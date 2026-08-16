@@ -332,7 +332,7 @@ builtins (`match_case`, and `run_user_fn` for user-fns) are tail by
 construction. A chain of tail calls (`A → B → PRINT`, or unbounded
 `LOOP → LOOP`) reuses one slot end-to-end. Verified by two slot-count
 assertions in the test suite. When a body has leading (non-tail) statements,
-the slot waits on them as deps (one body-block `DepRequest::BodyBlock`) and
+the slot waits on them as deps (one body-block `BlockRequest::Body`) and
 the `Continue` tail fires only from the resolving finish — so the leading
 siblings run, and are reclaimed, before the tail-replace, so the tail hop
 [reinstalls the slot](../tail-call-optimization.md#the-design-reinstall-the-slot-turn-over-the-region)

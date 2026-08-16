@@ -24,7 +24,8 @@
 use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::{
-    Action, ActionKind, BlockEntry, FinishCtx, FramePlacement, ReturnContract, TailContract,
+    Action, ActionKind, AwaitContinue, BlockEntry, BlockRequest, FinishCtx, FramePlacement,
+    ReturnContract, TailContract,
 };
 use crate::machine::model::{Carried, ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
@@ -34,7 +35,9 @@ use super::harness::KoanWorkload;
 use super::ignore_results;
 use super::nodes::NodeWork;
 use super::obligation::{ReturnObligation, with_obligation};
-use super::outcome::{TerminalDepFinish, continue_inline, dep_error_frame, tail_continue};
+use super::outcome::{
+    ParkDeps, TerminalDepFinish, continue_inline, dep_error_frame, tail_continue,
+};
 use crate::scheduler::{Dep, Deps};
 
 // The dep currency lives in core (`action.rs`) so an `Action` can carry it; re-exported here as the
@@ -265,7 +268,9 @@ pub(in crate::machine::execute) fn park_resume_labelled<'step>(
     resume: ResumeFn<'step>,
 ) -> Outcome<'step> {
     Outcome::Park {
-        deps: Deps::from_producers(sources.into_iter().map(ProducerId::scheduler_edge)),
+        deps: ParkDeps::List(Deps::from_producers(
+            sources.into_iter().map(ProducerId::scheduler_edge),
+        )),
         continuation: Continuation::Resume { carrier, resume },
         dep_error_frame,
     }
@@ -452,6 +457,20 @@ fn classify_dispatch<'step>(
 /// declared-return obligation off it (the ambient slot-step state) to decide keep-first and wrap the
 /// replacement continuation. A finish that emits its `Continue` later reads its own wake-time view
 /// instead, so the obligation it sees is the one its park deposit re-installed.
+/// Project a builtin's [`AwaitContinue`] onto the terminal-finish delivery: assemble the wake-time
+/// [`FinishCtx`] and recurse `run_action` on the `Action` it returns. Shared by the two await
+/// currencies — the dep list and the block — which differ only in how their deps are named.
+fn wrap_await_continue<'step>(finish: AwaitContinue<'step>) -> TerminalDepFinish<'step> {
+    Box::new(move |view, results| {
+        let fctx = FinishCtx {
+            scope: view.current_scope(),
+            ctx: view.step_ctx(),
+            types: view.types(),
+        };
+        run_action(view, finish(&fctx, results))
+    })
+}
+
 pub(in crate::machine::execute) fn run_action<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     action: Action<'step>,
@@ -499,7 +518,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     body_index,
                 );
             }
-            // Leading statements become owned siblings in the block (one `BodyBlock` dep); the slot
+            // Leading statements become owned siblings in the block (one `BlockRequest::Body`); the slot
             // parks on them so they run — and reclaim — before the tail continues. Where they
             // bind is what `block_entry` names: the block frame's own scope (MATCH / TRY arms via a
             // pre-built `FreshChild` cart, FN-body tails re-entering the already-installed cart with
@@ -559,19 +578,20 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     body_index,
                 )
             });
-            Await::on(Deps::from_requests([DepRequest::BodyBlock {
+            Await::on_block(BlockRequest::Body {
                 statements: leading,
                 placement,
-            }]))
+            })
             .error_frame(dep_error_frame())
             .finish_terminal(finish)
         }
 
         ActionKind::AwaitDeps { deps, finish } => {
-            // The builtin assembled the dep list itself, and results come back in that order. This
-            // arm maps each sub-dispatch request into the library dep currency, leaving the entries
-            // the builtin already named alone, and rebuilds the `Deps` envelope `Await::on`
-            // consumes; the wrapped finish recurses `run_action` on the `AwaitContinue`.
+            // The builtin assembled the dep list itself, and results come back in that order — one
+            // per entry, so an index it banked at `Deps::request` still addresses its own result.
+            // This arm maps each sub-dispatch request into the library dep currency, leaving the
+            // entries the builtin already named alone, and rebuilds the `Deps` envelope `Await::on`
+            // consumes.
             let mut lowered: Deps<DepRequest<'step>> = Deps::new();
             for entry in deps.into_entries() {
                 match entry {
@@ -581,17 +601,17 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     }
                 }
             }
-            let wrapped: TerminalDepFinish<'step> = Box::new(move |view, results| {
-                let fctx = FinishCtx {
-                    scope: view.current_scope(),
-                    ctx: view.step_ctx(),
-                    types: view.types(),
-                };
-                run_action(view, finish(&fctx, results))
-            });
             Await::on(lowered)
                 .error_frame(dep_error_frame())
-                .finish_terminal(wrapped)
+                .finish_terminal(wrap_await_continue(finish))
+        }
+
+        ActionKind::AwaitBlock { block, finish } => {
+            // The block's dep count is the statement split's, so there is nothing to lower entry by
+            // entry — it rides the block door whole and the finish reads its results in order.
+            Await::on_block(block)
+                .error_frame(dep_error_frame())
+                .finish_terminal(wrap_await_continue(finish))
         }
 
         ActionKind::Catch { watched, finish } => {
@@ -606,7 +626,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 run_action(view, finish(&fctx, result))
             });
             Outcome::Park {
-                deps: Deps::new(),
+                deps: ParkDeps::List(Deps::new()),
                 continuation: Continuation::Catch {
                     watched,
                     finish: wrapped,

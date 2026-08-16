@@ -24,7 +24,7 @@ use crate::machine::ProducerId;
 use crate::machine::core::KoanStorageProfile;
 use crate::machine::core::bindings::{WriteGate, WriteOp};
 use crate::machine::core::scope_frame;
-use crate::machine::core::{BlockEntry, DepPlacement, FramePlacement, ScopeId};
+use crate::machine::core::{BlockEntry, BlockRequest, DepPlacement, FramePlacement, ScopeId};
 use crate::machine::core::{ProgramBrand, RegionBrand, ScopeRefFamily};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::{
@@ -47,7 +47,7 @@ use super::lift::relocate_seam;
 use super::nodes::{ChainOp, NodePayload, NodeScope, NodeWork, SlotFrame};
 use super::obligation::with_obligation;
 use super::outcome::{
-    Await, Continuation, DepTerminal, Outcome, TerminalDepFinish, dep_error_frame,
+    Await, Continuation, DepTerminal, Outcome, ParkDeps, TerminalDepFinish, dep_error_frame,
 };
 use super::{
     ContinuationFamily, catch_continuation, ignore_results, seal_witnessed, short_circuit,
@@ -594,11 +594,9 @@ impl<'run> Host<'run> {
                 continuation,
                 dep_error_frame: park_error_frame,
             } => {
-                // Wire the whole dep list through the one door; each dep's filled-or-parked verdict
-                // comes back index-aligned.
-                let installed = self.wire_deps(sched, anchor, id, deps, |host, sched, request| {
-                    host.realize_park_request(sched, brand, request)
-                });
+                // Wire the whole declaration through the one door; each dep's filled-or-parked
+                // verdict comes back, one per wired dep.
+                let installed = self.wire_deps(sched, anchor, id, brand, deps);
                 // **Install-and-inspect**: a decide never probes a producer's standing, so a park
                 // whose producer had already finalized is classified here. An errored one is
                 // propagated now rather than waited on — a terminal slot never notifies again, so
@@ -623,18 +621,16 @@ impl<'run> Host<'run> {
                     // `dep_error_frame()` label. The short-circuit is baked into the continuation
                     // by `short_circuit` — the one loop the terminal delivery runs through.
                     Continuation::Finish(finish) => (short_circuit(park_error_frame, finish), None),
-                    // The action-harness catch carries its single watched dep unrealized (its
-                    // placement differs from a dep-finish body's fan-out: an `InScope` watched
-                    // enters a fresh single-statement block, never splitting). Realized here and
-                    // wired through the same door as every other dep. `catch_continuation` runs the
-                    // finish without short-circuiting on a dep error.
+                    // The action-harness catch carries its single watched dep unrealized. Realized
+                    // here and wired through the same door as every other dep list.
+                    // `catch_continuation` runs the finish without short-circuiting on a dep error.
                     Continuation::Catch { watched, finish } => {
                         let _watched_verdict = self.wire_deps(
                             sched,
                             anchor,
                             id,
-                            Deps::from_requests([watched]),
-                            |host, sched, watched| vec![host.realize_catch_watched(sched, watched)],
+                            brand,
+                            ParkDeps::List(Deps::from_requests([watched])),
                         );
                         (catch_continuation(finish), None)
                     }
@@ -765,21 +761,27 @@ fn replace_verdict(
 // ---------- Dep wiring: the one door ----------
 
 impl<'run> Host<'run> {
-    /// **The dep-wiring door.** Resolve `deps` to one source edge per dep — a dep the caller
-    /// already named passes its source through; a request is realized by `realize` into producer
-    /// slots, each named by a minted source destined at `anchor`'s region — then mint the
-    /// consumer's own edge off each source through [`Scheduler::install_deps`] and release the
-    /// minted sources, whose only job was carrying producer and destination into the install.
-    /// Returns each dep's filled-or-parked verdict, index-aligned with the realized list.
-    fn wire_deps<R>(
+    /// **The dep-wiring door.** Resolve `deps` to source edges — through
+    /// [`Self::named_sources`] or [`Self::block_sources`], whichever arm the park declared — then
+    /// mint the consumer's own edge off each source through [`Scheduler::install_deps`] and release
+    /// the minted sources, whose only job was carrying producer and destination into the install.
+    /// Returns each dep's filled-or-parked verdict, one per wired dep.
+    fn wire_deps<'a>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
         anchor: &SlotFrame,
         consumer: NodeId,
-        deps: Deps<R>,
-        realize: impl FnMut(&mut Self, &mut Scheduler<KoanWorkload>, R) -> Vec<NodeId>,
+        brand: RegionBrand<'a>,
+        deps: ParkDeps<'a>,
     ) -> Vec<InstalledEdge> {
-        let (sources, minted) = self.named_sources(sched, anchor, deps, realize);
+        let (sources, minted) = match deps {
+            ParkDeps::List(list) => {
+                self.named_sources(sched, anchor, list, |host, sched, request| {
+                    host.realize_dep(sched, brand, request)
+                })
+            }
+            ParkDeps::Block(block) => self.block_sources(sched, anchor, block),
+        };
         let installed = sched.install_deps(consumer, &sources);
         for source in minted {
             sched.release_edge(source);
@@ -787,149 +789,116 @@ impl<'run> Host<'run> {
         installed
     }
 
-    /// [`Self::wire_deps`]'s naming half, shared with the submission path (which hands its sources
-    /// to [`Scheduler::alloc_node`] instead of `install_deps`, the slot not existing yet): resolve
-    /// a dep list to one **source edge** per dep, in dep order, plus the sources this call minted —
-    /// which the caller releases once the door it feeds has minted the consumer's own edges.
+    /// [`Self::wire_deps`]'s naming half for a **dep list**, shared with the submission path (which
+    /// hands its sources to [`Scheduler::alloc_node`] instead of `install_deps`, the slot not
+    /// existing yet): resolve the list to one **source edge** per entry, in dep order, plus the
+    /// sources this call minted — which the caller releases once the door it feeds has minted the
+    /// consumer's own edges.
+    ///
+    /// One entry in, one source out. That is the whole reason the block fan-out lives in
+    /// [`Self::block_sources`] rather than here: it is what makes a caller's [`Deps::request`] index
+    /// the position its result comes back at.
     fn named_sources<R>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
         anchor: &SlotFrame,
         deps: Deps<R>,
-        mut realize: impl FnMut(&mut Self, &mut Scheduler<KoanWorkload>, R) -> Vec<NodeId>,
+        mut realize: impl FnMut(&mut Self, &mut Scheduler<KoanWorkload>, R) -> NodeId,
     ) -> (Vec<EdgeId>, Vec<EdgeId>) {
         let entries = deps.into_entries();
-        let entry_count = entries.len();
-        let mut sources: Vec<EdgeId> = Vec::with_capacity(entry_count);
+        let mut sources: Vec<EdgeId> = Vec::with_capacity(entries.len());
         let mut minted: Vec<EdgeId> = Vec::new();
         for entry in entries {
             match entry {
                 Dep::Producer(source) => sources.push(source),
                 Dep::Request(request) => {
-                    let producers = realize(self, sched, request);
-                    debug_assert!(
-                        producers.len() == 1 || entry_count == 1,
-                        "a request fanning out to several producers shifts every later dep's \
-                         position, so it may only be the sole entry in its list",
-                    );
-                    // Name each spawned producer by a source edge destined at this slot's own
-                    // anchor region — where a sub-result belongs. The install door mints the slot's
-                    // real dep edge off it and inherits that destination, so sub-work needs no
-                    // second wiring rule.
-                    for producer in producers {
-                        let source = sched.install_edge(producer, anchor.owner());
-                        sources.push(source);
-                        minted.push(source);
-                    }
+                    let producer = realize(self, sched, request);
+                    sources.push(self.mint_source(sched, anchor, producer, &mut minted));
                 }
             }
         }
         (sources, minted)
     }
 
-    /// Realize one park-declared dep request into its producer slots. An `InScope` dispatch and a
-    /// `BodyBlock` fan out one producer per statement; everything else is a single producer.
-    fn realize_park_request<'a>(
+    /// [`Self::wire_deps`]'s naming half for a **statement block**: fan the block out to one
+    /// producer per statement and name each by a minted source, in declaration order. Every source
+    /// here is minted, so the two vectors agree — the second is returned all the same, so both
+    /// naming doors hand their caller the same pair.
+    fn block_sources<'a>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
-        brand: RegionBrand<'a>,
-        request: DepRequest<'a>,
-    ) -> Vec<NodeId> {
-        match request {
-            // An `InScope` body fans out one producer per statement (multi-statement split);
-            // `OwnScope` realizes as a single producer via the shared [`Self::realize_dispatch`].
-            DepRequest::Dispatch {
-                expr,
-                placement: DepPlacement::InScope(scope),
-            } => {
-                let statements = split_working_body(scope.brand(), expr);
-                self.enter_block(sched, scope.id, statements, scope)
-            }
-            request @ (DepRequest::Dispatch { .. }
-            | DepRequest::ListLit(_)
-            | DepRequest::DictLit(_)
-            | DepRequest::RecordLit(_)) => {
-                vec![self.realize_eager_dep(sched, brand, request)]
-            }
+        anchor: &SlotFrame,
+        block: BlockRequest<'a>,
+    ) -> (Vec<EdgeId>, Vec<EdgeId>) {
+        let producers = match block {
             // A body block fans out one producer per statement: into a fresh per-call frame's own
             // scope (`dispatch_body`), or — under `Inherit` — into a caller-allocated overlay via
-            // the same `enter_block` fan-out the leading statements of an `InScope` body use
-            // (USING).
-            DepRequest::BodyBlock {
+            // the same `enter_block` fan-out a declaration builtin's child-scope body uses (USING).
+            BlockRequest::Body {
                 statements,
                 placement: BodyPlacement::Frame(frame),
             } => self.dispatch_body(sched, &frame, statements),
-            DepRequest::BodyBlock {
+            BlockRequest::Body {
                 statements,
                 placement: BodyPlacement::Overlay(overlay),
             } => self.enter_block(sched, overlay.id, statements, overlay),
-        }
+            // A declaration builtin's body splits into its top-level statements against the child
+            // scope it minted (MODULE, SIG).
+            BlockRequest::InScope { body, scope } => {
+                let statements = split_working_body(scope.brand(), body);
+                self.enter_block(sched, scope.id, statements, scope)
+            }
+        };
+        let mut minted: Vec<EdgeId> = Vec::with_capacity(producers.len());
+        let sources: Vec<EdgeId> = producers
+            .into_iter()
+            .map(|producer| self.mint_source(sched, anchor, producer, &mut minted))
+            .collect();
+        (sources, minted)
     }
 
-    /// Realize one staged eager dep as its producer node — the four shapes
-    /// [`stage_eager_part`](super::decide::stage_eager_part) emits. `brand` is the realizing
-    /// step's, where an aggregate literal's per-element dispatch node is bumped. `BodyBlock` never
-    /// reaches here (the stager doesn't produce it).
-    pub(in crate::machine::execute) fn realize_eager_dep<'a>(
+    /// Name a spawned `producer` by a source edge destined at this slot's own anchor region — where
+    /// a sub-result belongs — recording it in `minted` for the caller to release. The install door
+    /// mints the slot's real dep edge off it and inherits that destination, so sub-work needs no
+    /// second wiring rule.
+    fn mint_source(
+        &mut self,
+        sched: &mut Scheduler<KoanWorkload>,
+        anchor: &SlotFrame,
+        producer: NodeId,
+        minted: &mut Vec<EdgeId>,
+    ) -> EdgeId {
+        let source = sched.install_edge(producer, anchor.owner());
+        minted.push(source);
+        source
+    }
+
+    /// Realize one [`DepRequest`] to **its** producer node — the one realizer behind every
+    /// single-producer path: eager staging ([`stage_eager_part`](super::decide::stage_eager_part)),
+    /// a park's dep list, and a [`Continuation::Catch`]'s watched dep. `brand` is the realizing
+    /// step's, where an aggregate literal's per-element dispatch node is bumped.
+    ///
+    /// `OwnScope` re-dispatches against the executing slot's own scope; `InScope` enters a fresh
+    /// **single-statement** block (so an inner `LET` stays local). A body that splits across
+    /// statements is a [`BlockRequest`] and goes through [`Self::block_sources`] instead.
+    pub(in crate::machine::execute) fn realize_dep<'a>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
         brand: RegionBrand<'a>,
         dep: DepRequest<'a>,
     ) -> NodeId {
         match dep {
-            DepRequest::Dispatch { expr, placement } => {
-                self.realize_dispatch(sched, expr, placement)
-            }
+            DepRequest::Dispatch {
+                expr,
+                placement: DepPlacement::OwnScope,
+            } => self.dispatch_in_own_scope(sched, expr, SubmitContext::SubDispatch),
+            DepRequest::Dispatch {
+                expr,
+                placement: DepPlacement::InScope(scope),
+            } => self.enter_block_once(sched, scope.id, expr, scope),
             DepRequest::ListLit(items) => self.schedule_list_literal(sched, brand, items),
             DepRequest::DictLit(pairs) => self.schedule_dict_literal(sched, brand, pairs),
             DepRequest::RecordLit(fields) => self.schedule_record_literal(sched, brand, fields),
-            DepRequest::BodyBlock { .. } => {
-                unreachable!("eager staging emits only Dispatch / literal deps")
-            }
-        }
-    }
-
-    /// Realize a single-statement dispatch dep at `placement` to its producer slot. `OwnScope`
-    /// re-dispatches against the executing slot's own scope; `InScope` enters a fresh
-    /// **single-statement** block (so an inner `LET` stays local). A multi-statement body splits
-    /// separately — see [`Self::realize_park_request`].
-    fn realize_dispatch<'a>(
-        &mut self,
-        sched: &mut Scheduler<KoanWorkload>,
-        expr: WorkingExpression<'a>,
-        placement: DepPlacement<'a>,
-    ) -> NodeId {
-        match placement {
-            DepPlacement::OwnScope => {
-                self.dispatch_in_own_scope(sched, expr, SubmitContext::SubDispatch)
-            }
-            DepPlacement::InScope(scope) => self
-                .enter_block(sched, scope.id, vec![expr], scope)
-                .into_iter()
-                .next()
-                .expect("enter_block of one statement yields one node"),
-        }
-    }
-
-    /// Realize a [`Continuation::Catch`]'s single watched [`DepRequest`] to a producer `NodeId`: a
-    /// `Dispatch` realizes as a single statement (an `InScope` watched expr enters a fresh
-    /// single-statement block — see [`Self::realize_dispatch`]). A `Catch` never watches a
-    /// dispatcher-only lowering.
-    fn realize_catch_watched<'a>(
-        &mut self,
-        sched: &mut Scheduler<KoanWorkload>,
-        dep: DepRequest<'a>,
-    ) -> NodeId {
-        match dep {
-            DepRequest::Dispatch { expr, placement } => {
-                self.realize_dispatch(sched, expr, placement)
-            }
-            DepRequest::ListLit(_)
-            | DepRequest::DictLit(_)
-            | DepRequest::RecordLit(_)
-            | DepRequest::BodyBlock { .. } => {
-                unreachable!("a Catch watches only a simple Dispatch dep")
-            }
         }
     }
 }
@@ -1052,16 +1021,42 @@ impl<'run> Host<'run> {
         scope: &'a Scope<'a>,
     ) -> Vec<NodeId> {
         let parent = self.ambient.active_payload().map(|p| p.chain.clone());
-        // Indices start at 1: visibility is strict less-than and builtins sit at idx 0,
-        // so a top-level statement at index 1 sees them via `0 < 1`.
         statements
             .into_iter()
             .enumerate()
-            .map(|(i, expr)| {
-                let chain = LexicalFrame::push(parent.clone(), scope_id, i + 1);
-                self.dispatch_in_scope_with_chain(sched, expr, scope, Some(chain))
-            })
+            .map(|(i, expr)| self.block_statement(sched, parent.clone(), scope_id, i, expr, scope))
             .collect()
+    }
+
+    /// Submit `statement` as a **fresh single-statement** lexical block over `scope` —
+    /// [`Self::enter_block`]'s one-statement case, which an `InScope` dep takes directly rather than
+    /// through a one-element vector.
+    pub(in crate::machine::execute) fn enter_block_once<'a>(
+        &mut self,
+        sched: &mut Scheduler<KoanWorkload>,
+        scope_id: ScopeId,
+        statement: WorkingExpression<'a>,
+        scope: &'a Scope<'a>,
+    ) -> NodeId {
+        let parent = self.ambient.active_payload().map(|p| p.chain.clone());
+        self.block_statement(sched, parent, scope_id, 0, statement, scope)
+    }
+
+    /// Submit one block statement at zero-based position `index` under `parent`'s chain — the
+    /// per-statement half both block doors run through, so the index rule is written once. The
+    /// pushed frame index is `index + 1`: visibility is strict less-than and builtins sit at idx 0,
+    /// so a statement at index 1 sees them via `0 < 1`.
+    fn block_statement<'a>(
+        &mut self,
+        sched: &mut Scheduler<KoanWorkload>,
+        parent: Option<Rc<LexicalFrame>>,
+        scope_id: ScopeId,
+        index: usize,
+        statement: WorkingExpression<'a>,
+        scope: &'a Scope<'a>,
+    ) -> NodeId {
+        let chain = LexicalFrame::push(parent, scope_id, index + 1);
+        self.dispatch_in_scope_with_chain(sched, statement, scope, Some(chain))
     }
 
     /// Submit `expr` against a run-lived `scope`: establish the run frame, decide the slot's
@@ -1215,9 +1210,7 @@ impl<'run> Host<'run> {
             None,
         );
         let (sources, minted) =
-            self.named_sources(sched, &anchor, deps, |_host, _sched, producer| {
-                vec![producer]
-            });
+            self.named_sources(sched, &anchor, deps, |_host, _sched, producer| producer);
         let id = sched.alloc_node(work, &sources, anchor, framed);
         for source in minted {
             sched.release_edge(source);
@@ -1275,7 +1268,7 @@ impl<'run> KoanRuntime<'run> {
             sched,
             &anchor,
             Deps::from_requests(sub_work.iter().copied()),
-            |_host, _sched, producer| vec![producer],
+            |_host, _sched, producer| producer,
         );
         let id = sched.alloc_node(work, &sources, anchor, framed);
         for source in minted {

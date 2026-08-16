@@ -397,7 +397,7 @@ impl<'step> Host<'step> {
         deps: &mut Deps<NodeId>,
     ) -> Slot {
         let part = match stage_eager_part(brand, part) {
-            Ok(dep) => return Slot::spawned(deps, self.realize_eager_dep(sched, brand, dep)),
+            Ok(dep) => return Slot::spawned(deps, self.realize_dep(sched, brand, dep)),
             Err(part) => part,
         };
         match part {

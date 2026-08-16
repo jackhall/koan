@@ -197,7 +197,7 @@ statements (plus, for the `Expression` carrier, the return-type expression as an
 extra dep), and `resume` checks the body's terminal value once the deps resolve.
 The dispatch-side [`invoke`](../../src/machine/execute/decide/exec.rs) is a
 pure decide that lowers that `Suspend` into an `Outcome::Park` over
-a single body-block [`DepRequest::BodyBlock`](../../src/machine/core/kfunction/action.rs) — the
+a single body-block [`BlockRequest::Body`](../../src/machine/core/kfunction/action.rs) — the
 body statements plus the return-type expression as deps in the harness-acquired
 per-call frame (see
 [per-call-region/frames.md § Active-frame propagation](../per-call-region/frames.md#active-frame-propagation))

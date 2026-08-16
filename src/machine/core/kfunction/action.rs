@@ -475,6 +475,12 @@ impl<'a> Action<'a> {
         Action::from_kind(ActionKind::AwaitDeps { deps, finish })
     }
 
+    /// Fan `block` out to one dep per statement, then continue through `finish`. See
+    /// [`ActionKind::AwaitBlock`].
+    pub fn await_block(block: BlockRequest<'a>, finish: AwaitContinue<'a>) -> Self {
+        Action::from_kind(ActionKind::AwaitBlock { block, finish })
+    }
+
     /// Watch `watched`, recover via `finish`. See [`ActionKind::Catch`].
     pub fn catch(watched: DepRequest<'a>, finish: CatchContinue<'a>) -> Self {
         Action::from_kind(ActionKind::Catch { watched, finish })
@@ -528,9 +534,18 @@ pub enum ActionKind<'a> {
         frame_placement: FramePlacement,
         block_entry: BlockEntry<'a>,
     },
-    /// Dispatch `deps`, then `finish` over their resolved values yields the next `Action`.
+    /// Dispatch `deps`, then `finish` over their resolved values yields the next `Action`. Every
+    /// entry contributes exactly one dep, so a builtin that recorded a [`Deps::request`] index reads
+    /// its result back at that position.
     AwaitDeps {
         deps: Deps<SubDispatch<'a>>,
+        finish: AwaitContinue<'a>,
+    },
+    /// Fan a statement block out to one dep per statement, then `finish` over their resolved values
+    /// yields the next `Action`. The block currency is separate from `AwaitDeps` precisely because
+    /// its dep count is not known at declaration time — see [`BlockRequest`].
+    AwaitBlock {
+        block: BlockRequest<'a>,
         finish: AwaitContinue<'a>,
     },
     /// Watch `watched`, recover via `finish`.
@@ -579,15 +594,19 @@ impl<'a> SubDispatch<'a> {
 /// and a [`Action::Catch`] carries for its single watched dep — defined here in core so `Action` can
 /// carry it without core depending on the execute layer.
 ///
+/// **Every `DepRequest` realizes to exactly one producer**, hence one dep. That is what lets a
+/// caller bank a [`Deps::request`] index and read its result back at that position; work whose dep
+/// count is only known once the statements are split goes through [`BlockRequest`] instead, which is
+/// not a dep-list entry at all.
+///
 /// The builtin `AwaitDeps` currency does not flow through `DepRequest`: its request entries are
 /// [`SubDispatch`]es, which lower to one of these. `DepRequest`'s roles are `Catch`'s single
 /// `watched` dep (a `Dispatch` of the watched sub-expression) and the dispatcher-side `Outcome`
-/// currency: `Dispatch` staged subs, the `ListLit` / `DictLit` / `RecordLit` literal lowerings that
-/// schedule an aggregate literal as one producer, and `BodyBlock` fanning a non-tail statement block
-/// out to one producer per statement (see [`BodyPlacement`] for where they bind). A finish reads its
-/// results in dep order, and a request that fans out — an `InScope`-placed `Dispatch`, a `BodyBlock`
-/// — contributes one result per statement, so it is the sole entry in its list.
+/// currency: `Dispatch` staged subs, and the `ListLit` / `DictLit` / `RecordLit` literal lowerings
+/// that schedule an aggregate literal as one producer.
 pub enum DepRequest<'a> {
+    /// One sub-expression, one producer. `OwnScope` re-dispatches against the slot's own scope;
+    /// `InScope` enters a fresh **single-statement** block (so an inner `LET` stays local).
     Dispatch {
         expr: WorkingExpression<'a>,
         placement: DepPlacement<'a>,
@@ -595,18 +614,31 @@ pub enum DepRequest<'a> {
     ListLit(&'a [ExpressionPart<'a>]),
     DictLit(&'a [(ExpressionPart<'a>, ExpressionPart<'a>)]),
     RecordLit(&'a [(&'a str, ExpressionPart<'a>)]),
-    /// A body's non-tail statements dispatched as a block, fanning out to one producer per
-    /// statement (the harness `extend`s them in declaration order). `placement` picks where they
-    /// bind (see [`BodyPlacement`]): a deferred-return FN's first-call body and a leading-carrying
-    /// arm bind into a fresh per-call frame's own scope; a leading-carrying USING binds into an
+}
+
+/// A statement block to fan out — **one producer, and so one dep, per statement**, in declaration
+/// order. The count is a property of the split, not of the request, so this is deliberately *not* a
+/// [`DepRequest`]: it never joins a dep list, and the harness realizes it through its own door
+/// ([`Host::block_sources`](crate::machine::execute)) rather than the per-entry one. A finish behind
+/// a block reads its results in order and never by a banked index.
+pub enum BlockRequest<'a> {
+    /// A body's non-tail statements, already split. `placement` picks where they bind (see
+    /// [`BodyPlacement`]): a deferred-return FN's first-call body and a leading-carrying arm bind
+    /// into a fresh per-call frame's own scope; a leading-carrying USING binds into an
     /// inherited-cart overlay.
-    BodyBlock {
+    Body {
         statements: Vec<WorkingExpression<'a>>,
         placement: BodyPlacement<'a>,
     },
+    /// A body expression dispatched against `scope`, split into its top-level statements there — a
+    /// declaration builtin's child-scope body (MODULE, SIG).
+    InScope {
+        body: WorkingExpression<'a>,
+        scope: &'a Scope<'a>,
+    },
 }
 
-/// Where a [`DepRequest::BodyBlock`]'s statements bind — the two block fan-outs a leading-carrying
+/// Where a [`BlockRequest::Body`]'s statements bind — the two block fan-outs a leading-carrying
 /// tail chooses between.
 pub enum BodyPlacement<'a> {
     /// Dispatch as body-chain siblings in `frame`'s own scope (`KoanRuntime::dispatch_body`) — a
@@ -623,10 +655,9 @@ pub enum BodyPlacement<'a> {
 pub enum DepPlacement<'a> {
     /// The slot's own `NodeScope` (`dispatch_in_own_scope`) — binders' type sub-dispatches.
     OwnScope,
-    /// A builtin-minted child scope (module/sig/recursive/using body), carried by reference. In a
-    /// `AwaitDeps` a multi-statement body fans out one sub-dispatch per top-level statement
-    /// (`split_body_statements` + `enter_block`); in a `Catch` a single watched expr enters a
-    /// fresh lexical block (`enter_block`).
+    /// A builtin-minted child scope, carried by reference: the expression enters a fresh
+    /// **single-statement** lexical block there (`enter_block`), so an inner `LET` stays local. A
+    /// body that must split across statements is a [`BlockRequest::InScope`], not this.
     InScope(&'a Scope<'a>),
 }
 

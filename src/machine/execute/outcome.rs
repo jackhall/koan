@@ -32,6 +32,7 @@ use super::decide::{DecideCtx, DepRequest, ResumeFn, propagate_dep_error};
 use super::harness::KoanWorkload;
 use super::nodes::{ChainOp, NodeWork};
 use super::obligation::ReturnObligation;
+use crate::machine::core::BlockRequest;
 
 /// What a node's step wants the harness to do — the single currency every producer and finish
 /// returns. See the module docs for the taxonomy.
@@ -48,7 +49,7 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     /// per-call cart; `chain` is the pre-decided lexical-chain reshape (decided at the construction
     /// site while the contract variant is still live) and `block_entry` names any overlay scope the
     /// tail installs. A body's non-tail (leading) statements are NOT carried here — a producer with
-    /// leading statements waits on them as deps (a [`DepRequest::BodyBlock`]) and emits this
+    /// leading statements waits on them as deps (a [`BlockRequest::Body`]) and emits this
     /// `Continue` only from the resolving finish, restoring frame uniqueness for TCO reuse. The
     /// slot's declared-return obligation does not ride here — it is wrapped onto `work`'s
     /// continuation at the construction site (see
@@ -64,7 +65,7 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     /// at its own finalize; a [`Continuation::Resume`] declares only the former. `dep_error_frame`
     /// labels the dep-error short-circuit that runs before the finish.
     Park {
-        deps: Deps<DepRequest<'step>>,
+        deps: ParkDeps<'step>,
         continuation: Continuation<'step>,
         dep_error_frame: Option<TraceFrame>,
     },
@@ -179,6 +180,18 @@ pub(in crate::machine::execute) fn dep_error_frame() -> TraceFrame {
     TraceFrame::bare("<deps>", "deps")
 }
 
+/// What a park waits on — the two dep-wiring doors, told apart by whether the dep count is known at
+/// declaration time. The harness has one realization path per arm; nothing converts between them.
+pub(in crate::machine::execute) enum ParkDeps<'step> {
+    /// A dep list: one source per entry, in the builder's order. Every [`DepRequest`] realizes to
+    /// exactly one producer, so a caller's [`Deps::request`] index is the position its result comes
+    /// back at.
+    List(Deps<DepRequest<'step>>),
+    /// A statement block: one dep per statement, in declaration order. The count is only known once
+    /// the block is split, so it is never mixed with named deps.
+    Block(BlockRequest<'step>),
+}
+
 /// The envelope builder — the sole production constructor of an [`Outcome::Park`] carrying a
 /// [`Continuation::Finish`]. The finish is wrapped in the [`short_circuit`] dep-error gate so it
 /// never observes an errored dep; a witnessed finish is projected onto the same delivery through
@@ -186,12 +199,21 @@ pub(in crate::machine::execute) fn dep_error_frame() -> TraceFrame {
 /// the propagated error; skipping it propagates frameless. (`Resume` / `Catch` continuations are
 /// built at their own sites.)
 pub(in crate::machine::execute) struct Await<'step> {
-    deps: Deps<DepRequest<'step>>,
+    deps: ParkDeps<'step>,
     dep_error_frame: Option<TraceFrame>,
 }
 
 impl<'step> Await<'step> {
     pub(in crate::machine::execute) fn on(deps: Deps<DepRequest<'step>>) -> Self {
+        Await::on_park_deps(ParkDeps::List(deps))
+    }
+
+    /// Await a statement block's fan-out — the [`ParkDeps::Block`] door.
+    pub(in crate::machine::execute) fn on_block(block: BlockRequest<'step>) -> Self {
+        Await::on_park_deps(ParkDeps::Block(block))
+    }
+
+    fn on_park_deps(deps: ParkDeps<'step>) -> Self {
         Await {
             deps,
             dep_error_frame: None,

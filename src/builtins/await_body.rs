@@ -1,17 +1,16 @@
 //! The await-body-then-seal protocol combinator: a declaration builtin (SIG, MODULE) mints a child
-//! scope, dispatches its body block against it as an `InScope` dep, and finishes by capturing the
-//! populated scope into a declaration value bound in the parent scope. This file owns the
-//! protocol's moving parts — the `AwaitDeps` envelope, the `InScope` placement, and the
-//! close-before-capture ordering — so a caller states only its declaration-specific finish. Pattern
-//! precedent: [`resolve_or_await`](super::resolve_or_await).
+//! scope, fans its body block out against that scope, and finishes by capturing the populated scope
+//! into a declaration value bound in the parent scope. This file owns the protocol's moving parts —
+//! the `AwaitBlock` envelope, the [`BlockRequest::InScope`] fan-out, and the close-before-capture
+//! ordering — so a caller states only its declaration-specific finish. Pattern precedent:
+//! [`resolve_or_await`](super::resolve_or_await).
 
 use crate::machine::Scope;
 use crate::machine::model::KExpression;
-use crate::machine::{Action, AwaitContinue, DepPlacement, FinishCtx, SubDispatch};
-use crate::scheduler::Deps;
+use crate::machine::{Action, AwaitContinue, BlockRequest, FinishCtx};
 
 /// Dispatch `body` against `child` (one sub-slot per top-level statement, per
-/// `DepPlacement::InScope`), then run `finish`. The child closes first: every bind into it resolved
+/// [`BlockRequest::InScope`]), then run `finish`. The child closes first: every bind into it resolved
 /// with the awaited deps and the finish only reads it, so the sealed reach rides any value that
 /// captures the scope.
 pub(crate) fn await_body_in_scope<'a>(
@@ -23,11 +22,11 @@ pub(crate) fn await_body_in_scope<'a>(
         child.close();
         finish(fctx)
     });
-    Action::await_deps(
-        Deps::from_requests([SubDispatch {
-            expr: crate::machine::model::WorkingExpression::from_ast(child.brand(), body),
-            placement: DepPlacement::InScope(child),
-        }]),
+    Action::await_block(
+        BlockRequest::InScope {
+            body: crate::machine::model::WorkingExpression::from_ast(child.brand(), body),
+            scope: child,
+        },
         continuation,
     )
 }

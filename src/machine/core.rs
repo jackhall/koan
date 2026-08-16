@@ -38,9 +38,9 @@ pub(crate) use carrier_witness::{GroupSeal, OverloadSeal, product_reaches_region
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
 pub(crate) use kfunction::action::{
-    Action, ActionKind, AwaitContinue, BlockEntry, BodyCtx, BodyPlacement, CatchContinue,
-    DepPlacement, DepRequest, DepTerminal, FinishCtx, FramePlacement, SubDispatch, TailContract,
-    arg_held, arg_object, arg_type, arg_unresolved_type, require_bare_type_name,
+    Action, ActionKind, AwaitContinue, BlockEntry, BlockRequest, BodyCtx, BodyPlacement,
+    CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx, FramePlacement, SubDispatch,
+    TailContract, arg_held, arg_object, arg_type, arg_unresolved_type, require_bare_type_name,
     require_identifier_name, require_kexpression, require_ktype, scope_frame,
 };
 pub(crate) use kfunction::block_tail::{BlockBody, BlockScope, BlockSeed, block_tail};
