@@ -45,25 +45,6 @@ impl LexicalFrame {
         })
     }
 
-    /// A chain mentioning no real scope: `index_for` returns `None` for every
-    /// `ScopeId`, so the visibility predicate sees every scope as complete and every
-    /// binding in it as visible. Used for ambient-chain-less submission (REPL, test
-    /// fixtures) against an existing scope so previously-bound names resolve.
-    ///
-    /// Its per-statement index is `0` throughout, naming no statement — but declaration
-    /// identity is the installing [`Installer`](super::Installer), not the index, so
-    /// two declarations of one name submitted this way still carry distinct
-    /// [`StatementId`](super::StatementId)s and redeclaration still raises `Rebind`. The index-0
-    /// fallback is intended for these reachable users alone; production always enters through
-    /// `enter_block`.
-    pub fn detached() -> Rc<Self> {
-        Rc::new(LexicalFrame {
-            scope_id: ScopeId::DETACHED,
-            index: 0,
-            parent: None,
-        })
-    }
-
     /// First frame's `index` whose `scope_id` matches, walking head-first. `None`
     /// (no frame mentions that scope) reads as "scope complete, every entry visible".
     pub fn index_for(&self, scope_id: ScopeId) -> Option<usize> {

@@ -46,7 +46,7 @@ pub(super) fn run<'run>(
     // exactly as `run_program` does with program storage.
     let exprs = parse(program.brand(), source).expect("parse should succeed");
     for expr in exprs {
-        test_run.runtime.dispatch_in_scope(
+        test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(root.brand(), expr),
             root,
         );

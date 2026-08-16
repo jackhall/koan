@@ -548,6 +548,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
     let producer = runtime.dispatch_in_scope(
         working(scope, parse_one(&program, "producer_target {y = 1}")),
         scope,
+        1,
     );
     let claim = ProducerId::from_scheduler_edge(runtime.install_edge_for_test(producer, scope));
     scope
@@ -561,7 +562,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
         .expect("install_placeholder should succeed");
 
     let f_call_slot =
-        runtime.dispatch_in_scope(working(scope, parse_one(&program, "f {x = 7}")), scope);
+        runtime.dispatch_in_scope(working(scope, parse_one(&program, "f {x = 7}")), scope, 2);
     let f_call_id = runtime.install_edge_for_test(f_call_slot, scope);
 
     reset_resolve_dispatch_entry_count();
@@ -1123,7 +1124,8 @@ fn non_callable_list_head_errors() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let slot = runtime.dispatch_in_scope(working(scope, parse_one(&program, "[1 2 3] x")), scope);
+    let slot =
+        runtime.dispatch_in_scope(working(scope, parse_one(&program, "[1 2 3] x")), scope, 1);
     let root = runtime.install_edge_for_test(slot, scope);
     runtime
         .execute()

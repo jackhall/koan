@@ -264,7 +264,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        let root = test_run.runtime.dispatch_in_scope(
+        let root = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 parse_one(&program, "(x y) FROM 5"),
@@ -304,7 +304,7 @@ mod tests {
         );
 
         // Bare call ties: the full `{x, y, z}` carrier fills both incomparable arms.
-        let root = test_run.runtime.dispatch_in_scope(
+        let root = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 parse_one(&program, "PICK r"),

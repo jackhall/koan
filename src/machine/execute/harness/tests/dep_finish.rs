@@ -18,8 +18,8 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let dep_a = runtime.dispatch_in_scope(let_expr(&program, "ca", 7.0), scope);
-    let dep_b = runtime.dispatch_in_scope(let_expr(&program, "cb", 11.0), scope);
+    let dep_a = runtime.dispatch_in_scope(let_expr(&program, "ca", 7.0), scope, 1);
+    let dep_b = runtime.dispatch_in_scope(let_expr(&program, "cb", 11.0), scope, 2);
     let finish: TerminalDepFinish = Box::new(|_sched, terminals| {
         let a = match terminals[0].cell.open_at().value() {
             Carried::Object(KObject::Number(n)) => *n,
@@ -42,7 +42,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
         });
         Outcome::done_resident(_sched.current_scope(), Carried::Object(allocated))
     });
-    let dep_finish_id = runtime.add_dep_finish(&[dep_a, dep_b], scope, finish);
+    let dep_finish_id = runtime.add_dep_finish(&[dep_a, dep_b], scope, finish, 3);
     let watch = runtime.install_edge_for_test(dep_finish_id, scope);
     runtime.execute().unwrap();
     assert!(
@@ -71,9 +71,12 @@ fn dep_finish_short_circuits_on_dep_error() {
 
     // One dep that delivers a value and one that cannot resolve its name — an ordinary erroring
     // dispatch, which is what the consumer's walk fills its edge with.
-    let dep_ok = runtime.dispatch_in_scope(let_expr(&program, "ok", 99.0), scope);
-    let dep_err =
-        runtime.dispatch_in_scope(working_one(&program, "LET bad = (undefined_thing)"), scope);
+    let dep_ok = runtime.dispatch_in_scope(let_expr(&program, "ok", 99.0), scope, 1);
+    let dep_err = runtime.dispatch_in_scope(
+        working_one(&program, "LET bad = (undefined_thing)"),
+        scope,
+        2,
+    );
 
     let invoked: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let invoked_clone = Rc::clone(&invoked);
@@ -84,7 +87,7 @@ fn dep_finish_short_circuits_on_dep_error() {
             .fold_resident_object(|brand| KObject::KString(brand.allocator().text("finish ran")));
         Outcome::done_resident(scope, Carried::Object(allocated))
     });
-    let dep_finish_id = runtime.add_dep_finish(&[dep_ok, dep_err], scope, finish);
+    let dep_finish_id = runtime.add_dep_finish(&[dep_ok, dep_err], scope, finish, 3);
     let watch = runtime.install_edge_for_test(dep_finish_id, scope);
     runtime.execute().unwrap();
 

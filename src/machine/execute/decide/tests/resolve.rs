@@ -73,7 +73,7 @@ fn resolve_name_parked() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let producer = test_run.runtime.dispatch_in_scope(
+    let producer = test_run.dispatch_in_scope(
         WorkingExpression::new(
             scope.brand(),
             vec![Spanned::bare(WorkingPart::Ast(ExpressionPart::Identifier(

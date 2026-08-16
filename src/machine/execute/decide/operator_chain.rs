@@ -7,12 +7,15 @@
 //! through the scope chain (innermost visible wins, like every other name; see
 //! [the lookup protocol](../../../../design/typing/lookup-protocol.md)).
 //!
-//! A registry miss is a resolution error, never a park: the binding tables' exclusive visibility
-//! cutoff makes every name and declaration lexically well-founded (a statement's own claim is
-//! invisible to its own subtree, and a lexically-later declaration is not visible either), so an
-//! `OP` a chain names cannot still be finalizing in a way this arm could usefully wait on. A miss —
-//! a cross-group operator mix, or an operator no visible module declared — surfaces directly as a
-//! structured [`KErrorKind::DispatchFailed`]. A hit reduces the run by the resolved group's
+//! A registry miss first probes for a **visible pending** `OP` declaration: the declaration's
+//! registry write lands only when its body finalizes, so a chain that runs while a lexically
+//! earlier declaration is still in flight parks on that declaration's claim and re-runs on wake
+//! (see [`park_on_pending_operators`]). Visibility is the binding tables' exclusive cutoff, so the
+//! wait is always lexically backward — a lexically-later declaration is not visible, and a
+//! statement's own claim is ruled out by [`DecideCtx::is_own_claim`] on the chains that carry no
+//! cutoff. With nothing pending the miss is real — a cross-group operator mix, or an operator no
+//! visible module declared — and surfaces directly as a structured
+//! [`KErrorKind::DispatchFailed`]. A hit reduces the run by the resolved group's
 //! declared mode: [`ReductionMode::FoldLeft`] rewrites the chain into nested binary dispatches
 //! (see [`reduce_fold_left`]), [`ReductionMode::FoldRight`] mirrors it right-associated (see
 //! [`reduce_fold_right`]), [`ReductionMode::Unary`] rewrites it into one keyword-first call over
@@ -27,20 +30,22 @@ use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
 use crate::machine::model::Part;
 use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
-use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
-use crate::machine::{KError, KErrorKind, TraceFrame};
+use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode, StoredElement};
+use crate::machine::{KError, KErrorKind, ProducerId, TraceFrame};
 use crate::scheduler::Deps;
 use crate::source::{Span, Spanned};
 
 use super::super::TerminalDepFinish;
 use super::ctx::DecideCtx;
-use super::{Await, DepPlacement, DepRequest, Outcome, become_dispatch, working_frame};
+use super::{
+    Await, DepPlacement, DepRequest, Outcome, become_dispatch, park_resume_labelled, working_frame,
+};
 
 /// The probe is `Some` for every `OperatorChain` (the classifier guarantees it), so a
 /// `None` probe is a classification bug.
 ///
-/// Every path is terminal (no scheduler write, no park on the registry read itself), so this
-/// decides against a read-only [`DecideCtx`] and returns [`Outcome::Done`].
+/// Every path but the pending-`OP` park is terminal (no scheduler write), so this decides against
+/// a read-only [`DecideCtx`] and returns [`Outcome::Done`].
 pub(in crate::machine::execute) fn run<'step, 'b>(
     ctx: &DecideCtx<'_, 'step, '_>,
     s: &'b Scope<'b>,
@@ -51,10 +56,7 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
         .expect("OperatorChain shape guarantees a cached operator probe");
     let chain = ctx.chain_deref();
     match s.resolve_operator_group_delivered(probe, chain) {
-        None => Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-            expr: expr.summarize(),
-            reason: undeclared_operator_reason(probe),
-        }))),
+        None => park_on_pending_operators(ctx, s, expr, probe),
         Some(delivered) => {
             // Everything the reducers need is read out inside the envelope's one open, so the
             // record's own borrow never escapes and the envelope's pins drop before the reduce.
@@ -428,6 +430,82 @@ pub(super) fn combine<'step>(
             wrap_as_operand(brand, right),
         ],
     )
+}
+
+/// Park the chain on every still-finalizing `OP` declaration that would register one of its
+/// operators — an `OP`'s registry write lands at its body's finalize, so a miss while the
+/// declaration is in flight is a wait, not an error (see `builtins::op_def`). The wake re-runs
+/// [`run`] against the original chain. Visibility gating makes the wait always lexically
+/// backward. With no source found the miss is real and surfaces as the undeclared-operator
+/// diagnostic. Whether a claim's binder has already terminalized is the
+/// harness's to rule on when it installs the park; the `<operator-chain>` frame rides along on
+/// `dep_error_frame` so a propagated error keeps this site's label.
+fn park_on_pending_operators<'step, 'b>(
+    ctx: &DecideCtx<'_, 'step, '_>,
+    s: &'b Scope<'b>,
+    expr: &WorkingExpression<'step>,
+    probe: &str,
+) -> Outcome<'step> {
+    let to_wait = pending_operator_sources(ctx, s, expr);
+    if to_wait.is_empty() {
+        return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
+            expr: expr.summarize(),
+            reason: undeclared_operator_reason(probe),
+        })));
+    }
+    let carrier = expr.summarize();
+    let parked_expr = *expr;
+    let frame = working_frame("<operator-chain>", expr);
+    park_resume_labelled(
+        to_wait,
+        Some(carrier),
+        Some(frame),
+        Box::new(move |ctx, _id| run(ctx, ctx.current_scope(), &parked_expr)),
+    )
+}
+
+/// Every still-finalizing `OP` declaration visible from `s` that would register one of this
+/// chain's operators, named by its claim edge and deduped in walk order.
+///
+/// A pending `OP` lives in the **function buckets** (its claim is a pending overload slot, see
+/// `builtins::op_def`), so the probe reads those, not the operator registry. Both keys an operator
+/// can be declared under are probed — binary `[Slot, Keyword(sym), Slot]` and unary
+/// `[Keyword(sym), Slot]` — since the chain cannot know the declaration's arity until it lands.
+/// The scope walk mirrors `resolve_dispatch`'s read of `FunctionLookup::pending`: per-scope,
+/// visibility-gated by the chain's cutoff, innermost first.
+fn pending_operator_sources<'b>(
+    ctx: &DecideCtx<'_, '_, '_>,
+    s: &'b Scope<'b>,
+    expr: &WorkingExpression<'_>,
+) -> Vec<ProducerId> {
+    let chain = ctx.chain_deref();
+    let mut operators = chain_operators(expr);
+    operators.sort_unstable();
+    operators.dedup();
+    let mut sources: Vec<ProducerId> = Vec::new();
+    for operator in operators {
+        // Both shapes as stack runs over the operator's own borrowed text — a stored probe needs
+        // no allocation at all, where an owned key would clone the symbol twice per scope walk.
+        for key in [
+            [
+                StoredElement::Slot,
+                StoredElement::Keyword(operator),
+                StoredElement::Slot,
+            ]
+            .as_slice(),
+            [StoredElement::Keyword(operator), StoredElement::Slot].as_slice(),
+        ] {
+            for scope in s.ancestors() {
+                let cutoff = scope.binding_cutoff(chain);
+                if let Some(source) = scope.bindings().lookup_function_stored(key, cutoff).pending
+                    && !sources.contains(&source)
+                {
+                    sources.push(source);
+                }
+            }
+        }
+    }
+    sources
 }
 
 fn undeclared_operator_reason(probe: &str) -> String {

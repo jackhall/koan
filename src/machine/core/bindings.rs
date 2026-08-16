@@ -389,8 +389,9 @@ pub enum Installer {
 
 /// The identity of the declaration statement that installed a `types` entry: its
 /// [`Installer`] (the identity signal — same-declaration checks compare only this) plus its
-/// lexical position (the visibility signal — `idx < cutoff` reads it; under a detached chain
-/// the index is 0 and deliberately names no statement).
+/// lexical position (the visibility signal — `idx < cutoff` reads it, independent of installer
+/// identity: builtins sit at `idx 0` with no statement behind them, and a persistent scope's
+/// separate runs can each land a declaration at the same index).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct DeclarationSite {
     pub installer: Installer,

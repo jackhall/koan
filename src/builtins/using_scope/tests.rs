@@ -173,8 +173,10 @@ fn using_tail_value_reaches_a_later_statement_of_the_call_site_block() {
     );
 }
 
-/// A block-local bind and a block-local `FN` used by a *later statement of the same block*, under
-/// real per-statement chains (`enter_source`, not the detached-chain `run`). Both entries live in
+/// A block-local bind and a block-local `FN` used by a *later statement of the same block*,
+/// submitted as one block (`enter_source`, not the statement-at-a-time `run`) so the two
+/// top-level statements may resolve in whatever order the scheduler pops them — the index-gated
+/// visibility rule alone, not submission order, is what makes the read reach. Both entries live in
 /// the block's own scope at their plain statement indices, so the in-block reader gates by block
 /// ordering regardless of where the `USING` statement sits in its own block.
 #[test]
@@ -401,19 +403,20 @@ fn using_on_non_module_fails_dispatch() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("LET n = 5");
-    let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
+    let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "USING n SCOPE (1)"),
         ),
         scope,
     );
-    let edge = runtime.install_edge_for_test(root, scope);
-    runtime
+    let edge = test_run.runtime.install_edge_for_test(root, scope);
+    test_run
+        .runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-    let err = runtime
+    let err = test_run
+        .runtime
         .edge_result_error(edge)
         .expect_err("expected a DispatchFailed in the dispatch slot");
     assert!(

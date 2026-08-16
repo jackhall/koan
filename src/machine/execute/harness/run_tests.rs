@@ -17,10 +17,10 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
     for e in parse_all(&program, "LET x = 42") {
-        runtime.dispatch_in_scope(e, scope);
+        runtime.dispatch_in_scope(e, scope, 1);
     }
     runtime.execute().unwrap();
-    let id = runtime.dispatch_in_scope(parse_one(&program, "(x)"), scope);
+    let id = runtime.dispatch_in_scope(parse_one(&program, "(x)"), scope, 2);
     let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().unwrap();
     assert!(
@@ -67,7 +67,7 @@ fn single_identifier_short_circuit_falls_through_when_unbound() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(parse_one(&program, "(missing)"), scope);
+    let id = runtime.dispatch_in_scope(parse_one(&program, "(missing)"), scope, 1);
     let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().unwrap();
     let err = match runtime.edge_result_error(edge) {
@@ -87,8 +87,11 @@ fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    for e in parse_all(&program, "LET z = 7\nLET y = z") {
-        runtime.dispatch_in_scope(e, scope);
+    for (i, e) in parse_all(&program, "LET z = 7\nLET y = z")
+        .into_iter()
+        .enumerate()
+    {
+        runtime.dispatch_in_scope(e, scope, i + 1);
     }
     runtime.execute().unwrap();
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 7.0));
@@ -126,14 +129,17 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    for e in parse_all(
+    for (i, e) in parse_all(
         &program,
         "FN (ADD a :Number BY b :Number) -> Number = (a)\n\
          LET aa = 3\n\
          LET bb = 4\n\
          LET out = (ADD aa BY bb)",
-    ) {
-        runtime.dispatch_in_scope(e, scope);
+    )
+    .into_iter()
+    .enumerate()
+    {
+        runtime.dispatch_in_scope(e, scope, i + 1);
     }
     runtime.execute().unwrap();
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 3.0));
@@ -180,14 +186,17 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    for e in parse_all(
+    for (i, e) in parse_all(
         &program,
         "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET aa = 11\n\
          LET bb = 22\n\
          LET out = (ADD aa BY bb)",
-    ) {
-        runtime.dispatch_in_scope(e, scope);
+    )
+    .into_iter()
+    .enumerate()
+    {
+        runtime.dispatch_in_scope(e, scope, i + 1);
     }
     runtime.execute().unwrap();
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 22.0));
@@ -207,14 +216,17 @@ fn park_and_replay_minimal_program_for_miri() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    for e in parse_all(
+    for (i, e) in parse_all(
         &program,
         "LET z = 11\n\
          LET y = z\n\
          FN (DOUBLE x :Number) -> Number = (x)\n\
          LET out = (DOUBLE y)",
-    ) {
-        runtime.dispatch_in_scope(e, scope);
+    )
+    .into_iter()
+    .enumerate()
+    {
+        runtime.dispatch_in_scope(e, scope, i + 1);
     }
     runtime.execute().unwrap();
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 11.0));
@@ -237,7 +249,8 @@ fn replay_park_propagates_producer_error() {
          LET x = (UNDEFINED_FN)",
     )
     .into_iter()
-    .map(|e| runtime.dispatch_in_scope(e, scope))
+    .enumerate()
+    .map(|(i, e)| runtime.dispatch_in_scope(e, scope, i + 1))
     .collect();
     let edges: Vec<_> = ids
         .iter()
@@ -263,26 +276,33 @@ fn replay_park_propagates_producer_error() {
 /// Bare Type-tokens in `ProperType` slots of non-binders ride the same
 /// replay-park rails as bare Identifiers — see
 /// [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
+/// All three statements are submitted before any of them runs, so `a_result`'s consumer can still
+/// reach the scheduler ahead of the MODULE / SIG binders it depends on — its own index makes both
+/// visible, but their slots may still be finalizing when it dispatches, so it parks and replays
+/// once they're done.
 #[test]
-fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
+fn bare_type_token_in_typeexprref_slot_parks_while_still_finalizing() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let runtime = &mut test_run.runtime;
-    for e in parse_all(
+    for (i, e) in parse_all(
         &program,
-        "LET a_result = (int_ord :| Ordered)\n\
-         MODULE int_ord = (LET compare = 0)\n\
-         SIG Ordered = (VAL compare :Number)",
-    ) {
-        runtime.dispatch_in_scope(e, scope);
+        "MODULE int_ord = (LET compare = 0)\n\
+         SIG Ordered = (VAL compare :Number)\n\
+         LET a_result = (int_ord :| Ordered)",
+    )
+    .into_iter()
+    .enumerate()
+    {
+        runtime.dispatch_in_scope(e, scope, i + 1);
     }
     runtime.execute().unwrap();
     assert!(
         binds_module(scope, "a_result"),
-        "a_result should bind to the ascribed module value after replay-park on \
-         forward-declared MODULE / SIG",
+        "a_result should bind to the ascribed module value after parking on \
+         the still-finalizing MODULE / SIG binders",
     );
 }
 
@@ -314,7 +334,7 @@ fn let_type_to_value_name_rejected() {
 
     // The Type-classified alias is the legal form: it lands type-side.
     for e in parse_all(&program, "LET Ty = Number") {
-        test_run.runtime.dispatch_in_scope(e, scope);
+        test_run.dispatch_in_scope(e, scope);
     }
     test_run.runtime.execute().unwrap();
     assert_eq!(scope.resolve_type("Ty"), Some(KType::NUMBER));

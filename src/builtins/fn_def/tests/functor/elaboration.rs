@@ -103,7 +103,7 @@ fn let_then_fn_in_same_batch_works() {
     )
     .unwrap();
     for e in exprs {
-        test_run.runtime.dispatch_in_scope(
+        test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
             scope,
         );

@@ -137,8 +137,8 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
          ))\n\
          LET out = (PING 42 (Tick (More null)))",
     );
-    for e in exprs {
-        test_run.runtime.dispatch_in_scope(e, scope);
+    for (i, e) in exprs.into_iter().enumerate() {
+        test_run.runtime.dispatch_in_scope(e, scope, i + 1);
     }
     test_run
         .runtime

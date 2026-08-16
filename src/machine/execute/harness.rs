@@ -251,15 +251,18 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Submit an unresolved expression for the scheduler to dispatch + execute against `scope`,
-    /// inheriting the ambient (or, at top level, detached) lexical chain. The test harness's
-    /// statement-at-a-time submission door; production submission is [`Self::run_program`]'s
-    /// `enter_block`.
+    /// inheriting the ambient lexical chain — or, with no step installed, placed at `index`: the
+    /// caller-declared statement position, exactly as if the expression were the `index`-th line
+    /// of a file. Only the submission's driver (a REPL session, the test harness's cursor) knows
+    /// the position, so it is a parameter. The statement-at-a-time submission door; production
+    /// submission is [`Self::run_program`]'s `enter_block`.
     pub(crate) fn dispatch_in_scope<'a>(
         &mut self,
         expr: WorkingExpression<'a>,
         scope: &'a Scope<'a>,
+        index: usize,
     ) -> NodeId {
-        let chain = self.host.ambient_or_detached_chain();
+        let chain = self.host.statement_chain(scope, index);
         self.host
             .dispatch_in_scope_with_chain(&mut self.sched, expr, scope, chain)
     }
@@ -971,16 +974,22 @@ fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
 }
 
 impl<'run> Host<'run> {
-    /// The explicit chain when no slot step is installed: a detached chain so the visibility
-    /// predicate treats every scope as "complete" (test fixtures / top-level), else `None` to
-    /// inherit the ambient payload's chain.
-    pub(in crate::machine::execute) fn ambient_or_detached_chain(
+    /// The explicit chain when no slot step is installed: a fresh single-frame chain placing the
+    /// submission at `index` — the caller-declared statement position, numbered exactly as if the
+    /// statement were the `index`-th line of a file, so the visibility cutoff hides its own claims
+    /// and everything later while showing every earlier binding. Only the submission's driver (a
+    /// REPL session, the test harness's cursor) knows the position, so it is a parameter, never
+    /// stored or derived. With a slot step installed this is `None`, inheriting the ambient
+    /// payload's chain.
+    pub(in crate::machine::execute) fn statement_chain(
         &self,
+        scope: &Scope<'_>,
+        index: usize,
     ) -> Option<Rc<LexicalFrame>> {
         self.ambient
             .active_payload()
             .is_none()
-            .then(LexicalFrame::detached)
+            .then(|| LexicalFrame::root(scope.id, index))
     }
 
     /// Establish the run frame on the first run-lifetime submission, so every top-level slot carries
@@ -1115,7 +1124,8 @@ impl<'run> Host<'run> {
             .active_payload()
             .expect("a slot step installs the ambient payload before the body submits")
             .scope;
-        let chain = self.ambient_or_detached_chain();
+        // The expect above proves a step is active, so the chain is always the ambient one.
+        let chain = None;
         match node_scope {
             NodeScope::YokedChild(_) => {
                 // Hold the cart `Rc` in a local so the reattach is witnessed by an owned handle: it
@@ -1230,15 +1240,17 @@ impl<'run> KoanRuntime<'run> {
         NodeWork::new(short_circuit(Some(dep_error_frame()), finish), None)
     }
 
-    /// Ambient-chain submission for any `NodeWork`; with no slot step installed it synthesizes a
-    /// detached chain so the visibility predicate treats every scope as "complete".
+    /// Ambient-chain submission for any `NodeWork`; with no slot step installed the node is placed
+    /// at the caller-declared statement position `index`, exactly as [`Self::dispatch_in_scope`]
+    /// places an expression.
     pub(in crate::machine::execute) fn add(
         &mut self,
         work: NodeWork<KoanWorkload>,
         sub_work: &[NodeId],
         scope: &'run Scope<'run>,
+        index: usize,
     ) -> NodeId {
-        let explicit_chain = self.host.ambient_or_detached_chain();
+        let explicit_chain = self.host.statement_chain(scope, index);
         self.add_with_chain(work, sub_work, scope, explicit_chain)
     }
 
@@ -1280,8 +1292,9 @@ impl<'run> KoanRuntime<'run> {
         sub_work: &[NodeId],
         scope: &'run Scope<'run>,
         finish: TerminalDepFinish<'run>,
+        index: usize,
     ) -> NodeId {
-        self.add(Self::awaiting(finish), sub_work, scope)
+        self.add(Self::awaiting(finish), sub_work, scope, index)
     }
 }
 

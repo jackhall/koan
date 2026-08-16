@@ -240,19 +240,20 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        let runtime = &mut test_run.runtime;
-        let root = runtime.dispatch_in_scope(
+        let root = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 parse_one(&program, "UNION (Ok :Number Err :Str)"),
             ),
             scope,
         );
-        let root = runtime.install_edge_for_test(root, scope);
-        runtime
+        let root = test_run.runtime.install_edge_for_test(root, scope);
+        test_run
+            .runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-        let err = runtime
+        let err = test_run
+            .runtime
             .edge_result_error(root)
             .expect_err("a bare anonymous UNION (...) must fail dispatch");
         assert!(
@@ -417,51 +418,54 @@ mod tests {
         );
     }
 
-    /// Two `UNION`s of one name submitted through the DETACHED chain (`dispatch_in_scope`, not
-    /// `enter_block`) at equal arity. Every detached submission inherits no ambient payload and
-    /// falls back to `LexicalFrame::detached`, whose lexical index is `0` for every statement — so
-    /// the two declarations name no position to tell them apart, and their equal arity matched the
-    /// pre-node recovery probe as one declaration, silently returning the first union. Statement
-    /// identity gives each `dispatch_in_scope` its own [`StatementId`], so the second install
-    /// raises `Rebind`.
-    /// This is the item's headline gap: equal arity through the detached path.
+    /// Two `UNION`s of one name submitted statement-at-a-time (`TestRun::dispatch_in_scope`, not
+    /// `enter_block`) at equal arity still redeclare distinctly. Every statement-at-a-time
+    /// submission carries its own real lexical position — the numbered-chain world has no
+    /// position-free submission — and submitting is the one act that mints a fresh
+    /// [`StatementId`], so the second declaration's installer differs from the first's stored
+    /// entry regardless of the two schemas' matching arity, and the second install raises
+    /// `Rebind`. Redeclaration identity is decided by the installing [`StatementId`] alone,
+    /// exactly as [`same_scope_union_redeclare_rebinds`] pins for block submission — this test
+    /// pins the same identity through the statement-at-a-time door instead.
     #[test]
-    fn detached_chain_union_redeclare_rebinds() {
+    fn statement_at_a_time_union_redeclare_errors() {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        let runtime = &mut test_run.runtime;
-        let first = runtime.dispatch_in_scope(
+        let first = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 parse_one(&program, "UNION Maybe = (Some :Number None :Null)"),
             ),
             scope,
         );
-        let first = runtime.install_edge_for_test(first, scope);
-        runtime
+        let first = test_run.runtime.install_edge_for_test(first, scope);
+        test_run
+            .runtime
             .execute()
             .expect("execute does not surface per-slot errors");
         assert!(
-            runtime.edge_result_error(first).is_ok(),
+            test_run.runtime.edge_result_error(first).is_ok(),
             "the first declaration should succeed, got {:?}",
-            runtime.edge_result_error(first).err(),
+            test_run.runtime.edge_result_error(first).err(),
         );
-        let second = runtime.dispatch_in_scope(
+        let second = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 parse_one(&program, "UNION Maybe = (Some :Str None :Null)"),
             ),
             scope,
         );
-        let second = runtime.install_edge_for_test(second, scope);
-        runtime
+        let second = test_run.runtime.install_edge_for_test(second, scope);
+        test_run
+            .runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        let err = runtime
+        let err = test_run
+            .runtime
             .edge_result_error(second)
-            .expect_err("redeclaring Maybe through the detached chain should error");
+            .expect_err("redeclaring Maybe statement-at-a-time should error");
         assert!(
             matches!(&err.kind, KErrorKind::Rebind { name } if name == "Maybe"),
             "expected Rebind naming Maybe, got {err}",

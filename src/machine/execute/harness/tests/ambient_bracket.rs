@@ -34,7 +34,7 @@ fn slot_step_bracket_restores_ambient_on_unwind() {
         .clone();
     let payload = NodePayload {
         scope: NodeScope::Yoked,
-        chain: LexicalFrame::detached(),
+        chain: LexicalFrame::root(test_run.scope.id, 1),
     };
 
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -72,7 +72,7 @@ fn slot_step_bracket_restores_ambient_on_normal_return() {
         .clone();
     let payload = NodePayload {
         scope: NodeScope::Yoked,
-        chain: LexicalFrame::detached(),
+        chain: LexicalFrame::root(test_run.scope.id, 1),
     };
 
     let step_end_frame = host.with_slot_step(frame.clone(), payload, |host| {

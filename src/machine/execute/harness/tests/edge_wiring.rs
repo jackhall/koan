@@ -71,6 +71,7 @@ fn park_on_errored_producer_propagates_producer_error() {
         ),
         &[],
         scope,
+        3,
     );
     let watch = runtime.install_edge_for_test(consumer, scope);
     runtime.execute().unwrap();

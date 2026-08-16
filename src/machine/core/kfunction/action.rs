@@ -283,7 +283,8 @@ impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
     /// The installing declaration's identity: this body's statement ([`Self::installer`]) paired
     /// with its lexical position ([`Self::bind_index`]). A type binder threads this into its
     /// `types` entry so a same-declaration check compares the installing statement, not a lexical
-    /// position that a detached chain cannot tell apart.
+    /// position that a driver can hand to two distinct statements — e.g. a persistent scope's
+    /// separate runs, each numbering from 1 again.
     pub fn declaration_site(&self) -> DeclarationSite {
         DeclarationSite {
             installer: self.installer,

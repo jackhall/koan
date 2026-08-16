@@ -20,14 +20,14 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
     // The slot count below is absolute, so release the definition statements' slots first: the
     // store's length is a high-water mark over the whole scheduler's life.
     test_run.reset_slots();
-    let runtime = &mut test_run.runtime;
-    runtime.dispatch_in_scope(
+    test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "AA"),
         ),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     runtime.execute().expect("AA should run");
 
     assert_eq!(captured.borrow().as_slice(), b"ok\n");
@@ -56,15 +56,15 @@ fn chained_tail_calls_reuse_frames() {
     // The slot count below is absolute, so release the definition statements' slots first: the
     // store's length is a high-water mark over the whole scheduler's life.
     test_run.reset_slots();
-    let runtime = &mut test_run.runtime;
     // Parse before the snapshot: the parse bumps into program storage, and that storage's own
     // region mint is not a call's mint.
     let call = parse_one(&program, "AA");
     let minted_before = region_metrics().minted_total;
-    runtime.dispatch_in_scope(
+    test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     runtime.execute().expect("AA should run");
 
     assert_eq!(captured.borrow().as_slice(), b"ok\n");
@@ -131,15 +131,15 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
     // The slot count below is absolute, so release the definition statements' slots first: the
     // store's length is a high-water mark over the whole scheduler's life.
     test_run.reset_slots();
-    let runtime = &mut test_run.runtime;
     // Parse before the snapshot: the parse bumps into program storage, and that storage's own
     // region mint is not a call's mint.
     let call = parse_one(&program, "AA");
     let minted_before = region_metrics().minted_total;
-    runtime.dispatch_in_scope(
+    test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     runtime.execute().expect("AA should run");
 
     assert_eq!(
@@ -223,14 +223,14 @@ fn tail_call_enforces_first_callers_return_contract() {
         "FN (GG) -> Str = (\"hello\")\n\
          FN (FF) -> Number = (GG)",
     );
-    let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "FF"),
         ),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     let edge = runtime.install_edge_for_test(id, scope);
     runtime
         .execute()
@@ -394,18 +394,16 @@ fn body_subexpression_slots_recycle_across_calls() {
          ))",
     );
 
-    let runtime = &mut test_run.runtime;
-
     // Warmup: populates the free-list with the body's transient pool.
-    runtime.dispatch_in_scope(
+    test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "LOOK (Bit (One null))"),
         ),
         scope,
     );
-    runtime.execute().expect("LOOK should run");
-    let after_warmup = runtime.len();
+    test_run.runtime.execute().expect("LOOK should run");
+    let after_warmup = test_run.runtime.len();
 
     let n = 30;
     for i in 1..=n {
@@ -414,16 +412,16 @@ fn body_subexpression_slots_recycle_across_calls() {
         } else {
             "LOOK (Bit (Zero null))"
         };
-        runtime.dispatch_in_scope(
+        test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 parse_one(&program, src),
             ),
             scope,
         );
-        runtime.execute().expect("LOOK should run");
+        test_run.runtime.execute().expect("LOOK should run");
     }
-    let after_batch = runtime.len();
+    let after_batch = test_run.runtime.len();
 
     assert_eq!(
         captured.borrow().iter().filter(|&&b| b == b'\n').count(),

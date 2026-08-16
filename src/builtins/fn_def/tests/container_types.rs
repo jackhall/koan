@@ -41,14 +41,14 @@ fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (BAD) -> :(LIST OF Number) = ([2 \"hello\"])");
-    let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "BAD"),
         ),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().expect("scheduler runs to completion");
     assert!(runtime.edge_result_error(edge).is_err());
@@ -139,14 +139,14 @@ fn fn_returning_typed_list_rejects_wrong_element_type() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (BAD) -> :(LIST OF Number) = ([1 \"x\"])");
-    let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "BAD"),
         ),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().expect("scheduler runs to completion");
     let res = runtime.edge_result_error(edge);
@@ -189,14 +189,14 @@ fn fn_with_typed_function_param_rejects_name_mismatch() {
     let scope = test_run.scope;
     test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
     test_run.run("LET g = FN (SHOW n :Number) -> Str = (\"hi\")");
-    let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
+    let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "USE g"),
         ),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()
@@ -259,14 +259,14 @@ fn fn_with_typed_function_param_rejects_width_extra() {
     let scope = test_run.scope;
     test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
     test_run.run("LET g = FN (SHOW x :Number, y :Str) -> Str = (\"hi\")");
-    let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
+    let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "USE g"),
         ),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()
@@ -314,14 +314,14 @@ fn fn_typed_function_param_incomparable_is_ambiguous() {
     test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"num\")");
     test_run.run("FN (USE f :(FN (x :Str) -> Str)) -> Str = (\"str\")");
     test_run.run("LET g = FN (GET x :Any) -> Str = (\"v\")");
-    let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
+    let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "USE g"),
         ),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()
@@ -428,14 +428,14 @@ fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
     let scope = test_run.scope;
     test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
     test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
-    let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
+    let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "DESCRIBE nope"),
         ),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()
@@ -460,14 +460,14 @@ fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
     let scope = test_run.scope;
     test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
     test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
-    let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
+    let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "DESCRIBE [1 \"a\"]"),
         ),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()
@@ -534,14 +534,14 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (HEAD xs :(LIST OF Number)) -> Number = (1)");
-    let runtime = &mut test_run.runtime;
-    let root = runtime.dispatch_in_scope(
+    let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "HEAD [\"a\"]"),
         ),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     let edge = runtime.install_edge_for_test(root, scope);
     runtime
         .execute()

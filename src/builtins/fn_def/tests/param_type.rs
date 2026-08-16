@@ -48,7 +48,7 @@ fn fn_typed_param_rejects_mismatched_call() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
-    let root = test_run.runtime.dispatch_in_scope(
+    let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "DOUBLE \"hi\""),
@@ -89,7 +89,7 @@ fn fn_param_without_annotation_is_rejected() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "FN (DOUBLE x) -> Number = (x)"),
@@ -121,7 +121,7 @@ fn fn_param_with_unknown_type_name_is_rejected() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "FN (DOUBLE x :Bogus) -> Number = (x)"),

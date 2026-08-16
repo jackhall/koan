@@ -104,7 +104,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         ],
     );
     let mut runtime = KoanRuntime::new(program.brand(), Box::new(std::io::sink()));
-    let slot = runtime.dispatch_in_scope(working(&program, expr), inner);
+    let slot = runtime.dispatch_in_scope(working(&program, expr), inner, 1);
     let id = runtime.install_edge_for_test(slot, inner);
     runtime.execute().unwrap();
     let (matched, summary) = runtime
@@ -154,7 +154,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
         vec![Spanned::bare(ExpressionPart::Identifier("foo"))],
     );
     let mut runtime = KoanRuntime::new(program.brand(), Box::new(std::io::sink()));
-    let slot = runtime.dispatch_in_scope(working(&program, expr), scope);
+    let slot = runtime.dispatch_in_scope(working(&program, expr), scope, 1);
     let id = runtime.install_edge_for_test(slot, scope);
     runtime.execute().unwrap();
     let types = TypeRegistry::new();
@@ -207,7 +207,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
         ],
     );
     let mut runtime = KoanRuntime::new(program.brand(), Box::new(std::io::sink()));
-    let slot = runtime.dispatch_in_scope(working(&program, expr), scope);
+    let slot = runtime.dispatch_in_scope(working(&program, expr), scope, 1);
     let id = runtime.install_edge_for_test(slot, scope);
     runtime.execute().unwrap();
     assert!(

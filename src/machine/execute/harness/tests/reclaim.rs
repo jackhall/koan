@@ -27,8 +27,8 @@ fn a_finished_program_reclaims_every_slot() {
          LET y = 2\n\
          LET z = (LET a = 3)",
     );
-    for e in exprs {
-        runtime.dispatch_in_scope(e, root);
+    for (i, e) in exprs.into_iter().enumerate() {
+        runtime.dispatch_in_scope(e, root, i + 1);
     }
     runtime.execute().expect("program should run");
 
@@ -59,8 +59,8 @@ fn no_notify_list_names_a_released_edge() {
          LET y = 2\n\
          LET z = (LET a = 3)",
     );
-    for e in exprs {
-        runtime.dispatch_in_scope(e, root);
+    for (i, e) in exprs.into_iter().enumerate() {
+        runtime.dispatch_in_scope(e, root, i + 1);
     }
     runtime.execute().expect("program should run");
 
