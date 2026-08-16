@@ -1,8 +1,8 @@
 use crate::builtins::test_support::TestRun;
 use crate::machine::BindingIndex;
 use crate::machine::ProducerId;
-use crate::machine::Resolution;
 use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
+use crate::machine::execute::Resolution;
 use crate::machine::execute::decide::resolve::{TypeLeafChannels, resolve_name};
 use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject, KType};

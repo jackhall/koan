@@ -3,17 +3,17 @@
 //! user-defined body runs through [`crate::machine::core::kfunction::exec::run_user_fn`] and its
 //! [`ExecOutcome`] is lowered to an [`Action::Tail`] the shared
 //! [`run_action`](super::super::runtime::run_action) interprets.
-//! `invoke` is a **pure decide**: it reads a `SchedulerView` and the per-call `frame` the harness
+//! `invoke` is a **pure decide**: it reads a [`DecideCtx`] and the per-call `frame` the harness
 //! already acquired (frame acquisition is the harness's write), and hands the deferred body dispatch
 //! to `run_action` declaratively. Kept out of `ctx.rs` (the dispatcher facade) so the dispatcher core
 //! stays thin; pure body semantics live one layer down in [`crate::machine::core::kfunction::exec`].
 
+use super::super::harness::KoanWorkload;
 use super::super::ignore_results;
 use super::super::nodes::{ChainOp, NodeWork};
 use super::super::obligation::{ReturnObligation, with_obligation};
 use super::super::outcome::Outcome;
-use super::super::runtime::KoanWorkload;
-use super::SchedulerView;
+use super::ctx::DecideCtx;
 use std::rc::Rc;
 
 use crate::machine::core::ReturnContract;
@@ -23,7 +23,6 @@ use crate::machine::core::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
 use crate::machine::model::{Record, SignatureElement};
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
-use crate::scheduler::ResolvedDeps;
 
 /// Fold a resolved call into a [`Outcome::Continue`] — the dispatcher's one invoke entry, routing on
 /// the picked body:
@@ -40,7 +39,7 @@ use crate::scheduler::ResolvedDeps;
 /// the continuation it installs with the ambient obligation, keeping the first caller's declared
 /// return alive across the frame-installing hop; the nested tail's own contract loses.
 pub(super) fn invoke_continue<'step>(
-    view: &SchedulerView<'_, 'step, '_>,
+    view: &DecideCtx<'_, 'step, '_>,
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
@@ -68,18 +67,15 @@ fn builtin_work<'step>(
     let continuation = ignore_results(Box::new(move |view, _idx| {
         invoke_builtin(view, picked, working_expr)
     }));
-    let continuation = match obligation {
-        Some(obligation) => with_obligation(obligation, continuation),
-        None => continuation,
-    };
-    NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier))
+    let continuation = with_obligation(obligation, continuation);
+    NodeWork::new(continuation, Some(carrier))
 }
 
 /// Run a resolved **builtin** call through the action harness. Frameless (`Inherit`), so the working
 /// expression and the slot's cart are the same region here as at the decide that folded the call —
 /// nothing crosses a region boundary and the read is an ordinary resident read.
 fn invoke_builtin<'step>(
-    view: &SchedulerView<'_, 'step, '_>,
+    view: &DecideCtx<'_, 'step, '_>,
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
@@ -113,7 +109,7 @@ fn invoke_builtin<'step>(
 /// The cart rides the [`FramePlacement::FreshTail`] rather than being minted at apply, which is what
 /// puts the bind on this side of the boundary.
 fn enter_user_fn<'step>(
-    view: &SchedulerView<'_, 'step, '_>,
+    view: &DecideCtx<'_, 'step, '_>,
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
@@ -140,9 +136,10 @@ fn enter_user_fn<'step>(
         region: Rc::clone(&frame),
     };
     // A deferred-return FN dispatched as a tail call inside an established contract chain skips
-    // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
-    let in_chain = view.in_contract_chain();
+    // resolving its own (keep-first-discarded) return type — see `run_user_fn`. An established
+    // chain is exactly one with a live obligation, so the duplicate's presence answers both reads.
     let obligation = view.current_obligation_duplicate();
+    let in_chain = obligation.is_some();
     let carrier = working_expr.summarize();
     match run_user_fn(
         function,
@@ -218,32 +215,27 @@ fn body_continue<'step>(
     obligation: Option<ReturnObligation>,
 ) -> Outcome<'step> {
     let work_frame = Rc::clone(&frame);
-    let continuation = ignore_results(Box::new(
-        move |view: &SchedulerView<'_, 'step, '_>, _idx| {
-            // The body crosses into the scheduler here, one working node per statement: each is a
-            // slice copy of the parsed run into the installed cart's own region.
-            let brand = view.current_scope().brand();
-            super::super::runtime::run_action(
-                view,
-                Action::tail(
-                    leading
-                        .into_iter()
-                        .map(|e| WorkingExpression::from_ast(brand, e))
-                        .collect(),
-                    WorkingExpression::from_ast(brand, tail),
-                    contract,
-                    FramePlacement::Inherit,
-                    BlockEntry::FrameScope(work_frame),
-                ),
-            )
-        },
-    ));
-    let continuation = match obligation {
-        Some(obligation) => with_obligation(obligation, continuation),
-        None => continuation,
-    };
+    let continuation = ignore_results(Box::new(move |view: &DecideCtx<'_, 'step, '_>, _idx| {
+        // The body crosses into the scheduler here, one working node per statement: each is a
+        // slice copy of the parsed run into the installed cart's own region.
+        let brand = view.current_scope().brand();
+        super::run_action(
+            view,
+            Action::tail(
+                leading
+                    .into_iter()
+                    .map(|e| WorkingExpression::from_ast(brand, e))
+                    .collect(),
+                WorkingExpression::from_ast(brand, tail),
+                contract,
+                FramePlacement::Inherit,
+                BlockEntry::FrameScope(work_frame),
+            ),
+        )
+    }));
+    let continuation = with_obligation(obligation, continuation);
     Outcome::Continue {
-        work: NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier)),
+        work: NodeWork::new(continuation, Some(carrier)),
         frame: FramePlacement::FreshTail { frame },
         chain: ChainOp::Unchanged,
         block_entry: BlockEntry::None,
@@ -260,7 +252,7 @@ fn body_continue<'step>(
 /// value-embedding builtin's fold) works off an envelope that survives the call independently of
 /// that region. Once per call, not once per reader.
 fn carriers_from_expr<'step>(
-    view: &SchedulerView<'_, 'step, '_>,
+    view: &DecideCtx<'_, 'step, '_>,
     working_expr: &WorkingExpression<'step>,
 ) -> Vec<Option<DeliveredCarried>> {
     working_expr
@@ -301,7 +293,7 @@ fn map_arg_carriers<'e, 'step>(
 /// per-parameter reach carriers (a value-embedding body folds / merges the one it embeds; an
 /// absent entry is region-pure).
 fn run_action_builtin<'step>(
-    view: &SchedulerView<'_, 'step, '_>,
+    view: &DecideCtx<'_, 'step, '_>,
     f: crate::machine::core::ActionFn,
     args: Record<crate::machine::model::Held<'step>>,
     arg_carriers: Record<&DeliveredCarried>,
@@ -327,7 +319,7 @@ fn run_action_builtin<'step>(
     };
     // `run_action` lowers the `Action` to an `Outcome`; the harness applies the result. The step
     // view carries the ambient obligation a tail action keep-firsts against.
-    super::super::runtime::run_action(view, action)
+    super::run_action(view, action)
 }
 
 /// Deliver the call's value arguments: after this, every value part of `working_expr` has a delivery
@@ -346,7 +338,7 @@ fn run_action_builtin<'step>(
 /// contribute nothing. Any other value part is unreachable (the bind sites resolve value parts to
 /// `Spliced`/literal first) and surfaces as a diagnostic rather than a silent mis-bind.
 fn deliver_value_args<'step>(
-    view: &SchedulerView<'_, 'step, '_>,
+    view: &DecideCtx<'_, 'step, '_>,
     working_expr: &WorkingExpression<'step>,
     arg_carriers: &mut [Option<DeliveredCarried>],
 ) -> Result<(), KError> {

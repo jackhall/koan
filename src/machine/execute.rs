@@ -23,6 +23,8 @@ mod obligation;
 mod outcome;
 mod producer_id;
 mod step_carried;
+#[cfg(test)]
+mod test_support;
 
 pub use harness::KoanRuntime;
 pub(crate) use interpret::seed_run_root;
@@ -34,6 +36,10 @@ pub(in crate::machine::execute) use outcome::{
 pub use producer_id::ProducerId;
 pub(crate) use producer_id::{deps_on, extend_deps_on};
 pub use step_carried::{StepCarried, drive_step_allocator};
+#[cfg(test)]
+pub(crate) use test_support::edge_delivered;
 
+pub(crate) use decide::DispatchOutcome;
+#[cfg(test)]
+pub(crate) use decide::Resolution;
 pub(crate) use decide::{BrandCompose, FieldListDeferral, build_type_operand, seal_type_identity};
-pub(crate) use decide::{DispatchOutcome, Resolution};

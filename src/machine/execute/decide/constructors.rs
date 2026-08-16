@@ -27,7 +27,7 @@ use crate::witnessed::{Delivered, RegionHandle, reattachable};
 
 use super::super::outcome::DepTerminal;
 use super::super::{StepCarried, WitnessedDepFinish};
-use super::ctx::SchedulerView;
+use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
 use crate::scheduler::Deps;
 
@@ -354,7 +354,7 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
 /// Decide a constructor park: every value part is a fresh sub-Dispatch dep (a single-part
 /// `Expression` wrapping routes through normal classification), and a freshly-minted sub is never
 /// terminal in the same step (submission is enqueue-then-drain), so there is no inline-ready case —
-/// the slot always parks as a [`Outcome::ParkThenContinue`]. The finish folds the resolved value
+/// the slot always parks as an [`Outcome::Park`]. The finish folds the resolved value
 /// carriers into the wrapped value **inside the witness closure** ([`finish_witnessed`]) so it names
 /// every region it reaches; dep errors propagate frameless.
 fn launch<'step>(
@@ -389,9 +389,9 @@ fn launch<'step>(
 /// moved into the brand closure alongside the handle. `KType` is a bare interned handle (a `u128`
 /// into the registry) that points into no region, so it is region-pure data the yoke may carry in:
 /// nothing is composed, and the operand's reach is exactly the dest region's own, born co-located
-/// rather than paired with an asserted witness. The envelope it seals into is [`dest_brand`]'s shape
-/// exactly — homed in `dest_frame`, covering nothing beyond it — since a handle plus a scalar reaches
-/// nothing else.
+/// rather than paired with an asserted witness. The envelope it seals into is
+/// [`Delivered::destination`]'s shape exactly — homed in `dest_frame`, covering nothing beyond it —
+/// since a handle plus a scalar reaches nothing else.
 pub(crate) fn build_type_operand(
     dest_frame: Rc<FrameStorage>,
     identity: KType,
@@ -415,7 +415,7 @@ pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: KType) -> S
 /// its own reach rather than an asserted co-location. Type-checks run before the build (read out of
 /// the carrier), so the closure is infallible.
 fn finish_witnessed<'step>(
-    view: &SchedulerView<'_, 'step, '_>,
+    view: &DecideCtx<'_, 'step, '_>,
     kind: &CtorKind,
     terminals: &[&DepTerminal<'_>],
 ) -> Result<DeliveredCarried, KError> {

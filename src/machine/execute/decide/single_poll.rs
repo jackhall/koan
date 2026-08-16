@@ -16,19 +16,19 @@ use crate::machine::{KError, KErrorKind, NameLookup};
 use super::super::StepCarried;
 use super::super::WitnessedDepFinish;
 use super::super::lift::relocate_seam;
-use super::super::run_loop::dest_brand;
 use super::apply_callable::{ResolvedCallable, apply_callable};
-use super::ctx::SchedulerView;
+use super::ctx::DecideCtx;
 use super::{
     Await, DepRequest, Outcome, TypeChannel, become_dispatch, forward_to_producer, park_resume,
     type_channel,
 };
 use crate::scheduler::Deps;
+use crate::witnessed::Delivered;
 
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
 pub(super) fn bare_identifier<'step, 'b>(
-    ctx: &SchedulerView<'_, 'step, '_>,
+    ctx: &DecideCtx<'_, 'step, '_>,
     s: &'b Scope<'b>,
     name: &str,
 ) -> Outcome<'step> {
@@ -45,7 +45,7 @@ pub(super) fn bare_identifier<'step, 'b>(
 }
 
 pub(super) fn bare_type_leaf<'step, 'b>(
-    ctx: &SchedulerView<'_, 'step, '_>,
+    ctx: &DecideCtx<'_, 'step, '_>,
     s: &'b Scope<'b>,
     t: TypeIdentifier<'step>,
 ) -> Outcome<'step> {
@@ -68,13 +68,13 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         TypeChannel::Parked(source) => park_resume(
             vec![source],
             None,
-            Box::new(move |ctx, _idx| ctx.with_current_scope(|s| bare_type_leaf(ctx, s, t))),
+            Box::new(move |ctx, _idx| bare_type_leaf(ctx, ctx.current_scope(), t)),
         ),
     }
 }
 
 pub(super) fn sigiled_type_expr<'step>(
-    ctx: &SchedulerView<'_, 'step, '_>,
+    ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let inner = match expr.parts.first().map(|part| part.value) {
@@ -92,7 +92,7 @@ pub(super) fn sigiled_type_expr<'step>(
 /// through a dep-finish when a field forward-references or sub-dispatches. No type-constructor
 /// builtin is involved — the record type is structural.
 pub(super) fn record_type<'step>(
-    ctx: &SchedulerView<'_, 'step, '_>,
+    ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let fields = match expr.parts.first().map(|part| part.value) {
@@ -106,7 +106,7 @@ pub(super) fn record_type<'step>(
     };
     let chain = ctx.active_chain();
     // The field-list elaborator is a pure decide: fold the structural record type now, or declare
-    // its forward-ref/sub-dispatch deferral as a `ParkThenContinue`.
+    // its forward-ref/sub-dispatch deferral as a `Park`.
     super::field_list::elaborate_record_value(ctx, fields, chain)
 }
 
@@ -114,7 +114,7 @@ pub(super) fn record_type<'step>(
 /// literal-shaped expressions. Skips the bucket lookup + builtin call
 /// the Keyworded path would otherwise route through.
 pub(super) fn literal_pass_through<'step>(
-    ctx: &SchedulerView<'_, 'step, '_>,
+    ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let only = expr
@@ -173,21 +173,21 @@ pub(super) fn literal_pass_through<'step>(
     }
 }
 
-/// Park the slot on a single literal-producer dep as a [`Outcome::ParkThenContinue`] whose finish
-/// folds the producer's carrier into this slot's own witnessed terminal — relocating the value into
-/// the consumer region (`transfer_into`) and naming its reach on the carrier, so the literal's reach
+/// Park the slot on a single literal-producer dep as an [`Outcome::Park`] whose finish folds the
+/// producer's carrier into this slot's own witnessed terminal — relocating the value into the
+/// consumer region (`transfer_into`) and naming its reach on the carrier, so the literal's reach
 /// rides the terminal by construction rather than being recomputed beside it. The harness submits the
 /// literal and owns it; a dep error short-circuits frameless before the finish runs.
 fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
     let finish: WitnessedDepFinish<'step> = Box::new(|view, deps| {
-        // The dest brand is `yoke`d into the frame that owns the consumer scope's region, witnessed by
-        // it — co-located by construction rather than paired with an asserted singleton. It is a bare
-        // region handle (empty reach); the seam composes the literal producer's reach into it and
-        // homes the product in the consumer's own frame, which the step's seal re-pins — so
-        // `born_delivered` releases it and the foreign coverage rides on.
+        // The destination operand is `view.dest_frame()`'s own region handle, sealed as an envelope
+        // witnessed by it — co-located by construction rather than paired with an asserted
+        // singleton. It is a bare region handle (empty reach); the seam composes the literal
+        // producer's reach into it and homes the product in the consumer's own frame, which the
+        // step's seal re-pins — so `born_delivered` releases it and the foreign coverage rides on.
         Ok(StepCarried::born_delivered(relocate_seam(
             &view.current_scope().lift_spliced(&deps[0].cell),
-            dest_brand(view.dest_frame()),
+            Delivered::destination(view.dest_frame()),
         )))
     });
     Await::on(Deps::from_requests([dep])).finish_witnessed(finish)
@@ -202,7 +202,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
 /// recursive/forward type) parks on the binder's claim edge and re-runs `type_call` on wake. A name
 /// with no claim and no binding is `UnboundName`.
 pub(super) fn type_call<'step>(
-    ctx: &SchedulerView<'_, 'step, '_>,
+    ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let head_t = match expr.parts[0].value {

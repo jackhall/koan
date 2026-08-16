@@ -272,7 +272,9 @@ impl<'run> KoanRuntime<'run> {
 
     /// Open an edge's delivered terminal at a rank-2 brand and hand the value to `f`, returning its
     /// result or the terminal's error — the destination-verb read. See
-    /// [`Scheduler::read_edge_result_with`].
+    /// [`Scheduler::read_edge_result_with`]. In-crate tests read values through this; production
+    /// reads go through the scheduler directly.
+    #[cfg(test)]
     pub(crate) fn read_edge_result_with<R>(
         &self,
         edge: EdgeId,

@@ -144,8 +144,7 @@ pub(crate) fn extract_terminal<'a>(
     scope: &'a Scope<'a>,
     edge: EdgeId,
 ) -> Carried<'a> {
-    let delivered = runtime
-        .edge_delivered(edge, scope)
+    let delivered = crate::machine::execute::edge_delivered(runtime, edge, scope)
         .expect("terminal should be a value, not an error");
     // Reuse the production relocation: a value that would otherwise keep region storage behind — a
     // substrate carrier, a bare string — is totally rebuilt into `scope`'s region through the seam

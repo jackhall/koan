@@ -7,12 +7,12 @@
 //! through the scope chain (innermost visible wins, like every other name; see
 //! [the lookup protocol](../../../../design/typing/lookup-protocol.md)).
 //!
-//! A miss first probes the chain's operators for a still-finalizing `OP` declaration — a
-//! pending-overload entry under either bucket key an operator body registers — and parks on it
-//! rather than erroring, so an operator declared earlier in the same submitted block resolves
-//! whatever order the scheduler pops the statements in. With nothing pending, a miss — a
-//! cross-group operator mix, or an operator no module declared — surfaces a structured
-//! [`KErrorKind::DispatchFailed`]. A hit reduces the run by the resolved group's
+//! A registry miss is a resolution error, never a park: the binding tables' exclusive visibility
+//! cutoff makes every name and declaration lexically well-founded (a statement's own claim is
+//! invisible to its own subtree, and a lexically-later declaration is not visible either), so an
+//! `OP` a chain names cannot still be finalizing in a way this arm could usefully wait on. A miss —
+//! a cross-group operator mix, or an operator no visible module declared — surfaces directly as a
+//! structured [`KErrorKind::DispatchFailed`]. A hit reduces the run by the resolved group's
 //! declared mode: [`ReductionMode::FoldLeft`] rewrites the chain into nested binary dispatches
 //! (see [`reduce_fold_left`]), [`ReductionMode::FoldRight`] mirrors it right-associated (see
 //! [`reduce_fold_right`]), [`ReductionMode::Unary`] rewrites it into one keyword-first call over
@@ -23,36 +23,38 @@
 //! itself rather than purely rewriting syntax, since a shared middle operand must evaluate exactly
 //! once.
 
-use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
 use crate::machine::model::Part;
 use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
-use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode, StoredElement};
-use crate::machine::{KError, KErrorKind, NodeId};
+use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
+use crate::machine::{KError, KErrorKind, TraceFrame};
+use crate::scheduler::Deps;
 use crate::source::{Span, Spanned};
 
-use super::ctx::SchedulerView;
-use super::{Outcome, become_dispatch, park_resume_labelled, working_frame};
+use super::super::TerminalDepFinish;
+use super::ctx::DecideCtx;
+use super::{Await, DepPlacement, DepRequest, Outcome, become_dispatch, working_frame};
 
 /// The probe is `Some` for every `OperatorChain` (the classifier guarantees it), so a
 /// `None` probe is a classification bug.
 ///
-/// Every path but the pending-`OP` park is terminal (no scheduler write), so this decides against a
-/// read-only [`SchedulerView`] and returns [`Outcome::Done`]. `id` is this slot's own node, needed
-/// to classify a park edge's producers.
+/// Every path is terminal (no scheduler write, no park on the registry read itself), so this
+/// decides against a read-only [`DecideCtx`] and returns [`Outcome::Done`].
 pub(in crate::machine::execute) fn run<'step, 'b>(
-    ctx: &SchedulerView<'_, 'step, '_>,
+    ctx: &DecideCtx<'_, 'step, '_>,
     s: &'b Scope<'b>,
     expr: &WorkingExpression<'step>,
-    id: NodeId,
 ) -> Outcome<'step> {
     let probe = expr
         .operator_probe()
         .expect("OperatorChain shape guarantees a cached operator probe");
     let chain = ctx.chain_deref();
     match s.resolve_operator_group_delivered(probe, chain) {
-        None => park_on_pending_operators(ctx, s, expr, id, probe),
+        None => Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
+            expr: expr.summarize(),
+            reason: undeclared_operator_reason(probe),
+        }))),
         Some(delivered) => {
             // Everything the reducers need is read out inside the envelope's one open, so the
             // record's own borrow never escapes and the envelope's pins drop before the reduce.
@@ -165,7 +167,7 @@ fn wrap_as_operand<'step>(
 /// installs). The outermost expression stays a bare 3-part expression — never itself wrapped in
 /// `Expression(..)` — so [`become_dispatch`] re-enters ordinary dispatch on it directly.
 fn reduce_fold_left<'step>(
-    ctx: &SchedulerView<'_, 'step, '_>,
+    ctx: &DecideCtx<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
@@ -201,7 +203,7 @@ fn reduce_fold_left<'step>(
 /// 3-part expression — never itself wrapped in `Expression(..)` — so [`become_dispatch`]
 /// re-enters ordinary dispatch on it directly.
 fn reduce_fold_right<'step>(
-    ctx: &SchedulerView<'_, 'step, '_>,
+    ctx: &DecideCtx<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
@@ -240,7 +242,7 @@ fn reduce_fold_right<'step>(
 /// verbatim: a list literal's own element scheduling resolves a bare name against scope and
 /// dispatches a parenthesized element, so a run's operands need no per-kind rewrite.
 fn reduce_unary<'step>(
-    ctx: &SchedulerView<'_, 'step, '_>,
+    ctx: &DecideCtx<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
@@ -288,11 +290,11 @@ fn reduce_unary<'step>(
 /// dispatch through their normal lane via the one-part wrapper `install_pairwise_fold` builds);
 /// once every operand resolves, the finish splices each resolved cell into the up-to-two pair
 /// expressions it feeds (a `.duplicate()` per embed site) and folds the pairs through the group's
-/// combiner in the declared direction. See [`SchedulerView::install_pairwise_fold`] for the
-/// staging + finish mechanics (mirrors the shared eager-subs pattern in `ctx.rs`, but splices
-/// into a fresh pair-tree rather than back into the original expression's own slots).
+/// combiner in the declared direction. See [`install_pairwise_fold`] for the staging + finish
+/// mechanics (mirrors the shared eager-subs pattern in `ctx.rs`, but splices into a fresh pair-tree
+/// rather than back into the original expression's own slots).
 fn reduce_pairwise<'step>(
-    ctx: &SchedulerView<'_, 'step, '_>,
+    ctx: &DecideCtx<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
     combiner: String,
     direction: FoldDirection,
@@ -303,7 +305,8 @@ fn reduce_pairwise<'step>(
         "OperatorChain shape guarantees ≥3 operands and one fewer operator"
     );
     let dep_error_frame = Some(working_frame("<operator-chain>", expr));
-    ctx.install_pairwise_fold(
+    install_pairwise_fold(
+        ctx,
         operands,
         operators,
         combiner,
@@ -313,8 +316,90 @@ fn reduce_pairwise<'step>(
     )
 }
 
+/// Stage every pairwise operand as its own single-part sub-dispatch (whatever its part kind — a
+/// bare identifier, a literal, or a parenthesized sub-expression all dispatch through their normal
+/// lane via the one-part wrapper below); once every operand resolves, splice each resolved cell
+/// into the up-to-two adjacent pair expressions it feeds and fold the pairs through the group's
+/// combiner in the declared direction. A pairwise run has ≥3 operands and ≥2 operators (the chain
+/// shape guarantees it), so there are always at least 2 pairs — the combiner-fold loop below always
+/// runs at least once. `combiner` is the group's combiner symbol and `direction` its declared fold
+/// (see [`combine`] for the synthesized shape); `chain_span` labels the synthesized combiner parts,
+/// which have no single source token of their own.
+fn install_pairwise_fold<'step>(
+    ctx: &DecideCtx<'_, 'step, '_>,
+    operands: Vec<Spanned<WorkingPart<'step>>>,
+    operators: Vec<Spanned<WorkingPart<'step>>>,
+    combiner: String,
+    direction: FoldDirection,
+    chain_span: Option<Span>,
+    dep_error_frame: Option<TraceFrame>,
+) -> Outcome<'step> {
+    let brand = ctx.current_scope().brand();
+    let operand_spans: Vec<Option<Span>> = operands.iter().map(|operand| operand.span).collect();
+    let deps: Vec<DepRequest<'step>> = operands
+        .into_iter()
+        .map(|operand| DepRequest::Dispatch {
+            expr: WorkingExpression::new(brand, vec![operand]),
+            placement: DepPlacement::OwnScope,
+        })
+        .collect();
+    let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
+        // Every operand resolved. Build one pair per operator, resting each shared middle
+        // operand's resolved cell into both of the adjacent pairs it feeds — the splice that
+        // makes evaluation once-only. The region's union bundle dedupes the repeated coverage, so
+        // a middle operand costs one retention however many pairs read it.
+        let mut pairs = Vec::with_capacity(operators.len());
+        let scope = ctx.current_scope();
+        let brand = scope.brand();
+        for (i, operator) in operators.into_iter().enumerate() {
+            let left = Spanned {
+                value: WorkingPart::Spliced {
+                    cell: scope.rest_spliced(&terminals[i].cell),
+                },
+                span: operand_spans[i],
+            };
+            let right = Spanned {
+                value: WorkingPart::Spliced {
+                    cell: scope.rest_spliced(&terminals[i + 1].cell),
+                },
+                span: operand_spans[i + 1],
+            };
+            pairs.push(WorkingExpression::new(brand, vec![left, operator, right]));
+        }
+        // Fold the pairs through the combiner in the declared direction, nesting exactly like
+        // `reduce_fold_left` / `reduce_fold_right`'s accumulator loops.
+        let acc = match direction {
+            FoldDirection::Left => {
+                let mut pairs = pairs.into_iter();
+                let mut acc = pairs.next().expect(PAIRWISE_HAS_TWO_PAIRS);
+                for pair in pairs {
+                    acc = combine(brand, &combiner, acc, pair, chain_span);
+                }
+                acc
+            }
+            FoldDirection::Right => {
+                let mut pairs = pairs.into_iter().rev();
+                let mut acc = pairs.next().expect(PAIRWISE_HAS_TWO_PAIRS);
+                for pair in pairs {
+                    acc = combine(brand, &combiner, pair, acc, chain_span);
+                }
+                acc
+            }
+        };
+        become_dispatch(ctx, acc)
+    });
+    Await::on(Deps::from_requests(deps))
+        .error_frame(dep_error_frame)
+        .finish_terminal(finish)
+}
+
+/// A pairwise run has one pair per operator and the chain shape guarantees ≥2 operators, so the
+/// pair list the combiner fold consumes is never empty.
+const PAIRWISE_HAS_TWO_PAIRS: &str =
+    "pairwise always has ≥2 pairs (chain shape guarantees ≥2 operators)";
+
 /// One combiner application over two already-built sub-expressions — the fold step
-/// [`SchedulerView::install_pairwise_fold`] repeats over a pairwise run's pair results.
+/// [`install_pairwise_fold`] repeats over a pairwise run's pair results.
 ///
 /// The combiner is an **operator**, invoked infix: the synthesized shape is the 3-part keyworded
 /// expression `[left, Keyword(<sym>), right]`, which re-enters ordinary keyworded dispatch and so
@@ -343,88 +428,6 @@ pub(super) fn combine<'step>(
             wrap_as_operand(brand, right),
         ],
     )
-}
-
-/// Registry miss: an operator of this chain may still be *being declared*. An `OP` binder installs
-/// a pending-overload entry under each bucket key its body will register (see
-/// `builtins::op_def`), and the declaration's registry write lands only when its body finalizes —
-/// so a chain that misses the registry probes those same buckets for a visible pending claim and
-/// parks on it, re-running this arm on wake. With nothing pending, the miss is real and surfaces as
-/// the undeclared-operator diagnostic.
-///
-/// The scope walk mirrors `resolve_dispatch`'s read of `FunctionLookup::pending`: per-scope,
-/// visibility-gated by the chain's cutoff, innermost first. Both keys an operator can be declared
-/// under are probed — binary `[Slot, Keyword(sym), Slot]` and unary `[Keyword(sym), Slot]` — since
-/// the chain cannot know the declaration's arity until it lands.
-fn park_on_pending_operators<'step, 'b>(
-    ctx: &SchedulerView<'_, 'step, '_>,
-    s: &'b Scope<'b>,
-    expr: &WorkingExpression<'step>,
-    id: NodeId,
-    probe: &str,
-) -> Outcome<'step> {
-    let mut to_wait: Vec<ProducerId> = Vec::new();
-    for source in pending_operator_sources(ctx, s, expr) {
-        // Cycles are the only pre-wiring question left: parking on an ancestor deadlocks rather
-        // than errors, so such a claim is dropped. An `OP` binder that already terminalized —
-        // errored included — is the harness's to rule on when it installs the park, under the
-        // `<operator-chain>` frame carried below.
-        if !ctx.would_create_cycle_from(source, id) && !to_wait.contains(&source) {
-            to_wait.push(source);
-        }
-    }
-    if to_wait.is_empty() {
-        return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-            expr: expr.summarize(),
-            reason: undeclared_operator_reason(probe),
-        })));
-    }
-    let carrier = expr.summarize();
-    let parked_expr = *expr;
-    let frame = working_frame("<operator-chain>", expr);
-    park_resume_labelled(
-        to_wait,
-        Some(carrier),
-        Some(frame),
-        Box::new(move |ctx, id| ctx.with_current_scope(|s| run(ctx, s, &parked_expr, id))),
-    )
-}
-
-/// Every still-finalizing `OP` declaration visible from `s` that would register one of this
-/// chain's operators, named by its claim edge and deduped in walk order.
-fn pending_operator_sources<'b>(
-    ctx: &SchedulerView<'_, '_, '_>,
-    s: &'b Scope<'b>,
-    expr: &WorkingExpression<'_>,
-) -> Vec<ProducerId> {
-    let chain = ctx.chain_deref();
-    let mut operators = chain_operators(expr);
-    operators.sort_unstable();
-    operators.dedup();
-    let mut sources: Vec<ProducerId> = Vec::new();
-    for operator in operators {
-        // Both shapes as stack runs over the operator's own borrowed text — a stored probe needs
-        // no allocation at all, where an owned key would clone the symbol twice per scope walk.
-        for key in [
-            [
-                StoredElement::Slot,
-                StoredElement::Keyword(operator),
-                StoredElement::Slot,
-            ]
-            .as_slice(),
-            [StoredElement::Keyword(operator), StoredElement::Slot].as_slice(),
-        ] {
-            for scope in s.ancestors() {
-                let cutoff = scope.binding_cutoff(chain);
-                if let Some(source) = scope.bindings().lookup_function_stored(key, cutoff).pending
-                    && !sources.contains(&source)
-                {
-                    sources.push(source);
-                }
-            }
-        }
-    }
-    sources
 }
 
 fn undeclared_operator_reason(probe: &str) -> String {

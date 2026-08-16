@@ -345,6 +345,16 @@ impl<W: Workload> Scheduler<W> {
         self.edges.resident_duplicate(id)
     }
 
+    /// [`edge_resident`](Self::edge_resident), widened for a driving crate's own white-box tests.
+    /// The sealed cell a delivered edge holds, duplicated (leaving the edge's own copy intact,
+    /// releasing and consuming nothing) so a test can re-brand it into an owned envelope at a
+    /// lifetime of its own choosing — the capability [`read_edge_result_with`](Self::read_edge_result_with)
+    /// withholds, since its callback's value is scoped to the read rather than escaping it.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn edge_resident_duplicate(&self, id: EdgeId) -> Result<SealedTerminal<W>, W::Error> {
+        self.edge_resident(id)
+    }
+
     /// [`splice_forward`](Self::splice_forward) onto the producer behind `source`. A filled source
     /// never reaches here — the slot's step took the install verb's filled branch and forwarded the
     /// resident instead of emitting an alias.

@@ -68,7 +68,7 @@ pub(crate) use constructors::{build_type_operand, seal_type_identity};
 pub(in crate::machine::execute) use ctx::{DecideCtx, with_node_scope};
 pub(crate) use field_list::{BrandCompose, FieldListDeferral};
 pub(crate) use resolve::Resolution;
-pub(super) use resolve::{TypeChannel, bare_name_of, type_channel};
+pub(super) use resolve::{TypeChannel, type_channel};
 pub use resolve_dispatch::{DispatchOutcome, Resolved};
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
@@ -373,7 +373,7 @@ pub(in crate::machine::execute) fn decide_tail<'step>(
 ) -> NodeWork<'step, KoanWorkload> {
     let carrier = expr.summarize();
     // A birth decide waits on no deps: it runs on first poll, classifies, and routes.
-    let continuation = ignore_results(Box::new(move |view, id| classify_dispatch(view, expr, id)));
+    let continuation = ignore_results(Box::new(move |view, _id| classify_dispatch(view, expr)));
     NodeWork::new(with_obligation(obligation, continuation), Some(carrier))
 }
 
@@ -398,7 +398,6 @@ pub(in crate::machine::execute) fn decide_error<'step>(
 fn classify_dispatch<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
-    id: NodeId,
 ) -> Outcome<'step> {
     match expr.shape() {
         DispatchShape::BareTypeLeaf => {
@@ -433,8 +432,8 @@ fn classify_dispatch<'step>(
                 ),
             })))
         }
-        DispatchShape::OperatorChain => operator_chain::run(view, view.current_scope(), &expr, id),
-        DispatchShape::Keyworded => keyworded::initial(view, expr, id),
+        DispatchShape::OperatorChain => operator_chain::run(view, view.current_scope(), &expr),
+        DispatchShape::Keyworded => keyworded::initial(view, expr),
         DispatchShape::SigiledTypeExpr => single_poll::sigiled_type_expr(view, expr),
         DispatchShape::RecordType => single_poll::record_type(view, expr),
         DispatchShape::LiteralPassThrough => single_poll::literal_pass_through(view, expr),

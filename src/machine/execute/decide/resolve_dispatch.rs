@@ -84,7 +84,7 @@ impl<'step> Scope<'step> {
     /// test-only callers; production paths always supply the slot's chain.
     /// An empty `bare_outcomes` reverts admission to shape-only
     /// `arg.matches(part)`.
-    pub fn resolve_dispatch<'e>(
+    pub(crate) fn resolve_dispatch<'e>(
         &self,
         expr: &WorkingExpression<'e>,
         chain: Option<&LexicalFrame>,

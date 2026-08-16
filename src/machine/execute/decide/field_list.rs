@@ -37,8 +37,8 @@ use super::super::StepCarried;
 use super::super::TerminalDepFinish;
 use super::super::outcome::{Await, Outcome, dep_error_frame};
 use super::DepRequest;
-use super::SchedulerView;
 use super::SubDispatch;
+use super::ctx::DecideCtx;
 
 /// Composes the final `KType` from the elaborated pairs, plus whatever owned type content the
 /// caller closed over (e.g. the FN return type). Runs in [`compose_field_list`], which allocates
@@ -243,7 +243,7 @@ impl<'a> FieldListDeferral<'a> {
         (rewalk, deps, first_sub)
     }
 
-    /// Finish into the scheduler currency: a [`Outcome::ParkThenContinue`] whose dep-finish re-walks
+    /// Finish into the scheduler currency: an [`Outcome::Park`] whose dep-finish re-walks
     /// the field list once every dep resolves, then composes the pairs
     /// through `compose`. A pure decide, no write.
     pub(in crate::machine::execute) fn outcome(self, compose: BrandCompose<'a>) -> Outcome<'a> {
@@ -338,7 +338,7 @@ impl<'a> FieldListDeferral<'a> {
 /// field naming a forward type parks and a sigil field type sub-dispatches, both deferred
 /// through one dep-finish (the field walker's own re-walk handles nested records).
 pub(crate) fn elaborate_record_value<'step, 'view>(
-    view: &SchedulerView<'_, 'step, 'view>,
+    view: &DecideCtx<'_, 'step, 'view>,
     fields: FieldParts<'step>,
     chain: Option<Rc<LexicalFrame>>,
 ) -> Outcome<'step> {

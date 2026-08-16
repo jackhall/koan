@@ -451,7 +451,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
 #[test]
 fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     let types = TypeRegistry::new();
-    use crate::machine::Resolution;
+    use crate::machine::execute::Resolution;
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     // Outer `:Identifier` overload that owns the bare name (shape-only admit).

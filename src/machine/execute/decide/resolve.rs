@@ -119,13 +119,3 @@ pub(in crate::machine::execute) fn resolve_name(
         _ => unreachable!("resolve_name only called on bare-name parts"),
     }
 }
-
-/// Best-effort name extraction for a bare-name `ExpressionPart`, used to render
-/// the `cycle in type alias <name>` deadlock sample.
-pub(in crate::machine::execute) fn bare_name_of(part: &ExpressionPart<'_>) -> Option<String> {
-    match part {
-        ExpressionPart::Identifier(n) => Some((*n).to_string()),
-        ExpressionPart::Type(t) => Some(t.render()),
-        _ => None,
-    }
-}
