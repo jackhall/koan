@@ -6,6 +6,8 @@
 //! - [`continuation`] — the owned-tier continuation slot under Miri (tree borrows).
 //! - [`delivery`] — the finalize walk's timelines: copy and pin verdicts, a consumer that dies
 //!   before its producer fires, a late wire onto a delivered edge, and root-edge release.
+//! - [`drain`] — the run protocol: each verdict arm's application, the retirement hook's
+//!   exactly-once contract and ordering, the step-start dep reads, and the deadlock report.
 //! - [`edges`] — the edge slab's alloc/release recycling and the install door's branches.
 //! - [`reinstall`] — the replace boundary's timelines: a loop-carried argument relocated into the
 //!   incoming anchor's region, under both verdicts.
@@ -15,12 +17,13 @@ use std::rc::Weak;
 
 use super::nodes::NodeWork;
 use super::workload::{DeliveredTerminal, DeliveryDestination};
-use super::{Anchor, NodeId, ResolvedDeps, Scheduler, Workload};
+use super::{Anchor, NodeId, Scheduler, Workload};
 use crate::witnessed::doctest_fixture::{FixtureProfile, RegionCart};
 use crate::witnessed::reattachable;
 
 mod continuation;
 mod delivery;
+mod drain;
 mod edges;
 mod reinstall;
 
@@ -145,7 +148,7 @@ where
     let probe = Rc::downgrade(anchor.owner());
     let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
     let id = sched.alloc_node(
-        NodeWork::new(ResolvedDeps::new(), continuation, None),
+        NodeWork::new(continuation, None),
         &[],
         Rc::clone(&anchor),
         false,

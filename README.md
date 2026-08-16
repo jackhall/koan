@@ -54,7 +54,7 @@ The pipeline is three stages, split across two top-level modules:
 
 ```
 source ──▶ parse ──▶ dispatch ──▶ execute
-        KExpression  ResolveOutcome  KObject
+        KExpression  DispatchOutcome  KObject
 ```
 
 `parse`, `builtins`, and `machine` are sibling crate-top modules; `machine` owns dispatch and execute. [src/main.rs](src/main.rs) reads the source and hands it to `interpret_with_writer_path`, which stands up the scope pair, seeds the builtins, and drains the scheduler.
@@ -73,9 +73,9 @@ The output is one [`KExpression`](src/machine/model/ast.rs) per top-level line: 
 
 `KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse bumped them into. The scheduler dispatches a separate [`WorkingExpression`](src/machine/model/ast/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/machine/model/ast/program.rs), which types the tier the channel's verdicts assume. See [design/expressions-and-parsing.md](design/expressions-and-parsing.md).
 
-### dispatch — `KExpression` → `ResolveOutcome` against a `Scope`
+### dispatch — `KExpression` → `DispatchOutcome` against a `Scope`
 
-A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. [`resolve_dispatch`](src/machine/execute/dispatch/resolve_dispatch.rs) walks the scope chain in a single pass and returns a [`ResolveOutcome`](src/machine/execute/dispatch/resolve_dispatch.rs) — `Resolved` (a unique pick, classified per slot), `Ambiguous(n)` (strict-mode tie), `Deferred` (no match yet but nested subs may unblock one), or `Unmatched` (a real dispatch failure). [`ExpressionSignature`](src/machine/model/types/signature.rs)s mix fixed `Token`s and typed `Argument` slots; on `Resolved` the resolved function binds its arguments, ready to run but not yet executed.
+A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. [`resolve_dispatch`](src/machine/execute/decide/resolve_dispatch.rs) walks the scope chain in a single pass and returns a [`DispatchOutcome`](src/machine/execute/decide/resolve_dispatch.rs) — `Resolved` (a unique pick, classified per slot), `Ambiguous(n)` (strict-mode tie), `Deferred` (no match yet but nested subs may unblock one), `ParkOnProducers` (wait on a still-finalizing earlier binder), `UnboundName`, or `Unmatched` (a real dispatch failure). [`ExpressionSignature`](src/machine/model/types/signature.rs)s mix fixed `Token`s and typed `Argument` slots; on `Resolved` the resolved function binds its arguments, ready to run but not yet executed.
 
 Runtime values are [`KObject`](src/machine/model/values/kobject.rs) (scalars, collections, expressions, function references); the cross-cutting `Parseable` trait lives in [ktraits.rs](src/machine/model/types/ktraits.rs). Builtins are registered in [builtins.rs](src/builtins.rs) and produce the default root scope.
 
@@ -83,9 +83,9 @@ Errors are first-class via [`KError`](src/machine/core/kerror.rs) — a `Done(Er
 
 ### execute — run the DAG
 
-The [`Scheduler`](workgraph/src/scheduler.rs) — the [workgraph](workgraph/README.md) crate's — holds a slot table of in-flight work plus a push/notify dependency graph over first-class edges; [`KoanRuntime`](src/machine/execute/runtime.rs) owns it and is the sole holder of `&mut Scheduler`, and [`run_loop.rs`](src/machine/execute/run_loop.rs) is the pop loop that drives it. Callers submit a top-level block via the harness's `enter_block` (and nested parts via `dispatch_in_scope`); each slot's decide spawns sub-Dispatches for the expression's nested parts and parks the parent as a dep-finish until its deps terminalize. When a producer finalizes, a single walk delivers its terminal into every waiting edge's destination region and wakes any consumer whose pending count hits zero — no polling, no result-table sweep, and the producer's slot reclaims behind the walk. Tail returns (an `Action::Tail` lowered to `Outcome::Continue`) rewrite the slot's own work in place rather than allocating a new slot. See [the execution model](design/execution/README.md).
+The [`Scheduler`](workgraph/src/scheduler.rs) — the [workgraph](workgraph/README.md) crate's — holds a slot table of in-flight work plus a push/notify dependency graph over first-class edges, and its `drain` owns the pop loop; [`KoanRuntime`](src/machine/execute/harness.rs) owns the scheduler beside the koan-side `Host` whose `step` is the drain callback. Callers submit a top-level block via the harness's `enter_block`; each slot's decide spawns sub-Dispatches for the expression's nested parts and parks the parent as a dep-finish until its deps terminalize. When a producer finalizes, a single walk delivers its terminal into every waiting edge's destination region and wakes any consumer whose pending count hits zero — no polling, no result-table sweep, and the producer's slot reclaims behind the walk. Tail returns (an `Action::Tail` lowered to `Outcome::Continue`) rewrite the slot's own work in place rather than allocating a new slot. See [the execution model](design/execution/README.md).
 
-[`interpret`](src/machine/execute/runtime/interpret.rs) is the glue: parse the source, allocate the run-root scope and its `RunScope` child (`unseeded_scopes`), establish the run frame, seed the builtins against that frame's type registry (`seed_builtins`), hand the top-level block to `enter_block`, drain the scheduler, then `read_result` each top-level node. `PRINT` output flows through the scope's pluggable writer (default stdout; tests swap in a shared `Vec<u8>` buffer to read it back), and every value the program allocated dies with the per-run `KoanRegion` when `interpret` returns.
+[`interpret`](src/machine/execute/interpret.rs) is the glue: parse the source, allocate the run-root scope and its `RunScope` child (`unseeded_scopes`), establish the run frame, seed the builtins against that frame's type registry (`seed_builtins`), hand the top-level block to `enter_block`, drain the scheduler, then `read_result` each top-level node. `PRINT` output flows through the scope's pluggable writer (default stdout; tests swap in a shared `Vec<u8>` buffer to read it back), and every value the program allocated dies with the per-run `KoanRegion` when `interpret` returns.
 
 ## Source layout
 
@@ -99,9 +99,9 @@ splits into [model/](src/machine/model) (the value/type vocabulary —
 [values/](src/machine/model/values) for `KObject`/`Carried`/`KKey`/`Module`),
 [core/](src/machine/core) (allocation, `Scope`, `KError`, plus the
 `kfunction` submodule that owns `KFunction`/`Body` and the body executor), and
-[execute/](src/machine/execute) (the scheduler, the `dispatch` shape router —
+[execute/](src/machine/execute) (the drain harness, the `decide` shape router —
 where overload resolution lives as `resolve_dispatch` returning a
-`ResolveOutcome` — and the `interpret` glue).
+`DispatchOutcome` — and the `interpret` glue).
 
 Within those sub-modules, the `k`-prefix marks files built around a single
 eponymous Koan-runtime type: [kobject.rs](src/machine/model/values/kobject.rs) defines `KObject`,
@@ -113,8 +113,8 @@ eponymous Koan-runtime type: [kobject.rs](src/machine/model/values/kobject.rs) d
 Files without the prefix are infrastructure that don't introduce a single namesake type:
 [arena.rs](src/machine/core/arena.rs) (allocation),
 [scope.rs](src/machine/core/scope.rs) (lexical environment),
-[resolve_dispatch.rs](src/machine/execute/dispatch/resolve_dispatch.rs) (the
-overload-resolution walk returning a `ResolveOutcome`),
+[resolve_dispatch.rs](src/machine/execute/decide/resolve_dispatch.rs) (the
+overload-resolution walk returning a `DispatchOutcome`),
 [signature.rs](src/machine/model/types/signature.rs) (dispatch shapes and specificity),
 [node.rs](src/machine/model/types/node.rs) (`TypeNode`, one interned type's content —
 the thing a `KType` handle names),
@@ -131,7 +131,7 @@ schema a signature node carries, and the canonical signature-subtyping relation)
 [registry.rs](src/machine/model/types/registry.rs) (`TypeRegistry`, the
 run-frame-owned store that memoizes subtype verdicts by digest pair),
 [builtins.rs](src/builtins.rs) (registry),
-[constructors.rs](src/machine/execute/dispatch/constructors.rs) (shared structure),
+[constructors.rs](src/machine/execute/decide/constructors.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).
 
 ```
@@ -245,12 +245,13 @@ src/
     │       └── pick.rs              per-bucket tournament selecting the most-specific overload
     ├── execute.rs
     └── execute/
-        ├── run_loop.rs    the pop loop plus run_step — the one node handler: read each dep's resident off its edge, run the step under one rank-2 brand, retire the slot's edges (the scheduler itself is the workgraph crate)
-        ├── nodes.rs       node types: the NodeWork (live) / StoredWork (sealed) re-exports from the scheduler, plus SlotFrame / NodeStep / NodeScope / NodePayload / ChainOp
-        ├── producer_id.rs  ProducerId — the opaque park token everything below the drive loop stores, compares, and hands back but cannot open (both conversions pub(in crate::machine::execute)), plus deps_on / extend_deps_on, the single verb that spends one
-        ├── outcome.rs     Outcome — the unified scheduler-step currency (Done / Continue / ParkThenContinue / Invoke / Redispatch / Forward) + Continuation + the Await envelope builder (sole ParkThenContinue-with-finish constructor) + cont combinators (short_circuit / catch_cont / ignore_results); AST-free (carries DepRequest as an opaque type)
-        ├── runtime.rs     KoanRuntime — owns the Scheduler, the sole &mut holder: the execute loop, apply_outcome (sole graph writer), submit_dispatch, literal lowering; plus run_action (lowers a builtin Action to an Outcome, pure); interpret/ (program entry points + run_program) and submit/ (the AST-aware submission wrappers — enter_block / dispatch_in_scope / dispatch_in_own_scope / dispatch_body / submit_dep_finish_in_own_scope) submodules
-        ├── dispatch.rs    classify_dispatch (the decide) + decide_tail/decide_with_presubs + classify_dispatch_shape; submit/ (binder-aware submit_dispatch chokepoint), literal/ (aggregate-literal lowering), ctx/ (SchedulerView read view), exec/ (dispatch-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_identifier/ submodules
+        ├── harness.rs     KoanRuntime (Scheduler + Host side by side) — Host::step is the drain callback (open the sealed continuation at one rank-2 step brand, decide, drain binding writes), Host::apply is the sole &mut Scheduler code (wire_deps, the Outcome → StepVerdict map), plus run_action (lowers a builtin Action to an Outcome, pure), run_program, and the AST-aware submission wrappers (enter_block / dispatch_in_scope / dispatch_in_own_scope / dispatch_body / submit_dep_finish_witnessed_in_own_scope)
+        ├── interpret.rs   the embedder API: the interpret → interpret_with_writer → interpret_with_writer_path ladder
+        ├── nodes.rs       node types: the NodeWork re-export from the scheduler, plus SlotFrame / NodeScope / NodePayload / ChainOp
+        ├── producer_id.rs  ProducerId — the opaque park token everything below the drive loop stores, compares, and hands back but cannot open (both conversions pub(in crate::machine::execute)), plus deps_on / extend_deps_on, the single verb pair that spends one
+        ├── outcome.rs     Outcome — the unified scheduler-step currency (Done / Continue / Park / Forward) + Continuation (Finish / Catch / Resume) + the Await envelope builder (sole finish-carrying-Park constructor) + cont combinators (short_circuit / catch_cont / ignore_results); AST-free (carries DepRequest as an opaque type)
+        ├── ambient.rs     AmbientContext — the per-step ambient state (active frame, run frame, slot payload, declared-return obligation)
+        ├── decide.rs      classify_dispatch (the decide) + decide_tail + classify_dispatch_shape; submit/ (binder-aware submit_expression chokepoint), literal/ (aggregate-literal lowering), ctx/ (DecideCtx — the scheduler-free step context), resolve/ (Resolution — THE bare-name ladder), exec/ (decide-side invoke), keyworded/, fn_value/, single_poll/, head_deferred/, apply_callable/, operator_chain/, field_list/, constructors/, resolve_dispatch/, resolve_type_identifier/ submodules
         └── lift.rs        lift_kobject — rebuild values across per-call region boundaries
 ```
 

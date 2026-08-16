@@ -14,8 +14,8 @@ The scheduler models dispatch itself as a node. There is one node shape — a
 and then runs a [`NodeCont`](../../src/machine/execute/outcome.rs) closure over
 their resolved terminals. A top-level expression enters as a *dispatch decide*: a
 `NodeWork` whose `cont` classifies the expression on first poll
-([`schedule_expr`](../../src/machine/execute/runtime/interpret.rs) collapses to "add one
-dispatch decide per top-level expression"; the rest is dynamic). At run time a
+([`run_program`](../../src/machine/execute/harness.rs) collapses to "add one
+dispatch decide per top-level statement"; the rest is dynamic). At run time a
 decide walks its expression's parts, spawns sub-dispatch nodes for nested
 sub-expressions, and a builtin body can declare further dispatch nodes as deps of
 the `Outcome` it returns.
@@ -63,29 +63,31 @@ The scheduler ([`scheduler`](../../workgraph/src/scheduler.rs)) is a crate-root 
 nodes, generic over a [`Workload`](../../workgraph/src/scheduler/workload.rs) and naming no Koan
 value, error, scope, memory, or AST type. The Koan interpreter is the sole
 workload — `machine::execute` instantiates it as `Scheduler<KoanWorkload>` and
-drives it from the run loop
-([`execute/run_loop.rs`](../../src/machine/execute/run_loop.rs)) through the
-scheduler's inherent-method contract.
+drives it through [`Scheduler::drain`](../../workgraph/src/scheduler/drain.rs)
+from the harness ([`execute/harness.rs`](../../src/machine/execute/harness.rs)):
+the scheduler owns the pop/take/step/apply loop, the harness supplies the step
+callback.
 
-The dispatch tree
-([`execute/dispatch/`](../../src/machine/execute/dispatch.rs)) and the run-loop driver
+The decide tree
+([`execute/decide.rs`](../../src/machine/execute/decide.rs)) and the harness
 are both Koan-side. Every scheduler-facing step — a dispatch decide, a finish, a
 builtin body, an invoke — flows through one **decide → outcome → apply** contract:
-it decides against a read-only view, *returns* the scheduler mutations it wants as
+it decides against the read-only step context, *returns* the scheduler mutations
+it wants as
 data, and a single harness method applies them. The three pieces:
 
-- **The read view** —
-  [`SchedulerView<'step, 'view>`](../../src/machine/execute/dispatch/ctx.rs) wraps
-  `&'view Scheduler<KoanWorkload>` (never `&mut`) together with the driver's per-step
-  ambient context. It exposes only the reads a decide needs: the
-  static-over-the-step ones (`current_scope`, `chain_deref`, `in_contract_chain`,
-  `build_bare_outcomes`) and the live cycle guard on the producer behind a claim
-  edge (`would_create_cycle_from`) — readiness is not a view read: install
-  returns filled-or-parked when the harness applies the outcome. It permits scope
-  binding (interior-mutable `&Scope`) but no graph write. The scheduler's `queues`
-  / `deps` / `store` fields stay `pub(in crate::scheduler)`; the dispatch shape
-  modules (`keyworded`, `fn_value`, `single_poll`) never name scheduler fields
-  directly.
+- **The step context** —
+  [`DecideCtx`](../../src/machine/execute/decide/ctx.rs) carries the ambient
+  step values a shape handler reads while deciding: the active slot's scope
+  (`current_scope`), the chain (`chain_deref`), the installing statement's
+  identity, the step's binding-write sink, the type registry, and the run's
+  program storage capability. It holds **no scheduler borrow at all** — every
+  graph question a decide could ask is either the install door's answer when
+  the harness wires the park (filled-or-parked) or foreclosed by the lexical
+  well-foundedness rule (no cycles can form, so nothing probes reachability).
+  It permits scope binding (interior-mutable `&Scope`) but no graph access; the
+  dispatch shape modules (`keyworded`, `fn_value`, `single_poll`) never name
+  the scheduler.
 - **The effect** —
   [`Outcome<'step>`](../../src/machine/execute/outcome.rs) is the one currency
   every producer and finish returns (the dispatch-side peer of the builtin
@@ -97,64 +99,75 @@ data, and a single harness method applies them. The three pieces:
   across each dep edge ([per-call-region/lifecycle.md § Node-output delivery](../per-call-region/lifecycle.md#node-output-delivery)).
   Four variants: `Done` (the node's terminal value at `'step`, or an
   error), `Continue` (replace this slot's work and frame,
-  re-run, no park), `ParkThenContinue` (park on deps, then run a
+  re-run, no park), `Park` (park on deps, then run a
   [`Continuation`](../../src/machine/execute/outcome.rs) that yields another
   outcome), and `Forward` (the slot's result *is* the result behind a named
   edge — the harness splices the slot out as an alias of that producer rather
   than installing a forwarding node; see
   [Bare-name forward splice](#bare-name-forward-splice)). The dispatch→execution
-  hand-off is itself a dep-free `Continue`: a decide that picks a call folds the
-  resolved call into a `Continue` whose frame placement installs the per-call
-  cart (a user fn's `ReuseReserve`, a builtin's `Inherit`) and whose `work`
-  re-decides via the folded `invoke` / re-resolve closure on the next pop, so no
+  hand-off is itself a dep-free `Continue`: a decide that picks a user fn binds
+  the arguments into the callee's cart in the deciding step
+  (`enter_user_fn`), and the `Continue`'s frame placement (`FreshTail` carries
+  the built cart; a builtin's `Inherit` keeps the current one) installs it while
+  the `work` lowers the body on the next pop, so no
   variant carries the call's AST. Each is pure data — no `&mut Scheduler` is
   captured.
 - **The write harness** —
-  [`KoanRuntime<'run>`](../../src/machine/execute/runtime.rs) owns the `Scheduler`
-  by composition (a `sched` field, not a `&mut` borrow) and is the **sole**
-  holder of `&mut Scheduler` across the execute tree. The per-step *ambient*
-  state — the active per-call frame, the slot reserve, the run frame, the
+  [`KoanRuntime<'run>`](../../src/machine/execute/harness.rs) owns the
+  `Scheduler` and the koan-side `Host` as two sibling fields, so `drain` can
+  hold `&mut Scheduler` while the step body holds `&mut Host`. The per-step
+  *ambient*
+  state — the active per-call frame, the run frame, the
   executing slot's lexical payload (scope handle + chain, projected from the
   slot's anchor), and the slot's declared-return obligation
   (the continuation capture a tail chain carries; its presence *is* the
   contract-chain flag) — lives on the
-  driver ([`ambient`](../../src/machine/execute/ambient.rs)), not the scheduler,
-  which is a pure DAG runtime. Its
-  [`apply_outcome`](../../src/machine/execute/runtime.rs) interprets a returned
-  outcome into graph writes and the slot's `NodeStep`. Because only the harness
-  reborrows the scheduler mutably, no decide handler holds `&mut Scheduler` —
-  decide (against a read-only view) and apply (against `&mut self`) never
+  host ([`ambient`](../../src/machine/execute/ambient.rs)), not the scheduler,
+  which is a pure DAG runtime. [`Host::step`](../../src/machine/execute/harness.rs)
+  is the drain callback: it opens
+  the sealed continuation at the step brand, builds a `DecideCtx`, runs the
+  `cont` closure, drains the step's binding writes, and hands the `Outcome` to
+  `Host::apply` — the **sole** `&mut Scheduler` code in the crate — which
+  realizes dep requests through the single `wire_deps` door and maps the
+  outcome onto the
+  [`StepVerdict`](../../workgraph/src/scheduler/drain.rs) the drain applies
+  (`Done` / `Forward` / `Replace` / `Alias`). Because only apply
+  holds the scheduler mutably, decide (against the read-only context) and
+  apply never
   overlap, and that separation is structurally enforced by the type rather than
-  a naming convention. The execute loop, the AST-aware submission wrappers
-  (`enter_block`, `dispatch_in_own_scope`, `dispatch_in_active_frame`,
-  `dispatch_body`, `submit_dep_finish_in_own_scope`), `submit_expression`, and the
-  aggregate-literal lowering are all `&mut self` methods on `KoanRuntime`. The
-  unified node handler
-  ([`run_step`](../../src/machine/execute/run_loop.rs)) receives the slot's
-  deps as residents of its region — delivered at each producer's finalize, so
-  step start is zero graph work — builds a `SchedulerView`, runs the `cont`
-  closure, and hands the outcome to `apply_outcome`.
+  a naming convention. The AST-aware submission wrappers
+  (`enter_block`, `dispatch_in_own_scope`,
+  `dispatch_body`, `submit_dep_finish_witnessed_in_own_scope`,
+  `submit_expression`) and the
+  aggregate-literal lowering live on the host too. The step's
+  deps arrive as residents of its region — delivered at each producer's
+  finalize and handed to the callback pre-read, with their edges already
+  released — so
+  step start is zero graph work.
 
 The scheduler reaches the driver only through its method contract, and every
 method names only `EdgeId` and the workload's associated types — no signature
 names a `KExpression`, `Scope`, or AST type, and node identities stay
-library-internal. `pop_next` / `take_for_run` / `replace` drive a slot's
-lifecycle; `alloc_node`, `install_deps`,
-`install_edge` / `install_edge_from` and `splice_forward_from` wire the graph —
+library-internal. [`Scheduler::drain`](../../workgraph/src/scheduler/drain.rs)
+owns the slot lifecycle; `alloc_node`, `install_deps`, and
+`install_edge` wire the graph —
 `install_deps` being the single door for wiring an already-allocated slot,
 routing the same scheduler-internal wire primitive the allocators use, and
-install returning filled-or-parked per edge; `finalize` delivers and reclaims;
-`would_create_cycle_from` / `unresolved` and the edge-keyed terminal reads
-(`edge_result_error`, `read_edge_result_with`, `edge_delivered`) are the reads.
-No trait
-wraps `Scheduler`: those are inherent methods capped `pub(crate)`, so only the
-Koan driver reaches them, and the `queues` / `deps` / `store` fields stay
+install returning filled-or-parked per edge; delivery and reclamation happen
+inside the drain at each producer's finalize; the edge-keyed terminal reads
+(`edge_result_error`, `read_edge_result_with`) are the boundary reads; and
+[`Workload::retiring`](../../workgraph/src/scheduler/workload.rs) is the hook
+through which a retiring slot's owned edges are released, invoked exactly once
+per slot by the scheduler. No trait
+wraps `Scheduler`: those are inherent methods, and the `queues` / `deps` /
+`store` fields stay
 `pub(in crate::scheduler)`. A builtin invoked mid-dispatch
 (e.g. `newtype_construct`) routes through the shared
-[`run_action`](../../src/machine/execute/runtime.rs) harness as a pure
-`Action → Outcome` lowering; `exec::invoke_builtin` reads the dispatcher's ambient
-`current_frame` / `current_lexical_chain` off the view to build the builtin's
-`BodyCtx`.
+[`run_action`](../../src/machine/execute/harness.rs) harness as a pure
+`Action → Outcome` lowering; `exec::invoke_builtin` reads the dispatcher's
+ambient
+`current_frame` / `current_lexical_chain` off the step context to build the
+builtin's `BodyCtx`.
 
 ## Callable result — the `Outcome` return shapes
 
@@ -214,26 +227,31 @@ What is Koan's is *which* edges each dispatch shape installs:
 - **Root** edges are the run's: `run_program` wires one per top-level statement
   toward the run frame's region, reads the drain boundary through them, and
   releases every one before the harness tears the run frame down
-  ([interpret.rs](../../src/machine/execute/runtime/interpret.rs)).
+  ([interpret.rs](../../src/machine/execute/interpret.rs)).
 
 Spawned and awaited deps are one currency: each is an edge the door mints off
 the source naming it, they share one list, and a finish reads their results in
 dep order. What the dispatch layer classifies is the producer's *standing*, and
-that is **install-and-inspect**: a decide holds no `&mut Scheduler`, so it never
+that is **install-and-inspect**: a decide holds no scheduler access, so it never
 probes a producer; it emits the dep and the harness rules on the door's
 filled-or-parked return, propagating an already-errored producer's terminal at
-apply under the park site's own trace label. The would-cycle guard is the one
-question that stays pre-wiring, because parking on an ancestor deadlocks rather
-than errors ([dispatch.rs](../../src/machine/execute/dispatch.rs)).
+apply under the park site's own trace label. No pre-wiring question remains:
+a park always names a lexically earlier claim (the exclusive cutoff hides a
+statement's own claims from its subtree, and a lexically later name is a
+resolution error, not a park), so the dep graph is well-founded by
+construction and nothing cycle-checks
+([classify-and-apply.md](classify-and-apply.md)).
 
 Every consumer wakes the same way: at pop time its pending count is zero, so every
-dep is terminal, and [`run_step`](../../src/machine/execute/run_loop.rs) reads each
-resolved dep off the view by index and hands the `Result` slice to the slot's
+dep is terminal, and the drain hands
+[`Host::step`](../../src/machine/execute/harness.rs) each
+resolved dep's delivered resident in dep order, edges already released, and the
+step passes the `Result` slice to the slot's
 `cont`. There is no per-edge wake-attribution side channel — a decide that
 re-resolves reads its producers from the rebuilt scope, not a wakes list.
 
-Koan's own use of the two priority bands is thin: top-level `dispatch_in_scope`
-calls route through the top-level band so independent top-level expressions execute
+Koan's own use of the two priority bands is thin: top-level submissions
+(`enter_block`) route through the top-level band so independent top-level expressions execute
 in submission order, and everything else — wakeups, Replace-arm re-enqueues,
 ready-on-arrival nodes — is internal work that drains first.
 
@@ -250,10 +268,10 @@ Koan's half is the trigger: the bare-name decide returns
 binder's claim edge. The harness classifies it the same way it classifies a
 park — by *wiring*: it installs a second edge off `source`, which the slot owns
 for the rest of the step. A **filled** install means the producer is terminal,
-so the harness relocates that terminal through the new edge and finalizes
-([`NodeStep::ForwardReady(edge)`](../../src/machine/execute/nodes.rs)); a
+so the harness finalizes directly through the new edge
+([`StepVerdict::Forward(edge)`](../../workgraph/src/scheduler/drain.rs)); a
 **parked** one yields
-[`NodeStep::Alias(source)`](../../src/machine/execute/nodes.rs) and the library
+[`StepVerdict::Alias(source)`](../../workgraph/src/scheduler/drain.rs) and the library
 takes over — re-pointing the slot's parked edges at the
 producer once, so no aliased slot survives as a residual and no alias chain is
 walked on reads
@@ -270,8 +288,8 @@ type so that no value can ever hold one
 The keyworded dispatcher extracts every nested sub-expression out of
 the parent's `parts` (replacing each with a placeholder `StagedSlot`) and
 declares them as the deps of a
-[`ParkThenContinue`](#the-dispatcher--scheduler-boundary) whose continuation
-is a `Continuation::FinishTerminal` — the dispatch flavor of a dep-finish. The
+[`Park`](#the-dispatcher--scheduler-boundary) whose continuation
+is a `Continuation::Finish` — the dispatch flavor of a dep-finish. The
 harness submits each dep as a sub-Dispatch and parks the parent on a
 [`NodeWork`](../../src/machine/execute/nodes.rs) whose `cont` is a dep-finish wrapping
 that *splice finish* (a [`TerminalDepFinish`](../../src/machine/execute/outcome.rs)
@@ -348,7 +366,7 @@ each sub-Dispatch's slot reclaims at its own finalize, the moment its notify
 drains — its value is already a resident of the parent's region by then, so the
 slot has nothing left to hold. A dispatch splice finish's dep indices are on
 the free list before the harness dispatches the spliced body, with no separate
-release pass in [`run_step`](../../src/machine/execute/run_loop.rs); the
+release pass in the step callback; the
 consumer's teardown releases only the edges it still names.
 
 The net effect: recursive bodies whose only persistent state is the call result run

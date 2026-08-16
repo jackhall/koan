@@ -838,7 +838,7 @@ mod tests {
             KObject::KString(s) => assert_eq!(*s, "num"),
             other => panic!("expected \"num\", got {:?}", other.ktype()),
         }
-        let root = test_run.runtime.dispatch_in_scope(
+        let root = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 parse_one(&program, "TAKES_NUM (Distance (3.0))"),
@@ -858,7 +858,7 @@ mod tests {
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on Number-slot Distance, got {err}",
         );
-        let root2 = test_run.runtime.dispatch_in_scope(
+        let root2 = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 parse_one(&program, "TAKES_DIST (3.0)"),
@@ -1026,7 +1026,7 @@ mod tests {
         let exprs = crate::parse::parse(program.brand(), src).expect("parse should succeed");
         let mut edges = Vec::new();
         for expr in exprs {
-            let id = test_run.runtime.dispatch_in_scope(
+            let id = test_run.dispatch_in_scope(
                 crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
                 scope,
             );
@@ -1200,7 +1200,7 @@ mod tests {
     fn expect_dispatch_failure(test_run: &mut TestRun<'_>, probe: &str) {
         let program = test_run.program;
         let scope = test_run.scope;
-        let root = test_run.runtime.dispatch_in_scope(
+        let root = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 parse_one(program, probe),

@@ -49,13 +49,13 @@ relocates it across each dep edge — never the producer.
   ([`src/machine/execute/lift.rs`](../../src/machine/execute/lift.rs)) owns the
   `KObject`-invariant copy; the scheduler loop names no `KObject` / `KType`.
 - **Consumers receive residents.** When a consumer runs
-  ([`run_step`](../../src/machine/execute/run_loop.rs)) each dep is already an
+  ([`Host::step`](../../src/machine/execute/harness.rs)) each dep is already an
   ordinary resident of its own call region, at the consuming node's lifetime. A
   value delivered to N consumer regions is adopted N times — once per distinct
   destination — and each copy dies with its destination region. One mechanism
   serves parked-then-woken, late-wired, and bare-name-forward consumers alike.
 - **Roots deliver to the run region.** A top-level statement result's root edge
-  is held by [`run_program`](../../src/machine/execute/runtime/interpret.rs)
+  is held by [`run_program`](../../src/machine/execute/interpret.rs)
   and destined into the run region, so the terminal lands there at finalize;
   the drain boundary reads residents of the run's own region and releases the
   root edges when it is done.
@@ -109,7 +109,7 @@ everything its members reach. The embedding or binding site mints that
 carrier's reach — `merge` at an `attr` / `FROM` projection,
 [`Scope::adopt_for_binding`](../../src/machine/core/scope/reach.rs) at a `let` / user-fn arg / `USING`
 bind — and delivery mints a
-[`run_program`](../../src/machine/execute/runtime/interpret.rs) root terminal's full reach against
+[`run_program`](../../src/machine/execute/interpret.rs) root terminal's full reach against
 the run frame's own region, that region's union bundle owning the pins, so a value reaching
 several regions (a
 list of closures, a module over a functor-result region) keeps every one, read straight off its carrier

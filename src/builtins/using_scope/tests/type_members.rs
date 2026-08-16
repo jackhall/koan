@@ -157,9 +157,9 @@ fn block_type_declaration_shadows_a_surfaced_member() {
     );
 }
 
-/// The type channel under real per-statement chains (`enter_source`, not the detached-chain
-/// `run`): a block-local type alias types a block-local `FN`'s slot, and a later statement of the
-/// same block dispatches through it. The `types` entry lives in the block's own scope at its plain
+/// The type channel under block submission (`enter_source`, so the statements share one
+/// submission and resolve in whatever order the scheduler pops them): a block-local type alias
+/// types a block-local `FN`'s slot, and a later statement of the same block dispatches through it. The `types` entry lives in the block's own scope at its plain
 /// statement index, so the in-block reader gates by block ordering exactly as the value channel
 /// does.
 #[test]

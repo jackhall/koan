@@ -2,7 +2,7 @@
 //! lifting. `exec` runs a body in its per-call frame and describes what happens next in its native
 //! terms ([`KExpression`], [`Carried`]) as an [`ExecOutcome`] — never a scheduler step. The
 //! scheduler-aware shell that maps an outcome onto the scheduler is
-//! `execute::dispatch::exec::invoke`; keeping it out of here is what lets `exec` stay
+//! `execute::decide::exec::invoke`; keeping it out of here is what lets `exec` stay
 //! scheduler-agnostic and `'run`-free.
 //!
 //! ## One lifetime

@@ -120,7 +120,7 @@ through an exact pre-pass ranked above every typed arm — and the winner runs (
 
 A single `UNION` variant is named through its union: `:(Maybe Some)` — a
 union head followed by a bare variant `Type` token, resolving to the variant's member
-handle ([apply_callable.rs](../../src/machine/execute/dispatch/apply_callable.rs)).
+handle ([apply_callable.rs](../../src/machine/execute/decide/apply_callable.rs)).
 The same `(Union Tag …)` head-call shape constructs (`Maybe (Some 42)`); the two
 are disambiguated by body shape — a bare `Type`-token body with no payload is the
 variant *reference*, a paren-group payload (`(Some 42)`) newtype-constructs that
@@ -144,7 +144,7 @@ and the parser emits a first-class `ExpressionPart::RecordType(<field list>)` pa
 dispatcher to route), `:{...}` is matched *structurally*: the `DispatchShape::RecordType`
 handler folds the field list straight to a `Record` node via the shared field-list parser
 (`elaborate_record_value` in
-[dispatch/field_list.rs](../../src/machine/execute/dispatch/field_list.rs),
+[decide/field_list.rs](../../src/machine/execute/decide/field_list.rs),
 `FieldNameKind::Identifier`, like NEWTYPE), with no internal type-constructor builtin
 behind it. The field list parses through the same `parse_typed_field_list_via_elaborator`
 path NEWTYPE / FN use, so nested parameterized field types sub-Dispatch
@@ -194,7 +194,7 @@ the fields.
 ## Classifier
 
 `classify_dispatch_shape`
-([dispatch.rs](../../src/machine/execute/dispatch.rs))
+([decide.rs](../../src/machine/execute/decide.rs))
 carries a `SigiledTypeExpr` variant whose handler
 (`sigiled_type_expr`) tail-replaces the slot with a
 `Dispatch` of the wrapped `KExpression`. The inner dispatch sees the
@@ -239,7 +239,7 @@ constructible type.
 
 The classifier also carries a `RecordType` variant for a single-part `:{…}`,
 separate from the `SigiledTypeExpr` lane. Its handler (`record_type` in
-[single_poll.rs](../../src/machine/execute/dispatch/single_poll.rs)) does not
+[single_poll.rs](../../src/machine/execute/decide/single_poll.rs)) does not
 tail-replace with a sub-Dispatch — it folds the field list straight to
 a `Record` node, deferring through a dep-finish only when a field type forward-references
 or sub-dispatches. A `:{…}` head in a multi-part expression classifies as

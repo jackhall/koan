@@ -5,8 +5,8 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::{Carried, KType, TypeNode, TypeRegistry};
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
 
+use super::harness::Host;
 use super::obligation::ReturnObligation;
-use super::runtime::KoanRuntime;
 
 /// How a finished value disposes against its declared return, decided by a single read pass over the
 /// delivered carrier before anything is allocated.
@@ -60,7 +60,7 @@ pub(in crate::machine::execute) trait NodeFinalize {
     ) -> Result<DeliveredCarried, KError>;
 }
 
-impl NodeFinalize for KoanRuntime<'_> {
+impl NodeFinalize for Host<'_> {
     fn finalize_terminal(
         &self,
         envelope: DeliveredCarried,
@@ -161,8 +161,7 @@ pub(in crate::machine::execute) fn finalize_error(
 
 /// Discharge a tail-spliced slot's residual declared-return obligation against the spliced producer's
 /// delivered value — the checker micro-step's check, WITHOUT re-stamping (the value stays the
-/// producer's, re-stamped only later when the re-emitted `Forward` finalizes through
-/// [`NodeStep::ForwardReady`](super::nodes::NodeStep)). It inspects the value and its type and
+/// producer's, re-stamped only later when the re-emitted `Forward` verdict finalizes). It inspects the value and its type and
 /// adopts nothing, so it takes the value live at its caller's read brand rather than a carrier of
 /// its own. Returns the labelled mismatch or `Ok(())`.
 pub(in crate::machine::execute) fn check_spliced_return(

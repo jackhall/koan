@@ -22,15 +22,14 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let runtime = &mut test_run.runtime;
     let exprs = parse(program.brand(), "LET hello = 1").unwrap();
     for e in exprs {
-        runtime.dispatch_in_scope(
+        test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
             scope,
         );
     }
-    runtime.execute().unwrap();
+    test_run.runtime.execute().unwrap();
     assert!(scope.bindings().pending_value("hello").is_none());
     assert!(matches!(scope.lookup("hello"), Some(KObject::Number(n)) if *n == 1.0));
 }
@@ -89,21 +88,24 @@ fn let_type_class_with_non_type_value_errors() {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        let runtime = &mut test_run.runtime;
         let exprs = parse(program.brand(), src).unwrap();
-        let id = runtime.dispatch_in_scope(
+        let id = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 exprs.into_iter().next().unwrap(),
             ),
             scope,
         );
-        let edge = runtime.install_edge_for_test(id, scope);
-        runtime
+        let edge = test_run.runtime.install_edge_for_test(id, scope);
+        test_run
+            .runtime
             .execute()
             .expect("execute does not surface per-slot errors");
         let types = test_run.types.clone();
-        match runtime.read_edge_result_with(edge, |v| format!("{:?}", v.ktype(&types))) {
+        match test_run
+            .runtime
+            .read_edge_result_with(edge, |v| format!("{:?}", v.ktype(&types)))
+        {
             Err(e) => assert!(
                 matches!(&e.kind, KErrorKind::TypeClassBindingExpectsType { name, got }
                     if name == "Foo" && got == expected),
@@ -126,23 +128,23 @@ fn let_type_class_with_type_value_still_binds() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let runtime = &mut test_run.runtime;
     let exprs = parse(program.brand(), "LET Foo = Number").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(runtime.dispatch_in_scope(
+        ids.push(test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
             scope,
         ));
     }
     let edges: Vec<_> = ids
         .iter()
-        .map(|id| runtime.install_edge_for_test(*id, scope))
+        .map(|id| test_run.runtime.install_edge_for_test(*id, scope))
         .collect();
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = runtime.edge_result_error(edges[0]);
+    let res = test_run.runtime.edge_result_error(edges[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let kt = scope
         .resolve_type("Foo")
@@ -161,23 +163,23 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let runtime = &mut test_run.runtime;
     let exprs = parse(program.brand(), "LET foo = 1").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(runtime.dispatch_in_scope(
+        ids.push(test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
             scope,
         ));
     }
     let edges: Vec<_> = ids
         .iter()
-        .map(|id| runtime.install_edge_for_test(*id, scope))
+        .map(|id| test_run.runtime.install_edge_for_test(*id, scope))
         .collect();
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = runtime.edge_result_error(edges[0]);
+    let res = test_run.runtime.edge_result_error(edges[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let entry = scope.lookup("foo").expect("expected binding 'foo'");
     assert!(
@@ -199,24 +201,26 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let runtime = &mut test_run.runtime;
     let exprs = parse(program.brand(), "LET :(LIST OF Number) = 1").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(runtime.dispatch_in_scope(
+        ids.push(test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
             scope,
         ));
     }
     let edges: Vec<_> = ids
         .iter()
-        .map(|id| runtime.install_edge_for_test(*id, scope))
+        .map(|id| test_run.runtime.install_edge_for_test(*id, scope))
         .collect();
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
     let types = test_run.types.clone();
-    let res = runtime.read_edge_result_with(edges[0], |v| format!("{:?}", v.ktype(&types)));
+    let res = test_run
+        .runtime
+        .read_edge_result_with(edges[0], |v| format!("{:?}", v.ktype(&types)));
     match res {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(_)),

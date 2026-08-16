@@ -63,7 +63,9 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
         &mut crate::machine::WriteGate::for_test(),
     );
     let expr = working(region.brand(), vec![ExpressionPart::Identifier("foo")]);
-    let chain = LexicalFrame::detached();
+    // ONE was registered at `scope`'s BUILTIN index (0); root the chain there one past it
+    // so the registration is visible.
+    let chain = LexicalFrame::root(scope.id, 1);
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Resolved(r) => {
             assert_eq!(r.slots.wrap_indices, vec![0]);
@@ -103,7 +105,9 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
             ExpressionPart::Literal(KLiteral::Number(7.0)),
         ],
     );
-    let chain = LexicalFrame::detached();
+    // NA and AN were both registered at `scope`'s BUILTIN index (0); root the chain there
+    // one past it so both are visible and can tie.
+    let chain = LexicalFrame::root(scope.id, 1);
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Ambiguous(n) => assert_eq!(n, 2),
         _ => panic!("expected Ambiguous(2) for tied overloads"),
@@ -153,7 +157,10 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
             ExpressionPart::Literal(KLiteral::Number(7.0)),
         ],
     );
-    let chain = LexicalFrame::detached();
+    // NA/AN were registered at `inner`'s BUILTIN index (0); root the chain on `inner` one
+    // past it. `outer` is never named on this chain, so `OUTER` (index 1) stays visible
+    // through the unmentioned-scope "fully visible" rule.
+    let chain = LexicalFrame::root(inner.id, 1);
     match inner.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Ambiguous(_) => {}
         _ => panic!("inner ambiguity must surface, not fall through to outer's unique overload"),
@@ -204,7 +211,9 @@ fn resolve_marks_binder_pick_for_binder_function() {
             ExpressionPart::Literal(KLiteral::Number(1.0)),
         ],
     );
-    let chain = LexicalFrame::detached();
+    // LETLIKE was registered at `scope`'s BUILTIN index (0); root the chain there one
+    // past it so the registration is visible.
+    let chain = LexicalFrame::root(scope.id, 1);
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Resolved(r) => {
             assert!(
@@ -235,7 +244,9 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
         region.brand(),
         vec![ExpressionPart::Literal(KLiteral::Number(5.0))],
     );
-    let chain = LexicalFrame::detached();
+    // ONE_ID was registered at `scope`'s BUILTIN index (0); root the chain there one past
+    // it so the registration is visible.
+    let chain = LexicalFrame::root(scope.id, 1);
     assert!(matches!(
         scope.resolve_dispatch(&expr, Some(&chain), &[], &types),
         DispatchOutcome::Unmatched
@@ -274,7 +285,9 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
             ExpressionPart::Literal(KLiteral::Number(1.0)),
         ],
     );
-    let chain = LexicalFrame::detached();
+    // PLUS was registered at `scope`'s BUILTIN index (0); root the chain there one past
+    // it so the registration is visible.
+    let chain = LexicalFrame::root(scope.id, 1);
     assert!(matches!(
         scope.resolve_dispatch(&expr, Some(&chain), &[], &types),
         DispatchOutcome::Deferred
@@ -311,7 +324,9 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
             ExpressionPart::Identifier("fwd"),
         ],
     );
-    let chain = LexicalFrame::detached();
+    // The pending overload was installed at `scope`'s BUILTIN index (0); root the chain
+    // there one past it so it is visible.
+    let chain = LexicalFrame::root(scope.id, 1);
     match scope.resolve_dispatch(&bare, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![ProducerId::for_test(42)]),
         other => panic!(
@@ -381,7 +396,10 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     // Inner pending sibling on the same bucket key, body not yet finalized.
     scope_install_pending(inner, &expr, ProducerId::for_test(55));
 
-    let chain = LexicalFrame::detached();
+    // The pending sibling was installed at `inner`'s BUILTIN index (0); root the chain on
+    // `inner` one past it. `outer` is never named on this chain, so its strict Pick at
+    // index 1 stays visible through the unmentioned-scope "fully visible" rule.
+    let chain = LexicalFrame::root(inner.id, 1);
     match inner.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
             ps,
@@ -435,7 +453,10 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
             ExpressionPart::Literal(KLiteral::Number(1.0)),
         ],
     );
-    let chain = LexicalFrame::detached();
+    // inner_plus was registered at `inner`'s BUILTIN index (0); root the chain on `inner`
+    // one past it. `outer` is never named on this chain, so `outer_plus` stays visible
+    // through the unmentioned-scope "fully visible" rule.
+    let chain = LexicalFrame::root(inner.id, 1);
     assert!(
         matches!(
             inner.resolve_dispatch(&expr, Some(&chain), &[], &types),
@@ -451,7 +472,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
 #[test]
 fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     let types = TypeRegistry::new();
-    use crate::machine::NameOutcome;
+    use crate::machine::execute::Resolution;
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     // Outer `:Identifier` overload that owns the bare name (shape-only admit).
@@ -475,8 +496,11 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
         &mut crate::machine::WriteGate::for_test(),
     );
     let expr = working(region.brand(), vec![ExpressionPart::Identifier("fwd")]);
-    let bare_outcomes = vec![Some(NameOutcome::Unbound("fwd".into()))];
-    let chain = LexicalFrame::detached();
+    let bare_outcomes = vec![Some(Resolution::Unbound("fwd".into()))];
+    // inner_num was registered at `inner`'s BUILTIN index (0); root the chain on `inner`
+    // one past it. `outer` is never named on this chain, so `outer_id` stays visible
+    // through the unmentioned-scope "fully visible" rule.
+    let chain = LexicalFrame::root(inner.id, 1);
     match inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, &types) {
         DispatchOutcome::Resolved(r) => assert!(
             matches!(
@@ -543,7 +567,10 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         )
         .expect("install_pending_overload");
 
-    let chain = LexicalFrame::detached();
+    // pick_num sits at index 1, the pending sibling finalizes at index 3, and the
+    // finalizing overload below lands at index 3 too; root the chain on `scope` one past
+    // the highest of those so every entry stays visible across both resolves below.
+    let chain = LexicalFrame::root(scope.id, 4);
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
             ps,
@@ -653,7 +680,9 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
             ExpressionPart::Identifier("fwd"),
         ],
     );
-    let chain = LexicalFrame::detached();
+    // The two sibling pending overloads finalize at indices 3 and 4; root the chain on
+    // `scope` one past the higher so both stay visible.
+    let chain = LexicalFrame::root(scope.id, 5);
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => {
             assert_eq!(

@@ -1,7 +1,7 @@
 //! `:(A | B)` — the untagged structural union type constructor. The `|` operator is a
 //! single-member `Unary`-mode operator group, so a run `A | B | C` reduces to the
 //! keyword-first call `[Keyword("|"), ListLiteral([A, B, C])]` (see
-//! [`operator_chain::reduce_unary`](crate::machine::execute::dispatch::operator_chain)), while a
+//! [`operator_chain::reduce_unary`](crate::machine::execute::decide::operator_chain)), while a
 //! two-member run `A | B` stays a plain keyworded `[A, |, B]` (an operator chain needs at least
 //! two operators). Two overloads cover both shapes; each folds its resolved members through
 //! [`TypeRegistry::union_of`], so `:(A | A)` collapses to `:A` and member order never matters.

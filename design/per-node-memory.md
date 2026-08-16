@@ -85,10 +85,10 @@ captured scope riding a resident seed operand delivered at that very scope
 the fold's own composition. The object family's leaves and
 aggregates are built this way — a single-part literal and a static aggregate cell
 `yoke` their owned data, and a list / dict / record folds its dep carriers via
-`transfer_into` ([dispatch/literal.rs](../src/machine/execute/dispatch/literal.rs) /
-[single_poll.rs](../src/machine/execute/dispatch/single_poll.rs)). The
+`transfer_into` ([decide/literal.rs](../src/machine/execute/decide/literal.rs) /
+[single_poll.rs](../src/machine/execute/decide/single_poll.rs)). The
 carrier-self-building constructions follow: the newtype / tagged-union
-[`constructors`](../src/machine/execute/dispatch/constructors.rs) and
+[`constructors`](../src/machine/execute/decide/constructors.rs) and
 [`catch`](../src/builtins/catch.rs) fold their dep carriers, and FN def
 [`finalize`](../src/builtins/fn_def/finalize.rs) hands the callable's birth
 envelope to [`Scope::store_function_cell`](../src/machine/core/scope/reach.rs),
@@ -98,7 +98,7 @@ that birth already composed.
 The value-embedding sites that take a *bare arg* —
 [`attr`](../src/builtins/attr.rs)'s `Wrapped`,
 [`FROM`](../src/builtins/record_projection.rs)'s `Record`, and the
-[literal.rs](../src/machine/execute/dispatch/literal.rs) Resolved arm's bound value
+[literal.rs](../src/machine/execute/decide/literal.rs) Resolved arm's bound value
 — climb off it the same way: each receives the value it embeds as a delivered
 `Sealed` carrier and folds it into the result's own construction. `attr` / `FROM`
 go through the step context's
@@ -149,17 +149,18 @@ finalize's fold.
 
 A node's own value terminal is witnessed the same way — a region-pure result (a
 spliced value, a builtin's synchronous result) through `resident`, a dep-reaching
-result by folding its delivered dep carriers — so
-[`NodeStep::DoneWitnessed`](../src/machine/execute/nodes.rs) is the sole value
+result by folding its delivered dep carriers — so the witnessed `Done` carrier is
+the sole value
 terminal. `seal_at_step` pairs it with the producing frame into a delivery
 envelope, and [`finalize_terminal`](../src/machine/execute/finalize.rs) hands that
-envelope on whole — value and coverage stay one value all the way to
-`Scheduler::finalize`, whose delivery walk adopts it into each edge's
+envelope on whole as `StepVerdict::Done(Ok(_))` — value and coverage stay one
+value all the way to
+the drain's finalize, whose delivery walk adopts it into each edge's
 destination region. An error
 carries no value and finalizes bare. The type / region construction operands are computed carriers
 too — the newtype / tagged-union / `CATCH` build folds a delivered type-identity
 carrier in as the destination operand under the binding's stored reach
-([`build_type_operand`](../src/machine/execute/dispatch/constructors.rs)). A
+([`build_type_operand`](../src/machine/execute/decide/constructors.rs)). A
 declared return is checked and re-stamped in place in the producer's own region; no
 relocation operand exists at Done.
 
@@ -276,7 +277,7 @@ nothing branded crosses the step boundary.
   [`Within<'b, 'run>`](../workgraph/src/witnessed/dormant.rs) token whose declared
   `'run: 'b` the `for<'b>` instantiation discharges, which is what lets the
   [`ProgramBrand<'run>`](../src/machine/core/arena/frame.rs) the runtime holds be
-  stored **unshortened** in the step's `SchedulerView`: that struct keeps
+  stored **unshortened** in the step's `DecideCtx`: that struct keeps
   `'program` distinct from `'step`, related only by its own `'program: 'step`
   bound, and the token discharges it. The brand is invariant, so it could not
   shorten in any case. It needs no seal, no re-anchor and no pin: it is a live

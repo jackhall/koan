@@ -11,7 +11,7 @@ The missing capability is storage, not syntax. `crate::parse::parse` takes a
 `ProgramBrand` ([`arena/frame.rs`](../../src/machine/core/arena/frame.rs)),
 mintable only from a `ProgramStorage`, and the only one that exists is a local
 in
-[`interpret_with_writer_path`](../../src/machine/execute/runtime/interpret.rs).
+[`interpret_with_writer_path`](../../src/machine/execute/interpret.rs).
 Nothing reachable from a builtin's `BodyCtx` can obtain one, so no builtin can
 parse.
 

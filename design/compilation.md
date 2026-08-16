@@ -31,7 +31,7 @@ hard to compile has already been evaluated out by tested code:
   ([typing/ktype/](typing/ktype/README.md)) have concrete
   candidate sets to rank against.
 - Every dispatch node whose inputs are build-time-known carries its
-  `ResolveOutcome`; every fully-finalized node is a constant.
+  `DispatchOutcome`; every fully-finalized node is a constant.
 
 The code generator therefore compiles a much simpler language than
 surface koan: no forward references, no pending types, dispatch mostly

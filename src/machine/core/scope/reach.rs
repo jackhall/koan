@@ -106,7 +106,7 @@ impl<'a> Scope<'a> {
     ///   foreign region and travels under the home-frame pin alone (the envelope host
     ///   [`Self::deliver_resident`] adds); the `Copy` handle rides in place, never re-cloned
     ///   into the region.
-    /// - **Destination handle** (`RegionHandleFamily` / `DestHandleFamily`): a bare region handle
+    /// - **Destination handle** (`RegionHandleFamily`): a bare region handle
     ///   borrows nothing at all.
     ///
     /// A **callable** does not qualify and takes no door here: a `KFunction` borrows its captured
@@ -222,6 +222,15 @@ impl<'a> Scope<'a> {
     /// region owner as its pin — what the retention above makes sufficient.
     pub(crate) fn rest_delivered(&self, cell: &DeliveredCarried) -> SplicedCell<'a> {
         cell.rest_in(self.brand().handle())
+    }
+
+    /// **Lift-then-rest as one door**: recover a resting splice cell (a resolved dep terminal's)
+    /// into its producer's delivery envelope and rest that envelope into this scope's region — the
+    /// whole coverage moving into the region's union bundle, so the value's backing stays retained
+    /// until the consumer reads it. Fusing [`Self::lift_spliced`] with [`Self::rest_delivered`]
+    /// removes the possibility of resting an envelope lifted under a different scope.
+    pub(crate) fn rest_spliced(&self, cell: &SplicedCell) -> SplicedCell<'a> {
+        self.rest_delivered(&self.lift_spliced(cell))
     }
 
     /// **Lift** a resting splice cell back into a delivery envelope owning its whole reach

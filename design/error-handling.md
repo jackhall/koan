@@ -53,13 +53,13 @@ formats them to stderr with the frame chain via `KError`'s `Display` impl.
 
 Dispatch failures (no match, ambiguous overload, arity mismatch in bind) flow
 through the same channel as builtin errors:
-[`Scope::resolve_dispatch`](../src/machine/core/scope.rs) returns a
-`ResolveOutcome` whose `Ambiguous` and `Unmatched` arms the scheduler driver
+[`Scope::resolve_dispatch`](../src/machine/execute/decide/resolve_dispatch.rs) returns a
+`DispatchOutcome` whose `Ambiguous` and `Unmatched` arms the scheduler driver
 converts to `Err(KError)` with `KErrorKind::AmbiguousDispatch` /
 `DispatchFailed`, and `KFunction::bind_args` returns `Result<Record<Held>, KError>` on
 arity mismatch.
-[`Scheduler::execute`](../src/machine/execute/run_loop.rs) and
-[`interpret`](../src/machine/execute/runtime/interpret.rs) return `Result<(), KError>` to
+[`KoanRuntime::execute`](../src/machine/execute/harness.rs) and
+[`interpret`](../src/machine/execute/interpret.rs) return `Result<(), KError>` to
 complete the surfacing.
 
 ## `try_args!` macro

@@ -114,7 +114,7 @@ type identity.
 `bindings.data` holds runtime instances, including module values. A value-position
 reference to a nominal type token (passing `Outcome` to a constructor or ATTR call)
 surfaces the
-[`bindings.types` identity in the `Type` arm](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
+[`bindings.types` identity in the `Type` arm](../../src/machine/execute/decide/resolve_type_identifier.rs)
 on demand via `Scope::resolve_type_identifier` — no
 value-side schema carrier exists for newtype / union / Result.
 
@@ -143,7 +143,7 @@ union-typed sibling that admits the same value.
 **The variant-reference surface is the union-qualified sigil `:(Maybe Some)`** —
 a variant reached through its union, with no global `:Some` name and no `.`
 path operator. The dispatcher's union constructor arm
-([apply_callable.rs](../../src/machine/execute/dispatch/apply_callable.rs))
+([apply_callable.rs](../../src/machine/execute/decide/apply_callable.rs))
 disambiguates by body shape: a bare `Type`-token body (`Maybe Some`) yields the
 member handle type value, while a payload body (`Maybe (Some 42)`) constructs the
 tagged variant value. An unknown variant name in either form is a schema error listing
@@ -219,8 +219,8 @@ process-global counter and so can never collide with an earlier run's. Nothing h
 names a scheduler slot or edge: the counter is Koan's own, so the scheduler's
 index-recycling policy is not load-bearing for redeclaration semantics
 ([scheduler-library.md](../scheduler-library.md)). The `BindingIndex` in the entry has one job
-left — the visibility gate `idx < cutoff` reads it — and under a detached submission
-chain it is `0`, naming no statement, because identity no longer rests on it. The
+left — the visibility gate `idx < cutoff` reads it, against the statement
+position the submission's driver declared. The
 single-home invariant — Type-classed name lookups go through `Scope::resolve_type` only
 — holds because the identity *is* the only entry.
 
@@ -416,7 +416,7 @@ selected by the repr part-kind:
   the body's ambient window rather than opening its own.
 
 Construction (`Distance(3.0)`, `Bar(Foo(3.0))`) flows through
-[`type_call`](../../src/machine/execute/dispatch/single_poll.rs)'s `Newtype` arm —
+[`type_call`](../../src/machine/execute/decide/single_poll.rs)'s `Newtype` arm —
 which branches on the resolved member's `kind` — into
 [`newtype_def::newtype_construct`](../../src/builtins/newtype_def.rs), which
 schedules the value sub-expression via `dispatch_in_scope` and waits on it via a
@@ -500,8 +500,8 @@ type-variable substrate. Application binds the parameter by name —
 lowering an abstract constructor slot's application uses.
 
 **Construction stamps then collapses.** `Wrapper (v)` routes through
-[`dispatch_construct_apply`](../../src/machine/execute/dispatch/constructors.rs) (an
-[`ApplyConstructor`](../../src/machine/execute/dispatch/single_poll.rs) `CtorKind`), which
+[`dispatch_construct_apply`](../../src/machine/execute/decide/constructors.rs) (an
+[`ApplyConstructor`](../../src/machine/execute/decide/single_poll.rs) `CtorKind`), which
 mirrors `dispatch_construct_newtype`'s arity handling: a single redundant paren group
 unwraps, an empty body is `ArityMismatch { expected: 1, got: 0 }`. Its `finish_witnessed`
 arm reads the resolved value `v`, **stamps** `v`'s full `ktype()` — including a `Wrapped`

@@ -301,8 +301,7 @@ fn fn_return_type_constructor_apply_root_scope() {
         wrap,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(
@@ -312,9 +311,9 @@ fn fn_return_type_constructor_apply_root_scope() {
         ),
         scope,
     );
-    let edge = runtime.install_edge_for_test(id, scope);
-    runtime.execute().expect("scheduler should run");
-    match runtime.edge_result_error(edge) {
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
+    test_run.runtime.execute().expect("scheduler should run");
+    match test_run.runtime.edge_result_error(edge) {
         Ok(()) => {}
         Err(e) => panic!("FN with :(Number AS Wrap) return failed: {}", e),
     }
@@ -352,24 +351,23 @@ fn monad_signature_smoke() {
          (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
     let exprs = parse(program.brand(), src).expect("parse should succeed");
     {
-        let runtime = &mut test_run.runtime;
         let mut ids = Vec::new();
         for expr in exprs {
-            ids.push(runtime.dispatch_in_scope(
+            ids.push(test_run.dispatch_in_scope(
                 crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
                 scope,
             ));
         }
         let edges: Vec<_> = ids
             .iter()
-            .map(|id| runtime.install_edge_for_test(*id, scope))
+            .map(|id| test_run.runtime.install_edge_for_test(*id, scope))
             .collect();
-        match runtime.execute() {
+        match test_run.runtime.execute() {
             Ok(()) => {}
             Err(e) => panic!("scheduler errored: {}", e),
         }
         for (i, edge) in edges.iter().enumerate() {
-            if let Err(e) = runtime.edge_result_error(*edge) {
+            if let Err(e) = test_run.runtime.edge_result_error(*edge) {
                 panic!("expr {} errored: {}", i, e);
             }
         }

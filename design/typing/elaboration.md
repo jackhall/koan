@@ -139,10 +139,10 @@ cross-link this section rather than restating its slice.
   [execution/name-placeholders.md § Dispatch-time name placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)
   for the parking integration.
 - **Layer 4 — bare-leaf dispatch ingress** in
-  [`resolve_type_identifier.rs`](../../src/machine/execute/dispatch/resolve_type_identifier.rs).
+  [`resolve_type_identifier.rs`](../../src/machine/execute/decide/resolve_type_identifier.rs).
   The bare-`Type` token call sites — the dispatcher's `BareTypeLeaf` fast lane and the
   keyworded splice walk's eager name-resolve pass — call
-  [`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
+  [`Scope::resolve_type_identifier`](../../src/machine/execute/decide/resolve_type_identifier.rs)
   directly, the same memoized, park-capable bridge (Layer 2) every compound type form
   uses. It returns `TypeResolution<KType>::{Done, Park, Unbound}`: `Done` carries the
   bridge's cached `KType` handle on the value
@@ -315,12 +315,12 @@ a bare user name can still be pending:
 
 The single-part bare-`Type` lookup that those consumers' siblings need is
 folded into the dispatcher's `BareTypeLeaf` fast lane
-([`dispatch/single_poll.rs`](../../src/machine/execute/dispatch/single_poll.rs)),
+([`decide/single_poll.rs`](../../src/machine/execute/decide/single_poll.rs)),
 which calls the park-capable
-[`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
+[`Scope::resolve_type_identifier`](../../src/machine/execute/decide/resolve_type_identifier.rs)
 bridge directly — the same bridge the keyworded splice walk's eager
 name-resolve pass calls
-([`dispatch.rs`](../../src/machine/execute/dispatch.rs)).
+([`decide.rs`](../../src/machine/execute/decide.rs)).
 On a resolved leaf its `TypeResolution::Done(KType)` surfaces the interned
 `KType` handle in the value channel's `Type` arm for every type-only nominal — struct / union /
 Result *and* signature; on an earlier still-finalizing binder it parks; on a
@@ -341,7 +341,7 @@ already finalized every parameter-name identity; type-denoting parameters themse
 `register_type` from an already-resolved type argument, so there is no transient identity
 elaboration at the bind site. The sole bare-leaf resolution site for dispatch transport
 is the
-[`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
+[`Scope::resolve_type_identifier`](../../src/machine/execute/decide/resolve_type_identifier.rs)
 bridge, which surfaces the resolved `KType`. Bare leaves resolve through the same
 gate and parking discipline as compound type forms — there is no separate
 synchronous bare-leaf path.
@@ -351,7 +351,7 @@ surface-name carrier variant inside `KType` itself.
 
 ## Strict admission rules
 
-[`signature_admits_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
+[`signature_admits_strict`](../../src/machine/execute/decide/resolve_dispatch.rs)
 admits a candidate signature against an expression by walking slot/part
 pairs and consulting the per-dispatch-poll `bare_outcomes` cache. The
 admission rule per cache entry on a bare-name part:
@@ -369,7 +369,7 @@ through the park the harness installs, ruled on at wiring time rather than
 probed here
 ([classify-and-apply.md](../execution/classify-and-apply.md)).
 Cycle detection is likewise deferred — the cache carries no consumer id — so
-neither state is a `NameOutcome` variant admission must screen.
+neither state is a `Resolution` variant admission must screen.
 
 **Binder declaration slots bypass the cache.** A slot typed `KType::Identifier`
 or `KType::OfKind(KKind::ProperType)` owns the name (`x` in `LET x = …`, `Ty` in

@@ -21,8 +21,9 @@ free list of recyclable indices, mirroring the node store — addressed by
 wiring and read verbs, and confers no ownership and no lifecycle duty. The
 embedder wires everything through such names — parked deps, dispatch
 placeholders, scope bindings, and the run's roots alike — while the edges
-themselves stay in the slab. `NodeId` is a drive-loop currency: the embedder's
-driver pops, steps, wires, and may do graph surgery with it, but everything
+themselves stay in the slab. `NodeId` is a drive-loop currency: the drain
+pops, steps, wires, and does graph surgery with it, the embedder's step
+callback sees it only for the duration of a step, and everything
 deeper — an embedder's scopes, bindings, frames — never sees one. What crosses
 into those layers is an edge name, and an embedder that needs an identity of its
 own for something the DAG layer does not index (koan's declaration identity, for
@@ -89,7 +90,7 @@ memory stays O(1) across iterations.
 Because indices recycle, a `NodeId` names a **position**, not an incarnation: two
 ids for one index from different allocations compare equal, and an id is
 meaningful only for as long as the incarnation that minted it lives. Nothing is
-asked to hold one longer. The drive loop pops, steps, wires, and finalizes with
+asked to hold one longer. The drain pops, steps, wires, and finalizes with
 an id inside a single step; a holder that needs identity to survive reclamation
 mints its own, as koan does with `StatementId` and `ProducerId`.
 
@@ -166,10 +167,40 @@ The run set has two priority bands managed by
 wakeups, re-enqueues, and ready-on-arrival nodes registered in `add()` — routes
 through `push_internal` / `push_internal_front` / `push_woken`. **Top-level**
 submissions route through `push_top_level`, so independent top-level units execute
-in submission order. The loop drains via `pop_next`, which yields internal slots
+in submission order. The drain pops via `pop_next`, which yields internal slots
 ahead of top-level ones. The routing rule (which band a push lands in) and the
 priority rule (which band a pop drains first) are both enforced by the wrapper's
 method surface rather than restated at each call site.
+
+## The drain protocol
+
+[`Scheduler::drain`](../src/scheduler/drain.rs) owns the pop/take/step/apply
+loop — the embedder supplies only the step callback. Per popped slot the drain
+takes the stored work, reads every dep edge's delivered resident (releasing
+the edge as it reads), and hands the callback one
+[`Step`](../src/scheduler/drain.rs) bundle: the slot's id, a clone of its
+memory anchor, the still-sealed continuation, and the dep results in dep
+order. The callback opens the continuation at its own step brand, runs the
+step, and returns a [`StepVerdict`](../src/scheduler/drain.rs); returning the
+verdict *is* applying it, each arm mapping onto exactly one internal
+transition — `Done` (finalize and deliver), `Forward` (finalize through an
+already-filled edge the slot wired), `Replace` (tail-reinstall, optionally
+with a fresh anchor the embedder populated before returning), or `Alias`
+(splice onto the producer behind a parked source edge). The "slot sits empty
+until a verdict lands" contract and the "dep edges released exactly once" rule
+are both structural: the embedder never touches a dep edge.
+
+Slot retirement is a workload hook, not a call-site protocol:
+[`Workload::retiring`](../src/scheduler/workload.rs) is invoked exactly once
+per slot, at the one point the slot stops being able to release its edges —
+after the finalize / forward reads and the splice re-point, before slab
+reclaim — and the scheduler releases the edges it returns. The exactly-once
+claim and the after-the-forward-read ordering hold by the hook's placement,
+not by per-arm discipline.
+
+When the queues empty with slots still parked, `drain` returns its deadlock
+report — the pending count plus a carrier sample from the first parked slot
+that has one — as its `Err`.
 
 ## Delivery at finalize
 
@@ -272,10 +303,11 @@ is what wiring answers, so no consumer can read a producer's state without
 having wired the edge that makes the read sound. A `Filled` verdict is the
 caller's to act on rather than something a later poll rediscovers — an errored
 producer never notifies again, so a park on one would wait forever, and the
-embedder propagates at once instead. The one graph question that stays
-pre-wiring is `would_create_cycle` (and its edge-keyed form): parking on an
-ancestor deadlocks rather than errors, so it has to be answerable before the
-edge exists.
+embedder propagates at once instead. Nor does the crate expose a cycle probe:
+acyclicity is the embedder's premise (koan discharges it by lexical
+well-foundedness — every park names a lexically earlier claim), and the
+install door debug-asserts it, so a cycling park is a bug caught at the door,
+never an installed edge and never a runtime classification.
 
 ## Alias splice
 
@@ -308,6 +340,8 @@ Every dep mints the consumer its *own* slab edge off the source, inheriting the
 source's destination region, and the consumer owns it under the ordinary
 ownership rule (§ Edges and the boundary): the scheduler keeps no dep-side
 release bookkeeping, because a consumer holds its edges only as long as it needs
-their residents. A step's deps are read at step start and released right there —
+their residents. A step's deps are read by the drain before the step callback
+runs, their edges released right there —
 the values live in the destination regions, not in the edges — and whatever
-edges the consumer still owns at its terminal are released by its own teardown.
+edges the consumer still owns at its terminal are released through the
+`Workload::retiring` hook (§ The drain protocol).

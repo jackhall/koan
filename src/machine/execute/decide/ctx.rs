@@ -1,0 +1,243 @@
+//! The decide-phase context.
+//!
+//! [`DecideCtx`] is the surface every dispatch *decide* runs against: the ambient step context —
+//! scope, destination frame, installer identity, effects sink, obligations, types, writer, and the
+//! program brand — and nothing else. A decide holds no scheduler borrow at all: every graph
+//! question is either the install's answer (the park verdicts the harness reads off
+//! [`InstalledEdge`](crate::scheduler::InstalledEdge)) or foreclosed by the language's lexical
+//! well-foundedness rule (a park can never wait forward, so no decide probes for cycles). A shape
+//! handler decides against this and returns an [`Outcome`](super::Outcome); the harness
+//! ([`super::super::harness`]) holds the sole `&mut Scheduler` and applies it.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use crate::machine::core::bindings::WriteOp;
+use crate::machine::core::scope_frame;
+use crate::machine::core::{FrameStorage, ProgramBrand, RunWriter, StepAllocator};
+use crate::machine::model::types::TypeRegistry;
+use crate::machine::model::{ExpressionPart, WorkingPart};
+use crate::machine::{CallFrame, Installer, LexicalFrame, Scope};
+use crate::source::Spanned;
+
+use super::super::ambient::AmbientContext;
+use super::super::nodes::NodeScope;
+use super::super::obligation::ReturnObligation;
+use super::resolve::{Resolution, TypeLeafChannels, resolve_name};
+
+/// Run `f` with a [`NodeScope`] handle's scope opened at a `for<'b>` brand. A `Yoked` slot
+/// re-projects from the active cart through [`CallFrame::with_scope`]; a `YokedChild` slot opens its
+/// erased cart-ancestor [`SealedExtern<ScopeRefFamily>`](crate::witnessed::SealedExtern) carrier at
+/// the same brand, pinned by `frame`. Either way the `&Scope<'b>` is confined to `f`, so no borrow
+/// rides up a `&mut` path.
+pub(in crate::machine::execute) fn with_node_scope<R>(
+    node_scope: &NodeScope,
+    frame: Option<&Rc<CallFrame>>,
+    f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
+) -> R {
+    let frame = frame.expect("a slot keeps its active cart");
+    match node_scope {
+        NodeScope::YokedChild(carrier) => carrier.open(frame, f),
+        NodeScope::Yoked => frame.with_scope(f),
+    }
+}
+
+/// Run `f` with the active slot's scope from the ambient payload — the read the `&mut` harness
+/// classify and submit paths use (they hold the ambient context, not the step's branded scope).
+/// Panics outside a slot step; within a step the scope is always present.
+pub(in crate::machine::execute) fn with_current_node_scope<R>(
+    ambient: &AmbientContext,
+    f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
+) -> R {
+    let payload = ambient
+        .active_payload()
+        .expect("a slot step installs the ambient payload (and a Yoked slot keeps its frame)");
+    with_node_scope(&payload.scope, ambient.active_frame_ref(), f)
+}
+
+/// The frame storage owning the active slot's scope region, read through the ambient payload — the
+/// `&mut` harness path's analogue of [`DecideCtx::dest_frame`]. Routes through `scope_frame`, the
+/// liveness invariant's single owner.
+pub(in crate::machine::execute) fn current_dest_frame(
+    ambient: &AmbientContext,
+) -> Rc<FrameStorage> {
+    with_current_node_scope(ambient, scope_frame)
+}
+
+/// The decide-phase context: the ambient step values a shape handler reads while deciding. A
+/// `DecideCtx` lives only for the decide call, and its borrows end before the harness applies the
+/// outcome, so decide and apply never overlap.
+pub(in crate::machine::execute) struct DecideCtx<'program: 'step, 'step, 'view> {
+    /// Per-step context for the scope/chain reads (`chain_deref`, `active_chain`, `current_frame`)
+    /// and the obligation slot.
+    ambient: &'view AmbientContext,
+    /// The active slot's scope, opened at the step brand and handed in by the harness's step
+    /// `open`, so [`Self::current_scope`] returns it directly. It carries the cart content lifetime
+    /// `'step` every decide runs at; a longer-lived program-storage `KExpression` reaches that
+    /// lifetime by ordinary subtyping, the node being covariant.
+    scope: &'step Scope<'step>,
+    /// The `Rc<FrameStorage>` owning the active scope's region — resolved once per step by the
+    /// harness while the step machinery holds it, so step code reads a live frame with no failure
+    /// path.
+    dest_frame: Rc<FrameStorage>,
+    /// The statement this view's slot is running, as an [`Installer`]. A binder body reads it
+    /// through [`Self::installer`] to stamp the installing declaration's identity onto its `types`
+    /// entry.
+    installer: Installer,
+    /// The step's binding-write sink, owned by the harness's step for the step's duration and
+    /// drained by it after the continuation returns. **Private**, with one
+    /// `pub(in crate::machine::execute)` deposit method, so only [`run_action`] can reach it: a
+    /// builtin receives a [`BodyCtx`](crate::machine::BodyCtx), which does not carry it, and nothing
+    /// outside the execute layer can deposit. The asymmetry is deliberate — builtins express writes
+    /// as outcome *data* on their `Action`; this is a harness-internal hop from `run_action` to the
+    /// step's apply point, not a channel bodies write through.
+    ///
+    /// [`run_action`]: super::run_action
+    effects: &'view RefCell<Vec<WriteOp<'step>>>,
+    /// The run's program storage capability, minted once per run and carried unchanged across every
+    /// step. A builtin body reaches it through [`BodyCtx::program`](crate::machine::BodyCtx); it is
+    /// what the one runtime site that synthesizes a **value-channel** node (`OP`'s bridge body)
+    /// builds against. It is carried **unshortened**, at its own `'program`, related to the step
+    /// lifetime only by the struct's `'program: 'step` bound — so a mint door reached through it
+    /// pins its parts at program storage, not at the step.
+    program: ProgramBrand<'program>,
+}
+
+impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
+    pub(in crate::machine::execute) fn new(
+        ambient: &'view AmbientContext,
+        scope: &'step Scope<'step>,
+        dest_frame: Rc<FrameStorage>,
+        installer: Installer,
+        effects: &'view RefCell<Vec<WriteOp<'step>>>,
+        program: ProgramBrand<'program>,
+    ) -> Self {
+        Self {
+            ambient,
+            scope,
+            dest_frame,
+            installer,
+            effects,
+            program,
+        }
+    }
+
+    /// This run's program storage capability — see the [`program`](Self::program) field.
+    pub(in crate::machine::execute) fn program(&self) -> ProgramBrand<'program> {
+        self.program
+    }
+
+    /// Append this step's next batch of binding writes to the harness-owned sink, preserving the
+    /// order the bodies decided them in. The only way into `effects`; called once per interpreted
+    /// `Action` by [`run_action`](super::run_action).
+    pub(in crate::machine::execute) fn deposit_effects(&self, ops: Vec<WriteOp<'step>>) {
+        self.effects.borrow_mut().extend(ops);
+    }
+
+    /// The installing declaration's identity — the statement this slot is running — which a binder
+    /// body threads into its `types` entry via [`BodyCtx::declaration_site`].
+    pub(in crate::machine::execute) fn installer(&self) -> Installer {
+        self.installer
+    }
+
+    pub(in crate::machine::execute) fn current_scope(&self) -> &'step Scope<'step> {
+        self.scope
+    }
+
+    /// The run's subtype-verdict store, read through the ambient context's run frame. Memoized
+    /// predicates take it as their final parameter.
+    pub(in crate::machine::execute) fn types(&self) -> &TypeRegistry {
+        self.ambient.type_registry()
+    }
+
+    /// The run's output sink, read through the ambient context's run frame — the same channel and
+    /// the same owner as [`Self::types`]. `PRINT` is the only body that takes it.
+    pub(in crate::machine::execute) fn out(&self) -> &RunWriter {
+        self.ambient.writer()
+    }
+
+    pub(super) fn chain_deref(&self) -> Option<&LexicalFrame> {
+        self.ambient.active_payload().map(|p| &*p.chain)
+    }
+
+    /// Cloned `Rc` to the active chain — for the type-leaf and field-list reads that take it by
+    /// value, and the `record_type` elaborator deferral.
+    pub(super) fn active_chain(&self) -> Option<Rc<LexicalFrame>> {
+        self.ambient.active_payload().map(|p| p.chain.clone())
+    }
+
+    /// Cloned `Rc` to the active per-call frame. `None` only outside any frame (top-level builtins).
+    pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallFrame>> {
+        self.ambient.active_frame_ref().cloned()
+    }
+
+    /// The frame storage owning the active scope's region — infallible: resolved at step entry from
+    /// what the step machinery already holds. The destination frame for in-step allocation
+    /// (`alloc_witnessed` / `yoke_branded`) and relocation.
+    pub(in crate::machine::execute) fn dest_frame(&self) -> Rc<FrameStorage> {
+        Rc::clone(&self.dest_frame)
+    }
+
+    /// The step construction allocator wrapping [`Self::dest_frame`], branded at the step lifetime
+    /// `'step` — its doors return a [`StepCarried`](crate::machine::execute::StepCarried) confined to
+    /// the step (`design/scheduler-library.md` guarantees 3 and 5), handed to a finish through
+    /// [`FinishCtx`](crate::machine::core::FinishCtx).
+    pub(in crate::machine::execute) fn step_ctx(&self) -> StepAllocator<'step> {
+        StepAllocator::over_frame(self.dest_frame())
+    }
+
+    /// Deposit the slot's declared-return obligation into the ambient slot-step state — the reach
+    /// the [`with_obligation`](super::super::obligation::with_obligation) wrapper closure runs to
+    /// carry the checker down the tail chain.
+    pub(in crate::machine::execute) fn deposit_obligation(&self, obligation: ReturnObligation) {
+        self.ambient.deposit_obligation(obligation)
+    }
+
+    /// Duplicate the chain's established obligation without removing it — keep-first and park
+    /// propagation read it to wrap the replacement continuation, and `enter_user_fn` asks
+    /// `.is_some()` of it to detect a tail call within an established chain.
+    pub(in crate::machine::execute) fn current_obligation_duplicate(
+        &self,
+    ) -> Option<ReturnObligation> {
+        self.ambient.current_obligation_duplicate()
+    }
+
+    /// Build the per-part `bare_outcomes` cache: one [`resolve_name`] per bare-name part,
+    /// `None` otherwise. Every part resolves — a producer's error reaches this consumer through
+    /// the park the harness installs, not through the cache.
+    pub(super) fn build_bare_outcomes(
+        &self,
+        parts: &[Spanned<WorkingPart<'step>>],
+    ) -> Vec<Option<Resolution>> {
+        let active_chain = self.ambient.active_payload().map(|p| &p.chain);
+        parts
+            .iter()
+            .map(|p| match p.value.as_ast() {
+                Some(ast @ (ExpressionPart::Identifier(_) | ExpressionPart::Type(_))) => {
+                    Some(resolve_name(
+                        self.current_scope(),
+                        &ast,
+                        active_chain,
+                        self.types(),
+                        TypeLeafChannels::ValueChannelFirst,
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Reach the bare-name ladder for a single part, supplying the current scope, chain, and type
+    /// registry — the wrap-slot resolve `part_walk` runs.
+    pub(super) fn resolve_bare(&self, part: &ExpressionPart<'step>) -> Resolution {
+        // The bare-name ladder reads a parser token, so a wrap slot hands its AST part straight in.
+        let active_chain = self.ambient.active_payload().map(|p| &p.chain);
+        resolve_name(
+            self.current_scope(),
+            part,
+            active_chain,
+            self.types(),
+            TypeLeafChannels::TypeChannel,
+        )
+    }
+}

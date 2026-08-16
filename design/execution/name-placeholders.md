@@ -54,17 +54,20 @@ A placeholder has no table of its own. The
 [`Bindings`](../../src/machine/core/bindings.rs) façade on `Scope` holds four
 maps — `data`, `types`, `functions`, `operators` — and a still-finalizing binder
 occupies **a slot of the very table it will resolve into**, as a
-[`PendingBinding { edge, index }`](../../src/machine/core/bindings.rs) arm of
+[`PendingBinding { producer, index }`](../../src/machine/core/bindings.rs) arm of
 that slot. Three properties follow, and they are the reason for the shape: a name
 lookup is answered by one probe; finalization overwrites the claimed slot in
 place, so the key is stored once and the claim's bytes are never abandoned; and
 the exclusivity rule each table obeys is a fact of its slot enum.
 
-A claim's currency is an [`EdgeId`](../../workgraph/src/scheduler/edge_slab.rs),
+A claim's currency is an opaque
+[`ProducerId`](../../src/machine/execute/producer_id.rs) over the claim edge,
 not a node identity: the binder's submission wires an edge from its own slot
 toward **the region of the scope the name is being introduced into**, and stamps
-that edge into the slot it claims. A consumer that finds the claim parks by
-wiring its *own* edge off it, inheriting the destination — which is what makes a
+that edge's producer token into the slot it claims. A consumer that finds the
+claim parks by
+wiring its *own* edge off it (spending the token through the drive loop's
+single verb), inheriting the destination — which is what makes a
 placeholder park deliver into the scope the binding lives in rather than into the
 consumer's region ([scheduler.md § Which edges Koan installs](scheduler.md#which-edges-koan-installs)).
 The claim edge is owned by the slot that installed it, which releases it when it
@@ -75,7 +78,7 @@ terminalizes, so a table can never hold a name whose edge is gone.
 [`BinderKey`](../../src/machine/model/binder.rs) — the to-be-bound name the
 matching spec's name extractor pulls structurally out of the expression's parts.
 The
-claim stamps the binder slot's own `EdgeId` paired with its
+claim stamps the binder slot's own `ProducerId` paired with its
 [`BindingIndex { idx }`](../../src/machine/core/bindings.rs) — the lexical
 statement index — into `data[name]` or `types[name]` per the binder's
 `BindKind`, gated by the strict `idx < cutoff` rule like every other binder. The
@@ -186,8 +189,8 @@ walks ancestors, the `Bindings::lookup_*` accessors apply the
 `chain_cutoff`-gated `visible` predicate per entry, and `KType`
 predicates accept or reject the candidate. The placeholder mechanism
 extends the value- and function-side lookups so a still-running visible
-producer surfaces as `NameLookup::Parked(EdgeId)` /
-`FunctionLookup { pending: Some(EdgeId), .. }` rather than a miss —
+producer surfaces as `NameLookup::Parked(ProducerId)` /
+`FunctionLookup { pending: Some(ProducerId), .. }` rather than a miss —
 [`Bindings::lookup_value`](../../src/machine/core/bindings.rs) reads the arm of
 the one `data[name]` slot it probes, and
 [`Bindings::lookup_function`](../../src/machine/core/bindings.rs) surfaces
@@ -211,9 +214,11 @@ claim by overwriting the slot that holds it, so no name is ever both bound and
 claimed on the value side, and a bucket's sealed entry sits where its claim was.
 
 **Claim retirement rides the slot's death, not just the error path.** A slot
-owns every claim edge its submission stamped, and the run loop retires that list
-wherever the slot stops being able to release it — at every terminal (value,
-error, and the bare-name forward's relocation alike) and at the alias splice that
+owns every claim edge its submission stamped, and the
+[`Workload::retiring`](../../workgraph/src/scheduler/workload.rs) hook retires
+that list at the one point the slot stops being able to release it — invoked
+by the scheduler exactly once per slot, covering every terminal (value,
+error, and the bare-name forward's relocation alike) and the alias splice that
 retires the slot without a terminal. Retirement is
 `clear_placeholders_for_producers` — drop every pending arm naming one of the
 slot's edges — followed by the release of the edges themselves, so no table ever
@@ -255,7 +260,7 @@ recursion. Every node caches
 into the enclosing scope, read at construction from the
 [`BINDER_SPECS`](../../src/machine/model/binder.rs) table and `None` for a node
 that is not a binder. The dispatch-layer submission chokepoint
-[`KoanRuntime::submit_expression`](../../src/machine/execute/dispatch/submit.rs)
+[`KoanRuntime::submit_expression`](../../src/machine/execute/decide/submit.rs)
 reads that plan **once**, for a statement submission, and stamps its claims — a
 pending arm of `data[name]` / `types[name]` for the name channel, and a pending
 slot appended to `functions[bucket]` for each bucket key — on the dispatching
@@ -311,13 +316,17 @@ back in a value slot and re-earning the error. `LET f = ,` then the indented
 `FN …` is one statement; without the comma it is two nodes and an error.
 
 Statement indices are per-`enter_block` call: each call to
-[`KoanRuntime::enter_block`](../../src/machine/execute/runtime/submit.rs) mints
-chain frames at indices `1..N` for the N statements it submits. A REPL
-or test fixture that submits without an ambient chain (the
-[`Scheduler::add`](../../workgraph/src/scheduler/alloc.rs) auto-root
-branch) gets [`LexicalFrame::detached`](../../src/machine/core/lexical_frame.rs)
-— a chain that mentions no real scope, so the visibility predicate's
-`index_for → None ⇒ complete` arm makes every binding in the target
-scope visible. This is what lets a REPL query read through to every
-prior bind without sharing an index space with them.
+[`KoanRuntime::enter_block`](../../src/machine/execute/harness.rs) mints
+chain frames at indices `1..N` for the N statements it submits. A
+statement-at-a-time driver — a REPL session, the test harness's cursor —
+declares the position itself: the submission doors
+([`dispatch_in_scope`](../../src/machine/execute/harness.rs), `add`,
+`add_dep_finish`) take an explicit statement `index`, placing the node
+exactly as if it were the `index`-th line of a file. Only the driver knows
+the position, so it is a parameter, never stored or derived. Every
+submission therefore carries a real lexical chain, and the exclusive
+cutoff enforces lexical well-foundedness universally: a statement's own
+claims are hidden from its whole subtree at any depth, and a forward
+reference to a lexically later top-level statement is a resolution error,
+not a park.
 

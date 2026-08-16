@@ -247,8 +247,10 @@ fn distinct_statement_redeclare_rebinds() {
         first, second,
         "two submissions must mint distinct StatementIds"
     );
-    // Both declarations sit at the same lexical position, so only the statement can tell them
-    // apart — the detached-chain shape, where every submission reports index 0.
+    // Both declarations land at the same binding index: a driver numbers submissions like
+    // lines of a file, but a persistent scope's later run starts numbering from 1 again, so
+    // two separate runs can install declarations under equal indices — only the statement
+    // can tell them apart.
     let site = |statement| DeclarationSite {
         installer: Installer::Statement(statement),
         index: BindingIndex::value(0),

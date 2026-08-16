@@ -249,6 +249,29 @@ impl<T: Reattachable + DropFree, W, F: PinsRegion> Delivered<T, W, F> {
     }
 }
 
+/// The **destination-operand** constructor, on the envelope family whose payload is a bare region
+/// handle rather than a value.
+impl<P: StorageProfile + 'static>
+    Delivered<RegionHandleFamily<P>, Carrier<P::FrameOwner>, P::FrameOwner>
+where
+    P::FrameOwner: RegionOwner<Region = Region<P>>,
+{
+    /// **The destination operand for a relocation**: `frame`'s own region handle, resident in that
+    /// same region and sealed into the envelope the composition verbs take — its residence is the
+    /// frame itself, so the product a composition builds inherits it. Co-located by construction:
+    /// the handle, the residence, and the home pin all come off the one owner, so there is nothing
+    /// for a caller to pair wrongly. A bare handle reaches nothing beyond its own region, so the
+    /// operand's coverage is its home alone.
+    ///
+    /// The one door to the bare-handle destination: the scheduler's delivery walk builds its
+    /// per-destination operand here, and an embedder relocating toward a frame it holds builds the
+    /// same operand the same way.
+    pub fn destination(frame: Rc<P::FrameOwner>) -> Self {
+        let handle = RegionHandle::from_owner(&*frame);
+        handle.deliver_resident::<RegionHandleFamily<P>>(handle)
+    }
+}
+
 /// The envelope-bearing verbs over the reference-only [`Carrier`] witness. The envelope is the
 /// holder that owns the value's pins, so it is what a mint folds and what covers every read here.
 impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {

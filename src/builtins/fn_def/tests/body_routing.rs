@@ -77,9 +77,13 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
 }
 
 /// A sigil-form return type that sub-dispatches at FN-def (no parameter reference)
-/// and a parameter slot that parks on a forward-LET binding both join the same
-/// dep-finish; the finish picks each sub-dispatch's `Carried::Type` terminal out
-/// of the dep results by the index the builder handed back when it appended the request.
+/// and a parameter slot that parks on the still-in-flight `LET MyT`'s placeholder
+/// both join the same dep-finish; the finish picks each sub-dispatch's `Carried::Type`
+/// terminal out of the dep results by the index the builder handed back when it
+/// appended the request. `LET MyT` is submitted first (declaration order), but
+/// statement-at-a-time submission puts both statements in flight together, so the
+/// FN's param slot still parks on `MyT`'s placeholder when the FN statement steps
+/// ahead of the LET's finalize.
 #[test]
 fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine() {
     let program = program_storage();
@@ -87,8 +91,8 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
-        "FN (USE xs :MyT) -> :(LIST OF Number) = ([1])\n\
-         LET MyT = Number",
+        "LET MyT = Number\n\
+         FN (USE xs :MyT) -> :(LIST OF Number) = ([1])",
     );
     let f = lookup_fn(scope, "USE");
     let ReturnType::Resolved(kt) = f.signature.return_type() else {
@@ -97,17 +101,21 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
     assert_eq!(kt, test_run.types.list(KType::NUMBER));
 }
 
-/// A bare forward-LET return type with no parameters parks on the LET's placeholder
-/// and routes through `ReturnTypeCapture::Unresolved(name)` (`make_capture`).
+/// A bare return type with no parameters parks on the still-in-flight `LET MyT`'s
+/// placeholder and routes through `ReturnTypeCapture::Unresolved(name)`
+/// (`make_capture`). `LET MyT` is submitted first (declaration order), but
+/// statement-at-a-time submission puts both statements in flight together, so the
+/// FN's return-type capture still parks on `MyT`'s placeholder when the FN pops
+/// before the LET's finalize, and resolves once the LET wakes it.
 #[test]
-fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
+fn fn_def_bare_return_type_resolves_after_wake() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
-        "FN (NOP) -> MyT = (1)\n\
-         LET MyT = Number",
+        "LET MyT = Number\n\
+         FN (NOP) -> MyT = (1)",
     );
     let f = lookup_fn(scope, "NOP");
     let ReturnType::Resolved(kt) = f.signature.return_type() else {
@@ -125,14 +133,14 @@ fn fn_def_parens_param_type_non_type_value_errors() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "FN (USE xs (1)) -> Null = (xs)"),
         ),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     let edge = runtime.install_edge_for_test(id, scope);
     runtime
         .execute()
@@ -157,14 +165,14 @@ fn fn_def_sigil_return_type_non_type_value_errors() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "FN (NOP) -> :(1) = (1)"),
         ),
         scope,
     );
+    let runtime = &mut test_run.runtime;
     let edge = runtime.install_edge_for_test(id, scope);
     runtime
         .execute()

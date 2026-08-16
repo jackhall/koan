@@ -25,7 +25,7 @@ semantics, and the delivery protocol.
 - The witnessed memory substrate (regions, brands, carriers, reach sets, the
   delivery envelope, the step construction context) ships in `cellgraph`.
 - `workgraph`'s `Workload` is the cell contract plus the terminal error
-  type; the edge slab, park/notify, cycle detection, the finalize delivery
+  type; the edge slab, park/notify, the drain protocol, the finalize delivery
   walk, and alias splicing appear only in `workgraph`.
 
 **Directions.**

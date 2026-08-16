@@ -309,7 +309,7 @@ parameter door. **No binding door installs a module into `bindings.types`**, and
 [`Scope::register_type_upsert`](../../src/machine/core/scope.rs), and a `LET S2 =
 Ordered` signature alias routes through `register_type` against that entry. A
 signature identity rides the `Type` arm, surfaced from the type entry on demand by
-[`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs).
+[`Scope::resolve_type_identifier`](../../src/machine/execute/decide/resolve_type_identifier.rs).
 
 A module name is an Identifier token, so the resolver ladder reads it on the
 **value** channel like any other value name: no ladder arm is keyed to "a Type token

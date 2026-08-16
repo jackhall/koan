@@ -2,7 +2,7 @@
 //! destination waiting on it, and the slot reclaim that follows it unconditionally. See
 //! [design/dag-scheduler.md § Delivery at finalize](../../design/dag-scheduler.md#delivery-at-finalize).
 
-use crate::witnessed::{Delivered, RegionHandleFamily, Retained};
+use crate::witnessed::{Delivered, Retained};
 
 use super::workload::{DeliveredTerminal, SealedTerminal};
 use super::{EdgeId, NodeId, Scheduler, Workload};
@@ -31,7 +31,11 @@ impl<W: Workload> Scheduler<W> {
     /// when the walk ends. Then the slot's anchor is released and the slot reclaims —
     /// unconditionally, with no retention condition of any kind, because delivery has already moved
     /// everything this producer made into regions that outlive it.
-    pub fn finalize(&mut self, id: NodeId, output: Result<DeliveredTerminal<W>, W::Error>) {
+    pub(in crate::scheduler) fn finalize(
+        &mut self,
+        id: NodeId,
+        output: Result<DeliveredTerminal<W>, W::Error>,
+    ) {
         let mut notify = self.deps.take_notify(id);
         // Inv-C's recycle point: drop every entry whose edge its owner already released, returning
         // each index to circulation now that no list names it. Doing it up front leaves the walk
@@ -75,9 +79,9 @@ impl<W: Workload> Scheduler<W> {
     /// ordinary walk, so a forward costs one relocation per distinct onward destination and no
     /// special case in `finalize`.
     ///
-    /// Scheduler-internal in currency but public in reach: the embedder names the source by an edge
-    /// and the slot by the id it is stepping, which is exactly what it holds.
-    pub fn finalize_forward(&mut self, slot: NodeId, edge: EdgeId) {
+    /// The drain names the source by the edge the step's `Forward` verdict carries and the slot by
+    /// the id it is stepping.
+    pub(in crate::scheduler) fn finalize_forward(&mut self, slot: NodeId, edge: EdgeId) {
         let output = match self.edges.resident_duplicate(edge) {
             Ok(cell) => Ok(Delivered::lift(cell, self.edges.destination_host(edge))),
             Err(error) => Err(error),
@@ -101,13 +105,14 @@ impl<W: Workload> Scheduler<W> {
     }
 
     /// **Adopt** the terminal into `edge`'s destination region and leave it there at rest. The
-    /// destination operand is a bare handle on that region, minted off the slab's one deref;
-    /// [`Workload::deliver`] runs the embedder's relocation across it — deepcopy or pin, with the
-    /// retention claim the verdict implies — and the product rests in the destination, lodging its
-    /// coverage in that region's union bundle for the region's life.
+    /// destination operand is a bare handle on that region, built through the one public door
+    /// ([`Delivered::destination`]) off the destination's own owner; [`Workload::deliver`] runs the
+    /// embedder's relocation across it — deepcopy or pin, with the retention claim the verdict
+    /// implies — and the product rests in the destination, lodging its coverage in that region's
+    /// union bundle for the region's life.
     fn adopt_at(&self, edge: EdgeId, envelope: &DeliveredTerminal<W>) -> SealedTerminal<W> {
+        let dest = Delivered::destination(self.edges.destination_host(edge));
         let handle = self.edges.destination_handle(edge);
-        let dest = handle.deliver_resident::<RegionHandleFamily<W::Profile>>(handle);
         Retained::from_sealed(W::deliver(envelope, dest).rest_into(handle))
     }
 }

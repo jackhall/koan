@@ -40,24 +40,27 @@ fn bound_value_and_overload_are_one_function() {
     assert!(matches!(by_name, KObject::Number(n) if *n == 101.0));
 }
 
-/// A forward sibling reference parks on the combined statement through *either* channel: the
-/// submission-time plan stamps a name placeholder and a pending-overload entry at one node.
+/// A sibling reference parks on the combined statement through *either* channel: the
+/// submission-time plan stamps a name placeholder and a pending-overload entry at one node, and —
+/// because statement-at-a-time submission puts every statement in flight before any of them
+/// executes — the referencing statement still parks on the declaring statement even though the
+/// declaration precedes it, since the declaration is still finalizing when the reference steps.
 #[test]
-fn forward_reference_parks_on_both_channels() {
+fn sibling_reference_parks_on_both_channels() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (CALLER) -> Number = (TRIPLE 3)\n\
-         LET triple = FN (TRIPLE n :Number) -> Number = (n * 3)",
+        "LET triple = FN (TRIPLE n :Number) -> Number = (n * 3)\n\
+         FN (CALLER) -> Number = (TRIPLE 3)",
     );
     let via_bucket = test_run.run_one(parse_one(&program, "CALLER"));
     assert!(matches!(via_bucket, KObject::Number(n) if *n == 9.0));
 
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "LET alias = quad\n\
-         LET quad = FN (QUAD n :Number) -> Number = (n * 4)",
+        "LET quad = FN (QUAD n :Number) -> Number = (n * 4)\n\
+         LET alias = quad",
     );
     let via_name = test_run.run_one(parse_one(&program, "alias"));
     assert!(
@@ -96,7 +99,8 @@ fn combined_form_is_rejected_in_a_sig_body() {
 }
 
 /// `FN :{…}` is anonymous — it registers no bucket, so there is no combined form for it: the flat
-/// spelling matches no overload, and the parenthesized value bind stays the spelling.
+/// spelling matches no overload, so its parenthesized value slot is staged as an eager sub-dispatch
+/// whose `n` is unbound; the parenthesized value-bind spelling stays the working one.
 #[test]
 fn anonymous_signature_has_no_combined_form() {
     let program = program_storage();
@@ -107,8 +111,8 @@ fn anonymous_signature_has_no_combined_form() {
         "LET f = FN :{n :Number} -> Number = (n)",
     ));
     assert!(
-        matches!(err.kind, crate::machine::KErrorKind::DispatchFailed { .. }),
-        "expected a dispatch miss, got {err}",
+        matches!(err.kind, crate::machine::KErrorKind::UnboundName(ref n) if n == "n"),
+        "expected the staged eager sub-dispatch's `n` to be unbound, got {err}",
     );
 
     let mut test_run = TestRun::silent(&program, &region);

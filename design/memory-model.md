@@ -234,8 +234,7 @@ externally-witnessed `SealedExtern::open`, the `Witnessed` accessors, and the re
 store-side `erase_to_static` all route it. The carrier families live beside their own
 types as declarative `unsafe impl Reattachable` instantiations — `CarriedFamily` /
 `ContinuationFamily` for the scheduler value (`Workload::Value`) and continuation
-(`Workload::Continuation`), `DestHandleFamily` for the consumer region the run-loop step opens its
-tail against, and `ScopeRefFamily` so the frame / node `&Scope` carriers and the
+(`Workload::Continuation`), and `ScopeRefFamily` so the frame / node `&Scope` carriers and the
 region's `&Scope → &Scope<'static>` storage erasures route the same primitive — so `witnessed.rs`
 names no concrete Koan type and the scheduler stays workload-independent (the workload depends on
 the substrate for the machinery, not the reverse).
@@ -285,8 +284,8 @@ the destination's own liveness, inside a `for<'b>` brand whose fabricated conten
 un-nameable, so nothing branded escapes into a result and no re-anchored reference rides a `&self`
 borrow up-stack. The continuation — droppable, so it rests on
 the substrate's **owned tier** as a `SealedPinned` sealed against the slot's anchor `Rc` at the
-scheduler's install door — re-anchors through the run-loop step's single consuming open:
-[`run_step`](../src/machine/execute/run_loop.rs) opens it beside the active-scope operand at one
+scheduler's install door — re-anchors through the drain step's single consuming open:
+[`Host::step`](../src/machine/execute/harness.rs) opens it beside the active-scope operand at one
 rank-2 `for<'b>` brand standing in for the step lifetime, witnessed by the seal's own bundled anchor
 pin plus the step's owned pins, so the whole tail nests inside the brand and carries no loose
 witness-borrow reattach. That brand is **bounded above by `'run`**: the open hands its closure a
@@ -294,7 +293,7 @@ witness-borrow reattach. That brand is **bounded above by `'run`**: the open han
 `for<'b>` instantiation discharges, which is what lets the run's
 [`ProgramBrand<'run>`](../src/machine/core/arena/frame.rs) — a live borrow, not a sealed carrier —
 be stored unshortened where the step's
-[`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) is built: the view keeps `'program`
+[`DecideCtx`](../src/machine/execute/decide/ctx.rs) is built: the context keeps `'program`
 distinct from the step lifetime, related only by its own `'program: 'step` bound, and the token is
 what discharges that bound. The brand is invariant, so no shortening is available to it; what
 reaches step code instead is the covariance of what it *mints*. Program storage therefore reaches a
@@ -314,7 +313,7 @@ destination's own fold door, and the adopt is a mint — the relocated value re-
 description into its reach table, pins to the destination's union bundle. The run's roots are
 Koan-held edges destined into the run-global root region, so top-level terminals are delivered
 there at finalize and the drain boundary in
-[`run_program`](../src/machine/execute/runtime/interpret.rs) reads each as a resident of a region
+[`run_program`](../src/machine/execute/interpret.rs) reads each as a resident of a region
 the run owns, releasing the root edges when it is done.
 
 A relocated closure / future / module survives its producer's dying frame because the copy keeps its
@@ -624,15 +623,15 @@ through), `Type` (a `types` entry under a
 [`TypeWritePolicy`](../src/machine/core/bindings/ops.rs)), `Group` (one operator-registry probe
 key), and `SigSlot` (a `VAL` slot in the nearest enclosing SIG decl scope).
 
-`run_action` deposits each interpreted `Action`'s effects into a run-loop-owned sink — a private
-field on [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) with one deposit method the
+`run_action` deposits each interpreted `Action`'s effects into a harness-owned sink — a private
+field on [`DecideCtx`](../src/machine/execute/decide/ctx.rs) with one deposit method the
 execute layer alone can reach, so a builtin (which receives a `BodyCtx`) cannot touch it. The sink
-is created per step by [`run_step`](../src/machine/execute/run_loop.rs) and drained there, after
+is created per step by [`Host::step`](../src/machine/execute/harness.rs) and drained there, after
 the step's continuation has returned and before its outcome is realized. `WriteOp::apply` is the
 single interpreter: it writes against the step's own scope — which always owns its binding table,
 since even a `USING` block runs in an owned layer stacked inside the borrowed window — runs the
 builtin-shadow consult where the door asks for it, and mutates the table. Because nothing but the
-run loop reaches this point, every map borrow is a firm `borrow_mut` — there is no koan frame on
+step callback reaches this point, every map borrow is a firm `borrow_mut` — there is no koan frame on
 the stack to hold a competing one, so contention is unrepresentable rather than tolerated.
 
 Ops apply in `Vec` order, which is program order within the step. On the first failure the
@@ -703,7 +702,7 @@ party's death schedule reaches into another's subtree.
 
 ## Verification
 
-- [`a_rejected_binding_write_is_the_binders_error_terminal`](../src/machine/execute/run_loop/tests/statement_binder_install.rs)
+- [`a_rejected_binding_write_is_the_binders_error_terminal`](../src/machine/execute/harness/tests/statement_binder_install.rs)
   submits two colliding `OP` declarations as one block and confirms the second one's rejected
   bucket write surfaces on its own binder slot; its sibling
   `a_binder_that_errors_installs_nothing` confirms a body that errors before deciding its write

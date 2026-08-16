@@ -14,7 +14,7 @@ sigiled type expression (`-> :(…)`), or an identifier (a diagnose-only overloa
 `(LIST OF Str)` is a `KExpression` part, so no overload matches, resolution
 defers, and the submit path stages *every* parenthesized part as an ordinary
 sub-dispatch (`install_eager_only` in
-[`keyworded.rs`](../../src/machine/execute/dispatch/keyworded.rs)). The
+[`keyworded.rs`](../../src/machine/execute/decide/keyworded.rs)). The
 parameter list — meaningful only as a binder pattern — is then evaluated as a
 call, and the definition dies with
 `dispatch failed for SINGLETON s Str: no matching function`.

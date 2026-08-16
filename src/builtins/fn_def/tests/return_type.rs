@@ -33,7 +33,7 @@ fn fn_without_return_type_annotation_does_not_register() {
     let exprs = parse(program.brand(), "FN (DOUBLE x :Number) = (PRINT \"x\")")
         .expect("parse should succeed");
     for expr in exprs {
-        test_run.runtime.dispatch_in_scope(
+        test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
             scope,
         );
@@ -54,14 +54,14 @@ fn return_type_only_difference_is_a_duplicate_overload() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.runtime.dispatch_in_scope(
+    test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "FN (DOUBLE x :Number) -> Number = (x)"),
         ),
         scope,
     );
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "FN (DOUBLE x :Number) -> Str = (\"a\")"),
@@ -89,7 +89,7 @@ fn fn_with_unknown_return_type_name_errors() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "FN (DOUBLE x :Number) -> Bogus = (x)"),
@@ -118,7 +118,7 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (LIE) -> Number = (\"oops\")");
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "LIE"),
@@ -161,17 +161,43 @@ fn fn_with_user_bound_return_type_works() {
     assert_eq!(bytes, b"7\n");
 }
 
-/// Forward reference: FN's body parks on `MyT`'s submit-time placeholder via dep-finish
-/// and re-elaborates against the final scope when the LET wakes.
+/// A FN's parameter and return-type slots referencing a name (`MyT`) bound by a *later*
+/// statement is a forward reference — the ratified H2 ruling: structural use of a
+/// lexically-later name is a resolution error, not a park. `MyT`'s `LET` sits at a higher
+/// lexical index than the FN, so the FN's sigil elaboration finds no visible `MyT` and
+/// surfaces a `ShapeError` naming it.
 #[test]
-fn fn_with_forward_user_bound_return_type_works() {
-    use super::capture_program_output;
-    let bytes = capture_program_output(
-        "FN (DOIT xs :MyT) -> MyT = (xs)\n\
-         LET MyT = Number\n\
-         PRINT (DOIT 7)",
+fn fn_return_type_forward_user_bound_name_is_a_resolution_error() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    let edges: Vec<_> = parse(
+        program.brand(),
+        "FN (DOIT xs :MyT) -> MyT = (xs)\nLET MyT = Number",
+    )
+    .expect("parse succeeds")
+    .into_iter()
+    .map(|e| {
+        let id = test_run.dispatch_in_scope(
+            crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
+            scope,
+        );
+        test_run.runtime.install_edge_for_test(id, scope)
+    })
+    .collect();
+    test_run
+        .runtime
+        .execute()
+        .expect("execute does not surface per-slot errors");
+    let err = match test_run.runtime.edge_result_error(edges[0]) {
+        Err(e) => e,
+        Ok(()) => panic!("FN referencing the later-bound MyT should fail to resolve"),
+    };
+    assert!(
+        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("MyT")),
+        "expected ShapeError naming the forward type MyT, got {err}",
     );
-    assert_eq!(bytes, b"7\n");
 }
 
 /// Pins the surface-form-survives-bind guarantee on `KObject::TypeNameRef` —
@@ -182,7 +208,7 @@ fn fn_return_type_surface_name_preserved_in_error() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "FN (DOIT) -> SomeWeirdName = (1)"),
@@ -231,7 +257,7 @@ fn keep_first_across_tail_chain_errors_against_outer_contract() {
     test_run.run("FN (INNER) -> Any = (\"nope\")");
     test_run.run("FN (MIDDLE) -> Any = (INNER)");
     test_run.run("FN (OUTER) -> Number = (MIDDLE)");
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "OUTER"),
@@ -270,14 +296,15 @@ fn keep_first_across_tail_chain_errors_against_outer_contract() {
 }
 
 /// A tail-spliced declared-return obligation is discharged before any consumer reads the rehomed
-/// terminal. `WRAP`'s body tail is a bare name (`x`) that forward-references a name defined lexically
-/// later, so `x` is still a submit-time placeholder when the body decides: the slot splices out via
-/// `Outcome::Forward` (an already-*bound* name would read as a plain `Done`, never a forward) rather
-/// than parking a continuation. `WRAP`'s `-> Number` obligation rides the splice, so before the
-/// forwarded terminal reaches the `out` consumer the checker discharges the declared return against
-/// the producer's value — here through the parked-checker micro-step, since a forward-referenced
-/// producer is unresolved when the consumer decides. A non-matching `Str` fires the mismatch at the
-/// splice check; a matching `Number` forwards through intact.
+/// terminal. `WRAP`'s body tail is a bare name (`x`) bound by a preceding `LET`; statement-at-a-time
+/// submission puts every statement in flight before any of them executes, so `x` can still be a
+/// submit-time placeholder when the body decides — the slot splices out via `Outcome::Forward` (an
+/// already-*bound* name would read as a plain `Done`, never a forward) rather than parking a
+/// continuation. `WRAP`'s `-> Number` obligation rides the splice, so before the forwarded terminal
+/// reaches the `out` consumer the checker discharges the declared return against the producer's
+/// value — here through the parked-checker micro-step, since `x`'s producer is unresolved when the
+/// consumer decides. A non-matching `Str` fires the mismatch at the splice check; a matching `Number`
+/// forwards through intact.
 #[test]
 fn spliced_bare_name_tail_checks_declared_return() {
     // Non-matching: the bare-name tail forwards a Str; the splice check rejects it against -> Number.
@@ -287,12 +314,12 @@ fn spliced_bare_name_tail_checks_declared_return() {
     let scope = test_run.scope;
     let bad_edges: Vec<_> = parse(
         program.brand(),
-        "FN (WRAP) -> Number = (x)\nLET out = (WRAP)\nLET x = \"nope\"",
+        "LET x = \"nope\"\nFN (WRAP) -> Number = (x)\nLET out = (WRAP)",
     )
     .expect("parse succeeds")
     .into_iter()
     .map(|e| {
-        let id = test_run.runtime.dispatch_in_scope(
+        let id = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
             scope,
         );
@@ -303,7 +330,7 @@ fn spliced_bare_name_tail_checks_declared_return() {
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match test_run.runtime.edge_result_error(bad_edges[1]) {
+    let err = match test_run.runtime.edge_result_error(bad_edges[2]) {
         Err(e) => e,
         Ok(()) => panic!("the spliced Str tail must fail WRAP's -> Number check"),
     };
@@ -328,12 +355,12 @@ fn spliced_bare_name_tail_checks_declared_return() {
     let scope = test_run.scope;
     let ok_edges: Vec<_> = parse(
         program.brand(),
-        "FN (WRAP) -> Number = (x)\nLET out = (WRAP)\nLET x = 7",
+        "LET x = 7\nFN (WRAP) -> Number = (x)\nLET out = (WRAP)",
     )
     .expect("parse succeeds")
     .into_iter()
     .map(|e| {
-        let id = test_run.runtime.dispatch_in_scope(
+        let id = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
             scope,
         );
@@ -345,9 +372,9 @@ fn spliced_bare_name_tail_checks_declared_return() {
         .execute()
         .expect("execute does not surface per-slot errors");
     assert!(
-        test_run.runtime.edge_result_error(ok_edges[1]).is_ok(),
+        test_run.runtime.edge_result_error(ok_edges[2]).is_ok(),
         "the matching spliced value passes the splice check: {:?}",
-        test_run.runtime.edge_result_error(ok_edges[1]).err(),
+        test_run.runtime.edge_result_error(ok_edges[2]).err(),
     );
     assert!(
         matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0),

@@ -299,19 +299,19 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
-        let runtime = &mut test_run.runtime;
-        let id = runtime.dispatch_in_scope(
+        let id = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 parse_one(&program, "Ordered WITH {Bogus = Number}"),
             ),
             scope,
         );
-        let edge = runtime.install_edge_for_test(id, scope);
-        runtime
+        let edge = test_run.runtime.install_edge_for_test(id, scope);
+        test_run
+            .runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        match runtime.edge_result_error(edge) {
+        match test_run.runtime.edge_result_error(edge) {
             Err(e) => assert!(
                 format!("{e}").contains("no abstract type slot"),
                 "expected unknown-slot rejection, got {e}",
@@ -347,19 +347,19 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run("SIG Tagged = ((LET Tag = Number) (VAL value :Number))");
-        let runtime = &mut test_run.runtime;
-        let id = runtime.dispatch_in_scope(
+        let id = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 parse_one(&program, "Tagged WITH {Tag = Str}"),
             ),
             scope,
         );
-        let edge = runtime.install_edge_for_test(id, scope);
-        runtime
+        let edge = test_run.runtime.install_edge_for_test(id, scope);
+        test_run
+            .runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        match runtime.edge_result_error(edge) {
+        match test_run.runtime.edge_result_error(edge) {
             Err(e) => {
                 let text = format!("{e}");
                 assert!(
@@ -398,19 +398,19 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
-        let runtime = &mut test_run.runtime;
-        let id = runtime.dispatch_in_scope(
+        let id = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
                 parse_one(&program, "Ordered WITH {type = Number}"),
             ),
             scope,
         );
-        let edge = runtime.install_edge_for_test(id, scope);
-        runtime
+        let edge = test_run.runtime.install_edge_for_test(id, scope);
+        test_run
+            .runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        match runtime.edge_result_error(edge) {
+        match test_run.runtime.edge_result_error(edge) {
             Err(e) => assert!(
                 format!("{e}").contains("no abstract type slot"),
                 "expected lowercase-slot rejection, got {e}",

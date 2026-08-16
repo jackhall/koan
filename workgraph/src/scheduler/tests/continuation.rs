@@ -10,8 +10,8 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use super::super::Scheduler;
 use super::super::nodes::NodeWork;
-use super::super::{ResolvedDeps, Scheduler};
 use super::*;
 use crate::witnessed::{NoPins, SealedExtern};
 
@@ -48,7 +48,7 @@ fn parked_continuation_drops_under_its_own_pin() {
         };
         let continuation: Box<dyn FnOnce() -> u32 + '_> = Box::new(move || *probe.last);
         sched.alloc_node(
-            NodeWork::new(ResolvedDeps::new(), continuation, None),
+            NodeWork::new(continuation, None),
             &[],
             Rc::clone(&anchor),
             false,
@@ -80,7 +80,7 @@ fn parked_continuation_opens_and_runs_after_its_handles_drop() {
         let captured: &u32 = anchor.handle().allocator().value(9u32);
         let continuation: Box<dyn FnOnce() -> u32 + '_> = Box::new(move || *captured);
         sched.alloc_node(
-            NodeWork::new(ResolvedDeps::new(), continuation, None),
+            NodeWork::new(continuation, None),
             &[],
             Rc::clone(&anchor),
             false,
@@ -93,7 +93,7 @@ fn parked_continuation_opens_and_runs_after_its_handles_drop() {
     assert_eq!(ready, id, "the ready slot is the one just installed");
 
     let (work, _anchor) = sched.take_for_run(id);
-    let (_deps, sealed, _carrier) = work.into_run_parts();
+    let sealed = work.continuation;
     let got = sealed.open(
         SealedExtern::<UnitOperand>::erase(()),
         &NoPins,

@@ -72,6 +72,7 @@ fn region_pure_scalar_rides_the_envelope_and_releases_at_envelope_drop() {
     // the run loop hands it to the scheduler at finalize.
     let envelope = test_run
         .runtime
+        .host
         .finalize_terminal(delivered, &producer.storage_rc(), None)
         .expect("no declared return, no error");
 
@@ -152,6 +153,7 @@ fn home_borrowing_value_keeps_its_home_membership_and_rides_the_envelope() {
 
     let envelope = test_run
         .runtime
+        .host
         .finalize_terminal(delivered, &producer.storage_rc(), None)
         .expect("no declared return, no error");
     assert!(
@@ -372,6 +374,7 @@ fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
     let (carrier, weak) = resident_scalar(&producer, false);
     let cell = test_run
         .runtime
+        .host
         .finalize_terminal(
             Delivered::lift(
                 crate::witnessed::Retained::from_sealed(Sealed::seal(
@@ -445,6 +448,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
 
     let envelope = test_run
         .runtime
+        .host
         .finalize_terminal(delivered, &producer.storage_rc(), None)
         .expect("no declared return, no error");
     assert_eq!(

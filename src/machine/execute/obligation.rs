@@ -77,13 +77,17 @@ impl ReturnObligation {
 }
 
 /// Wrap a live continuation so it deposits `obligation` into the ambient slot-step state before
-/// running. Applied to the outermost closure at the point where the live [`NodeContinuation`] is
-/// boxed, before `NodeWork::new` erases it — the whole invariant that carries the declared-return
-/// checker down a tail chain.
+/// running — a no-op pass-through on `None`, so every construction site states the fold once
+/// instead of matching on the option itself. Applied to the outermost closure at the point where
+/// the live [`NodeContinuation`] is boxed, before `NodeWork::new` erases it — the whole invariant
+/// that carries the declared-return checker down a tail chain.
 pub(in crate::machine::execute) fn with_obligation<'a>(
-    obligation: ReturnObligation,
+    obligation: Option<ReturnObligation>,
     inner: NodeContinuation<'a>,
 ) -> NodeContinuation<'a> {
+    let Some(obligation) = obligation else {
+        return inner;
+    };
     Box::new(move |view, deps, idx| {
         view.deposit_obligation(obligation);
         inner(view, deps, idx)

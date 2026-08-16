@@ -6,13 +6,14 @@
 //! `tests/` reach them; everything else is `#[cfg(test)]`.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
 
 #[cfg(test)]
-#[cfg(test)]
 use crate::machine::KFunction;
 use crate::machine::KoanRuntime;
+use crate::machine::ScopeId;
 #[cfg(test)]
 use crate::machine::SealedFunction;
 #[cfg(test)]
@@ -69,6 +70,12 @@ pub struct TestRun<'a> {
     pub runtime: KoanRuntime<'a>,
     /// The run frame's registry, cloned out so it stays readable after the runtime drops.
     pub types: Rc<TypeRegistry>,
+    /// Per-scope statement cursors — the session's own record of how many top-level statements it
+    /// has submitted against each scope, which is what numbers the next one. The lexical position
+    /// of a statement-at-a-time submission exists only in the submitting session (statement N is
+    /// the N-th line typed), so the driver carries it and hands it to the runtime explicitly;
+    /// the runtime stores nothing. Starts at `1` per scope: builtins sit at index `0`.
+    cursors: HashMap<ScopeId, usize>,
 }
 
 impl<'a> TestRun<'a> {
@@ -92,6 +99,7 @@ impl<'a> TestRun<'a> {
             scope: child,
             runtime,
             types,
+            cursors: HashMap::new(),
         }
     }
 
@@ -144,8 +152,7 @@ pub(crate) fn extract_terminal<'a>(
     scope: &'a Scope<'a>,
     edge: EdgeId,
 ) -> Carried<'a> {
-    let delivered = runtime
-        .edge_delivered(edge, scope)
+    let delivered = crate::machine::execute::edge_delivered(runtime, edge, scope)
         .expect("terminal should be a value, not an error");
     // Reuse the production relocation: a value that would otherwise keep region storage behind — a
     // substrate carrier, a bare string — is totally rebuilt into `scope`'s region through the seam
@@ -199,13 +206,47 @@ pub(crate) fn parse_one<'a>(program: &'a ProgramStorage, src: &str) -> KExpressi
 /// against. The `_in` forms target a scope other than the bundle's own (a synthetic child, a
 /// `SIG` body scope); the short forms target [`TestRun::scope`].
 impl<'a> TestRun<'a> {
+    /// The next statement position on `scope`, advancing the session's cursor: the number this
+    /// statement would carry as the next line of a file targeting that scope.
+    pub fn next_statement_index(&mut self, scope: &Scope<'_>) -> usize {
+        let cursor = self.cursors.entry(scope.id).or_insert(1);
+        let index = *cursor;
+        *cursor += 1;
+        index
+    }
+
+    /// The current statement position on `scope` without advancing — where a read-only watcher
+    /// submitted "after everything so far" sits.
+    pub fn statement_index(&mut self, scope: &Scope<'_>) -> usize {
+        *self.cursors.entry(scope.id).or_insert(1)
+    }
+
+    /// Advance `scope`'s cursor past a block of `count` statements entered positionally
+    /// (`enter_block` numbers them `1..=count`), so a later statement-at-a-time submission
+    /// numbers after them.
+    fn skip_block_indices(&mut self, scope: &Scope<'_>, count: usize) {
+        let cursor = self.cursors.entry(scope.id).or_insert(1);
+        *cursor = (*cursor).max(count + 1);
+    }
+
+    /// Dispatch `working` against `scope` at the session cursor's position — the cursor-driven
+    /// form of [`KoanRuntime::dispatch_in_scope`], for tests that want the raw `NodeId`.
+    pub fn dispatch_in_scope(
+        &mut self,
+        working: crate::machine::model::WorkingExpression<'a>,
+        scope: &'a Scope<'a>,
+    ) -> NodeId {
+        let index = self.next_statement_index(scope);
+        self.runtime.dispatch_in_scope(working, scope, index)
+    }
+
     /// REPL-style setup: parse `source` and dispatch each top-level statement against `scope`
     /// individually, so chained calls compose. Tests asserting top-level statement *ordering*
     /// (e.g. forward-ref-fails behavior) call `enter_block` on `runtime` directly instead.
     pub fn run_in(&mut self, scope: &'a Scope<'a>, source: &str) {
         let exprs = parse(self.program_brand(), source).expect("parse should succeed");
         for expr in exprs {
-            self.runtime.dispatch_in_scope(
+            self.dispatch_in_scope(
                 crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
                 scope,
             );
@@ -223,13 +264,15 @@ impl<'a> TestRun<'a> {
     /// *ordering* needs, where [`TestRun::run_in`]'s statement-at-a-time dispatch would not.
     /// Returns the top-level node ids; the caller drives `execute` itself.
     pub fn enter_source_in(&mut self, scope: &'a Scope<'a>, source: &str) -> Vec<NodeId> {
-        let statements = parse(self.program_brand(), source)
-            .expect("parse should succeed")
-            .into_iter()
-            .map(|statement| {
-                crate::machine::model::WorkingExpression::from_ast(scope.brand(), statement)
-            })
-            .collect();
+        let statements: Vec<crate::machine::model::WorkingExpression<'a>> =
+            parse(self.program_brand(), source)
+                .expect("parse should succeed")
+                .into_iter()
+                .map(|statement| {
+                    crate::machine::model::WorkingExpression::from_ast(scope.brand(), statement)
+                })
+                .collect();
+        self.skip_block_indices(scope, statements.len());
         self.runtime.enter_block(scope.id, statements, scope)
     }
 
@@ -262,7 +305,7 @@ impl<'a> TestRun<'a> {
             .map(|statement| {
                 let working =
                     crate::machine::model::WorkingExpression::from_ast(scope.brand(), statement);
-                self.runtime.dispatch_in_scope(working, scope)
+                self.dispatch_in_scope(working, scope)
             })
             .collect();
         slots
@@ -280,7 +323,7 @@ impl<'a> TestRun<'a> {
         scope: &'a Scope<'a>,
         working: crate::machine::model::WorkingExpression<'a>,
     ) -> EdgeId {
-        let id = self.runtime.dispatch_in_scope(working, scope);
+        let id = self.dispatch_in_scope(working, scope);
         self.runtime.install_edge_for_test(id, scope)
     }
 

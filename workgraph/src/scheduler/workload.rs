@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::{DropFree, Reattachable};
+use super::{DropFree, EdgeId, Reattachable};
 use crate::witnessed::{
     Carrier, Delivered, PinsRegion, Region, RegionHandleFamily, RegionOwner, Retained,
     StorageProfile, Witnessed,
@@ -104,4 +104,15 @@ where
         terminal: &DeliveredTerminal<Self>,
         dest: DeliveryDestination<Self>,
     ) -> DeliveredTerminal<Self>;
+
+    /// **The edges a retiring slot still owns** — the workload's slot-retirement hook.
+    /// [`Scheduler::drain`](super::Scheduler::drain) invokes it exactly once per slot, at the one
+    /// point the slot stops being able to release its edges — before the delivery walk on a
+    /// terminal, after the forward read, after the splice re-point — and releases every edge it
+    /// returns. The workload's impl drains whatever owned-edge record its anchor keeps (and does
+    /// its own bookkeeping for those names); a workload whose anchors own no edges takes the
+    /// default.
+    fn retiring(_anchor: &Self::Frame) -> Vec<EdgeId> {
+        Vec::new()
+    }
 }

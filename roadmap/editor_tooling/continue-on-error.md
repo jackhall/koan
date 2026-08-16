@@ -4,8 +4,8 @@
 `KError` to the CLI, which formats it to stderr and stops. A REPL therefore
 cannot keep running past a typo, and the CLI's batch mode aborts at the first
 failed expression instead of running the next one.
-[`interpret`](../../src/machine/execute/runtime/interpret.rs) and
-[`Scheduler::execute`](../../src/machine/execute/run_loop.rs) return
+[`interpret`](../../src/machine/execute/interpret.rs) and
+[`KoanRuntime::execute`](../../src/machine/execute/harness.rs) return
 `Result<(), KError>`, so the first error propagates all the way out.
 
 **Acceptance criteria.**

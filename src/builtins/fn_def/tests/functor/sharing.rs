@@ -153,7 +153,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
         "FN (MAKEBAD p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE generated = ((LET Elt = Str) (LET insert = 0)))",
     );
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "MAKEBAD int_ord_view"),
@@ -196,7 +196,7 @@ fn functor_return_with_matching_sharing_constraint_passes() {
         "FN (MAKEGOOD p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "MAKEGOOD int_ord_view"),

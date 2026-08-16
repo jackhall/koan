@@ -84,7 +84,7 @@ fn deferred_type_of_param_return_contract_is_the_self_sig() {
          MODULE int_ord = (LET compare = 7)",
     );
     test_run.run("FN (BAD_ORD er :Ordered) -> :(TYPE OF er) = (1)");
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "BAD_ORD int_ord"),

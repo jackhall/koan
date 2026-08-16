@@ -65,7 +65,7 @@ pub(crate) fn sig<'a>(
 
 /// Full-form builtin registration marking whether the builtin introduces a binder. The `body` is
 /// an [`ActionFn`](crate::machine::ActionFn) (`fn(&BodyCtx) -> Action`) installed
-/// as [`Body::Builtin`] — the builtin runs through `machine::execute::runtime::run_action`. The
+/// as [`Body::Builtin`] — the builtin runs through `machine::execute`'s action harness (`run_action`). The
 /// binder's name/bucket extractors and chain-slot mask are the static spec table's business
 /// ([`crate::machine::model::binder`]); `binder` is only the classification bit dispatch reads.
 pub(crate) fn register_builtin_full<'a>(

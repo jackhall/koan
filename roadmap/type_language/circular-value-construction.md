@@ -13,7 +13,7 @@ all: there is no surface that knots a cycle and no representation that would hol
 
 Values are acyclic by construction. A constructor's arguments are already-finished
 values (the constructor path in
-[`constructors.rs`](../../src/machine/execute/dispatch/constructors.rs) materializes a
+[`constructors.rs`](../../src/machine/execute/decide/constructors.rs) materializes a
 [`KObject`](../../src/machine/model/values/kobject.rs) only once its parts are done), so
 a field cannot point back at a value that does not yet exist. The storage substrate holds
 that shut from the other side: no stored value owns an `Rc` back to a region — a substrate

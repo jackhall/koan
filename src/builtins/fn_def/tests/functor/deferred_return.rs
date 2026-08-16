@@ -196,7 +196,7 @@ fn deferred_return_tail_call_stays_tco_flat() {
     // Measure this program's own slot footprint: release the setup phase's slots so the store's
     // high-water mark starts at zero.
     test_run.reset_slots();
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "AA Seq"),
@@ -246,7 +246,7 @@ fn deferred_expression_return_tail_chain_stays_flat() {
     // Parse before the snapshot: program storage's own region mint is not a call's mint.
     let call = parse_one(&program, "AA view");
     let minted_before = region_metrics().minted_total;
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
         scope,
     );
@@ -292,7 +292,7 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     // member, not the builtin `Type` name — module member access is module-own and does not
     // fall through to the builtin root.)
     test_run.run("FN (BAD er :Ordered) -> er.Carrier = (1)");
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
             parse_one(&program, "BAD int_ord_view"),

@@ -14,23 +14,22 @@ driver's ambient context ([`KoanRuntime`](../../src/machine/execute/ambient.rs))
 not the scheduler — the scheduler is a pure DAG runtime:
 
 - **`active_frame: Option<Rc<CallFrame>>`** — the cart of the slot
-  currently being executed. Read through
-  [`KoanRuntime::current_frame`](../../src/machine/execute/ambient.rs);
-  written only by `KoanRuntime::with_slot_step` (the RAII bracket
-  `run_step` wraps each slot step in) and the `KoanRuntime::with_active_frame`
+  currently being executed. Read through the ambient context
+  ([`ambient.rs`](../../src/machine/execute/ambient.rs));
+  written only by `Host::with_slot_step` (the RAII bracket
+  `Host::step` wraps each slot step in) and the `Host::with_active_frame`
   bracket. An invoke never empties it, so within a step it is always
-  `Some` — `PostStep::prev_frame` (the slot's cart at step end) is
-  non-optional.
-- **`KoanRuntime::with_active_frame(frame, body) -> R`** — brackets
+  `Some`.
+- **`Host::with_active_frame(frame, body) -> R`** — brackets
   `frame` as `active_frame` for the duration of `body`, restoring the
   previous one on every exit path, unwind included. Used by
-  [`KoanRuntime::dispatch_body`](../../src/machine/execute/runtime/submit.rs) to
+  [`Host::dispatch_body`](../../src/machine/execute/harness.rs) to
   dispatch a body's non-tail statements under the body frame so each sub-slot
   inherits it as its cart (see
   [typing/functors.md § Deferred return-type elaboration](../typing/functors.md#deferred-return-type-elaboration)
   for the per-call type-side bind that motivates it).
 
-`run_step` sources the slot's cart from its scheduler-held anchor
+`Host::step` sources the slot's cart from its scheduler-held anchor
 ([`SlotFrame.cart`](../../src/machine/execute/nodes.rs)) and installs it as
 `active_frame` for the duration of the step via `with_slot_step`. Sub-dispatch
 and dep-finish slots inherit `active_frame` so they see the right ancestor for

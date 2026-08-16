@@ -10,7 +10,7 @@
 use std::rc::Rc;
 
 use super::super::nodes::NodeWork;
-use super::super::{EdgeId, InstalledEdge, NodeId, ResolvedDeps, Scheduler};
+use super::super::{EdgeId, InstalledEdge, NodeId, Scheduler};
 use super::*;
 
 /// A scheduler holding one dep-free, pre-terminal node — the pending producer every install test
@@ -25,7 +25,7 @@ fn pending_producer() -> (Scheduler<TestWorkload>, NodeId) {
 fn alloc_dep_free(sched: &mut Scheduler<TestWorkload>) -> NodeId {
     let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
     sched.alloc_node(
-        NodeWork::new(ResolvedDeps::new(), continuation, None),
+        NodeWork::new(continuation, None),
         &[],
         TestAnchor::fresh(),
         false,
@@ -169,7 +169,7 @@ fn install_deps_parks_and_fills() {
     let on_delivered = sched.install_edge(delivered, destination.owner());
     finalize_in_place(&mut sched, delivered);
 
-    let (resolved, installed) = sched.install_deps(consumer, &[on_pending, on_delivered]);
+    let installed = sched.install_deps(consumer, &[on_pending, on_delivered]);
 
     assert!(
         matches!(installed[0], InstalledEdge::Parked(_)),
@@ -180,9 +180,9 @@ fn install_deps_parks_and_fills() {
         "the delivered producer's park is already satisfied",
     );
     assert_eq!(
-        resolved.len(),
+        sched.stored_deps(consumer).len(),
         2,
-        "the realized list lines up with the sources, one entry each",
+        "the realized list the door wrote onto the dep row lines up with the sources, one entry each",
     );
     assert_eq!(
         sched.pending_count(consumer),
@@ -202,7 +202,7 @@ fn install_deps_inherits_the_source_destination() {
     let source = sched.install_edge(sub, consumer_anchor.owner());
     let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
     let consumer = sched.alloc_node(
-        NodeWork::new(ResolvedDeps::new(), continuation, None),
+        NodeWork::new(continuation, None),
         &[source],
         Rc::clone(&consumer_anchor),
         false,
@@ -214,10 +214,9 @@ fn install_deps_inherits_the_source_destination() {
         1,
         "the dep's edge is unfilled, so the consumer waits on it",
     );
-    let dep_edge = sched
+    let dep_edge = *sched
         .stored_deps(consumer)
-        .all_ids()
-        .next()
+        .first()
         .expect("the door recorded the dep's edge");
     assert!(
         sched.edge_destination_is(dep_edge, consumer_anchor.owner()),

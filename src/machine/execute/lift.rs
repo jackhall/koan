@@ -9,7 +9,6 @@
 //! live in the value model, shared with the core binding seams. See
 //! [design/value-substrates.md § Escape](../../../design/value-substrates.md#escape-pin-by-default).
 
-use super::run_loop::DestHandleFamily;
 use crate::machine::core::{FoldingBrand, SubstrateDoor};
 use crate::machine::core::{KoanRegion, KoanStorageProfile, product_reaches_region};
 use crate::machine::model::{
@@ -17,7 +16,7 @@ use crate::machine::model::{
     relocate_object_into,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, FrameStorage};
-use crate::witnessed::{Delivered, RegionHandle};
+use crate::witnessed::{Delivered, RegionHandle, RegionHandleFamily};
 
 /// The structural-copy callback a witnessed transfer's fold runs
 /// ([`Delivered::transfer_into`](crate::witnessed::Delivered)): copy a [`Carried`] into `dest`'s
@@ -129,27 +128,28 @@ fn seam_still_borrows<'e>(
 /// cannot be re-paired at a call site.
 ///
 /// `dest` is the destination operand — a bare region handle sealed into a delivery envelope
-/// ([`dest_brand`](super::run_loop::dest_brand)) — so the transfer composes the producer's reach
+/// ([`Delivered::destination`]) — so the transfer composes the producer's reach
 /// alone and homes the product in the destination's own frame.
 pub(in crate::machine::execute) fn relocate_seam(
     delivered: &DeliveredCarried,
-    dest: Delivered<DestHandleFamily, CarrierWitness, FrameStorage>,
+    dest: Delivered<RegionHandleFamily<KoanStorageProfile>, CarrierWitness, FrameStorage>,
 ) -> DeliveredCarried {
     let verb = seam_verb(delivered);
     // The source envelope's coverage is the holder-rule proof the relocation's cells read their
     // stored reach under — captured before the fold, which cannot reach its operand's pins.
     let holder = delivered.coverage().clone();
-    delivered.transfer_into::<DestHandleFamily, CarriedFamily, KoanStorageProfile>(
-        dest,
-        seam_still_borrows(delivered, verb),
-        |value, _region, placement| {
-            copy_carried(
-                value,
-                verb,
-                FoldingBrand::in_fold_closure(placement).with_holder(&holder),
-            )
-        },
-    )
+    delivered
+        .transfer_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+            dest,
+            seam_still_borrows(delivered, verb),
+            |value, _region, placement| {
+                copy_carried(
+                    value,
+                    verb,
+                    FoldingBrand::in_fold_closure(placement).with_holder(&holder),
+                )
+            },
+        )
 }
 
 /// The **retention claim** a relocation of `delivered` across the container-cell seam hands its

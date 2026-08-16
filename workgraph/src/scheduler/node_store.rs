@@ -126,16 +126,6 @@ impl<W: Workload> NodeStore<W> {
         }
     }
 
-    /// Write the slot's realized dep list — the install door's write-back. A fresh slot's edges are
-    /// *the slot's own*, so minting them needs the slot to exist; the work therefore lands first with
-    /// an empty list and the door fills it in once its wiring is settled.
-    pub(super) fn write_deps(&mut self, id: NodeId, deps: super::ResolvedDeps) {
-        match &mut self.slots[id] {
-            SlotState::PreRun(work) => work.deps = deps,
-            _ => panic!("only a pre-run slot takes its realized dep list"),
-        }
-    }
-
     /// Tail-call path: reuse the slot index for a new node's work.
     pub(super) fn reinstall(&mut self, id: NodeId, work: StoredWork<W>) {
         self.slots[id] = SlotState::PreRun(work);
@@ -195,16 +185,6 @@ impl<W: Workload> NodeStore<W> {
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn clear_node(&mut self, id: NodeId) {
         self.slots[id] = SlotState::Running;
-    }
-
-    /// The realized dep list the install door wrote onto a pre-run slot — the probe a wiring test
-    /// reads its own edges back through.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn stored_deps(&self, id: NodeId) -> &super::ResolvedDeps {
-        match &self.slots[id] {
-            SlotState::PreRun(work) => &work.deps,
-            _ => panic!("only a pre-run slot holds a realized dep list"),
-        }
     }
 
     #[cfg(any(test, feature = "test-hooks"))]
@@ -267,7 +247,7 @@ mod tests {
 
     fn sample_wait(carrier: Option<String>) -> StoredWork<TestWorkload> {
         super::super::nodes::seal_work(
-            super::super::nodes::NodeWork::new(super::super::ResolvedDeps::new(), (), carrier),
+            super::super::nodes::NodeWork::new((), carrier),
             &TestAnchor::new(),
         )
     }

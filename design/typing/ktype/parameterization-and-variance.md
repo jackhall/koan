@@ -24,7 +24,7 @@ parser's only job is to flag "this slot evaluates to a type". `<` and `>` flow t
 tokens, leaving the arithmetic comparison operators available. The framing
 logic lives in [frame.rs](../../../src/parse/frame.rs) (`Frame::TypeExpr`);
 the dispatcher's `sigiled_type_expr` handler
-([dispatch.rs](../../../src/machine/execute/dispatch.rs))
+([decide.rs](../../../src/machine/execute/decide.rs))
 tail-replaces the slot with a `Dispatch` of the wrapped expression. See
 [type-language-via-dispatch.md](../type-language-via-dispatch.md) for the full
 sigil-and-dispatch contract.

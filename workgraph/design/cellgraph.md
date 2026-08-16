@@ -9,8 +9,8 @@ continuation captures, and values that pass between cells. Nothing more: the
 cell graph makes **no acyclicity guarantee**, has **no notion of a terminal**,
 and a cell may be **long-lived** — re-entered, held across arbitrary spans,
 or never finished at all. Everything that makes `workgraph` a *DAG scheduler*
-— dependency edges, park/notify wakeups, cycle detection, terminal results,
-delivery-driven retention, splicing — is layered on top of this substrate,
+— dependency edges, park/notify wakeups, the drain protocol, terminal results,
+delivery at finalize, splicing — is layered on top of this substrate,
 not part of it.
 
 The dependency direction is `koan` → `workgraph` → `cellgraph`; each arrow is
@@ -74,7 +74,9 @@ Each absence is a design statement, not a gap:
 
 - **No acyclicity.** Cells may reference each other in cycles; whether a
   reference topology must be acyclic is a property of a *scheduling
-  discipline*, so the DAG layer owns cycle detection.
+  discipline*, so acyclicity is the DAG layer's premise — held by its
+  embedder's well-foundedness discipline and debug-asserted at its install
+  door — not the substrate's.
 - **No terminality, and therefore no error type.** "This cell is finished
   forever, with this result" — including the `Result` split between a
   witnessed value and a bare owned error — is the DAG layer's terminal
@@ -94,9 +96,8 @@ Each absence is a design statement, not a gap:
 
 `workgraph`'s embedder trait is the cell contract plus one addition: the
 terminal **error** type its `Result`-shaped terminal protocol needs. On top
-of the substrate it owns dependency edges (park and owned), notify lists and
-work queues, cycle classification, terminal storage and delivery, retention
-holds, and tail splicing. Koan instantiates the combined trait once
+of the substrate it owns dependency edges, notify lists and
+work queues, the drain protocol, delivery at finalize, and tail splicing. Koan instantiates the combined trait once
 (`KoanWorkload`) and speaks only the consumer API described in
 [scheduler-library.md](../../design/scheduler-library.md).
 

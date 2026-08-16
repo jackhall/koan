@@ -31,12 +31,6 @@ impl ScopeId {
     /// sentinel cannot collide.
     pub const SENTINEL: ScopeId = ScopeId { session: 0, idx: 0 };
 
-    /// Sentinel for [`LexicalFrame::detached`](super::lexical_frame::LexicalFrame::detached)
-    /// — a chain frame mentioning no real scope, so `index_for` against any real
-    /// `ScopeId` returns `None` and the visibility predicate treats every scope as
-    /// "complete." Cannot collide with [`Self::SENTINEL`] or any minted id.
-    pub const DETACHED: ScopeId = ScopeId { session: 0, idx: 1 };
-
     pub fn next() -> ScopeId {
         ScopeId {
             session: session_id(),

@@ -19,7 +19,7 @@ use crate::witnessed::{region_metrics, reset_region_metrics};
 /// mints as soon as the test scope is built) so the later peak reading is meaningful and no
 /// still-live region is zeroed out from under itself. The countdown is expressed as a `Nat`
 /// (`Zero | Succ Nat`) unwound one layer per hop through `MATCH` — the recursion lives entirely in
-/// the scheduler's `NodeStep::Replace` loop, not in Rust call-stack depth, so the depth-1000 value
+/// the scheduler's `Replace`-verdict loop, not in Rust call-stack depth, so the depth-1000 value
 /// is built beforehand as 1000 flat (no-mint, top-level) `LET`s rather than a 1000-deep parsed
 /// literal.
 #[test]
@@ -57,7 +57,7 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
     // the sole contributor to `peak` at this point.
     let baseline = region_metrics().peak;
 
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
         scope,
     );
@@ -134,7 +134,7 @@ fn tail_recursive_record_thread_stays_o1_in_regions() {
     let call = parse_one(&program, &format!("THREAD n{DEPTH} {{acc = 0}}"));
     let baseline = region_metrics().peak;
 
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
         scope,
     );
@@ -188,7 +188,7 @@ fn no_mint_categories_add_no_region_mints() {
          LET visible = (USING mo SCOPE (hidden))",
     );
     // Bare-name forward: a submission that is just a name, spliced onto its existing producer.
-    let id = test_run.runtime.dispatch_in_scope(
+    let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), forward),
         scope,
     );

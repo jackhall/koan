@@ -2,10 +2,11 @@
 //!
 //! A binding table has to tell one declaration statement re-entering (a parallel nominal
 //! finalize, which must overwrite idempotently) from a second declaration of the same name
-//! (which must `Rebind`). Lexical position cannot decide it: a detached chain gives every
-//! submission index `0`, so two textually identical declarations name no position to tell
-//! them apart. Content cannot decide it either — a byte-identical redeclaration is still a
-//! redeclaration.
+//! (which must `Rebind`). Lexical position cannot decide it: a driver numbers each submission
+//! like a line of a file, but a persistent scope's later run starts numbering from 1 again, so
+//! two distinct declarations can land at the same index — and a slot's identity must survive a
+//! tail replace across however many positions it steps through. Content cannot decide it
+//! either — a byte-identical redeclaration is still a redeclaration.
 //!
 //! What distinguishes them is only *that they are separate submissions*, so that is what
 //! this names. The counter is process-global (precedent: `ScopeId`'s `idx` counter in

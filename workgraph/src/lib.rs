@@ -57,13 +57,15 @@
 //!   no embedder can accrete against it (see its own module docs).
 //!
 //! [`scheduler`] — the workload-generic DAG scheduler:
-//! - [`scheduler::Scheduler`], generic over an embedder's [`scheduler::Workload`] impl.
-//! - [`scheduler::Live`], [`scheduler::Dep`] / [`scheduler::Deps`] / [`scheduler::ResolvedDeps`],
-//!   [`scheduler::NodeId`].
+//! - [`scheduler::Scheduler`], generic over an embedder's [`scheduler::Workload`] impl, driven
+//!   through the one run door [`scheduler::Scheduler::drain`]: the embedder's step callback
+//!   receives a [`scheduler::Step`] and returns a [`scheduler::StepVerdict`] the drain applies;
+//!   deadlock surfaces as [`scheduler::DrainDeadlock`].
+//! - [`scheduler::Live`], [`scheduler::Dep`] / [`scheduler::Deps`], [`scheduler::NodeId`].
 //! - [`scheduler::nodes`]'s [`scheduler::nodes::NodeWork`] — the generic per-node work the scheduler
 //!   stores, paired with the per-slot memory anchor ([`scheduler::Anchor`]) it holds by `Rc`.
 //! - A `test-hooks` cargo feature widens a white-box surface (slot/edge state pokes: e.g.
-//!   `Scheduler::clear_node`, `Scheduler::set_dep_edges`) from `cfg(test)` to
+//!   `Scheduler::clear_node`, `Scheduler::stored_deps`) from `cfg(test)` to
 //!   `cfg(any(test, feature = "test-hooks"))`, so an embedder's own white-box tests — compiled
 //!   as a dependent crate, where `cfg(test)` is off — can still reach it.
 
