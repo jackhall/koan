@@ -206,7 +206,7 @@ needs both).
   restricted to owned data** by language rule — a function or module key is
   meaningless — enforced at the one site that turns a carrier into a key on
   the dict door's own construction path
-  ([`scalar_key`](../src/machine/execute/dispatch/literal.rs)), which rejects
+  ([`scalar_key`](../src/machine/execute/decide/literal.rs)), which rejects
   a carrier naming any reach member by its stored envelope: an O(1) check,
   not a walk. `KKey` then admits only `String` / `Number` / `Bool`, so a key
   naming a substrate or a closure is unrepresentable downstream of that site,
@@ -528,7 +528,7 @@ for the runtime's own node builders: one that merely dispatches what it builds
 (the dispatcher's multi-part construction group) takes the working form rather
 than minting a marker, so per-call AST never lands in eternal storage; and the
 one that mints a value-channel node (`OP`'s bridge body) builds under the run's
-program brand, which reaches it through the step's `SchedulerView`
+program brand, which reaches it through the step's `DecideCtx`
 ([memory-model.md](memory-model.md)) and bounds its growth by program size.
 
 ## Invariants preserved

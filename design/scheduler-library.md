@@ -7,7 +7,7 @@ workspace crates: `cellgraph` *(working name — [cellgraph.md](../workgraph/des
 the computation-cell substrate (witnessed memory plus a cell table:
 continuations, memory anchors, inter-cell values — no acyclicity, no
 terminality), and `workgraph`, the DAG scheduler layered on it (dep edges,
-wake/notify, cycle detection, terminal delivery, splicing). The
+wake/notify, the drain protocol, terminal delivery, splicing). The
 dependency direction (`koan` → `workgraph` → `cellgraph`, never the reverse)
 is what makes "no Koan type in scope" compile-enforced rather than a
 convention. Koan is its first embedder, re-exporting `workgraph::witnessed`
@@ -139,9 +139,9 @@ a concept, not a final identifier.
   Vocabulary).
 - Terminal delivery: adopting each terminal into its edges' destination
   regions at finalize, and the first-errored-dep short-circuit.
-- The consumer API: the install verb (filled-or-parked) and
-  `would_create_cycle`, the `Deps` builder, the `Await` envelope, and the
-  step construction context (all below).
+- The consumer API: the drain protocol (the step callback and its
+  `StepVerdict`), the install verb (filled-or-parked), the `Deps` builder,
+  the `Await` envelope, and the step construction context (all below).
 
 **Koan keeps:**
 
@@ -198,7 +198,7 @@ place translates.
   `Done` / `Tail` / `AwaitDeps` / `Catch` — the scheduler-agnostic shape a
   builtin returns, plus dispatch's `Outcome` on the execute side.
 - **The lowering**: the action harness
-  ([runtime.rs](../src/machine/execute/runtime.rs)) and the apply side are
+  ([harness.rs](../src/machine/execute/harness.rs)) and the apply side are
   the only code that translates Koan currency into library envelopes.
 
 The governance rule, stated so it can be enforced in review: **builtins
@@ -215,6 +215,24 @@ internals.
 
 Working names throughout; shapes are the commitment, identifiers are not.
 
+**The drain protocol — the run loop as library code.**
+
+[`Scheduler::drain`](../workgraph/src/scheduler/drain.rs) owns the
+pop/take/step/apply loop. Per popped slot it hands the embedder's step
+callback one `Step` bundle — the slot's id, its memory anchor, the sealed
+continuation, and every dep's delivered resident **pre-read in dep order with
+its edge already released** — and applies the
+[`StepVerdict`](../workgraph/src/scheduler/drain.rs) the callback returns:
+`Done` (finalize and deliver), `Forward` (finalize through an already-filled
+edge), `Replace` (tail-reinstall, optionally with a fresh anchor), or `Alias`
+(splice onto the producer behind a parked edge). The embedder never touches a
+dep edge and never orders a retirement:
+[`Workload::retiring`](../workgraph/src/scheduler/workload.rs) is invoked by
+the scheduler exactly once per slot, at the one point the slot stops being
+able to release its edges, and the scheduler releases whatever edges the hook
+returns. Drain-end with slots still parked is the deadlock report, returned
+as the drain's `Err` with a pending count and a carrier sample.
+
 **The install door — the generic building block.**
 
 Wiring goes through one public door, `Scheduler::install_deps`, and **install
@@ -225,11 +243,14 @@ finalize. The "can I depend on this producer?" classification — ready /
 already-errored / must-park — is install-and-inspect, not a separate probe
 ladder: the library exposes **no** standalone readiness or
 producer-standing probe, so no consumer can read a producer's state without
-wiring the edge that makes the read sound. The would-cycle guard stays a
-pre-wiring query, because parking on an ancestor deadlocks rather than errors.
+wiring the edge that makes the read sound. Nor does it expose a cycle probe:
+acyclicity is the embedder's premise — Koan discharges it by lexical
+well-foundedness, every park naming a lexically earlier claim — and the
+install door debug-asserts it rather than classifying it, so a cycling park
+is a bug at the door, never an installed edge.
 Every arm's meaning is a Koan dispatch decision, so the classification lives
 Koan-side over `KoanWorkload` / `KError`
-([runtime.rs](../src/machine/execute/runtime.rs) rules on the door's return
+([harness.rs](../src/machine/execute/harness.rs) rules on the door's return
 when it applies an outcome), built on the install door. The library names no
 Koan type and stays smaller.
 

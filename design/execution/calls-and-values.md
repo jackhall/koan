@@ -167,11 +167,11 @@ statement `i` onto the current ambient chain and submits the
 statements as dispatch nodes:
 
 - Top-level statements
-  ([`interpret`](../../src/machine/execute/runtime/interpret.rs)) enter through
+  ([`interpret`](../../src/machine/execute/interpret.rs)) enter through
   `enter_block(root.id, exprs, root)` against an empty parent chain.
 - `MODULE` and `SIG` bodies enter through the dispatch harness's `InScope`
   fan-out
-  ([`apply_outcome`](../../src/machine/execute/runtime.rs)), which splits
+  ([`Host::apply`](../../src/machine/execute/harness.rs)), which splits
   via the shared
   [`split_body_statements`](../../src/machine/core/kfunction/body.rs) helper and
   submits each statement through `enter_block`. The scheduler itself never
@@ -191,12 +191,14 @@ statements as dispatch nodes:
   shape is special because the call site's chain is not the body's
   lexical chain).
 
-The "every dispatched node has a chain" invariant is an `expect` in
-[`Scheduler::alloc_node`](../../workgraph/src/scheduler/alloc.rs); the
-public `dispatch_in_scope` entry auto-roots a chain when no ambient one is present
-via [`LexicalFrame::detached`](../../src/machine/core/lexical_frame.rs) (so
-REPL-style submissions outside `enter_block` see every prior bind in the target
-scope).
+The "every dispatched node has a chain" invariant is an `expect` in the
+harness's submission funnel
+([`add_with_chain`](../../src/machine/execute/harness.rs)); with no ambient
+step installed, the statement-at-a-time `dispatch_in_scope` door takes an
+explicit statement `index` from the submission's driver (a REPL session, the
+test harness's cursor) and mints a real chain at that position, so every
+submission is visibility-gated exactly as if it were the `index`-th line of a
+file.
 
 ### Multi-statement FN body split
 

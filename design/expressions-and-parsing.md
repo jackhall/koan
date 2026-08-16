@@ -169,7 +169,7 @@ user operators — the operator probe caches the sorted-joined unique operators 
 the per-scope operator registry is looked up by.
 
 A recognized chain reduces in
-[`dispatch/operator_chain.rs`](../src/machine/execute/dispatch/operator_chain.rs)
+[`decide/operator_chain.rs`](../src/machine/execute/decide/operator_chain.rs)
 by the mode its resolved [`OperatorGroup`](../src/machine/model/operators.rs)
 declares. The reducer allocates no result values: three of the four modes are
 pure syntactic rewrites handed back to ordinary dispatch, and the fourth stages
@@ -226,7 +226,7 @@ User modules populate the registry through the `OP` / `GROUP` declaration surfac
 The four call-shape lanes that resolve a head to a callable —
 `TypeCall`, `FunctionValueCall`, `HeadDeferred`, `TypeHeadDeferred` — converge on
 one shared apply-a-callable tail in
-[`dispatch/apply_callable.rs`](../src/machine/execute/dispatch/apply_callable.rs)
+[`decide/apply_callable.rs`](../src/machine/execute/decide/apply_callable.rs)
 with two execution arms: *construct* from a type schema, or *call* a `KFunction`
 by name. A functor — a module-returning function — is a `KFunction` like any
 other, so it takes the call arm — see
@@ -270,7 +270,7 @@ A builtin can opt out of eager evaluation for specific slot positions: it
 declares the slot as lazy at registration, the scheduler hands it the
 unevaluated `KExpression` instead of a value, and the builtin emits a fresh
 `Dispatch` for the chosen branch only. Two mechanisms exist:
-[`KoanRuntime::dispatch_in_scope`](../src/machine/execute/runtime/submit.rs) submits a child
+[`KoanRuntime::dispatch_in_scope`](../src/machine/execute/harness.rs) submits a child
 node directly, while [`Action::Tail`](../src/machine/core/kfunction/action.rs) — used
 by `MATCH` — tail-returns the chosen branch so the scheduler dispatches it in
 place.

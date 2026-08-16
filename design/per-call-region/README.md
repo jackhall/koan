@@ -5,7 +5,7 @@ The contract for [`Rc<CallFrame>`](../../src/machine/core/arena.rs): which
 per-call anchor, how
 [`lift_kobject`](../../src/machine/execute/lift.rs) decides to attach one,
 why the allocation engine needs no cycle gate,
-how the [scheduler](../../src/machine/execute/run_loop.rs) propagates the
+how the [scheduler](../../src/machine/execute/harness.rs) propagates the
 active frame, how builtin-built frames chain the call-site frame's
 storage through `FrameStorage.outer`, and how the TCO step reuses the
 frame shell over a fresh `FrameStorage`.

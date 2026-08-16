@@ -6,12 +6,12 @@ pipeline (the submit half is
 [Name placeholders and submission](name-placeholders.md)). Part of the
 [execution model](README.md).
 
-The execute side — [`classify_dispatch`](../../src/machine/execute/dispatch.rs) —
+The execute side — [`classify_dispatch`](../../src/machine/execute/decide.rs) —
 opens with a pre-walk shape classifier. `classify_dispatch_shape` sweeps the
 expression's parts for any `Keyword` first and, if none, branches on the head
 token's shape, producing a `DispatchShape` variant. The no-keyword fast-lane
 variants run their own handlers and never enter
-`Scope::resolve_dispatch_with_chain`: there are no candidates in
+`Scope::resolve_dispatch`: there are no candidates in
 `bindings.functions` for these shapes, so the candidate machinery would do no
 useful work. The single-part lanes (`BareIdentifier`, `BareTypeLeaf`,
 `SigiledTypeExpr`, `RecordType`, `LiteralPassThrough`) surface a name or value directly, while
@@ -25,29 +25,26 @@ name-resolve plus dep-schedule pipeline below.
 
 The keyworded pipeline runs in three steps. Step 1 builds the bare-name
 outcome cache: one
-[`resolve_name_part`](../../src/machine/execute/dispatch/bare_name.rs) call per
+[`resolve_name`](../../src/machine/execute/decide/resolve.rs) call per
 bare-name part of `expr` (`Identifier` or leaf `Type`) into
-`bare_outcomes: Vec<Option<NameOutcome<'a>>>`, with `None` for non-bare-name
-parts. The cache carries no consumer id, so cycle detection is
-deferred to Step 3, where it runs only on slots the picked function
-classifies as references (a binder declaration slot like `x` in `LET x = …`
-has the dispatching slot as its own placeholder's producer, so an upfront
-cycle check would false-positive on declarations). The cache carries no
-producer standing either: a decide reads a still-finalizing name as the claim
-`EdgeId` its binder stamped and nothing more. Whether that binder has already
+`bare_outcomes: Vec<Option<Resolution>>`, with `None` for non-bare-name
+parts. The cache carries no producer standing: a decide reads a
+still-finalizing name as the `ProducerId` its binder's claim stamped and
+nothing more. Whether that producer has already
 terminalized — errored included — is the install door's ruling when the harness
 wires the park, so it never becomes a cache state a later sweep must screen
 ([Which edges Koan installs](scheduler.md#which-edges-koan-installs)).
 
 The ladder is **total**, and that is a type-level fact rather than a
-convention: `resolve_name_part` returns a `NameOutcome`, not a `Result`, so
+convention: `resolve_name` returns a
+[`Resolution`](../../src/machine/execute/decide/resolve.rs), not a `Result`, so
 Step 1 has no failure channel and the build cannot short-circuit. Every
 bare-name part reaches Step 2 as exactly one of resolved / parked / unbound.
 
 Step 2 calls
-[`Scope::resolve_dispatch_with_chain`](../../src/machine/core/scope.rs) once,
-passing the cache as `bare_outcomes: &[Option<NameOutcome<'a>>]`. Admission
-is strict-only: [`signature_admits_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
+[`Scope::resolve_dispatch`](../../src/machine/execute/decide/resolve_dispatch.rs) once,
+passing the cache as `bare_outcomes: &[Option<Resolution>]`. Admission
+is strict-only: [`signature_admits_strict`](../../src/machine/execute/decide/resolve_dispatch.rs)
 reads each bare-name slot's cached outcome rather than re-resolving it per
 scope. A `Resolved(obj)` cache entry admits iff
 [`KType::accepts_part`](../../src/machine/model/types/ktype_predicates.rs)
@@ -57,7 +54,7 @@ rather than a bind-time `TypeMismatch`. `Parked` / `Unbound` cache entries
 admit via shape-only `arg.matches(part)`: the post-pick splice/park walk in
 Step 3 is the only place that produces precise per-slot `ParkOnProducers` /
 `UnboundName` diagnostics, so admission must not reject and lose them. The
-match on [`ResolveOutcome`](../../src/machine/core/scope.rs) is:
+match on [`DispatchOutcome`](../../src/machine/execute/decide/resolve_dispatch.rs) is:
 `Resolved(r)` continues into Step 3 with the strict-picked function plus
 the per-slot index buckets `r.slots` carries (`wrap_indices`,
 `ref_name_indices`, `eager_indices`); `Ambiguous(n)` surfaces as an
@@ -70,7 +67,7 @@ dep completion;
 `ParkOnProducers(_)` and `UnboundName(_)` are decided inside the scope walk
 as described below.
 
-`resolve_dispatch_with_chain` decides each visible scope's contribution as
+`resolve_dispatch` decides each visible scope's contribution as
 it walks innermost-first, from the finalized overloads and the visible
 in-flight pending producer the scope's `FunctionLookup` surfaces together.
 The innermost scope to reach a terminal outcome wins; only `UnboundName` and
@@ -138,7 +135,7 @@ The rails the dispatch driver feeds:
     [typing/elaboration.md § Layers](../typing/elaboration.md#layers)
     § Layer 4 for the shared resolver seam.
   - `TypeCall` (`MyStruct {x = 1}`) —
-    [`type_call`](../../src/machine/execute/dispatch/single_poll.rs)
+    [`type_call`](../../src/machine/execute/decide/single_poll.rs)
     resolves the head Type token to its `bindings.types` identity. A
     `SetMember` identity is a `ResolvedCallable::Constructor` — the only invocable
     type identity, since `bindings.types` holds no callable value — and flows
@@ -160,7 +157,7 @@ The rails the dispatch driver feeds:
     deferring through a dep-finish `cont` only when a field type forward-references
     or sub-dispatches. See
     [type-language-via-dispatch.md § Record-type sigil](../typing/type-language-via-dispatch.md#record-type-sigil).
-  - `FunctionValueCall` (`f {x = 7}`) — [`FnValueState`](../../src/machine/execute/dispatch/fn_value.rs)
+  - `FunctionValueCall` (`f {x = 7}`) — [`fn_value`](../../src/machine/execute/decide/fn_value.rs)
     resolves the `Identifier` head and handles every admission outcome
     directly. The call shape admits iff `expr.parts[1..]` is exactly one
     nested-parens part (the *only* call shape — koan has no `f 1 2`
@@ -180,9 +177,9 @@ The rails the dispatch driver feeds:
     the `Err` arm of a node result with the same structured wording the keyworded
     path produces.
   - `HeadDeferred` (`(pick) {x = 1}`) and `TypeHeadDeferred`
-    (`:(pick_type) {x = 1}`) — [`HeadDeferredState`](../../src/machine/execute/dispatch/head_deferred.rs)
+    (`:(pick_type) {x = 1}`) — [`head_deferred`](../../src/machine/execute/decide/head_deferred.rs)
     sub-dispatches the head first (as sub-work; the park/resume pair mirrors
-    `CtorState`'s), then branches the resumed value's kind into a
+    the constructor lane's), then branches the resumed value's kind into a
     `ResolvedCallable`. `HeadDeferred` admits any function value or a
     constructible type; `TypeHeadDeferred` (the `:(...)` sigil guarantees a
     type) prunes the function arm — the type-only lane admits no value-channel
@@ -191,7 +188,7 @@ The rails the dispatch driver feeds:
 
   **The shared apply-a-callable tail.** All four head-position call lanes —
   `TypeCall`, `FunctionValueCall`, `HeadDeferred`, `TypeHeadDeferred` —
-  converge on [`apply_callable`](../../src/machine/execute/dispatch/apply_callable.rs).
+  converge on [`apply_callable`](../../src/machine/execute/decide/apply_callable.rs).
   A `ResolvedCallable` has exactly two execution arms: `Constructor(&KType)`
   builds from a struct / tagged / newtype / `TypeConstructor` schema, and
   `Function(&KFunction)` calls a `KFunction` by name. A functor — a
@@ -220,7 +217,8 @@ The rails the dispatch driver feeds:
   (see [ktype/dispatch.md § Overload bucket visibility filter](../typing/ktype/dispatch.md#overload-bucket-visibility-filter)).
   A later-sibling overload registered after this consumer's statement is
   hidden, and dispatch falls through to outer scopes; finding nothing
-  surfaces as `DispatchFailed`. Forward calls between sibling FNs work
+  surfaces as `DispatchFailed`. Calls into a still-finalizing *earlier*
+  sibling FN work
   through the bucket-keyed pending-slot channel: each sibling FN
   install appends a distinct pending slot to the `functions[bucket]` vec, and a parking
   consumer wakes on the earliest-index visible producer, re-parking on
@@ -248,32 +246,28 @@ The rails the dispatch driver feeds:
 
   The ref-name arm reads the same `bare_outcomes[i]` cache the resolver
   consumed in Step 2. The wrap arm re-resolves through the shared bare-name
-  ladder ([`resolve_bare_carrier`](../../src/machine/execute/dispatch/bare_name.rs)),
+  ladder ([`resolve_name`](../../src/machine/execute/decide/resolve.rs)),
   which seals the delivered carrier the splice needs — the cache's admission
   currency never held a sealed carrier; within one synchronous decide the
   fresh resolve agrees with the cache.
   Per-arm behavior:
 
   - **Wrap slot.** The arm matches the ladder's three-state
-    [`BareCarrier`](../../src/machine/execute/dispatch/bare_name.rs) — three
-    arms and no fourth, since `resolve_bare_carrier` is total like its
-    `resolve_name_part` twin.
-    `Sealed(cell)` splices the sealed binding-scope carrier inline as
+    [`Resolution`](../../src/machine/execute/decide/resolve.rs) — three
+    arms and no fourth, since the ladder is total.
+    `Resolved(cell)` splices the sealed binding-scope carrier inline as
     `WorkingPart::Spliced { cell }` — value and reach as one unit.
-    `Parked(source)` cycle-checks the producer behind the claim edge
-    via [`DepGraph::would_create_cycle`](../../workgraph/src/scheduler/dep_graph.rs)
-    and either surfaces `SchedulerDeadlock { sample: "cycle in type alias
-    `<name>`" }` on a self-park or pushes `source` onto the shared
-    `sources_to_wait` list. `Unbound(name)` surfaces a slot-terminal
-    `UnboundName` (the parent binder's dep-finish reads it through
-    `read_result(dep)` and short-circuits with the right framing — an
-    `Err` from `execute` would break that catch). A producer error is not a
+    `Parked(source)` pushes `source` onto the shared
+    `sources_to_wait` list — no graph question is asked, because a claim is
+    visible to this consumer only when its declaration sits lexically earlier,
+    so the park cannot close a cycle. `Unbound(name)` surfaces a slot-terminal
+    `UnboundName` (the parent binder's dep-finish reads it off its dep slot
+    and short-circuits with the right framing). A producer error is not a
     ladder state and not a walk outcome either: it reaches this consumer through
-    the park the harness installs. The would-cycle guard is the one pre-wiring
-    question left, and it classifies only here, where a consumer id is in hand.
+    the park the harness installs.
   - **Ref-name slot.** Literal-name slots keep the bare token, so
-    `Resolved` and `Unbound` are no-ops. `Parked(source)` runs the same
-    cycle-check then push as the wrap arm. Only `Identifier` and leaf
+    `Resolved` and `Unbound` are no-ops. `Parked(source)` pushes onto
+    `sources_to_wait` like the wrap arm. Only `Identifier` and leaf
     `Type` parts park here; non-bare-name parts are skipped by
     classification.
   - **Eager-sub slot.** `Expression` parts sub-Dispatch; `SigiledTypeExpr`
@@ -291,7 +285,7 @@ The rails the dispatch driver feeds:
   rather than submitted eagerly during the walk — the single
   `stage_eager_part` classifier owns the eager part-shape set and hands back
   the staged `DepRequest` directly. After the loop, if `sources_to_wait` is non-empty the decide
-  returns a `ParkThenContinue` whose continuation is a `Continuation::Resume`
+  returns an `Outcome::Park` whose continuation is a `Continuation::Resume`
   (carrying a `ResumeFn` closure over the partly-spliced `working_expr`) — the
   harness mints this slot's own edge off each source through the install door and
   installs a resume dispatch decide, so the captured
@@ -305,24 +299,25 @@ The rails the dispatch driver feeds:
   `Dispatch { .. }` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
   for the aggregate. With no subs to schedule the driver binds the picked
   function directly: the decide folds the resolved call into a dep-free
-  `Outcome::Continue` (via `dispatch::exec::invoke_continue`) whose frame
-  placement installs the per-call cart and whose `work` re-decides via
-  `dispatch::exec::invoke` on the next pop
+  `Outcome::Continue` (via [`decide::exec`](../../src/machine/execute/decide/exec.rs)'s
+  `invoke_continue`) — a user-fn call builds the callee's cart and binds its
+  arguments in this same step (`enter_user_fn`), leaving only the body
+  lowering for the reinstalled step
   (a wrap-slot-only call like `MAKESET int_ord` resolves bare names in Step 3,
   leaves no eager parts, and binds in one step — no dep-finish detour). Otherwise
-  the decide returns a `ParkThenContinue` with a `Continuation::Finish`
+  the decide returns an `Outcome::Park` with a `Continuation::Finish`
   declaring the fresh subs as deps with a splice finish; the harness parks the
   slot as a dep-finish carrying the finish. At dep completion the finish
   re-resolves the spliced `working_expr` and folds it into a `Continue` — via
   `invoke_continue` on the speculatively-picked function, or via
   `redispatch_continue` (re-running
-  [`keyworded::finish`](../../src/machine/execute/dispatch/keyworded.rs)) when
+  [`keyworded::finish`](../../src/machine/execute/decide/keyworded.rs)) when
   none was pre-picked.
 
   List, dict, and record literals (`classify_aggregate_part` in
-  [`dispatch/literal.rs`](../../src/machine/execute/dispatch/literal.rs))
+  [`decide/literal.rs`](../../src/machine/execute/decide/literal.rs))
   ride the same name-resolve rail: bare-name entries call the shared
-  [`resolve_bare_carrier`](../../src/machine/execute/dispatch/bare_name.rs)
+  [`resolve_name`](../../src/machine/execute/decide/resolve.rs)
   ladder directly and materialize as `Slot::Static` (sealed) or `Slot::Dep`
   (a producer the literal waits on), with the dep-finish driving a single wake
   across all parked siblings. A `Slot::Dep` carries no index: the classify walk
@@ -335,23 +330,27 @@ The rails the dispatch driver feeds:
 [`KFunction::classify_for_pick`](../../src/machine/core/kfunction.rs) is
 the sole producer of the `ClassifiedSlots` carrier (which `Resolved` holds
 by value), so the disjointness invariant lives in one place rather than as
-comment-enforced rules across the scheduler driver. Cycle detection runs
-inside the fused walk (not in the cache build) so it sees the picked
-function's slot classification: a binder declaration slot — `x` in
-`LET x = …`, `Foo` in `NEWTYPE Foo (…)` — is owned by the binder, never
-classified as wrap or ref-name, and so never reaches the cycle-check arm.
-`DepGraph::would_create_cycle` walks the forward `notify_list` graph from
-the consumer; if the producer is reachable, the driver surfaces
-`SchedulerDeadlock` on the slot terminal instead of installing a park edge
-that would close the cycle. That catches the trivially-cyclic
-`LET Ty = Ty` / `LET x = x` shapes uniformly — both Identifier-LHS and
-Type-LHS cycles surface with the same error kind without a special case
-in the elaborator.
+comment-enforced rules across the scheduler driver.
+
+**Parks are well-founded by construction, so nothing cycle-checks.** A
+consumer can park only on a claim its lexical chain makes visible, and the
+exclusive cutoff hides a statement's own claims from its entire subtree.
+Two language rules follow. `LET` is non-recursive: `LET x = x` /
+`LET Ty = Ty` never see their own claim — the name resolves at an outer
+scope or surfaces `UnboundName`, for Identifier-LHS and Type-LHS shapes
+uniformly. And a structural use of a name declared lexically *later*
+surfaces the same resolution outcome (fall-through, then
+`DispatchFailed` / `UnboundName`) rather than a park. Identity-level
+forward references between nominals keep working: a function *body*
+re-dispatches per call, by which point every sibling binder has registered,
+so mutually recursive FNs and recursive types are unaffected. Every
+installed park edge therefore points at a lexically earlier claim, the dep
+graph cannot close a cycle, and the scheduler carries no cycle detection.
 
 A bare-identifier slot resolving to a producer returns `Outcome::Forward` and is
 spliced out (above). The other parking fast-lane handlers (the `fn_value`
-`FunctionValueCall` head-placeholder park) and the eager-resolve pass return a
-`ParkThenContinue` with a `Continuation::Resume` for a re-resolve, whose harness
+`FunctionValueCall` head-placeholder park) and the eager-resolve pass return an
+`Outcome::Park` with a `Continuation::Resume` for a re-resolve, whose harness
 installs the park edge through the scheduler's single wiring door; the
 bare-name splice likewise re-points the moved edges at the resolved producer.
 An edge install lands the forward `notify` wake and the consumer's `pending`
@@ -383,16 +382,16 @@ finish closure splices each result into
 `signature_expr.parts[slot_idx]` as `Future(Carried::Type(_))` before
 re-running the parameter-list walk against the spliced signature. NEWTYPE
 and UNION share the same elaborator-and-dep-finish shape for their
-field-type lists. The fused walk's per-park cycle check
-([`DepGraph::would_create_cycle`](../../workgraph/src/scheduler/dep_graph.rs),
-covered above) handles the simple trivially-cyclic cases proactively; the
-elaborator's threaded-set carry-through handles the recursive-type cases
-during NEWTYPE / UNION body elaboration.
+field-type lists. The elaborator's threaded-set carry-through handles the
+recursive-type cases during NEWTYPE / UNION body elaboration; a
+trivially-self-referential alias (`LET Ty = Ty`) never reaches its own
+claim — the exclusive cutoff hides it, so the name resolves outer or
+surfaces `UnboundName` (covered above).
 
-A drain-end guard catches any cycle the proactive check doesn't: after
-[`execute`](../../src/machine/execute/run_loop.rs) empties its work
-queues, it scans the slot table for nodes still parked (`PreRun`) — a
-node parked on a dependency that can no longer fire — and returns
+A drain-end guard catches a dependency that never fires: when
+[`Scheduler::drain`](../../workgraph/src/scheduler/drain.rs) empties its work
+queues with nodes still parked (`PreRun`), it reports the deadlock, which
+the harness surfaces as
 `KErrorKind::SchedulerDeadlock { pending, sample }` rather than letting
 the top-level result read panic on an unresolved slot. `sample` is the carrier
 summary of the first parked node that has one (a dispatch decide carries its
@@ -404,34 +403,35 @@ to a generic tag), so the diagnostic points at code the reader can act on.
 A dispatch slot is the one [`NodeWork`](../../src/machine/execute/nodes.rs) shape with
 a decide `cont` (built by [`ignore_results`](../../src/machine/execute/outcome.rs))
 and a `carrier` deadlock-summary string. The `cont` captures a
-`SchedulerView -> Outcome` closure that reads the view, classifies / re-resolves,
+`DecideCtx -> Outcome` closure that reads the step context, classifies /
+re-resolves,
 and returns an `Outcome`; it takes no dep values, so its deps are park-only. Birth
-and resume are the same shape, run through the same handler
-([`run_step`](../../src/machine/execute/run_loop.rs)); the scheduler never
+and resume are the same shape, run through the same drain step callback
+([`Host::step`](../../src/machine/execute/harness.rs)); the scheduler never
 switches on dispatch-internal state and `NodeWork` names no `KExpression`.
 
 **Birth** closures are built by the dispatch layer
-([`decide_tail`](../../src/machine/execute/dispatch.rs), called by
-[`submit_expression`](../../src/machine/execute/dispatch/submit.rs)) capturing the
+([`decide_tail`](../../src/machine/execute/decide.rs), called by
+[`submit_expression`](../../src/machine/execute/decide/submit.rs)) capturing the
 slot's `expr`. On first poll the closure runs `classify_dispatch`, which
-classifies `expr` via `classify_dispatch_shape` and decides against a
-`SchedulerView`, returning an `Outcome`. A birth decide carries no pre-submitted
+classifies `expr` via `classify_dispatch_shape` and decides against the
+[`DecideCtx`](../../src/machine/execute/decide/ctx.rs), returning an
+`Outcome`. A birth decide carries no pre-submitted
 sub-Dispatches: binder discovery is parse-static, so submission does no recursion
 and the aggregate a statement installs is read once from the node's cache.
 
 When a decide must wait — a keyworded resolve that found bare-name or
 overload producers, a `FunctionValueCall` head still resolving to a
-`Placeholder`, a `TypeCall` parked on a still-finalizing head — it returns a
-`ParkThenContinue` whose continuation is a `Continuation::Resume` carrying an
-opaque [`ResumeFn`](../../src/machine/execute/dispatch.rs) closure
-(`SchedulerView -> Outcome`, built by `park_resume`). The harness parks the
-slot's edges and installs a fresh **resume** decide carrying that closure. On
-wake, `run_step` clears the slot's stale dep edges, runs the captured closure
-against a fresh `SchedulerView`, and applies its `Outcome` — **one uniform arm**
-for every shape. Clearing on resume is uniform and safe: a dispatch park installs
-only `Notify` edges (sibling forward references, never children), which drop at
-free, so a resume re-deriving its producers from the rebuilt scope cannot drop a
-live wake. (Clearing on a fresh birth is a no-op — it owns no dep edges yet.)
+`Placeholder`, a `TypeCall` parked on a still-finalizing head — it returns an
+`Outcome::Park` whose continuation is a `Continuation::Resume` carrying an
+opaque [`ResumeFn`](../../src/machine/execute/decide.rs) closure
+(`DecideCtx -> Outcome`, built by `park_resume`). The harness wires the
+slot's park edges and installs a fresh **resume** decide carrying that
+closure. On wake, the drain hands the step callback the dep results already
+read and their edges already released, and the callback runs the captured
+closure against a fresh `DecideCtx` and applies its `Outcome` — **one
+uniform arm** for every shape; a resume re-derives its producers from the
+rebuilt scope.
 
 Each family's closure captures exactly what its decide needs and re-runs it
 against the now-populated scope:
@@ -442,8 +442,8 @@ against the now-populated scope:
   wrap-slot splice fires `Future(obj)` on the second pass.
 - A keyworded **overload** park carries the original (unspliced) expression and
   re-runs the resolve against the now-sealed slots of the `functions` bucket.
-  **Eager subs never park here**: a `Deferred`/eager-subs resolve returns a
-  `ParkThenContinue` with a `Continuation::Finish` and parks on a node with a
+  **Eager subs never park here**: a `Deferred`/eager-subs resolve returns an
+  `Outcome::Park` with a `Continuation::Finish` and parks on a node with a
   dep-finish `cont` whose finish re-resolves the spliced expression — so a
   keyworded resume never re-enters for them. Re-resolve in the finish is
   authoritative: an element-typed `Future(_)` that narrows a typed-slot
@@ -466,7 +466,7 @@ stage, because the part walk's park-precedence guard runs first; eager subs
 take the dep-finish route rather than a resume. So a slot's resume
 carries exactly one park reason.
 
-The drain-end cycle-detection guard (`NodeStore::unresolved`) summarizes parked
+The drain-end deadlock guard (`NodeStore::unresolved`) summarizes parked
 slots from each `NodeWork`'s `carrier` — a dispatch decide carries its
 expression's pre-rendered summary; a carrier-less dep-finish/catch wait falls back to
 a generic `<wait>` tag — selected by a testable `work_deadlock_sample` helper in

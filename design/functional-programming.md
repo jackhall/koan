@@ -4,7 +4,7 @@ Functions are first-class values in Koan. `KFunction` is a `KObject` variant
 ([kobject.rs](../src/machine/model/values/kobject.rs)), so a function can be returned from a
 body, bound via `LET`, looked up by name, and invoked through the
 `FunctionValueCall` handler
-([dispatch/fn_value.rs](../src/machine/execute/dispatch/fn_value.rs) —
+([decide/fn_value.rs](../src/machine/execute/decide/fn_value.rs) —
 `initial`) or by appearing in a position the dispatcher
 resolves.
 
@@ -118,7 +118,7 @@ End-to-end verification:
 
 - [`captured_per_call_value_survives_let_bind_and_call`](../src/builtins/fn_def/tests/arena.rs)
   — return a closure from a body, call it after the outer frame has finalized.
-- [`fast_lane_escaped_closure_with_param_returns_body_value`](../src/machine/execute/run_loop/tests/dispatch_shapes.rs)
+- [`fast_lane_escaped_closure_with_param_returns_body_value`](../src/machine/execute/harness/tests/dispatch_shapes.rs)
   — escaped closure with a parameter resolves the captured binding correctly.
 
 ## Composition with the language extension story

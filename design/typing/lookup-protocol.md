@@ -39,13 +39,13 @@ matching the three lookup kinds:
 - [`Scope::resolve_type_with_chain`](../../src/machine/core/scope.rs) —
   type-name lookup. Per-ancestor calls
   [`Bindings::lookup_type`](../../src/machine/core/bindings.rs).
-- [`Scope::resolve_dispatch_with_chain`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
+- [`Scope::resolve_dispatch`](../../src/machine/execute/decide/resolve_dispatch.rs)
   — function-bucket lookup. Per-ancestor calls
   [`Bindings::lookup_function`](../../src/machine/core/bindings.rs)
   and decides the scope's contribution from the returned
   [`FunctionLookup`](../../src/machine/core/bindings.rs): a visible pending
   producer parks the scope, otherwise the finalized overloads go to
-  [`OverloadBucket::pick_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
+  [`OverloadBucket::pick_strict`](../../src/machine/execute/decide/resolve_dispatch.rs)
   for the per-overload admit pass. The innermost scope to reach a terminal
   decision wins (see
   [scheduler.md § In-walk dispatch precedence](scheduler.md#in-walk-dispatch-precedence)).
@@ -103,7 +103,7 @@ nor the reverse.
   wiring its own edge off — or `None` on a miss, the caller keeping on
   walking ancestors. The terminal unbound disposition is not a lookup variant:
   it is materialized one level up on the resolution path, where
-  [`NameOutcome`](../../src/machine/execute/dispatch/resolve_dispatch.rs) is the
+  [`Resolution`](../../src/machine/execute/decide/resolve.rs) is the
   merge point that adds the `Unbound` state. The producer's standing is not read
   here at all — a lookup runs on a read-only view, and classifying a producer is
   the install door's answer at wiring time
@@ -135,7 +135,7 @@ nor the reverse.
   member named by a relative `Sibling` reference is in flight iff the scope carrying the
   very group window that reference resolves against still holds a pending arm for
   the name
-  ([resolve_type_identifier.rs](../../src/machine/execute/dispatch/resolve_type_identifier.rs)).
+  ([resolve_type_identifier.rs](../../src/machine/execute/decide/resolve_type_identifier.rs)).
   The window match is what stops a same-named in-flight declaration of a
   different type from capturing the reference; a SIG-declared or abstract slot,
   whose type records its declaring scope id, is matched by that id instead.
@@ -209,12 +209,12 @@ check fires:
   two read carrier-type metadata in O(1).
 
 The dispatch-admission glue is
-[`signature_admits_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs),
+[`signature_admits_strict`](../../src/machine/execute/decide/resolve_dispatch.rs),
 which walks slot/part pairs and consults the per-dispatch-poll
 `bare_outcomes` cache — the strict-admission rules table at
 [elaboration.md § Strict admission rules](elaboration.md#strict-admission-rules)
-spells out which `NameOutcome` arms admit via `accepts_part`, which
-admit shape-only, and which strict-reject. [`OverloadBucket::pick_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
+spells out which `Resolution` arms admit via `accepts_part`, which
+admit shape-only, and which strict-reject. [`OverloadBucket::pick_strict`](../../src/machine/execute/decide/resolve_dispatch.rs)
 wraps the filter-then-`most_specific` dance over a single scope's
 visibility-pre-filtered bucket.
 
@@ -282,7 +282,7 @@ Because a builtin can never be shadowed, a builtin entry is authoritative: it is
 root-first, in one hop through the direct reference, before the Layer-1 ancestor walk — the
 constant-time path for the hottest names (operators, `PRINT`, dispatch primitives).
 [`Scope::resolve_type_with_chain`](../../src/machine/core/scope/resolve.rs) returns a builtin
-hit directly; [`Scope::resolve_dispatch`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
+hit directly; [`Scope::resolve_dispatch`](../../src/machine/execute/decide/resolve_dispatch.rs)
 consults the root's builtin bucket first and returns its decision when terminal. Each is gated
 on the `idx == 0` [`has_builtin_*`](../../src/machine/core/bindings.rs) predicate, so a
 non-builtin name finds nothing in the root and falls through to the Layer-1 chain walk with its

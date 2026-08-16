@@ -11,7 +11,7 @@ cross:
 - *Cross-run (sequential), reachable today.* A second `KoanRuntime` driven over one
   persistent scope mints its own registry, so the type handles the first run committed
   into the scope's `types` bindings name nodes the second run cannot deref: the second run
-  panics in [`resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
+  panics in [`resolve_type_identifier`](../../src/machine/execute/decide/resolve_type_identifier.rs)
   ("type handle names no interned node") before any declaration logic runs. This is why the
   cross-run declaration-`Rebind` guarantee is pinned only at the install door
   (`cross_run_redeclare_rebinds_on_run_qualified_handle`) rather than end-to-end.

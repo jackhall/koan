@@ -27,9 +27,9 @@ boundary.
 This makes element-only-differing overloads (`:(LIST OF Number)` vs `:(LIST OF Str)`)
 dispatchable across the forms a container argument takes. Admission is
 strict-only, driven by a per-dispatch-poll `bare_outcomes` cache —
-[`signature_admits_strict`](../../../src/machine/execute/dispatch/resolve_dispatch.rs)
+[`signature_admits_strict`](../../../src/machine/execute/decide/resolve_dispatch.rs)
 reads each bare-name slot's cached
-[`NameOutcome`](../../../src/machine/execute/dispatch/resolve_dispatch.rs) once and
+[`Resolution`](../../../src/machine/execute/decide/resolve.rs) once and
 admits accordingly. The forms:
 
 - **Evaluated argument** (`DESCRIBE (xs)`, a call result) — the scheduler has
@@ -39,7 +39,7 @@ admits accordingly. The forms:
   [`KType::accepts_cell`](../../../src/machine/model/types/ktype_predicates.rs)
   for the carried-type check — no part shape is consulted.
 - **Bare variable** (`DESCRIBE xs`) — the cache entry is
-  `NameOutcome::Resolved(Delivered)`. Admission opens the delivered envelope and
+  `Resolution::Resolved(Delivered)`. Admission opens the delivered envelope and
   tests
   [`KType::accepts_carried`](../../../src/machine/model/types/ktype_predicates.rs)
   against the carried value (an object or a `Type` arm — no clone). A bare name whose value has the
@@ -66,10 +66,10 @@ post-pick splice/park walk is the only place that produces precise per-slot
 reject them. If no bucket admits anywhere, the resolver's post-walk
 fallback reads the cache by fixed precedence — placeholders > eager >
 unbound > pending overload > Unmatched — and surfaces the right
-`ResolveOutcome`:
+`DispatchOutcome`:
 
 - A `Placeholder` name *will* bind, so the fallback surfaces
-  `ResolveOutcome::ParkOnProducers(producers)`. Dispatch parks on the
+  `DispatchOutcome::ParkOnProducers(producers)`. Dispatch parks on the
   binder's producer and re-dispatches once it binds; the rebuilt cache
   carries `Resolved(obj)` and strict admission picks. This keeps dispatch
   order-independent within the visibility window — `DESCRIBE xs` resolves
@@ -80,7 +80,7 @@ unbound > pending overload > Unmatched — and surfaces the right
   replay-park.
 - An `Unbound` name names nothing (no visible binding *and* no
   forward-declared placeholder visible at the consumer's chain position),
-  so the fallback surfaces `ResolveOutcome::UnboundName(name)` — the
+  so the fallback surfaces `DispatchOutcome::UnboundName(name)` — the
   precise error matching what the single-overload path reports for an
   unresolved bare name, not a generic dispatch miss.
 
@@ -102,7 +102,7 @@ is `idx < cutoff`, one rule across the value and type languages. A consumer
 between two same-bucket overloads sees only the earlier; the later-sibling
 overload is hidden, and dispatch falls through to outer scopes unaffected by the
 not-yet-visible registration.
-[`OverloadBucket::pick_strict`](../../../src/machine/execute/dispatch/resolve_dispatch.rs)
+[`OverloadBucket::pick_strict`](../../../src/machine/execute/decide/resolve_dispatch.rs)
 receives the pre-filtered survivor list (the `FunctionLookup`'s `overloads`)
 and runs only the admit predicate over it. The same lookup also surfaces the
 earliest-index visible pending slot of that same `functions[key]` bucket in

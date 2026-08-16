@@ -72,7 +72,7 @@ tighten-after-the-fact scheduler primitive.
 
 ## In-walk dispatch precedence
 
-[`Scope::resolve_dispatch_with_chain`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
+[`Scope::resolve_dispatch`](../../src/machine/execute/decide/resolve_dispatch.rs)
 walks visible scopes innermost-first and decides each scope's contribution
 from its [`FunctionLookup`](../../src/machine/core/bindings.rs) — finalized
 overloads and the earliest-visible in-flight pending producer, surfaced
@@ -88,7 +88,7 @@ regardless of finalize or evaluation order. The per-scope precedence:
    would lean on union into the park list so a single wake re-runs the full
    resolution.
 2. **Strict Pick / Tie.** Over the finalized overloads, the strict gate
-   [`OverloadBucket::pick_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
+   [`OverloadBucket::pick_strict`](../../src/machine/execute/decide/resolve_dispatch.rs)
    Picks the most-specific admitting candidate (`Resolved`), or surfaces a
    genuine tie as `Ambiguous` — except a tie with an unevaluated eager part
    `Defer`s, since the eager value may break it.
@@ -114,7 +114,7 @@ Only two outcomes are decided *post-walk*, after every scope reported
 - **`Unmatched`** when no scope contributed even a dead lean.
 
 **One relaxed pass covers parked and eager slots uniformly.** The relaxed pass
-([`relaxed_admits`](../../src/machine/execute/dispatch/resolve_dispatch.rs))
+([`relaxed_admits`](../../src/machine/execute/decide/resolve_dispatch.rs))
 treats a parked bare name as just an eager part whose value arrives from a
 producer instead of a sub-Dispatch, so both kinds flow through the same
 per-candidate classification. The dead-slot arm only labels the `UnboundName`

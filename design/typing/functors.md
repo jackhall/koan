@@ -195,8 +195,8 @@ Per-call elaboration runs in the body executor
 `Deferred(_)` outcome as a `Suspend { join, resume }`: `join` names the body
 statements (plus, for the `Expression` carrier, the return-type expression as an
 extra dep), and `resume` checks the body's terminal value once the deps resolve.
-The dispatch-side [`invoke`](../../src/machine/execute/dispatch/exec.rs) is a
-pure decide that lowers that `Suspend` into an `Outcome::ParkThenContinue` over
+The dispatch-side [`invoke`](../../src/machine/execute/decide/exec.rs) is a
+pure decide that lowers that `Suspend` into an `Outcome::Park` over
 a single body-block [`DepRequest::BodyBlock`](../../src/machine/core/kfunction/action.rs) — the
 body statements plus the return-type expression as deps in the harness-acquired
 per-call frame (see
@@ -211,7 +211,7 @@ genuinely type-denoting argument, value-side for a module — and both carriers 
 the same dep-finish. The inline elaboration is the standard
 [elaboration.md § Layers](elaboration.md#layers) § Layer 3 walk against
 the per-call scope, run through
-[`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
+[`Scope::resolve_type_identifier`](../../src/machine/execute/decide/resolve_type_identifier.rs)
 so the hit arrives as a bare region `&KType`. Re-homing it needs no residence
 evidence: [`home_return_type`](../../src/machine/core/kfunction/exec.rs) clones the
 owned type into the captured-scope region (a live ancestor of the call) through the
@@ -220,7 +220,7 @@ cannot outlive the window the lift boundary consumes it in. The cap is
 return-contract discipline, not a residence audit — a `KType` has no residence to
 audit. The lift-time
 return-type check in
-[`run_loop.rs`](../../src/machine/execute/run_loop.rs)
+[`harness.rs`](../../src/machine/execute/harness.rs)
 gates on `ReturnType::is_resolved()` so the static-typing pathway stays
 untouched and the deferred slot check runs only inside the dep-finish
 finish where the per-call elaboration is in hand. The structural
@@ -297,7 +297,7 @@ Error = MyError})`. It lowers to
 structural identity by `(ctor, args)`, with `Record`'s order-blind
 identity, so the same name-to-type map is the same application however it
 was written. The arm lives in
-[`apply_callable.rs`](../../src/machine/execute/dispatch/apply_callable.rs):
+[`apply_callable.rs`](../../src/machine/execute/decide/apply_callable.rs):
 a constructor-kind head with a record-literal body launches one sub-dispatch
 per field, so a compound argument (`{Elem = (LIST OF Number)}`) elaborates
 through the ordinary type-expression lanes and the slot parks until it

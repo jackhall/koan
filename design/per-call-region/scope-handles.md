@@ -23,7 +23,7 @@ from the slot's live frame at read, never re-anchored at a free `'run`:
   the slot holds the cart. It differs from `Yoked` only in that the child scope differs from the cart's
   own scope, so it needs a stored carrier.
 
-The funnel [`resolve_node_scope`](../../src/machine/execute/runtime/submit.rs) decides the arm in
+The funnel [`resolve_node_scope`](../../src/machine/execute/harness.rs) decides the arm in
 order: a pointer test (`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot
 to `Yoked`; the cart's own pin claim over `scope`'s region
 ([`CallFrame::pins_scope_region`](../../src/machine/core/arena.rs), a `pins_region` walk of the
@@ -38,7 +38,7 @@ honest across a TCO hop: nothing persisted points into the region the hop retire
 [tail-call-optimization.md](../tail-call-optimization.md)).
 
 The read boundary hands a slot's scope to a closure on demand, not as a stored free `&'run`:
-[`with_node_scope`](../../src/machine/execute/dispatch/ctx.rs) opens it per use at a `for<'b>` brand —
+[`with_node_scope`](../../src/machine/execute/decide/ctx.rs) opens it per use at a `for<'b>` brand —
 a `YokedChild` slot opens its stored `&'static Scope` carrier through `SealedExtern::open` (witnessed
 by the frame `Rc`, sound because the cart pins the ancestor region; the open carries no `unsafe` of
 its own); a `Yoked` slot re-reads from the live `active_frame` cart via
@@ -49,12 +49,12 @@ separate struct. Bodies / finishes / the dispatch engine no longer thread a `sco
 call `current_scope()`; the genuine run-scope methods (`dispatch_in_scope` /
 `dispatch_in_scope_with_chain` / `enter_block`) keep their `&'a Scope` argument.
 
-The post-step loop in `Scheduler::execute` reads the just-finished step's scope through a
-`PostStep` token returned by the `with_slot_step` bracket, derived from the slot's *returned* frame
-(`prev_frame`) rather than the ambient `active_frame` — an in-step invoke can swap the ambient
-frame, so the returned value is the authoritative source. A within-step frame lifetime `'step`
-(`'a: 'step`) threads `classify_dispatch` → `SchedulerView` → `BuiltinFn` → the scheduler's write
-primitives, lifting to the run `'a` only at the `lift_kobject` Done boundary.
+The step's whole tail — decide, binding writes, apply — runs inside the
+`Host::with_slot_step` bracket, so `Host::apply` reads the step-end frame and the
+deposited obligation off the ambient context directly; the bracket restores the
+displaced values on every exit path, unwind included. A within-step frame lifetime `'step`
+(`'a: 'step`) threads `classify_dispatch` → `DecideCtx` → `BuiltinFn` → the step's write
+sink, lifting to the run `'a` only at the `lift_kobject` Done boundary.
 
 ## Seed-side re-anchor
 

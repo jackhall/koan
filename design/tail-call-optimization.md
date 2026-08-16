@@ -43,7 +43,7 @@ closure reaches every one), so they are retained `O(N)` through the scope chain
 (§ Soundness, Lemma 3) — this is required liveness, not a TCO regression.
 
 Because the reinstall applies **after** the caller's step returns
-([apply_outcome](../src/machine/execute/runtime.rs) is the sole graph-writing site,
+([`Host::apply`](../src/machine/execute/harness.rs) is the sole graph-writing site,
 never mid-step), the old incarnation's region is past every borrow into it by the
 time it is retired. No reserve frame, no in-place reset, no two-iteration timing:
 the scheduler's ordinary run-then-apply ordering supplies the safety a synchronous
@@ -79,7 +79,7 @@ A tail call carries values forward — its arguments, any closure it re-invokes.
 These are sealed as carriers in the retiring incarnation's region during its step
 and adopted into the new incarnation's fresh region *in that same step*: the
 decide that folds the resolved call
-([`enter_user_fn`](../src/machine/execute/dispatch/exec.rs)) mints the callee's
+([`enter_user_fn`](../src/machine/execute/decide/exec.rs)) mints the callee's
 cart and binds the arguments into it before it emits the replace, so the
 reinstalled incarnation's first step reads nothing in the region the replace
 retires (`transfer_into`, the ordinary carrier-delivery path — see

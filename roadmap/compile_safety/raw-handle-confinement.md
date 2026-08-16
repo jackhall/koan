@@ -5,10 +5,9 @@ door koan code stores through.
 
 **Problem.** `pub(crate)` `RegionBrand::handle()`
 ([arena.rs](../../src/machine/core/arena.rs)) hands any koan crate code the raw
-`RegionHandle`, bypassing every veneer door; eighteen production reaches exist
-across `src/machine`, eleven inside `machine::core` and seven outside
-(`execute/dispatch/constructors.rs`, `execute/dispatch/literal.rs`,
-`execute/run_loop.rs`, `execute/runtime/interpret.rs`,
+`RegionHandle`, bypassing every veneer door; production reaches exist
+across `src/machine`, most inside `machine::core` and several outside
+(`execute/decide/constructors.rs`, `execute/decide/literal.rs`,
 `model/values/kobject.rs`). Most routes the raw handle exposes are vetted by
 their own signature — the `!needs_drop`-asserted `in_place` / `frozen_table`
 verbs, the rank-2 `bump_born_with` door, and the `mint_retained` composition —

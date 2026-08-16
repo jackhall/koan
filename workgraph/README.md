@@ -31,7 +31,8 @@ crate reads as a standalone library rather than as one of koan's internals.
   - [dag-scheduler.md](design/dag-scheduler.md) — what the DAG layer adds over
     the cell substrate: the edge slab and its containment lattice, the
     node-store lifecycle, push/notify dep edges and the dep-row invariants, the
-    two-band work queue, alias splicing, and delivery at finalize with the
+    two-band work queue, the drain protocol (the embedder's step callback and
+    its `StepVerdict`), alias splicing, and delivery at finalize with the
     unconditional slot reclaim behind it.
   - [cellgraph.md](design/cellgraph.md) — the computation-cell substrate
     beneath the DAG layer (working name `cellgraph`): cells with a
