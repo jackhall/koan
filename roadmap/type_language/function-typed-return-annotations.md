@@ -71,8 +71,9 @@ and fails with `unbound name 'left'`.
   `IDENTIFIER` overload folds into an error arm) — and replaces
   [`op_def.rs`](../../src/builtins/op_def.rs)'s `for operand { for result { …
   } }` registration loop with flat union-slot registrations. The signature
-  dimension stays two overloads because the binder flag is per-overload and
-  genuinely differs. (Enumerating the missing matrix cells as overloads was
+  dimension stays two overloads because their signature slots and bodies
+  genuinely differ — `KExpression` versus `ProperType`, and the record form
+  routes to `body_record_schema`. (Enumerating the missing matrix cells as overloads was
   rejected: the matrix re-leaks with every new carrier and the buckets keep
   growing.)
 - *`OP`'s operand and return slots — decided.* The fix covers them in this

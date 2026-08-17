@@ -191,8 +191,7 @@ pub(super) fn unsealed_announcement_error(child_scope: &Scope<'_>, name: &str) -
 }
 
 /// The Type-token-named overload (`MODULE IntOrd = …`, `GROUP VecOps FOLD LEFT = …`): a module is a
-/// value, so its name belongs in the value namespace. Registered with no binder hook — it always
-/// errors, so it installs nothing.
+/// value, so its name belongs in the value namespace. It always errors, so it installs nothing.
 pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     use crate::machine::require_bare_type_name;
     use crate::machine::{KError, KErrorKind};
@@ -219,21 +218,19 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             ],
         )
     };
-    crate::builtins::register_builtin_full(
+    crate::builtins::register_builtin(
         scope,
         "MODULE",
         module_sig(KType::IDENTIFIER),
         body,
-        true,
         types,
         gate,
     );
-    crate::builtins::register_builtin_full(
+    crate::builtins::register_builtin(
         scope,
         "MODULE",
         module_sig(KType::of_kind(KKind::ProperType)),
         body_type_named,
-        false,
         types,
         gate,
     );

@@ -238,8 +238,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             ],
         )
     };
-    crate::builtins::register_builtin_full(scope, "LET", identifier_sig(), body, true, types, gate);
-    crate::builtins::register_builtin_full(scope, "LET", type_sig(), body, true, types, gate);
+    crate::builtins::register_builtin(scope, "LET", identifier_sig(), body, types, gate);
+    crate::builtins::register_builtin(scope, "LET", type_sig(), body, types, gate);
 }
 
 #[cfg(test)]

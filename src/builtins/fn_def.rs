@@ -271,8 +271,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
     // admits only against `ProperType`. A third overload (below) carries the
     // anonymous `:{…}` record-schema signature.
     //
-    // The three keyworded overloads are binder-shaped (`binder: true`): a named `FN` installs a
-    // pending-overload *bucket* entry so a forward sibling reference parks. FN's spec-table
+    // The keyworded overloads share a bucket key the spec table lists, so a named `FN` installs a
+    // pending-overload *bucket* entry and a forward sibling reference parks on it. FN's spec-table
     // extractor is `Bucket`, not `Name` — sibling FN overloads share one bucket and each installs
     // its own per-bucket entry, and consumers park on the earliest-index visible entry. A
     // single-name install (LET / UNION / SIG / MODULE, via `Name` extractors) would Rebind on the
@@ -280,8 +280,10 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
     // collapsing the overload set — right for a one-name-to-one-value binder, wrong for an overload
     // family.
     //
-    // The record-schema overload is not binder-shaped (`binder: false`): a `:{…}` record signature
-    // is anonymous, so `FN :{…}` installs nothing and stays legal in a value position.
+    // The record-schema overload shares that key but installs nothing: `fn_def_binder_bucket` reads
+    // the signature operand as a parenthesized expression, and a `:{…}` record part is not one, so
+    // the extractor returns `None`. An anonymous `FN :{…}` therefore claims no bucket and stays
+    // legal in a value position.
     // `:ProperType`-return keyworded overload (`-> Number` / `-> er`).
     let typeexpr_sig = || {
         sig(
@@ -369,49 +371,38 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             ],
         )
     };
-    use crate::builtins::register_builtin_full;
-    register_builtin_full(scope, "FN", typeexpr_sig(), body, true, types, gate);
-    register_builtin_full(scope, "FN", sigil_sig(), body, true, types, gate);
-    register_builtin_full(
+    use crate::builtins::register_builtin;
+    register_builtin(scope, "FN", typeexpr_sig(), body, types, gate);
+    register_builtin(scope, "FN", sigil_sig(), body, types, gate);
+    register_builtin(
         scope,
         "FN",
         value_named_return_sig(),
         body_value_named_return,
-        true,
         types,
         gate,
     );
-    register_builtin_full(
-        scope,
-        "FN",
-        record_sig(),
-        body_record_schema,
-        false,
-        types,
-        gate,
-    );
+    register_builtin(scope, "FN", record_sig(), body_record_schema, types, gate);
     for return_type in [KType::of_kind(KKind::ProperType), KType::SIGILED_TYPE_EXPR] {
-        register_builtin_full(
+        register_builtin(
             scope,
             "LET",
             combined_sig(KType::IDENTIFIER, KType::KEXPRESSION, return_type),
             body_let_combined,
-            true,
             types,
             gate,
         );
     }
-    register_builtin_full(
+    register_builtin(
         scope,
         "LET",
         combined_sig(KType::IDENTIFIER, KType::KEXPRESSION, KType::IDENTIFIER),
         body_value_named_return,
-        true,
         types,
         gate,
     );
-    // A diagnostic overload (`binder: false` — it installs nothing, so no spec-table entry): a
-    // function is a value, and this names the shape that binds one under a Type-classified name.
+    // A diagnostic overload — it always errors, so it installs nothing: a function is a value, and
+    // this names the shape that binds one under a Type-classified name.
     //
     // There is deliberately no combined overload for the anonymous `FN :{…}` signature. Its
     // `ProperType` signature slot would make the bucket's pick undecidable until that operand
@@ -419,7 +410,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
     // `name` token — which by then names this very node's placeholder, a self-cycle. The anonymous
     // form is not a binder anyway, so its flat spelling reports a plain dispatch miss and the
     // parenthesized value bind `LET f = (FN :{…} -> <Return> = (…))` stays the spelling.
-    register_builtin_full(
+    register_builtin(
         scope,
         "LET",
         combined_sig(
@@ -428,7 +419,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             KType::of_kind(KKind::ProperType),
         ),
         body_let_combined_type_named,
-        false,
         types,
         gate,
     );

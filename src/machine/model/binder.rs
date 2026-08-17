@@ -2,10 +2,10 @@
 //! which name and bucket keys they declare.
 //!
 //! Everything here is a pure `&KExpression -> Option<…>` reader plus a static spec table
-//! ([`BINDER_SPECS`]) that is the single source of truth for the binder-introducing forms. The
-//! table is derived from the builtin registration sites and pinned against them by the
-//! spec⟺registration consistency test, so a new binder builtin that forgets its spec entry (or a
-//! spec entry with no live registration) fails the suite.
+//! ([`BINDER_SPECS`]) that is the single source of truth for the binder-introducing forms — a form
+//! is a binder because it has an entry here, and nothing else declares it. The keys are pinned
+//! against the live builtin registration table by the spec⟺registration consistency test, so an
+//! entry whose builtin was renamed, re-shaped, or dropped fails the suite.
 
 use crate::machine::core::{KError, KErrorKind, RegionBrand};
 #[cfg(test)]
@@ -410,7 +410,7 @@ impl BinderSpec {
 use UntypedElementSpec::{Keyword as Kw, Slot};
 
 /// The single source of truth for the binder-introducing forms. One entry per distinct untyped
-/// bucket key; keys and extractors are pinned against the live builtin registration table by the
+/// bucket key; the keys are pinned against the live builtin registration table by the
 /// spec⟺registration consistency test.
 pub static BINDER_SPECS: &[BinderSpec] = &[
     // LET <name> = <value>: value-name overload then type-alias overload.
@@ -522,8 +522,8 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         surface: BinderSurface::Other,
         name_slot: Some(1),
     },
-    // FN <signature> -> <return_type> = <body> (three hook-bearing overloads share this key; the
-    // anonymous record-schema overload has no hooks).
+    // FN <signature> -> <return_type> = <body> (every FN overload shares this key; the anonymous
+    // record-schema form claims no bucket because the extractor rejects its signature operand).
     BinderSpec {
         key: &[Kw("FN"), Slot, Kw("->"), Slot, Kw("="), Slot],
         names: &[],

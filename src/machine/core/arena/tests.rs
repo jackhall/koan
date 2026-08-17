@@ -1125,7 +1125,6 @@ fn region_death_frees_every_drop_free_family() {
                         Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
                     )
                 }),
-                false,
                 &types,
             )
         })

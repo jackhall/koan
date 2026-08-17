@@ -317,17 +317,16 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             ],
         )
     };
-    use crate::builtins::register_builtin_full;
+    use crate::builtins::register_builtin;
     // Scalar / bare-leaf repr (`= Number`, `= Foo`) and non-record sigil repr (`= :(LIST OF T)`)
     // share `body`; the record repr (`= :{…}`) routes to `body_record_repr`.
-    register_builtin_full(scope, "NEWTYPE", scalar_sig(), body, true, types, gate);
-    register_builtin_full(scope, "NEWTYPE", sigil_sig(), body, true, types, gate);
-    register_builtin_full(
+    register_builtin(scope, "NEWTYPE", scalar_sig(), body, types, gate);
+    register_builtin(scope, "NEWTYPE", sigil_sig(), body, types, gate);
+    register_builtin(
         scope,
         "NEWTYPE",
         record_sig(),
         body_record_repr,
-        true,
         types,
         gate,
     );
@@ -339,12 +338,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         KType::of_kind(KKind::AnyType),
         vec![kw("NEWTYPE"), arg("decl", KType::KEXPRESSION)],
     );
-    register_builtin_full(
+    register_builtin(
         scope,
         "NEWTYPE",
         constructor_family_sig,
         body_constructor_family,
-        true,
         types,
         gate,
     );

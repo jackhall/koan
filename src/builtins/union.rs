@@ -140,7 +140,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             arg("schema", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin_full(scope, "UNION", signature, body, true, types, gate);
+    crate::builtins::register_builtin(scope, "UNION", signature, body, types, gate);
 }
 
 #[cfg(test)]

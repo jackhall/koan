@@ -406,7 +406,6 @@ fn a_function<'a>(
         scope,
         sig,
         Body::UserDefined(KExpression::new(storage.brand(), Vec::new())),
-        false,
         types,
     );
     KObject::KFunction(f)

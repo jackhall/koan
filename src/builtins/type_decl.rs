@@ -147,20 +147,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         KType::ANY,
         vec![kw("TYPE"), arg("name", KType::of_kind(KKind::ProperType))],
     );
-    crate::builtins::register_builtin_full(
-        scope,
-        "TYPE",
-        bare_signature,
-        body_bare,
-        true,
-        types,
-        gate,
-    );
+    crate::builtins::register_builtin(scope, "TYPE", bare_signature, body_bare, types, gate);
     let hk_signature = sig(
         KType::ANY,
         vec![kw("TYPE"), arg("decl", KType::KEXPRESSION)],
     );
-    crate::builtins::register_builtin_full(scope, "TYPE", hk_signature, body_hk, true, types, gate);
+    crate::builtins::register_builtin(scope, "TYPE", hk_signature, body_hk, types, gate);
 }
 
 #[cfg(test)]

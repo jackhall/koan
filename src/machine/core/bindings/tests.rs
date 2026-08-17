@@ -507,13 +507,8 @@ fn bump_backed_tables_full_churn() {
 
         // A dispatch bucket claimed by two sibling binders, one of which finalizes into its own
         // pending slot — the in-place overwrite that keeps peak occupancy at the binding count.
-        let f = KFunction::alloc_captured(
-            scope,
-            unit_signature(),
-            Body::Builtin(body_no_op),
-            false,
-            &types,
-        );
+        let f =
+            KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
         let sealed_key = f.open(|f| f.signature.untyped_key());
         for claim in [ProducerId::for_test(7), ProducerId::for_test(8)] {
             scope

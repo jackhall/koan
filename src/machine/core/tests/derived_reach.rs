@@ -42,7 +42,6 @@ fn builtin_seed_registers_a_callable_reaching_exactly_its_home_region() {
         scope,
         super::unit_signature(),
         Body::Builtin(body_no_op),
-        false,
         &types,
     );
     scope

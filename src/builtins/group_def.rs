@@ -163,7 +163,7 @@ fn body_pairwise_right<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
-    use crate::builtins::register_builtin_full;
+    use crate::builtins::register_builtin;
 
     // `FOLD <LEFT|RIGHT>` and `PAIRWISE FOLD #(<combiner>) <LEFT|RIGHT>`, each over the two name
     // carriers: an `Identifier` name binds the group's module value, a Type-token name takes the
@@ -208,39 +208,35 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
     ] {
         // The identifier-named overloads bind a group module value-side (like MODULE); the
         // type-named overloads carry no binder.
-        register_builtin_full(
+        register_builtin(
             scope,
             "GROUP",
             fold(KType::IDENTIFIER, direction),
             fold_body,
-            true,
             types,
             gate,
         );
-        register_builtin_full(
+        register_builtin(
             scope,
             "GROUP",
             pairwise(KType::IDENTIFIER, direction),
             pairwise_body,
-            true,
             types,
             gate,
         );
-        register_builtin_full(
+        register_builtin(
             scope,
             "GROUP",
             fold(KType::of_kind(KKind::ProperType), direction),
             super::module_def::body_type_named,
-            false,
             types,
             gate,
         );
-        register_builtin_full(
+        register_builtin(
             scope,
             "GROUP",
             pairwise(KType::of_kind(KKind::ProperType), direction),
             super::module_def::body_type_named,
-            false,
             types,
             gate,
         );

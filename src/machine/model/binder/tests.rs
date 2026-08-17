@@ -1,7 +1,7 @@
 //! Binder-model tests: the spec⟺registration consistency pin (the table matches the live builtin
 //! function table) and the parse-time binder plan each statement caches.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use super::{BINDER_SPECS, BinderSpec, StoredBinderKey};
 use crate::machine::core::{ProgramBrand, RegionBrand, program_storage};
@@ -12,47 +12,32 @@ use crate::source::Spanned;
 
 // ---------- spec ⟺ registration consistency ----------
 
-/// One live bucket as read off the seeded root: whether any overload carries a binder hook.
-struct LiveBucket {
-    has_hook: bool,
-}
-
-/// Whether an overload is a binder-introducing builtin — the `binder` bool `KFunction` carries.
-fn overload_has_hook(f: &crate::machine::KFunction<'_>) -> bool {
-    f.binder
-}
-
-/// Walk the seeded root's registered function buckets into a `key -> LiveBucket` map, recomputing
-/// each bucket's hook flag straight from the live `KFunction`s.
-fn live_buckets() -> HashMap<UntypedKey, LiveBucket> {
+/// Every bucket key the seeded root registers a callable under.
+fn live_buckets() -> HashSet<UntypedKey> {
     let program = crate::machine::core::program_storage();
     let storage = crate::machine::core::run_root_storage();
     let run = crate::builtins::test_support::TestRun::silent(&program, &storage);
-    let mut table: HashMap<UntypedKey, LiveBucket> = HashMap::new();
-    for scope in run.scope.ancestors() {
-        // Snapshot the bucket's dormant carriers, then read each under the scope's own pin — the
-        // bucket stores seals, so a signature walk opens rather than dereferences.
-        let buckets: Vec<(UntypedKey, Vec<_>)> = scope
-            .bindings()
-            .functions()
-            .iter()
-            .map(|(key, overloads)| {
-                (
-                    owned_untyped_key(key),
-                    overloads
-                        .iter()
-                        .filter_map(|slot| slot.sealed())
-                        .map(|entry| scope.read_function(&entry.sealed, overload_has_hook))
-                        .collect(),
-                )
-            })
-            .collect();
-        for (key, overloads) in buckets {
-            let has_hook = overloads.iter().copied().any(|hook| hook);
-            table.insert(key.clone(), LiveBucket { has_hook });
-        }
-    }
-    table
+    run.scope
+        .ancestors()
+        .flat_map(|scope| {
+            scope
+                .bindings()
+                .functions()
+                .iter()
+                .map(|(key, _)| owned_untyped_key(key))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// A spec key rendered for a failure message: keywords verbatim, slots as `_`.
+fn render_key(key: &[super::UntypedElementSpec]) -> Vec<String> {
+    key.iter()
+        .map(|element| match element {
+            super::UntypedElementSpec::Keyword(k) => (*k).to_string(),
+            super::UntypedElementSpec::Slot => "_".to_string(),
+        })
+        .collect()
 }
 
 /// Build a bucket-shaped `KExpression` from a spec key (keywords verbatim, slots as bare
@@ -69,65 +54,28 @@ fn expression_for_key<'a>(brand: RegionBrand<'a>, spec: &BinderSpec) -> KExpress
     KExpression::new(brand, parts)
 }
 
-/// A spec entry with extractors exists for a bucket key iff that bucket carries a binder hook, and
-/// every spec key classifies `Keyworded`. Recomputed independently from the seeded root, so it is
-/// not a tautology against the table.
+/// Every spec entry names a bucket the seeded root actually registers, and every spec key
+/// classifies `Keyworded`. Recomputed independently from the seeded root, so it is not a tautology
+/// against the table: a spec key whose builtin was renamed, re-shaped, or dropped fails here.
 #[test]
 fn spec_table_matches_live_registration() {
     let program = program_storage();
     let brand = program.brand();
     let live = live_buckets();
 
-    // Forward: every spec entry has a matching live bucket, with the derived hook flag and shape.
     for spec in BINDER_SPECS {
-        let (key, bucket) = live
-            .iter()
-            .find(|(key, _)| spec.matches_key(key))
-            .unwrap_or_else(|| {
-                panic!(
-                    "spec key {:?} has no registered bucket",
-                    spec.key
-                        .iter()
-                        .map(|e| match e {
-                            super::UntypedElementSpec::Keyword(k) => (*k).to_string(),
-                            super::UntypedElementSpec::Slot => "_".to_string(),
-                        })
-                        .collect::<Vec<_>>()
-                )
-            });
-
-        if spec.installs_nothing() {
-            // A declaration form (VAL): present for completeness, installs nothing, so its bucket
-            // must carry no hook.
-            assert!(
-                !bucket.has_hook,
-                "empty-extractor spec key {key:?} matches a hook-bearing bucket"
-            );
-        } else {
-            assert!(
-                bucket.has_hook,
-                "spec key {key:?} has extractors but its bucket carries no binder hook"
-            );
-        }
+        assert!(
+            live.iter().any(|key| spec.matches_key(key)),
+            "spec key {:?} has no registered bucket",
+            render_key(spec.key)
+        );
 
         assert_eq!(
             expression_for_key(brand.region(), spec).shape(),
             DispatchShape::Keyworded,
-            "spec key {key:?} does not classify Keyworded"
+            "spec key {:?} does not classify Keyworded",
+            render_key(spec.key)
         );
-    }
-
-    // Reverse: every hook-bearing bucket is covered by a spec entry with extractors.
-    for (key, bucket) in &live {
-        if bucket.has_hook {
-            let covered = BINDER_SPECS
-                .iter()
-                .any(|spec| !spec.installs_nothing() && spec.matches_key(key));
-            assert!(
-                covered,
-                "hook-bearing bucket {key:?} has no BINDER_SPECS entry with extractors"
-            );
-        }
     }
 }
 
@@ -170,13 +118,7 @@ fn operator_def_marker_agrees_with_the_keys_it_labels() {
             spec.surface == super::BinderSurface::OperatorDef,
             names_op,
             "spec key {:?} disagrees with its surface marker",
-            spec.key
-                .iter()
-                .map(|e| match e {
-                    super::UntypedElementSpec::Keyword(k) => (*k).to_string(),
-                    super::UntypedElementSpec::Slot => "_".to_string(),
-                })
-                .collect::<Vec<_>>(),
+            render_key(spec.key),
         );
     }
 }

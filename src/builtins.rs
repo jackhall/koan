@@ -63,25 +63,14 @@ pub(crate) fn sig<'a>(
     }
 }
 
-/// Full-form builtin registration marking whether the builtin introduces a binder. The `body` is
-/// an [`ActionFn`](crate::machine::ActionFn) (`fn(&BodyCtx) -> Action`) installed
-/// as [`Body::Builtin`] — the builtin runs through `machine::execute`'s action harness (`run_action`). The
-/// binder's name/bucket extractors and chain-slot mask are the static spec table's business
-/// ([`crate::machine::model::binder`]); `binder` is only the classification bit dispatch reads.
-pub(crate) fn register_builtin_full<'a>(
-    scope: &'a Scope<'a>,
-    name: &str,
-    signature: SignatureDraft<'a>,
-    body: crate::machine::ActionFn,
-    binder: bool,
-    types: &TypeRegistry,
-    gate: &mut WriteGate,
-) {
-    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), binder, types);
-    let _ = scope.register_function_direct(name.into(), &cell, BindingIndex::BUILTIN, gate);
-}
-
-/// Common-case [`register_builtin_full`]: not a binder builtin.
+/// Builtin registration. The `body` is an [`ActionFn`](crate::machine::ActionFn)
+/// (`fn(&BodyCtx) -> Action`) installed as [`Body::Builtin`] — the builtin runs through
+/// `machine::execute`'s action harness (`run_action`).
+///
+/// Whether the registered form introduces a binder is not declared here: binder-ness, the
+/// name/bucket extractors it implies, and the chain-slot mask all live once in the static spec
+/// table ([`crate::machine::model::binder`]), keyed by untyped signature shape, and dispatch reads
+/// them off the expression's cached plan.
 pub(crate) fn register_builtin<'a>(
     scope: &'a Scope<'a>,
     name: &str,
@@ -90,7 +79,8 @@ pub(crate) fn register_builtin<'a>(
     types: &TypeRegistry,
     gate: &mut WriteGate,
 ) {
-    register_builtin_full(scope, name, signature, body, false, types, gate);
+    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), types);
+    let _ = scope.register_function_direct(name.into(), &cell, BindingIndex::BUILTIN, gate);
 }
 
 /// Test-only: register one overload at an explicit [`BindingIndex`]. A test uses this to
@@ -107,7 +97,7 @@ pub(crate) fn register_overload_at<'a>(
     types: &TypeRegistry,
     gate: &mut WriteGate,
 ) {
-    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), false, types);
+    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), types);
     scope
         .register_function_direct(name.into(), &cell, index, gate)
         .expect("register_overload_at: user-index overload should not collide with a builtin");

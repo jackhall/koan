@@ -480,8 +480,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    let pick_num_fn =
-        KFunction::alloc_captured(scope, pick_num, Body::Builtin(body_a), false, &types);
+    let pick_num_fn = KFunction::alloc_captured(scope, pick_num, Body::Builtin(body_a), &types);
     scope
         .register_function_direct(
             "pick_num".to_string(),
@@ -536,13 +535,8 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    let sibling = KFunction::alloc_captured(
-        scope,
-        pick_str,
-        Body::Builtin(super::body_no_op),
-        false,
-        &types,
-    );
+    let sibling =
+        KFunction::alloc_captured(scope, pick_str, Body::Builtin(super::body_no_op), &types);
     scope
         .register_function_direct(
             "pick_str".to_string(),

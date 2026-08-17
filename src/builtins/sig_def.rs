@@ -58,7 +58,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             arg("body", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin_full(scope, "SIG", signature, body, true, types, gate);
+    crate::builtins::register_builtin(scope, "SIG", signature, body, types, gate);
 }
 
 #[cfg(test)]

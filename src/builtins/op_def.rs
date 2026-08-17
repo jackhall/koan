@@ -522,7 +522,7 @@ fn register_body<'a>(
     bind_index: BindingIndex,
     types: &TypeRegistry,
 ) -> Result<(SealedValue<'a>, WriteOp<'a>), KError> {
-    let cell = KFunction::alloc_captured(scope, signature, body, false, types);
+    let cell = KFunction::alloc_captured(scope, signature, body, types);
     let write = WriteOp::Overload {
         name: sym.to_string(),
         index: bind_index,
@@ -640,7 +640,7 @@ fn combined<'a>(mut elements: Vec<SignatureElement<'a>>) -> SignatureDraft<'a> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
-    use crate::builtins::register_builtin_full;
+    use crate::builtins::register_builtin;
 
     // Declared return is `KType::ANY`: an operator declaration evaluates to the function it
     // synthesizes, whose structural type only exists once its signature is known.
@@ -692,76 +692,68 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
     };
 
     for operand in type_carriers() {
-        register_builtin_full(
+        register_builtin(
             scope,
             "OP",
             sig(KType::ANY, binary(operand)),
             body_binary,
-            true,
             types,
             gate,
         );
-        register_builtin_full(
+        register_builtin(
             scope,
             "LET",
             combined(binary(operand)),
             body_binary_combined,
-            true,
             types,
             gate,
         );
-        register_builtin_full(
+        register_builtin(
             scope,
             "OP",
             sig(KType::ANY, unary_missing_result(operand)),
             body_unary_missing_result,
-            false,
             types,
             gate,
         );
-        register_builtin_full(
+        register_builtin(
             scope,
             "LET",
             combined(unary_missing_result(operand)),
             body_unary_missing_result_combined,
-            false,
             types,
             gate,
         );
         for result in type_carriers() {
-            register_builtin_full(
+            register_builtin(
                 scope,
                 "OP",
                 sig(KType::ANY, binary_with_result(operand, result)),
                 body_binary,
-                true,
                 types,
                 gate,
             );
-            register_builtin_full(
+            register_builtin(
                 scope,
                 "LET",
                 combined(binary_with_result(operand, result)),
                 body_binary_combined,
-                true,
                 types,
                 gate,
             );
-            register_builtin_full(
+            register_builtin(
                 scope,
                 "OP",
                 sig(KType::ANY, unary(operand, result)),
                 body_unary,
-                true,
                 types,
                 gate,
             );
-            register_builtin_full(
+            register_builtin(
                 scope,
                 "LET",
                 combined(unary(operand, result)),
                 body_unary_combined,
-                true,
                 types,
                 gate,
             );

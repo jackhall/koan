@@ -247,7 +247,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         elements,
     };
 
-    let birth = KFunction::alloc_captured(scope, draft, Body::UserDefined(body_expr), false, types);
+    let birth = KFunction::alloc_captured(scope, draft, Body::UserDefined(body_expr), types);
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame. The birth envelope
     // carries the description the callable's own construction composed — hosted in `scope`'s region

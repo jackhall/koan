@@ -44,16 +44,6 @@ pub struct KFunction<'a> {
     /// **Variance-load-bearing.** `&'a Scope<'a>` is invariant in `'a` (`Scope<'a>` holds `RefCell`s),
     /// so `captured` keeps `KFunction<'a>` invariant in `'a`.
     captured: &'a Scope<'a>,
-    /// True for binder-introducing builtins (LET, VAL, FN, OP, TYPE, MODULE, SIG, UNION, NEWTYPE,
-    /// GROUP). The structural detail of *what* a binder declares — the name or the
-    /// inner-call bucket key it installs, and which of its slots carry nested binders forward — lives
-    /// once in [`crate::machine::model::binder`] (the [`BINDER_SPECS`](crate::machine::model::binder::BINDER_SPECS)
-    /// table), keyed by untyped signature shape; dispatch reads binder-ness off the *expression*'s
-    /// cached copy of that table's facts, never off this flag. The flag is the registration-side
-    /// declaration of the same fact, and the spec⟺registration consistency test pins the two
-    /// against each other. User `FN` construction and user `OP` registration are not binder
-    /// builtins, so they carry `false`.
-    pub binder: bool,
     /// The function *value*'s own type: the `(params) -> ret` handle interned once, here at
     /// definition, from the normalized signature. `KObject::KFunction(f).ktype()` copies it, so
     /// the value layer never rebuilds a parameter record per dispatch check (ruling 4).
@@ -134,7 +124,6 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
         draft: SignatureDraft<'a>,
         body: Body<'a>,
-        binder: bool,
         types: &TypeRegistry,
     ) -> DeliveredFunction {
         let brand = captured.brand();
@@ -155,7 +144,6 @@ impl<'a> KFunction<'a> {
                         signature: birth.signature,
                         body: birth.body,
                         captured: birth.captured,
-                        binder,
                         value_ktype,
                     })
                 },
@@ -172,10 +160,9 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
         draft: SignatureDraft<'a>,
         body: Body<'a>,
-        binder: bool,
         types: &TypeRegistry,
     ) -> &'a KFunction<'a> {
-        let cell = Self::alloc_captured(captured, draft, body, binder, types);
+        let cell = Self::alloc_captured(captured, draft, body, types);
         let sealed = cell.rest_into(captured.brand().handle());
         captured.open_function(&sealed).value()
     }
