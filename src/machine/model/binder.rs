@@ -366,6 +366,15 @@ pub struct BinderSpec {
     pub bucket: Option<BinderBucketFn>,
     /// The declaration surface this key belongs to (see [`BinderSurface`]).
     pub surface: BinderSurface,
+    /// The parts-run position of the declared name, for the forms whose name is a direct part of
+    /// the statement spine (`VAL` declares at this position even though it installs nothing;
+    /// `TYPE`'s higher-kinded form nests its name inside the slot, so the position holds no bare
+    /// name there and reads as vacuous). `None` for the bucket-only forms (`FN`, `OP`), whose
+    /// spine carries no declared name. Dispatch resolution reads this off the node's cached copy
+    /// ([`KExpression::binder_name_slot`]) to exempt a declaration slot from parking on a
+    /// still-finalizing same-named outer binder. Pinned against `names` by the
+    /// name-slot⟺extractor consistency test.
+    pub name_slot: Option<usize>,
 }
 
 impl BinderSpec {
@@ -413,6 +422,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         ],
         bucket: None,
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
     // TYPE <name> — SIG-body-only abstract-type declarator (bare and higher-kinded share the key).
     BinderSpec {
@@ -420,6 +430,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(type_decl_binder_name, BindKind::Type)],
         bucket: None,
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
     // MODULE <name> = <body> (identifier overload; the type-named overload has no hooks).
     BinderSpec {
@@ -427,6 +438,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
     // GROUP <name> FOLD LEFT = <body>.
     BinderSpec {
@@ -434,6 +446,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
     // GROUP <name> FOLD RIGHT = <body>.
     BinderSpec {
@@ -441,6 +454,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
     // GROUP <name> PAIRWISE FOLD <combiner> LEFT = <body>.
     BinderSpec {
@@ -457,6 +471,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
     // GROUP <name> PAIRWISE FOLD <combiner> RIGHT = <body>.
     BinderSpec {
@@ -473,6 +488,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: None,
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
     // SIG <name> = <body>.
     BinderSpec {
@@ -480,6 +496,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(type_part_binder_name, BindKind::Type)],
         bucket: None,
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
     // UNION <name> = <schema>.
     BinderSpec {
@@ -487,6 +504,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(type_part_binder_name, BindKind::Type)],
         bucket: None,
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
     // NEWTYPE <name> = <repr> (scalar / sigil / record reprs share the key).
     BinderSpec {
@@ -494,6 +512,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(type_part_binder_name, BindKind::Type)],
         bucket: None,
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
     // NEWTYPE <decl> — constructor family (keyword set {NEWTYPE}, disjoint from the `= _` forms).
     BinderSpec {
@@ -501,6 +520,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(type_decl_binder_name, BindKind::Type)],
         bucket: None,
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
     // FN <signature> -> <return_type> = <body> (three hook-bearing overloads share this key; the
     // anonymous record-schema overload has no hooks).
@@ -509,6 +529,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[],
         bucket: Some(fn_def_binder_bucket),
         surface: BinderSurface::Other,
+        name_slot: None,
     },
     // OP <symbol> OVER <operand> = <body>.
     BinderSpec {
@@ -516,6 +537,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[],
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
+        name_slot: None,
     },
     // OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -532,6 +554,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[],
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
+        name_slot: None,
     },
     // UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -549,6 +572,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[],
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
+        name_slot: None,
     },
     // The combined statement forms: one binder filling both channels — the LET value name and the
     // bucket key(s) the declaration's body registers under. `LET <name> = UNARY OP …` is the
@@ -570,6 +594,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: Some(fn_def_binder_bucket),
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
     // LET <name> = OP <symbol> OVER <operand> = <body>.
     BinderSpec {
@@ -587,6 +612,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
+        name_slot: Some(1),
     },
     // LET <name> = OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -606,6 +632,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
+        name_slot: Some(1),
     },
     // LET <name> = UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -626,6 +653,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[(identifier_part_binder_name, BindKind::Value)],
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
+        name_slot: Some(1),
     },
     // VAL <name> <ty> — a declaration form with no install channel. It records
     // into the decl scope's slot collector, not a binding map any name lookup can see, so it
@@ -636,6 +664,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         names: &[],
         bucket: None,
         surface: BinderSurface::Other,
+        name_slot: Some(1),
     },
 ];
 
@@ -658,9 +687,7 @@ pub(crate) enum TypeDeclarationSurface {
 pub(crate) fn announced_type_declaration(
     expression: &KExpression<'_>,
 ) -> Option<TypeDeclarationSurface> {
-    let spec = BINDER_SPECS
-        .iter()
-        .find(|spec| spec.matches_stored_key(expression.stored_key()))?;
+    let spec = binder_spec_for(expression)?;
     match spec.key {
         [Kw("NEWTYPE"), Slot, Kw("="), Slot] => Some(TypeDeclarationSurface::NewType),
         [Kw("UNION"), Slot, Kw("="), Slot] => Some(TypeDeclarationSurface::Union),
@@ -675,9 +702,7 @@ pub(crate) fn announced_type_declaration(
 /// operator declaration, and neither is an `OP` nested inside some other statement's slot. `GROUP`
 /// reads its members' symbols off exactly the statements this admits.
 pub(crate) fn op_declaration_arity(expression: &KExpression<'_>) -> Option<OpArity> {
-    let spec = BINDER_SPECS
-        .iter()
-        .find(|spec| spec.matches_stored_key(expression.stored_key()))?;
+    let spec = binder_spec_for(expression)?;
     if spec.surface != BinderSurface::OperatorDef {
         return None;
     }
@@ -695,19 +720,25 @@ pub enum OpArity {
     Unary,
 }
 
-/// What `expression` installs, if its bucket key matches a [`BINDER_SPECS`] entry whose extractors
-/// read a binder out of the AST. Both channels are read — a combined form fills them together. The
-/// key is read off the node's own stored run, and a synthesized bucket key is bumped into `brand`'s
-/// region — the node's, since this runs from the construction door. Returns `None` for a non-binder
-/// shape, and for a form whose extractors install nothing (`VAL`, and the anonymous `FN :{…}` whose
-/// signature part names no bucket).
-pub(crate) fn binder_plan_for<'a>(
+/// The [`BINDER_SPECS`] entry `expression`'s bucket key matches, or `None` for a non-binder shape.
+/// The one spec-table probe — every reader of the table's per-form facts (install plan, surface
+/// classification, declared-name position) resolves its entry through here.
+pub(crate) fn binder_spec_for(expression: &KExpression<'_>) -> Option<&'static BinderSpec> {
+    BINDER_SPECS
+        .iter()
+        .find(|spec| spec.matches_stored_key(expression.stored_key()))
+}
+
+/// What `expression` installs under its matched `spec`. Both channels are read — a combined form
+/// fills them together. The key is read off the node's own stored run, and a synthesized bucket key
+/// is bumped into `brand`'s region — the node's, since this runs from the construction door.
+/// Returns `None` for a form whose extractors install nothing (`VAL`, and the anonymous `FN :{…}`
+/// whose signature part names no bucket).
+pub(crate) fn binder_plan_from_spec<'a>(
     brand: RegionBrand<'a>,
+    spec: &BinderSpec,
     expression: &KExpression<'a>,
 ) -> Option<StoredBinderKey<'a>> {
-    let spec = BINDER_SPECS
-        .iter()
-        .find(|spec| spec.matches_stored_key(expression.stored_key()))?;
     let name = spec
         .names
         .iter()

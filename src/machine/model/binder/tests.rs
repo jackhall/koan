@@ -252,6 +252,54 @@ fn a_statements_plan_is_its_own_spine() {
     }
 }
 
+/// The spec table's `name_slot` agrees with the name extractors: for every parsed binder form
+/// whose plan carries a name, the token at the cached `binder_name_slot` position IS that name;
+/// `VAL` declares at its slot while installing nothing; the bucket-only forms cache no position.
+#[test]
+fn name_slot_agrees_with_the_extractors() {
+    let program = program_storage();
+    let brand = program.brand();
+    for source in [
+        "LET x = 1",
+        "LET Alias = Number",
+        "MODULE m = (LET a = 1)",
+        "SIG Sx = (VAL zero :Number)",
+        "UNION Ux = (Red | Green)",
+        "NEWTYPE Nx = Number",
+        "TYPE Tx",
+        "LET double = FN (DOUBLE n :Number) -> Number = (n * 2)",
+        "LET plus = OP #(⊕) OVER Number = (left + right)",
+    ] {
+        let stmt = parse_one(brand, source);
+        let pos = stmt
+            .binder_name_slot()
+            .unwrap_or_else(|| panic!("a name-bearing binder form caches its position: {source}"));
+        let expected = name_of(stmt.binder_plan().expect("each form installs a name"))
+            .expect("each form installs a name");
+        let token = match stmt.parts[pos].value {
+            ExpressionPart::Identifier(s) => s.to_string(),
+            ExpressionPart::Type(t) => t.as_str().to_string(),
+            other => panic!("name slot holds a bare name token, got {other:?}: {source}"),
+        };
+        assert_eq!(token, expected, "{source}");
+    }
+    // `VAL` declares at its slot without installing; the bucket-only forms cache no position.
+    let val = parse_one(brand, "VAL x :Number");
+    assert_eq!(val.binder_name_slot(), Some(1));
+    assert!(matches!(
+        val.parts[1].value,
+        ExpressionPart::Identifier("x")
+    ));
+    for source in [
+        "FN (TRIPLE n :Number) -> Number = (n * 3)",
+        "OP #(⊗) OVER Number = (left * right)",
+        "UNARY OP #(⊖) OVER Number -> Number = (0 - operands)",
+    ] {
+        let stmt = parse_one(brand, source);
+        assert_eq!(stmt.binder_name_slot(), None, "{source}");
+    }
+}
+
 /// A `VAL` declaration installs nothing: its spec entry has no channel, so its parse-time plan is
 /// `None`.
 #[test]

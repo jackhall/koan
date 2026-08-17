@@ -157,13 +157,14 @@ pending arms and skip a bucket holding no sealed slot: a claim names an edge of
 its own scheduler run, so a copy of one would hand the target a park on an edge
 that will never wake it — and that its owner has already released.
 
-Binder builtins opt in through the `binder: bool` flag they pass to
+Binder builtins declare themselves through the `binder: bool` flag they pass to
 [`register_builtin_full`](../../src/builtins.rs) (`LET`, `TYPE`, `MODULE`,
-`GROUP`, `SIG`, `UNION`, `NEWTYPE`, `FN`, `OP`); the flag is
-only the classification bit dispatch reads — a binder's literal-name slots are
-declarations, not references, so they must not replay-park on their own
-placeholder — while the name or bucket each installs lives once in the
-[`BINDER_SPECS`](../../src/machine/model/binder.rs) table. `VAL` is a declaration
+`GROUP`, `SIG`, `UNION`, `NEWTYPE`, `FN`, `OP`); dispatch itself reads
+binder-ness off the *expression*'s cached spec-table facts — the flag is the
+registration-side declaration of the same fact, pinned against the
+[`BINDER_SPECS`](../../src/machine/model/binder.rs) table (where the name or
+bucket each form installs lives once) by the spec⟺registration consistency
+test. `VAL` is a declaration
 form that installs nothing; everything else stays placeholder-free.
 
 A claim's `BindKind` (value or type) picks its destination table, and each
@@ -238,13 +239,13 @@ a scope where the name is absent and surfaces `UnboundName` rather than the
 binder's own failure. That is the cost of not leaving a claim behind for a
 *later* sibling to park on and never be woken by.
 
-### Miri forward-splice and replay-park lifetime contract
+### Miri forward-splice and dispatch-park lifetime contract
 
 A bare-name slot whose name resolves to a still-running producer is spliced out
 as an alias of it (see [Bare-name forward splice](scheduler.md#bare-name-forward-splice)). A
 read of the aliased slot resolves to the producer and returns the producer's own
 `&KObject<'a>` reference — not a clone. The producer's region therefore must
-outlive every consumer that reads through the alias. The replay-park route is
+outlive every consumer that reads through the alias. The dispatch-park route is
 symmetric: a parked dispatch decide's captured scope, and the `&KObject<'a>` its
 resolved producers carry, must stay valid across the wake and the re-dispatch.
 The `park_and_replay_minimal_program_for_miri` test pins both halves of the

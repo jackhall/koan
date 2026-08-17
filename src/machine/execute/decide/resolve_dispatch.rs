@@ -1,16 +1,22 @@
 //! Overload resolution for a [`WorkingExpression`] against the lexical scope chain.
 //!
-//! Read-only consumer of the dispatch table. The caller builds a
-//! `bare_outcomes` cache (one [`Resolution`] per bare-name part) consulted by
-//! admission instead of re-resolving each part per scope. Each scope is decided
-//! in walk order (innermost first): a visible in-flight pending overload parks
-//! the scope (it would shadow once finalized); a strict [`OverloadBucket::pick_strict`]
-//! picks (tie ⇒ `Ambiguous`, or `Deferred` when an eager part may break it); a
-//! strict-Empty bucket runs one relaxed-admission pass per candidate that may
-//! park (forward-reference producers) or defer (eager parts). Only a *dead*
-//! unbound bare-name lean and total non-admission are post-walk terminals — a
-//! dead lean must not pre-empt an outer scope that could strict-pick the bare
-//! name as an `:Identifier` / `:Any` slot.
+//! Read-only consumer of the dispatch table, and the sole owner of bare-name parking. The caller
+//! builds a `bare_outcomes` cache (one [`Resolution`] per bare-name part) consulted by admission
+//! instead of re-resolving each part per scope. A `Parked` entry pre-empts everything: resolution
+//! parks on the still-finalizing producers *before* any admission runs, so every candidate decides
+//! against the same landed facts and no pick commits ahead of a value it depends on. Exempt from
+//! the pre-scan are the slots a binder form's own machinery owns — the declared-name position
+//! ([`WorkingExpression::binder_name_slot`], off the spec table) and a binder form's `Type`-token
+//! operands, which the binder body resolves through the declaration-window / type-resolution
+//! protocol.
+//!
+//! Each scope is then decided in walk order (innermost first): a visible in-flight pending
+//! overload parks the scope (it would shadow once finalized); a strict
+//! [`OverloadBucket::pick_strict`] picks (tie ⇒ `Ambiguous`, or `Deferred` when an eager part may
+//! break it); a strict-Empty bucket runs one relaxed-admission pass per candidate that may park
+//! (an exempt slot's producers) or defer (eager parts). Only a *dead* unbound bare-name lean and
+//! total non-admission are post-walk terminals — a dead lean must not pre-empt an outer scope
+//! that could strict-pick the bare name as an `:Identifier` slot.
 
 use crate::machine::ProducerId;
 use crate::machine::core::{ClassifiedSlots, OpenedFunction};
@@ -46,8 +52,8 @@ pub fn reset_resolve_dispatch_entry_count() {
 }
 
 /// Picked function plus the per-slot classification the dispatch driver needs
-/// for auto-wrap, replay-park, and eager-sub scheduling. Sole carrier of the
-/// disjoint `(eager_indices | wrap_indices | ref_name_indices)` invariant from
+/// for auto-wrap and eager-sub scheduling. Sole carrier of the disjoint
+/// `(eager_indices | wrap_indices)` invariant from
 /// [`crate::machine::core::ClassifiedSlots`].
 ///
 /// `function` is the pick **in use**: adopted into its own binding region, so the mint that
@@ -93,6 +99,14 @@ impl<'step> Scope<'step> {
     ) -> DispatchOutcome<'step> {
         #[cfg(test)]
         RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(c.get() + 1));
+        // Bare-name parking pre-empts admission: with a still-finalizing producer behind any
+        // non-exempt bare-name part, no pick may commit — which overload wins can depend on the
+        // carried type the producer has yet to land, and deciding early would make dispatch a
+        // function of drain order.
+        let parked = parked_producers(expr, bare_outcomes);
+        if !parked.is_empty() {
+            return DispatchOutcome::ParkOnProducers(parked);
+        }
         // The node's own bumped run, read where it rests: dispatch is the hottest read in the
         // machine, and materializing an owned key per call would clone every keyword's text.
         let key = expr.stored_key();
@@ -132,6 +146,42 @@ impl<'step> Scope<'step> {
             None => DispatchOutcome::Unmatched,
         }
     }
+}
+
+/// Deduped producers behind every non-exempt `Parked` bare-name part — the pre-admission park
+/// scan. Exempt are the slots a binder form's own machinery resolves:
+///
+/// - the declared-name position (`binder_name_slot`, cached off
+///   [`BinderSpec::name_slot`](crate::machine::model::binder::BinderSpec)): the slot *owns* the
+///   name, so an inner shadowing binder must not wait on a same-named outer binder still in
+///   flight (its own claim is already invisible to it by the exclusive visibility cutoff);
+/// - a binder form's `Type`-token operands (`NEWTYPE M = Alias`, `LET T = OtherT`, a combined
+///   form's return type): the binder body resolves these through the declaration-window /
+///   type-resolution protocol, which answers a declarator's reference to a co-declared sibling
+///   without waiting — parking here instead could deadlock a recursive declaration group.
+///
+/// A non-binder expression has no exemptions: its `Type`-token operands wait here, on exactly the
+/// producers the type-resolution walk would park on downstream.
+fn parked_producers(
+    expr: &WorkingExpression<'_>,
+    bare_outcomes: &[Option<Resolution>],
+) -> Vec<ProducerId> {
+    let name_slot = expr.binder_name_slot();
+    let mut producers: Vec<ProducerId> = Vec::new();
+    for (i, (part, outcome)) in expr.parts.iter().zip(bare_outcomes).enumerate() {
+        let Some(Resolution::Parked(p)) = outcome else {
+            continue;
+        };
+        if let Some(pos) = name_slot
+            && (i == pos || matches!(part.value.as_ast(), Some(ExpressionPart::Type(_))))
+        {
+            continue;
+        }
+        if !producers.contains(p) {
+            producers.push(*p);
+        }
+    }
+    producers
 }
 
 /// Per-scope precedence: the innermost scope with a `Terminal` decision wins.
@@ -368,13 +418,12 @@ fn signature_admits_strict<'e>(
 /// returned unresolved slots.
 ///
 /// "Leaned on" = strict rejects at the slot but the assume-satisfiable
-/// relaxation passes it: an unevaluated eager part (`Eager`), or a bare-name
-/// `Parked` / `Unbound` whose declared type rejects the bare shape (`Parked` /
-/// `Dead`). A `Parked` / `Unbound` slot that strict-admits shape-only via an
-/// `:Identifier` / `:Any` declaration is *not* leaned on — it just Picks.
-/// One per-candidate pass names every leaned-on kind — which arriving (`Eager` /
-/// `Parked`) slots, and any `Dead` blocker — so the caller decides park / defer /
-/// unbound at the scope rather than re-deriving it.
+/// relaxation passes it: an unevaluated eager part (`Eager`), a `Dead` unbound
+/// bare name, or — on a pre-scan-exempt slot only, the pre-scan having parked
+/// every other `Parked` part before admission — a still-finalizing bare name
+/// (`Parked`). One per-candidate pass names every leaned-on kind — which
+/// arriving (`Eager` / `Parked`) slots, and any `Dead` blocker — so the caller
+/// decides park / defer / unbound at the scope rather than re-deriving it.
 fn relaxed_admits<'e>(
     sig: &ExpressionSignature<'_>,
     expr: &WorkingExpression<'e>,
@@ -507,11 +556,11 @@ fn slot_admits_strict<'e>(
                 Some(Resolution::Resolved(delivered)) => arg
                     .ktype
                     .accepts_carried(delivered.open_at().value(), types),
-                // Speculative admit so the splice/park walk can surface the
-                // precise per-slot diagnostic.
-                Some(Resolution::Parked(_)) | Some(Resolution::Unbound(_)) => {
-                    arg.matches(part_value, types)
-                }
+                // A name that resolves to nothing satisfies no typed value slot; the relaxed
+                // pass's `Dead` lean carries the precise `UnboundName`. `Parked` reaches this
+                // consult only on a pre-scan-exempt slot (a binder form's own operand), where the
+                // reject leaves the pick to the binder overloads' shape-only slots.
+                Some(Resolution::Parked(_)) | Some(Resolution::Unbound(_)) => false,
                 None => arg.matches(part_value, types),
             }
         }

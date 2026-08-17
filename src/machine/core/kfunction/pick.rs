@@ -2,7 +2,7 @@
 //! signature matches the expression a slot is dispatching for late dispatch.
 //!
 //! The classifiers share the "bare-name" predicate ([`is_bare_name`]) — the
-//! load-bearing shape concept the auto-wrap and replay-park rails turn on.
+//! load-bearing shape concept the auto-wrap rail turns on.
 
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, SignatureElement};
@@ -16,20 +16,15 @@ use super::KFunction;
 ///   parts in *non*-`KExpression` slots. `None` when not a lazy candidate, so every eager-shaped
 ///   part schedules as its own sub-Dispatch.
 /// - `wrap_indices`: bare-Identifier / bare-Type parts in non-literal-name slots to
-///   auto-wrap as sub-Dispatches.
-/// - `ref_name_indices`: bare-Identifier / bare-Type parts in literal-name slots
-///   (`KType::Identifier` / `KType::OfKind(KKind::ProperType)`) of a non-binder function; candidates
-///   for replay-park.
+///   auto-wrap as sub-Dispatches. A literal-name slot (`KType::Identifier` /
+///   `KType::OfKind(KKind::ProperType)`) is excluded: it owns its token — a declaration's name,
+///   or name-data the body reads — so the token rides to the bind unresolved.
 ///
-/// `picked_has_binder_name` distinguishes binder-shaped expressions (literal-name slots are
-/// declarations) from call-shaped expressions (literal-name slots are references that may
-/// need to park). The three index vectors are disjoint by construction over disjoint
-/// `(SignatureElement, WorkingPart)` shapes — `classify_for_pick` is the sole producer.
+/// The two index sets are disjoint by construction over disjoint `(SignatureElement, WorkingPart)`
+/// shapes — `classify_for_pick` is the sole producer.
 pub struct ClassifiedSlots {
     pub eager_indices: Option<Vec<usize>>,
     pub wrap_indices: Vec<usize>,
-    pub ref_name_indices: Vec<usize>,
-    pub picked_has_binder_name: bool,
 }
 
 impl<'a> KFunction<'a> {
@@ -129,7 +124,7 @@ impl<'a> KFunction<'a> {
         }
     }
 
-    /// Per-slot classification of `expr` against `self`'s signature into the three index
+    /// Per-slot classification of `expr` against `self`'s signature into the two index
     /// buckets of [`ClassifiedSlots`]. Disjointness is guaranteed by construction — each
     /// `(SignatureElement, WorkingPart)` shape lands in at most one bucket — and the
     /// downstream scheduler relies on it.
@@ -140,8 +135,6 @@ impl<'a> KFunction<'a> {
     ) -> ClassifiedSlots {
         let eager_indices = self.lazy_eager_indices(expr, types);
         let mut wrap_indices: Vec<usize> = Vec::new();
-        let mut ref_name_indices: Vec<usize> = Vec::new();
-        let picked_has_binder_name = self.binder;
         for (i, (el, part)) in self
             .signature
             .elements()
@@ -155,22 +148,14 @@ impl<'a> KFunction<'a> {
             if !is_bare_name(&part.value) {
                 continue;
             }
-            match arg.ktype {
-                // Binders' literal-name slots are *declarations* — the slot already owns
-                // the name and must not park on its own placeholder.
-                KType::IDENTIFIER | KType::PROPER_TYPE => {
-                    if !picked_has_binder_name {
-                        ref_name_indices.push(i);
-                    }
-                }
-                _ => wrap_indices.push(i),
+            // A literal-name slot owns its token; every other slot's bare name resolves.
+            if !matches!(arg.ktype, KType::IDENTIFIER | KType::PROPER_TYPE) {
+                wrap_indices.push(i);
             }
         }
         ClassifiedSlots {
             eager_indices,
             wrap_indices,
-            ref_name_indices,
-            picked_has_binder_name,
         }
     }
 }
@@ -189,9 +174,9 @@ pub fn slot_admits(arg: &Argument, part: &WorkingPart<'_>, types: &TypeRegistry)
 }
 
 /// True iff `part` is the "bare-name" shape — a bare `Identifier` or a leaf
-/// `Type`-token. Both name-shaped parts ride the same auto-wrap and replay-park
-/// rails, so the symmetry is load-bearing for `LET T = Number` vs `LET y = z`
-/// walking identical scheduler paths.
+/// `Type`-token. Both name-shaped parts ride the same auto-wrap and
+/// dispatch-park rails, so the symmetry is load-bearing for `LET T = Number`
+/// vs `LET y = z` walking identical scheduler paths.
 fn is_bare_name(part: &WorkingPart<'_>) -> bool {
     matches!(
         part.as_ast(),

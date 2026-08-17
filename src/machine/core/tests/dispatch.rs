@@ -69,8 +69,6 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Resolved(r) => {
             assert_eq!(r.slots.wrap_indices, vec![0]);
-            assert!(r.slots.ref_name_indices.is_empty());
-            assert!(!r.slots.picked_has_binder_name);
         }
         _ => panic!("expected Resolved for known overload"),
     }
@@ -164,64 +162,6 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     match inner.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Ambiguous(_) => {}
         _ => panic!("inner ambiguity must surface, not fall through to outer's unique overload"),
-    }
-}
-
-/// A binder overload (the `binder` bool) is classified as a binder pick, so its literal-name slot is
-/// a declaration (never a replay-park reference). The name/bucket a binder installs is parse-static
-/// (the `BINDER_SPECS` table) and installed once at statement submission — the aggregation is pinned
-/// in `machine::model::binder::tests`, and program-level install-then-resolve in the run-loop tests;
-/// here we pin only the surviving dispatch-side classification bit.
-#[test]
-fn resolve_marks_binder_pick_for_binder_function() {
-    let types = TypeRegistry::new();
-    use crate::builtins::register_builtin_full;
-    let region = run_root_storage();
-    let scope = run_root_bare(&region);
-    let sig = SignatureDraft {
-        return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![
-            SignatureElement::Keyword("LETLIKE"),
-            SignatureElement::Argument(Argument {
-                name: "n",
-                ktype: KType::IDENTIFIER,
-            }),
-            SignatureElement::Keyword("="),
-            SignatureElement::Argument(Argument {
-                name: "v",
-                ktype: KType::ANY,
-            }),
-        ],
-    };
-    register_builtin_full(
-        scope,
-        "LETLIKE",
-        sig,
-        body_a,
-        true,
-        &types,
-        &mut crate::machine::WriteGate::for_test(),
-    );
-    let expr = working(
-        region.brand(),
-        vec![
-            ExpressionPart::Keyword("LETLIKE"),
-            ExpressionPart::Identifier("foo"),
-            ExpressionPart::Keyword("="),
-            ExpressionPart::Literal(KLiteral::Number(1.0)),
-        ],
-    );
-    // LETLIKE was registered at `scope`'s BUILTIN index (0); root the chain there one
-    // past it so the registration is visible.
-    let chain = LexicalFrame::root(scope.id, 1);
-    match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
-        DispatchOutcome::Resolved(r) => {
-            assert!(
-                r.slots.picked_has_binder_name,
-                "a `binder: true` overload's literal-name slot is a declaration, not a reference"
-            );
-        }
-        _ => panic!("expected Resolved for the binder overload"),
     }
 }
 
@@ -693,6 +633,128 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
         }
         other => panic!(
             "expected ParkOnProducers([101]), got variant {}",
+            std::any::type_name_of_val(&other),
+        ),
+    }
+}
+
+/// A still-finalizing bare name parks dispatch resolution before any pick — even sharing the
+/// expression with an eager part, the shape whose speculative pick used to reach the splice walk
+/// and drop the staged sub on the park. The park carries the name's producer, nothing is staged,
+/// and the wake re-resolves against the landed value.
+#[test]
+fn parked_bare_name_parks_before_any_pick() {
+    let types = TypeRegistry::new();
+    use crate::machine::ProducerId;
+    use crate::machine::execute::Resolution;
+    let region = run_root_storage();
+    let scope = run_root_bare(&region);
+    register_builtin(
+        scope,
+        "OP",
+        two_slot_sig(KType::ANY, KType::ANY),
+        body_a,
+        &types,
+        &mut crate::machine::WriteGate::for_test(),
+    );
+    let program = program_storage();
+    let inner = ExpressionPart::expression(
+        program.brand(),
+        vec![
+            Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
+            Spanned::bare(ExpressionPart::Keyword("OP")),
+            Spanned::bare(ExpressionPart::Literal(KLiteral::Number(2.0))),
+        ],
+    );
+    let expr = working(
+        region.brand(),
+        vec![
+            ExpressionPart::Identifier("z"),
+            ExpressionPart::Keyword("OP"),
+            inner,
+        ],
+    );
+    let producer = ProducerId::for_test(7);
+    let bare_outcomes = vec![Some(Resolution::Parked(producer)), None, None];
+    let chain = LexicalFrame::root(scope.id, 1);
+    match scope.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, &types) {
+        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![producer]),
+        other => panic!(
+            "a parked bare name must park before any pick; got variant {}",
+            std::any::type_name_of_val(&other),
+        ),
+    }
+}
+
+/// The park pre-scan's binder exemptions, keyed off the expression's cached declared-name
+/// position: the declaration slot must not wait on a same-named outer binder, and a binder form's
+/// `Type`-token operands belong to the binder body's own type machinery — while a binder's
+/// ordinary value slot still parks on a still-finalizing reference.
+#[test]
+fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
+    use crate::machine::ProducerId;
+    use crate::machine::execute::Resolution;
+    use crate::machine::model::{KExpression, TypeIdentifier};
+    let types = TypeRegistry::new();
+    let region = run_root_storage();
+    let scope = run_root_bare(&region);
+    let brand = region.brand();
+    let chain = LexicalFrame::root(scope.id, 1);
+    let parked = || Some(Resolution::Parked(ProducerId::for_test(9)));
+    let let_form = |name, value| {
+        WorkingExpression::from_ast(
+            brand,
+            KExpression::new(
+                brand,
+                vec![
+                    Spanned::bare(ExpressionPart::Keyword("LET")),
+                    Spanned::bare(name),
+                    Spanned::bare(ExpressionPart::Keyword("=")),
+                    Spanned::bare(value),
+                ],
+            ),
+        )
+    };
+
+    // Declaration slot: an inner `LET x = 1` shadowing a still-finalizing outer `x` must not wait.
+    let decl = let_form(
+        ExpressionPart::Identifier("x"),
+        ExpressionPart::Literal(KLiteral::Number(1.0)),
+    );
+    let outcomes = vec![None, parked(), None, None];
+    assert!(
+        !matches!(
+            scope.resolve_dispatch(&decl, Some(&chain), &outcomes, &types),
+            DispatchOutcome::ParkOnProducers(_)
+        ),
+        "the declaration slot owns its name; it must not park on an outer claim",
+    );
+
+    // Type-token operand of a binder form: the binder body's type machinery owns the wait.
+    let alias = let_form(
+        ExpressionPart::Type(TypeIdentifier::leaf("Alias")),
+        ExpressionPart::Type(TypeIdentifier::leaf("OtherT")),
+    );
+    let outcomes = vec![None, parked(), None, parked()];
+    assert!(
+        !matches!(
+            scope.resolve_dispatch(&alias, Some(&chain), &outcomes, &types),
+            DispatchOutcome::ParkOnProducers(_)
+        ),
+        "a binder form's Type-token operands resolve through the binder body, not the pre-scan",
+    );
+
+    // A binder's ordinary value slot is a reference: it waits like any other.
+    let reference = let_form(
+        ExpressionPart::Identifier("x"),
+        ExpressionPart::Identifier("y"),
+    );
+    let producer = ProducerId::for_test(11);
+    let outcomes = vec![None, None, None, Some(Resolution::Parked(producer))];
+    match scope.resolve_dispatch(&reference, Some(&chain), &outcomes, &types) {
+        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![producer]),
+        other => panic!(
+            "a binder's value-slot reference must park; got variant {}",
             std::any::type_name_of_val(&other),
         ),
     }

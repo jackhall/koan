@@ -183,8 +183,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
     );
     // VAL installs nothing: it records into the decl scope's slot collector, not into a binding map
     // any name lookup or forward-reference walk can see. Its `BINDER_SPECS` entry has empty
-    // extractors, so `binder` is `false` — the flag drives dispatch's declaration-vs-reference
-    // classification, and VAL declares no callable name to replay-park on.
+    // extractors, so `binder` is `false` — VAL registers no callable and installs no claim. Its
+    // declaration slot is still declaration-classified in dispatch, via the spec entry's
+    // `name_slot` cached on the expression.
     crate::builtins::register_builtin_full(scope, "VAL", signature, body, false, types, gate);
 }
 

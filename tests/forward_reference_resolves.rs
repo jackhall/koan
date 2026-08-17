@@ -70,6 +70,18 @@ fn backward_value_let_at_same_level_resolves() {
     assert!(matches!(lookup_binding(scope, "y"), Some(KObject::Number(n)) if *n == 1.0));
 }
 
+/// A backward reference sharing its reduced node with an eager sub-expression — the shape whose
+/// speculative pick used to reach the splice walk with a still-finalizing `z` and drop the staged
+/// sub on the park. Dispatch now parks on `z`'s producer before any pick, so the eager operand
+/// stages exactly once, after the wake.
+#[test]
+fn backward_reference_beside_eager_operand_resolves() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let scope = run(&program, &region, "LET z = 1\nLET y = (z + (1 + 2))").scope;
+    assert!(matches!(lookup_binding(scope, "y"), Some(KObject::Number(n)) if *n == 4.0));
+}
+
 /// MODULE body: forward LET reference under the body's child scope is `UnboundName` for
 /// the same reason as the top-level case — `LET y = x` sits at body-scope index `i`,
 /// `LET x = 1` at index `i+1`, and the gate hides the producer from the consumer.

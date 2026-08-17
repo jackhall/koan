@@ -81,7 +81,7 @@ scopes sharing an outer, mutual references between a `Scope` and the
 region's bump it lives in, and cross-region carrier-witness pins all
 break tree shape. Slots are added incrementally as the program runs;
 references can be installed before or after the pointee exists (forward
-declarations, replay-park edges). The frame-chain `Rc` that rides on top of
+declarations, dispatch-park edges). The frame-chain `Rc` that rides on top of
 this graph lives in
 [per-call-region/README.md](per-call-region/README.md).
 

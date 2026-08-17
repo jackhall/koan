@@ -212,8 +212,9 @@ impl<'a> WorkingPart<'a> {
 ///
 /// Carries the same structural cache a [`KExpression`] does — copied over verbatim when the node is
 /// made from one, since the cache is invariant under splice, and computed outright for a node the
-/// scheduler synthesized — except the binder plan, which is copied over and never computed here: a
-/// binder is always parsed AST, so a synthesized node carries `None` and installs nothing.
+/// scheduler synthesized — except the two binder caches (the plan and the declared-name position),
+/// which are copied over and never computed here: a binder is always parsed AST, so a synthesized
+/// node carries `None` for both and installs nothing.
 #[derive(Clone, Copy)]
 pub struct WorkingExpression<'a> {
     pub parts: &'a [Spanned<WorkingPart<'a>>],
@@ -223,6 +224,7 @@ pub struct WorkingExpression<'a> {
     shape: DispatchShape,
     operator_probe: Option<&'a str>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
+    binder_name_slot: Option<usize>,
 }
 
 impl<'a> WorkingExpression<'a> {
@@ -249,6 +251,7 @@ impl<'a> WorkingExpression<'a> {
             shape,
             operator_probe: operator_probe_for(brand, parts, shape),
             binder_plan: None,
+            binder_name_slot: None,
         }
     }
 
@@ -272,6 +275,7 @@ impl<'a> WorkingExpression<'a> {
             shape: ast.shape(),
             operator_probe: ast.operator_probe(),
             binder_plan: ast.binder_plan_ref(),
+            binder_name_slot: ast.binder_name_slot(),
         }
     }
 
@@ -281,6 +285,7 @@ impl<'a> WorkingExpression<'a> {
     pub fn respliced(&self, brand: RegionBrand<'a>, parts: Vec<Spanned<WorkingPart<'a>>>) -> Self {
         let mut rebuilt = Self::build(brand, parts, self.span, self.file);
         rebuilt.binder_plan = self.binder_plan;
+        rebuilt.binder_name_slot = self.binder_name_slot;
         rebuilt
     }
 
@@ -307,6 +312,12 @@ impl<'a> WorkingExpression<'a> {
     /// statement.
     pub fn binder_plan(&self) -> Option<StoredBinderKey<'a>> {
         self.binder_plan.copied()
+    }
+
+    /// The declared-name position of the binder form this node matches — see
+    /// [`KExpression::binder_name_slot`]. `None` for a node the scheduler synthesized.
+    pub fn binder_name_slot(&self) -> Option<usize> {
+        self.binder_name_slot
     }
 
     /// The stored bucket key, as a borrow of the run bumped at construction.

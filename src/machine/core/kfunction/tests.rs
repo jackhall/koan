@@ -85,16 +85,13 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
     let f = find_match(scope, &expr, &types).expect("OP <Number> should match");
     let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
     assert_eq!(pick.wrap_indices, vec![1]);
-    assert!(pick.ref_name_indices.is_empty());
-    assert!(!pick.picked_has_binder_name);
 }
 
-/// `<verb:Identifier> <args:KExpression>` picked against `myFn (x: 1)` returns
-/// `ref_name_indices = [0]`: the Identifier slot is a literal-name reference and
-/// the function is not binder-shaped (`binder == false`), so replay-park checks whether `myFn`
-/// resolves to a placeholder.
+/// `<verb:Identifier> <args:KExpression>` picked against `myFn (x: 1)`: the Identifier slot is a
+/// literal-name slot — it owns its token — so `classify_for_pick` excludes it from `wrap_indices`
+/// and the token rides to the bind unresolved.
 #[test]
-fn classify_returns_ref_name_indices_for_non_binder_function() {
+fn classify_excludes_literal_name_slots_from_wrap() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -139,14 +136,13 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
     let f = find_match(scope, &expr, &types)
         .expect("test overload should match an Identifier-leading expression");
     let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
-    assert!(pick.ref_name_indices.contains(&0));
-    assert!(!pick.picked_has_binder_name);
+    assert!(pick.wrap_indices.is_empty());
 }
 
-/// LET is binder-shaped (`binder == true`), so its Identifier name slot is a *declaration*,
-/// not a reference, and `classify_for_pick` must exclude it from `ref_name_indices`.
+/// LET's Identifier name slot is a literal-name slot (a *declaration* — the slot owns the name),
+/// so `classify_for_pick` must exclude it from `wrap_indices`.
 #[test]
-fn classify_skips_ref_name_indices_for_binder_function() {
+fn classify_excludes_binder_name_slot_from_wrap() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
@@ -164,20 +160,20 @@ fn classify_skips_ref_name_indices_for_binder_function() {
     );
     let f = find_match(scope, &expr, &types).expect("LET should match");
     let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
-    assert!(pick.picked_has_binder_name);
     assert!(
-        pick.ref_name_indices.is_empty(),
+        pick.wrap_indices.is_empty(),
         "LET's Identifier name slot is a declaration, not a reference; \
-         should not be ref_name_index. Got {:?}",
-        pick.ref_name_indices,
+         should not be a wrap index. Got {:?}",
+        pick.wrap_indices,
     );
 }
 
-/// A bare leaf Type-token in a `ProperType` slot lands in `ref_name_indices` the
-/// same way an Identifier in an Identifier slot does. Symmetry pinned by
+/// A bare leaf Type-token in a `ProperType` slot is a literal-name slot the same way an
+/// Identifier in an Identifier slot is: excluded from `wrap_indices`, the token riding to the
+/// bind. Symmetry pinned by
 /// [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
-fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
+fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -209,9 +205,7 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
     );
     let f = find_match(scope, &expr, &types).expect("OP <ProperType> should match");
     let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
-    assert_eq!(pick.ref_name_indices, vec![1]);
     assert!(pick.wrap_indices.is_empty());
-    assert!(!pick.picked_has_binder_name);
 }
 
 /// Every `KFunction` value projects through `KObject::ktype()` as `KType::KFunction`,
@@ -281,6 +275,4 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
     let f = find_match(scope, &expr, &types).expect("OP <Any> should match");
     let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
     assert_eq!(pick.wrap_indices, vec![1]);
-    assert!(pick.ref_name_indices.is_empty());
-    assert!(!pick.picked_has_binder_name);
 }

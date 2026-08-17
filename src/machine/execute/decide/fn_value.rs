@@ -1,8 +1,15 @@
 //! FunctionValueCall dispatch shape.
 //!
-//! Head resolution runs before any part walk: a value-bound head dispatches the call
+//! A bare `Identifier` head is the one head shape a scope walk alone can resolve, so it gets a
+//! fast lane: head resolution runs before any part walk — a value-bound head dispatches the call
 //! immediately, an unbound name errors, and a still-finalizing head placeholder parks via a
 //! [`park_resume`] closure that re-runs the fast lane on resume.
+//!
+//! The shape covers more than that one head, though: a head is callable whenever it *evaluates* to
+//! something callable. Every other head this shape admits — a slot the scheduler filled or staged —
+//! carries no name to walk, so it takes the general lane
+//! ([`head_deferred::defer_head`](super::head_deferred::defer_head)), which evaluates the head and
+//! applies its resolved value through the same apply-a-callable tail.
 
 use crate::machine::ProducerId;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
@@ -16,9 +23,8 @@ pub(super) fn initial<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    let head = match expr.parts[0].value {
-        WorkingPart::Ast(ExpressionPart::Identifier(n)) => n,
-        _ => unreachable!("FunctionValueCall shape implies Identifier head"),
+    let WorkingPart::Ast(ExpressionPart::Identifier(head)) = expr.parts[0].value else {
+        return super::head_deferred::defer_head(ctx, expr);
     };
     let chain = ctx.chain_deref();
     match ctx.current_scope().resolve_value_delivered(head, chain) {

@@ -59,30 +59,26 @@ admits accordingly. The forms:
   carries no eager parts on the second pass and surfaces as
   `AmbiguousDispatch`.
 
-`Placeholder` (forward reference) and `Unbound` cache outcomes admit via
-shape-only `arg.matches(part)` rather than carrier-type check. The
-post-pick splice/park walk is the only place that produces precise per-slot
-`ParkOnProducers` / `UnboundName` diagnostics, so admission must not
-reject them. If no bucket admits anywhere, the resolver's post-walk
-fallback reads the cache by fixed precedence — placeholders > eager >
-unbound > pending overload > Unmatched — and surfaces the right
-`DispatchOutcome`:
+A `Placeholder` (forward reference) cache outcome pre-empts admission
+entirely: resolution parks on the binder's producer before any candidate
+is consulted and re-dispatches once it binds — the rebuilt cache carries
+`Resolved(obj)` and strict admission picks against the landed carrier.
+This keeps dispatch order-independent within the visibility window —
+`DESCRIBE xs` resolves to the same overload whether or not `LET xs = …`
+had landed at first dispatch, provided the binding is lexically visible
+to the reference (see
+[Overload bucket visibility filter](#overload-bucket-visibility-filter)).
+The pre-scan's exemptions — a binder form's declared-name position and
+its `Type`-token operands, both read off the expression's cached
+spec-table facts — are covered in
+[elaboration.md § Strict admission rules](../elaboration.md#strict-admission-rules).
 
-- A `Placeholder` name *will* bind, so the fallback surfaces
-  `DispatchOutcome::ParkOnProducers(producers)`. Dispatch parks on the
-  binder's producer and re-dispatches once it binds; the rebuilt cache
-  carries `Resolved(obj)` and strict admission picks. This keeps dispatch
-  order-independent within the visibility window — `DESCRIBE xs` resolves
-  to the same overload whether or not `LET xs = …` had landed at first
-  dispatch, provided the binding is lexically visible to the reference
-  (see [Overload bucket visibility filter](#overload-bucket-visibility-filter)).
-  Park parking goes through the same edges as the resolved-pick
-  replay-park.
-- An `Unbound` name names nothing (no visible binding *and* no
-  forward-declared placeholder visible at the consumer's chain position),
-  so the fallback surfaces `DispatchOutcome::UnboundName(name)` — the
-  precise error matching what the single-overload path reports for an
-  unresolved bare name, not a generic dispatch miss.
+An `Unbound` cache outcome rejects at every typed value slot (a name that
+resolves to nothing satisfies none). If no bucket admits anywhere, the
+resolver's post-walk fallback surfaces
+`DispatchOutcome::UnboundName(name)` from the relaxed pass's dead lean —
+the precise error matching what the single-overload path reports for an
+unresolved bare name, not a generic dispatch miss.
 
 Specificity ranks `is_more_specific_than` so that concrete carrier types
 beat the unconstrained-name slot types (`Identifier` / `OfKind(Proper)`). A

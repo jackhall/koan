@@ -325,7 +325,10 @@ impl<'a> ExpressionPart<'a> {
 /// re-deriving on every call of the enclosing function. `binder_plan` is the binder-position cache:
 /// what this node installs when it is submitted as a statement, and `None` when it is not itself a
 /// binder. It is per-node only — a statement's namespace is legible from its own spine, never from
-/// what its slots contain.
+/// what its slots contain. `binder_name_slot` is the matched binder form's declared-name position
+/// ([`BinderSpec::name_slot`](crate::machine::model::binder::BinderSpec)), cached separately from
+/// the plan because `VAL` and the anonymous `FN :{…}` match binder keys — and their declaration
+/// slots need declaration treatment in dispatch — while installing nothing.
 ///
 /// Every field is a shared borrow at `'a` or a `Copy` handle, so the node is covariant in `'a`: a
 /// program-storage node flows into shorter-lived code by ordinary subtyping, with no reattach and no
@@ -339,6 +342,7 @@ pub struct KExpression<'a> {
     shape: DispatchShape,
     operator_probe: Option<&'a str>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
+    binder_name_slot: Option<usize>,
 }
 
 // Lifetimes do not affect layout, so this retype is a no-op transmute. The witness's `'b: 'w` bound
@@ -371,11 +375,17 @@ impl<'a> KExpression<'a> {
             shape,
             operator_probe: operator_probe_for(brand, parts, shape),
             binder_plan: None,
+            binder_name_slot: None,
         };
-        // Bumped behind a reference rather than stored inline: the plan is the widest thing a node
-        // would carry, and `KExpression` is copied on every part walk.
-        expression.binder_plan = crate::machine::model::binder::binder_plan_for(brand, &expression)
-            .map(|key| brand.allocator().value(key));
+        // One spec-table probe fills both binder caches. The plan is bumped behind a reference
+        // rather than stored inline: it is the widest thing a node would carry, and `KExpression`
+        // is copied on every part walk.
+        if let Some(spec) = crate::machine::model::binder::binder_spec_for(&expression) {
+            expression.binder_name_slot = spec.name_slot;
+            expression.binder_plan =
+                crate::machine::model::binder::binder_plan_from_spec(brand, spec, &expression)
+                    .map(|key| brand.allocator().value(key));
+        }
         expression
     }
 
@@ -397,6 +407,13 @@ impl<'a> KExpression<'a> {
     /// a splice unchanged.
     pub(crate) fn binder_plan_ref(&self) -> Option<&'a StoredBinderKey<'a>> {
         self.binder_plan
+    }
+
+    /// The declared-name position of the binder form this node's bucket key matches
+    /// ([`BinderSpec::name_slot`](crate::machine::model::binder::BinderSpec)); `None` when the node
+    /// is not a binder form, or the form's spine carries no declared name (`FN`, `OP`).
+    pub fn binder_name_slot(&self) -> Option<usize> {
+        self.binder_name_slot
     }
 
     /// True when this expression is a statement block: two or more parts, all of them

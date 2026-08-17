@@ -226,18 +226,4 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
             })
             .collect()
     }
-
-    /// Reach the bare-name ladder for a single part, supplying the current scope, chain, and type
-    /// registry — the wrap-slot resolve `part_walk` runs.
-    pub(super) fn resolve_bare(&self, part: &ExpressionPart<'step>) -> Resolution {
-        // The bare-name ladder reads a parser token, so a wrap slot hands its AST part straight in.
-        let active_chain = self.ambient.active_payload().map(|p| &p.chain);
-        resolve_name(
-            self.current_scope(),
-            part,
-            active_chain,
-            self.types(),
-            TypeLeafChannels::TypeChannel,
-        )
-    }
 }

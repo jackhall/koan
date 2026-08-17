@@ -63,6 +63,20 @@ pub(in crate::machine::execute) fn initial_type<'step>(
     park_on_head(expr, head, true)
 }
 
+/// Evaluate `expr`'s head as a one-part sub-dispatch and apply the resolved value to `parts[1..]`.
+/// The general head lane: a head is callable whenever it *evaluates* to something callable, so any
+/// part shape the `FunctionValueCall` name fast lane cannot resolve by a scope walk — a resolved
+/// cell, a synthesized node, a slot still awaiting its sibling — routes here instead. Wrapping the
+/// part rather than unwrapping it keeps whatever marker the part carries (mirrors
+/// [`initial_type`]).
+pub(in crate::machine::execute) fn defer_head<'step>(
+    ctx: &DecideCtx<'_, 'step, '_>,
+    expr: WorkingExpression<'step>,
+) -> Outcome<'step> {
+    let head = WorkingExpression::new(ctx.current_scope().brand(), vec![expr.parts[0]]);
+    park_on_head(expr, head, false)
+}
+
 /// Park the slot on the head sub-dispatch. When the head resolves, the finish classifies it into a
 /// [`ResolvedCallable`] and hands off to the shared apply-a-callable tail; that tail may itself
 /// re-park, so the finish must be re-park-capable. A dep error short-circuits frameless in

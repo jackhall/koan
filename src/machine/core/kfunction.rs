@@ -48,11 +48,11 @@ pub struct KFunction<'a> {
     /// GROUP). The structural detail of *what* a binder declares — the name or the
     /// inner-call bucket key it installs, and which of its slots carry nested binders forward — lives
     /// once in [`crate::machine::model::binder`] (the [`BINDER_SPECS`](crate::machine::model::binder::BINDER_SPECS)
-    /// table), keyed by untyped signature shape. This flag is only the classification bit dispatch
-    /// reads (a binder's literal-name slots are declarations, not references, so they must not
-    /// replay-park on their own placeholder); the spec⟺registration consistency test pins the flag
-    /// against the table. User `FN` construction and user `OP` registration are not binder builtins,
-    /// so they carry `false`.
+    /// table), keyed by untyped signature shape; dispatch reads binder-ness off the *expression*'s
+    /// cached copy of that table's facts, never off this flag. The flag is the registration-side
+    /// declaration of the same fact, and the spec⟺registration consistency test pins the two
+    /// against each other. User `FN` construction and user `OP` registration are not binder
+    /// builtins, so they carry `false`.
     pub binder: bool,
     /// The function *value*'s own type: the `(params) -> ret` handle interned once, here at
     /// definition, from the normalized signature. `KObject::KFunction(f).ktype()` copies it, so

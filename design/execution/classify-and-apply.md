@@ -43,29 +43,37 @@ bare-name part reaches Step 2 as exactly one of resolved / parked / unbound.
 
 Step 2 calls
 [`Scope::resolve_dispatch`](../../src/machine/execute/decide/resolve_dispatch.rs) once,
-passing the cache as `bare_outcomes: &[Option<Resolution>]`. Admission
-is strict-only: [`signature_admits_strict`](../../src/machine/execute/decide/resolve_dispatch.rs)
+passing the cache as `bare_outcomes: &[Option<Resolution>]`. The resolve
+owns bare-name parking: before any candidate is consulted it parks on the
+producers behind every `Parked` cache entry (`ParkOnProducers`), so
+admission always decides against landed facts and no pick commits ahead of
+a value it depends on. Exempt from that pre-scan are the slots a binder
+form's own machinery resolves — the declared-name position and the form's
+`Type`-token operands, both read off the expression's cached spec-table
+facts (see [typing/elaboration.md § Strict admission
+rules](../typing/elaboration.md#strict-admission-rules)).
+
+Admission is strict-only: [`signature_admits_strict`](../../src/machine/execute/decide/resolve_dispatch.rs)
 reads each bare-name slot's cached outcome rather than re-resolving it per
 scope. A `Resolved(obj)` cache entry admits iff
 [`KType::accepts_part`](../../src/machine/model/types/ktype_predicates.rs)
 holds for the carried type — a bare name whose value has the wrong carrier
 type strict-rejects the overload, and the call surfaces as `DispatchFailed`
-rather than a bind-time `TypeMismatch`. `Parked` / `Unbound` cache entries
-admit via shape-only `arg.matches(part)`: the post-pick splice/park walk in
-Step 3 is the only place that produces precise per-slot `ParkOnProducers` /
-`UnboundName` diagnostics, so admission must not reject and lose them. The
+rather than a bind-time `TypeMismatch`. An `Unbound` cache entry rejects at
+every typed value slot; its precise `UnboundName` diagnostic rides the
+relaxed pass's dead lean. The
 match on [`DispatchOutcome`](../../src/machine/execute/decide/resolve_dispatch.rs) is:
 `Resolved(r)` continues into Step 3 with the strict-picked function plus
 the per-slot index buckets `r.slots` carries (`wrap_indices`,
-`ref_name_indices`, `eager_indices`); `Ambiguous(n)` surfaces as an
+`eager_indices`); `Ambiguous(n)` surfaces as an
 `AmbiguousDispatch` error; `Unmatched` surfaces as `DispatchFailed`;
 `Deferred` (the candidate may match after sub-evaluation yields a typed
 `Future(_)`) routes to `KeywordedState::install_eager_only`, which declares every
 eager-shaped part as a dep-finish dependency and parks this slot on them;
 the splice finish re-resolves dispatch against the spliced expression at
 dep completion;
-`ParkOnProducers(_)` and `UnboundName(_)` are decided inside the scope walk
-as described below.
+`ParkOnProducers(_)` and `UnboundName(_)` are decided by the pre-scan and
+the scope walk as described below.
 
 `resolve_dispatch` decides each visible scope's contribution as
 it walks innermost-first, from the finalized overloads and the visible
@@ -226,50 +234,37 @@ The rails the dispatch driver feeds:
   function *body* are unaffected because bodies re-dispatch per call
   against the body's lexical chain, by which point every sibling binder
   has registered.
-- **Binder classification** (Step 2.5). The pick reads the picked function's
-  `binder` flag but installs nothing: a binder's claim — a pending arm of
+- **Binder classification** (Step 2.5). The pick installs nothing: a binder's
+  claim — a pending arm of
   `data[name]` / `types[name]`, or a pending slot in `functions[bucket]` — was
   already stamped at statement submission
   from the enclosing statement's parse-static aggregate (see [Submission-time
   binder install and the position
   rule](name-placeholders.md#submission-time-binder-install-and-the-position-rule)
-  below). The flag serves one purpose here — a binder's literal-name slots are
-  *declarations*, not references, so `classify_for_pick` excludes them from the
-  replay-park `ref_name_indices` set.
-- **Fused splice / park / eager-sub walk** (Step 3). One iteration over
-  `expr.parts` co-handles the three per-slot rails the strict pick
-  carries: wrap-slot splice (`resolved.slots.wrap_indices`), ref-name-slot
-  park (`resolved.slots.ref_name_indices`), and eager sub-Dispatch
-  scheduling (filtered by `resolved.slots.eager_indices` when the picked
-  function is a lazy candidate, otherwise every eager-shaped part
-  schedules). Per part, exactly one arm fires.
-
-  The ref-name arm reads the same `bare_outcomes[i]` cache the resolver
-  consumed in Step 2. The wrap arm re-resolves through the shared bare-name
-  ladder ([`resolve_name`](../../src/machine/execute/decide/resolve.rs)),
-  which seals the delivered carrier the splice needs — the cache's admission
-  currency never held a sealed carrier; within one synchronous decide the
-  fresh resolve agrees with the cache.
+  below). Binder-ness itself is a static fact of the *expression* — its bucket
+  key either matches a `BINDER_SPECS` entry or it doesn't — so the pick
+  consults no per-function flag: `classify_for_pick` excludes every
+  literal-name slot (`:Identifier` / `:ProperType`) from `wrap_indices`
+  uniformly (the slot owns its token — a declaration's name, or name-data the
+  body reads), and the pre-scan's binder exemptions read the expression's
+  cached spec-table facts.
+- **Fused splice / eager-sub walk** (Step 3). One iteration over
+  `expr.parts` co-handles the two per-slot rails the strict pick
+  carries: wrap-slot splice (`resolved.slots.wrap_indices`) and eager
+  sub-Dispatch scheduling (filtered by `resolved.slots.eager_indices` when
+  the picked function is a lazy candidate, otherwise every eager-shaped part
+  schedules). Per part, exactly one arm fires. The walk is infallible and
+  installs no parks: dispatch resolution parked on every still-finalizing
+  bare name and admission rejected every unbound one before the pick, so
+  each wrap slot's cache entry is `Resolved` by the time the walk reads it.
   Per-arm behavior:
 
-  - **Wrap slot.** The arm matches the ladder's three-state
-    [`Resolution`](../../src/machine/execute/decide/resolve.rs) — three
-    arms and no fourth, since the ladder is total.
-    `Resolved(cell)` splices the sealed binding-scope carrier inline as
-    `WorkingPart::Spliced { cell }` — value and reach as one unit.
-    `Parked(source)` pushes `source` onto the shared
-    `sources_to_wait` list — no graph question is asked, because a claim is
-    visible to this consumer only when its declaration sits lexically earlier,
-    so the park cannot close a cycle. `Unbound(name)` surfaces a slot-terminal
-    `UnboundName` (the parent binder's dep-finish reads it off its dep slot
-    and short-circuits with the right framing). A producer error is not a
-    ladder state and not a walk outcome either: it reaches this consumer through
-    the park the harness installs.
-  - **Ref-name slot.** Literal-name slots keep the bare token, so
-    `Resolved` and `Unbound` are no-ops. `Parked(source)` pushes onto
-    `sources_to_wait` like the wrap arm. Only `Identifier` and leaf
-    `Type` parts park here; non-bare-name parts are skipped by
-    classification.
+  - **Wrap slot.** Splices the slot's `Resolved(cell)` cache entry — the
+    sealed binding-scope carrier, value and reach as one unit — inline as
+    `WorkingPart::Spliced { cell }`, rested into the consuming scope's own
+    region.
+  - **Literal-name slot.** Keeps the bare token; the body reads it as data
+    at bind time.
   - **Eager-sub slot.** `Expression` parts sub-Dispatch; `SigiledTypeExpr`
     and `RecordType` parts wrap into a single-part `WorkingExpression` and
     sub-Dispatch (the sub-Dispatch enters `classify_dispatch`'s matching shape arm —
@@ -280,22 +275,14 @@ The rails the dispatch driver feeds:
     `Expression` parts in `KExpression` slots are filtered out by
     `eager_indices` and the receiving builtin dispatches them itself.
 
-  **Park-precedence guard.** Sub-Dispatch and aggregate scheduling are
-  staged into a `DepRequest` vec (the dep currency the harness realizes)
-  rather than submitted eagerly during the walk — the single
-  `stage_eager_part` classifier owns the eager part-shape set and hands back
-  the staged `DepRequest` directly. After the loop, if `sources_to_wait` is non-empty the decide
-  returns an `Outcome::Park` whose continuation is a `Continuation::Resume`
-  (carrying a `ResumeFn` closure over the partly-spliced `working_expr`) — the
-  harness mints this slot's own edge off each source through the install door and
-  installs a resume dispatch decide, so the captured
-  `working_expr` becomes the source of truth on wake — **without** submitting
-  any staged subs. Eager submission would leak the sub-nodes on the re-resume
-  wake path, where the closure would re-stage them. Multi-name forward
-  references compose as one combined park rather than N independent
-  sub-Dispatches.
+  Multi-name forward references compose as one combined pre-pick park
+  rather than N independent sub-Dispatches: the pre-scan's
+  `ParkOnProducers` carries every still-finalizing producer, the harness
+  mints this slot's own edge off each source through the install door, and
+  the wake re-runs the resolve against the landed bindings — with nothing
+  staged ahead of the park, so no sub-node leaks on the wake path.
 
-  If no producer parked, the driver installs each staged `DepRequest`:
+  The driver installs each staged `DepRequest`:
   `Dispatch { .. }` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
   for the aggregate. With no subs to schedule the driver binds the picked
   function directly: the decide folds the resolved call into a dep-free
@@ -324,8 +311,8 @@ The rails the dispatch driver feeds:
   appends one dep per such cell, so the finish's walk over the same rows reads
   each result off a cursor in dep order.
 
-`Resolved.slots`'s three index vectors (`wrap_indices` / `ref_name_indices` /
-`eager_indices`) are disjoint by construction: each slot's
+`Resolved.slots`'s two index vectors (`wrap_indices` / `eager_indices`)
+are disjoint by construction: each slot's
 `(SignatureElement, ExpressionPart)` shape lands in at most one bucket.
 [`KFunction::classify_for_pick`](../../src/machine/core/kfunction.rs) is
 the sole producer of the `ClassifiedSlots` carrier (which `Resolved` holds
@@ -460,11 +447,10 @@ against the now-populated scope:
   re-resolving.
 
 **Park exclusivity holds by construction.** A single resolve reaches exactly
-one park installer: the overload park installs from a resolve failure *before*
-the part walk runs; the bare-name park installs *before* any eager sub could
-stage, because the part walk's park-precedence guard runs first; eager subs
-take the dep-finish route rather than a resume. So a slot's resume
-carries exactly one park reason.
+one park installer: the bare-name pre-scan and the overload park both install
+from dispatch resolution, *before* the part walk runs and before any eager sub
+could stage; eager subs take the dep-finish route rather than a resume. So a
+slot's resume carries exactly one park reason.
 
 The drain-end deadlock guard (`NodeStore::unresolved`) summarizes parked
 slots from each `NodeWork`'s `carrier` — a dispatch decide carries its

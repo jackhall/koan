@@ -1,5 +1,5 @@
 //! End-to-end coverage for the bare-name short-circuit, auto-wrap pass, and
-//! replay-park routing in `classify_dispatch` (see
+//! dispatch-park routing in `classify_dispatch` (see
 //! [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)).
 use crate::builtins::test_support::TestRun;
 use crate::builtins::test_support::binds_module;
@@ -121,7 +121,7 @@ fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
 }
 
 /// Backward-ref shape: producers precede the consumer so the gate doesn't hide
-/// them, and the multi-producer wrap-slot replay-park wakes once both finalize.
+/// them, and the multi-producer dispatch-park wakes once both finalize.
 #[test]
 fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     let program = program_storage();
@@ -203,8 +203,8 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
 }
 
 /// Miri audit-slate: both park lifetime contracts in one batch-submitted program — see
-/// [design/execution/README.md § Miri forward-splice and replay-park lifetime
-/// contract](../../../../design/execution/name-placeholders.md#miri-forward-splice-and-replay-park-lifetime-contract).
+/// [design/execution/README.md § Miri forward-splice and dispatch-park lifetime
+/// contract](../../../../design/execution/name-placeholders.md#miri-forward-splice-and-dispatch-park-lifetime-contract).
 /// `LET y = z` forward-splices a bare name whose producer has not run yet (the lift park), and
 /// `LET out = (DOUBLE y)` parks a FN call on that same binding and replays it on the wake — the
 /// parked slot's scope must stay valid across both the wake and the re-dispatch, which is
@@ -274,7 +274,7 @@ fn replay_park_propagates_producer_error() {
 }
 
 /// Bare Type-tokens in `ProperType` slots of non-binders ride the same
-/// replay-park rails as bare Identifiers — see
+/// dispatch-park rails as bare Identifiers — see
 /// [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 /// All three statements are submitted before any of them runs, so `a_result`'s consumer can still
 /// reach the scheduler ahead of the MODULE / SIG binders it depends on — its own index makes both

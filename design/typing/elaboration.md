@@ -351,15 +351,31 @@ surface-name carrier variant inside `KType` itself.
 
 ## Strict admission rules
 
+**Parking pre-empts admission.** Before any candidate is consulted,
+[`resolve_dispatch`](../../src/machine/execute/decide/resolve_dispatch.rs) scans the
+per-dispatch-poll `bare_outcomes` cache and parks on the producers behind every `Parked`
+bare-name part — so admission always decides against landed facts, and which overload wins
+never depends on drain order. Two slot kinds are exempt, both owned by a binder form's own
+machinery and both statically known from the expression's cached spec-table facts
+([`KExpression::binder_name_slot`](../../src/machine/model/ast.rs), off
+[`BinderSpec::name_slot`](../../src/machine/model/binder.rs)):
+
+- the **declared-name position** — the slot owns the name (`x` in `LET x = …`), so an inner
+  shadowing binder must not wait on a same-named outer binder still in flight (its own claim
+  is already invisible to it by the exclusive visibility cutoff);
+- a binder form's **`Type`-token operands** (`NEWTYPE M = Alias`, a combined form's return
+  type) — the binder body resolves these through the declaration-window / type-resolution
+  protocol, which answers a declarator's reference to a co-declared sibling without waiting.
+
 [`signature_admits_strict`](../../src/machine/execute/decide/resolve_dispatch.rs)
-admits a candidate signature against an expression by walking slot/part
-pairs and consulting the per-dispatch-poll `bare_outcomes` cache. The
-admission rule per cache entry on a bare-name part:
+then admits a candidate signature against the expression by walking slot/part
+pairs and consulting the cache. The admission rule per cache entry on a
+bare-name part:
 
 | Cache entry              | Admission rule                                                                   |
 |--------------------------|----------------------------------------------------------------------------------|
 | `Resolved(obj)`          | Admit iff [`KType::accepts_part`](../../src/machine/model/types/ktype_predicates.rs) accepts `Future(obj)`. A wrong carried type strict-rejects rather than tentative-admitting into a bind-time `TypeMismatch`. |
-| `Parked` / `Unbound`     | Admit via shape-only `arg.matches(part)`. The post-pick splice/park walk is the only place that produces precise per-slot `ParkOnProducers` / `UnboundName` diagnostics, so admission must not reject and lose them. |
+| `Parked` / `Unbound`     | Reject: a name that has not landed satisfies no typed value slot. An `Unbound` name's precise `UnboundName` diagnostic rides the relaxed pass's `Dead` lean; `Parked` reaches admission only on a pre-scan-exempt slot, where the reject leaves the pick to the binder overloads' shape-only slots. |
 | `None` (non-bare part)   | Fall back to shape-only `arg.matches(part)`.                                     |
 
 A producer error never reaches this table, and no fourth row is hiding: the

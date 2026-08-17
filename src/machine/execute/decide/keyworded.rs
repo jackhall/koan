@@ -14,13 +14,13 @@ use super::super::outcome::continue_inline;
 use super::super::{TerminalDepFinish, ignore_results};
 use super::ctx::DecideCtx;
 use super::{
-    Await, DepRequest, Outcome, Resolution, Resolved, park_resume, park_resume_labelled,
-    stage_eager_part, staged_slot_placeholder, working_frame,
+    Await, DepRequest, Outcome, Resolution, Resolved, park_resume_labelled, stage_eager_part,
+    staged_slot_placeholder, working_frame,
 };
 
-/// Entry from the dispatch router. Resolved-no-parks-no-subs terminates inline; every other outcome
-/// parks — on an overload / bare-name claim, or on eager subs — and re-enters through a
-/// [`park_resume`] closure that re-runs this function on wake.
+/// Entry from the dispatch router. Resolved-no-subs terminates inline; every other outcome
+/// parks — on an overload / bare-name claim ([`park_on_claims`]), or on eager subs — and
+/// re-enters through a park-resume closure that re-runs this function on wake.
 pub(super) fn initial<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
@@ -60,43 +60,29 @@ pub(super) fn initial<'step>(
     };
     // Binder name claims / pending overload slots were installed at statement submission from the
     // enclosing statement's parse-time aggregate (see `submit_expression`); nothing installs here.
-    walk_and_invoke(ctx, resolved, expr, &bare_outcomes, install_bare_name_park)
+    walk_and_invoke(ctx, resolved, expr, &bare_outcomes)
 }
 
 /// Shared [`DispatchOutcome::Resolved`] tail for [`initial`] and [`finish`]: run [`part_walk`]
-/// over the pick's classified slots, then route the result. A walk that leaned on a
-/// still-finalizing bare-name producer parks through `park` — each caller resumes *itself*
-/// against the partly-spliced expression and drops any staged subs on the floor (park
-/// precedence: the wake re-runs the caller's
-/// resolve, which re-stages them). A walk that staged eager subs installs them, discarding the
-/// speculative pick — the post-subs re-resolve ([`finish`]) picks again against the spliced
-/// expression. Otherwise this is the synchronous call, the common path for builtins and simple
-/// calls: `resolved.function` is already at the cart `'step` (resolved against the cart scope),
-/// so it rides straight into the invoke, which reads each inline-resolved arg's reach off its
-/// spliced cell.
+/// over the pick's classified slots, then route the result. A walk that staged eager subs
+/// installs them, discarding the speculative pick — the post-subs re-resolve ([`finish`]) picks
+/// again against the spliced expression. Otherwise this is the synchronous call, the common path
+/// for builtins and simple calls: `resolved.function` is already at the cart `'step` (resolved
+/// against the cart scope), so it rides straight into the invoke, which reads each
+/// inline-resolved arg's reach off its spliced cell.
 fn walk_and_invoke<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     resolved: Resolved<'step>,
     expr: WorkingExpression<'step>,
     bare_outcomes: &[Option<Resolution>],
-    park: impl FnOnce(Vec<ProducerId>, WorkingExpression<'step>) -> Outcome<'step>,
 ) -> Outcome<'step> {
-    let walk = match part_walk(ctx, expr.parts, bare_outcomes, &resolved.slots) {
-        Ok(w) => w,
-        Err(e) => return Outcome::Done(Err(e)),
-    };
     let PartWalkResult {
         new_parts,
-        sources_to_wait,
         staged_subs,
-    } = walk;
+    } = part_walk(ctx, expr.parts, bare_outcomes, &resolved.slots);
     // The walk spliced / staged into a fresh run; freeze it back onto this node so `span`, `file`
-    // and the binder plan ride through to the invoke and to any re-resolve.
+    // and the binder caches ride through to the invoke and to any re-resolve.
     let new_expr = expr.respliced(ctx.current_scope().brand(), new_parts);
-    if !sources_to_wait.is_empty() {
-        let _ = staged_subs;
-        return park(sources_to_wait, new_expr);
-    }
     if staged_subs.is_empty() {
         return super::exec::invoke_continue(ctx, resolved.function, new_expr);
     }
@@ -112,9 +98,8 @@ fn walk_and_invoke<'step>(
 /// name sharing an expression with an eager part (`(a ⊕ b) ⊕ c`, which is what a fold-left run of
 /// three named operands reduces to) therefore reaches this point unresolved; the pick made here
 /// against the spliced expression is what classifies it, and the walk splices it before the
-/// invoke. Where [`initial`] parks back into itself, this re-resolve parks back into itself
-/// ([`park_finish`]) — and a `Deferred` outcome is an error here, not another eager-subs round,
-/// so the two resolves cannot ping-pong.
+/// invoke. A `Deferred` outcome is an error here, not another eager-subs round, so the two
+/// resolves cannot ping-pong.
 fn finish<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     working_expr: WorkingExpression<'step>,
@@ -127,9 +112,7 @@ fn finish<'step>(
         &bare_outcomes,
         ctx.types(),
     ) {
-        DispatchOutcome::Resolved(r) => {
-            walk_and_invoke(ctx, r, working_expr, &bare_outcomes, park_finish)
-        }
+        DispatchOutcome::Resolved(r) => walk_and_invoke(ctx, r, working_expr, &bare_outcomes),
         // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
         // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
         DispatchOutcome::Ambiguous(n) => {
@@ -151,26 +134,13 @@ fn finish<'step>(
     }
 }
 
-/// Park the post-eager-subs re-resolve on the bare-name claims its splice walk leaned on; the
-/// wake re-runs [`finish`] against the partly-spliced expression.
-fn park_finish<'step>(
-    sources: Vec<ProducerId>,
-    working_expr: WorkingExpression<'step>,
-) -> Outcome<'step> {
-    let carrier = working_expr.summarize();
-    park_resume(
-        sources,
-        Some(carrier),
-        Box::new(move |ctx, _id| finish(ctx, working_expr)),
-    )
-}
-
-/// Park on the overload claims dispatch resolution leaned on — a visible pending overload slot, or
-/// a forward-reference producer a relaxed candidate needs — and re-run [`initial`] against `expr`
-/// on wake. The claims are lexically-earlier binders still in flight (the binding tables' exclusive
-/// cutoff keeps a statement's own claim out of its own subtree), so the wait is always
-/// well-founded; the `<dispatch-park>` frame rides on `dep_error_frame` so a propagated error keeps
-/// this site's label.
+/// Park on the claims dispatch resolution leaned on — a still-finalizing bare-name producer from
+/// the pre-admission scan, a visible pending overload slot, or a forward-reference producer a
+/// relaxed candidate needs — and re-run [`initial`] against `expr` on wake. The claims are
+/// lexically-earlier binders still in flight (the binding tables' exclusive cutoff keeps a
+/// statement's own claim out of its own subtree), so the wait is always well-founded; the
+/// `<dispatch-park>` frame rides on `dep_error_frame` so a propagated error keeps this site's
+/// label.
 fn park_on_claims<'step>(
     sources: Vec<ProducerId>,
     expr: WorkingExpression<'step>,
@@ -220,21 +190,6 @@ fn install_eager_only<'step>(
     let new_expr = expr.respliced(brand, new_parts);
     // The Deferred arm has no pre-pick, so no inline-resolved wrap slots.
     install_eager_subs(ctx, new_expr, staged_subs, None)
-}
-
-/// Park on bare-name forward-reference claims. `working_expr` is partly spliced — Resolved wrap
-/// slots already substituted for `Spliced(obj)`; Parked wrap and ref-name slots keep their original
-/// bare-name token — so on wake `resume` re-runs [`initial`] against it.
-fn install_bare_name_park<'step>(
-    sources: Vec<ProducerId>,
-    working_expr: WorkingExpression<'step>,
-) -> Outcome<'step> {
-    let carrier = working_expr.summarize();
-    park_resume(
-        sources,
-        Some(carrier),
-        Box::new(move |ctx, _id| initial(ctx, working_expr)),
-    )
 }
 
 /// Park each staged eager dep and decide the eager-subs outcome. Every dep is already `DepRequest`
@@ -309,79 +264,47 @@ fn finish_eager_subs<'step>(
     }
 }
 
-/// Record `source` as a claim this walk waits on, deduped. A claim is always a lexically-earlier
-/// binder still in flight, so the wait is well-founded by the language's visibility cutoff and the
-/// walk asks the graph nothing.
-fn wait_on(source: ProducerId, sources_to_wait: &mut Vec<ProducerId>) {
-    if !sources_to_wait.contains(&source) {
-        sources_to_wait.push(source);
-    }
-}
-
-/// Fused splice / park / eager-sub walk over `parts`. Pure: no dep realization, no park
-/// installation — the caller decides whether to park on the collected claims or on the staged
-/// subs. `Err(KError)` surfaces a *slot-terminal* error (an unbound wrap name), not a
-/// scheduler-level error.
+/// Fused splice / eager-sub walk over `parts`. Pure: no dep realization — the caller decides
+/// whether to park on the staged subs. Infallible: dispatch resolution parks on a
+/// still-finalizing bare name and admission rejects an unbound one before any pick, so every bare
+/// name the pick's wrap set names is `Resolved` in `bare_outcomes` by the time the walk runs.
 fn part_walk<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     parts: &[Spanned<WorkingPart<'step>>],
     bare_outcomes: &[Option<Resolution>],
     slots: &crate::machine::core::ClassifiedSlots,
-) -> Result<PartWalkResult<'step>, KError> {
-    use crate::machine::model::ExpressionPart;
-
+) -> PartWalkResult<'step> {
     let brand = ctx.current_scope().brand();
     let wrap_set = &slots.wrap_indices;
-    let ref_name_set = &slots.ref_name_indices;
     let eager_filter = slots.eager_indices.as_deref();
     let mut new_parts: Vec<Spanned<WorkingPart<'step>>> = Vec::with_capacity(parts.len());
-    let mut sources_to_wait: Vec<ProducerId> = Vec::new();
     let mut staged_subs: Vec<(usize, DepRequest<'step>)> = Vec::new();
     for (i, part) in parts.iter().enumerate() {
         let span = part.span;
-        // A wrap / ref-name / eager slot is decided on the parser token it still holds; a slot the
-        // scheduler already filled rides through every branch below untouched.
-        let ast = part.value.as_ast();
-        let bare_name = matches!(
-            ast,
-            Some(ExpressionPart::Identifier(_) | ExpressionPart::Type(_))
-        );
         if wrap_set.contains(&i) {
-            let Some(name_part) = ast.filter(|_| bare_name) else {
-                debug_assert!(false, "wrap_indices implies bare-name part");
-                new_parts.push(*part);
-                continue;
+            // A wrap slot's bound name splices inline as its binding-scope carrier — value and
+            // reach as one cell — rested into this scope's own region. A name bound here rests
+            // for free (the self rule strips this region from what is retained); one bound
+            // further out lodges its binding scope's coverage, which is what keeps the read live.
+            let Some(Resolution::Resolved(cell)) = bare_outcomes.get(i).and_then(|o| o.as_ref())
+            else {
+                unreachable!("a picked wrap slot's bare name has a Resolved cache entry");
             };
-            match ctx.resolve_bare(&name_part) {
-                // A resolved bound name splices inline as its binding-scope carrier — value and reach
-                // as one cell — rested into this scope's own region. A name bound here rests for
-                // free (the self rule strips this region from what is retained); one bound further
-                // out lodges its binding scope's coverage, which is what keeps the read live.
-                Resolution::Resolved(cell) => new_parts.push(Spanned {
-                    value: WorkingPart::Spliced {
-                        cell: ctx.current_scope().rest_delivered(&cell),
-                    },
-                    span,
-                }),
-                Resolution::Parked(source) => {
-                    wait_on(source, &mut sources_to_wait);
-                    new_parts.push(*part);
-                }
-                Resolution::Unbound(name) => {
-                    return Err(KError::new(KErrorKind::UnboundName(name)));
-                }
-            }
+            new_parts.push(Spanned {
+                value: WorkingPart::Spliced {
+                    cell: ctx.current_scope().rest_delivered(cell),
+                },
+                span,
+            });
             continue;
         }
-        if ref_name_set.contains(&i) {
-            if let (true, Some(Resolution::Parked(source))) = (bare_name, &bare_outcomes[i]) {
-                wait_on(*source, &mut sources_to_wait);
-            }
-            new_parts.push(*part);
-            continue;
-        }
+        // A literal-name slot's token (which the body reads as data) is a bare name — never an
+        // eager shape — so the stager's `Err` passes it through untouched, as it does a slot the
+        // scheduler already filled.
         let in_eager_filter = eager_filter.is_none_or(|idxs| idxs.contains(&i));
-        match ast
+        match part
+            .value
+            .as_ast()
             .filter(|_| in_eager_filter)
             .map(|a| stage_eager_part(brand, a))
         {
@@ -392,16 +315,14 @@ fn part_walk<'step>(
             _ => new_parts.push(*part),
         }
     }
-    Ok(PartWalkResult {
+    PartWalkResult {
         new_parts,
-        sources_to_wait,
         staged_subs,
-    })
+    }
 }
 
-/// Result of a successful keyworded part walk.
+/// Result of a keyworded part walk.
 struct PartWalkResult<'step> {
     new_parts: Vec<Spanned<WorkingPart<'step>>>,
-    sources_to_wait: Vec<ProducerId>,
     staged_subs: Vec<(usize, DepRequest<'step>)>,
 }
