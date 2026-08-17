@@ -44,7 +44,7 @@ use super::ambient::AmbientContext;
 use super::decide::{BodyPlacement, DecideCtx, DepRequest, SubmitContext, with_node_scope};
 use super::finalize::{NodeFinalize, finalize_error};
 use super::lift::relocate_seam;
-use super::nodes::{ChainOp, NodePayload, NodeScope, NodeWork, SlotFrame};
+use super::nodes::{ChainOp, NodePayload, NodeScope, NodeWork, SlotFrame, WorkLabel};
 use super::obligation::with_obligation;
 use super::outcome::{
     Await, Continuation, DepTerminal, Outcome, ParkDeps, TerminalDepFinish, dep_error_frame,
@@ -150,7 +150,10 @@ impl<'run> KoanRuntime<'run> {
         let KoanRuntime { sched, host } = self;
         sched.drain(|sched, step| host.step(sched, step)).map_err(
             |DrainDeadlock { pending, sample }| {
-                KError::new(KErrorKind::SchedulerDeadlock { pending, sample })
+                KError::new(KErrorKind::SchedulerDeadlock {
+                    pending,
+                    sample: sample.sample(),
+                })
             },
         )
     }
@@ -521,6 +524,7 @@ impl<'run> Host<'run> {
                 frame,
                 chain,
                 block_entry,
+                label,
             } => {
                 // A tail iteration (`FreshTail`) retires this scope before the fresh cart is
                 // installed for the next; other placements keep the current scope live.
@@ -570,7 +574,13 @@ impl<'run> Host<'run> {
                         // incarnation reads — the decide that emitted this replace relocated the
                         // callee's arguments into `f`'s region — so the drain drops the displaced
                         // anchor at the reinstall.
-                        Some(SlotFrame::opening(f, NodeScope::Yoked, new_chain, anchor))
+                        Some(SlotFrame::opening(
+                            f,
+                            NodeScope::Yoked,
+                            new_chain,
+                            anchor,
+                            label,
+                        ))
                     }
                     None => {
                         // A frameless replace keeps the prior cart. A tail entering an overlay
@@ -583,7 +593,13 @@ impl<'run> Host<'run> {
                         let scope =
                             overlay_scope.map_or(anchor.payload.scope, NodeScope::YokedChild);
                         (has_overlay || chain_changed).then(|| {
-                            SlotFrame::replacing(Rc::clone(&step_frame), scope, new_chain, anchor)
+                            SlotFrame::replacing(
+                                Rc::clone(&step_frame),
+                                scope,
+                                new_chain,
+                                anchor,
+                                label,
+                            )
                         })
                     }
                 };
@@ -613,14 +629,13 @@ impl<'run> Host<'run> {
                         return self.apply(sched, Outcome::Done(Err(error)), brand, id, anchor);
                     }
                 }
-                // Lower each variant to its outermost live continuation alongside its
-                // deadlock-summary carrier.
-                let (continuation, carrier) = match continuation {
+                // Lower each variant to its outermost live continuation.
+                let continuation = match continuation {
                     // A dispatch finish carries its own dep-error frame (the consuming call's, or
                     // `None` frameless); an action/literal dep-finish carries the
                     // `dep_error_frame()` label. The short-circuit is baked into the continuation
                     // by `short_circuit` — the one loop the terminal delivery runs through.
-                    Continuation::Finish(finish) => (short_circuit(park_error_frame, finish), None),
+                    Continuation::Finish(finish) => short_circuit(park_error_frame, finish),
                     // The action-harness catch carries its single watched dep unrealized. Realized
                     // here and wired through the same door as every other dep list.
                     // `catch_continuation` runs the finish without short-circuiting on a dep error.
@@ -632,12 +647,11 @@ impl<'run> Host<'run> {
                             brand,
                             ParkDeps::List(Deps::from_requests([watched])),
                         );
-                        (catch_continuation(finish), None)
+                        catch_continuation(finish)
                     }
-                    // The resume closure carries the evolving `working_expr` from here on; the
-                    // `carrier` it travels with is only the deadlock-summary sample. A decide takes
-                    // no dep values, so `ignore_results` drops the results slice.
-                    Continuation::Resume { carrier, resume } => (ignore_results(resume), carrier),
+                    // The resume closure carries the evolving `working_expr` from here on. A
+                    // decide takes no dep values, so `ignore_results` drops the results slice.
+                    Continuation::Resume { resume } => ignore_results(resume),
                 };
                 // Carry the ambient obligation across the park: the resumed step re-deposits it so
                 // the chain's declared-return check still fires. The wrap sits on the outermost
@@ -645,8 +659,9 @@ impl<'run> Host<'run> {
                 // `short_circuit` — runs under it and its error arm still gets the trace label.
                 let continuation =
                     with_obligation(self.ambient.current_obligation_duplicate(), continuation);
-                // The degenerate replace: same cart, scope, and chain, so no anchor swaps in.
-                replace_verdict(NodeWork::new(continuation, carrier), None)
+                // The degenerate replace: same cart, scope, and chain, so no anchor swaps in —
+                // and with it the slot keeps the `WorkLabel` its submission minted.
+                replace_verdict(NodeWork::new(continuation), None)
             }
             Outcome::Forward(source) => {
                 // The slot's result *is* the result behind `source`. Classification is the
@@ -750,10 +765,7 @@ fn replace_verdict(
     anchor: Option<Rc<SlotFrame>>,
 ) -> StepVerdict<'static, KoanWorkload> {
     StepVerdict::Replace {
-        work: NodeWork::new(
-            erase_to_static::<ContinuationFamily>(work.continuation),
-            work.carrier,
-        ),
+        work: NodeWork::new(erase_to_static::<ContinuationFamily>(work.continuation)),
         anchor,
     }
 }
@@ -1202,13 +1214,13 @@ impl<'run> Host<'run> {
             .expect("a slot step installs the ambient payload before the body submits")
             .clone();
         let (cart, framed) = self.ambient.submission_cart();
-        let anchor = SlotFrame::new(cart, payload.scope, payload.chain);
+        let anchor = SlotFrame::new(cart, payload.scope, payload.chain, WorkLabel::None);
         // The witnessed finish rides the same delivery every dep-finish does: the short-circuit
         // gate over the `seal_witnessed` projection, run under the frameless dep-error label.
-        let work = NodeWork::new(
-            short_circuit(Some(dep_error_frame()), seal_witnessed(finish)),
-            None,
-        );
+        let work = NodeWork::new(short_circuit(
+            Some(dep_error_frame()),
+            seal_witnessed(finish),
+        ));
         let (sources, minted) =
             self.named_sources(sched, &anchor, deps, |_host, _sched, producer| producer);
         let id = sched.alloc_node(work, &sources, anchor, framed);
@@ -1230,7 +1242,7 @@ impl<'run> KoanRuntime<'run> {
     /// errored dep under the [`dep_error_frame`] label, else hands the resolved values to a
     /// value-only `finish`.
     fn awaiting(finish: TerminalDepFinish<'run>) -> NodeWork<'run, KoanWorkload> {
-        NodeWork::new(short_circuit(Some(dep_error_frame()), finish), None)
+        NodeWork::new(short_circuit(Some(dep_error_frame()), finish))
     }
 
     /// Ambient-chain submission for any `NodeWork`; with no slot step installed the node is placed
@@ -1263,7 +1275,7 @@ impl<'run> KoanRuntime<'run> {
             .or_else(|| host.ambient.active_payload().map(|p| p.chain.clone()))
             .expect("every dispatched node has a chain — submission outside enter_block / ambient payload is a bug");
         let (cart, framed) = host.ambient.submission_cart();
-        let anchor = SlotFrame::new(cart, scope_handle, chain);
+        let anchor = SlotFrame::new(cart, scope_handle, chain, WorkLabel::None);
         let (sources, minted) = host.named_sources(
             sched,
             &anchor,

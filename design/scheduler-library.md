@@ -231,7 +231,9 @@ dep edge and never orders a retirement:
 the scheduler exactly once per slot, at the one point the slot stops being
 able to release its edges, and the scheduler releases whatever edges the hook
 returns. Drain-end with slots still parked is the deadlock report, returned
-as the drain's `Err` with a pending count and a carrier sample.
+as the drain's `Err` with a pending count and the first stuck slot's anchor.
+koan renders that anchor's `WorkLabel` — a source extent, else the node's
+dispatch shape — so the report's text is koan's, not the scheduler's.
 
 **The install door — the generic building block.**
 

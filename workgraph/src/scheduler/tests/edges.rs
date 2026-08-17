@@ -24,12 +24,7 @@ fn pending_producer() -> (Scheduler<TestWorkload>, NodeId) {
 /// Allocate one dep-free node with a trivial continuation and its own anchor.
 fn alloc_dep_free(sched: &mut Scheduler<TestWorkload>) -> NodeId {
     let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
-    sched.alloc_node(
-        NodeWork::new(continuation, None),
-        &[],
-        TestAnchor::fresh(),
-        false,
-    )
+    sched.alloc_node(NodeWork::new(continuation), &[], TestAnchor::fresh(), false)
 }
 
 /// Drive a node to a terminal: pop it off the ready queue, then deliver an error — an `Err` terminal
@@ -202,7 +197,7 @@ fn install_deps_inherits_the_source_destination() {
     let source = sched.install_edge(sub, consumer_anchor.owner());
     let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
     let consumer = sched.alloc_node(
-        NodeWork::new(continuation, None),
+        NodeWork::new(continuation),
         &[source],
         Rc::clone(&consumer_anchor),
         false,

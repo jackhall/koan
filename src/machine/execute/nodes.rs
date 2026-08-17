@@ -3,8 +3,10 @@ use std::rc::Rc;
 
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{ScopeId, ScopeRefFamily, StatementId, assemble_body_chain};
+use crate::machine::model::ast::{DispatchShape, WorkingExpression};
 use crate::machine::{CallFrame, LexicalFrame};
 use crate::scheduler::EdgeId;
+use crate::source::{FileId, Span};
 use crate::witnessed::SealedExtern;
 
 /// The generic per-node work lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
@@ -13,6 +15,60 @@ use crate::witnessed::SealedExtern;
 /// install path takes; the scheduler seals its continuation on the owned tier against the slot's
 /// anchor and hands it back per step through the drain.
 pub(super) use crate::scheduler::nodes::NodeWork;
+
+/// How a slot renders in the drain's deadlock report — the sample [`DrainDeadlock`] names when the
+/// queues drain with this slot still parked.
+///
+/// Every arm is `Copy` and costs nothing at install: a source extent is two words read off the
+/// working expression, and the shape tag is the classification the expression already cached.
+/// Nothing is *rendered* until a deadlock actually fires — [`SlotFrame::sample`] is the only
+/// reader, and a run that drains never calls it — and nothing region-resident is held to render it
+/// later, so the label survives a region's death without a pin of its own.
+///
+/// Minted with the anchor and never carried across one: a tail replace mints a fresh [`SlotFrame`]
+/// for the incarnation it installs, which is a different node than the one that retired.
+#[derive(Clone, Copy)]
+pub(super) enum WorkLabel {
+    /// The node's source extent, rendered as `path:line:col` plus the spanning source text.
+    Source { span: Span, file: FileId },
+    /// A run with no source extent at all — one the machine assembled from no origin. Names the
+    /// dispatch shape, which is as much as such a node can say about itself.
+    Shape(DispatchShape),
+    /// A slot with no expression behind it — a dep-finish, a block fan-out, a test fixture.
+    None,
+}
+
+impl WorkLabel {
+    /// Read a node's label off the expression it will dispatch. A synthesized run carries the file
+    /// and extent of the expression it was built out of
+    /// ([`WorkingExpression::synthesized`](crate::machine::model::WorkingExpression::synthesized)),
+    /// so the shape tag is the floor for a node with no origin at all rather than the normal case.
+    pub(super) fn of(expr: &WorkingExpression<'_>) -> WorkLabel {
+        match (expr.span, expr.file) {
+            (Some(span), Some(file)) => WorkLabel::Source { span, file },
+            _ => WorkLabel::Shape(expr.shape()),
+        }
+    }
+
+    /// The report line for this label — the label's only reader, reached only from a drain that
+    /// deadlocked. Reads nothing region-resident, so it stands under no pin: a `Source` label
+    /// resolves through the source registry and a `Shape` label renders its own tag.
+    fn render(self) -> String {
+        match self {
+            WorkLabel::Source { span, file } => crate::source::with(file, |f| {
+                let (line, col_utf16) = f.resolve(span.start);
+                let text = f
+                    .text
+                    .get(span.start as usize..span.end as usize)
+                    .unwrap_or_default()
+                    .trim();
+                format!("{}:{}:{}: {}", f.path, line, col_utf16, text)
+            }),
+            WorkLabel::Shape(shape) => format!("<{shape:?}>"),
+            WorkLabel::None => "<wait>".to_string(),
+        }
+    }
+}
 
 /// Koan's `Workload::Frame` — the scheduler-held per-slot memory anchor. Wraps the shared
 /// per-call cart with the slot's own [`NodeScope`] handle and lexical [`chain`]. The scheduler
@@ -43,6 +99,9 @@ pub(super) struct SlotFrame {
     /// naming the owner would be answering "is this me?" with an identity comparison the anchor
     /// already answers by construction.
     opened_scope: bool,
+    /// What this slot renders as if the drain deadlocks on it. Minted here and never inherited —
+    /// see [`WorkLabel`].
+    label: WorkLabel,
 }
 
 impl crate::scheduler::Anchor for SlotFrame {
@@ -61,6 +120,7 @@ impl SlotFrame {
         cart: Rc<CallFrame>,
         scope: NodeScope,
         chain: Rc<LexicalFrame>,
+        label: WorkLabel,
     ) -> Rc<SlotFrame> {
         Rc::new(SlotFrame {
             cart,
@@ -68,6 +128,7 @@ impl SlotFrame {
             owned_edges: RefCell::new(Vec::new()),
             statement: StatementId::next(),
             opened_scope: false,
+            label,
         })
     }
 
@@ -82,6 +143,7 @@ impl SlotFrame {
         scope: NodeScope,
         chain: Rc<LexicalFrame>,
         retiring: &SlotFrame,
+        label: WorkLabel,
     ) -> Rc<SlotFrame> {
         Rc::new(SlotFrame {
             cart,
@@ -89,6 +151,7 @@ impl SlotFrame {
             owned_edges: RefCell::new(retiring.take_owned_edges()),
             statement: retiring.statement,
             opened_scope: retiring.opened_scope,
+            label,
         })
     }
 
@@ -102,6 +165,7 @@ impl SlotFrame {
         scope: NodeScope,
         chain: Rc<LexicalFrame>,
         retiring: &SlotFrame,
+        label: WorkLabel,
     ) -> Rc<SlotFrame> {
         Rc::new(SlotFrame {
             cart,
@@ -109,7 +173,14 @@ impl SlotFrame {
             owned_edges: RefCell::new(retiring.take_owned_edges()),
             statement: retiring.statement,
             opened_scope: true,
+            label,
         })
+    }
+
+    /// Render this slot for the drain's deadlock report — reached only when the queues drained with
+    /// this slot still parked.
+    pub(super) fn sample(&self) -> String {
+        self.label.render()
     }
 
     /// Close the scope of the cart this slot runs in, iff this slot opened it: the per-call frame's
@@ -249,3 +320,6 @@ pub(super) struct NodePayload {
     /// `core/lexical_frame.rs`.
     pub(super) chain: Rc<LexicalFrame>,
 }
+
+#[cfg(test)]
+mod tests;

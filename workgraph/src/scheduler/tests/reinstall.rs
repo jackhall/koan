@@ -46,7 +46,7 @@ where
     let dest = Delivered::destination(Rc::clone(into.owner()));
     let cell = W::deliver(argument, dest).rest_into(handle);
     let continuation: Box<dyn FnOnce() -> u32 + 'a> = Box::new(move || cell.open(|v| *v));
-    NodeWork::new(continuation, None)
+    NodeWork::new(continuation)
 }
 
 /// Run the reinstalled incarnation's step: take its work and open the continuation the way the run

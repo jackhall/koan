@@ -20,7 +20,7 @@ use crate::machine::{BindingIndex, KError, KErrorKind, LexicalFrame, NodeId, Sco
 use crate::scheduler::EdgeId;
 
 use super::super::harness::{Host, KoanWorkload};
-use super::super::nodes::{NodeScope, SlotFrame};
+use super::super::nodes::{NodeScope, SlotFrame, WorkLabel};
 use crate::scheduler::Scheduler;
 
 /// Where a [`KoanRuntime::submit_expression`] lands, deciding how its cached binder plan is
@@ -74,8 +74,8 @@ impl<'run> Host<'run> {
                 suggest_flat: !key.buckets.is_empty(),
             });
             let (cart, framed) = self.ambient.submission_cart();
-            let anchor = SlotFrame::new(cart, node_scope, chain);
-            return sched.alloc_node(super::decide_error(error, carrier), &[], anchor, framed);
+            let anchor = SlotFrame::new(cart, node_scope, chain, WorkLabel::of(&expr));
+            return sched.alloc_node(super::decide_error(error), &[], anchor, framed);
         }
 
         // Only a statement installs; the plan read above also gates the sub-dispatch rejection.
@@ -85,7 +85,7 @@ impl<'run> Host<'run> {
         };
 
         let (cart, framed) = self.ambient.submission_cart();
-        let anchor = SlotFrame::new(cart, node_scope, chain.clone());
+        let anchor = SlotFrame::new(cart, node_scope, chain.clone(), WorkLabel::of(&expr));
         let id = sched.alloc_node(
             super::decide_tail(expr, None),
             &[],

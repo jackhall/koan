@@ -187,10 +187,17 @@ fn reduce_fold_left<'step>(
         .next()
         .expect("chain shape guarantees ≥2 operators");
 
-    let mut acc =
-        WorkingExpression::new(brand, vec![first_operand, first_operator, second_operand]);
+    let mut acc = WorkingExpression::synthesized(
+        brand,
+        vec![first_operand, first_operator, second_operand],
+        expr,
+    );
     for (operator, operand) in operators.zip(operands) {
-        acc = WorkingExpression::new(brand, vec![wrap_as_operand(brand, acc), operator, operand]);
+        acc = WorkingExpression::synthesized(
+            brand,
+            vec![wrap_as_operand(brand, acc), operator, operand],
+            expr,
+        );
     }
 
     become_dispatch(ctx, acc)
@@ -223,12 +230,17 @@ fn reduce_fold_right<'step>(
         .next()
         .expect("chain shape guarantees ≥2 operators");
 
-    let mut acc = WorkingExpression::new(
+    let mut acc = WorkingExpression::synthesized(
         brand,
         vec![second_last_operand, last_operator, last_operand],
+        expr,
     );
     for (operator, operand) in operators.zip(operands) {
-        acc = WorkingExpression::new(brand, vec![operand, operator, wrap_as_operand(brand, acc)]);
+        acc = WorkingExpression::synthesized(
+            brand,
+            vec![operand, operator, wrap_as_operand(brand, acc)],
+            expr,
+        );
     }
 
     become_dispatch(ctx, acc)
@@ -281,7 +293,10 @@ fn reduce_unary<'step>(
         )),
         span: expr.span,
     };
-    become_dispatch(ctx, WorkingExpression::new(brand, vec![kw_part, list_part]))
+    become_dispatch(
+        ctx,
+        WorkingExpression::synthesized(brand, vec![kw_part, list_part], expr),
+    )
 }
 
 /// Reduces a `Pairwise`-mode run: `f x < g y < h z` must evaluate `g y` **once**, its value
@@ -313,7 +328,7 @@ fn reduce_pairwise<'step>(
         operators,
         combiner,
         direction,
-        expr.span,
+        *expr,
         dep_error_frame,
     )
 }
@@ -333,7 +348,7 @@ fn install_pairwise_fold<'step>(
     operators: Vec<Spanned<WorkingPart<'step>>>,
     combiner: String,
     direction: FoldDirection,
-    chain_span: Option<Span>,
+    chain: WorkingExpression<'step>,
     dep_error_frame: Option<TraceFrame>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
@@ -341,7 +356,7 @@ fn install_pairwise_fold<'step>(
     let deps: Vec<DepRequest<'step>> = operands
         .into_iter()
         .map(|operand| DepRequest::Dispatch {
-            expr: WorkingExpression::new(brand, vec![operand]),
+            expr: WorkingExpression::synthesized(brand, vec![operand], &chain),
             placement: DepPlacement::OwnScope,
         })
         .collect();
@@ -366,7 +381,11 @@ fn install_pairwise_fold<'step>(
                 },
                 span: operand_spans[i + 1],
             };
-            pairs.push(WorkingExpression::new(brand, vec![left, operator, right]));
+            pairs.push(WorkingExpression::synthesized(
+                brand,
+                vec![left, operator, right],
+                &chain,
+            ));
         }
         // Fold the pairs through the combiner in the declared direction, nesting exactly like
         // `reduce_fold_left` / `reduce_fold_right`'s accumulator loops.
@@ -375,7 +394,7 @@ fn install_pairwise_fold<'step>(
                 let mut pairs = pairs.into_iter();
                 let mut acc = pairs.next().expect(PAIRWISE_HAS_TWO_PAIRS);
                 for pair in pairs {
-                    acc = combine(brand, &combiner, acc, pair, chain_span);
+                    acc = combine(brand, &combiner, acc, pair, &chain);
                 }
                 acc
             }
@@ -383,7 +402,7 @@ fn install_pairwise_fold<'step>(
                 let mut pairs = pairs.into_iter().rev();
                 let mut acc = pairs.next().expect(PAIRWISE_HAS_TWO_PAIRS);
                 for pair in pairs {
-                    acc = combine(brand, &combiner, pair, acc, chain_span);
+                    acc = combine(brand, &combiner, pair, acc, &chain);
                 }
                 acc
             }
@@ -411,24 +430,26 @@ const PAIRWISE_HAS_TWO_PAIRS: &str =
 /// the operator bodies), so a missing, non-callable, or wrong-arity combiner surfaces as an
 /// ordinary error there.
 ///
-/// `span` labels the synthesized keyword part, which has no source token of its own.
+/// `chain` is the originating operator chain: the synthesized keyword part has no source token of
+/// its own, so it takes the chain's extent, and the combined node names the chain's file.
 pub(super) fn combine<'step>(
     brand: RegionBrand<'step>,
     combiner: &str,
     left: WorkingExpression<'step>,
     right: WorkingExpression<'step>,
-    span: Option<Span>,
+    chain: &WorkingExpression<'step>,
 ) -> WorkingExpression<'step> {
-    WorkingExpression::new(
+    WorkingExpression::synthesized(
         brand,
         vec![
             wrap_as_operand(brand, left),
             Spanned {
                 value: WorkingPart::Ast(ExpressionPart::Keyword(brand.allocator().text(combiner))),
-                span,
+                span: chain.span,
             },
             wrap_as_operand(brand, right),
         ],
+        chain,
     )
 }
 
@@ -453,12 +474,10 @@ fn park_on_pending_operators<'step, 'b>(
             reason: undeclared_operator_reason(probe),
         })));
     }
-    let carrier = expr.summarize();
     let parked_expr = *expr;
     let frame = working_frame("<operator-chain>", expr);
     park_resume_labelled(
         to_wait,
-        Some(carrier),
         Some(frame),
         Box::new(move |ctx, _id| run(ctx, ctx.current_scope(), &parked_expr)),
     )

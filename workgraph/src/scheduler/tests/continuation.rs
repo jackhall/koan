@@ -47,12 +47,7 @@ fn parked_continuation_drops_under_its_own_pin() {
             seen: Rc::clone(&seen),
         };
         let continuation: Box<dyn FnOnce() -> u32 + '_> = Box::new(move || *probe.last);
-        sched.alloc_node(
-            NodeWork::new(continuation, None),
-            &[],
-            Rc::clone(&anchor),
-            false,
-        );
+        sched.alloc_node(NodeWork::new(continuation), &[], Rc::clone(&anchor), false);
     }
     // The scheduler's own holds are now the only ones on the region.
     drop(anchor);
@@ -79,12 +74,7 @@ fn parked_continuation_opens_and_runs_after_its_handles_drop() {
     let id = {
         let captured: &u32 = anchor.handle().allocator().value(9u32);
         let continuation: Box<dyn FnOnce() -> u32 + '_> = Box::new(move || *captured);
-        sched.alloc_node(
-            NodeWork::new(continuation, None),
-            &[],
-            Rc::clone(&anchor),
-            false,
-        )
+        sched.alloc_node(NodeWork::new(continuation), &[], Rc::clone(&anchor), false)
     };
     // Only the scheduler's holds remain — the seal's bundled pin and the slot's anchor row.
     drop(anchor);

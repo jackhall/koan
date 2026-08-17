@@ -33,7 +33,7 @@ use crate::source::Spanned;
 
 use super::harness::KoanWorkload;
 use super::ignore_results;
-use super::nodes::NodeWork;
+use super::nodes::{NodeWork, WorkLabel};
 use super::obligation::{ReturnObligation, with_obligation};
 use super::outcome::{
     ParkDeps, TerminalDepFinish, continue_inline, dep_error_frame, tail_continue,
@@ -246,16 +246,15 @@ pub(in crate::machine::execute) fn propagate_dep_error(
 // ---------- Outcome constructors (the dispatch-currency → Outcome mapping) ----------
 
 /// Park the slot on `sources` — the binder edges its names resolved to — and re-run its `resume`
-/// decide on wake. `carrier` is the parked expression's pre-rendered summary for the deadlock
-/// report (`None` when the park carries no renderable form) — rendering it here keeps the AST out
-/// of the scheduler. `dep_error_frame` labels the propagation when one of those sources turns out
-/// to name an already-errored producer, which the harness rules on when it installs.
+/// decide on wake. The park carries no deadlock sample of its own: it keeps the slot's anchor, so
+/// the [`WorkLabel`] minted at submission is what a stuck slot renders through.
+/// `dep_error_frame` labels the propagation when one of those sources turns out to name an
+/// already-errored producer, which the harness rules on when it installs.
 pub(in crate::machine::execute) fn park_resume<'step>(
     sources: Vec<ProducerId>,
-    carrier: Option<String>,
     resume: ResumeFn<'step>,
 ) -> Outcome<'step> {
-    park_resume_labelled(sources, carrier, None, resume)
+    park_resume_labelled(sources, None, resume)
 }
 
 /// [`park_resume`] carrying an explicit dep-error frame — the park sites that label their
@@ -263,7 +262,6 @@ pub(in crate::machine::execute) fn park_resume<'step>(
 /// surfaces is framed at the site that asked for the park rather than arriving bare.
 pub(in crate::machine::execute) fn park_resume_labelled<'step>(
     sources: Vec<ProducerId>,
-    carrier: Option<String>,
     dep_error_frame: Option<TraceFrame>,
     resume: ResumeFn<'step>,
 ) -> Outcome<'step> {
@@ -271,7 +269,7 @@ pub(in crate::machine::execute) fn park_resume_labelled<'step>(
         deps: ParkDeps::List(Deps::from_producers(
             sources.into_iter().map(ProducerId::scheduler_edge),
         )),
-        continuation: Continuation::Resume { carrier, resume },
+        continuation: Continuation::Resume { resume },
         dep_error_frame,
     }
 }
@@ -294,7 +292,11 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     inner: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    continue_inline(decide_tail(inner, view.current_obligation_duplicate()))
+    let label = WorkLabel::of(&inner);
+    continue_inline(
+        decide_tail(inner, view.current_obligation_duplicate()),
+        label,
+    )
 }
 
 /// Walk raw parts emitting a [`StagedSlot`](WorkingPart::StagedSlot) marker at every
@@ -311,12 +313,13 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
 /// (the keyworded `Deferred` arm, which re-resolves on finish) pass `&[]`.
 pub(super) fn stage_all_eager_parts<'step>(
     brand: RegionBrand<'step>,
-    parts: &[Spanned<WorkingPart<'step>>],
+    origin: &WorkingExpression<'step>,
     wrap_indices: &[usize],
 ) -> (
     Vec<Spanned<WorkingPart<'step>>>,
     Vec<(usize, DepRequest<'step>)>,
 ) {
+    let parts = origin.parts;
     let mut new_parts: Vec<Spanned<WorkingPart<'step>>> = Vec::with_capacity(parts.len());
     let mut staged: Vec<(usize, DepRequest<'step>)> = Vec::new();
     for (i, part) in parts.iter().enumerate() {
@@ -327,12 +330,13 @@ pub(super) fn stage_all_eager_parts<'step>(
             // the resolved `Spliced` carrier reaches `accepts_part` at bind. Not
             // one of the six eager shapes (it wraps bare Identifier/Type parts),
             // so this stays a pre-check before the stager.
-            let wrapped = WorkingExpression::new(
+            let wrapped = WorkingExpression::synthesized(
                 brand,
                 vec![Spanned {
                     value: part.value,
                     span,
                 }],
+                origin,
             );
             staged.push((
                 i,
@@ -376,10 +380,9 @@ pub(in crate::machine::execute) fn decide_tail<'step>(
     expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
 ) -> NodeWork<'step, KoanWorkload> {
-    let carrier = expr.summarize();
     // A birth decide waits on no deps: it runs on first poll, classifies, and routes.
     let continuation = ignore_results(Box::new(move |view, _id| classify_dispatch(view, expr)));
-    NodeWork::new(with_obligation(obligation, continuation), Some(carrier))
+    NodeWork::new(with_obligation(obligation, continuation))
 }
 
 /// Build a [`NodeWork`](super::nodes::NodeWork) that fails on its first poll with `error`. Used by
@@ -388,12 +391,11 @@ pub(in crate::machine::execute) fn decide_tail<'step>(
 /// offending expression for the deadlock report.
 pub(in crate::machine::execute) fn decide_error<'step>(
     error: KError,
-    carrier: String,
 ) -> NodeWork<'step, KoanWorkload> {
     let continuation = ignore_results(Box::new(move |_view: &DecideCtx<'_, '_, '_>, _id| {
         Outcome::Done(Err(error))
     }));
-    NodeWork::new(continuation, Some(carrier))
+    NodeWork::new(continuation)
 }
 
 /// Classify a freshly-born dispatch expression's shape and route to the matching per-shape decide,

@@ -38,8 +38,10 @@ impl<T> SlotVec<T> {
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-    fn iter(&self) -> impl Iterator<Item = &T> {
-        self.0.iter()
+    /// Walk the slots paired with the id naming each — the store's own mint, so a scan that
+    /// reports a slot hands back a currency the rest of the surface speaks.
+    fn iter_ids(&self) -> impl Iterator<Item = (NodeId, &T)> {
+        self.0.iter().enumerate().map(|(i, v)| (NodeId::new(i), v))
     }
 }
 
@@ -64,25 +66,6 @@ enum SlotState<W: Workload> {
     /// Reclaimed; the index sits on the free list. Every slot reaches this state at its own
     /// finalize, once the delivery walk has drained — there is no terminal state in between.
     Free,
-}
-
-/// The drain-end deadlock-sample contribution of one parked/pending slot's work.
-/// `unresolved` shows the first `Preferred` (a workload-supplied expression) across all stuck slots,
-/// falling back to the first `Fallback` (a generic work-shape tag) only when no slot carries an
-/// expression — so a stuck named work always out-renders a bare `<wait>`.
-enum DeadlockSample {
-    Preferred(String),
-    Fallback(&'static str),
-}
-
-/// Map a stuck slot's `work` to its deadlock-sample contribution. A `Some`-carrier wait carries a
-/// renderable expression summary (`Preferred`); a carrier-less wait carries only a generic tag
-/// (`Fallback`).
-fn work_deadlock_sample<W: Workload>(work: &StoredWork<W>) -> DeadlockSample {
-    match &work.carrier {
-        Some(carrier) => DeadlockSample::Preferred(carrier.clone()),
-        None => DeadlockSample::Fallback("<wait>"),
-    }
 }
 
 pub(in crate::scheduler) struct NodeStore<W: Workload> {
@@ -142,30 +125,21 @@ impl<W: Workload> NodeStore<W> {
         self.free_list.push(id);
     }
 
-    /// Scan for slots still parked (`PreRun`) after the work queues drained — each
-    /// is a node waiting on a dependency that can no longer fire (a dependency
-    /// cycle). Returns `(count, sample)` where `sample` summarizes the first such
-    /// node, or `None` when every slot has reclaimed.
-    pub(super) fn unresolved(&self) -> Option<(usize, String)> {
+    /// Scan for slots still parked (`PreRun`) after the work queues drained — each is a node
+    /// waiting on a dependency that can no longer fire (a dependency cycle). Returns
+    /// `(count, first)` where `first` names the lowest-indexed such slot, or `None` when every slot
+    /// has reclaimed. What that slot renders as is the embedder's to answer off its anchor; the
+    /// store holds no diagnostic payload of its own.
+    pub(super) fn unresolved(&self) -> Option<(usize, NodeId)> {
         let mut count = 0usize;
-        let mut expr_sample: Option<String> = None;
-        let mut fallback_sample: Option<String> = None;
-        for slot in self.slots.iter() {
-            if let SlotState::PreRun(work) = slot {
+        let mut first: Option<NodeId> = None;
+        for (id, slot) in self.slots.iter_ids() {
+            if matches!(slot, SlotState::PreRun(_)) {
                 count += 1;
-                match work_deadlock_sample(work) {
-                    DeadlockSample::Preferred(s) if expr_sample.is_none() => expr_sample = Some(s),
-                    DeadlockSample::Fallback(s) if fallback_sample.is_none() => {
-                        fallback_sample = Some(s.to_string());
-                    }
-                    _ => {}
-                }
+                first.get_or_insert(id);
             }
         }
-        if count == 0 {
-            return None;
-        }
-        Some((count, expr_sample.or(fallback_sample).unwrap_or_default()))
+        first.map(|id| (count, id))
     }
 
     pub(super) fn len(&self) -> usize {
@@ -190,86 +164,5 @@ impl<W: Workload> NodeStore<W> {
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn free_list_len(&self) -> usize {
         self.free_list.len()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::witnessed::reattachable;
-
-    /// A lifetime-free `Reattachable` family for the trivial test value.
-    struct U32Value;
-    /// A lifetime-free `Reattachable` family standing in for the contract / continuation carriers.
-    struct UnitCarrier;
-    // Both are lifetime-free, so `At<'r>` is the same type for every `'r`; the shared `reattachable!`
-    // macro discharges the obligation.
-    reattachable! {
-        U32Value => u32,
-        UnitCarrier => (),
-    }
-
-    /// A minimal memory anchor projecting a trivial region owner. The store tests seal work against
-    /// one, so it is constructible over a fresh empty region.
-    struct TestAnchor(std::rc::Rc<crate::witnessed::doctest_fixture::RegionCart>);
-    impl TestAnchor {
-        fn new() -> std::rc::Rc<Self> {
-            std::rc::Rc::new(TestAnchor(crate::witnessed::doctest_fixture::fresh_cart()))
-        }
-    }
-    impl crate::scheduler::Anchor for TestAnchor {
-        type Owner = crate::witnessed::doctest_fixture::RegionCart;
-        fn owner(&self) -> &std::rc::Rc<Self::Owner> {
-            &self.0
-        }
-    }
-
-    /// A minimal workload for the white-box store tests: every associated type is trivial, so the
-    /// generic store can be exercised without naming any Koan type. These tests only classify a
-    /// parked slot's deadlock sample, so the delivery hook is never reached — the scheduler-level
-    /// slates in [`tests::delivery`](super::super::tests) are what exercise it.
-    struct TestWorkload;
-    impl Workload for TestWorkload {
-        type Value = U32Value;
-        type Error = ();
-        type Profile = crate::witnessed::doctest_fixture::FixtureProfile;
-        type Frame = TestAnchor;
-        type Continuation = UnitCarrier;
-
-        fn deliver(
-            _terminal: &super::super::workload::DeliveredTerminal<Self>,
-            _dest: super::super::workload::DeliveryDestination<Self>,
-        ) -> super::super::workload::DeliveredTerminal<Self> {
-            unimplemented!("the deadlock-sample slate finalizes nothing")
-        }
-    }
-
-    fn sample_wait(carrier: Option<String>) -> StoredWork<TestWorkload> {
-        super::super::nodes::seal_work(
-            super::super::nodes::NodeWork::new((), carrier),
-            &TestAnchor::new(),
-        )
-    }
-
-    #[test]
-    fn some_carrier_wait_prefers_the_carrier() {
-        let work = sample_wait(Some("PARKED-EXPR".to_string()));
-        assert!(
-            matches!(work_deadlock_sample(&work), DeadlockSample::Preferred(s) if s.contains("PARKED")),
-            "a Some-carrier wait must surface its carrier",
-        );
-    }
-
-    #[test]
-    fn carrier_less_wait_falls_back_to_a_tag() {
-        let work = sample_wait(None);
-        assert!(
-            matches!(
-                work_deadlock_sample(&work),
-                DeadlockSample::Fallback("<wait>")
-            ),
-            "a carrier-less wait must surface a generic tag, not an empty sample",
-        );
     }
 }

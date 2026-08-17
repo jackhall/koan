@@ -199,8 +199,10 @@ claim and the after-the-forward-read ordering hold by the hook's placement,
 not by per-arm discipline.
 
 When the queues empty with slots still parked, `drain` returns its deadlock
-report — the pending count plus a carrier sample from the first parked slot
-that has one — as its `Err`.
+report — the pending count plus the first parked slot's memory anchor — as its
+`Err`. The scheduler stores no diagnostic payload of its own: the anchor is the
+workload's own `Frame`, so what a stuck slot *reads as* is rendered by the
+embedder off per-slot data it wrote itself.
 
 ## Delivery at finalize
 

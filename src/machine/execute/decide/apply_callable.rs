@@ -494,7 +494,7 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
         .value()
         .classify_for_pick(&expr, ctx.types())
         .wrap_indices;
-    let (new_parts, staged_subs) = stage_all_eager_parts(brand, expr.parts, &wrap_indices);
+    let (new_parts, staged_subs) = stage_all_eager_parts(brand, &expr, &wrap_indices);
     let working_expr = expr.respliced(brand, new_parts);
     super::keyworded::install_eager_subs(ctx, working_expr, staged_subs, Some(picked))
 }

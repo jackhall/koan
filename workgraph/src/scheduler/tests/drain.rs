@@ -87,12 +87,7 @@ impl Workload for RetireWorkload {
 fn alloc_retire_slot(sched: &mut Scheduler<RetireWorkload>) -> (NodeId, Rc<RetireAnchor>) {
     let anchor = RetireAnchor::fresh();
     let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
-    let id = sched.alloc_node(
-        NodeWork::new(continuation, None),
-        &[],
-        Rc::clone(&anchor),
-        false,
-    );
+    let id = sched.alloc_node(NodeWork::new(continuation), &[], Rc::clone(&anchor), false);
     (id, anchor)
 }
 
@@ -138,7 +133,7 @@ fn dep_residents_arrive_pre_read_and_their_edges_release_once() {
     let source = sched.install_edge(producer, consumer_anchor.owner());
     let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
     let consumer = sched.alloc_node(
-        NodeWork::new(continuation, None),
+        NodeWork::new(continuation),
         &[source],
         Rc::clone(&consumer_anchor),
         true,
@@ -192,7 +187,7 @@ fn replace_verdict_reinstalls_and_reruns_the_slot() {
             if steps.get() == 1 {
                 let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
                 StepVerdict::Replace {
-                    work: NodeWork::new(continuation, None),
+                    work: NodeWork::new(continuation),
                     anchor: None,
                 }
             } else {
@@ -319,7 +314,7 @@ fn replace_does_not_retire_the_slot() {
             if steps.get() == 1 {
                 let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
                 StepVerdict::Replace {
-                    work: NodeWork::new(continuation, None),
+                    work: NodeWork::new(continuation),
                     anchor: None,
                 }
             } else {
@@ -413,13 +408,15 @@ fn alias_retires_the_slot_after_the_splice() {
     );
 }
 
-/// **The deadlock backstop carries the pending count and the carrier sample.** The cyclic wait is
-/// wired at the primitive tier — the install door's debug assertion forecloses a cycling park, so
-/// the backstop is reachable only by the invariant breach it exists to report.
+/// **The deadlock backstop carries the pending count and the first stuck slot's anchor.** The
+/// sample is the workload's own `Frame`, so the embedder renders the report off per-slot data it
+/// wrote itself. The cyclic wait is wired at the primitive tier — the install door's debug
+/// assertion forecloses a cycling park, so the backstop is reachable only by the invariant breach
+/// it exists to report.
 #[test]
-fn deadlock_surfaces_pending_count_and_carrier_sample() {
+fn deadlock_surfaces_pending_count_and_first_stuck_anchor() {
     let mut sched: Scheduler<TestWorkload> = Scheduler::new();
-    let (a, _a_anchor, _) = alloc_slot(&mut sched);
+    let (a, a_anchor, _) = alloc_slot(&mut sched);
     let (b, _b_anchor, _) = alloc_slot(&mut sched);
     let dest = TestAnchor::fresh();
 
@@ -432,18 +429,17 @@ fn deadlock_surfaces_pending_count_and_carrier_sample() {
                 .install_parked(other, Some(step.id), dest.owner());
             sched.deps.wire_parked(other, edge, Some(step.id));
             let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
-            let carrier = (step.id == a).then(|| "STUCK-A".to_string());
             StepVerdict::Replace {
-                work: NodeWork::new(continuation, carrier),
+                work: NodeWork::new(continuation),
                 anchor: None,
             }
         })
         .expect_err("a cyclic wait leaves both slots unresolved");
 
     assert_eq!(error.pending, 2, "both slots are stuck");
-    assert_eq!(
-        error.sample, "STUCK-A",
-        "the carrier-bearing stuck slot out-renders the generic tag",
+    assert!(
+        Rc::ptr_eq(&error.sample, &a_anchor),
+        "the sample names the first stuck slot's own anchor",
     );
 }
 

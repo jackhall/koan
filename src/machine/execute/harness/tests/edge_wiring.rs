@@ -50,25 +50,21 @@ fn park_on_errored_producer_propagates_producer_error() {
     let resumed_in_step = Rc::clone(&resumed);
     let frame = TraceFrame::bare("<test-park>", "park on two producers");
     let consumer = runtime.add(
-        NodeWork::new(
-            ignore_results(Box::new(move |_view, _id| {
-                park_resume_labelled(
-                    vec![
-                        ProducerId::from_scheduler_edge(edge_ok),
-                        ProducerId::from_scheduler_edge(edge_err),
-                    ],
-                    None,
-                    Some(frame),
-                    Box::new(move |_view, _id| {
-                        resumed_in_step.set(true);
-                        Outcome::Done(Err(KError::new(KErrorKind::ShapeError(
-                            "resume ran".into(),
-                        ))))
-                    }),
-                )
-            })),
-            None,
-        ),
+        NodeWork::new(ignore_results(Box::new(move |_view, _id| {
+            park_resume_labelled(
+                vec![
+                    ProducerId::from_scheduler_edge(edge_ok),
+                    ProducerId::from_scheduler_edge(edge_err),
+                ],
+                Some(frame),
+                Box::new(move |_view, _id| {
+                    resumed_in_step.set(true);
+                    Outcome::Done(Err(KError::new(KErrorKind::ShapeError(
+                        "resume ran".into(),
+                    ))))
+                }),
+            )
+        }))),
         &[],
         scope,
         3,

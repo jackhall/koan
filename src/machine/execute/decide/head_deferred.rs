@@ -56,7 +56,11 @@ pub(in crate::machine::execute) fn initial_type<'step>(
 ) -> Outcome<'step> {
     let head = match expr.parts[0].value {
         head @ WorkingPart::Ast(ExpressionPart::SigiledTypeExpr(_)) => {
-            WorkingExpression::new(ctx.current_scope().brand(), vec![Spanned::bare(head)])
+            WorkingExpression::synthesized(
+                ctx.current_scope().brand(),
+                vec![Spanned::bare(head)],
+                &expr,
+            )
         }
         _ => unreachable!("TypeHeadDeferred shape implies SigiledTypeExpr head"),
     };
@@ -73,7 +77,8 @@ pub(in crate::machine::execute) fn defer_head<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    let head = WorkingExpression::new(ctx.current_scope().brand(), vec![expr.parts[0]]);
+    let head =
+        WorkingExpression::synthesized(ctx.current_scope().brand(), vec![expr.parts[0]], &expr);
     park_on_head(expr, head, false)
 }
 

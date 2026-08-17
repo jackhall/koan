@@ -227,10 +227,39 @@ pub struct WorkingExpression<'a> {
     binder_name_slot: Option<usize>,
 }
 
+/// The source extent a parts run covers: the union of the extents its parts carry, or `None` when
+/// no part carries one.
+fn parts_extent(parts: &[Spanned<WorkingPart<'_>>]) -> Option<Span> {
+    parts
+        .iter()
+        .filter_map(|part| part.span)
+        .reduce(|a, b| Span {
+            start: a.start.min(b.start),
+            end: a.end.max(b.end),
+        })
+}
+
 impl<'a> WorkingExpression<'a> {
     /// Spanless construction door for a run the scheduler built itself.
     pub fn new(brand: RegionBrand<'a>, parts: Vec<Spanned<WorkingPart<'a>>>) -> Self {
         Self::build(brand, parts, None, None)
+    }
+
+    /// Construction door for a run the machine synthesized **out of** `origin` — an operator-chain
+    /// reduction, an extracted head, a wrapped literal element. The node takes `origin`'s file and
+    /// the extent its own parts span, so a synthesized node still names the source it came from
+    /// rather than reporting as location-free.
+    ///
+    /// Parts carry their own extents down from the parse, so the union is exact where they survive
+    /// the synthesis; a run assembled entirely from spanless parts falls back to `origin`'s extent,
+    /// which is the enclosing expression the synthesis is standing in for either way.
+    pub fn synthesized(
+        brand: RegionBrand<'a>,
+        parts: Vec<Spanned<WorkingPart<'a>>>,
+        origin: &WorkingExpression<'a>,
+    ) -> Self {
+        let span = parts_extent(&parts).or(origin.span);
+        Self::build(brand, parts, span, origin.file)
     }
 
     /// Construction chokepoint: bumps the parts run into `brand`'s region and fills the structural

@@ -747,6 +747,10 @@ digraph {
     "koan::machine::execute::nodes" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::execute::nodes" -> "koan::machine::execute" [label="uses", style="dashed"];
+    "koan::machine::execute::nodes" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::nodes" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::execute::nodes" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::obligation" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::obligation" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::obligation" -> "koan::machine::model" [label="uses", style="dashed"];

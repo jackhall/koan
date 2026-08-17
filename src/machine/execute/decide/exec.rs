@@ -10,7 +10,7 @@
 
 use super::super::harness::KoanWorkload;
 use super::super::ignore_results;
-use super::super::nodes::{ChainOp, NodeWork};
+use super::super::nodes::{ChainOp, NodeWork, WorkLabel};
 use super::super::obligation::{ReturnObligation, with_obligation};
 use super::super::outcome::Outcome;
 use super::ctx::DecideCtx;
@@ -45,6 +45,7 @@ pub(super) fn invoke_continue<'step>(
 ) -> Outcome<'step> {
     match &picked.value().body {
         Body::Builtin(_) => Outcome::Continue {
+            label: WorkLabel::of(&working_expr),
             work: builtin_work(picked, working_expr, view.current_obligation_duplicate()),
             frame: FramePlacement::Inherit,
             chain: ChainOp::Unchanged,
@@ -63,12 +64,11 @@ fn builtin_work<'step>(
     working_expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
 ) -> NodeWork<'step, KoanWorkload> {
-    let carrier = working_expr.summarize();
     let continuation = ignore_results(Box::new(move |view, _idx| {
         invoke_builtin(view, picked, working_expr)
     }));
     let continuation = with_obligation(obligation, continuation);
-    NodeWork::new(continuation, Some(carrier))
+    NodeWork::new(continuation)
 }
 
 /// Run a resolved **builtin** call through the action harness. Frameless (`Inherit`), so the working
@@ -140,7 +140,7 @@ fn enter_user_fn<'step>(
     // chain is exactly one with a live obligation, so the duplicate's presence answers both reads.
     let obligation = view.current_obligation_duplicate();
     let in_chain = obligation.is_some();
-    let carrier = working_expr.summarize();
+    let label = WorkLabel::of(&working_expr);
     match run_user_fn(
         function,
         &named_carriers,
@@ -165,7 +165,7 @@ fn enter_user_fn<'step>(
                 leading.into_iter().copied().collect(),
                 *tail,
                 TailContract::Eager(Some(contract)),
-                carrier,
+                label,
                 obligation,
             )
         }
@@ -189,7 +189,7 @@ fn enter_user_fn<'step>(
                 TailContract::FromLastResult {
                     func: picked.reseal(),
                 },
-                carrier,
+                label,
                 obligation,
             )
         }
@@ -211,7 +211,7 @@ fn body_continue<'step>(
     leading: Vec<KExpression<'step>>,
     tail: KExpression<'step>,
     contract: TailContract<'step>,
-    carrier: String,
+    label: WorkLabel,
     obligation: Option<ReturnObligation>,
 ) -> Outcome<'step> {
     let work_frame = Rc::clone(&frame);
@@ -235,10 +235,11 @@ fn body_continue<'step>(
     }));
     let continuation = with_obligation(obligation, continuation);
     Outcome::Continue {
-        work: NodeWork::new(continuation, Some(carrier)),
+        work: NodeWork::new(continuation),
         frame: FramePlacement::FreshTail { frame },
         chain: ChainOp::Unchanged,
         block_entry: BlockEntry::None,
+        label,
     }
 }
 

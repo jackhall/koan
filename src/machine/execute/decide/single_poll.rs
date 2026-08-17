@@ -67,7 +67,6 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // render, so carrier is `None`.
         TypeChannel::Parked(source) => park_resume(
             vec![source],
-            None,
             Box::new(move |ctx, _idx| bare_type_leaf(ctx, ctx.current_scope(), t)),
         ),
     }
@@ -219,10 +218,8 @@ pub(super) fn type_call<'step>(
             // A finalized binder has already installed `types[name]`, so the `Bound` arm would win;
             // reaching here means the claim still stands, so park on it and re-run the fast lane on
             // wake — where either the identity is bound or the name is genuinely `UnboundName`.
-            let carrier = expr.summarize();
             return park_resume(
                 vec![source],
-                Some(carrier),
                 Box::new(move |ctx, _idx| type_call(ctx, expr)),
             );
         }

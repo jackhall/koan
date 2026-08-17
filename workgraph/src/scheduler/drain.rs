@@ -63,12 +63,23 @@ pub struct Step<W: Workload> {
 }
 
 /// The drain's deadlock report: slots still parked after the queues drained, each waiting on a
-/// dependency that can no longer fire. `sample` summarizes the first stuck slot (a
-/// workload-supplied expression summary when one rode the work's `carrier`, else a generic tag).
-#[derive(Debug)]
-pub struct DrainDeadlock {
+/// dependency that can no longer fire. `sample` is the first stuck slot's memory anchor — the
+/// workload's own [`Workload::Frame`] — so the embedder renders the report off per-slot data it
+/// wrote itself rather than off a diagnostic string the scheduler carried for it.
+pub struct DrainDeadlock<W: Workload> {
     pub pending: usize,
-    pub sample: String,
+    pub sample: Rc<W::Frame>,
+}
+
+// Hand-written rather than derived: `W::Frame` is the embedder's own anchor type and carries no
+// `Debug` bound, so the report shows the count it owns and defers the sample to whoever can render
+// it.
+impl<W: Workload> std::fmt::Debug for DrainDeadlock<W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DrainDeadlock")
+            .field("pending", &self.pending)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<W: Workload> Scheduler<W> {
@@ -87,7 +98,7 @@ impl<W: Workload> Scheduler<W> {
     pub fn drain<'work>(
         &mut self,
         mut step: impl FnMut(&mut Self, Step<W>) -> StepVerdict<'work, W>,
-    ) -> Result<(), DrainDeadlock> {
+    ) -> Result<(), DrainDeadlock<W>> {
         while let Some(id) = self.pop_next() {
             let (work, anchor) = self.take_for_run(id);
             // Step start is a read, not a graph walk: every dep was delivered into its edge's

@@ -8,7 +8,7 @@ use crate::machine::{DispatchOutcome, KError, KErrorKind};
 use crate::scheduler::Deps;
 use crate::source::Spanned;
 
-use super::super::nodes::NodeWork;
+use super::super::nodes::{NodeWork, WorkLabel};
 use super::super::obligation::with_obligation;
 use super::super::outcome::continue_inline;
 use super::super::{TerminalDepFinish, ignore_results};
@@ -145,12 +145,9 @@ fn park_on_claims<'step>(
     sources: Vec<ProducerId>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    // Summarize the expression for the deadlock report before handing it to the resume closure.
-    let carrier = expr.summarize();
     let frame = working_frame("<dispatch-park>", &expr);
     park_resume_labelled(
         sources,
-        Some(carrier),
         Some(frame),
         Box::new(move |ctx, _id| initial(ctx, expr)),
     )
@@ -164,12 +161,12 @@ fn redispatch_continue<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    let carrier = working_expr.summarize();
+    let label = WorkLabel::of(&working_expr);
     let continuation = with_obligation(
         view.current_obligation_duplicate(),
         ignore_results(Box::new(move |ctx, _id| finish(ctx, working_expr))),
     );
-    continue_inline(NodeWork::new(continuation, Some(carrier)))
+    continue_inline(NodeWork::new(continuation), label)
 }
 
 /// `DispatchOutcome::Deferred` arm: stage every eager part and park
@@ -181,7 +178,7 @@ fn install_eager_only<'step>(
     // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
     // bare-name slots to pre-resolve here.
     let brand = ctx.current_scope().brand();
-    let (new_parts, staged_subs) = super::stage_all_eager_parts(brand, expr.parts, &[]);
+    let (new_parts, staged_subs) = super::stage_all_eager_parts(brand, &expr, &[]);
     debug_assert!(
         !staged_subs.is_empty(),
         "install_eager_only invoked from Deferred arm; \

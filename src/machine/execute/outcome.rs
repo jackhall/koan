@@ -30,6 +30,7 @@ use crate::witnessed::reattachable;
 use super::StepCarried;
 use super::decide::{DecideCtx, DepRequest, ResumeFn, propagate_dep_error};
 use super::harness::KoanWorkload;
+use super::nodes::WorkLabel;
 use super::nodes::{ChainOp, NodeWork};
 use super::obligation::ReturnObligation;
 use crate::machine::core::BlockRequest;
@@ -59,6 +60,10 @@ pub(in crate::machine::execute) enum Outcome<'step> {
         frame: FramePlacement,
         chain: ChainOp,
         block_entry: BlockEntry<'step>,
+        /// What the next incarnation renders as if the drain deadlocks on it. Read only by the
+        /// arms that mint a fresh anchor (a framed tail, an overlay entry, a chain reshape); a
+        /// replace that keeps the slot's anchor keeps its label with it.
+        label: WorkLabel,
     },
     /// Park the slot on `deps` and run `continuation` when they resolve. Each dep is either named by
     /// a source this slot only reads, or a request the harness realizes into a sub-slot that reclaims
@@ -97,12 +102,14 @@ impl<'step> Outcome<'step> {
 /// folded work).
 pub(in crate::machine::execute) fn continue_inline(
     work: NodeWork<'_, KoanWorkload>,
+    label: WorkLabel,
 ) -> Outcome<'_> {
     Outcome::Continue {
         work,
         frame: FramePlacement::Inherit,
         chain: ChainOp::Unchanged,
         block_entry: BlockEntry::None,
+        label,
     }
 }
 
@@ -138,11 +145,13 @@ pub(in crate::machine::execute) fn tail_continue<'step>(
     let winner = view
         .current_obligation_duplicate()
         .or_else(|| contract.map(ReturnObligation::seal));
+    let label = WorkLabel::of(&tail);
     Outcome::Continue {
         work: super::decide::decide_tail(tail, winner),
         frame,
         chain,
         block_entry,
+        label,
     }
 }
 
@@ -155,8 +164,8 @@ pub(in crate::machine::execute) fn tail_continue<'step>(
 /// - `Catch` watches the realized `watched` dep (a producer the harness spawns) and hands it to a
 ///   [`CatchFinish`] without short-circuiting.
 /// - `Resume` re-runs the parked dispatch decide through the [`ResumeFn`] the parking decide
-///   captured; `carrier` is the parked expression's rendered summary for the deadlock report (`None`
-///   when it has no renderable form).
+///   captured. It carries no deadlock sample of its own: a park keeps the slot's anchor, so the
+///   [`WorkLabel`] minted at submission is still the one a stuck slot renders through.
 ///
 /// (A bare-name forward is not a continuation — it splices out via [`Outcome::Forward`], never parking.)
 pub(in crate::machine::execute) enum Continuation<'step> {
@@ -169,7 +178,6 @@ pub(in crate::machine::execute) enum Continuation<'step> {
         finish: CatchFinish<'step>,
     },
     Resume {
-        carrier: Option<String>,
         resume: ResumeFn<'step>,
     },
 }

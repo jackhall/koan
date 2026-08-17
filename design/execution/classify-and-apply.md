@@ -380,16 +380,17 @@ A drain-end guard catches a dependency that never fires: when
 queues with nodes still parked (`PreRun`), it reports the deadlock, which
 the harness surfaces as
 `KErrorKind::SchedulerDeadlock { pending, sample }` rather than letting
-the top-level result read panic on an unresolved slot. `sample` is the carrier
-summary of the first parked node that has one (a dispatch decide carries its
-expression's pre-rendered summary; a carrier-less dep-finish/catch wait falls back
-to a generic tag), so the diagnostic points at code the reader can act on.
+the top-level result read panic on an unresolved slot. The scheduler's own report
+names the first parked slot's memory anchor — the workload's `Frame`, so it holds
+no koan-shaped diagnostic of its own — and the harness renders that anchor's
+[`WorkLabel`](../../src/machine/execute/nodes.rs) into `sample`, so the diagnostic
+points at code the reader can act on.
 
 ### Dispatch birth and resume
 
 A dispatch slot is the one [`NodeWork`](../../src/machine/execute/nodes.rs) shape with
-a decide `cont` (built by [`ignore_results`](../../src/machine/execute/outcome.rs))
-and a `carrier` deadlock-summary string. The `cont` captures a
+a decide `cont` (built by [`ignore_results`](../../src/machine/execute/outcome.rs)).
+The `cont` captures a
 `DecideCtx -> Outcome` closure that reads the step context, classifies /
 re-resolves,
 and returns an `Outcome`; it takes no dep values, so its deps are park-only. Birth
@@ -452,9 +453,11 @@ from dispatch resolution, *before* the part walk runs and before any eager sub
 could stage; eager subs take the dep-finish route rather than a resume. So a
 slot's resume carries exactly one park reason.
 
-The drain-end deadlock guard (`NodeStore::unresolved`) summarizes parked
-slots from each `NodeWork`'s `carrier` — a dispatch decide carries its
-expression's pre-rendered summary; a carrier-less dep-finish/catch wait falls back to
-a generic `<wait>` tag — selected by a testable `work_deadlock_sample` helper in
-`node_store`.
+The drain-end deadlock guard (`NodeStore::unresolved`) counts parked slots and
+names the first; the report line comes from that slot's `SlotFrame` label, minted
+at the anchor and never rendered until the guard fires. A node built from a
+source expression labels by extent (`path:line:col` plus the text it spans); a
+run the machine assembled from no origin labels by its `DispatchShape`; a slot
+with no expression behind it — a dep-finish, a block fan-out — falls back to a
+generic `<wait>` tag.
 

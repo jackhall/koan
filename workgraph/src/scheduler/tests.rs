@@ -147,12 +147,7 @@ where
     let anchor = TestAnchor::fresh();
     let probe = Rc::downgrade(anchor.owner());
     let continuation: Box<dyn FnOnce() -> u32> = Box::new(|| 0);
-    let id = sched.alloc_node(
-        NodeWork::new(continuation, None),
-        &[],
-        Rc::clone(&anchor),
-        false,
-    );
+    let id = sched.alloc_node(NodeWork::new(continuation), &[], Rc::clone(&anchor), false);
     (id, anchor, probe)
 }
 

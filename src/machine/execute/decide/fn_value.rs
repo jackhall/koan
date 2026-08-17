@@ -71,13 +71,7 @@ fn dispatch_callable_value<'step>(
 }
 
 /// Park the whole call on its head's still-finalizing binder edge `source` and re-run the fast
-/// lane on resume. The carrier surfaces the original (unspliced) call expression for the drain-end
-/// deadlock summary.
+/// lane on resume.
 fn install_head_park<'step>(source: ProducerId, expr: WorkingExpression<'step>) -> Outcome<'step> {
-    let carrier = expr.summarize();
-    park_resume(
-        vec![source],
-        Some(carrier),
-        Box::new(move |ctx, _idx| initial(ctx, expr)),
-    )
+    park_resume(vec![source], Box::new(move |ctx, _idx| initial(ctx, expr)))
 }

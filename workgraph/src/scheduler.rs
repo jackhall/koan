@@ -136,10 +136,14 @@ impl<W: Workload> Scheduler<W> {
     }
 
     /// Slots still `PreRun` after the queue drained — each is parked on a dependency that can no
-    /// longer fire. `(count, sample)` for the drain's deadlock error, or `None` when every slot has
-    /// reclaimed.
-    pub(in crate::scheduler) fn unresolved(&self) -> Option<(usize, String)> {
-        self.store.unresolved()
+    /// longer fire. `(count, anchor)` for the drain's deadlock error, pairing the stuck count with
+    /// the first stuck slot's memory anchor, or `None` when every slot has reclaimed. The anchor is
+    /// the workload's own per-slot type, so an embedder renders the report off data it wrote
+    /// itself — the scheduler stores nothing diagnostic.
+    pub(in crate::scheduler) fn unresolved(&self) -> Option<(usize, Rc<W::Frame>)> {
+        self.store
+            .unresolved()
+            .map(|(count, first)| (count, self.deps.anchor_clone(first)))
     }
 
     /// A clone of the slot's memory anchor, or `None` for a slot with none installed. Test-only.
