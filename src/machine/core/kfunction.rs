@@ -293,26 +293,14 @@ impl<'a> KFunction<'a> {
     ) -> Result<WorkingExpression<'b>, KError> {
         let mut pairs = NamedPairs::from_fields(fields)
             .map_err(|msg| KError::new(KErrorKind::ShapeError(msg)))?;
-        // Every named slot is checked satisfiable before the run is reserved, so the fill below
-        // cannot fail partway and the reconstruction builds straight into the region's bytes.
-        //
-        // Satisfiable is two conditions, because `take` consumes: the caller supplied the name, and
-        // no earlier slot already claimed it. A signature may name the same argument twice — nothing
-        // rejects `FN (a :Str OR a :Str)` — and the caller's fields cannot satisfy the second such
-        // slot however they are written, since a `NamedPairs` holds one value per name. Reporting
-        // the repeat as missing is what the consuming fill itself reports.
-        //
-        // Quadratic in the argument names, which a signature has a handful of, and allocation-free —
-        // a `HashSet` of claimed names would cost more than the scan it saves.
-        let argument_names = || {
-            self.signature.elements().iter().filter_map(|el| match el {
-                SignatureElement::Argument(a) => Some(a.name),
-                SignatureElement::Keyword(_) => None,
-            })
-        };
-        if let Some(missing) = argument_names().enumerate().find_map(|(slot, name)| {
-            let claimed_earlier = argument_names().take(slot).any(|earlier| earlier == name);
-            (claimed_earlier || !pairs.contains(name)).then_some(name)
+        // Every named slot is checked present before the run is reserved, so the fill below cannot
+        // fail partway and the reconstruction builds straight into the region's bytes. Presence is
+        // the whole of it: `take` consumes, but no two slots ever ask for the same name — a
+        // signature declaring one twice is refused at its definition
+        // (`fn_def::finalize::check_distinct_parameter_names`).
+        if let Some(missing) = self.signature.elements().iter().find_map(|el| match el {
+            SignatureElement::Argument(a) if !pairs.contains(a.name) => Some(a.name),
+            _ => None,
         }) {
             return Err(KError::new(KErrorKind::MissingArg(missing.to_string())));
         }

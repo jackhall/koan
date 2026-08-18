@@ -58,6 +58,20 @@ arguments don't satisfy the signature surfaces as
 with different parameter types routes to a different overload by
 slot-specificity (see below).
 
+Parameter names within one signature are distinct, and a signature declaring one
+twice is refused where it is written — `FN (BETWEEN x :Number AND x :Number)` is a
+[`KErrorKind::ShapeError`](../../../src/machine/core/kerror.rs) naming the repeated
+parameter, raised by `check_distinct_parameter_names` in
+[`src/builtins/fn_def/finalize.rs`](../../../src/builtins/fn_def/finalize.rs) before the
+callable is built. There is no reading of a repeat that works: positionally the second
+slot's binding would shadow the first, leaving one of the caller's arguments unreachable
+in the body, and by name no call could fill both slots at all, since a field record
+carries one value per name. Refusing the definition puts the diagnostic on the signature
+that is wrong rather than on a call site that did nothing wrong. Distinctness is what
+lets the named-argument lane's reconstruction
+([`KFunction::reconstruct_positional`](../../../src/machine/core/kfunction.rs)) check its
+slots by presence alone.
+
 The return type is non-optional and runtime-enforced. The scheduler injects a
 check at user-fn slot finalization that surfaces
 [`KErrorKind::TypeMismatch`](../../../src/machine/core/kerror.rs) (with a `<return>` arg

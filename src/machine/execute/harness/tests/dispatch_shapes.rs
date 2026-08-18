@@ -218,20 +218,21 @@ fn function_value_call_named_args_missing_short_circuits() {
     );
 }
 
-/// A signature may name the same argument twice — nothing rejects it — and no field record can
-/// satisfy the second such slot, because a supplied name carries one value. `reconstruct_positional`
-/// reserves its parts run up front, so the repeat has to surface from the pre-check rather than
-/// from the fill: the slot-terminal `MissingArg` here is what says the run was never reserved on a
-/// signature it could not fill.
+/// A signature naming the same parameter twice is refused where it is written, not where it is
+/// called. This is what keeps the named-argument lane's pre-check a plain presence test: a field
+/// record carries one value per name, so a repeated slot could never be filled, and without the
+/// definition-time gate the call site would be told it was missing an argument it did supply.
 #[test]
-fn function_value_call_named_args_repeated_slot_name_is_missing() {
+fn fn_definition_with_a_repeated_parameter_name_is_refused() {
     use crate::machine::KErrorKind;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("LET f = FN (a :Number OR a :Number) -> Number = (a)");
-    let expr = parse_one(&program, "f {a = 1}");
+    let expr = parse_one(
+        &program,
+        "FN (BETWEEN x :Number AND x :Number) -> Number = (x)",
+    );
     let types = test_run.types.clone();
     let id = test_run.dispatch_watched_in(scope, working(scope, expr));
     test_run
@@ -243,11 +244,11 @@ fn function_value_call_named_args_repeated_slot_name_is_missing() {
         .read_edge_result_with(id, |v| v.summarize(&types))
     {
         Err(e) => e.clone(),
-        Ok(summary) => panic!("expected MissingArg error, got value {summary}"),
+        Ok(summary) => panic!("expected a repeated-parameter ShapeError, got value {summary}"),
     };
     assert!(
-        matches!(&err.kind, KErrorKind::MissingArg(name) if name == "a"),
-        "expected MissingArg(\"a\"), got {err}",
+        matches!(&err.kind, KErrorKind::ShapeError(message) if message.contains("`x` is declared more than once")),
+        "expected a repeated-parameter ShapeError naming `x`, got {err}",
     );
 }
 

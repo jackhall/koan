@@ -218,6 +218,34 @@ fn check_value_type_kinds(
     Ok(())
 }
 
+/// Reject a signature that names the same parameter twice.
+///
+/// A repeated name has no reading that works. Positionally the second slot's binding overwrites
+/// the first, so one of the two arguments the caller passed is silently unreachable in the body;
+/// by name it is worse, because a field record carries one value per name, so no call can fill
+/// both slots and the call site is told it is missing an argument it did in fact supply. Refusing
+/// the definition puts the diagnostic on the signature that is actually wrong.
+///
+/// Quadratic in the parameter names, which a signature has a handful of, and this runs once per
+/// definition.
+fn check_distinct_parameter_names(elements: &[SignatureElement<'_>]) -> Result<(), KError> {
+    let names = || {
+        elements.iter().filter_map(|element| match element {
+            SignatureElement::Argument(argument) => Some(argument.name),
+            SignatureElement::Keyword(_) => None,
+        })
+    };
+    for (slot, name) in names().enumerate() {
+        if names().take(slot).any(|earlier| earlier == name) {
+            return Err(KError::new(KErrorKind::ShapeError(format!(
+                "FN parameter `{name}` is declared more than once; each parameter of a \
+                 signature must have its own name"
+            ))));
+        }
+    }
+    Ok(())
+}
+
 /// Build the `KFunction` and, for a keyworded `Function`, register it under its lead
 /// keyword — plus, for the combined form, bind it under the statement's value name.
 /// `Anonymous` skips registration entirely — the value it returns is the
@@ -231,6 +259,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     bind_index: BindingIndex,
     types: &TypeRegistry,
 ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp<'a>>), KError> {
+    check_distinct_parameter_names(&elements)?;
     check_value_type_kinds(&elements, &return_type, types)?;
 
     // First Keyword keys the data table. Dispatch is by full signature via
