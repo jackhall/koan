@@ -293,22 +293,42 @@ impl<'a> KFunction<'a> {
     ) -> Result<WorkingExpression<'b>, KError> {
         let mut pairs = NamedPairs::from_fields(fields)
             .map_err(|msg| KError::new(KErrorKind::ShapeError(msg)))?;
-        let mut parts: Vec<Spanned<WorkingPart<'b>>> =
-            Vec::with_capacity(self.signature.elements().len());
-        for el in self.signature.elements() {
-            match el {
-                SignatureElement::Keyword(s) => parts.push(Spanned::bare(WorkingPart::Ast(
-                    ExpressionPart::Keyword(brand.allocator().text(s)),
-                ))),
-                SignatureElement::Argument(a) => match pairs.take(a.name) {
-                    Some(v) => parts.push(Spanned::bare(WorkingPart::Ast(v))),
-                    None => {
-                        return Err(KError::new(KErrorKind::MissingArg(a.name.to_string())));
-                    }
-                },
-            }
+        // Every named slot is checked satisfiable before the run is reserved, so the fill below
+        // cannot fail partway and the reconstruction builds straight into the region's bytes.
+        //
+        // Satisfiable is two conditions, because `take` consumes: the caller supplied the name, and
+        // no earlier slot already claimed it. A signature may name the same argument twice — nothing
+        // rejects `FN (a :Str OR a :Str)` — and the caller's fields cannot satisfy the second such
+        // slot however they are written, since a `NamedPairs` holds one value per name. Reporting
+        // the repeat as missing is what the consuming fill itself reports.
+        //
+        // Quadratic in the argument names, which a signature has a handful of, and allocation-free —
+        // a `HashSet` of claimed names would cost more than the scan it saves.
+        let argument_names = || {
+            self.signature.elements().iter().filter_map(|el| match el {
+                SignatureElement::Argument(a) => Some(a.name),
+                SignatureElement::Keyword(_) => None,
+            })
+        };
+        if let Some(missing) = argument_names().enumerate().find_map(|(slot, name)| {
+            let claimed_earlier = argument_names().take(slot).any(|earlier| earlier == name);
+            (claimed_earlier || !pairs.contains(name)).then_some(name)
+        }) {
+            return Err(KError::new(KErrorKind::MissingArg(missing.to_string())));
         }
-        Ok(WorkingExpression::new(brand, parts))
+        Ok(WorkingExpression::new_from_iter(
+            brand,
+            self.signature.elements().iter().map(|el| {
+                Spanned::bare(WorkingPart::Ast(match el {
+                    SignatureElement::Keyword(s) => {
+                        ExpressionPart::Keyword(brand.allocator().text(s))
+                    }
+                    SignatureElement::Argument(a) => pairs
+                        .take(a.name)
+                        .expect("every named slot checked satisfiable above"),
+                }))
+            }),
+        ))
     }
 }
 

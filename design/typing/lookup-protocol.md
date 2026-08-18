@@ -157,6 +157,14 @@ nor the reverse.
   precedence with both in hand rather than the lookup shadowing one. A scope
   contributes nothing to the walk when `overloads.is_empty() &&
   pending.is_none()`.
+- [`Bindings::pending_function_stored`](../../src/machine/core/bindings.rs) is
+  that lookup's pending-only peer, for a caller that reads nothing but the
+  in-flight claim — the operator chain's park probe, which asks two keys of every
+  ancestor scope per operator. It answers from the same bucket by the same
+  earliest-visible-index rule, written once so the two entry points cannot name
+  different claims, and copies nothing out: a `ProducerId` is a plain edge name,
+  where `overloads` has to duplicate its sealed carriers to let the candidate walk
+  run outside the `tables` borrow.
 
 [`Bindings::lookup_operator_group`](../../src/machine/core/bindings.rs) is the
 operator-side instance: it consults the `operators` map for the chain's probe

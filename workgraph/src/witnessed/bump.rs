@@ -225,6 +225,23 @@ impl<'b> BumpAllocator<'b> {
         self.0.alloc_slice_copy(items)
     }
 
+    /// Fill a `Copy` slice in the region **straight from `items`** and hand back the co-located
+    /// `&'b [T]` — the peer of [`slice`](Self::slice) for a run whose elements are computed rather
+    /// than already sitting in one. Same `T: Copy` rationale as [`value`](Self::value).
+    ///
+    /// The run is reserved before the first element lands, so the iterator's length has to be known
+    /// up front — hence `ExactSizeIterator` rather than the looser bound
+    /// [`frozen_table`](Self::frozen_table) takes, where a wrong `size_hint` costs a rehash and not
+    /// correctness. That bound is what makes this verb strictly better than staging: a caller
+    /// holding an owned run only to hand it to `slice` pays a heap allocation and two copies, where
+    /// this pays one copy into the bytes the value keeps.
+    pub fn slice_from_iter<T: Copy>(
+        self,
+        items: impl IntoIterator<Item = T, IntoIter: ExactSizeIterator>,
+    ) -> &'b [T] {
+        self.0.alloc_slice_fill_iter(items)
+    }
+
     /// Copy `text` into the region and hand back the co-located `&'b str`. A `str` is a slice of
     /// `Copy` bytes under a UTF-8 invariant, so it carries no destructor either and needs no bound to
     /// say so.

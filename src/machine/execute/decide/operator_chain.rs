@@ -189,13 +189,13 @@ fn reduce_fold_left<'step>(
 
     let mut acc = WorkingExpression::synthesized(
         brand,
-        vec![first_operand, first_operator, second_operand],
+        &[first_operand, first_operator, second_operand],
         expr,
     );
     for (operator, operand) in operators.zip(operands) {
         acc = WorkingExpression::synthesized(
             brand,
-            vec![wrap_as_operand(brand, acc), operator, operand],
+            &[wrap_as_operand(brand, acc), operator, operand],
             expr,
         );
     }
@@ -232,13 +232,13 @@ fn reduce_fold_right<'step>(
 
     let mut acc = WorkingExpression::synthesized(
         brand,
-        vec![second_last_operand, last_operator, last_operand],
+        &[second_last_operand, last_operator, last_operand],
         expr,
     );
     for (operator, operand) in operators.zip(operands) {
         acc = WorkingExpression::synthesized(
             brand,
-            vec![operand, operator, wrap_as_operand(brand, acc)],
+            &[operand, operator, wrap_as_operand(brand, acc)],
             expr,
         );
     }
@@ -274,28 +274,25 @@ fn reduce_unary<'step>(
     };
     // A chain is parsed syntax, so every operand is still a parser part and rides straight into the
     // literal run the brand bumps.
-    let list_items: Vec<ExpressionPart<'step>> = operands
-        .into_iter()
-        .map(|operand| {
+    let list_items = brand
+        .allocator()
+        .slice_from_iter(operands.into_iter().map(|operand| {
             operand
                 .value
                 .as_ast()
                 .expect("an operator chain's operands are parsed parts")
-        })
-        .collect();
+        }));
     let kw_part = Spanned {
         value: WorkingPart::Ast(ExpressionPart::Keyword(sym)),
         span: operator.span,
     };
     let list_part = Spanned {
-        value: WorkingPart::Ast(ExpressionPart::ListLiteral(
-            brand.allocator().slice(&list_items),
-        )),
+        value: WorkingPart::Ast(ExpressionPart::ListLiteral(list_items)),
         span: expr.span,
     };
     become_dispatch(
         ctx,
-        WorkingExpression::synthesized(brand, vec![kw_part, list_part], expr),
+        WorkingExpression::synthesized(brand, &[kw_part, list_part], expr),
     )
 }
 
@@ -356,7 +353,7 @@ fn install_pairwise_fold<'step>(
     let deps: Vec<DepRequest<'step>> = operands
         .into_iter()
         .map(|operand| DepRequest::Dispatch {
-            expr: WorkingExpression::synthesized(brand, vec![operand], &chain),
+            expr: WorkingExpression::synthesized(brand, &[operand], &chain),
             placement: DepPlacement::OwnScope,
         })
         .collect();
@@ -383,7 +380,7 @@ fn install_pairwise_fold<'step>(
             };
             pairs.push(WorkingExpression::synthesized(
                 brand,
-                vec![left, operator, right],
+                &[left, operator, right],
                 &chain,
             ));
         }
@@ -441,7 +438,7 @@ pub(super) fn combine<'step>(
 ) -> WorkingExpression<'step> {
     WorkingExpression::synthesized(
         brand,
-        vec![
+        &[
             wrap_as_operand(brand, left),
             Spanned {
                 value: WorkingPart::Ast(ExpressionPart::Keyword(brand.allocator().text(combiner))),
@@ -516,7 +513,7 @@ fn pending_operator_sources<'b>(
         ] {
             for scope in s.ancestors() {
                 let cutoff = scope.binding_cutoff(chain);
-                if let Some(source) = scope.bindings().lookup_function_stored(key, cutoff).pending
+                if let Some(source) = scope.bindings().pending_function_stored(key, cutoff)
                     && !sources.contains(&source)
                 {
                     sources.push(source);

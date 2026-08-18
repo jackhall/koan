@@ -157,14 +157,12 @@ fn single_value_cell<'step>(
             got: 0,
         })),
         [only] => Ok(ValueCell::Part(only.value)),
-        many => Ok(ValueCell::Synthesized(WorkingExpression::new(
+        many => Ok(ValueCell::Synthesized(WorkingExpression::new_from_iter(
             brand,
-            many.iter()
-                .map(|part| Spanned {
-                    value: WorkingPart::Ast(part.value),
-                    span: part.span,
-                })
-                .collect(),
+            many.iter().map(|part| Spanned {
+                value: WorkingPart::Ast(part.value),
+                span: part.span,
+            }),
         ))),
     }
 }
@@ -379,7 +377,7 @@ fn launch<'step>(
         .map(|cell| DepRequest::Dispatch {
             expr: match cell {
                 ValueCell::Part(part) => {
-                    WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))])
+                    WorkingExpression::new(brand, &[Spanned::bare(WorkingPart::Ast(part))])
                 }
                 ValueCell::Synthesized(expr) => expr,
             },

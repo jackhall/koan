@@ -30,7 +30,7 @@ fn a_spanned_node_labels_by_source() {
 
     let expr = WorkingExpression::build(
         region.brand(),
-        identifier_run(Some(span)),
+        &identifier_run(Some(span)),
         Some(span),
         Some(file),
     );
@@ -55,7 +55,7 @@ fn an_originless_run_labels_by_shape() {
     let region = run_root_storage();
     let _ = &program;
 
-    let expr = WorkingExpression::new(region.brand(), identifier_run(None));
+    let expr = WorkingExpression::new(region.brand(), &identifier_run(None));
 
     let label = WorkLabel::of(&expr);
     assert!(
@@ -80,14 +80,14 @@ fn a_synthesized_run_inherits_its_origin() {
     let file = crate::source::register(SourceFile::new("fold.koan", "a + b + c\n".into()));
     let origin = WorkingExpression::build(
         region.brand(),
-        identifier_run(Some(Span { start: 0, end: 9 })),
+        &identifier_run(Some(Span { start: 0, end: 9 })),
         Some(Span { start: 0, end: 9 }),
         Some(file),
     );
 
     let reduced = WorkingExpression::synthesized(
         region.brand(),
-        identifier_run(Some(Span { start: 0, end: 5 })),
+        &identifier_run(Some(Span { start: 0, end: 5 })),
         &origin,
     );
 

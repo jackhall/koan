@@ -44,8 +44,8 @@ use crate::witnessed::{Reattachable, StepContext};
 /// a fresh `for<'b>` brand. A [`WorkingExpression`](crate::machine::model::WorkingExpression) is not
 /// a carrier — it is a plain borrowing node that must live at `'step` — and this context holds its
 /// destination frame as an owned `Rc`, which no `'step` brand can be derived from. Its doors
-/// (`BodyCtx::expression` / `working`, and their `FinishCtx` peers) hang off the step's own scope
-/// instead, whose [`RegionBrand`] is already at `'step` and names this same destination region.
+/// (`BodyCtx::working` and its `FinishCtx` peer) hang off the step's own scope instead, whose
+/// [`RegionBrand`] is already at `'step` and names this same destination region.
 #[derive(Clone)]
 pub struct StepAllocator<'step> {
     context: StepContext<FrameStorage>,

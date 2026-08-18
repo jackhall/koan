@@ -218,6 +218,39 @@ fn function_value_call_named_args_missing_short_circuits() {
     );
 }
 
+/// A signature may name the same argument twice — nothing rejects it — and no field record can
+/// satisfy the second such slot, because a supplied name carries one value. `reconstruct_positional`
+/// reserves its parts run up front, so the repeat has to surface from the pre-check rather than
+/// from the fill: the slot-terminal `MissingArg` here is what says the run was never reserved on a
+/// signature it could not fill.
+#[test]
+fn function_value_call_named_args_repeated_slot_name_is_missing() {
+    use crate::machine::KErrorKind;
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run("LET f = FN (a :Number OR a :Number) -> Number = (a)");
+    let expr = parse_one(&program, "f {a = 1}");
+    let types = test_run.types.clone();
+    let id = test_run.dispatch_watched_in(scope, working(scope, expr));
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should not surface errors directly");
+    let err = match test_run
+        .runtime
+        .read_edge_result_with(id, |v| v.summarize(&types))
+    {
+        Err(e) => e.clone(),
+        Ok(summary) => panic!("expected MissingArg error, got value {summary}"),
+    };
+    assert!(
+        matches!(&err.kind, KErrorKind::MissingArg(name) if name == "a"),
+        "expected MissingArg(\"a\"), got {err}",
+    );
+}
+
 // =====================================================================
 // Surface assertions on the named-arg fast lane, paired with a routing claim
 // (`resolve_dispatch_entry_count == 0`) to pin that the fast lane handles each

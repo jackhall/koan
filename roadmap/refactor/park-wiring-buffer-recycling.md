@@ -10,10 +10,8 @@ through `named_sources`, which returns a `(sources, minted)` pair of `Vec<EdgeId
 more plus the `Vec<NodeId>` its fan-out produced. `install_eager_subs`
 ([src/machine/execute/decide/keyworded.rs](../../src/machine/execute/decide/keyworded.rs))
 adds churn of its own: it `unzip()`s the staged subs into two vectors, then
-`Deps::from_requests` pushes one of them into a third, and the finish closure does
-`working_expr.parts.to_vec()` into a fourth which `respliced` immediately copies into the
-bump. The `unzip`/`from_requests` pair produces nothing the staging walk did not already
-have.
+`Deps::from_requests` pushes one of them into a third. The `unzip`/`from_requests` pair
+produces nothing the staging walk did not already have.
 
 On the workgraph side, `install_for_slot` assigns a fresh `ResolvedDeps` and
 `take_deps` / `take_notify` `mem::take` their vectors

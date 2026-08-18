@@ -15,12 +15,11 @@ use crate::source::Spanned;
 /// Freeze a run of raw AST parts as the working node a dispatch entry receives — the shape
 /// `WorkingExpression::from_ast` produces for a parsed statement, assembled part-by-part here.
 fn working<'a>(brand: RegionBrand<'a>, parts: Vec<ExpressionPart<'a>>) -> WorkingExpression<'a> {
-    WorkingExpression::new(
+    WorkingExpression::new_from_iter(
         brand,
         parts
             .into_iter()
-            .map(|part| Spanned::bare(WorkingPart::Ast(part)))
-            .collect(),
+            .map(|part| Spanned::bare(WorkingPart::Ast(part))),
     )
 }
 

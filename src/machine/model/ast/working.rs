@@ -239,10 +239,28 @@ fn parts_extent(parts: &[Spanned<WorkingPart<'_>>]) -> Option<Span> {
         })
 }
 
+/// A parts run on its way into a node's region, as a construction door takes it: either a borrowed
+/// run to copy in, or an exact-length iterator to fill the region's bytes straight from.
+///
+/// Both forms exist because both shapes of call site do. A fixed-length run — an operator chain's
+/// `[left, op, right]`, a wrapped single operand — is a stack array the door copies; a run whose
+/// slots are computed one at a time is an iterator, and staging it through an owned `Vec` first
+/// would pay a heap allocation and a second copy for bytes the region was going to hold anyway.
+type RunIter<I> = <I as IntoIterator>::IntoIter;
+
 impl<'a> WorkingExpression<'a> {
-    /// Spanless construction door for a run the scheduler built itself.
-    pub fn new(brand: RegionBrand<'a>, parts: Vec<Spanned<WorkingPart<'a>>>) -> Self {
+    /// Spanless construction door for a borrowed run the scheduler built itself.
+    pub fn new(brand: RegionBrand<'a>, parts: &[Spanned<WorkingPart<'a>>]) -> Self {
         Self::build(brand, parts, None, None)
+    }
+
+    /// [`new`](Self::new)'s peer for a run whose slots are computed — see [`RunIter`].
+    pub fn new_from_iter<I>(brand: RegionBrand<'a>, parts: I) -> Self
+    where
+        I: IntoIterator<Item = Spanned<WorkingPart<'a>>>,
+        RunIter<I>: ExactSizeIterator,
+    {
+        Self::build_from_iter(brand, parts, None, None)
     }
 
     /// Construction door for a run the machine synthesized **out of** `origin` — an operator-chain
@@ -255,22 +273,52 @@ impl<'a> WorkingExpression<'a> {
     /// which is the enclosing expression the synthesis is standing in for either way.
     pub fn synthesized(
         brand: RegionBrand<'a>,
-        parts: Vec<Spanned<WorkingPart<'a>>>,
+        parts: &[Spanned<WorkingPart<'a>>],
         origin: &WorkingExpression<'a>,
     ) -> Self {
-        let span = parts_extent(&parts).or(origin.span);
-        Self::build(brand, parts, span, origin.file)
+        let parts = brand.allocator().slice(parts);
+        Self::from_run(
+            brand,
+            parts,
+            parts_extent(parts).or(origin.span),
+            origin.file,
+        )
     }
 
-    /// Construction chokepoint: bumps the parts run into `brand`'s region and fills the structural
-    /// cache from it. A node built here is not a binder — binders are parsed statements.
+    /// Construction door for a borrowed run: copy it into `brand`'s region, then fill the cache. A
+    /// node built here is not a binder — binders are parsed statements.
     pub fn build(
         brand: RegionBrand<'a>,
-        parts: Vec<Spanned<WorkingPart<'a>>>,
+        parts: &[Spanned<WorkingPart<'a>>],
         span: Option<Span>,
         file: Option<FileId>,
     ) -> Self {
-        let parts = brand.allocator().slice(&parts);
+        Self::from_run(brand, brand.allocator().slice(parts), span, file)
+    }
+
+    /// [`build`](Self::build)'s peer for a run whose slots are computed — see [`RunIter`].
+    pub fn build_from_iter<I>(
+        brand: RegionBrand<'a>,
+        parts: I,
+        span: Option<Span>,
+        file: Option<FileId>,
+    ) -> Self
+    where
+        I: IntoIterator<Item = Spanned<WorkingPart<'a>>>,
+        RunIter<I>: ExactSizeIterator,
+    {
+        Self::from_run(brand, brand.allocator().slice_from_iter(parts), span, file)
+    }
+
+    /// Construction chokepoint, over a parts run **already resident** in `brand`'s region: fills the
+    /// structural cache from it and does nothing else. Every door above lands here, differing only
+    /// in how the run reached the region.
+    fn from_run(
+        brand: RegionBrand<'a>,
+        parts: &'a [Spanned<WorkingPart<'a>>],
+        span: Option<Span>,
+        file: Option<FileId>,
+    ) -> Self {
         let shape = classify_dispatch_shape(parts);
         WorkingExpression {
             parts,
@@ -288,16 +336,13 @@ impl<'a> WorkingExpression<'a> {
     /// [`WorkingPart::Ast`], and the whole structural cache carried over as pointer copies. Shallow
     /// by construction — a nested sub-node stays AST until it is itself dispatched.
     pub fn from_ast(brand: RegionBrand<'a>, ast: KExpression<'a>) -> Self {
-        let parts: Vec<Spanned<WorkingPart<'a>>> = ast
-            .parts
-            .iter()
-            .map(|part| Spanned {
-                value: WorkingPart::Ast(part.value),
-                span: part.span,
-            })
-            .collect();
         WorkingExpression {
-            parts: brand.allocator().slice(&parts),
+            parts: brand
+                .allocator()
+                .slice_from_iter(ast.parts.iter().map(|part| Spanned {
+                    value: WorkingPart::Ast(part.value),
+                    span: part.span,
+                })),
             span: ast.span,
             file: ast.file,
             untyped_key: ast.stored_key(),
@@ -308,22 +353,22 @@ impl<'a> WorkingExpression<'a> {
         }
     }
 
-    /// Rebuild this node with a new parts run — the splice path: `install_eager_subs`'s finish
-    /// replaces each staging hole with its resolved cell and freezes the result. `span` and `file`
-    /// ride through, and the cache refills from the new run.
-    pub fn respliced(&self, brand: RegionBrand<'a>, parts: Vec<Spanned<WorkingPart<'a>>>) -> Self {
-        let mut rebuilt = Self::build(brand, parts, self.span, self.file);
+    /// Rebuild this node with a new parts run — the splice path: a part walk replaces each wrap slot
+    /// with its resolved cell and each eager slot with a staging hole, and `install_eager_subs`'s
+    /// finish replaces each hole with the cell the dep delivered. `span`, `file` and the binder
+    /// caches ride through, and the structural cache refills from the new run.
+    ///
+    /// Every caller's run is computed slot by slot, so this door only takes the iterator form —
+    /// see [`RunIter`].
+    pub fn respliced<I>(&self, brand: RegionBrand<'a>, parts: I) -> Self
+    where
+        I: IntoIterator<Item = Spanned<WorkingPart<'a>>>,
+        RunIter<I>: ExactSizeIterator,
+    {
+        let mut rebuilt = Self::build_from_iter(brand, parts, self.span, self.file);
         rebuilt.binder_plan = self.binder_plan;
         rebuilt.binder_name_slot = self.binder_name_slot;
         rebuilt
-    }
-
-    /// Build a node and bump it, for the [`WorkingPart::Expression`] arm that nests one.
-    pub fn nested(
-        brand: RegionBrand<'a>,
-        parts: Vec<Spanned<WorkingPart<'a>>>,
-    ) -> &'a WorkingExpression<'a> {
-        brand.allocator().value(Self::new(brand, parts))
     }
 
     /// Cached dispatch shape (see [`classify_dispatch_shape`]).

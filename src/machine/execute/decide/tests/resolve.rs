@@ -76,7 +76,7 @@ fn resolve_name_parked() {
     let producer = test_run.dispatch_in_scope(
         WorkingExpression::new(
             scope.brand(),
-            vec![Spanned::bare(WorkingPart::Ast(ExpressionPart::Identifier(
+            &[Spanned::bare(WorkingPart::Ast(ExpressionPart::Identifier(
                 "_",
             )))],
         ),

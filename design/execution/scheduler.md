@@ -298,11 +298,21 @@ delivery envelope in the finishing step's own region and freezes a new parts run
 with each staging hole replaced by its resting cell —
 `WorkingPart::Spliced { cell }` — through
 [`WorkingExpression::respliced`](../../src/machine/model/ast/working.rs). Every
-part is `Copy`, so that is a memcpy with the holes patched, not a rebuild. The splice
-lives **entirely inside the finish** — the scheduler resolves deps and hands
+part is `Copy` and the deps were staged in slot order, so that is one ascending
+pass filling the region's own bytes — no owned run staged in between, and no
+rebuild. The splice lives **entirely inside the finish** — the scheduler resolves deps and hands
 values back exactly as it does for any dep-finish, learning nothing about
 `Spliced` cells. The assembled `Spliced`-laden expression then goes through
 `resolve_dispatch` as if it had been written with literals.
+
+**A walk that moves nothing splices nothing.** The part walk that produces those
+staging holes reports either `Respliced` — a re-frozen node plus its staged deps —
+or `Unchanged`. A walk that splices no wrap slot and stages no eager sub provably
+produced the run it was handed, so it builds no run at all and the caller invokes
+on the node it already holds: no parts run re-bumped, no bucket key re-bumped, no
+structural cache recomputed. That is the whole of a call like `PRINT "hi"`, where
+every slot passes through. Staging therefore runs as its own pass ahead of the
+rebuild, so the decision is known before any region byte is spent.
 
 (This *expression* splice — rewriting `parts` to `Spliced` cells — is distinct
 from the *slot* splice of [Bare-name forward splice](#bare-name-forward-splice),

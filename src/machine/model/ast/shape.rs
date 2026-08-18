@@ -243,12 +243,10 @@ pub fn stored_untyped_key<'a, P: Part<'a>>(
     brand: RegionBrand<'a>,
     parts: &[Spanned<P>],
 ) -> &'a [StoredElement<'a>] {
-    let elements: Vec<StoredElement<'a>> = parts
-        .iter()
-        .map(|part| match part.value.class() {
+    brand
+        .allocator()
+        .slice_from_iter(parts.iter().map(|part| match part.value.class() {
             PartClass::Keyword(s) => StoredElement::Keyword(s),
             _ => StoredElement::Slot,
-        })
-        .collect();
-    brand.allocator().slice(&elements)
+        }))
 }

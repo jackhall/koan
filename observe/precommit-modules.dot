@@ -514,7 +514,6 @@ digraph {
     "koan::machine::core::kfunction::action" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::core::kfunction::action" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine::core::bindings" [label="uses", style="dashed"];

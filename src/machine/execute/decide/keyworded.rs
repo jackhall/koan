@@ -14,8 +14,8 @@ use super::super::outcome::continue_inline;
 use super::super::{TerminalDepFinish, ignore_results};
 use super::ctx::DecideCtx;
 use super::{
-    Await, DepRequest, Outcome, Resolution, Resolved, park_resume_labelled, stage_eager_part,
-    staged_slot_placeholder, working_frame,
+    Await, DepRequest, Outcome, PartWalk, Resolution, Resolved, park_resume_labelled,
+    stage_eager_part, staged_slot_placeholder, working_frame,
 };
 
 /// Entry from the dispatch router. Resolved-no-subs terminates inline; every other outcome
@@ -76,18 +76,23 @@ fn walk_and_invoke<'step>(
     expr: WorkingExpression<'step>,
     bare_outcomes: &[Option<Resolution>],
 ) -> Outcome<'step> {
-    let PartWalkResult {
-        new_parts,
-        staged_subs,
-    } = part_walk(ctx, expr.parts, bare_outcomes, &resolved.slots);
-    // The walk spliced / staged into a fresh run; freeze it back onto this node so `span`, `file`
-    // and the binder caches ride through to the invoke and to any re-resolve.
-    let new_expr = expr.respliced(ctx.current_scope().brand(), new_parts);
-    if staged_subs.is_empty() {
-        return super::exec::invoke_continue(ctx, resolved.function, new_expr);
+    match part_walk(ctx, &expr, bare_outcomes, &resolved.slots) {
+        // Nothing to splice and nothing to stage: the node the walk was handed is the node the
+        // invoke wants, so it rides straight through with no rebuild.
+        PartWalk::Unchanged => super::exec::invoke_continue(ctx, resolved.function, expr),
+        // The walk spliced / staged into a fresh run and froze it back onto this node, so `span`,
+        // `file` and the binder caches ride through to the invoke and to any re-resolve.
+        PartWalk::Respliced {
+            expr: new_expr,
+            staged_subs,
+        } => {
+            if staged_subs.is_empty() {
+                return super::exec::invoke_continue(ctx, resolved.function, new_expr);
+            }
+            let _ = resolved; // discard the speculative pick.
+            install_eager_subs(ctx, new_expr, staged_subs, None)
+        }
     }
-    let _ = resolved; // discard the speculative pick.
-    install_eager_subs(ctx, new_expr, staged_subs, None)
 }
 
 /// Re-resolve dispatch against `working_expr` once its eager subs have spliced back in.
@@ -178,13 +183,18 @@ fn install_eager_only<'step>(
     // Deferred arm: no committed pick yet (resume re-resolves on finish), so no
     // bare-name slots to pre-resolve here.
     let brand = ctx.current_scope().brand();
-    let (new_parts, staged_subs) = super::stage_all_eager_parts(brand, &expr, &[]);
-    debug_assert!(
-        !staged_subs.is_empty(),
-        "install_eager_only invoked from Deferred arm; \
-         resolve_dispatch contract requires at least one eager part",
-    );
-    let new_expr = expr.respliced(brand, new_parts);
+    let (new_expr, staged_subs) = match super::stage_all_eager_parts(brand, &expr, &[]) {
+        PartWalk::Respliced { expr, staged_subs } => (expr, staged_subs),
+        // The `Deferred` arm's contract is at least one eager part, so the walk always stages.
+        PartWalk::Unchanged => {
+            debug_assert!(
+                false,
+                "install_eager_only invoked from Deferred arm; \
+                 resolve_dispatch contract requires at least one eager part",
+            );
+            (expr, Vec::new())
+        }
+    };
     // The Deferred arm has no pre-pick, so no inline-resolved wrap slots.
     install_eager_subs(ctx, new_expr, staged_subs, None)
 }
@@ -221,23 +231,34 @@ pub(super) fn install_eager_subs<'step>(
         // dep list in staging order — 1:1 with `part_indices`.
         //
         // A parts run is frozen once its door bumps it, so the whole batch lands in one rebuild:
-        // the run is copied out, each staging hole overwritten with its cell, and the result
-        // re-frozen through `respliced` (which carries `span` / `file` / the binder plan over and
-        // refills the structural cache from the spliced run).
+        // the run is walked slot by slot with each staging hole replaced by its cell, straight
+        // into the region's own bytes, and re-frozen through `respliced` (which carries `span` /
+        // `file` / the binder plan over and refills the structural cache from the spliced run).
+        // The deps were staged in slot order, so `part_indices` ascends and a single cursor over
+        // it places every cell in one pass.
         let scope = ctx.current_scope();
-        let mut parts: Vec<Spanned<WorkingPart<'step>>> = working_expr.parts.to_vec();
-        for (slot, terminal) in part_indices.iter().zip(terminals) {
-            // Lift the dep's resident cell back into a delivery envelope and rest that envelope
-            // into this step's own region in one door: the cell keeps the producer's carrier, the
-            // envelope's whole coverage moves into the region's union bundle. That is what keeps
-            // the value's backing retained until the bind reads it — which happens in this same
-            // step, on the decide that folds the resolved call (`enter_user_fn`), so the cell is
-            // never read across a tail hop.
-            parts[*slot].value = WorkingPart::Spliced {
-                cell: scope.rest_spliced(&terminal.cell),
-            };
-        }
-        let spliced = working_expr.respliced(scope.brand(), parts);
+        let parts = working_expr.parts;
+        let mut filled = part_indices.iter().copied().zip(terminals).peekable();
+        let spliced = working_expr.respliced(
+            scope.brand(),
+            parts.iter().enumerate().map(|(i, part)| {
+                // Lift the dep's resident cell back into a delivery envelope and rest that
+                // envelope into this step's own region in one door: the cell keeps the producer's
+                // carrier, the envelope's whole coverage moves into the region's union bundle.
+                // That is what keeps the value's backing retained until the bind reads it — which
+                // happens in this same step, on the decide that folds the resolved call
+                // (`enter_user_fn`), so the cell is never read across a tail hop.
+                match filled.next_if(|(slot, _)| *slot == i) {
+                    Some((_, terminal)) => Spanned {
+                        value: WorkingPart::Spliced {
+                            cell: scope.rest_spliced(&terminal.cell),
+                        },
+                        span: part.span,
+                    },
+                    None => *part,
+                }
+            }),
+        );
         finish_eager_subs(ctx, spliced, picked)
     });
     Await::on(Deps::from_requests(deps))
@@ -261,65 +282,78 @@ fn finish_eager_subs<'step>(
     }
 }
 
-/// Fused splice / eager-sub walk over `parts`. Pure: no dep realization — the caller decides
+/// Fused splice / eager-sub walk over `expr`'s parts. Pure: no dep realization — the caller decides
 /// whether to park on the staged subs. Infallible: dispatch resolution parks on a
 /// still-finalizing bare name and admission rejects an unbound one before any pick, so every bare
 /// name the pick's wrap set names is `Resolved` in `bare_outcomes` by the time the walk runs.
+///
+/// Staged first, rebuilt second. The two ways a slot moves are the pick's wrap set, known before
+/// the walk, and an eager part, known once the stager has classified it — so the staging pass runs
+/// alone, and a walk with an empty wrap set that stages nothing answers
+/// [`PartWalk::Unchanged`] having built no run at all. That is the whole of a call like
+/// `PRINT "hi"`: every slot passes through, so the node it was given is already the answer.
 fn part_walk<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
-    parts: &[Spanned<WorkingPart<'step>>],
+    expr: &WorkingExpression<'step>,
     bare_outcomes: &[Option<Resolution>],
     slots: &crate::machine::core::ClassifiedSlots,
-) -> PartWalkResult<'step> {
+) -> PartWalk<'step> {
     let brand = ctx.current_scope().brand();
+    let parts = expr.parts;
     let wrap_set = &slots.wrap_indices;
     let eager_filter = slots.eager_indices.as_deref();
-    let mut new_parts: Vec<Spanned<WorkingPart<'step>>> = Vec::with_capacity(parts.len());
     let mut staged_subs: Vec<(usize, DepRequest<'step>)> = Vec::new();
     for (i, part) in parts.iter().enumerate() {
-        let span = part.span;
+        // A wrap slot splices its bare name inline below rather than staging, so it is never
+        // offered to the stager.
         if wrap_set.contains(&i) {
-            // A wrap slot's bound name splices inline as its binding-scope carrier — value and
-            // reach as one cell — rested into this scope's own region. A name bound here rests
-            // for free (the self rule strips this region from what is retained); one bound
-            // further out lodges its binding scope's coverage, which is what keeps the read live.
-            let Some(Resolution::Resolved(cell)) = bare_outcomes.get(i).and_then(|o| o.as_ref())
-            else {
-                unreachable!("a picked wrap slot's bare name has a Resolved cache entry");
-            };
-            new_parts.push(Spanned {
-                value: WorkingPart::Spliced {
-                    cell: ctx.current_scope().rest_delivered(cell),
-                },
-                span,
-            });
             continue;
         }
         // A literal-name slot's token (which the body reads as data) is a bare name — never an
         // eager shape — so the stager's `Err` passes it through untouched, as it does a slot the
         // scheduler already filled.
         let in_eager_filter = eager_filter.is_none_or(|idxs| idxs.contains(&i));
-        match part
+        if let Some(Ok(dep)) = part
             .value
             .as_ast()
             .filter(|_| in_eager_filter)
             .map(|a| stage_eager_part(brand, a))
         {
-            Some(Ok(dep)) => {
-                staged_subs.push((i, dep));
-                new_parts.push(staged_slot_placeholder());
-            }
-            _ => new_parts.push(*part),
+            staged_subs.push((i, dep));
         }
     }
-    PartWalkResult {
-        new_parts,
-        staged_subs,
+    if wrap_set.is_empty() && staged_subs.is_empty() {
+        return PartWalk::Unchanged;
     }
-}
-
-/// Result of a keyworded part walk.
-struct PartWalkResult<'step> {
-    new_parts: Vec<Spanned<WorkingPart<'step>>>,
-    staged_subs: Vec<(usize, DepRequest<'step>)>,
+    // Staging ran in slot order, so a single ascending cursor over the staged indices places every
+    // hole in one pass — the run fills the region's bytes directly, with no owned copy in between.
+    let mut holes = staged_subs.iter().map(|(slot, _)| *slot).peekable();
+    let expr = expr.respliced(
+        brand,
+        parts.iter().enumerate().map(|(i, part)| {
+            if wrap_set.contains(&i) {
+                // A wrap slot's bound name splices inline as its binding-scope carrier — value and
+                // reach as one cell — rested into this scope's own region. A name bound here rests
+                // for free (the self rule strips this region from what is retained); one bound
+                // further out lodges its binding scope's coverage, which is what keeps the read
+                // live.
+                let Some(Resolution::Resolved(cell)) =
+                    bare_outcomes.get(i).and_then(|o| o.as_ref())
+                else {
+                    unreachable!("a picked wrap slot's bare name has a Resolved cache entry");
+                };
+                return Spanned {
+                    value: WorkingPart::Spliced {
+                        cell: ctx.current_scope().rest_delivered(cell),
+                    },
+                    span: part.span,
+                };
+            }
+            if holes.next_if_eq(&i).is_some() {
+                return staged_slot_placeholder();
+            }
+            *part
+        }),
+    );
+    PartWalk::Respliced { expr, staged_subs }
 }

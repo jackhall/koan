@@ -72,8 +72,8 @@ take indexed pairs, contorting a type-system door to solve an allocation problem
   by `candidates.len()`, `candidates` by `overloads.len()` — so all are built with capacity.
 - *`FunctionLookup`'s lifetime — open.* Give the struct the scratch brand so its
   `overloads` is scratch-hosted, versus keeping `FunctionLookup` heap-backed and hosting
-  only the two walk buffers. Recommended: the former — `lookup_function_stored` has three
-  call sites, all inside `decide/`, so the parameter does not travel far.
+  only the two walk buffers. Recommended: the former — `lookup_function_stored` has two
+  call sites, both inside `decide/`, so the parameter does not travel far.
 - *Buffers that escape as park data — deferred.* A park's `Deps<R>`
   ([workgraph/src/scheduler/deps.rs](../../workgraph/src/scheduler/deps.rs)) is workgraph
   API over a global-allocator `Vec`, so anything leaving the decide as park data stays on

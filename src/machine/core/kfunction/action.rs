@@ -20,14 +20,13 @@ use crate::machine::model::Carried;
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
+use crate::machine::model::WorkingExpression;
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KType, Record, TypeNode};
-use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{
     BindingIndex, DeclarationSite, DeliveredCarried, Installer, KError, KErrorKind,
 };
 use crate::scheduler::Deps;
-use crate::source::Spanned;
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
 /// `Action::done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
@@ -311,13 +310,6 @@ impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
         WorkingExpression::from_ast(self.brand(), ast)
     }
 
-    /// Freeze a run of working slots into a node in this body's own region — the door a builtin
-    /// takes when it assembles the expression it hands the scheduler rather than copying one out of
-    /// the AST.
-    pub fn expression(&self, parts: Vec<Spanned<WorkingPart<'a>>>) -> WorkingExpression<'a> {
-        WorkingExpression::new(self.brand(), parts)
-    }
-
     /// A [`FinishCtx`] over this body's own scope and context — for a synchronous body that hands its
     /// resolve/dispatch continuation the same shape a wake-time finish receives (e.g.
     /// `resolve_or_await`'s synchronous arm).
@@ -369,12 +361,6 @@ impl<'a, 'r> FinishCtx<'a, 'r> {
     /// [`BodyCtx::working`].
     pub fn working(&self, ast: KExpression<'a>) -> WorkingExpression<'a> {
         WorkingExpression::from_ast(self.brand(), ast)
-    }
-
-    /// Freeze a run of working slots into a node in this finish's own region — the wake-time peer
-    /// of [`BodyCtx::expression`].
-    pub fn expression(&self, parts: Vec<Spanned<WorkingPart<'a>>>) -> WorkingExpression<'a> {
-        WorkingExpression::new(self.brand(), parts)
     }
 }
 

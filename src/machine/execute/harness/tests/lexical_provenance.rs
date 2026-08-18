@@ -163,7 +163,7 @@ fn add_with_chain_without_chain_panics() {
         crate::machine::execute::decide::decide_tail(
             WorkingExpression::new(
                 program.brand().region(),
-                vec![Spanned::bare(WorkingPart::Ast(ExpressionPart::Literal(
+                &[Spanned::bare(WorkingPart::Ast(ExpressionPart::Literal(
                     KLiteral::Number(1.0),
                 )))],
             ),

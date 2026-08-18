@@ -34,6 +34,12 @@ impl<'a> NamedPairs<'a> {
     pub fn take(&mut self, name: &str) -> Option<ExpressionPart<'a>> {
         self.map.remove(name)
     }
+
+    /// Whether `name` is still present — [`take`](Self::take)'s non-consuming peer, for a caller
+    /// that has to know the whole run is satisfiable before it takes the first value.
+    pub fn contains(&self, name: &str) -> bool {
+        self.map.contains_key(name)
+    }
 }
 
 #[cfg(test)]

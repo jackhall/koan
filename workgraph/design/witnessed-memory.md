@@ -125,8 +125,8 @@ than a relaxation of the `Copy` bound that would admit both and everything else 
 
 **The verbs are defined once, on the allocator handle.**
 [`BumpAllocator<'b>`](../src/witnessed/bump.rs) is a `Copy`, brand-carrying
-wrapper over the region's `Bump`, and it is where `value` / `slice` / `text`
-live. Every surface that can reach a region's bytes — `RegionHandle::allocator`,
+wrapper over the region's `Bump`, and it is where `value` / `slice` /
+`slice_from_iter` / `text` live. Every surface that can reach a region's bytes — `RegionHandle::allocator`,
 `FoldedPlacement::allocator`, an embedder's own brand veneer — hands back that
 one type rather than restating a verb set of its own, so the `Copy` guard and its
 rationale are written once. Because the handle's `'b` is the region's brand,

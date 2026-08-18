@@ -15,8 +15,6 @@ dropped inside one step, and each takes a heap allocation:
   — one per keyworded dispatch, and a second time in `keyworded::finish` after eager subs land.
 - `carriers_from_expr` ([src/machine/execute/decide/exec.rs](../../src/machine/execute/decide/exec.rs))
   — one per invoke.
-- `part_walk`'s `new_parts` ([src/machine/execute/decide/keyworded.rs](../../src/machine/execute/decide/keyworded.rs))
-  — one per dispatch that the re-splice skip does not short-circuit.
 - `retiring` in the placeholder-clearing path
   ([src/machine/execute/harness.rs](../../src/machine/execute/harness.rs)) — a
   `Vec<ProducerId>` built from the edge list purely to satisfy

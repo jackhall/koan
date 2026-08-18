@@ -150,7 +150,7 @@ pub(in crate::machine::execute) fn stage_eager_working_part<'a>(
         // Rewrap the whole part, as the AST `:{…}` shape does: the record-type wrapper is the
         // handler, so the sub-Dispatch must see a one-part `RecordType`-shaped node, not the body.
         WorkingPart::RecordType(_) => Ok(DepRequest::Dispatch {
-            expr: WorkingExpression::new(brand, vec![Spanned::bare(part)]),
+            expr: WorkingExpression::new(brand, &[Spanned::bare(part)]),
             placement: DepPlacement::OwnScope,
         }),
         other => Err(other),
@@ -175,7 +175,7 @@ pub(in crate::machine::execute) fn stage_eager_part<'a>(
         Some(EagerShape::TypeExpression) => Ok(DepRequest::Dispatch {
             // Rewrap the whole part — the same shape `classify_aggregate_part`
             // builds, equivalent to the destructure-and-rewrap the walks did.
-            expr: WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]),
+            expr: WorkingExpression::new(brand, &[Spanned::bare(WorkingPart::Ast(part))]),
             placement: DepPlacement::OwnScope,
         }),
         Some(EagerShape::ListLiteral) => {
@@ -299,6 +299,25 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
     )
 }
 
+/// What a dispatch part walk produced — the splice / stage pass over a node's slots, as both
+/// [`stage_all_eager_parts`] and the keyworded walk report it.
+///
+/// [`Unchanged`](PartWalk::Unchanged) is the arm that costs nothing. A walk that splices no slot
+/// and stages no sub provably produced the run it was handed, so the caller keeps the node it
+/// already holds: no parts run re-bumped, no bucket key re-bumped, and no structural cache
+/// recomputed from a run that did not move. Every other walk hands back the rebuilt node, since a
+/// parts run is frozen once its door bumps it.
+pub(in crate::machine::execute) enum PartWalk<'step> {
+    /// Nothing spliced and nothing staged — the node the walk was given already holds this run.
+    Unchanged,
+    /// The walk rebuilt the run: `expr` is the re-frozen node, `staged_subs` the deps whose
+    /// resolved carriers fill its staging holes, in slot order.
+    Respliced {
+        expr: WorkingExpression<'step>,
+        staged_subs: Vec<(usize, DepRequest<'step>)>,
+    },
+}
+
 /// Walk raw parts emitting a [`StagedSlot`](WorkingPart::StagedSlot) marker at every
 /// eager slot and a parallel staged-subs Vec; non-eager parts pass
 /// through unchanged.
@@ -311,33 +330,25 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
 /// callable, so it resolves them by sub-Dispatch through the same eager-subs
 /// parking/resume path as `Expression` parts. Callers with no committed pick
 /// (the keyworded `Deferred` arm, which re-resolves on finish) pass `&[]`.
+///
+/// Staged first, rebuilt second: every slot this walk touches becomes a staging hole, so the
+/// staged list alone decides whether the run moved, and a walk that stages nothing builds no run
+/// at all.
 pub(super) fn stage_all_eager_parts<'step>(
     brand: RegionBrand<'step>,
     origin: &WorkingExpression<'step>,
     wrap_indices: &[usize],
-) -> (
-    Vec<Spanned<WorkingPart<'step>>>,
-    Vec<(usize, DepRequest<'step>)>,
-) {
+) -> PartWalk<'step> {
     let parts = origin.parts;
-    let mut new_parts: Vec<Spanned<WorkingPart<'step>>> = Vec::with_capacity(parts.len());
     let mut staged: Vec<(usize, DepRequest<'step>)> = Vec::new();
     for (i, part) in parts.iter().enumerate() {
-        let span = part.span;
         if wrap_indices.contains(&i) {
             // Bare-name value slot: resolve the name through a single-part
             // sub-Dispatch (the `BareIdentifier` / `BareTypeLeaf` fast lane), so
             // the resolved `Spliced` carrier reaches `accepts_part` at bind. Not
             // one of the six eager shapes (it wraps bare Identifier/Type parts),
             // so this stays a pre-check before the stager.
-            let wrapped = WorkingExpression::synthesized(
-                brand,
-                vec![Spanned {
-                    value: part.value,
-                    span,
-                }],
-                origin,
-            );
+            let wrapped = WorkingExpression::synthesized(brand, std::slice::from_ref(part), origin);
             staged.push((
                 i,
                 DepRequest::Dispatch {
@@ -345,18 +356,32 @@ pub(super) fn stage_all_eager_parts<'step>(
                     placement: DepPlacement::OwnScope,
                 },
             ));
-            new_parts.push(staged_slot_placeholder());
             continue;
         }
-        match stage_eager_working_part(brand, part.value) {
-            Ok(dep) => {
-                staged.push((i, dep));
-                new_parts.push(staged_slot_placeholder());
-            }
-            Err(_) => new_parts.push(*part),
+        if let Ok(dep) = stage_eager_working_part(brand, part.value) {
+            staged.push((i, dep));
         }
     }
-    (new_parts, staged)
+    if staged.is_empty() {
+        return PartWalk::Unchanged;
+    }
+    // Staging ran in slot order, so a single ascending cursor over the staged indices places every
+    // hole in one pass — the run fills the region's bytes directly, with no owned copy in between.
+    let mut holes = staged.iter().map(|(slot, _)| *slot).peekable();
+    let expr = origin.respliced(
+        brand,
+        parts.iter().enumerate().map(|(i, part)| {
+            if holes.next_if_eq(&i).is_some() {
+                staged_slot_placeholder()
+            } else {
+                *part
+            }
+        }),
+    );
+    PartWalk::Respliced {
+        expr,
+        staged_subs: staged,
+    }
 }
 
 // ---------- Resume closure ----------

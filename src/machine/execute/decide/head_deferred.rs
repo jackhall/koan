@@ -58,7 +58,7 @@ pub(in crate::machine::execute) fn initial_type<'step>(
         head @ WorkingPart::Ast(ExpressionPart::SigiledTypeExpr(_)) => {
             WorkingExpression::synthesized(
                 ctx.current_scope().brand(),
-                vec![Spanned::bare(head)],
+                &[Spanned::bare(head)],
                 &expr,
             )
         }
@@ -77,8 +77,7 @@ pub(in crate::machine::execute) fn defer_head<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    let head =
-        WorkingExpression::synthesized(ctx.current_scope().brand(), vec![expr.parts[0]], &expr);
+    let head = WorkingExpression::synthesized(ctx.current_scope().brand(), &[expr.parts[0]], &expr);
     park_on_head(expr, head, false)
 }
 

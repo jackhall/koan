@@ -83,7 +83,7 @@ pub(super) fn keyword_expr<'a>(program: &'a ProgramStorage, name: &str) -> Worki
     let brand = program.brand().region();
     WorkingExpression::new(
         brand,
-        vec![Spanned::bare(WorkingPart::Ast(ExpressionPart::Keyword(
+        &[Spanned::bare(WorkingPart::Ast(ExpressionPart::Keyword(
             brand.allocator().text(name),
         )))],
     )

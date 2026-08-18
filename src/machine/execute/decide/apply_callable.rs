@@ -33,7 +33,7 @@ use super::super::TerminalDepFinish;
 use super::super::outcome::dep_error_frame;
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
-use super::{constructors, stage_all_eager_parts};
+use super::{PartWalk, constructors, stage_all_eager_parts};
 
 #[cfg(test)]
 mod tests;
@@ -259,7 +259,7 @@ fn apply_named_type_args<'step>(
     let deps: Vec<DepRequest<'step>> = value_parts
         .into_iter()
         .map(|part| DepRequest::Dispatch {
-            expr: WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]),
+            expr: WorkingExpression::new(brand, &[Spanned::bare(WorkingPart::Ast(part))]),
             placement: DepPlacement::OwnScope,
         })
         .collect();
@@ -494,7 +494,12 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
         .value()
         .classify_for_pick(&expr, ctx.types())
         .wrap_indices;
-    let (new_parts, staged_subs) = stage_all_eager_parts(brand, &expr, &wrap_indices);
-    let working_expr = expr.respliced(brand, new_parts);
+    // A call whose slots are all filled already stages nothing, and then the node the walk was
+    // handed is the one the committed call folds over — no rebuild, and the eager-subs door routes
+    // it straight to the invoke.
+    let (working_expr, staged_subs) = match stage_all_eager_parts(brand, &expr, &wrap_indices) {
+        PartWalk::Unchanged => (expr, Vec::new()),
+        PartWalk::Respliced { expr, staged_subs } => (expr, staged_subs),
+    };
     super::keyworded::install_eager_subs(ctx, working_expr, staged_subs, Some(picked))
 }

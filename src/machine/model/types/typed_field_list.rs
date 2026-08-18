@@ -384,10 +384,8 @@ fn rewrite_threaded_self_refs<'a>(
     let Some(window) = window.filter(|_| names_threaded_self_ref(inner, threaded)) else {
         return WorkingExpression::from_ast(brand, *inner);
     };
-    let parts = inner
-        .parts
-        .iter()
-        .map(|p| {
+    let parts =
+        inner.parts.iter().map(|p| {
             let value =
                 match &p.value {
                     ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
@@ -428,9 +426,8 @@ fn rewrite_threaded_self_refs<'a>(
                 value,
                 span: p.span,
             }
-        })
-        .collect();
-    WorkingExpression::new(brand, parts)
+        });
+    WorkingExpression::new_from_iter(brand, parts)
 }
 
 /// Thread `inner`'s co-declared references against `window`, yielding the scheduler node a

@@ -640,6 +640,24 @@ impl<'a> Bindings<'a> {
         self.lookup_function_probe(&StoredKeyProbe(key), cutoff)
     }
 
+    /// [`Self::lookup_function_stored`]'s **pending-only** peer: the earliest-index visible claim in
+    /// `functions[key]`, and nothing else. For a caller that only ever reads
+    /// [`FunctionLookup::pending`] — the operator chain's park probe, which asks two keys of every
+    /// ancestor scope per operator — the full lookup would build the bucket's visible finalized
+    /// overloads and drop them unread, once per question.
+    ///
+    /// Copies nothing out, so the `tables` borrow is over before the answer is: a `ProducerId` is a
+    /// plain edge name, unlike the sealed carriers `overloads` has to duplicate to let a candidate
+    /// walk run outside the borrow.
+    pub fn pending_function_stored(
+        &self,
+        key: &[StoredElement<'_>],
+        cutoff: Option<usize>,
+    ) -> Option<ProducerId> {
+        let tables = self.tables.borrow();
+        Self::earliest_pending(tables.functions.get(&StoredKeyProbe(key))?, cutoff)
+    }
+
     /// The one bucket read, over whichever key form the caller holds: hashbrown resolves both
     /// through `Equivalent`, and the two forms hash identically by construction (see
     /// [`UntypedKeyProbe`]).
@@ -660,14 +678,22 @@ impl<'a> Bindings<'a> {
             .filter(|entry| Self::visible(entry.index, cutoff))
             .map(|entry| entry.sealed.duplicate())
             .collect();
-        // Earliest-index visible claim: most likely to finalize first.
-        let pending = bucket
+        FunctionLookup {
+            overloads,
+            pending: Self::earliest_pending(bucket, cutoff),
+        }
+    }
+
+    /// The bucket's earliest-index visible claim — most likely to finalize first, and so the one a
+    /// consumer parks on. Written once so the full lookup and the pending-only probe cannot drift
+    /// on which claim they name.
+    fn earliest_pending(bucket: &Bucket<'a>, cutoff: Option<usize>) -> Option<ProducerId> {
+        bucket
             .iter()
             .filter_map(OverloadSlot::pending)
             .filter(|p| Self::visible(p.index, cutoff))
             .min_by_key(|p| p.index.idx)
-            .map(|p| p.producer);
-        FunctionLookup { overloads, pending }
+            .map(|p| p.producer)
     }
 
     /// Per-scope operator-group lookup. Mirrors [`Self::lookup_value`] for the

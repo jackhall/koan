@@ -476,3 +476,21 @@ fn a_fold_allocator_writes_a_self_referential_value_into_its_own_destination() {
         "a bare byte write composes no reach and retains nothing"
     );
 }
+
+/// [`BumpAllocator::slice_from_iter`] fills the run from the iterator with no owned staging run in
+/// between: the elements land in the region's own bytes, and the reserved length is the iterator's
+/// exact one.
+#[test]
+fn a_computed_run_fills_the_bump_without_staging() {
+    let dest = frame();
+    let allocator = placement(&dest).allocator();
+
+    let before = dest.region().bump_capacity();
+    let run: &[u32] = allocator.slice_from_iter((0..8u32).map(|n| n * 3));
+
+    assert_eq!(run, [0, 3, 6, 9, 12, 15, 18, 21]);
+    assert!(
+        dest.region().bump_capacity() >= before + size_of_val(run),
+        "the run's bytes are the destination's own"
+    );
+}

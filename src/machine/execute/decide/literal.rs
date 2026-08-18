@@ -410,7 +410,7 @@ impl<'step> Host<'step> {
                 // `KObject::KExpression` is invariant in its region lifetime with no `'static`
                 // rebuild, so `resolve_region_pure` cannot build it at the `yoke` brand below.
                 let wrapped =
-                    WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(part))]);
+                    WorkingExpression::new(brand, &[Spanned::bare(WorkingPart::Ast(part))]);
                 Slot::spawned(
                     deps,
                     self.dispatch_in_own_scope(sched, wrapped, SubmitContext::SubDispatch),
@@ -469,8 +469,7 @@ impl<'step> Host<'step> {
             // Unbound: fall back to a sub-Dispatch so the `BareIdentifier` fast lane's error path
             // surfaces it uniformly.
             Resolution::Unbound(_) => {
-                let expr =
-                    WorkingExpression::new(brand, vec![Spanned::bare(WorkingPart::Ast(*part))]);
+                let expr = WorkingExpression::new(brand, &[Spanned::bare(WorkingPart::Ast(*part))]);
                 Slot::spawned(
                     deps,
                     self.dispatch_in_own_scope(sched, expr, SubmitContext::SubDispatch),
