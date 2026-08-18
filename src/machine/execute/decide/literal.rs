@@ -79,12 +79,12 @@ impl<'t, 'd> ResultFeed<'t, 'd> {
     }
 }
 
-/// The per-cell envelope the fold consumes: a static cell's source-built envelope, or a dep
-/// terminal's resident lifted back into one. The fold needs the reach *owned* — `transfer_into`
-/// relocates each cell into the aggregate's region while minting its reach and residence host onto
-/// the accumulator's carrier — so a dep arm lifts rather than reads, and the envelope it hands back
-/// is the cell's own description upgraded, never a fresh bundle pairing a read-out value with a
-/// separately-read reach.
+/// The per-cell envelope the relocation consumes: a static cell's source-built envelope, or a dep
+/// terminal's resident lifted back into one. The relocation needs the reach *owned* — it moves each
+/// cell into the aggregate's region while minting its reach and residence host onto the product's
+/// carrier — so a dep arm lifts rather than reads, and the envelope it hands back is the cell's own
+/// description upgraded, never a fresh bundle pairing a read-out value with a separately-read
+/// reach.
 fn cell_carrier(
     slot: Slot,
     terminals: &mut ResultFeed<'_, '_>,
@@ -223,12 +223,12 @@ struct AggRow {
     value: Slot,
 }
 
-/// Finish-side assemble hook: the resolved keys (empty unless the rows carry key slots) and the folded
-/// value cells become the aggregate object. Boxed higher-ranked so the record variant captures its
-/// field names and each shape builds its own `KObject` at the substrate door. Most cells [`fold_cells`]
-/// pushed were rebuilt at this very brand, but a borrow leaf rides its source borrow verbatim, so the
-/// door carries the accumulator's own coverage as its holder — the pins every folded cell's reach was
-/// composed from.
+/// Finish-side assemble hook: the resolved keys (empty unless the rows carry key slots) and the
+/// relocated value cells become the aggregate object. Boxed higher-ranked so the record variant
+/// captures its field names and each shape builds its own `KObject` at the substrate door. Most
+/// cells [`fold_cells`] staged were rebuilt at this very brand, but a borrow leaf rides its source
+/// borrow verbatim, so the door carries the relocated envelope's own coverage as its holder — the
+/// union across the run, the pins every cell's reach composed into.
 type AggAssemble = Box<
     dyn for<'r, 'h> FnOnce(
         SubstrateDoor<'r, 'h>,
@@ -254,7 +254,7 @@ impl<'step> Host<'step> {
         let finish: WitnessedDepFinish<'step> = Box::new(move |view, terminals| {
             let n = rows.len();
             // Keys stay scalar (reaching no region): read them out eagerly, erroring before the fold.
-            // The value cells fold into the witnessed accumulator, paired back with the keys at `map`.
+            // The value cells relocate as one run, paired back with the keys at `map`.
             let mut keys: Vec<PendingKey> = Vec::new();
             let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(n);
             let mut feed = ResultFeed::new(terminals);
@@ -269,17 +269,21 @@ impl<'step> Host<'step> {
                 cells.push(cell_carrier(row.value, &mut feed, view.current_scope()));
             }
             let acc = fold_cells(view, &cells);
-            // The accumulated envelope's coverage carries every region the folded `Held` views point
-            // into, and its home is the destination frame the folds minted into. Merging it into a
+            // The relocated envelope's coverage carries every region the `Held` views point into,
+            // and its home is the destination frame the relocation minted into. Merging it into a
             // bare handle on that same region assembles the aggregate at a fold door and mints its
             // description there in one step: `dest_frame`'s region is the product's host, and it
             // rides the members too — a record literal's fresh substrate borrows into the very
-            // region it was built in, which the accumulator's own pins name.
+            // region it was built in, which the relocated envelope's own pins name.
             let dest_frame = view.dest_frame();
             let types = view.types();
-            // The accumulated coverage pins every region the folded cells reach — the holder-rule
-            // proof the substrate door reads their stored reach under, and the declared reach for a
-            // cell that carries no stored description of its own (a spliced expression).
+            // The holder for the **aggregate's own** birth is the union across the run — the
+            // relocated envelope's coverage, pinning every region any cell reaches. Union rather
+            // than per-cell because the value being born here is the container, whose stored run
+            // spans all of them: the door reads that run's reach under a proof covering every
+            // region it could name, and it is also the declared reach for a cell carrying no
+            // stored description of its own (a spliced expression). The per-cell rule applies one
+            // level down, at each cell's own rebuild inside `fold_cells`.
             let holder = acc.coverage().clone();
             let built = acc
                 .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(

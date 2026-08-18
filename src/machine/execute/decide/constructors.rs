@@ -66,9 +66,9 @@ pub(in crate::machine::execute) enum CtorKind {
     ApplyConstructor { constructor: KType },
 }
 
-/// Fold accumulator for a record-repr newtype: the destination region plus the field values
-/// gathered from the value deps, each `transfer_into`-folded so the accumulator's witness composes
-/// by minting into that region (the [`HasRegionHandle`](crate::witnessed::HasRegionHandle) seam).
+/// Relocation product for a record-repr newtype: the destination region plus the field values
+/// gathered from the value deps, relocated as one run so the product's witness composes by minting
+/// into that region (the [`HasRegionHandle`](crate::witnessed::HasRegionHandle) seam).
 /// The final `merge` with [`RegionTypeFamily`] builds the `Record` and wraps it with the identity.
 /// Layout-invariant: a thin region pointer and a slice of layout-invariant field values — the same
 /// shape as [`dispatch::literal`](super::literal)'s `AggBuildFamily`, and bumped exactly once for
@@ -521,19 +521,24 @@ fn finish_witnessed<'step>(
             );
             let home = build_type_operand(Rc::clone(&dest_frame), *identity);
             let types = view.types();
-            // Each accumulated field cell is a pointer copy of its term's value, so a field
-            // substrate that stays foreign rides as that field's own stored run; the accumulator's
-            // coverage names every region those cells reach, which is the door's holder-rule proof.
+            // Each field cell is a pointer copy of its term's value, so a field substrate that
+            // stays foreign rides as that field's own stored run. The holder for the **record's**
+            // birth is therefore the union across the run — the relocated envelope's coverage,
+            // naming every region any field reaches — because the value born at this door is the
+            // record, whose stored run spans every field. No per-field narrowing applies here:
+            // unlike a literal cell, a field is not rebuilt through a door of its own (the
+            // relocation `deep_clone`s its top node), so there is no per-cell rebuild to prove
+            // against a narrower coverage.
             let holder = fields.coverage().clone();
-            // The type operand is empty-reach; merge the accumulated fields into it, yielding the
+            // The type operand is empty-reach; merge the relocated fields into it, yielding the
             // wrapped record homed in the dest frame.
             let product = fields.merge_into::<RegionTypeFamily, CarriedFamily, KoanStorageProfile>(
                 home,
                 |(_region, fields), (_identity_region, identity_ty), placement| {
                     let region = FoldingBrand::in_fold_closure(placement);
                     let door = region.with_holder(&holder);
-                    // The names never rode the carrier — they pair back with the accumulated
-                    // values here, in the fold order the terminals were visited in.
+                    // The names never rode the carrier — they pair back with the relocated
+                    // values here, in the staging order the terminals were visited in.
                     let record = KObject::record(
                         door,
                         Record::from_pairs(field_names.iter().cloned().zip(fields.iter().copied())),
@@ -548,7 +553,8 @@ fn finish_witnessed<'step>(
             );
             // The merge minted the product's description into `dest_frame`'s own region, so that
             // region is the product's host and rides its members: the fresh record's substrate
-            // borrows into the very region it was built in, and the accumulator's pins named it.
+            // borrows into the very region it was built in, and the relocated envelope's pins
+            // named it.
             Ok(product)
         }
         CtorKind::Tagged {

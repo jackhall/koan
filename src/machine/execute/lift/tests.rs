@@ -481,11 +481,11 @@ fn relocate_cell_run(
     )
 }
 
-/// Build-time accumulator for the aggregate-fold mirrors below: the destination region plus the
-/// cells folded in so far — a local twin of `dispatch::literal::AggBuildFamily` (private to that
+/// Build-time product family for the aggregate-relocation mirrors below: the destination region
+/// plus the relocated cells — a local twin of `dispatch::literal::AggBuildFamily` (private to that
 /// module), reattached here so the tests can drive `fold_cells`'s own mechanism
-/// (`cell_still_borrows` + `transfer_into` + `copy_held_from_carried`) directly, including
-/// its region-bumped cell slice.
+/// (`relocated_cell_still_borrows` + `transfer_all_into` + `copy_held_from_carried`) directly,
+/// including its region-bumped cell slice.
 struct RecordAggFamily;
 reattachable!(RecordAggFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [Held<'r>]));
 
@@ -583,15 +583,15 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
     assert!(
         acc_final.coverage_releasing_home().is_empty(),
         "every plain-data record cell releases its producer: beyond its own destination home, the \
-         accumulated envelope covers nothing"
+         relocated envelope covers nothing"
     );
 
     for producer in producers.drain(..) {
         drop(producer);
     }
 
-    // The accumulator is not a `Copy` family, so the read is by reference; the envelope's own pins
-    // keep everything the fold claimed alive across it.
+    // The product is not a `Copy` family, so the read is by reference; the envelope's own pins
+    // keep everything the relocation claimed alive across it.
     let values: Vec<f64> = acc_final.open_ref(|(_region, cells)| {
         cells
             .iter()
@@ -637,7 +637,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
 
     assert!(
         !acc_final.coverage_releasing_home().is_empty(),
-        "every closure-embedding record cell keeps its producer: the accumulated envelope covers it \
+        "every closure-embedding record cell keeps its producer: the relocated envelope covers it \
          beyond its own destination home"
     );
 
@@ -645,8 +645,8 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
         drop(producer);
     }
 
-    // The accumulator is not a `Copy` family, so the read is by reference; the envelope's own pins
-    // keep everything the fold claimed alive across it.
+    // The product is not a `Copy` family, so the read is by reference; the envelope's own pins
+    // keep everything the relocation claimed alive across it.
     let read_ids: Vec<_> = acc_final.open_ref(|(_region, cells)| {
         cells
             .iter()
@@ -1223,6 +1223,135 @@ mod seam_verb_table {
     }
 }
 
+/// **The escape rule holds per source across a mixed run.** One relocation over three cells —
+/// a closure-embedding record first, then two plain-data records — asserts *exactly* which
+/// producers the product still claims: the closure cell's, and neither plain one's. The order is
+/// deliberately non-palindromic, so a retention claim that read a neighbour's cell, ran the run
+/// backwards, or slipped by one would name a plain producer (or drop the closure's) and fail here.
+///
+/// This is the run-shaped statement of what the pairwise door proved per transfer: rebuilding a
+/// cell is what decides release, and the door pairs each source with its own rebuilt bytes.
+#[test]
+fn a_mixed_run_retains_exactly_the_producers_its_own_cells_still_borrow() {
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let scope = test_run.scope;
+    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+    let dest_storage = dest_frame.storage_rc();
+
+    let (closure_producers, closure_cells, captured_ids) =
+        closure_record_cell_run(scope, &types, 1);
+    let (plain_producers, plain_cells) = plain_record_cell_run(scope, &types, 2);
+    let mut cells = closure_cells;
+    cells.extend(plain_cells);
+    let mut producers = closure_producers;
+    producers.extend(plain_producers);
+
+    let relocated = relocate_cell_run(&dest_storage, &cells);
+
+    // Exactly one producer survives the relocation, and it is the closure cell's: the rebuilt
+    // record still holds a `KFunction` borrowing into the frame that defined it, so that region is
+    // a member of the product's coverage. The two plain records were totally rebuilt into the
+    // destination and borrow nothing back, so their producers are released.
+    let covered = relocated.coverage_releasing_home();
+    let survivors: Vec<usize> = producers
+        .iter()
+        .enumerate()
+        .filter(|(_, producer)| {
+            covered
+                .members()
+                .iter()
+                .any(|member| Rc::ptr_eq(member, &producer.storage_rc()))
+        })
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        survivors,
+        vec![0],
+        "only the closure-embedding cell's producer is retained; the plain-data cells release theirs"
+    );
+
+    for producer in producers.drain(..) {
+        drop(producer);
+    }
+
+    // Every cell reads back at its own position, which is what makes the claim above a claim about
+    // *this* run rather than about a set: the closure's captured scope leads, then the two plain
+    // records' distinct field values.
+    let read: Vec<String> = relocated.open_ref(|(_region, run)| {
+        run.iter()
+            .map(|held| match held.object() {
+                KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
+                    Some(KObject::KFunction(function)) => {
+                        format!("closure:{:?}", function.captured_scope().id)
+                    }
+                    _ => match substrate.field("acc").map(|h| h.object()) {
+                        Some(KObject::Number(n)) => format!("plain:{n}"),
+                        _ => panic!("expected field acc: Number"),
+                    },
+                },
+                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+            })
+            .collect()
+    });
+    assert_eq!(
+        read,
+        vec![
+            format!("closure:{:?}", captured_ids[0]),
+            "plain:0".to_string(),
+            "plain:1".to_string(),
+        ],
+        "the relocated run reads back in staging order after every producer frame freed"
+    );
+}
+
+/// **Region bytes are linear in the run length.** The door bumps the run once, inside one brand;
+/// a relocation that instead folded the sources pairwise would re-bump the whole gathered run at
+/// every step, costing O(n²) region bytes a bump cannot reclaim before its frame dies. Doubling n
+/// therefore roughly doubles the destination region's allocated total — the quadratic shape would
+/// roughly quadruple it.
+///
+/// The bar is 2.5× per doubling: comfortably above the ~2× a linear path costs (the per-cell
+/// record rebuild dominates and is itself linear) and comfortably below the ~4× a quadratic one
+/// would. The three sizes are held small deliberately; they already separate the two shapes.
+#[test]
+fn region_bytes_for_a_relocated_run_grow_linearly_in_its_length() {
+    fn bytes_for(count: usize) -> u64 {
+        let program = program_storage();
+        let root = run_root_storage();
+        let test_run = TestRun::silent(&program, &root);
+        let scope = test_run.scope;
+        let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+        let types = TypeRegistry::new();
+        let dest_storage = dest_frame.storage_rc();
+        let baseline = dest_frame.region().allocated_total();
+        let (_producers, cells) = plain_record_cell_run(scope, &types, count);
+        let relocated = relocate_cell_run(&dest_storage, &cells);
+        assert_eq!(
+            relocated.open_ref(|(_region, run)| run.len()),
+            count,
+            "the whole run relocated"
+        );
+        dest_frame.region().allocated_total() - baseline
+    }
+
+    let small = bytes_for(500);
+    let medium = bytes_for(1000);
+    let large = bytes_for(2000);
+    assert!(
+        medium * 2 < small * 5,
+        "doubling the run from 500 to 1000 cells cost {medium} region bytes against {small} — \
+         more than the 2.5x a linear relocation allows"
+    );
+    assert!(
+        large * 2 < medium * 5,
+        "doubling the run from 1000 to 2000 cells cost {large} region bytes against {medium} — \
+         more than the 2.5x a linear relocation allows"
+    );
+}
+
 /// `count` plain-data record cells, each born in its own producer frame and lifted to a delivery
 /// envelope — the aggregate-relocation fixture the allocation-count, linearity and escape tests
 /// share. The producers ride back alongside so a caller can drop them and read the cells after.
@@ -1262,15 +1391,15 @@ fn plain_record_cell_run<'run>(
     (producers, cells)
 }
 
-/// **Fixed cost at small N**: relocating a two-element aggregate costs no more heap allocations
-/// than the pairwise fold it replaced. Brackets the relocation between two reads of the
-/// thread-local allocation counter, so the delta covers the door's own staging and composition and
-/// nothing else — the cells and their producers are built before the first read.
+/// **Fixed cost at small N**: the N-ary door buys its asymptotics for free at the bottom end —
+/// relocating a two-element aggregate costs no more heap allocations than driving the same two
+/// cells through the pairwise `transfer_into` does. Brackets the relocation between two reads of
+/// the thread-local allocation counter, so the delta covers the door's own staging and composition
+/// and nothing else: the cells and their producers are built before the first read.
 ///
-/// The pairwise fold measured 21 allocations for the same two cells (2026-08-18, this fixture run
-/// against `transfer_into`); the door measures 19. Most of both is the record rebuild itself,
-/// which is common to the two paths — what the door removes at N=2 is the accumulator's per-step
-/// gather, and what it removes at large N is the whole quadratic tail.
+/// Measured 2026-08-18 over this fixture: 21 allocations pairwise, 19 through the door. Most of
+/// both is the record rebuild, which is common to the two; what the door drops at N=2 is the
+/// accumulator's per-step gather, and what it drops as N grows is the whole quadratic tail.
 #[test]
 fn two_element_relocation_allocates_no_more_than_the_pairwise_fold() {
     /// The pairwise `transfer_into` fold's delta over the same two cells, measured 2026-08-18.

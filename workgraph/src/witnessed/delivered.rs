@@ -340,8 +340,8 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
     }
 
     /// [`Self::hosted`] taking a live [`Witnessed`] carrier rather than a sealed one — it seals on
-    /// the way in. Crate-private for the same reason, and reached from the same places: the
-    /// accumulator seed a fold yokes over its own frame, and the handle doors an embedder uses.
+    /// the way in. Crate-private for the same reason, and reached from the same places: a
+    /// destination operand yoked over its own frame, and the handle doors an embedder uses.
     pub(crate) fn seal(
         witnessed: Witnessed<T, Carrier<F>>,
         home: Rc<F>,

@@ -319,10 +319,13 @@ that reordered ahead of the relocation. The `unsafe` routed is the shared `retyp
 - `pin_verdict_transfers_the_retiring_region_into_the_new_anchor_bundle`
 
 **`StepContext::alloc_with` — finish-surface fold** ([src/witnessed/step_ctx.rs](../src/witnessed/step_ctx.rs))
-— guarantee 5 made structural: every listed dep's envelope folds into the result's carrier by
-construction, before the build closure can embed a dep view. The test's built value **is** a dep
-view (a borrow into the producer's region, riding the result un-copied); the producer handle
-drops, and the by-construction fold is the sole pin under the read. The behavioral twins
+— guarantee 5 made structural: every listed dep's envelope composes into the result's carrier by
+construction, before the build closure can embed a dep view. The whole dep run relocates in one
+act (`Delivered::transfer_each_into`), so the test also pins the **staged re-anchor**: N erased dep
+values re-anchored as one `Staged` slice under the borrowed run of their own pin bundles, which is
+the coverage that re-anchor stands on. The test's built value **is** a dep view (a borrow into the
+producer's region, riding the result un-copied); the producer handle drops, and the
+by-construction composition is the sole pin under the read. The behavioral twins
 (`step_context_alloc_carrier_is_empty`,
 `step_context_alloc_with_mints_dep_homes_and_preserves_dep_order` — membership and dep-order
 assertions) run under plain `cargo test` and stay off the slate. Embedder twin: koan's

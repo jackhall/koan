@@ -202,9 +202,10 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         for<'b> V::At<'b>: Copy,
     {
         self.alloc_with_in_region::<T, V, P>(deps, |region, views, token| {
-            // The accumulator was yoked over this frame's own region and `alloc_with` folds every
-            // dep's reach into it, so a placement over its handle is honestly minted here; the fold
-            // token is subsumed by the placement as the `'b` brand proof.
+            // The relocation's destination is a bare handle over this frame's own region and it
+            // composes every dep's reach into that region, so a placement over its handle is
+            // honestly minted here; the fold token is subsumed by the placement as the `'b` brand
+            // proof.
             let _ = token;
             build(FoldedPlacement::mint(RegionHandle::new(region)), views)
         })

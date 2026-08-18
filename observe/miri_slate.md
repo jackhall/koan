@@ -117,7 +117,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-21 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
+22 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
 below are the exact test identifiers; pass them after `--` in the Miri command. A further 54 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
@@ -489,22 +489,27 @@ points at, which only tree borrows observes — a normal build reads the freed b
 
 **Record escape seam — cost-driven copy vs pin** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
 — two distinct seams relocate a top-level `Record` out of a dying producer, each pinned here. The
-**container-cell** seam (`cell_still_borrows`, Ruling 4: fresh containers stay self-contained,
-never a pin) picks each crossing cell's release: the producer frees when the retention predicate
-reads no surviving borrow leaf into the cell's own producer host off the rebuilt cell's stored
-reach (the cell is totally rebuilt via `copy_held_from_carried`), and the producer materializes
-into the aggregate's reach and stays pinned when it does. One unit test mirrors
-`dispatch::literal::fold_cells`'s exact aggregate loop
-(`cell_still_borrows` + `transfer_into` + `copy_held_from_carried`) directly for five
-independent producers, each record cell embedding a closure captured in that same producer (every
-producer pinned; drops every producer first, then reads every closure's captured scope back) —
-wrongly releasing a still-borrowing record dangles under tree borrows; wrongly pinning leaks. The
-plain-data twin (`plain_record_cells_select_released_and_survive_every_producer_free`, every
-producer released) runs under plain `cargo test`: the retention verdict is derived from the rebuilt
-cell's own stored reach, so a release verdict that disagrees with what the rebuild left behind is
-unrepresentable, its rebuilt plain-data cells hold no borrow leaf that could dangle, and the
-release direction stays Miri-audited end-to-end by the mixed aggregate census test above, whose
-record cells ride this same `fold_cells` seam through the real scheduler and parser.
+**container-cell** seam (`relocated_cell_still_borrows`, Ruling 4: fresh containers stay
+self-contained, never a pin) picks each crossing cell's release: the producer frees when the
+retention predicate reads no surviving borrow leaf into the cell's own producer host off the
+rebuilt cell's stored reach (the cell is totally rebuilt via `copy_held_from_carried`), and the
+producer materializes into the aggregate's reach and stays pinned when it does. The whole cell run
+relocates in one act (`Delivered::transfer_all_into`), which pairs each source with the very cell
+it produced before asking the predicate — so a run mixing the two verdicts is where a mis-pairing
+would show. Two unit tests mirror `dispatch::literal::fold_cells`'s exact relocation
+(`relocated_cell_still_borrows` + `transfer_all_into` + `copy_held_from_carried`) directly: one
+over five independent producers whose record cells each embed a closure captured in that same
+producer (every producer pinned; drops every producer first, then reads every closure's captured
+scope back), and one over a **mixed run** — a closure-embedding cell followed by two plain-data
+cells — asserting exactly one survivor, at position zero. Wrongly releasing a still-borrowing
+record dangles under tree borrows; wrongly pinning leaks; pairing a source with a neighbour's cell
+does both at once, on the same run. The all-plain twin
+(`plain_record_cells_select_released_and_survive_every_producer_free`, every producer released)
+runs under plain `cargo test`: the retention verdict is derived from the rebuilt cell's own stored
+reach, so a release verdict that disagrees with what the rebuild left behind is unrepresentable,
+its rebuilt plain-data cells hold no borrow leaf that could dangle, and the release direction stays
+Miri-audited end-to-end by the mixed aggregate census test above, whose record cells ride this same
+`fold_cells` seam through the real scheduler and parser.
 
 The **value-level** escape seam (the fused `relocate_seam`: the `copy_or_pin` cost chooser
 ([kobject.rs](../src/machine/model/values/kobject.rs)) at `relocate_terminal` and the literal park
@@ -526,6 +531,7 @@ shared `retype` in `witnessed.rs`; `lift.rs` carries none of its own (see the fi
 whitelist entry).
 
 - `closure_embedding_record_cells_select_copied_and_pin_every_producer`
+- `a_mixed_run_retains_exactly_the_producers_its_own_cells_still_borrow`
 - `record_seam_pin_verb_shares_substrate_and_survives_producer_free`
 
 ## Adding tests to the slate
@@ -548,9 +554,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-18: 703s — 22 tests, 0 leaks, 0 UB
 - 2026-08-15: 823s — 21 tests, 0 leaks, 0 UB
 - 2026-08-14: 1299s — 21 tests, 0 leaks, 0 UB
 - 2026-08-13: 926s — 21 tests, 0 leaks, 0 UB
 - 2026-08-11: 604s — 21 tests, 0 leaks, 0 UB
-- 2026-08-11: 704s — 21 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
