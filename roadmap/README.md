@@ -47,6 +47,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Relocate a source run in one act](refactor/nary-relocation-door.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)

@@ -80,9 +80,8 @@ unsafe impl<'b, P: StorageProfile> HasRegionHandle<'b, P> for RegionHandle<'b, P
 }
 
 // SAFETY: a handle-headed operand re-homes through its head — the only 'b-branded allocation
-// capability its live form carries. Peer of the (&'b Region<P>, T) blanket in step_ctx.rs; an
-// embedder whose operand heads are a `RegionHandle` newtype veneer (rather than a bare
-// `&'b Region<P>`) discharges its `HasRegionHandle` obligation through this blanket instead of a
+// capability its live form carries. An embedder whose operand heads are a `RegionHandle` paired
+// with a payload discharges its `HasRegionHandle` obligation through this blanket instead of a
 // per-family impl of its own.
 unsafe impl<'b, P: StorageProfile, T> HasRegionHandle<'b, P> for (RegionHandle<'b, P>, T) {
     fn region_handle(&self) -> RegionHandle<'b, P> {

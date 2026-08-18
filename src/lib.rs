@@ -20,3 +20,9 @@ pub mod step_fixture;
 /// workload-generic DAG scheduler, re-exported from the `workgraph` crate so `machine` and
 /// integration tests keep resolving `koan::witnessed::…` / `koan::scheduler::…` paths unchanged.
 pub use workgraph::{scheduler, witnessed};
+
+/// Crate-wide test scaffolding: the counting global allocator the relocation path's fixed-cost
+/// measurements read. Its only consumer is `machine::execute::lift`'s aggregate suite, but a
+/// `#[global_allocator]` is a crate-level declaration, so it lives at the crate root.
+#[cfg(test)]
+mod tests;

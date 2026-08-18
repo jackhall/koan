@@ -277,13 +277,7 @@ impl<F: PinsRegion> ReachDescription<F> {
     /// description's `Weak`) through [`PinBundle::insert`], so outer-chain subsumption normalizes
     /// the result to the deepest owners.
     fn compose_sources(sources: &[&PinBundle<F>]) -> PinBundle<F> {
-        let mut composed = PinBundle::empty();
-        for source in sources {
-            for owner in &source.members {
-                composed.insert(Rc::clone(owner)); // exact members + subsumption
-            }
-        }
-        composed
+        PinBundle::union_all(sources) // exact members + subsumption
     }
 
     /// **The resident mint**: freeze the composed description into `dest`'s side table and establish
@@ -452,6 +446,52 @@ impl<F: PinsRegion> PinBundle<F> {
         result
     }
 
+    /// [`Self::union`] over a whole batch — one pass over every source's members through the same
+    /// antichain [`Self::insert`], so N bundles cost one deduped walk rather than N-1 intermediate
+    /// clones. The shared front half of both mint doors
+    /// ([`ReachDescription::compose_sources`]) and of the composition an N-ary relocation
+    /// ([`Delivered::transfer_all_into`](super::Delivered::transfer_all_into)) performs.
+    pub fn union_all(sources: &[&Self]) -> Self {
+        let mut composed = PinBundle::empty();
+        for source in sources {
+            for owner in &source.members {
+                composed.insert(Rc::clone(owner));
+            }
+        }
+        composed
+    }
+
+    /// [`Self::union_all`] with the **retention predicate** applied per source as it walks — the
+    /// composed source side of an N-ary relocation, built directly. `keep` is asked for source `i`
+    /// and one of that source's member regions, and only the members it answers `true` for reach
+    /// the composed antichain.
+    ///
+    /// Fusing the filter into the union is what keeps the door's fixed cost at small N at or below
+    /// the pairwise path's: a per-source [`Self::retaining`] would allocate one bundle per source
+    /// and a gather to union them, where this allocates the one antichain it returns.
+    ///
+    /// The `usize` names *whose* claim is being derived, so the same walk serves N distinct
+    /// predicates. It is engine plumbing: the relocation door translates it to the (source
+    /// envelope, its product cell) pair before any embedder-supplied code sees it, so no public
+    /// signature carries an index into a run a caller would have to trust.
+    pub(in crate::witnessed) fn union_all_retained<'s>(
+        sources: impl Iterator<Item = &'s Self>,
+        mut keep: impl FnMut(usize, &F::Region) -> bool,
+    ) -> Self
+    where
+        F: 's,
+    {
+        let mut composed = PinBundle::empty();
+        for (index, source) in sources.enumerate() {
+            for owner in &source.members {
+                if keep(index, owner.region()) {
+                    composed.insert(Rc::clone(owner));
+                }
+            }
+        }
+        composed
+    }
+
     /// This bundle without any member whose region **is** `region` — the self rule
     /// (design/reach.md § Composition), applied where a bundle is about to be owned by
     /// `region` itself: a region holding a pin on its own owner is a reference cycle that frees
@@ -577,6 +617,12 @@ impl<F: PinsRegion> Clone for PinBundle<F> {
 // bundle carries no pin: a frameless value is backed by storage that outlives the carrier, so no
 // held pin is required.
 unsafe impl<F: PinsRegion> Witness for PinBundle<F> {}
+
+// SAFETY: holding `&[&PinBundle<F>]` across a call holds every element's borrow, and each element
+// is itself a `Witness` pinning its own members — so the slice pins the union of what its elements
+// pin, which is exactly what a staged re-anchor over those sources' backings requires. The empty
+// slice carries no pin, the same frameless case the bundle impl above names.
+unsafe impl<F: PinsRegion> Witness for [&PinBundle<F>] {}
 
 // SAFETY: `union` returns the set union (deduplicated by region, a member dropped only when another
 // member's owner chain already pins its region), so holding the result keeps every region either

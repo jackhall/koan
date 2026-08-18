@@ -785,7 +785,79 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
             threaded,
         )
     }
+
+    /// [`Self::merge_composed`] with the source side **staged**: `self` is the destination operand
+    /// and `staged` is a run of N erased source values, re-anchored as one [`Staged`] slice against
+    /// it inside a single brand. `fold` therefore sees every source at the brand *at once* and
+    /// builds the product in one pass — the N-ary shape behind
+    /// [`Delivered::transfer_all_into`](delivered::Delivered::transfer_all_into), where the pairwise
+    /// door would make a caller thread an accumulator that re-gathers its whole run per step.
+    ///
+    /// The source witnesses are not inputs. A pairwise merge hands `fold` both operands' witnesses
+    /// because its composition is *between* two carriers; an N-ary relocation composes N source
+    /// **bundles** instead, which the caller holds envelope-side and threads into the mint itself —
+    /// so there is nothing for a per-source witness to contribute here.
+    ///
+    /// `pin` must cover **every** staged source's backing, not just one. It is `?Sized` so the
+    /// caller's own borrowed slice of source bundles can serve as the witness directly, with no
+    /// union allocation standing between the sources and the coverage they already are.
+    pub(in crate::witnessed) fn merge_staged_composed<S, P, Pin, X>(
+        self,
+        staged: &[S::At<'static>],
+        pin: &Pin,
+        fold: impl for<'b> FnOnce(&W, &'b [S::At<'b>], T::At<'b>, FoldToken<'b>) -> (P::At<'b>, W, X),
+    ) -> (Witnessed<P, W>, X)
+    where
+        S: Reattachable + DropFree,
+        P: Reattachable + DropFree,
+        Pin: Witness + ?Sized,
+    {
+        let Witnessed {
+            value: dest,
+            witness: dest_witness,
+        } = self;
+        // SAFETY: `retype`'s contract — `Staged<S>`'s form is one type up to its lifetime (the
+        // family's layout-invariance, discharged at its `Reattachable` impl), so the staged run and
+        // its re-anchored view share layout. The obligation is `merge_composed`'s, quantified over
+        // the run: the borrowed `pin` covers every staged source's backing for the whole call (the
+        // `Witness` contract, and the caller's own doc obligation above), `staged` itself is a
+        // borrow the caller holds across the call, and the view is re-anchored to one existential
+        // brand the `for<'b>` closure cannot leak.
+        let live_staged: <Staged<S> as Reattachable>::At<'_> = unsafe { retype(staged) };
+        // SAFETY: as in `merge_composed` — the destination operand's backing is the live destination
+        // the caller holds to compose into, re-anchored to that same brand and immediately re-erased
+        // to `'static` for storage below.
+        let live_dest: T::At<'_> = unsafe { dest.reattach() };
+        let (projected, witness, threaded) =
+            fold(&dest_witness, live_staged, live_dest, FoldToken::mint());
+        let _ = pin;
+        (
+            Witnessed {
+                value: Erased::erase(projected),
+                witness,
+            },
+            threaded,
+        )
+    }
 }
+
+/// The **staged run** family: N erased values of one family, viewed as a single slice. Its erased
+/// form is `&'static [S::At<'static>]`, so a run staged by a relocation site re-anchors through the
+/// same single retype one operand takes — which is what lets [`Witnessed::merge_staged_composed`]
+/// hand a fold *every* source at the brand at once, rather than folding them in one at a time
+/// against an accumulator that must re-bump its gathered run at every step.
+///
+/// Layout-invariant in `'r`: a slice of a layout-invariant family is one, the componentwise
+/// discharge [`And`] takes.
+pub(in crate::witnessed) struct Staged<S>(PhantomData<S>);
+
+// SAFETY: `&'r [S::At<'r>]` is one type up to `'r` when `S` is — see the type's doc comment.
+unsafe impl<S: Reattachable> Reattachable for Staged<S> {
+    type At<'r> = &'r [S::At<'r>];
+}
+
+/// A shared reference needs no drop, so a staged run rests in the Copy tier like the run it views.
+impl<S> DropFree for Staged<S> {}
 
 /// A bundled carrier whose value family is a bit-copy (a thin/fat reference) and whose witness is
 /// too — the reference-only [`Carrier`], never an owned `PinBundle` — is itself `Copy`, so it

@@ -37,11 +37,19 @@
 
 use std::rc::Rc;
 
+use smallvec::SmallVec;
+
 use super::{
     Carrier, DropFree, Erased, FoldToken, FoldedPlacement, HasRegionHandle, Opened, PinBundle,
     PinsRegion, ReachDescription, Reattachable, Region, RegionHandle, RegionHandleFamily,
     RegionOwner, Retained, Sealed, SealedExtern, StepCoverage, StorageProfile, Witnessed,
 };
+
+/// Inline capacity for an N-ary relocation's staging buffers — the run of erased source values,
+/// the envelopes beside it, and their pin bundles. Sized to a typical aggregate arity (a record's
+/// fields, a small list literal, a step's deps), so those sites stage entirely on the stack and a
+/// wider run pays one heap growth per buffer rather than one per element.
+const STAGED_INLINE: usize = 8;
 
 /// A sealed carrier paired with the owned `PinBundle` that pins every region its value reaches —
 /// the value's home region among them, as an ordinary member. `T` is the carrier's value family,
@@ -492,6 +500,122 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
         )
     }
 
+    /// The engine under [`Self::transfer_all_into`]: the same relocation over an
+    /// [`ExactSizeIterator`] of source envelopes instead of a slice of them. Crate-internal so a
+    /// library caller whose run is already a slice of *borrows* ([`StepContext::alloc_with`]'s dep
+    /// list) feeds it `iter().copied()` rather than gathering a second slice purely to match the
+    /// public currency — the one adapter allocation the door exists to avoid.
+    ///
+    /// [`StepContext::alloc_with`]: super::StepContext::alloc_with
+    pub(in crate::witnessed) fn transfer_each_into<'s, B, P, C, Pr>(
+        sources: impl ExactSizeIterator<Item = &'s Self>,
+        dest: Delivered<B, Carrier<F>, F>,
+        still_borrows: impl for<'b> FnMut(&Self, &C::At<'b>, &F::Region) -> bool,
+        relocate: impl for<'b> FnOnce(
+            &'b [T::At<'b>],
+            B::At<'b>,
+            FoldedPlacement<'b, Pr>,
+        ) -> (P::At<'b>, &'b [C::At<'b>]),
+    ) -> Delivered<P, Carrier<F>, F>
+    where
+        B: Reattachable + DropFree,
+        P: Reattachable + DropFree,
+        C: Reattachable,
+        Pr: StorageProfile<FrameOwner = F> + 'static,
+        F: RegionOwner<Region = Region<Pr>>,
+        for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
+        T::At<'static>: Copy,
+        Self: 's,
+    {
+        let dest_home = dest.home_owner();
+        // The self rule, as in `transfer_into`: the destination contributes its foreign reach alone,
+        // never the residence the mint is about to stamp as the product's own.
+        let dest_reach = dest.pins().without_region(RegionOwner::region(&*dest_home));
+        // Stage the sources' erased forms into one run, keeping the envelopes beside it so the
+        // retention pass can name each source itself rather than an index into the run. Copying an
+        // already-erased value fabricates no lifetime — the run is inert until the staged merge
+        // re-anchors it, under the very envelopes borrowed here.
+        let capacity = sources.len();
+        let mut envelopes: SmallVec<[&'s Self; STAGED_INLINE]> = SmallVec::with_capacity(capacity);
+        let mut staged: SmallVec<[T::At<'static>; STAGED_INLINE]> =
+            SmallVec::with_capacity(capacity);
+        for source in sources {
+            staged.push(*source.cell.erased().as_static());
+            envelopes.push(source);
+        }
+        // The pin the staged re-anchor runs under has to cover every source's backing at once, and
+        // the borrowed slice of their bundles already is that coverage — it is itself the `Witness`,
+        // so nothing is unioned to present one. The claims those bundles carry are filtered
+        // individually inside the fold.
+        let source_pins: SmallVec<[&PinBundle<F>; STAGED_INLINE]> =
+            envelopes.iter().map(|envelope| envelope.pins()).collect();
+        let (product, bundle) = dest.cell.into_retained_inner().merge_staged_composed(
+            &staged,
+            &source_pins[..],
+            relocate_run_then_compose::<T, B, P, C, F, Pr>(
+                &envelopes,
+                &source_pins,
+                &dest_reach,
+                still_borrows,
+                relocate,
+            ),
+        );
+        Delivered::hosted(
+            Retained::from_witnessed(product),
+            dest_home,
+            StepCoverage(bundle),
+        )
+    }
+
+    /// **Relocate N sources into one destination in a single act** — the N-ary
+    /// [`Self::transfer_into`], for a site building one aggregate out of many delivered values.
+    /// `relocate` receives every source's live form as one slice at the shared brand, so it stores
+    /// the whole run through the placement *once*.
+    ///
+    /// This is the door an aggregate build takes, and the reason it exists is asymptotic. Folding
+    /// the same N sources pairwise makes each step's product the next step's destination, so the
+    /// accumulator has to carry the run gathered so far — and it can only carry it as region-bumped
+    /// bytes, since the destination family rests glue-free between steps ([`DropFree`]) and each
+    /// step's brand is fresh, so no buffer named outside a step can receive a value built inside
+    /// one. The run is then re-bumped per step: quadratic in region bytes, none of them reclaimable
+    /// before the frame dies. Staging the sources and re-anchoring them together instead gathers the
+    /// run once and builds the product in one pass, so both are linear in N.
+    ///
+    /// The retention rule is [`Self::transfer_into`]'s, asked **per source**: `relocate` returns the
+    /// product together with the run of cells it produced, and this door zips that run with the
+    /// source envelopes to ask `still_borrows(source, its own cell, region)` against each region
+    /// that source pins. Asking per source is what preserves the pairwise door's answer rather than
+    /// approximating it — an embedder's predicate reads a region against the source that pinned it,
+    /// so a source asked about a region it never named would answer for the wrong claim and retain
+    /// everything. The surviving members compose to one antichain, the source side of the mint.
+    ///
+    /// **Staging-order contract.** `relocate` returns its cells in staging order: `cells[i]` is the
+    /// product cell built from `sources[i]`. That is the whole of what the door trusts a relocate
+    /// hook for — the pairing it derives from it is handed to `still_borrows` as a (source, cell)
+    /// pair, so no embedder-facing signature carries an index into a run it would have to trust. A
+    /// debug assert checks the run lengths agree.
+    pub fn transfer_all_into<B, P, C, Pr>(
+        sources: &[Self],
+        dest: Delivered<B, Carrier<F>, F>,
+        still_borrows: impl for<'b> FnMut(&Self, &C::At<'b>, &F::Region) -> bool,
+        relocate: impl for<'b> FnOnce(
+            &'b [T::At<'b>],
+            B::At<'b>,
+            FoldedPlacement<'b, Pr>,
+        ) -> (P::At<'b>, &'b [C::At<'b>]),
+    ) -> Delivered<P, Carrier<F>, F>
+    where
+        B: Reattachable + DropFree,
+        P: Reattachable + DropFree,
+        C: Reattachable,
+        Pr: StorageProfile<FrameOwner = F> + 'static,
+        F: RegionOwner<Region = Region<Pr>>,
+        for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
+        T::At<'static>: Copy,
+    {
+        Self::transfer_each_into::<B, P, C, Pr>(sources.iter(), dest, still_borrows, relocate)
+    }
+
     /// [`Self::merge_into`] handing `f` a bare [`FoldToken`] instead of a [`FoldedPlacement`] over
     /// the destination operand's handle — the raw fold the public door adapts, crate-internal for
     /// the same reason [`Self::transfer_into_token`] is.
@@ -707,6 +831,66 @@ where
         let handle = live_dest.region_handle();
         let product = relocate(left_value, live_dest, token);
         let source_pins = source.retaining(|region| still_borrows(&product, region));
+        let (witness, bundle) = Carrier::compose_into(&source_pins, dest_bundle, handle);
+        (product, witness, bundle)
+    }
+}
+
+/// [`Delivered::transfer_all_into`]'s [`Witnessed::merge_staged_composed`] fold — the run-shaped
+/// twin of [`relocate_then_compose`]: `relocate` receives the whole staged run instead of one
+/// source value and hands back the cells it built alongside the product, and the retention pass
+/// walks each source's bundle under the (envelope, cell) pair that names whose claim it is. The
+/// composed source side is built in that same walk ([`PinBundle::union_all_retained`]), so N
+/// sources cost the one antichain the mint takes. The placement is minted over the destination
+/// operand's own handle here rather than through [`super::place_over_dest`], which pairs with the
+/// single-value fold shape.
+///
+/// Factored into a returned `impl for<'b> FnOnce` for the reason [`relocate_then_compose`] is: an
+/// inline closure written inside a scope binding `T::At<'static>: Copy` is not coerced to `for<'b>`
+/// and trips a spurious `'b: 'static`.
+#[allow(clippy::type_complexity)]
+fn relocate_run_then_compose<'s, T, B, P, C, F, Pr>(
+    envelopes: &'s [&'s Delivered<T, Carrier<F>, F>],
+    source_pins: &'s [&'s PinBundle<F>],
+    dest_bundle: &'s PinBundle<F>,
+    mut still_borrows: impl for<'b> FnMut(&Delivered<T, Carrier<F>, F>, &C::At<'b>, &F::Region) -> bool
+    + 's,
+    relocate: impl for<'b> FnOnce(
+        &'b [T::At<'b>],
+        B::At<'b>,
+        FoldedPlacement<'b, Pr>,
+    ) -> (P::At<'b>, &'b [C::At<'b>])
+    + 's,
+) -> impl for<'b> FnOnce(
+    &Carrier<F>,
+    &'b [T::At<'b>],
+    B::At<'b>,
+    FoldToken<'b>,
+) -> (P::At<'b>, Carrier<F>, PinBundle<F>)
++ 's
+where
+    T: Reattachable + DropFree,
+    B: Reattachable,
+    P: Reattachable,
+    C: Reattachable,
+    F: PinsRegion + RegionOwner<Region = Region<Pr>> + 'static,
+    Pr: StorageProfile<FrameOwner = F> + 'static,
+    for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
+{
+    move |_dest_witness, run, live_dest, _token| {
+        let handle = live_dest.region_handle();
+        let (product, cells) = relocate(run, live_dest, FoldedPlacement::mint(handle));
+        // The staging-order contract the door states: one cell per source, in the order they were
+        // staged. Length is what an assert can see; the pairing itself is the hook's obligation.
+        debug_assert_eq!(
+            cells.len(),
+            envelopes.len(),
+            "a relocate hook returns one product cell per staged source, in staging order"
+        );
+        let source_pins =
+            PinBundle::union_all_retained(source_pins.iter().copied(), |index, region| {
+                still_borrows(envelopes[index], &cells[index], region)
+            });
         let (witness, bundle) = Carrier::compose_into(&source_pins, dest_bundle, handle);
         (product, witness, bundle)
     }

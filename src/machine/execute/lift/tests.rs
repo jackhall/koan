@@ -7,10 +7,10 @@
 
 use super::*;
 use crate::builtins::test_support::{TestRun, run_root_bare};
-use crate::machine::CallFrame;
 use crate::machine::core::{
     FoldingBrand, KoanRegion, KoanRegionExt, KoanStorageProfile, program_storage, run_root_storage,
 };
+use crate::machine::{CallFrame, Scope};
 use crate::witnessed::RegionHandleFamily;
 
 /// Koan's destination-operand family, fixed to the storage profile — the `Delivered::destination`
@@ -1280,4 +1280,90 @@ mod seam_verb_table {
             "a foreign crossing pins"
         );
     }
+}
+
+/// `count` plain-data record cells, each born in its own producer frame and lifted to a delivery
+/// envelope — the aggregate-relocation fixture the allocation-count, linearity and escape tests
+/// share. The producers ride back alongside so a caller can drop them and read the cells after.
+///
+/// The field value is the cell's index, so a test that asserts read-back order (or that a
+/// permuted retention claim would change the answer) has a per-cell tell to assert against.
+fn plain_record_cell_run<'run>(
+    scope: &'run Scope<'run>,
+    types: &TypeRegistry,
+    count: usize,
+) -> (Vec<Rc<CallFrame>>, Vec<DeliveredCarried>) {
+    let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(count);
+    let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(count);
+    for index in 0..count {
+        let producer: Rc<CallFrame> = CallFrame::new(scope);
+        let born_cells = crate::machine::core::FrameCoverage::empty();
+        let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
+            producer.brand().handle(),
+        ))
+        .with_holder(&born_cells);
+        let fields = Record::from_pairs(vec![(
+            "acc".to_string(),
+            Held::Object(KObject::Number(index as f64)),
+        )]);
+        let object: &KObject<'_> =
+            door.alloc_object_folded(KObject::record_of_held(door, fields, types));
+        let sealed = producer.seal_born_here(Carried::Object(object), true);
+        cells.push(Delivered::lift(
+            crate::witnessed::Retained::from_sealed(Sealed::seal(
+                sealed,
+                producer.brand().handle(),
+            )),
+            producer.storage_rc(),
+        ));
+        producers.push(producer);
+    }
+    (producers, cells)
+}
+
+/// **Fixed cost at small N**: relocating a two-element aggregate must not cost more heap
+/// allocations than the pairwise fold it replaces. Brackets the relocation between two reads of
+/// the thread-local allocation counter, so the delta covers the door's own staging and composition
+/// and nothing else — the cells and their producers are built before the first read.
+#[test]
+fn two_element_relocation_allocates_no_more_than_the_pairwise_fold() {
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let scope = test_run.scope;
+    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let types = TypeRegistry::new();
+    let dest_storage = dest_frame.storage_rc();
+
+    let (_producers, cells) = plain_record_cell_run(scope, &types, 2);
+    let owned_cells = crate::machine::core::FrameCoverage::empty();
+
+    let before = crate::tests::allocation_count();
+    let acc0 = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
+        (region.handle(), &[][..])
+    });
+    let acc_final = cells.iter().fold(acc0, |acc, cell| {
+        cell.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
+            acc,
+            cell_still_borrows(cell),
+            |value, (region, folded), placement| {
+                let held = copy_held_from_carried(
+                    value,
+                    FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
+                );
+                let mut grown = Vec::with_capacity(folded.len() + 1);
+                grown.extend_from_slice(folded);
+                grown.push(held);
+                (region, placement.allocator().slice(&grown))
+            },
+        )
+    });
+    let delta = crate::tests::allocation_count() - before;
+
+    assert_eq!(
+        acc_final.open_ref(|(_region, folded)| folded.len()),
+        2,
+        "both cells relocated"
+    );
+    println!("PAIRWISE_TWO_ELEMENT_ALLOCATIONS = {delta}");
 }
