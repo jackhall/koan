@@ -47,8 +47,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Argument currency keyed by borrowed name](refactor/borrowed-argument-keying.md)
 - [Redundant work on the dispatch path](refactor/dispatch-path-redundant-work.md)
-- [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
-- [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Park-wiring buffer recycling](refactor/park-wiring-buffer-recycling.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Whole-program allocation counting](refactor/whole-program-allocation-count.md)

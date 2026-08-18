@@ -295,6 +295,4 @@ restarting from scratch.
 
 - `modgraph propose` (above) now surfaces SCC (cycle) and modularity
   (density) co-location candidates, scored and ranked by the existing
-  what-if. Its first intended target is the machine
-  [model/core straddle](../roadmap/refactor/machine-straddle-colocation.md),
-  still open.
+  what-if.
