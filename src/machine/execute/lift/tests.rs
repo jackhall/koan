@@ -505,9 +505,10 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
     let types = TypeRegistry::new();
     let dest_storage = dest_frame.storage_rc();
 
-    // `fold_cells`'s seed: a bare handle on the destination region plus an empty cell slice, homed
-    // in the destination frame. A handle and an empty slice reach nothing, so the seed's own
-    // coverage is empty — every member the product ends up with comes from the birth mint.
+    // An aggregate operand shaped like `fold_cells`'s product: a bare handle on the destination
+    // region plus a cell slice, homed in the destination frame. A handle and an empty slice reach
+    // nothing, so this operand's own coverage is empty — every member the product ends up with
+    // comes from the birth mint.
     let acc = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
         (region.handle(), &[][..])
     });

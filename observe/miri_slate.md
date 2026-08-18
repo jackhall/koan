@@ -40,8 +40,8 @@ group just to silence the stale-anchor check.
   `Drop`-free and lives in the region's bump: a value whose fields are all at the caller's `'a` —
   a `KFunction`, a `Module`, a same-region `Scope` — is bumped with no brand and no `unsafe` at all,
   and the two `Scope` stores embedding a foreign operand ride `RegionHandle::bump_born_with`, whose
-  `for<'b>` brand discharges residence at compile time. Koan-side `src/` carries no `unsafe` of its
-  own at all.
+  `for<'b>` brand discharges residence at compile time. Koan-side `src/` production code carries no
+  `unsafe` of its own at all.
 - `src/machine/core/scope.rs` — `Scope::add` re-entry pins the queue-and-drain
   discipline that keeps `Scope`'s `RefCell<…>` invariant intact when a binding
   is added while a `data` borrow is live.
@@ -123,8 +123,9 @@ covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
 whose failure modes live entirely in the library's verbs (the region alloc engine, the envelope
 transfer / duplication / adoption / re-stamp verbs, the mint's self rule and teardown, the
-`alloc_with` dep fold, the born-door round trips, the `SealedExtern` opens over thin, boxed, and
-fat-pointer carriers) is audited there, over library-only profiles; this slate holds only shapes
+`alloc_with` dep-run relocation, the born-door round trips, the `SealedExtern` opens over thin,
+boxed, and fat-pointer carriers) is audited there, over library-only profiles; this slate holds
+only shapes
 whose discipline lives in koan's own `src/` — its doors, seams, and scheduler-driving programs.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the

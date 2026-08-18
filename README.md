@@ -138,6 +138,7 @@ run-frame-owned store that memoizes subtype verdicts by digest pair),
 src/
 ├── main.rs              CLI entry point — reads source, calls interpret_with_writer_path
 ├── lib.rs               library facade — declares `parse`, `builtins`, and `machine` so integration tests under tests/ link against the same module graph
+├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — the counting global allocator fixed-cost measurements read
 ├── parse.rs             pub mod parse; …
 ├── parse/
 │   ├── quotes.rs           mask string literals

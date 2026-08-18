@@ -613,9 +613,9 @@ fn step_context_alloc_carrier_names_its_home_and_no_members() {
     assert!(opened.with_home_region(|region| std::ptr::eq(region, frame.region())));
 }
 
-/// [`StepContext::alloc_with`]: each dep folds through its delivery envelope claiming that
-/// envelope's own pins, so the built value's carrier names every dep's home as a minted reach
-/// member, and the dep views arrive at `build` in the same order as `deps`.
+/// [`StepContext::alloc_with`]: the dep run relocates in one act, each dep claiming its own
+/// delivery envelope's pins, so the built value's carrier names every dep's home as a minted reach
+/// member, and the dep views arrive at `build` in the staging order of `deps`.
 #[test]
 fn step_context_alloc_with_mints_dep_homes_and_preserves_dep_order() {
     static ONE: u32 = 1;

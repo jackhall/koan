@@ -45,7 +45,8 @@ just enough to read the policy.
   `Rc<FrameStorage>` in the consuming holder's bundle, released when that
   holder drops; the escape default below.
 - **Seam** — the one relocation choke-point every region crossing routes: the
-  [`transfer_into`](../workgraph/src/witnessed/delivered.rs) fold and its
+  [`transfer_into` / `transfer_all_into`](../workgraph/src/witnessed/delivered.rs)
+  fold — the second relocating a whole run of sources in one act — and its
   [`copy_carried`](../src/machine/execute/lift.rs) hook.
 - **Drop-free** — a stored (`'static`) form that owns no heap data: dropping
   it is a no-op, so its bytes can be reclaimed without running any destructor.
@@ -300,8 +301,8 @@ optimization below exists to bound exactly that cost.
 ## Cost-driven copy: the optimization
 
 At the one relocation seam every crossing routes (the
-[`transfer_into`](../workgraph/src/witnessed/delivered.rs) fold and its
-[`copy_carried`](../src/machine/execute/lift.rs) hook — the finalize walk's
+[`transfer_into` / `transfer_all_into`](../workgraph/src/witnessed/delivered.rs)
+fold and its [`copy_carried`](../src/machine/execute/lift.rs) hook — the finalize walk's
 per-destination adopt, which is where koan's `relocate_seam` is the scheduler's
 `Workload::deliver`; the container and callable folds; seed binds), the runtime
 chooses per value:

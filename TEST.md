@@ -78,7 +78,10 @@ witnessed substrate, the safe-code disciplines routing them (brand-confined
 construction doors, interior mutation under live shared borrows, region drop
 order), and the cycle gate that prevents self-referential `Rc<FrameStorage>`
 storage — under Miri's tree-borrows mode, with zero process-exit leaks and zero
-UB required for sign-off. `src/` itself carries no `unsafe`, tests included; the
+UB required for sign-off. `src/`'s production code carries no `unsafe` at all —
+the tree's only `unsafe` is the `#[cfg(test)]` counting global allocator in
+[`src/tests.rs`](src/tests.rs), test scaffolding the slate audit does not track
+(`tools/observe_tests.py` skips test files by design). The
 slate covers the safe koan code that drives the substrate's retypes, and
 `workgraph`'s own slate ([workgraph/observe/miri_slate.md](workgraph/observe/miri_slate.md))
 covers the library in isolation.

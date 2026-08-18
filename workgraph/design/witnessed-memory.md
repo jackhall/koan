@@ -253,11 +253,12 @@ carries its own pins, and the union of the two covers the shared re-anchor for
 the whole fold. The composition is `ComposeWitness::compose`, run inside the
 shared brand with the destination in scope: an owned region *set* composes by
 plain union (total, since a set can always represent the combined pin), while a
-hosted carrier mints the union into the destination's own arena. Both `merge_into`
-and `transfer_into` run one crate-private engine, `Witnessed::merge_composed`,
-whose `fold` builds the product and composes the witness inside a single brand;
-the engine is the only thing that takes the pin, and it is reachable only from
-the envelope verbs that derive it.
+hosted carrier mints the union into the destination's own arena. `merge_into` and
+`transfer_into` run one crate-private engine, `Witnessed::merge_composed`, whose
+`fold` builds the product and composes the witness inside a single brand. An
+engine is the only thing that takes the pin, and each is reachable only from the
+envelope verbs that derive it — the N-ary relocation below has its own,
+`merge_staged_composed`, differing only in how many sources it re-anchors at once.
 
 This is what keeps witnessed-ness at the *boundary*. Without it, an aggregate of
 independently-witnessed elements would nest `Witnessed<…Witnessed<…>>` wrappers
@@ -319,6 +320,46 @@ dying but whose consumer outlives it.
 
 `transfer_into` shares its `ComposeWitness::compose` engine with `merge_into`,
 so a relocated operand and a co-located one fold through one composition rule.
+
+**Relocating a run.** A site building *one* value out of *many* delivered ones —
+an aggregate literal's cells, a record's fields, a step's dep views — takes
+`transfer_all_into`, the N-ary door over the same rule. It is not sugar over a
+loop of `transfer_into`, and the reason is asymptotic: folding pairwise makes
+each step's product the next step's destination, so the accumulator must carry
+the run gathered so far, and it can only carry it as region-bumped bytes (the
+destination family rests glue-free between steps, and each step's brand is
+fresh, so no buffer named outside a step can receive a value built inside one).
+The run is then re-bumped per step — quadratic in region bytes none of which a
+bump can reclaim before its frame dies.
+
+The N-ary door removes the accumulator instead of optimizing it. The sources'
+erased forms are staged as one slice of the `Staged<S>` run family — a slice of
+a layout-invariant family is itself layout-invariant, so it re-anchors through
+the *same single retype* one operand takes — and `merge_staged_composed`
+re-anchors that whole run together with the destination operand inside one
+brand. The relocate hook therefore sees every source live at once and bumps the
+product run exactly once, so region bytes and heap copies are linear in N.
+
+Two things carry the run's obligations:
+
+- **The staging pin.** The re-anchor needs coverage of every staged source's
+  backing, not one. The caller's own borrowed slice of the sources' `PinBundle`s
+  *is* that coverage, so `[&PinBundle<F>]` is itself a `Witness` and the engine's
+  pin parameter is `?Sized` — nothing is unioned to present a pin the sources
+  already hold between them.
+- **Retention, asked per source.** The relocate hook returns the product
+  together with the run of cells it built, and the door zips that run against the
+  source envelopes to ask the retention predicate `(source, its own cell,
+  region)`. That preserves `transfer_into`'s exact per-source answer rather than
+  approximating it with a run-wide union, and it means no embedder-facing
+  signature carries an index into a run it would have to trust. The residual
+  contract is the hook's: cells come back in staging order, checked for length
+  by a debug assert. The surviving members compose to a single antichain in the
+  same walk that filters them (`PinBundle::union_all_retained`), which is what
+  keeps the door's fixed cost at small N at or below the pairwise path's.
+
+`transfer_into` stays the door for genuine 1:1 relocations — a seam crossing, a
+`catch` arm — where there is no run to stage.
 
 ## The dormant slot and the two resting tiers
 

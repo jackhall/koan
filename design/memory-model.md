@@ -259,8 +259,10 @@ asserted; and the envelope merge (`Delivered::merge_into` / `transfer_into`) com
 under one shared brand, runs a binding projection, and re-seals under the *composed* witness — the
 union of both operands' regions, with `outer`-chain subsumption dropping a region another already
 pins. The pin covering the shared re-anchor comes from the envelopes themselves — each side travels
-with its own pins, so no caller threads a pin in — and the crate-private `merge_composed` engine that
-consumes it is reachable only from those verbs. The composition is `ComposeWitness::compose`,
+with its own pins, so no caller threads a pin in — and the crate-private engine that consumes it
+(`merge_composed`, or `merge_staged_composed` where the source side is a whole staged run — see
+[witnessed-memory.md § Storage and access](../workgraph/design/witnessed-memory.md#storage-and-access-seal-open-transfer_into))
+is reachable only from those verbs. The composition is `ComposeWitness::compose`,
 run inside the brand with the destination in scope: an owned region set composes by plain union
 (total, since a set can always represent the combined pin), while a hosted carrier mints the combined
 reach into the destination's own arena. All keep their `unsafe` retype inside the module, so callers
@@ -437,8 +439,9 @@ taken at a `for<'b>` lifetime no ambient borrow inhabits. A `KObject` embedding 
   runtime-audited obligation. `FoldingBrand`'s sole constructor
   ([`in_fold_closure`](../src/machine/core/arena.rs)) takes a
   [`FoldedPlacement`](../workgraph/src/witnessed.rs) — a compile-only capability privately wrapping
-  the destination handle — which only a fold engine (`transfer_into` / `merge_into` /
-  `Delivered::project` / `StepAllocator::alloc_carried_with`) mints over the destination region
+  the destination handle — which only a fold engine (`transfer_into` / `transfer_all_into` /
+  `merge_into` / `Delivered::project` / `StepAllocator::alloc_carried_with`) mints over the
+  destination region
   and whose `'b` brand keeps it from escaping the closure, so the capability is reachable only at a
   fresh fold brand. The store itself is the placement's own
   [`bump`](../workgraph/src/witnessed.rs) door: a `KObject`, a `Held` cell, a `Module` and a
@@ -604,10 +607,11 @@ subsumption only ever drops members
 ([reach.md § Composition](../workgraph/design/reach.md#composition-minting-a-description-and-retaining-its-pins)).
 
 What it does not see bounds how a clean run should be read: the direct
-`merge_into` / `transfer_into` fold sites are not instrumented, and the address
-walk records a `KFunction`'s or `Module`'s captured-scope pointer without
-descending into that scope's binding tables, so a product embedding a value
-reachable only through a captured binding reads as non-contributing.
+`merge_into` / `transfer_into` / `transfer_all_into` fold sites are not
+instrumented, and the address walk records a `KFunction`'s or `Module`'s
+captured-scope pointer without descending into that scope's binding tables, so a
+product embedding a value reachable only through a captured binding reads as
+non-contributing.
 
 ## Binding writes ride the step outcome
 

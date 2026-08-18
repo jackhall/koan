@@ -349,16 +349,17 @@ fn fold_witnessed_yokes_a_reference_only_value() {
     assert_eq!(got, 7.0);
 }
 
-/// Workload-level accumulator carrier for the aggregate construction fold: the dest region the
-/// finished aggregate node lands in, paired with the element cells built so far — re-bumped into
-/// that region each step, so the accumulator rests on the Copy tier between folds. The
-/// production family the object-family construction inversion uses lives in the execute layer; this
-/// is the spike stand-in that proves the carrier round-trips and the fold composition is sound.
+/// Accumulator carrier for the **pairwise** relocation fold: the dest region the finished
+/// aggregate node lands in, paired with the element cells built so far — re-bumped into that region
+/// each step, so the accumulator rests on the Copy tier between folds. Production aggregates take
+/// the N-ary `transfer_all_into` door instead (`dispatch::literal`'s own family, in the execute
+/// layer); this stand-in exercises `transfer_into`'s multi-step composition, which the 1:1
+/// relocation sites still depend on.
 struct AggBuildFamily;
 crate::witnessed::reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [Held<'r>]));
 
-/// The **aggregate** construction fold: a list / dict / record built from several dep producers —
-/// the shape the object family folds with shipped verbs only (no new substrate primitive). The
+/// A multi-step **pairwise** construction fold over several dep producers, the composition rule
+/// the 1:1 relocation sites (`relocate_seam`, the `catch` and tag arms) rest on. The
 /// accumulator is `yoke`d empty over the dest frame's region; each foreign dep's
 /// `Delivered` envelope is folded in with
 /// [`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into), which re-anchors it at
@@ -368,8 +369,8 @@ crate::witnessed::reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageP
 /// node into the carried region under the envelope's own pins.
 /// After every producer handle drops, the folded witness is the sole owner of all three regions the
 /// list reaches, so reading the cells back is sound — the proof the construction site names its reach
-/// on the one carrier rather than reconstructing it from the value. Mirrors the production fold; fails
-/// on UB / leaks, not values.
+/// on the one carrier rather than reconstructing it from the value. Fails on UB / leaks, not
+/// values.
 #[test]
 fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
     // Two unrelated producer frames, each holding one element — sibling producers whose terminals
@@ -530,11 +531,11 @@ fn region_union_foreign_pins_release_at_region_death() {
 /// FROM's own construction shape — [`record_projection::body`](crate::builtins::record_projection)
 /// narrows a record's carried type by sharing its substrate borrow whole, built at the fold brand
 /// from the delivered `record` operand's view (`alloc_carried_with`). The combinator's
-/// by-construction dep fold is pinned library-side (`alloc_with_folds_dep_reach_before_result_read`
-/// in the workgraph slate); this exercises it over the `Record` substrate specifically: the
-/// substrate stays in the *producer's* region (never copied — `record_with_type` swaps only the
-/// type handle), and the fold's reach union is what keeps that region alive once every producer
-/// handle drops. A regression that copied the substrate instead of sharing it would still pass
+/// by-construction dep-run relocation is pinned library-side
+/// (`alloc_with_folds_dep_reach_before_result_read` in the workgraph slate); this exercises it over
+/// the `Record` substrate specifically: the substrate stays in the *producer's* region (never
+/// copied — `record_with_type` swaps only the type handle), and the composed reach is what keeps
+/// that region alive once every producer handle drops. A regression that copied the substrate instead of sharing it would still pass
 /// (a copy is also readable); the pointer-identity assertion is what actually pins "shares, never
 /// copies," while Miri is what catches a dangling read if the reach fold is skipped.
 #[test]

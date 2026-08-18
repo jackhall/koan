@@ -91,7 +91,7 @@ impl<'a> RegionBrand<'a> {
     }
 
     /// The bare library allocation capability this brand wraps — the handle-headed construction
-    /// operand families (`RegionTypeFamily`, the aggregate accumulators, the destination-operand
+    /// operand families (`RegionTypeFamily`, the aggregate build products, the destination-operand
     /// `RegionHandleFamily`) cross the brand as this raw handle rather than the koan veneer, so the
     /// library's own `HasRegionHandle` impls for `RegionHandle`/`(RegionHandle, T)` discharge their
     /// obligation with no koan-side impl. A closure that needs the koan-typed `alloc_*` veneer back
@@ -475,8 +475,9 @@ pub(crate) trait KoanRegionExt {
     /// `yoke` a value of **any** carrier family into `owner`'s region, handing the build closure a
     /// per-construction [`RegionBrand`] (confined to the `for<'b>` brand) so it allocates through the
     /// one capability. Generalizes [`alloc_witnessed`](Self::alloc_witnessed) (the `CarriedFamily`
-    /// case) for the aggregate-accumulator yokes (`AggBuildFamily`) whose closures alloc into the dest
-    /// region. The yoke hands a `&'b KoanRegion`; wrapping it as the brand is sound for the same reason
+    /// case) for the operand yokes over a non-carried family (`RegionTypeFamily`,
+    /// `OperatorGroupFamily`) whose closures alloc into the dest region. The yoke hands a
+    /// `&'b KoanRegion`; wrapping it as the brand is sound for the same reason
     /// the yoke is — the `for<'b>` quantifier admits only region-derived/owned references, so
     /// co-location holds by construction and nothing branded escapes the closure.
     fn yoke_branded<T: Reattachable + DropFree, F>(

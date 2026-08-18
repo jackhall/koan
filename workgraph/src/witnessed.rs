@@ -885,7 +885,7 @@ impl<T: Reattachable + DropFree, W: Copy> Copy for Witnessed<T, W> where T::At<'
 /// covers), so the placement's region is the engine's own operand, never a caller-captured handle.
 /// Built as a returned `impl for<'b> FnOnce` so the closure is inferred higher-ranked over the brand
 /// — an inline closure is not coerced to `for<'b>` and trips a spurious `'b: 'static`, the same
-/// reason the `alloc_with` fold steps are factored out.
+/// reason `alloc_with`'s build step is factored out.
 fn place_over_dest<T, B, P, Pr>(
     relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P::At<'b>,
 ) -> impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>

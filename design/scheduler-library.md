@@ -183,9 +183,11 @@ by-convention is the point.
 5. **Escape prevention.** A dep's payload is viewable only at a closure
    brand inside the step context. Embedding it in an output value is only
    possible through the combinator that received that dep's carrier — which
-   folds the dep's reach into the output's reach set as a side effect of
-   the call shape. Forgetting to name a reach is not expressible.
-   *Enforced by:* brands.
+   composes the dep's reach into the output's reach set as a side effect of
+   the call shape. The combinator relocates the *whole* dep run in one act,
+   so every listed dep's reach enters the output's set at the one brand the
+   build closure sees its views at. Forgetting to name a reach is not
+   expressible. *Enforced by:* brands.
 
 ## Two currencies, one lowering
 
@@ -299,7 +301,7 @@ list, scheduler-internal from that point on.
 Await::on(deps)
     .error_frame(frame)              // label attached if a dep errors
     .finish_terminal(|ctx, terminals| ...)  // reads the deps as residents
-// or, for a construction that folds its deps into one witnessed carrier:
+// or, for a construction that relocates its deps into one witnessed carrier:
 Await::on(deps).finish_witnessed(|ctx, terminals| ...)
 ```
 
@@ -328,8 +330,9 @@ ctx.region()                       // the consumer's live region — infallible
 ctx.alloc(|handle| value)          // reach = own region only: purity is
                                    // structural, not asserted
 ctx.alloc_with(&[dep_a, dep_b],    // reach = own region ∪ those deps' reaches
-    |placement, views| value)      // dep payloads viewable only inside, at
-                                   // the placement's brand (guarantee 5)
+    |placement, views| value)      // the whole dep run relocates in one act;
+                                   // payloads viewable only inside, at the
+                                   // placement's brand (guarantee 5)
 dep.carrier()                      // the dep's sealed carrier, freely
                                    // passable — for policy work
 ```
@@ -342,7 +345,12 @@ safely.
 There is one door per verb. `alloc` hands its closure the region's
 `RegionHandle`, and `alloc_with` hands it a `FoldedPlacement` over that same
 handle — the allocation capability and the fold-brand proof as one value, so
-the two are never paired by hand. The region-flavoured forms that take a bare
+the two are never paired by hand. `alloc_with` is not a per-dep fold: it stages
+its whole dep run against a destination operand on the held frame's own region
+and re-anchors the run at a single brand
+([witnessed-memory.md § Storage and access](../workgraph/design/witnessed-memory.md#storage-and-access-seal-open-transfer_into)),
+so the closure sees every view at once and the deps' reaches compose into the
+result's carrier in one composition rather than one per dep. The region-flavoured forms that take a bare
 `&Region` plus a separate `FoldToken` are crate-internal implementations of
 those two, not a second public layer.
 

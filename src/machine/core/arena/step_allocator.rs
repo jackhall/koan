@@ -88,8 +88,8 @@ impl<'step> StepAllocator<'step> {
 
     /// [`StepContext::alloc_with`] with the closure receiving a [`FoldingBrand`] and the deps'
     /// views: the built carrier names every listed dep's reach **and residence host** (each dep
-    /// arrives as its delivery envelope and folds at `Residence::Kept`), by construction — so a
-    /// value the closure builds from those deps' operands is covered by the fold, and
+    /// arrives as its delivery envelope and relocates at `Residence::Kept`), by construction — so a
+    /// value the closure builds from those deps' operands is covered by that composition, and
     /// [`FoldingBrand`]'s folded-placement methods store it without a per-value audit. Plain
     /// [`RegionBrand`] methods stay reachable through `Deref`, so a closure building an unrelated
     /// `'static` value is unaffected.

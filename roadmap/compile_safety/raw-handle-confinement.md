@@ -32,8 +32,8 @@ handle without it.
 - Production koan code cannot reach the workgraph raw mints
   (`RegionHandle::from_owner`, `FoldedPlacement::handle()`); tests reach a
   handle only through a `test-hooks`-gated accessor.
-- `src/` still carries no `unsafe`, tests included — the confinement adds no
-  koan-side `unsafe impl`.
+- The confinement adds no koan-side `unsafe impl`: `src/`'s production code
+  still carries no `unsafe` at all.
 
 **Directions.**
 
@@ -41,8 +41,8 @@ handle without it.
   ([reach.rs](../../src/machine/core/scope/reach.rs)) to `pub(crate)` — three
   of the seven sites duplicate it verbatim — and add veneer doors for the
   rest. The alternative (koan-side `RegionBrand`-headed witness families over
-  a local `unsafe impl HasRegionHandle`) is rejected: it reintroduces `unsafe`
-  into `src/`.
+  a local `unsafe impl HasRegionHandle`) is rejected: it puts `unsafe` into
+  koan's production code.
 - *Workgraph-side mints — open.* (a) Narrow `RegionHandle::from_owner` and
   `FoldedPlacement::handle()` to `pub(crate)` with a `test-hooks` accessor;
   (b) keep them `pub` for embedders and gate koan's use by module discipline

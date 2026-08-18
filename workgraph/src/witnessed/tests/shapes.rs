@@ -3,7 +3,8 @@
 //! relocation site makes through its source-pins claim, envelope duplication, the
 //! [`ReachDescription::mint_resident`] self rule, the three carrier states and the transform verbs between
 //! them, the drop to rest that lodges a value's coverage in a region so its cell rides as plain
-//! data, and the [`StepContext::alloc_with`] finish-surface fold. Everything routes production
+//! data, and the [`StepContext::alloc_with`] finish-surface dep-run relocation. Everything routes
+//! production
 //! verbs over a library-only profile ([`ShapeProfile`] /
 //! `RegionHost` frames, `u32` content) — no embedder type. Each test frees every frame handle a
 //! regression would leave the value dangling into, then reads the value back: a use-after-free
@@ -799,11 +800,13 @@ fn an_unhosted_pair_pins_its_whole_reach_until_it_is_hosted() {
     );
 }
 
-/// **Finish-surface fold** — `alloc_with` folds every listed dep's envelope into the result's
-/// carrier *by construction*, before the build closure can embed a dep view. The built value here
-/// IS a dep view (a borrow into the producer's region, riding the result un-copied); the producer
-/// handle drops, and the by-construction fold is the sole pin under the read — the mirror of the
-/// behavioral membership test above it in `tests.rs`, UAF-shaped.
+/// **Finish-surface relocation** — `alloc_with` relocates the whole dep run in one act, so every
+/// listed dep's envelope composes into the result's carrier *by construction*, before the build
+/// closure can embed a dep view. The run is staged and re-anchored at one brand under the borrowed
+/// slice of the deps' own pin bundles, so this also pins that staged re-anchor. The built value
+/// here IS a dep view (a borrow into the producer's region, riding the result un-copied); the
+/// producer handle drops, and the by-construction composition is the sole pin under the read — the
+/// mirror of the behavioral membership test above it in `tests.rs`, UAF-shaped.
 #[test]
 fn alloc_with_folds_dep_reach_before_result_read() {
     let dep_frame = frame();

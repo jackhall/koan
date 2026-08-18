@@ -32,9 +32,11 @@ supplied witness pins), and through the `Witnessed` accessors: the rank-2 brande
 (borrow + read) and `map` (consume + transform), the borrow-bounded `read` that hands the carrier
 *out* at the `&self` borrow — sound because its content lifetime is the borrow itself (not a free
 `'b`), so the bundled `Witness` pins it for exactly that long — and the rank-2 branded composition
-engine `merge_composed`, which re-anchors *two* carriers under one `'b`, runs a binding projection,
+engines `merge_composed`, which re-anchors *two* carriers under one `'b`, runs a binding projection,
 and re-seals under the composed witness (the descendant's ancestor-chain pin keeps both regions
-live). The co-location-enforcing constructor `yoke` sources its carrier from the witness's region
+live), and `merge_staged_composed`, which does the same for a whole `Staged` run of source values
+plus the destination operand, under the borrowed slice of the sources' own pin bundles as its
+witness. The co-location-enforcing constructor `yoke` sources its carrier from the witness's region
 through a `for<'b>` closure (no `unsafe` of its own — it routes the safe `erase`), so it is exercised
 for the brand discipline, not a retype. The `unsafe impl Reattachable` families declare
 layout-invariance and carry no runtime `unsafe` of their own — they are exercised through this
@@ -318,7 +320,7 @@ that reordered ahead of the relocation. The `unsafe` routed is the shared `retyp
 - `copy_verdict_frees_the_retiring_region_at_the_replace`
 - `pin_verdict_transfers_the_retiring_region_into_the_new_anchor_bundle`
 
-**`StepContext::alloc_with` — finish-surface fold** ([src/witnessed/step_ctx.rs](../src/witnessed/step_ctx.rs))
+**`StepContext::alloc_with` — finish-surface dep run** ([src/witnessed/step_ctx.rs](../src/witnessed/step_ctx.rs))
 — guarantee 5 made structural: every listed dep's envelope composes into the result's carrier by
 construction, before the build closure can embed a dep view. The whole dep run relocates in one
 act (`Delivered::transfer_each_into`), so the test also pins the **staged re-anchor**: N erased dep

@@ -153,11 +153,13 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     }
 
     /// The relocation composition behind the envelope's
-    /// [`transfer_into`](super::Delivered::transfer_into) and the live-carrier reach merges: mint
-    /// BOTH operands' exact reach — the destination's (an accumulator's prior folds, threaded as
-    /// `right_bundle`) and the newly-folded source's (`left_bundle`) — into `dest`'s arena. Never
-    /// the source alone, or a multi-step accumulator fold would drop everything folded before this
-    /// step. Both operand bundles are owned and threaded in — the composition folds strong `Rc`s,
+    /// [`transfer_into`](super::Delivered::transfer_into) /
+    /// [`transfer_all_into`](super::Delivered::transfer_all_into) and the live-carrier reach merges:
+    /// mint BOTH operands' exact reach — the destination's (threaded as `right_bundle`; for a
+    /// pairwise accumulator, everything its prior steps folded) and the newly-relocated source
+    /// side's (`left_bundle`, the composed antichain across the run where the source side is a run)
+    /// — into `dest`'s arena. Never the source alone, or a multi-step accumulator fold would drop
+    /// everything folded before this step. Both operand bundles are owned and threaded in — the composition folds strong `Rc`s,
     /// never a description's `Weak` — and `left_bundle` is where the folded value's home enters, as
     /// an ordinary member.
     ///
