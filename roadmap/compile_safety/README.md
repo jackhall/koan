@@ -7,9 +7,10 @@ check. No residence walk over a composite value survives, no runtime residence
 check survives, and a region keeps no address side table for one to consult: a
 move-in is discharged by the door's signature — a region-free leaf type, a fold
 brand's rank-2 capability, a born door's rank-2 brand over the destination, or a
-merge whose composition derives the reach. `src/`'s production code carries no
-`unsafe` at all; the tree's only `unsafe` is a `#[cfg(test)]` counting global
-allocator (`src/tests.rs`), test scaffolding the slate audit does not track.
+merge whose composition derives the reach. `src/` carries no `unsafe` at all;
+koan's only `unsafe` is the counting global allocator
+(`audit/counting_alloc.rs`), measurement scaffolding outside the tree the slate
+audit censuses.
 The remaining work is the hotspot-map holes below; a row linking
 a roadmap item is promoted, and an unlinked one is a hole that is observed or
 tolerated but not yet owned by an item. Tier vocabulary:

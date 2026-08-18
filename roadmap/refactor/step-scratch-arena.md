@@ -23,6 +23,12 @@ and `build_resolved` adds one to two more through `ClassifiedSlots`
 ([src/machine/core/kfunction/pick.rs](../../src/machine/core/kfunction/pick.rs)). None of
 the four escapes the call — only the pick does, through `Scope::open_function`.
 
+The recorded baselines put a figure on that traffic: the 128-operand chain in
+[audit/README.md](../../audit/README.md) costs ≈63 allocations per dispatch, against 226
+per machine step for the tail loop, and `tests/allocation_baseline.rs` holds both shapes
+to a bound. A buffer removed here therefore shows up as a measured drop rather than as a
+static read of the call graph.
+
 Absent a scratch arena the only way to remove them is to rework the signature of
 `ExpressionSignature::most_specific`
 ([src/machine/model/types/signature.rs](../../src/machine/model/types/signature.rs)) to
@@ -75,9 +81,7 @@ take indexed pairs, contorting a type-system door to solve an allocation problem
 
 ## Dependencies
 
-**Requires:**
-
-- [Whole-program allocation counting](whole-program-allocation-count.md) — the counts decide whether this item's plumbing earns its keep before it is built.
+**Requires:** none — the allocation counts that decide whether this plumbing earns its keep are recorded.
 
 **Unblocks:**
 

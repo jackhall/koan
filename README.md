@@ -48,6 +48,8 @@ cargo test parse::    # tests under one module
 
 Each module keeps its tests in a `#[cfg(test)] mod tests` block alongside the code (parser, scheduler, dispatch, and interpreter all have suites). For the full testing and linting workflow — including the Miri audit slate that signs off the memory model under tree borrows — see [TEST.md](TEST.md).
 
+Measurement scaffolding that no build ships — the counting global allocator, the debug reach-tightness report, and the recorded koan programs the allocation baselines are read over — lives outside `src/` under [audit/](audit/README.md), which carries the charter for the split plus the committed baseline table and the script that reproduces it.
+
 ## Architecture
 
 The pipeline is three stages, split across two top-level modules:
@@ -138,7 +140,7 @@ run-frame-owned store that memoizes subtype verdicts by digest pair),
 src/
 ├── main.rs              CLI entry point — reads source, calls interpret_with_writer_path
 ├── lib.rs               library facade — declares `parse`, `builtins`, and `machine` so integration tests under tests/ link against the same module graph
-├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — the counting global allocator fixed-cost measurements read
+├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for the lib-test binary and exposes the tally fixed-cost measurements read
 ├── parse.rs             pub mod parse; …
 ├── parse/
 │   ├── quotes.rs           mask string literals

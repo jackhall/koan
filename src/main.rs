@@ -3,11 +3,29 @@ use std::process::ExitCode;
 
 use koan::machine::interpret_with_writer_path;
 
-// Miri can't call mimalloc's FFI (`mi_malloc_aligned`); fall back to the
-// system allocator under miri so the bin target stays in the audit slate.
-#[cfg(not(miri))]
+// Allocator selection, over two axes. Miri can't call mimalloc's FFI
+// (`mi_malloc_aligned`), so the bin target falls back to the system allocator under miri
+// to stay in the audit slate. `alloc-count` then *wraps* whichever of the two is in play
+// in the delegating counter rather than replacing it, so the counted build and the
+// shipped build allocate through the same allocator and a wall-clock reading off the
+// counted one is still comparable.
+#[cfg(feature = "alloc-count")]
+#[path = "../audit/counting_alloc.rs"]
+mod counting_alloc;
+
+#[cfg(all(not(feature = "alloc-count"), not(miri)))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[cfg(all(feature = "alloc-count", not(miri)))]
+#[global_allocator]
+static GLOBAL: counting_alloc::Counting<mimalloc::MiMalloc> =
+    counting_alloc::Counting(mimalloc::MiMalloc);
+
+#[cfg(all(feature = "alloc-count", miri))]
+#[global_allocator]
+static GLOBAL: counting_alloc::Counting<std::alloc::System> =
+    counting_alloc::Counting(std::alloc::System);
 
 /// CLI entry point: read source from a file (if a path is given as the first argument) or from
 /// stdin, then parse, dispatch, and execute it via `interpret_with_writer_path` so error
@@ -33,6 +51,10 @@ fn main() -> ExitCode {
 
     let out: Box<dyn std::io::Write> = Box::new(std::io::stdout());
     let outcome = interpret_with_writer_path(&source, path.as_deref(), out);
+    // Before the region audits: their pin-ring walk is debug scaffolding that allocates in
+    // proportion to what the run pinned, so counting it would fold the reader's own cost
+    // into the program's.
+    report_allocations();
     report_region_audits();
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
@@ -65,3 +87,16 @@ fn report_region_audits() {
         );
     }
 }
+
+/// Print the run's allocation total to stderr — the reader half of the `alloc-count`
+/// feature, without which wrapping the allocator surfaces nothing. The tally is read
+/// before the print, since the print itself allocates.
+#[cfg(feature = "alloc-count")]
+fn report_allocations() {
+    let total = counting_alloc::allocations();
+    eprintln!("allocations: {total}");
+}
+
+/// No-op when the counter is not compiled in, so the call site in `main` needs no cfg.
+#[cfg(not(feature = "alloc-count"))]
+fn report_allocations() {}

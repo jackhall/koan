@@ -19,7 +19,7 @@ arms — while the two verbs are library-generic, so there is no instrumentation
 point shared with the chokepoint already covered.
 
 *Unwalked captured bindings.* `collect_addresses`
-([reach_audit.rs](../../src/machine/core/reach_audit.rs)) records a `KFunction`'s
+([reach_audit.rs](../../audit/reach_audit.rs)) records a `KFunction`'s
 and a `Module`'s own address and captured-scope pointer, but does not descend
 into that scope's binding table ([scope.rs](../../src/machine/core/scope.rs)). A
 product whose only route to an operand runs through a captured binding therefore

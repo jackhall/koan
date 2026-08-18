@@ -49,7 +49,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Redundant work on the dispatch path](refactor/dispatch-path-redundant-work.md)
 - [Park-wiring buffer recycling](refactor/park-wiring-buffer-recycling.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
-- [Whole-program allocation counting](refactor/whole-program-allocation-count.md)
+- [Step-scoped scratch arena](refactor/step-scratch-arena.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)

@@ -21,8 +21,10 @@ pub mod step_fixture;
 /// integration tests keep resolving `koan::witnessed::…` / `koan::scheduler::…` paths unchanged.
 pub use workgraph::{scheduler, witnessed};
 
-/// Crate-wide test scaffolding: the counting global allocator the relocation path's fixed-cost
-/// measurements read. Its only consumer is `machine::execute::lift`'s aggregate suite, but a
-/// `#[global_allocator]` is a crate-level declaration, so it lives at the crate root.
+/// Crate-wide test scaffolding: installs the counting global allocator from
+/// [`audit/counting_alloc.rs`](../audit/counting_alloc.rs) for the lib-test binary and exposes
+/// the thread-local tally the relocation path's fixed-cost measurements read. Its only consumer
+/// is `machine::execute::lift`'s aggregate suite, but a `#[global_allocator]` is a crate-level
+/// declaration, so it lives at the crate root.
 #[cfg(test)]
 mod tests;

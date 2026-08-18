@@ -584,10 +584,13 @@ no wiring for it: `FrameStorage` is the library's `RegionHost`, so the walk's
 ancestor enumeration is the same `outer` chain
 [`pins_region`](../src/machine/core/arena/frame.rs) already answers over.
 
-The **reach-tightness report** ([`reach_audit.rs`](../src/machine/core/reach_audit.rs))
+The **reach-tightness report** ([`reach_audit.rs`](../audit/reach_audit.rs))
 is Koan's, and compiles only under `cfg(any(test, feature = "region-audit"))` —
 `cargo run --features region-audit -- <program>` for an instrumented interpreter
-run, whose findings [`main.rs`](../src/main.rs) prints to stderr afterwards. It
+run, whose findings [`main.rs`](../src/main.rs) prints to stderr afterwards. Its
+body sits in [`audit/`](../audit/README.md), the home for measurement code no
+build ships; what `src/` carries is the module declaration
+([core.rs](../src/machine/core.rs)) and the instrumented door itself. It
 instruments one door, the fold chokepoint
 [`StepAllocator::alloc_carried_with`](../src/machine/core/arena/step_allocator.rs),
 and asks whether each declared operand actually reached the product.
@@ -738,10 +741,10 @@ party's death schedule reaches into another's subtree.
   walk, which only tree borrows observes.
 - The over-pinning audits ([§ Debug region audits](#debug-region-audits)) are
   observed by their own slates rather than trusted:
-  [`over_fold_is_flagged`](../src/machine/core/reach_audit/tests.rs) drives a fold
-  whose product embeds only its first operand through the real chokepoint door and
-  reads back one flag naming the second operand's home, with three sibling tests
-  fixing what must *not* flag (a tight fold, a co-homed non-contributor, a rebuilt
+  [`over_fold_is_flagged`](../audit/reach_audit/tests.rs) drives a fold whose
+  product embeds only its first operand through the real chokepoint door and reads
+  back one flag naming the second operand's home, with three sibling tests fixing
+  what must *not* flag (a tight fold, a co-homed non-contributor, a rebuilt
   scalar); [`mutual_pin_is_reported`](../workgraph/src/witnessed/tests/pin_cycles.rs)
   and its chain-mediated sibling build real rings — a genuine leak, so each test
   dismantles the ring it built — against two negatives that must stay silent.

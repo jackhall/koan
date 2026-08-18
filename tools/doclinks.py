@@ -46,10 +46,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 MD_GLOBS = (
-    "*.md", "design/**/*.md", "roadmap/**/*.md",
+    "*.md", "audit/**/*.md", "design/**/*.md", "roadmap/**/*.md",
     "workgraph/*.md", "workgraph/design/**/*.md", "workgraph/roadmap/**/*.md",
 )
-SRC_GLOBS = ("src/**/*.rs", "workgraph/src/**/*.rs")
+SRC_GLOBS = ("src/**/*.rs", "audit/**/*.rs", "workgraph/src/**/*.rs")
 
 # Roadmap items live in two trees: koan's own `roadmap/`, and the library's
 # `workgraph/roadmap/`. They form one dependency graph — an edge crosses trees

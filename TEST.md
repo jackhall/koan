@@ -78,11 +78,14 @@ witnessed substrate, the safe-code disciplines routing them (brand-confined
 construction doors, interior mutation under live shared borrows, region drop
 order), and the cycle gate that prevents self-referential `Rc<FrameStorage>`
 storage — under Miri's tree-borrows mode, with zero process-exit leaks and zero
-UB required for sign-off. `src/`'s production code carries no `unsafe` at all —
-the tree's only `unsafe` is the `#[cfg(test)]` counting global allocator in
-[`src/tests.rs`](src/tests.rs), test scaffolding the slate audit does not track
-(`tools/observe_tests.py` skips test files by design). The
-slate covers the safe koan code that drives the substrate's retypes, and
+UB required for sign-off. `src/` carries no `unsafe` at all — koan's only
+`unsafe` is the counting global allocator in
+[`audit/counting_alloc.rs`](audit/counting_alloc.rs), measurement scaffolding
+outside the tree the slate audit censuses (`tools/observe_tests.py` walks `src/`
+only). It is still exercised under Miri: [`src/tests.rs`](src/tests.rs) installs
+it as the lib-test binary's global allocator, so every slate test allocates
+through it. The slate covers the safe koan code that drives the substrate's
+retypes, and
 `workgraph`'s own slate ([workgraph/observe/miri_slate.md](workgraph/observe/miri_slate.md))
 covers the library in isolation.
 
@@ -131,3 +134,24 @@ Findings print to stderr after the run. The pin-ring detector needs no feature �
 any debug build has it — while the reach-tightness report is `region-audit`'s.
 Silence means the run detected nothing, which is the expected result; a report is
 a real finding worth chasing.
+
+## Allocation counts
+
+The counting global allocator ([`audit/`](audit/README.md)) reports allocation
+traffic two ways.
+
+```sh
+bash audit/measure.sh                                   # whole-program totals per shape
+cargo run --features alloc-count -- program.koan        # one program's total, on stderr
+cargo test --test allocation_baseline                   # the bounded regression test
+```
+
+`audit/measure.sh` reproduces the committed baseline table in
+[audit/README.md](audit/README.md); the table is transcribed by hand, so a
+figure that moves is a deliberate edit. The regression test brackets each
+recorded shape and asserts its count against a bound tight enough to see one
+added allocation — 41 allocations of headroom against the 100 (loop) or 127
+(chain) a single new one on the scaling path costs. A failure means either an
+allocation was added to the execute path or an unrelated fixed cost moved;
+re-measure with `audit/measure.sh` before rebaselining, and rebaseline the table
+and the bound together.
