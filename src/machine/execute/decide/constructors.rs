@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use smallvec::SmallVec;
+
 use crate::machine::core::DepPlacement;
 use crate::machine::core::{
     FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, RegionBrand, Scope,
@@ -23,7 +25,7 @@ use crate::machine::{
     CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, RegionTypeFamily,
 };
 use crate::source::Spanned;
-use crate::witnessed::{Delivered, RegionHandle, reattachable};
+use crate::witnessed::{Delivered, RegionHandle, RegionHandleFamily, reattachable};
 
 use super::super::outcome::DepTerminal;
 use super::super::{StepCarried, WitnessedDepFinish};
@@ -69,15 +71,21 @@ pub(in crate::machine::execute) enum CtorKind {
 /// by minting into that region (the [`HasRegionHandle`](crate::witnessed::HasRegionHandle) seam).
 /// The final `merge` with [`RegionTypeFamily`] builds the `Record` and wraps it with the identity.
 /// Layout-invariant: a thin region pointer and a slice of layout-invariant field values — the same
-/// shape as [`dispatch::literal`](super::literal)'s `AggBuildFamily`, and re-bumped per fold step for
-/// the same reason: the accumulator rests on the Copy tier between steps, whose dormant slot runs no
-/// drop glue, so an owned buffer could not live there.
+/// shape as [`dispatch::literal`](super::literal)'s `AggBuildFamily`, and bumped exactly once for
+/// the same reason: the run rides the Copy tier, whose dormant slot runs no drop glue, so an owned
+/// buffer could not live there.
 ///
 /// Only the *values* ride the carrier. The field **names** are owned data with no region lifetime,
-/// so they stay beside the fold and pair back with the accumulated values at the final merge — one
-/// less thing the carrier has to be honest about.
+/// so they stay beside the relocation and pair back with the relocated values at the final merge —
+/// one less thing the carrier has to be honest about.
 struct RecordFieldsFamily;
 reattachable!(RecordFieldsFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [KObject<'r>]));
+
+/// The per-source cell family the field relocation hands back: one rebuilt field value per term.
+/// The relocation door pairs each with its own source envelope to derive that field's retention
+/// claim. Layout-invariant in `'r`: [`KObject`] is one type up to its lifetime.
+struct KObjectFamily;
+reattachable!(KObjectFamily => KObject<'r>);
 
 /// Validate a tagged-union call site's args shape: exactly two parts, the first a
 /// `Type`-token tag (tags are capitalized variant types). The value part rides through
@@ -476,39 +484,41 @@ fn finish_witnessed<'step>(
             );
             check_record_newtype_repr(*identity, &probe, view.types())?;
             drop(opened);
-            // The fold accumulator is yoked into the dest frame's own region up front (mirroring
-            // `dispatch::literal`'s `AggBuildFamily`), so each field's `transfer_into` composes by
-            // minting that field's reach into the accumulator's own arena rather than by plain union.
+            // The whole field run relocates in one act against a bare destination handle over the
+            // dest frame's region (mirroring `dispatch::literal`'s `AggBuildFamily`), so every
+            // field's reach is minted into that region's own arena rather than unioned by hand,
+            // and the fields are bumped once.
             let dest_frame = view.dest_frame();
-            // The accumulator crosses as an envelope homed in the dest frame, so each field's
-            // `transfer_into` composes into it directly — the accumulated coverage rides the
-            // envelope rather than being threaded beside it. A bare handle plus an empty slice
-            // reaches nothing, so the seed's coverage is empty.
-            let acc0 = KoanRegion::yoke_branded::<RecordFieldsFamily, _>(
-                Rc::clone(&dest_frame),
-                |region| (region.handle(), &[][..]),
+            // The relocation takes owned envelopes, so each term's resident cell is lifted back to
+            // one first. The `Vec` is the envelopes' own storage, not a slice built to fit the
+            // door: the door takes it as it stands.
+            let lifted: Vec<DeliveredCarried> = terminals
+                .iter()
+                .map(|term| view.current_scope().lift_spliced(&term.cell))
+                .collect();
+            let fields = DeliveredCarried::transfer_all_into::<
+                RegionHandleFamily<KoanStorageProfile>,
+                RecordFieldsFamily,
+                KObjectFamily,
+                KoanStorageProfile,
+            >(
+                &lifted,
+                Delivered::destination(Rc::clone(&dest_frame)),
+                // Each field cell is a pointer copy of its term's value, so it borrows everything
+                // that term did.
+                |_source, _cell, _region| true,
+                |run, dest_handle, placement| {
+                    let rebuilt: SmallVec<[KObject<'_>; 8]> = run
+                        .iter()
+                        .map(|value| value.object().deep_clone())
+                        .collect();
+                    // The one bump of the run. Staging order: `rebuilt[i]` is `lifted[i]`'s field
+                    // value, so the same slice serves as the product's fields and as the
+                    // per-source cells the door pairs back with the envelopes.
+                    let slice = placement.allocator().slice(&rebuilt);
+                    ((dest_handle, slice), slice)
+                },
             );
-            let fields = terminals.iter().fold(acc0, |acc, term| {
-                // `transfer_into` needs an owned envelope, so the term's resident cell is lifted
-                // back to one first.
-                view.current_scope()
-                    .lift_spliced(&term.cell)
-                    .transfer_into::<RecordFieldsFamily, RecordFieldsFamily, _>(
-                        acc,
-                        // Each field cell is a pointer copy of the term's value, so it
-                        // borrows everything the term did.
-                        |_product, _region| true,
-                        |value, (region, fields), placement| {
-                            // Re-bump the fields gathered so far plus this one: the accumulator
-                            // rests on the Copy tier between steps, so it holds a region slice
-                            // rather than a buffer nothing would free.
-                            let mut grown = Vec::with_capacity(fields.len() + 1);
-                            grown.extend_from_slice(fields);
-                            grown.push(value.object().deep_clone());
-                            (region, placement.allocator().slice(&grown))
-                        },
-                    )
-            });
             let home = build_type_operand(Rc::clone(&dest_frame), *identity);
             let types = view.types();
             // Each accumulated field cell is a pointer copy of its term's value, so a field

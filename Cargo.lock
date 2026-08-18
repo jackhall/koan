@@ -197,6 +197,7 @@ dependencies = [
  "indexmap",
  "mimalloc",
  "regex",
+ "smallvec",
  "stable_deref_trait",
  "trybuild",
  "workgraph",

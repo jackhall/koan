@@ -16,7 +16,7 @@ use crate::machine::model::{
     relocate_object_into,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, FrameStorage};
-use crate::witnessed::{Delivered, RegionHandle, RegionHandleFamily};
+use crate::witnessed::{Delivered, RegionHandleFamily, reattachable};
 
 /// The structural-copy callback a witnessed transfer's fold runs
 /// ([`Delivered::transfer_into`](crate::witnessed::Delivered)): copy a [`Carried`] into `dest`'s
@@ -152,27 +152,37 @@ pub(in crate::machine::execute) fn relocate_seam(
         )
 }
 
-/// The **retention claim** a relocation of `delivered` across the container-cell seam hands its
-/// fold (whose relocate hook is [`copy_held_from_carried`]) — what the copy still reaches on the
-/// source side (design § Escape). The cell always rebuilds, so the answer is exact and per-cell: it
-/// reads the stored reach of the [`Held`] the fold just pushed, and a cell that no longer borrows
-/// the region it lived in releases it, letting the retiring producer free at retention discharge
-/// instead of riding the destination's reach.
+/// The cell family an aggregate relocation's product run is made of — the per-source cells a
+/// relocate hook over [`copy_held_from_carried`] hands back, which the door pairs with the source
+/// envelopes to derive each cell's retention claim. Layout-invariant in `'r`: [`Held`] is one type
+/// up to its lifetime.
+pub(in crate::machine::execute) struct HeldFamily;
+reattachable!(HeldFamily => Held<'r>);
+
+/// The **retention claim** a relocation of a cell run across the container-cell seam hands its
+/// door (whose relocate hook is [`copy_held_from_carried`]) — what the copy still reaches on the
+/// source side (design § Escape). Every cell rebuilds, so the answer is exact and per-cell: it
+/// reads the stored reach of the [`Held`] that this source produced, and a cell that no longer
+/// borrows the region it lived in releases it, letting the retiring producer free at retention
+/// discharge instead of riding the destination's reach.
 ///
 /// It is also what keeps a birth-site mint from over-retaining: a fold door's mint names every
 /// region the source bundle pins, and this pass is where a plain-data copy drops the ones it no
 /// longer borrows, while a still-borrowing carrier keeps its pins.
-pub(in crate::machine::execute) fn cell_still_borrows(
-    delivered: &DeliveredCarried,
-) -> impl for<'b> FnMut(&(RegionHandle<'b, KoanStorageProfile>, &'b [Held<'b>]), &KoanRegion) -> bool + '_
-{
-    move |product, region| {
-        let cell = product.1.last().and_then(|held| match held {
-            Held::Object(object) => Some(object),
-            Held::Type(_) | Held::UnresolvedType(_) => None,
-        });
-        product_reaches_region(delivered, cell, region)
-    }
+///
+/// [`Delivered::transfer_all_into`] hands each source together with **its own** product cell, so
+/// there is no index into a run to trust and no way to pair a source with a neighbour's bytes: the
+/// claim this answers is always the one belonging to the cell it is looking at.
+pub(in crate::machine::execute) fn relocated_cell_still_borrows(
+    source: &DeliveredCarried,
+    cell: &Held<'_>,
+    region: &KoanRegion,
+) -> bool {
+    let object = match cell {
+        Held::Object(object) => Some(object),
+        Held::Type(_) | Held::UnresolvedType(_) => None,
+    };
+    product_reaches_region(source, object, region)
 }
 
 #[cfg(test)]

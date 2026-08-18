@@ -44,6 +44,10 @@ hashbrown = "0.17"
 # The `Allocator` trait `BumpAllocator` implements, and the growable `Vec` a dispatch bucket takes
 # over it — `std::vec::Vec` has no stable custom-allocator seam.
 allocator-api2 = "0.2.21"
+# Inline-capacity vectors for the aggregate relocation's staging buffers, so a small literal
+# stages its cells on the stack. `union`: stores the inline slots in a union rather than an enum,
+# matching workgraph's own use — one version in the graph.
+smallvec = { version = "1.15", features = ["union"] }
 # Persistent HAMT for the type registry's node table. No features: the optional `triomphe`
 # feature swaps the default shared pointer to an atomic one, and the registry is single-threaded
 # per run frame, so it instantiates the map over `archery::RcK` instead.

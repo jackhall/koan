@@ -10,6 +10,9 @@ use crate::builtins::test_support::{TestRun, run_root_bare};
 use crate::machine::core::{
     FoldingBrand, KoanRegion, KoanRegionExt, KoanStorageProfile, program_storage, run_root_storage,
 };
+use smallvec::SmallVec;
+
+use crate::machine::core::ScopeId;
 use crate::machine::{CallFrame, Scope};
 use crate::witnessed::RegionHandleFamily;
 
@@ -444,6 +447,40 @@ fn type_recursive_member_relocates_and_navigates() {
     }
 }
 
+/// `fold_cells`'s exact mechanism, driven directly: relocate the whole cell run into
+/// `dest_storage`'s region through the N-ary door, deriving each cell's retention claim with
+/// [`relocated_cell_still_borrows`] and rebuilding it with [`copy_held_from_carried`] under its own
+/// source envelope's coverage — the per-cell holder rule production applies.
+fn relocate_cell_run(
+    dest_storage: &Rc<crate::machine::FrameStorage>,
+    cells: &[DeliveredCarried],
+) -> Delivered<RecordAggFamily, CarrierWitness, crate::machine::FrameStorage> {
+    DeliveredCarried::transfer_all_into::<
+        DestHandleFamily,
+        RecordAggFamily,
+        HeldFamily,
+        KoanStorageProfile,
+    >(
+        cells,
+        Delivered::destination(Rc::clone(dest_storage)),
+        relocated_cell_still_borrows,
+        |run, dest_handle, placement| {
+            let rebuilt: SmallVec<[Held<'_>; 8]> = run
+                .iter()
+                .zip(cells)
+                .map(|(carried, envelope)| {
+                    copy_held_from_carried(
+                        *carried,
+                        FoldingBrand::in_fold_closure(placement).with_holder(envelope.coverage()),
+                    )
+                })
+                .collect();
+            let slice = placement.allocator().slice(&rebuilt);
+            ((dest_handle, slice), slice)
+        },
+    )
+}
+
 /// Build-time accumulator for the aggregate-fold mirrors below: the destination region plus the
 /// cells folded in so far — a local twin of `dispatch::literal::AggBuildFamily` (private to that
 /// module), reattached here so the tests can drive `fold_cells`'s own mechanism
@@ -536,52 +573,12 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
     let types = TypeRegistry::new();
     let dest_storage = dest_frame.storage_rc();
 
-    let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(DEPTH);
-    let acc0 = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-        (region.handle(), &[][..])
-    });
-    let acc_final = (0..DEPTH).fold(acc0, |acc, i| {
-        let producer: Rc<CallFrame> = CallFrame::new(scope);
-        let owned_cells = crate::machine::core::FrameCoverage::empty();
-        let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(
-            producer.brand().handle(),
-        ))
-        .with_holder(&owned_cells);
-        let fields = Record::from_pairs(vec![(
-            "acc".to_string(),
-            Held::Object(KObject::Number(i as f64)),
-        )]);
-        let obj: &KObject<'_> =
-            door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
-        // The seal chokepoint (Ruling 5, design/value-substrates.md): every record's carrier
-        // conservatively claims its own home as a member at construction, regardless of its own
-        // contents — the retention predicate's walk over the rebuilt cell is what actually
-        // decides release vs. retain below; the claim only matters if the source is retained.
-        let sealed = producer.seal_born_here(Carried::Object(obj), true);
-        let owned_cells = crate::machine::core::FrameCoverage::empty();
-        let dep: DeliveredCarried = Delivered::lift(
-            crate::witnessed::Retained::from_sealed(Sealed::seal(
-                sealed,
-                producer.brand().handle(),
-            )),
-            producer.storage_rc(),
-        );
-        producers.push(producer);
-        dep.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
-            acc,
-            cell_still_borrows(&dep),
-            |value, (region, cells), placement| {
-                let cell = copy_held_from_carried(
-                    value,
-                    FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
-                );
-                let mut grown = Vec::with_capacity(cells.len() + 1);
-                grown.extend_from_slice(cells);
-                grown.push(cell);
-                (region, placement.allocator().slice(&grown))
-            },
-        )
-    });
+    // The seal chokepoint (Ruling 5, design/value-substrates.md): every record's carrier
+    // conservatively claims its own home as a member at construction, regardless of its own
+    // contents — the retention predicate's walk over the rebuilt cell is what actually decides
+    // release vs. retain below; the claim only matters if the source is retained.
+    let (mut producers, cells) = plain_record_cell_run(scope, &types, DEPTH);
+    let acc_final = relocate_cell_run(&dest_storage, &cells);
 
     assert!(
         acc_final.coverage_releasing_home().is_empty(),
@@ -632,49 +629,11 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
     let types = TypeRegistry::new();
     let dest_storage = dest_frame.storage_rc();
 
-    let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(DEPTH);
-    let mut expected_ids = Vec::with_capacity(DEPTH);
-    let acc0 = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-        (region.handle(), &[][..])
-    });
-    let acc_final = (0..DEPTH).fold(acc0, |acc, _| {
-        let producer: Rc<CallFrame> = CallFrame::new(scope);
-        let obj = alloc_home_closure_record(&producer, &types);
-        expected_ids.push(match obj {
-            KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
-                Some(KObject::KFunction(f)) => f.captured_scope().id,
-                _ => panic!("expected field f: KFunction"),
-            },
-            other => panic!("expected a Record, got {}", other.ktype().name(&types)),
-        });
-        // The seal chokepoint (Ruling 5): every record's carrier conservatively claims its own home
-        // as a member at construction; the retention predicate below independently walks the
-        // rebuilt cell and finds the closure leaf, so the producer is retained either way.
-        let sealed = producer.seal_born_here(Carried::Object(obj), true);
-        let owned_cells = crate::machine::core::FrameCoverage::empty();
-        let dep: DeliveredCarried = Delivered::lift(
-            crate::witnessed::Retained::from_sealed(Sealed::seal(
-                sealed,
-                producer.brand().handle(),
-            )),
-            producer.storage_rc(),
-        );
-        producers.push(producer);
-        dep.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
-            acc,
-            cell_still_borrows(&dep),
-            |value, (region, cells), placement| {
-                let cell = copy_held_from_carried(
-                    value,
-                    FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
-                );
-                let mut grown = Vec::with_capacity(cells.len() + 1);
-                grown.extend_from_slice(cells);
-                grown.push(cell);
-                (region, placement.allocator().slice(&grown))
-            },
-        )
-    });
+    // The seal chokepoint (Ruling 5): every record's carrier conservatively claims its own home as
+    // a member at construction; the retention predicate independently walks the rebuilt cell and
+    // finds the closure leaf, so the producer is retained either way.
+    let (mut producers, cells, expected_ids) = closure_record_cell_run(scope, &types, DEPTH);
+    let acc_final = relocate_cell_run(&dest_storage, &cells);
 
     assert!(
         !acc_final.coverage_releasing_home().is_empty(),
@@ -811,10 +770,6 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
     let types = TypeRegistry::new();
     let dest_storage = dest_frame.storage_rc();
 
-    let acc = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-        (region.handle(), &[][..])
-    });
-
     let producer: Rc<CallFrame> = CallFrame::new(scope);
     let born_cells = crate::machine::core::FrameCoverage::empty();
     let door =
@@ -839,21 +794,7 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
         crate::witnessed::Retained::from_sealed(Sealed::seal(sealed, producer.brand().handle())),
         producer.storage_rc(),
     );
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
-    let acc_final = dep.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
-        acc,
-        cell_still_borrows(&dep),
-        |value, (region, cells), placement| {
-            let cell = copy_held_from_carried(
-                value,
-                FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
-            );
-            let mut grown = Vec::with_capacity(cells.len() + 1);
-            grown.extend_from_slice(cells);
-            grown.push(cell);
-            (region, placement.allocator().slice(&grown))
-        },
-    );
+    let acc_final = relocate_cell_run(&dest_storage, std::slice::from_ref(&dep));
 
     drop(producer);
 
@@ -1321,12 +1262,19 @@ fn plain_record_cell_run<'run>(
     (producers, cells)
 }
 
-/// **Fixed cost at small N**: relocating a two-element aggregate must not cost more heap
-/// allocations than the pairwise fold it replaces. Brackets the relocation between two reads of
-/// the thread-local allocation counter, so the delta covers the door's own staging and composition
-/// and nothing else — the cells and their producers are built before the first read.
+/// **Fixed cost at small N**: relocating a two-element aggregate costs no more heap allocations
+/// than the pairwise fold it replaced. Brackets the relocation between two reads of the
+/// thread-local allocation counter, so the delta covers the door's own staging and composition and
+/// nothing else — the cells and their producers are built before the first read.
+///
+/// The pairwise fold measured 21 allocations for the same two cells (2026-08-18, this fixture run
+/// against `transfer_into`); the door measures 19. Most of both is the record rebuild itself,
+/// which is common to the two paths — what the door removes at N=2 is the accumulator's per-step
+/// gather, and what it removes at large N is the whole quadratic tail.
 #[test]
 fn two_element_relocation_allocates_no_more_than_the_pairwise_fold() {
+    /// The pairwise `transfer_into` fold's delta over the same two cells, measured 2026-08-18.
+    const PAIRWISE_BASELINE: u64 = 21;
     let program = program_storage();
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
@@ -1336,34 +1284,63 @@ fn two_element_relocation_allocates_no_more_than_the_pairwise_fold() {
     let dest_storage = dest_frame.storage_rc();
 
     let (_producers, cells) = plain_record_cell_run(scope, &types, 2);
-    let owned_cells = crate::machine::core::FrameCoverage::empty();
 
     let before = crate::tests::allocation_count();
-    let acc0 = KoanRegion::yoke_branded::<RecordAggFamily, _>(Rc::clone(&dest_storage), |region| {
-        (region.handle(), &[][..])
-    });
-    let acc_final = cells.iter().fold(acc0, |acc, cell| {
-        cell.transfer_into::<RecordAggFamily, RecordAggFamily, _>(
-            acc,
-            cell_still_borrows(cell),
-            |value, (region, folded), placement| {
-                let held = copy_held_from_carried(
-                    value,
-                    FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells),
-                );
-                let mut grown = Vec::with_capacity(folded.len() + 1);
-                grown.extend_from_slice(folded);
-                grown.push(held);
-                (region, placement.allocator().slice(&grown))
-            },
-        )
-    });
+    let relocated = relocate_cell_run(&dest_storage, &cells);
     let delta = crate::tests::allocation_count() - before;
 
     assert_eq!(
-        acc_final.open_ref(|(_region, folded)| folded.len()),
+        relocated.open_ref(|(_region, run)| run.len()),
         2,
         "both cells relocated"
     );
-    println!("PAIRWISE_TWO_ELEMENT_ALLOCATIONS = {delta}");
+    assert!(
+        delta <= PAIRWISE_BASELINE,
+        "the N-ary door allocated {delta} times for a two-element aggregate, more than the \
+         pairwise fold's {PAIRWISE_BASELINE}"
+    );
+}
+
+/// `count` record cells whose single field is a closure capturing its own producer frame — a
+/// genuine borrow leaf back into the producer, so a rebuilt cell still names it and the retention
+/// predicate keeps it. The escape fixture's still-borrowing half, beside
+/// [`plain_record_cell_run`]'s plain-data half.
+///
+/// Each cell's captured-scope id rides back beside it: distinct per producer, so a read-back
+/// assertion against the run is sensitive to order.
+fn closure_record_cell_run<'run>(
+    scope: &'run Scope<'run>,
+    types: &TypeRegistry,
+    count: usize,
+) -> (Vec<Rc<CallFrame>>, Vec<DeliveredCarried>, Vec<ScopeId>) {
+    let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(count);
+    let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(count);
+    let mut captured: Vec<ScopeId> = Vec::with_capacity(count);
+    for _ in 0..count {
+        let producer: Rc<CallFrame> = CallFrame::new(scope);
+        let object = alloc_home_closure_record(&producer, types);
+        captured.push(captured_scope_id(object, types));
+        let sealed = producer.seal_born_here(Carried::Object(object), true);
+        cells.push(Delivered::lift(
+            crate::witnessed::Retained::from_sealed(Sealed::seal(
+                sealed,
+                producer.brand().handle(),
+            )),
+            producer.storage_rc(),
+        ));
+        producers.push(producer);
+    }
+    (producers, cells, captured)
+}
+
+/// The captured-scope id of the closure held in a [`alloc_home_closure_record`] record — the
+/// per-producer tell a read-back assertion pairs the relocated run against.
+fn captured_scope_id(object: &KObject<'_>, types: &TypeRegistry) -> ScopeId {
+    match object {
+        KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
+            Some(KObject::KFunction(function)) => function.captured_scope().id,
+            _ => panic!("expected field f: KFunction"),
+        },
+        other => panic!("expected a Record, got {}", other.ktype().name(types)),
+    }
 }
