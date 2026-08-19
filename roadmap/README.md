@@ -46,7 +46,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [One kind-blind reader per shape slot](metaprogramming/one-reader-per-shape-slot.md)
 - [Parse at runtime](metaprogramming/parse-at-runtime.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
-- [Deferred error-trace rendering](reduce_allocs/deferred-error-trace-rendering.md)
+- [Deferred signature summaries](reduce_allocs/deferred-signature-summaries.md)
 - [Park-wiring buffer recycling](reduce_allocs/park-wiring-buffer-recycling.md)
 - [Step-scoped scratch arena](reduce_allocs/step-scratch-arena.md)
 - [Run-scoped label interning](reduce_allocs/string-interning.md)

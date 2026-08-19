@@ -51,6 +51,17 @@ short-circuits, appends a `TraceFrame`, and writes the error into its own slot (
 catch instead recovers or re-raises). Errors flow to the top level; the CLI
 formats them to stderr with the frame chain via `KError`'s `Display` impl.
 
+A park's own frame is *captured*, not rendered, when the park installs. A
+`DeferredTraceFrame`
+([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs)) holds a `Copy`
+label plus the working expression the slot dispatches, and becomes `TraceFrame` text
+only on the error arm — `propagate_dep_error`
+([src/machine/execute/decide.rs](../src/machine/execute/decide.rs)) is the single
+render point. A step that finishes without a dep error therefore allocates no trace
+text at all. What makes the deferral safe is that every frame-carrying park already
+holds that same expression in its continuation, sealed against the slot's anchor, so
+the expression's region is live wherever the render runs.
+
 Dispatch failures (no match, ambiguous overload, arity mismatch in bind) flow
 through the same channel as builtin errors:
 [`Scope::resolve_dispatch`](../src/machine/execute/decide/resolve_dispatch.rs) returns a
