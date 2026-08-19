@@ -89,8 +89,10 @@ crate::witnessed::reattachable! {
 }
 
 impl<'a> KFunction<'a> {
-    /// **Build a function at its captured scope's region and store it there** — the sole door for a
-    /// `KFunction`, and the reason the value never exists outside the region that owns its capture.
+    /// **Build a function at its captured scope's region and store it there** — the privacy-gated
+    /// door for a `KFunction`: `captured` and `value_ktype` are private fields, so a struct literal
+    /// is unstateable outside this module, and the value never exists outside the region that owns
+    /// its capture.
     ///
     /// The destination is derived from `captured`'s own brand rather than passed alongside it, so
     /// pairing a function with a region other than its captured scope's is unstateable. The `draft`'s
@@ -106,10 +108,8 @@ impl<'a> KFunction<'a> {
     /// borrow cannot inhabit `KFunction<'b>`, so the finished callable can borrow nothing but the
     /// fold's declared operands — and the merge *composes* the product's description from the seed's
     /// coverage: host the home region, home its one member. "A function borrows only the scope it
-    /// captures" is therefore a fact the composition derived, not a claim a seal asserts, and the
-    /// envelope handed back is what every registration door composes from
-    /// ([`OverloadSeal::of_delivered`](crate::machine::core::carrier_witness::OverloadSeal),
-    /// [`Scope::store_function_cell`]).
+    /// captures" is therefore a fact the composition derived, not a claim a seal asserts, and a
+    /// registration door composes from the envelope handed back rather than re-stating that reach.
     ///
     /// The signature is minted **before** the merge, at the captured scope's own brand: its text is
     /// re-homed into the very region the merge targets, so it enters as a region-resident operand

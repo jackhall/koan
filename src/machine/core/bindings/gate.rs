@@ -5,9 +5,8 @@
 //! [`Scope`](crate::machine::core::Scope) that reaches one — takes a `&mut WriteGate`. The gate is
 //! a zero-sized token with no public constructor and no `Clone`, minted only inside
 //! `crate::machine`, so a builtin body (`crate::builtins` is a sibling of `crate::machine`, not a
-//! descendant) cannot produce one and therefore cannot name a write verb at all. A published
-//! scope's table is mutated by the run loop and nothing else — a resolution failure rather than a
-//! convention.
+//! descendant) cannot produce one and therefore cannot name a write verb at all — a resolution
+//! failure rather than a convention.
 //!
 //! `&mut` rather than `&`: exclusivity. A gate cannot be reborrowed into two concurrent write
 //! paths, so "one write in flight" is the borrow checker's invariant too.
@@ -28,20 +27,15 @@ pub struct WriteGate {
 }
 
 impl WriteGate {
-    /// The run loop's door: the apply loop that drains a step's [`WriteOp`](super::WriteOp)s after
-    /// its continuation returns, the error-path placeholder clears in the same loop, and the
-    /// submission-channel placeholder stamp dispatch performs when it submits a binder. All three
-    /// run with no koan frame on the stack, which is what lets the write verbs take firm
-    /// `borrow_mut`s.
+    /// The run loop's door: a write into a published scope's table, performed between steps with no
+    /// koan frame on the stack — which is what lets the write verbs take firm `borrow_mut`s.
     pub(in crate::machine) fn for_run_loop() -> Self {
         WriteGate { _private: () }
     }
 
-    /// The construction door: a write into a scope no other node can reach — the run-global root at
-    /// startup, a not-yet-published per-call scope (parameters, MATCH / TRY `it`), a freshly minted
-    /// child scope before its body dispatches, an ascription view before the view module captures
-    /// it. Every such site either owns the scope's construction outright or receives this gate as a
-    /// parameter from the `machine`-side caller that does.
+    /// The construction door: a write into a scope no other node can reach, because the scope is
+    /// still being built. A site mints this gate only while it owns that construction, or receives
+    /// it as a parameter from the `machine`-side caller that does.
     pub(in crate::machine) fn for_unpublished_scope() -> Self {
         WriteGate { _private: () }
     }

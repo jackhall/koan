@@ -252,9 +252,8 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
     /// residence itself is already the host of the carrier's description.
     ///
     /// **Crate-private**, because it takes the two as separate arguments and checks neither against
-    /// the other. Every caller holds them as one unit already. An embedder reaches the envelope
-    /// through [`RegionHandle::deliver_resident`] / [`RegionHandle::deliver_yoked`], which read both
-    /// off one handle, never through this.
+    /// the other, so an embedder cannot reach it: the public doors read the cell and the home off
+    /// one handle.
     pub(crate) fn hosted(
         cell: Retained<T, Carrier<F>>,
         home: Rc<F>,
@@ -313,8 +312,7 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
 
     /// [`Self::seal`] handed out for white-box assertion — for a suite that needs an envelope whose
     /// owned coverage is *exactly* what it names, so the bundle can be the sole owner of a region
-    /// and the region observed dying with it. Every production envelope's coverage comes from a
-    /// mint, a lift or a composition, each of which retains what it names somewhere else too.
+    /// and the region observed dying with it. Gated off production.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn seal_for_test(
         witnessed: Witnessed<T, Carrier<F>>,
@@ -649,7 +647,7 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
     /// retained only to match the transfer fold's shape.
     ///
     /// `home` is passed in rather than read off the envelope: the envelope's pins are one flat
-    /// antichain with no distinguished home, and the single-seam caller holds the frame anyway. It
+    /// antichain with no distinguished home, so the home owner comes in as an argument. It
     /// **must** be the owner of the region the value lives in — re-stamping against any other region
     /// would re-anchor the value into storage that does not hold it.
     ///
@@ -661,7 +659,7 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
     /// covering the restamped value read in place.
     ///
     /// This is also the door a **birth site** takes when it has no relocation to ride: a value whose
-    /// substrate can only be born through a fold door mints its description here, naming the birth
+    /// substrate is born through a fold door mints its description here, naming the birth
     /// region as an ordinary member, instead of correcting a fold-composed witness after the fact.
     pub fn restamp_in_place<P: Reattachable + DropFree, Pr>(
         &self,
@@ -698,7 +696,7 @@ impl<T: Reattachable + DropFree, F: PinsRegion + 'static> Delivered<T, Carrier<F
 }
 
 /// A [`Delivered`] **before its home is known**: the same fused carrier-plus-coverage pair, minus
-/// the home pin. It exists for the one holder shape the envelope cannot serve — a value whose host
+/// the home pin. It exists for the holder shape the envelope cannot serve — a value whose host
 /// is the frame that will *finalize* it, chosen after the step body has already produced the
 /// carrier. Rather than let such a holder carry the cell and the coverage as two fields it could
 /// separate, it carries this: the fields are private, no accessor hands the cell back, and the only

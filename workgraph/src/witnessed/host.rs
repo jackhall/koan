@@ -296,9 +296,8 @@ pub fn reset_region_metrics() {
     REACH_RETENTION_FOLDS.with(|c| c.set(0));
 }
 
-// SAFETY: nothing about drop needs an unsafe obligation here; the impl is gated alongside the
-// metrics it feeds, and only decrements `live` when this host actually minted a region — a host that
-// never allocated contributed no mint and must not phantom-decrement one.
+// Gated alongside the metrics it feeds. Decrements `live` only when this host actually minted a
+// region — a host that never allocated contributed no mint and must not phantom-decrement one.
 #[cfg(any(test, feature = "test-hooks"))]
 impl<P: StorageProfile> Drop for RegionHost<P> {
     fn drop(&mut self) {

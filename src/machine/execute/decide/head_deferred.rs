@@ -83,7 +83,7 @@ fn park_on_head<'step>(
         // The head dep rests in a region this step already covers; lift it to an owned envelope
         // so the adopt below can fold its reach into the classified callable, which outlives this
         // finish. The callable arm adopts *as a callable* so it arrives fused to the reach it was
-        // minted under; every other head takes the whole-value adopt for its classification.
+        // minted under; the fallback arm below takes the whole-value adopt instead.
         let head_delivered = ctx.current_scope().lift_spliced(&head_terminal.cell);
         let callable = match ctx
             .current_scope()

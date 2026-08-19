@@ -38,7 +38,7 @@ fn finalize_carrier(fields: Vec<(String, KType)>, ret: KType, types: &TypeRegist
 /// Reject a bare type constructor in a type-language argument position that demands kind `*`:
 /// a list's element, a dict's key and value, a function type's return. Each names the type of a
 /// value, so each must be a proper type. The parameter list of an `:(FN …)` is checked inside the
-/// shared field-list walker instead, alongside every other record-shaped schema.
+/// shared field-list walker instead.
 fn require_proper_type(
     kt: KType,
     position: &str,

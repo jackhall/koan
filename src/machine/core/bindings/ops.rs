@@ -4,8 +4,8 @@
 //! A builtin body (or a wake-time finish) constructs its value under the step brand — mint, copy,
 //! seal — and returns the resulting table write as a `WriteOp` on its [`Action`](crate::machine::Action).
 //! The run loop drains a step's ops after the continuation has returned and applies them in program
-//! order against the step scope, before finalize. So exactly one code path mutates a published
-//! binding table, and it is run-loop-owned: no builtin holds a `Bindings` borrow across user code,
+//! order against the step scope, before finalize. So a published binding table is mutated from the
+//! run loop rather than from a builtin body: no builtin holds a `Bindings` borrow across user code,
 //! which is what lets every write verb here take a firm `borrow_mut`. [`WriteOp::apply`] takes the
 //! [`WriteGate`](super::WriteGate) the run loop mints, so a builtin cannot short-circuit its own op
 //! back through the interpreter either.
@@ -15,10 +15,9 @@
 //! and attribute the error. A body that errors before deciding its write installs nothing at all:
 //! the writes are outcome data, and an error terminal carries none.
 //!
-//! Writes into a scope no other node can reach — startup builtin registration into the run-global
-//! root, parameter binds into a not-yet-published per-call scope, an ascription view's bulk install
-//! — need no such discipline and stay direct (`*_direct` on [`Scope`]), under the construction-door
-//! mint of the same gate.
+//! A write into a scope no other node can reach — one still under construction — needs no such
+//! discipline and stays direct (`*_direct` on [`Scope`]), under the construction-door mint of the
+//! same gate.
 
 use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
@@ -46,11 +45,10 @@ pub(crate) enum WriteOp<'a> {
         index: BindingIndex,
         sealed: SealedValue<'a>,
     },
-    /// `FN` / `OP` overload registration: dispatch bucket only, no `data` entry — the only door a
-    /// keyworded expression becomes dispatchable through. `builtin_shadow_guard` is false
-    /// only for the operator door — a user module may declare an operator the root already
-    /// declares, because dispatch consults the immutable root bucket first and shadowing is
-    /// type-gated there.
+    /// `FN` / `OP` overload registration: dispatch bucket only, no `data` entry.
+    /// `builtin_shadow_guard` is false only for the operator door — a user module may declare an
+    /// operator the root already declares, because dispatch consults the immutable root bucket
+    /// first and shadowing is type-gated there.
     Overload {
         name: String,
         index: BindingIndex,
@@ -84,8 +82,7 @@ pub(crate) enum WriteOp<'a> {
 
 impl<'a> WriteOp<'a> {
     /// Apply this write against `scope` — the step scope the op was returned from, which is always
-    /// the scope the entry lands in. The single interpreter: run the door's guards, then mutate the
-    /// table.
+    /// the scope the entry lands in. Runs the door's guards before the table verb.
     pub(crate) fn apply(self, scope: &Scope<'a>, gate: &mut WriteGate) -> Result<(), KError> {
         scope.assert_owns_bindings();
         match self {

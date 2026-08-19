@@ -193,8 +193,8 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
 /// a manifest or abstract type member first, then a declared value slot's type — with no
 /// decl-scope reverse-lookup; an abstract identity carries no receiver and errors. A module rides
 /// the value channel, so a module lhs lands in [`body_module`] instead. A nominal type handle
-/// (struct / union name) and every other type has no members and falls through to the same TypeMismatch a
-/// static struct field access produces.
+/// (struct / union name) carries no members and falls through to the same TypeMismatch a static
+/// struct field access produces.
 fn access_type_member<'a>(
     scope: &Scope<'a>,
     kt: KType,

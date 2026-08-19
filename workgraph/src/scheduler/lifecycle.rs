@@ -96,7 +96,7 @@ impl<W: Workload> Scheduler<W> {
 
     /// **Adopt** the terminal into `edge`'s destination region and leave it there at rest.
     /// [`Workload::deliver`] runs the embedder's relocation across a bare handle on that region —
-    /// built through the one public door, [`Delivered::destination`] — deepcopy or pin, with the
+    /// the destination operand from [`Delivered::destination`] — deepcopy or pin, with the
     /// retention claim the verdict implies, and the product's coverage lodges in that region's
     /// union bundle for the region's life.
     fn adopt_at(&self, edge: EdgeId, envelope: &DeliveredTerminal<W>) -> SealedTerminal<W> {

@@ -5,7 +5,7 @@
 //!
 //! The layer is two phases with one door each: a *decide* ([`decide`]) runs against a read-only
 //! [`DecideCtx`](decide::DecideCtx) and returns an [`Outcome`](outcome::Outcome); the *apply* half
-//! ([`harness`]) is the sole holder of `&mut Scheduler`, mapping each outcome onto the
+//! ([`harness`]) maps each outcome onto the
 //! [`StepVerdict`](crate::scheduler::StepVerdict) the scheduler's drain applies.
 //!
 //! See [design/execution/README.md](../../design/execution/README.md) and

@@ -315,7 +315,7 @@ impl<W: StorageProfile> Region<W> {
 
 // No `Default` impl: `Default` is a public trait, so implementing it here would hand every
 // embedder back a public mint route (`Region::<W>::default()`) even with `new` sealed above —
-// the raw-region constructor stays reachable only through `RegionHost::region`.
+// the raw-region constructor stays `pub(crate)`.
 
 // SAFETY: a `Region`'s values live in its `Bump`, which never moves an allocated chunk — an
 // allocation is served from a chunk's free space and a new chunk is linked in rather than the old

@@ -91,13 +91,9 @@ pub struct TypeRegistry {
 }
 
 impl TypeRegistry {
-    /// Crate-internal: the run frame is the only production site that mints one
-    /// (`CallFrame::adopting`), and tests reach the run's registry through the
-    /// `builtins::test_support::TestRun` bundle rather than minting a cold one.
-    ///
-    /// Pre-seeds the fixed handles — the nine leaves, the five `OfKind` values, `List<Any>`,
-    /// `Dict<Any, Any>`, and the empty signature — so the constants those names lower to are
-    /// dereferenceable in a registry that has interned nothing else.
+    /// Crate-internal. Pre-seeds the fixed handles — the leaves, the `OfKind` values,
+    /// `List<Any>`, `Dict<Any, Any>`, and the empty signature — so the constants those names
+    /// lower to are dereferenceable in a registry that has interned nothing else.
     pub(crate) fn new() -> Self {
         let registry = Self {
             nodes: RefCell::new(NodeMap::with_hasher(IdentityBuildHasher::default())),

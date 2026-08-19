@@ -10,7 +10,7 @@
 //! value family moves through three states connected by transform verbs rather than by wrapping:
 //! [`witnessed::Delivered`] in transit (owned pins), [`witnessed::Sealed`] at rest (weak members
 //! via an arena-hosted description), and [`witnessed::Opened`] in use (borrowed at a step lifetime
-//! under a presented pin — the only state that answers a membership query).
+//! under a presented pin, which is what a membership query is answered against).
 //!
 //! Reach evidence splits by ownership ([design/reach.md](../design/reach.md)):
 //! [`witnessed::ReachDescription`] is non-owning and side-table hosted, while

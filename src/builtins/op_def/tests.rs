@@ -138,7 +138,7 @@ fn declaring_plus_over_number_registers_but_the_builtin_still_wins() {
     );
 }
 
-/// A unary operator takes the whole run as one list. All four surfaces reach the one body: the
+/// A unary operator takes the whole run as one list. Every surface below reaches the one body: the
 /// infix run (reduced to the keyword-first shape) over literals and over named operands, the
 /// two-operand call (through the synthesized binary bridge), and the prefix form.
 #[test]
@@ -339,7 +339,7 @@ fn a_run_parks_on_a_still_finalizing_declaration() {
 }
 
 /// Lexical cutoff: an operator declared *after* a run is invisible to it — the pending-overload
-/// probe is visibility-gated exactly like every other name lookup, so the run errors rather than
+/// probe is visibility-gated, so the run errors rather than
 /// parking on a declaration it cannot see. The erroring body statement short-circuits the module's
 /// finalize, so the module never binds; the same two statements in declaration order do bind.
 #[test]

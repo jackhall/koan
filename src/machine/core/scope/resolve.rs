@@ -3,8 +3,8 @@
 //! builtin-shadow consults. Split out of the parent `scope` module; the `Scope` struct,
 //! its constructors, and small accessors live there.
 
-// `AdoptSeam` and `KObject` serve the `#[cfg(test)]` bare-read ladder alone; every other
-// resolution verb hands back a delivery envelope.
+// `AdoptSeam` and `KObject` serve the `#[cfg(test)]` bare-read ladder; a delivering resolution
+// verb hands back an envelope instead.
 #[cfg(test)]
 use super::AdoptSeam;
 use super::Scope;
@@ -39,10 +39,10 @@ impl<'a> Scope<'a> {
     /// reference outlives the read). Collapses a `Parked` producer and a miss to `None`. Visibility
     /// unfiltered.
     ///
-    /// The adoption is the price of a bare `&KObject`: every production read that only *inspects* a
-    /// binding takes [`Self::lookup_value_delivered`] instead and reads under the envelope's own
-    /// pins, retaining nothing. This ladder is `#[cfg(test)]` — it survives for the assertion
-    /// suites alone, and production has no route to it. The integration tests in `tests/`, which
+    /// The adoption is the price of a bare `&KObject`: a read that only *inspects* a binding takes
+    /// [`Self::lookup_value_delivered`] instead and reads under the envelope's own pins, retaining
+    /// nothing. This ladder is `#[cfg(test)]` — it survives for the assertion suites alone, and
+    /// production has no route to it. The integration tests in `tests/`, which
     /// compile against the crate without `cfg(test)`, reach the same shape through
     /// [`test_support::lookup_binding`](crate::builtins::test_support::lookup_binding).
     #[cfg(test)]
@@ -111,8 +111,8 @@ impl<'a> Scope<'a> {
 
     /// Resolve `name` down the outer chain and **lift** the hit into a delivery envelope pinned by
     /// its declaring scope's region owner — the read form of a binding, its exact reach upgraded
-    /// `Weak → Rc` so the value's whole reach travels owned. Walks the same chain as every other
-    /// value ladder, so shadowing agrees; the lift happens at the **binding** scope, whose arena
+    /// `Weak → Rc` so the value's whole reach travels owned. Walks the shared `walk_chain`
+    /// traversal, so shadowing agrees; the lift happens at the **binding** scope, whose arena
     /// hosts the description. The non-`Bound` dispositions mirror the bare resolution.
     pub(crate) fn resolve_value_delivered(
         &self,

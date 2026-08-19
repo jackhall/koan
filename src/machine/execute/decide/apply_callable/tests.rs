@@ -209,7 +209,7 @@ fn arity_two_abstract_slot_satisfied_by_result() {
 }
 
 /// An identity wrapper infers one type argument from the one value it wraps, so a wider family
-/// has no value-construction surface yet — the named type application is its only use.
+/// has no value-construction surface yet.
 #[test]
 fn multi_parameter_family_rejects_value_construction() {
     let program = program_storage();

@@ -15,9 +15,8 @@
 //! | 0x1D | `JUMP_MARK`    | `\x1D<abs_offset>\x1D`                        | Snap cursor to `<abs_offset>`.                   |
 //!
 //! Each non-empty literal collapses `'foo'` → `'<LITERAL idx len>'<JUMP past>`. The
-//! JUMP-after-literal is the cursor-sync invariant — the only mechanism keeping the
-//! downstream cursor aligned with original byte offsets after a literal shortens the
-//! stream. Empty literals (`''`) emit two verbatim quote bytes back-to-back with no
+//! JUMP-after-literal is the cursor-sync invariant — it keeps the downstream cursor
+//! aligned with original byte offsets after a literal shortens the stream. Empty literals (`''`) emit two verbatim quote bytes back-to-back with no
 //! placeholder and no JUMP; the stream is already aligned.
 //!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).

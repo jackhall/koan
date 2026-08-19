@@ -20,8 +20,8 @@ use super::KFunction;
 ///   `KType::OfKind(KKind::ProperType)`) is excluded: it owns its token — a declaration's name,
 ///   or name-data the body reads — so the token rides to the bind unresolved.
 ///
-/// The two index sets are disjoint by construction over disjoint `(SignatureElement, WorkingPart)`
-/// shapes — `classify_for_pick` is the sole producer.
+/// The two index sets are disjoint by construction: they classify over disjoint
+/// `(SignatureElement, WorkingPart)` shapes.
 pub struct ClassifiedSlots {
     pub eager_indices: Option<Vec<usize>>,
     pub wrap_indices: Vec<usize>,
@@ -160,8 +160,7 @@ impl<'a> KFunction<'a> {
     }
 }
 
-/// Whether `part` satisfies `arg`'s declared parameter type — the one admissibility reader over a
-/// dispatch-path slot. An AST slot classifies by part shape
+/// Whether `part` satisfies `arg`'s declared parameter type. An AST slot classifies by part shape
 /// ([`KType::accepts_part`](crate::machine::model::KType::accepts_part)); a resolved sub-result
 /// classifies by the carrier resting in its cell, opened at that cell's own brand. A synthesized
 /// nested node and a staging hole denote no value yet, so neither satisfies a slot.

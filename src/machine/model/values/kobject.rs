@@ -206,8 +206,7 @@ impl<'a> KObject<'a> {
     /// Fresh `List` carrier over [`Held`] cells — the type-aware path (a list element may be
     /// a first-class type). One pass over `items` computes the memoized element-type join (this
     /// carrier's own `ktype()`); the substrate door then sections the cells, folding their stored
-    /// reach verdicts into the runs and the value-level union ([`section_cells`]) — the list door's
-    /// sole construction site.
+    /// reach verdicts into the runs and the value-level union ([`section_cells`]).
     pub fn list_of_held(
         door: SubstrateDoor<'a, '_>,
         items: &[Held<'a>],
@@ -256,14 +255,13 @@ impl<'a> KObject<'a> {
     /// Fresh `Dict` carrier over [`Held`] value cells — the type-aware path (a dict value may be a
     /// first-class type; keys stay scalar). One pass over `map` computes the memoized key/value type
     /// join (this carrier's own `ktype()`); the value cells are then sectioned through `door` and the
-    /// key→index table frozen into the region's bump (last-wins dedup already happened in the transient
-    /// input map) — the dict door's sole construction site.
+    /// key→index table frozen into the region's bump (last-wins dedup already happened in the
+    /// transient input map).
     ///
     /// **Keys carry no reach** ([`KKey`] admits only `String` / `Number` / `Bool`, so a key naming a
     /// substrate or a closure is unrepresentable here, and a string key's bytes are re-bumped into
-    /// this dict's own region by the door below); the O(1) stored-envelope rejection of a key whose
-    /// carrier names any reach member runs at the one site that produces a key from a carrier
-    /// (`dispatch::literal`'s `scalar_key`).
+    /// this dict's own region by the door below); a key produced from a carrier is rejected in O(1)
+    /// off the stored envelope when that carrier names any reach member.
     pub fn dict_of_held(
         door: SubstrateDoor<'a, '_>,
         map: HashMap<KKey<'_>, Held<'a>>,
@@ -313,8 +311,7 @@ impl<'a> KObject<'a> {
     /// Fresh `Record` carrier over [`Held`] field cells — the type-aware path (a field
     /// value may be a first-class type). One pass over `fields` computes the memoized
     /// field-type join (this carrier's own `ktype()`); the cells are then sectioned through `door`
-    /// name-sorted, aligned with the bump-hosted name slice that is the substrate's whole layout —
-    /// the record door's sole construction site.
+    /// name-sorted, aligned with the bump-hosted name slice that is the substrate's whole layout.
     pub fn record_of_held(
         door: SubstrateDoor<'a, '_>,
         fields: Record<Held<'a>>,
@@ -346,10 +343,10 @@ impl<'a> KObject<'a> {
         KObject::Record(alloc_record(door, fields), record_type)
     }
 
-    /// Fresh `Tagged` carrier over one payload value. Sections the payload cell through `door` — the
-    /// tagged door's sole construction site — then names the carrier `tag` / `identity`. `value` is
-    /// deep-cloned into the substrate (a pointer copy for a substrate-carrier payload, whose own
-    /// stored reach then becomes the payload run's); the caller keeps its borrow.
+    /// Fresh `Tagged` carrier over one payload value. Sections the payload cell through `door`, then
+    /// names the carrier `tag` / `identity`. `value` is deep-cloned into the substrate (a pointer
+    /// copy for a substrate-carrier payload, whose own stored reach then becomes the payload run's);
+    /// the caller keeps its borrow.
     ///
     /// The discriminant's bytes are re-bumped into `door`'s region, so the tag is home-resident like
     /// every other string a substrate door stores — a carrier whose tag still borrowed the caller's
@@ -407,7 +404,7 @@ impl<'a> KObject<'a> {
     /// downstream dispatch sees the contract rather than the implementation's
     /// incidental precision.
     ///
-    /// Only the four parameterized carriers re-tag, and each re-tags to `declared` itself —
+    /// Only parameterized carriers re-tag, and each re-tags to `declared` itself —
     /// the declared type IS the carrier's new identity handle. Every other shape passes through
     /// (its `ktype()` is already its nominal identity). For a `Tagged` stamped against a
     /// `ConstructorApply`, the constructor identity must already match, so adopting `declared`
@@ -770,8 +767,8 @@ fn alloc_record<'a>(
 /// table the door bumps beside them.
 /// Cell order follows the input map's iteration order, which is what makes dict entry order
 /// unspecified. Incoming keys may borrow **anywhere** — a producer's region, a caller's staging
-/// buffer — because this is the one site that re-homes them, so no dict door verb has to state a
-/// residence rule of its own.
+/// buffer — because they are re-homed here, so no dict door verb has to state a residence rule of
+/// its own.
 fn alloc_dict<'a>(
     door: SubstrateDoor<'a, '_>,
     map: HashMap<KKey<'_>, Held<'a>>,

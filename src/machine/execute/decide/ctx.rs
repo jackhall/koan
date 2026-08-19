@@ -84,21 +84,17 @@ pub(in crate::machine::execute) struct DecideCtx<'program: 'step, 'step, 'view> 
     /// through [`Self::installer`] to stamp the installing declaration's identity onto its `types`
     /// entry.
     installer: Installer,
-    /// The step's binding-write sink, owned by the harness's step for the step's duration and
-    /// drained by it after the continuation returns. **Private**, with one
-    /// `pub(in crate::machine::execute)` deposit method, so only [`run_action`] can reach it: a
-    /// builtin receives a [`BodyCtx`](crate::machine::BodyCtx), which does not carry it, and nothing
-    /// outside the execute layer can deposit. The asymmetry is deliberate — builtins express writes
-    /// as outcome *data* on their `Action`; this is a harness-internal hop from `run_action` to the
-    /// step's apply point, not a channel bodies write through.
-    ///
-    /// [`run_action`]: super::run_action
+    /// The step's binding-write sink, owned and drained by the harness's step — see [the step's
+    /// binding writes](../../../../design/execution/classify-and-apply.md#the-steps-binding-writes).
+    /// **Private**, with one `pub(in crate::machine::execute)` deposit method: a builtin receives
+    /// a [`BodyCtx`](crate::machine::BodyCtx), which does not carry it, and nothing outside the
+    /// execute layer can deposit.
     effects: &'view RefCell<Vec<WriteOp<'step>>>,
     /// The run's program storage capability, minted once per run and carried unchanged across every
-    /// step. A builtin body reaches it through [`BodyCtx::program`](crate::machine::BodyCtx); it is
-    /// what the one runtime site that synthesizes a **value-channel** node (`OP`'s bridge body)
-    /// builds against. It is carried **unshortened**, at its own `'program`, related to the step
-    /// lifetime only by the struct's `'program: 'step` bound — so a mint door reached through it
+    /// step. A builtin body reaches it through [`BodyCtx::program`](crate::machine::BodyCtx), and
+    /// synthesizing a **value-channel** node (`OP`'s bridge body) builds against it. It is carried
+    /// **unshortened**, at its own `'program`, related to the step lifetime only by the struct's
+    /// `'program: 'step` bound — so a mint door reached through it
     /// pins its parts at program storage, not at the step.
     program: ProgramBrand<'program>,
 }
@@ -147,7 +143,7 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
     }
 
     /// The run's output sink, read through the ambient context's run frame — the same channel and
-    /// the same owner as [`Self::types`]. `PRINT` is the only body that takes it.
+    /// the same owner as [`Self::types`].
     pub(in crate::machine::execute) fn out(&self) -> &RunWriter {
         self.ambient.writer()
     }

@@ -691,14 +691,12 @@ mod tests {
         );
     }
 
-    /// A `:{…}` nested inside a *sub-dispatched* sigil — the one field-list position whose body
-    /// leaves this walk entirely. `:(LIST OF …)` sub-Dispatches through the standalone dispatcher,
+    /// A `:{…}` nested inside a *sub-dispatched* sigil — a field-list position whose body leaves
+    /// this walk entirely. `:(LIST OF …)` sub-Dispatches through the standalone dispatcher,
     /// which carries no declaration window, so the record body reaches it as a threaded
     /// [`WorkingPart::RecordType`](crate::machine::model::WorkingPart) whose `Tree` leaf is already
-    /// a sealed sibling cell. Both the inline nested record
-    /// ([`nested_record_field_threads_self_reference`]) and the bare-`Type` sigil field
-    /// ([`record_repr_list_of_self_field_seals_self_handle`]) cover their own halves; this is the
-    /// cell where the two cross.
+    /// a sealed sibling cell — an inline nested record and a bare-`Type` sigil field crossed in one
+    /// cell.
     #[test]
     fn record_nested_in_sub_dispatched_sigil_threads_self_reference() {
         let program = program_storage();

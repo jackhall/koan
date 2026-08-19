@@ -255,12 +255,12 @@ impl<'a> DictSubstrate<'a> {
 /// The single-cell payload substrate an identity-carrying composite borrows — a `Tagged` value's
 /// `value` and a `Wrapped` value's `inner` both ride one of these: exactly one cell (a tagged/wrapped
 /// value is always an object, never a first-class type) plus its run and the memos. One substrate
-/// family shared by both carriers, born only through the fold door.
+/// family shared by both carriers, born through the fold door.
 pub(crate) type PayloadSubstrate<'a> = ContainerSubstrate<'a, PayloadLayout>;
 
 impl<'a> PayloadSubstrate<'a> {
-    /// The single payload cell's object. Infallible by the door's own invariant: `alloc_payload` is
-    /// the sole construction site and it hands in exactly one `Held::Object`.
+    /// The single payload cell's object. Infallible by the layout's own invariant: a payload
+    /// substrate holds exactly one cell, and it holds a `Held::Object`.
     pub fn payload(&self) -> &'a KObject<'a> {
         self.cell(0)
             .expect("a payload substrate is built with exactly one cell")

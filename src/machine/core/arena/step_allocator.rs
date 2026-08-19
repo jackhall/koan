@@ -21,21 +21,19 @@ use crate::witnessed::{Reattachable, StepContext};
 /// construction doors live here — not on `StepContext` itself — because [`RegionBrand`]'s
 /// constructor is private to the `arena` module (see [`FrameStorage::brand`]): each door's closure
 /// receives a [`RegionBrand`] / [`FoldingBrand`] (the koan allocation capability) rather than the
-/// bare `&KoanRegion` the library-level context hands out, so a step construction site allocates
-/// through the one capability every other site uses. Named with full words (`alloc_carried`, not
-/// `alloc`) to avoid colliding with the generic verb each wraps.
+/// bare `&KoanRegion` the library-level context hands out. Named with full words (`alloc_carried`,
+/// not `alloc`) to avoid colliding with the generic verb each wraps.
 ///
 /// Every door returns its carrier as a [`StepCarried`] at `'step` — in production the step tail's
 /// rank-2 open lifetime, so a door product cannot be stashed past its construction step (the
-/// within-step transient invariant, borrow-checker-enforced) and the sole exit to node storage is
-/// the seal door in `step_carried.rs`. [`Self::alloc_carried_with`] is how a finish folds a dep's
-/// reach into a carrier it builds from that dep's value: the dep views only exist inside the
-/// shared brand, so a caller cannot smuggle one out and seal it under a narrower reach than the
-/// fold produces.
+/// within-step transient invariant, borrow-checker-enforced). [`Self::alloc_carried_with`] is how a
+/// finish folds a dep's reach into a carrier it builds from that dep's value: the dep views only
+/// exist inside the shared brand, so a caller cannot smuggle one out and seal it under a narrower
+/// reach than the fold produces.
 ///
-/// The type is `pub` and the one door an external `compile_fail` guard drives
-/// ([`Self::alloc_object_scalar`]) is `pub`, so the `#[doc(hidden)]` `step_fixture` can hand a guard
-/// an allocator and have it door-allocate; the remaining doors are crate-visible. The constructors
+/// The type is `pub` and [`Self::alloc_object_scalar`] is `pub`, so the `#[doc(hidden)]`
+/// `step_fixture` can hand an external `compile_fail` guard an allocator and have it door-allocate;
+/// the remaining doors are crate-visible. The constructors
 /// are crate-confined, so no external caller can mint one. The confinement rests on the brand
 /// lifetime and on the constructors' visibility — builtins receive an allocator already branded at
 /// their step (`BodyCtx.ctx` / `FinishCtx.ctx`) and cannot mint one at a lifetime of their choosing.
@@ -102,9 +100,9 @@ impl<'step> StepAllocator<'step> {
         // delivery envelope homed in this context's own frame; `born_delivered` releases that home
         // (the seal re-pins it) so the product's foreign coverage rides the step to the seal.
         //
-        // This is the sole instrumented fold door: the operand views and the product are nameable
-        // only inside the brand, so the tightness audit's address walk runs there and only `usize`
-        // addresses cross back out to the comparison below.
+        // The operand views and the product are nameable only inside the brand, so the tightness
+        // audit's address walk runs there and only `usize` addresses cross back out to the
+        // comparison below.
         #[cfg(any(test, feature = "region-audit"))]
         let audit = reach_audit::FoldAudit::begin("StepAllocator::alloc_carried_with");
         let delivered = self

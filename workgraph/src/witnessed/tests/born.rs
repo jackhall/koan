@@ -130,7 +130,7 @@ fn a_bumped_value_accepts_writes_through_the_shared_reference() {
 
 /// The crossing-operand door: a child born in one region embedding a parent resident in **another**,
 /// with the parent's frame held as the pin for the destination's whole life. This is the frame-child
-/// shape — the one store whose operand is genuinely foreign.
+/// shape, where the store's operand is genuinely foreign.
 #[test]
 fn the_crossing_door_embeds_a_parent_from_another_region() {
     let parent_frame = frame();

@@ -20,7 +20,7 @@ pub enum KKind {
     /// A proper (non-module, non-signature) type value with no finer nominal family —
     /// `List`, `Record`, `KFunction`, a bare resolved leaf, etc. As a slot it is the
     /// lowest-specificity proper-type slot (ties with `Identifier` in
-    /// `is_more_specific_than`); it subsumes the three nominal families below it.
+    /// `is_more_specific_than`); it subsumes the nominal families below it.
     ProperType,
     /// A first-class signature value's kind, and the `:Signature` wildcard slot. The
     /// sig-as-constraint role is the separate [`KType::Signature`](super::ktype::KType::Signature),

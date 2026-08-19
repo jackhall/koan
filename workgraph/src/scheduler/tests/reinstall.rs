@@ -26,9 +26,9 @@ use crate::witnessed::doctest_fixture::RegionCart;
 use crate::witnessed::{Delivered, NoPins, SealedExtern};
 
 /// Relocate a loop-carried argument into `into`'s region through the workload's own delivery hook —
-/// the embedder's act, run on the deciding side of a replace, and the one place the verdict is
-/// asked. The work handed back reads the relocated value back out, which is the read the retiring
-/// region must not be freed ahead of.
+/// the embedder's act, run on the deciding side of a replace, where the verdict is asked. The work
+/// handed back reads the relocated value back out, which is the read the retiring region must not
+/// be freed ahead of.
 fn carry_into<'a, W>(argument: &DeliveredTerminal<W>, into: &'a TestAnchor) -> NodeWork<'a, W>
 where
     W: Workload<

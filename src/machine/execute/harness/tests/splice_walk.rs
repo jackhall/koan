@@ -10,8 +10,8 @@ use crate::machine::core::{program_storage, run_root_storage};
 
 /// Self-reference `LET Ty = Ty`: index gating is a strict `idx <` predicate, so
 /// the in-progress binding is invisible to its own RHS at the same idx. The
-/// cache holds `Unbound("Ty")` and the wrap-slot terminal surfaces
-/// `UnboundName` rather than self-parking.
+/// cache holds `Unbound("Ty")`, which resolution reports as a dead lean and
+/// `keyworded::initial` surfaces as `UnboundName` rather than self-parking.
 #[test]
 fn self_referential_let_surfaces_unbound_name() {
     let program = program_storage();
@@ -31,7 +31,7 @@ fn self_referential_let_surfaces_unbound_name() {
     };
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(n) if n.contains("Ty")),
-        "expected UnboundName naming Ty from the wrap-slot terminal, got {err}",
+        "expected UnboundName naming Ty from the dead-lean terminal, got {err}",
     );
 }
 
@@ -39,7 +39,7 @@ fn self_referential_let_surfaces_unbound_name() {
 /// `Parked(producer)`, LET's binder slot admits shape-only, and on wake the
 /// rebuilt cache resolves and dispatch commits.
 #[test]
-fn forward_reference_parks_then_resolves_on_wake() {
+fn pending_producer_parks_then_resolves_on_wake() {
     let program = program_storage();
     let region = run_root_storage();
     let (mut test_run, buf) = TestRun::with_buf(&program, &region);

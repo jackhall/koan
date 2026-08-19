@@ -27,7 +27,7 @@ fn anonymous_fn_call_by_record_runs_body() {
     );
 }
 
-/// The bound value is a `KFunction` — the only handle to an anonymous function.
+/// An anonymous `FN` binds a `KFunction` value.
 #[test]
 fn anonymous_fn_binds_a_function_value() {
     let program = program_storage();

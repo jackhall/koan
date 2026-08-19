@@ -45,18 +45,17 @@ use super::{
 /// write-once byte goes through, and the raw [`Allocator`] impl a **mutable** collection is built
 /// over so its backing allocation lands in the region's own chunks instead of the global heap.
 ///
-/// The verbs live here and nowhere else: every surface that can reach a region's bytes
-/// ([`RegionHandle::allocator`](super::RegionHandle::allocator), [`FoldedPlacement::allocator`], an
-/// embedder's own brand veneer) hands back this one type rather than restating a verb set of its
-/// own, so the `Copy` guard and the rationale behind it are written once. Their primitives are std
-/// shapes only — a `Copy` value, a `Copy` slice, a `str` — so the door names no workload type and
-/// grows no per-family verb, and each hands back a shared `&'b`, never the `&mut` the bump itself
-/// returns: a bumped value is region state a holder names, not one it owns.
+/// A surface that can reach a region's bytes hands back this type rather than restating a verb set
+/// of its own, so the `Copy` guard and the rationale behind it are written once. The verbs'
+/// primitives are std shapes only — a `Copy` value, a `Copy` slice, a `str` — so the door names no
+/// workload type and grows no per-family verb, and each hands back a shared `&'b`, never the `&mut`
+/// the bump itself returns: a bumped value is region state a holder names, not one it owns.
 ///
-/// `Copy`, and the field is private, so those `allocator()` accessors are the only mint and `'b`
-/// stays the region's own brand: nothing built through one can outlive the region whose bytes it
-/// holds. Where `'b` is a rank-2 fold brand, that same lifetime is the confinement — which is why
-/// the allocator needs no mint privacy of its own to serve as a fold's write surface.
+/// `Copy`, with a private field and a `pub(crate)` wrapping constructor, so a value of this type
+/// exists only where a region hands one out and `'b` stays the region's own brand: nothing built
+/// through one can outlive the region whose bytes it holds. Where `'b` is a rank-2 fold brand, that
+/// same lifetime is the confinement — which is why the allocator needs no mint privacy of its own
+/// to serve as a fold's write surface.
 ///
 /// **The two tiers, and why the guard cannot cover both.** What licenses handing the raw allocator
 /// out at all is that a `Bump` releases its chunks whole and [`Region::bump_capacity`] prices every
@@ -129,9 +128,8 @@ unsafe impl Allocator for BumpAllocator<'_> {
 }
 
 impl<'b> BumpAllocator<'b> {
-    /// Wrap `bump` — crate-internal, so an embedder reaches one only through an `allocator()`
-    /// accessor that names a region it is authorized over, and no caller can pair the allocator with
-    /// a bump that is not a region's.
+    /// Wrap `bump` — `pub(crate)`, so no embedder can pair a `BumpAllocator` with a bump that is
+    /// not a region's.
     pub(crate) fn over(bump: &'b Bump) -> Self {
         BumpAllocator(bump)
     }

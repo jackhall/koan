@@ -352,9 +352,8 @@ impl<F: PinsRegion> PinBundle<F> {
     /// [`PinsRegion::pins_region`] over the bundle's **strong** members. No `Weak` upgrade, since
     /// the bundle already owns its members.
     ///
-    /// White-box introspection with no production caller — a live holder asks the description,
-    /// which answers the same question without touching the owned tier — so gated behind
-    /// `test-hooks` like [`Self::members`].
+    /// White-box introspection, gated behind `test-hooks` like [`Self::members`]: a live holder
+    /// asks the description, which answers the same question without touching the owned tier.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn pins_region(&self, region: &F::Region) -> bool {
         self.members.iter().any(|m| m.pins_region(region))

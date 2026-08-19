@@ -51,7 +51,7 @@ pub(crate) fn mock_declaration_site(index: usize) -> DeclarationSite {
 }
 
 /// A seeded test run: the run-root child `Scope`, the runtime that owns the run frame, and that
-/// frame's [`TypeRegistry`] — the only registry in the tree.
+/// frame's [`TypeRegistry`].
 ///
 /// The constructor follows production order (`interpret`): allocate the scope pair, establish the
 /// run frame, then seed the builtins **against the frame's own registry**, so every seeded type is
@@ -156,8 +156,7 @@ pub(crate) fn extract_terminal<'a>(
         .expect("terminal should be a value, not an error");
     // Reuse the production relocation: a value that would otherwise keep region storage behind — a
     // substrate carrier, a bare string — is totally rebuilt into `scope`'s region through the seam
-    // copy verb, every other object's top node is cloned at the fold brand, a type crosses by
-    // handle / clone.
+    // copy verb.
     scope.adopt_copied_for_test(&delivered)
 }
 

@@ -6,8 +6,7 @@
 //! life of a run, so a handle stays dereferenceable as long as its registry lives.
 //!
 //! Interning and node reads live on [`TypeRegistry`](super::registry::TypeRegistry); the digest
-//! recipe per variant lives in [`type_digest`](super::type_digest), which is the one place the
-//! hash function is touched.
+//! recipe per variant lives in [`type_digest`](super::type_digest).
 //!
 //! See [design/typing/type-registry.md](../../../../design/typing/type-registry.md).
 

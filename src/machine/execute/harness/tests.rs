@@ -12,8 +12,8 @@ mod index_gated;
 mod lexical_provenance;
 mod nested_binder_positions;
 mod reclaim;
+mod splice_walk;
 mod statement_binder_install;
-mod unified_walk;
 
 use crate::machine::core::ProgramStorage;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};

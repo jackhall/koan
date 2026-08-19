@@ -129,9 +129,8 @@ impl<'a> FieldParts<'a> {
 /// re-walk re-descends in the same deterministic order, so positional consumption needs no
 /// slot index and nested field-lists fall out for free.
 ///
-/// The two part families walk the same [`walk_field_list`]; this is the door that picks the
-/// instantiation, and the one a nested record recurses back through when it descends into the
-/// other family.
+/// The two part families walk the same [`walk_field_list`]; this door picks the instantiation, and
+/// a nested record recurses back through it when it descends into the other family.
 pub fn parse_typed_field_list_via_elaborator<'a, 'f>(
     parts: FieldParts<'a>,
     context: FieldListContext,
@@ -167,7 +166,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
     let parsed = parse_pair_list(parts, context_list, name_kind, |part, name| {
         // Every field types a value, so each field type must be a proper type; a bare
         // constructor of kind `* -> *` standing unapplied is a kind error. Applied to each
-        // elaborated field on the way out, so the four arms below share one verdict — the
+        // elaborated field on the way out, so the arms below share one verdict — the
         // `KType::ANY` placeholders a `Pending` walk yields are proper and pass, and the
         // re-walk checks the resolved type they stand for.
         let checked = |kt: KType| match super::sig_schema::unsaturated_constructor_message(

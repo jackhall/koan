@@ -11,9 +11,9 @@
 //!
 //! Every door here takes a [`WriteGate`], which only `crate::machine` can mint. A builtin-side
 //! caller therefore never holds the capability: it either receives one as a parameter from the
-//! `machine`-side caller that owns the construction ([`crate::machine::block_tail`]'s seed, the
-//! builtin-seeding entry point) or calls an allocate-and-seed door — [`Scope::alloc_group_child`],
-//! [`Scope::alloc_module_view`] — which births the scope it writes into and so mints its own.
+//! `machine`-side caller that owns the construction, or calls an allocate-and-seed door —
+//! [`Scope::alloc_group_child`], [`Scope::alloc_module_view`] — which births the scope it writes
+//! into and so mints its own.
 //!
 //! Split out of the parent `scope` module.
 
@@ -272,8 +272,7 @@ impl<'a> Scope<'a> {
     ///
     /// Born-inside-the-door like [`Self::alloc_group_child`]: the view scope is returned only once
     /// the replay and the seeding have landed, and nothing else has a reference to it before then,
-    /// so the door mints its own [`WriteGate`]. `:|` / `:!` run builtin-side, where no gate can be
-    /// minted.
+    /// so the door mints its own [`WriteGate`].
     pub(crate) fn alloc_module_view(
         outer: &'a Scope<'a>,
         path: String,
@@ -308,7 +307,7 @@ impl<'a> Scope<'a> {
     /// The child is **born inside this door** and handed back only once the registry seeding has
     /// landed, so no other node can have reached it while it was written. That is what lets the door
     /// mint its own [`WriteGate`]: the "unpublished scope" premise is structural here, not a claim
-    /// the caller makes. The `GROUP` binder runs builtin-side, where no gate can be minted.
+    /// the caller makes.
     pub(crate) fn alloc_group_child(
         outer: &'a Scope<'a>,
         name: String,

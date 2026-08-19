@@ -8,8 +8,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::{
-    DropFree, PinBundle, PinsRegion, Reattachable, Region, RegionOwner, SealedExtern,
-    StorageProfile, Witness, WitnessRegion, Witnessed,
+    DropFree, PinsRegion, Reattachable, Region, RegionOwner, SealedExtern, StorageProfile, Witness,
+    WitnessRegion,
 };
 
 /// A shared-reference carrier family: `&'r u32`.
@@ -67,15 +67,6 @@ unsafe impl PinsRegion for Cart {
     fn for_each_pinned_region(&self, visit: &mut dyn FnMut(&[u32])) {
         visit(&self.0[..]);
     }
-}
-
-/// Build a bundle-witnessed carrier over a cart: yoked from the cart's own region (so the value is
-/// provably region-derived), then re-bundled under the singleton `PinBundle` that pins the same
-/// cart. Fixture-only: the crate-internal witness-retype it routes is not part of the module's real
-/// surface.
-pub fn set_witnessed(cart: std::rc::Rc<Cart>) -> Witnessed<RefFamily, PinBundle<Cart>> {
-    Witnessed::<RefFamily, std::rc::Rc<Cart>>::yoke(std::rc::Rc::clone(&cart), |region| &region[0])
-        .rewitness(PinBundle::singleton(cart))
 }
 
 /// Build a [`SealedExtern`] from a live carrier — a turbofish-friendly spelling

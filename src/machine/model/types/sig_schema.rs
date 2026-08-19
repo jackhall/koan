@@ -67,8 +67,7 @@ impl SigSchema {
     /// Project a SIG decl scope into its schema, at SIG finish. Every type-table entry is a
     /// genuine type member (the token-class partition holds — value slots live in the scope's
     /// slot collector, not in `types`), classified abstract/manifest by representation; the
-    /// value slots come from the scope's own slot collector. The only place this
-    /// classification runs — once per SIG.
+    /// value slots come from the scope's own slot collector. Runs once per SIG.
     pub(crate) fn project_decl(decl_scope: &Scope<'_>, types: &TypeRegistry) -> SigSchema {
         let declared = decl_scope.id;
         let mut abstract_members = HashMap::new();
@@ -345,10 +344,9 @@ fn canonicalize_binder(kt: KType, declared: ScopeId, types: &TypeRegistry) -> KT
     }
 }
 
-/// Why a [`sig_subtype`] check failed — one of the five per-member rules, carrying the offending
-/// member name and the *rendered* types that disagreed. Rendering to `String` at the failure
-/// site (the only thing [`Self::render_fragment`] ever does with them) keeps this type free of
-/// any `KType` reference, so it travels as plain diagnostic data.
+/// Why a [`sig_subtype`] check failed — the per-member rule that rejected, carrying the offending
+/// member name and the *rendered* types that disagreed. Rendering to `String` at the failure site
+/// keeps this type free of any `KType` reference, so it travels as plain diagnostic data.
 pub enum SigSubtypeFailure {
     MissingTypeMember {
         name: String,

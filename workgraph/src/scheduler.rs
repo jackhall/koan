@@ -181,11 +181,11 @@ impl<W: Workload> Scheduler<W> {
         false
     }
 
-    /// **The one door a consumer's dep list is wired through** ([`alloc_node`](Self::alloc_node),
-    /// the submit-time sibling for a fresh row, routes through it too). The embedder hands the dep
-    /// *sources* it holds — one edge per dep, in dep order — and the door mints the consumer's own
-    /// slab edge off each. Producer `NodeId`s never leave the scheduler: resolving a source edge to
-    /// one is this door's job.
+    /// **The one door a consumer's dep list is wired through**: the dep row lives on a
+    /// scheduler-private `DepGraph`, so no embedder-reachable path writes one. The embedder hands
+    /// the dep *sources* it holds — one edge per dep, in dep order — and the door mints the
+    /// consumer's own slab edge off each. Producer `NodeId`s never leave the scheduler: resolving
+    /// a source edge to one is this door's job.
     ///
     /// Every dep's edge inherits its source's destination, uniformly: a dep on a placeholder
     /// delivers into the region that placeholder named, a dep on spawned sub-work into the region

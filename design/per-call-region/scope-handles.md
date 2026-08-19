@@ -17,19 +17,20 @@ from the slot's live frame at read, never re-anchored at a free `'run`:
   `Rc<CallFrame>` is the liveness witness pinning that scope's region — a `Yoked` slot stores no
   scope carrier of its own to re-anchor across a tail hop.
 - `YokedChild(SealedExtern<ScopeRefFamily>)` holds a `&'static Scope` carrier to a block scope a
-  builtin allocated in a cart *ancestor* region (an `InScope` body — USING / MODULE / SIG / TRY),
-  opened at read through the rank-2 `SealedExtern::open` at a `for<'b>` brand against the slot's frame
-  `Rc`, sound because the cart's `FrameStorage.outer` chain pins that ancestor region for as long as
-  the slot holds the cart. It differs from `Yoked` only in that the child scope differs from the cart's
+  builtin allocated in a region the cart holds a pin claim on — its own, an ancestor along the
+  `FrameStorage.outer` chain, or the eternal run root. That covers an `InScope` body (MODULE / SIG /
+  TRY) and a USING overlay alike. It is opened at read through the rank-2 `SealedExtern::open` at a
+  `for<'b>` brand against the slot's frame `Rc`, sound because the claim holds for as long as the
+  slot holds the cart. It differs from `Yoked` only in that the child scope differs from the cart's
   own scope, so it needs a stored carrier.
 
-The funnel [`resolve_node_scope`](../../src/machine/execute/harness.rs) decides the arm in
-order: a pointer test (`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot
+For a run-scope submission, [`resolve_node_scope`](../../src/machine/execute/harness.rs) decides
+the arm in order: a pointer test (`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot
 to `Yoked`; the cart's own pin claim over `scope`'s region
-([`CallFrame::pins_scope_region`](../../src/machine/core/arena.rs), a `pins_region` walk of the
+([`CallFrame::pins_scope_region`](../../src/machine/core/arena/frame.rs), a `pins_region` walk of the
 `FrameStorage.outer` chain — the pin that actually holds, not the lexical scope graph, and trivially
-satisfied for an eternal-tier region no frame has to pin) routes a
-cart-ancestor block scope to `YokedChild`, erasing the borrow through `SealedExtern::<ScopeRefFamily>::erase`; the
+satisfied for an eternal-tier region no frame has to pin) routes such a
+block scope to `YokedChild`, erasing the borrow through `SealedExtern::<ScopeRefFamily>::erase`; the
 frameless top-level run root routes to `Yoked` via the `run_frame` cart that adopts it (the slot's
 cart is that `run_frame`). The two residual fall-throughs are `unreachable!` — an instrumented
 whole-suite spike confirmed every framed submission resolves to `Yoked` / `YokedChild` and every

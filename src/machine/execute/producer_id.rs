@@ -10,8 +10,8 @@
 //! conversions are `pub(in crate::machine::execute)`, so a layer that stores a producer,
 //! compares two for equality, and passes one along still *cannot* open one — the field is
 //! unreachable from there, so a leak is a compile error rather than a review catch. The type
-//! lives under `execute` because that is the layer owning the scheduler, and so the only
-//! ancestor visibility naming the drive loop and nothing below it.
+//! lives under `execute` because that is the layer owning the scheduler, so that visibility
+//! names the drive loop and nothing below it.
 //!
 //! A layer that cannot open a producer still needs to wait on one, which is what [`deps_on`]
 //! and [`extend_deps_on`] are for: the only crossing that turns producers into scheduler

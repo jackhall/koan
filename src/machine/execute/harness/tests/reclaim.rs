@@ -11,8 +11,8 @@ use crate::builtins::test_support::TestRun;
 use crate::machine::core::{program_storage, run_root_storage};
 
 /// Unconditional reclamation, end to end: run a program with nested blocks and spawned sub-slots, then
-/// confirm the slot store's free list holds every index it ever minted. Finalize is the only event
-/// that ends a slot and it reclaims unconditionally, so quiescence means an entirely free store.
+/// confirm the slot store's free list holds every index it ever minted. Finalize ends a slot and
+/// reclaims unconditionally, so quiescence means an entirely free store.
 #[test]
 fn a_finished_program_reclaims_every_slot() {
     let program = program_storage();
@@ -43,8 +43,8 @@ fn a_finished_program_reclaims_every_slot() {
 
 /// Stale-name canary. A consumer releases each dep edge as soon as it has read the resident off it,
 /// and a released edge's index is re-mintable — so a notify list that still named one would misfire
-/// the next producer's delivery onto whatever took that index. Inv-C makes the walk (or the splice)
-/// the one place a listed edge's name is dropped; this asserts nothing slipped past it.
+/// the next producer's delivery onto whatever took that index. Inv-C has the walk (or the splice)
+/// drop a listed edge's name; this asserts nothing slipped past it.
 #[test]
 fn no_notify_list_names_a_released_edge() {
     let program = program_storage();

@@ -17,7 +17,7 @@
 //! bare `KType`, and the member set is fixed at the scan, so the run never grows. A declarator that
 //! needs neither — a standalone declaration, a generative `:|` mint — keeps the std-owned
 //! [`RecursiveGroupWindow`], which carries `TypeConstructor` schemas and grows by threaded
-//! discovery. Both seal through the one pure core, [`seal_group`].
+//! discovery. Both seal through the shared pure core, [`seal_group`].
 //!
 //! # Owned members
 //!

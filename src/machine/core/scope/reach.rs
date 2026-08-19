@@ -29,8 +29,8 @@ use crate::witnessed::{
     Delivered, DropFree, Reattachable, RegionHandleFamily, Sealed, SealedExtern, Witnessed,
 };
 
-// The sole test here pins the bind-seam pin (substrate-sharing) mechanism; the `seam-force-copy`
-// build rebuilds the record instead, so the module cannot hold there. The equivalence battery proves
+// The tests here pin the bind-seam pin (substrate-sharing) mechanism; the `seam-force-copy` build
+// rebuilds the record instead, so they cannot hold there. The equivalence battery proves
 // language-output invisibility separately.
 #[cfg(all(test, not(feature = "seam-force-copy")))]
 mod tests;
@@ -49,8 +49,8 @@ impl<'a> Scope<'a> {
     }
 
     /// Mint `sources` into this scope's own arena, which is the same act that folds the composed
-    /// bundle into the **region's** union bundle — the single reach-derivation door behind every
-    /// bind, a veneer over the library's fused
+    /// bundle into the **region's** union bundle — the scope-side reach-derivation door, a veneer
+    /// over the library's fused
     /// [`RegionHandle::mint_retained`](crate::witnessed::RegionHandle::mint_retained). Each source is
     /// a caller's owned claim (a delivery envelope's whole coverage, or a release-exact subset of
     /// it), which already names the value's home region as an ordinary member: there is no residence
@@ -94,11 +94,11 @@ impl<'a> Scope<'a> {
     }
 
     /// Fuse a value living **in this scope's region and reaching nothing** to its reference-only
-    /// carrier — the one region-pure resident verb, generic over the carried family, for every
-    /// terminal that hands a resident value out of a step un-sealed (a type terminal's
-    /// `Carried::Type`, a relocation's bare destination handle). The description is minted on the
-    /// confined arena surface ([`RegionBrand::seal_resident`]), so the residence is derived where
-    /// the region handle is, never assembled at a call site.
+    /// carrier — region-pure and generic over the carried family, for a terminal that hands a
+    /// resident value out of a step un-sealed (a type terminal's `Carried::Type`, a relocation's
+    /// bare destination handle). The description is minted on the confined arena surface
+    /// ([`RegionBrand::seal_resident`]), so the residence is derived where the region handle is,
+    /// never assembled at a call site.
     ///
     /// What "reaching nothing" covers, by family:
     ///
@@ -468,7 +468,7 @@ impl<'a> Scope<'a> {
     ///
     /// The seam is [`AdoptSeam::Binding`], the only one that admits the escape-seam cost chooser:
     /// the adopting scope's region union owns the minted reach for the region's life, so pinning a
-    /// record in its producer region is affordable here and nowhere else. [`adopt_disposition`]
+    /// record in its producer region is affordable here. [`adopt_disposition`]
     /// picks; this door runs the mechanism:
     ///
     /// Both arms run the same engine ([`Self::relocate_delivered`]), differing only in the verb, and
@@ -515,14 +515,12 @@ impl<'a> Scope<'a> {
     /// keep region storage behind ([`KObject::needs_destination_door`]) so it lands here, a `Pin`
     /// pointer-copies the top node and lets its region-resident substrate borrow ride.
     ///
-    /// The verb also fixes the retention claim the fold hands its composition:
-    ///
-    /// - **Copy** — release-exact. The predicate runs over the rebuilt value, so a plain-data
-    ///   record drops the producer region (a tail loop's retiring frame does not ride this binding)
-    ///   while a rebuild still borrowing its home keeps it.
-    /// - **Pin** — nothing is released: the value stays where it lived and the producer transfers
-    ///   by hold, so every region the source envelope named is kept. That is what covers the
-    ///   pointer-copied substrate still living in the producer's region.
+    /// The verb also fixes the retention claim the fold hands its composition, under the release
+    /// rule ([value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach)):
+    /// a `Copy`'s predicate runs over the rebuilt value, so a plain-data record drops the producer
+    /// region and a tail loop's retiring frame does not ride the binding, while a `Pin` keeps every
+    /// region the source envelope named — which is what covers the pointer-copied substrate still
+    /// living in the producer's region.
     ///
     /// The fold's own composition mints the product's exact reach into this scope's arena and
     /// retains the owning bundle here for the region's life, so the witnessed product is already
@@ -621,8 +619,7 @@ impl<'a> Scope<'a> {
             .rest_into(self.brand().handle())
     }
 
-    /// **Birth an operator-group record in this scope's own region** — the one door behind every
-    /// `GROUP` / `OP` declaration and the builtin seeds. The record is built inside a
+    /// **Birth an operator-group record in this scope's own region.** The record is built inside a
     /// [`yoke_branded`](KoanRegionExt::yoke_branded) whose `for<'b>` brand is the region-purity
     /// proof: [`OperatorGroup::alloc`] re-homes the member texts and any combiner name at that same
     /// brand, so the finished record borrows nothing but the region it was born into, and the
@@ -787,11 +784,9 @@ impl<'a> Scope<'a> {
 /// step as its carrier rather than as a relocated copy (a bare-name read, the head-deferred
 /// callable, a spliced argument).
 ///
-/// [`Binding`](Self::Binding) additionally admits the record cost chooser. It is minted only by
-/// [`Scope::adopt_for_binding`] — [`BindSeam`]'s field is private to this module, so no caller
-/// outside it can select cost-driven record pinning. A copying seam has no other user: a call's
-/// arguments are copied by the frame bind itself, off the envelope they were delivered in, so
-/// nothing re-homes a delivered value ahead of the door that binds it.
+/// [`Binding`](Self::Binding) additionally admits the record cost chooser. It carries a
+/// [`BindSeam`] admission token whose field is private to this module, so no caller outside the
+/// module can select cost-driven record pinning.
 pub(crate) enum AdoptSeam {
     Retaining,
     Binding(BindSeam),

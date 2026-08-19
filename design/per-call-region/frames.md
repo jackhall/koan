@@ -1,25 +1,32 @@
 # Frame management
 
-Active-frame propagation and the outer-frame chain for builtin-built frames.
+Active-frame propagation, the lexical-chain reshape a replace installs, and the
+outer-frame chain for builtin-built frames.
 Part of the [per-call region protocol](README.md). Tail-call region turnover —
-how a tail hop runs in constant space — is owned by
-[tail-call-optimization.md](../tail-call-optimization.md).
+how a tail hop runs in constant space, and why no hold spans the hop — is owned by
+[tail-call-optimization.md](../tail-call-optimization.md); the slot's stored scope
+handle is owned by [scope-handles.md](scope-handles.md).
 
 ## Active-frame propagation
 
 The interpreter exposes the currently running slot's frame to code that needs
 to capture it ([builtin-built frame chaining](#outer-frame-chain-for-builtin-built-frames)
 below, deferred sub-Dispatch under a per-call frame). The state lives on the
-driver's ambient context ([`KoanRuntime`](../../src/machine/execute/ambient.rs)),
-not the scheduler — the scheduler is a pure DAG runtime:
+driver's ambient context
+([`AmbientContext`](../../src/machine/execute/ambient.rs), a field of the koan-side
+`Host`), not the scheduler — the scheduler is a pure DAG runtime:
 
 - **`active_frame: Option<Rc<CallFrame>>`** — the cart of the slot
   currently being executed. Read through the ambient context
   ([`ambient.rs`](../../src/machine/execute/ambient.rs));
   written only by `Host::with_slot_step` (the RAII bracket
   `Host::step` wraps each slot step in) and the `Host::with_active_frame`
-  bracket. An invoke never empties it, so within a step it is always
-  `Some`.
+  bracket. The bracket installs the slot's non-optional cart and an invoke
+  never empties it — a `FreshTail` placement mints its own cart rather than
+  touching the active one — so within a step it is always `Some`. It stays an
+  `Option` because it is legitimately `None` *between* steps: a submission
+  arriving outside any step reads exactly that, and `submission_cart` falls
+  back to the run frame and reports the new slot unframed.
 - **`Host::with_active_frame(frame, body) -> R`** — brackets
   `frame` as `active_frame` for the duration of `body`, restoring the
   previous one on every exit path, unwind included. Used by
@@ -34,6 +41,50 @@ not the scheduler — the scheduler is a pure DAG runtime:
 `active_frame` for the duration of the step via `with_slot_step`. Sub-dispatch
 and dep-finish slots inherit `active_frame` so they see the right ancestor for
 their own chaining decisions.
+
+## Lexical-chain reshape at the replace
+
+A slot's lexical position is an `Rc<LexicalFrame>` cactus chain stored on its
+anchor's `NodePayload` ([`nodes.rs`](../../src/machine/execute/nodes.rs)). The
+chain a tail replace installs is decided in one half of the step and assembled in
+the other, because the two inputs it needs are never live at the same moment:
+
+- **The decision reads the return contract.** Whether a tail is an FN-body invoke
+  or a block entry is a property of the
+  [`ReturnContract`](../../src/machine/core/kfunction/body.rs) variant, and the
+  contract is live only at the `Outcome::Continue` construction site —
+  [`tail_continue`](../../src/machine/execute/outcome.rs) seals it onto the
+  replacement continuation, and `Outcome::Continue` carries no contract field of
+  its own, so the apply has nothing left to re-read.
+- **The assembly reads the frame the body runs in**, which only the apply
+  resolves: the cart a `FreshTail` / `FreshChild` placement carries, else the
+  slot's current cart for an `Inherit` FN-body re-entry.
+
+[`ChainOp`](../../src/machine/execute/nodes.rs) is what carries the first across to
+the second. It names no lifetime — a `ScopeId` and a body index — so it rides the
+outcome past the contract's erasure, and `ChainOp::apply` turns it into the
+`Rc<LexicalFrame>` the fresh anchor stores. Both ends are lifetime-free, so a node
+pins no `'run` through its chain.
+
+Three reshapes:
+
+- **`Unchanged`** — a tail in the same lexical block; the chain rides over
+  untouched.
+- **`AssembleBody { body_index }`** — an FN-body invoke (a `Function` or `PerCall`
+  contract). [`assemble_body_chain`](../../src/machine/core/lexical_frame.rs)
+  rebuilds the chain from the body scope's lexical `outer` walk, read through
+  `CallFrame::with_scope` against the body frame, so depth tracks source-level
+  nesting rather than call depth and a recursive tail chain's stored chain does
+  not grow per hop.
+- **`PushBlock { scope_id, body_index }`** — a block entry under any other
+  contract (a MATCH / TRY arm, a `USING` overlay): prepend one frame, with
+  `body_index` positioning it for multi-statement tail-into-last.
+
+The apply keys its fresh-anchor decision on the same variant rather than on
+whether a cart was minted
+([`harness.rs`](../../src/machine/execute/harness.rs)): an `Inherit` FN-body
+re-entry installs no frame yet reshapes the chain, so a frameless replace still
+mints a fresh anchor whenever the variant is not `Unchanged`.
 
 ## Outer-frame chain for builtin-built frames
 

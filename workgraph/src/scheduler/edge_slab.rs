@@ -338,8 +338,8 @@ impl<W: Workload> EdgeSlab<W> {
         }
     }
 
-    /// **The adopt capability** on the edge's destination region, minted off the one deref — the
-    /// scheduler's only route to a destination's allocation door.
+    /// **The adopt capability** on the edge's destination region, minted off the one deref
+    /// ([`Destination::region_ref`]).
     pub(in crate::scheduler) fn destination_handle(
         &self,
         id: EdgeId,
@@ -358,7 +358,7 @@ impl<W: Workload> EdgeSlab<W> {
         self.destination(id).region
     }
 
-    /// The single state match every destination reader here goes through.
+    /// The state match behind this module's destination readers.
     fn destination(&self, id: EdgeId) -> &Destination<W> {
         match &self.entries[self.slot_index(id)] {
             EdgeState::Parked { destination, .. } | EdgeState::Filled { destination, .. } => {
@@ -407,7 +407,7 @@ impl<W: Workload> EdgeSlab<W> {
         }
     }
 
-    /// The only path that picks an index — recycle from `free_list` or extend, mirroring
+    /// Pick an index for `state`, recycling from `free_list` ahead of extending, mirroring
     /// `NodeStore::alloc_slot`.
     fn alloc(&mut self, state: EdgeState<W>) -> EdgeId {
         let index = match self.free_list.pop() {
@@ -429,8 +429,8 @@ impl<W: Workload> EdgeSlab<W> {
         }
     }
 
-    /// Return an index to circulation and stale every outstanding name for it. The sole pusher onto
-    /// `free_list`, so the generation bump and the recycle cannot part company.
+    /// Return an index to circulation and stale every outstanding name for it: the generation bump
+    /// rides the free-list push, so a recycled index cannot be re-minted under an old name.
     fn recycle(&mut self, index: usize) {
         self.free_list.push(index);
         #[cfg(debug_assertions)]

@@ -22,8 +22,7 @@ use crate::machine::model::{Carried, KObject, TypeNode, TypeRegistry};
 use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::{BindingIndex, KFunction, Scope};
 
-/// Cross a parsed node into the scheduler against `scope`'s region — the one door a test's AST
-/// takes into dispatch.
+/// Cross a parsed node into the scheduler against `scope`'s region.
 fn working<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> WorkingExpression<'run> {
     WorkingExpression::from_ast(scope.brand(), expr)
 }
@@ -342,7 +341,7 @@ fn fast_lane_legacy_paren_args_rejected() {
 }
 
 /// Non-function head resolves to a value-side carrier the fast lane refuses with
-/// `TypeMismatch { arg: "verb", expected: "KFunction or Type" }`. Verb-precedence
+/// `TypeMismatch { arg: "verb", expected: "KFunction" }`. Verb-precedence
 /// (verb resolves before pair parsing) holds because head resolution is the first
 /// match arm.
 #[test]
@@ -359,7 +358,7 @@ fn fast_lane_on_non_function_returns_error() {
         matches!(
             &err.kind,
             KErrorKind::TypeMismatch { arg, expected, .. }
-                if arg == "verb" && expected == "KFunction or Type"
+                if arg == "verb" && expected == "KFunction"
         ),
         "expected TypeMismatch on verb, got {err}",
     );

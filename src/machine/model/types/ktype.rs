@@ -64,7 +64,7 @@ impl KType {
     /// constrains nothing, so every module value satisfies it.
     pub const EMPTY_SIGNATURE: KType = KType(TypeDigest(0x1660d74d_20447364_cde2f1b9_3ed245f6));
 
-    /// The type-accepting slot admitting `kind` — one of the five pre-seeded `OfKind` handles.
+    /// The type-accepting slot admitting `kind` — one of the pre-seeded `OfKind` handles.
     pub const fn of_kind(kind: KKind) -> KType {
         match kind {
             KKind::ProperType => KType::PROPER_TYPE,
@@ -75,11 +75,9 @@ impl KType {
         }
     }
 
-    /// Wrap a digest as the handle naming it. Named rather than a public tuple field so the
-    /// wrapping is a deliberate act: the only production caller is
-    /// [`TypeRegistry::intern`](super::registry::TypeRegistry::intern), which has just computed
-    /// the digest of content it is inserting, plus the seal path deriving a member handle from
-    /// its component's digest.
+    /// Wrap a digest as the handle naming it. Named rather than a public tuple field, and
+    /// crate-internal, so the wrapping is a deliberate act: `digest` must already be the digest
+    /// of interned content, or a member handle derived from its component's digest.
     pub(crate) const fn from_digest(digest: TypeDigest) -> KType {
         KType(digest)
     }

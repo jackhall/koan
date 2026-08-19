@@ -13,7 +13,7 @@
 //! name matches a surfaced member shadows the window from the next statement
 //! on, on the value and type channels alike.
 //!
-//! All four tables of the opened module's child scope are surfaced, `types`
+//! Every table of the opened module's child scope is surfaced, `types`
 //! included, so a module's type members name types by bare name inside the
 //! block exactly as its value members name values. An opaque view's child
 //! scope holds *only* the view's own type members — the per-call abstract

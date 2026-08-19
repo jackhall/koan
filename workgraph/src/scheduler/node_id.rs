@@ -26,11 +26,4 @@ impl NodeId {
     pub(crate) fn index(self) -> usize {
         self.index
     }
-
-    /// Fabricate an id for a white-box test that drives no store. Widened past `cfg(test)` for
-    /// an embedder's own white-box tests, which compile against this crate as a dependency.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub const fn for_test(index: usize) -> Self {
-        NodeId::new(index)
-    }
 }

@@ -11,8 +11,8 @@
 //!
 //! ## Invariants
 //!
-//! - `alloc_slot` is the only path that picks a slot index (recycle from `free_list` or extend
-//!   `slots`); `free_one` is the sole pusher onto `free_list`.
+//! - `slots` and `free_list` are private to this module, so a slot index is minted, recycled and
+//!   handed out through `NodeStore`'s own verbs.
 //! - `slots` is wrapped in [`SlotVec<T>`], which impls only `Index<NodeId>` / `IndexMut<NodeId>`,
 //!   so no raw index reaches the table.
 
@@ -78,7 +78,7 @@ impl<W: Workload> NodeStore<W> {
         }
     }
 
-    /// The only path that picks a slot index.
+    /// Park `work` in a slot, recycling a freed index ahead of extending the table.
     pub(super) fn alloc_slot(&mut self, work: StoredWork<W>) -> NodeId {
         match self.free_list.pop() {
             Some(id) => {

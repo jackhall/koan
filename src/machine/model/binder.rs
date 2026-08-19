@@ -346,8 +346,8 @@ impl UntypedElementSpec {
 
 /// Which declaration surface a spec entry belongs to. Binder discovery itself never branches on
 /// this; it exists so a consumer outside binder discovery can recognize a surface by *full bucket
-/// key* — which is the only structural read that cannot be fooled by a statement merely spelling
-/// one of the surface's keywords. `GROUP`'s member scan is that consumer.
+/// key*, a structural read that a statement merely spelling one of the surface's keywords cannot
+/// fool.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BinderSurface {
     /// `OP #(…) OVER …` / `UNARY OP #(…) OVER …`, bare or in its combined `LET <name> =` spelling.

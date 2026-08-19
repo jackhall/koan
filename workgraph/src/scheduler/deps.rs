@@ -99,8 +99,8 @@ impl<R> Deps<R> {
 /// never holds one.
 ///
 /// Deliberately *not* `Deps<EdgeId>`: [`Deps`] entries name *source* edges, while a realized list
-/// names the consumer's own edges, minted off those sources by the install door — which is why the
-/// only way to append here is the door's own `push`.
+/// names the consumer's own edges, minted off those sources by the install door — which is why
+/// `push` is `pub(crate)`, so no embedder appends.
 pub struct ResolvedDeps {
     ids: Vec<EdgeId>,
 }

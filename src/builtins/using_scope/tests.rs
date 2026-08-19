@@ -425,9 +425,9 @@ fn using_on_non_module_fails_dispatch() {
     );
 }
 
-/// A `USING` window's overlay is the one scope whose `region_owner` is the *call site* while the
-/// bindings it surfaces live in the **module's** region — the single place residence and the reading
-/// scope diverge. Residence rides the value's own description, not the reading scope, so a record
+/// A `USING` window's overlay carries its `region_owner` at the *call site* while the bindings it
+/// surfaces live in the **module's** region, so residence and the reading scope diverge. Residence
+/// rides the value's own description, not the reading scope, so a record
 /// read through the window reports the module's region as its home. That is what makes the crossing
 /// out of the window a *priceable* home crossing: `copy_or_pin`'s home-crossing test holds
 /// and the chooser runs. A host taken from the reading scope would own no substrate here, and the
@@ -470,7 +470,7 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
         .expect("fresh binding name in an unborrowed scope");
 
     // The window: a transparent overlay whose `region_owner` is the call-site frame, not the
-    // module's — the one place residence and the reading scope genuinely diverge.
+    // module's, so residence and the reading scope genuinely diverge.
     let call_site_storage = run_root_storage();
     let call_site_scope = run_root_bare(&call_site_storage);
     let window = call_site_scope.alloc_transparent_window_for_test(module_scope.bindings());

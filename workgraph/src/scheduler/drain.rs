@@ -151,7 +151,6 @@ impl<W: Workload> Scheduler<W> {
         }
     }
 
-    /// Runs exactly once per slot, from the one verdict arm that retires it.
     fn release_retiring(&mut self, anchor: &W::Frame) {
         for edge in W::retiring(anchor) {
             self.release_edge(edge);

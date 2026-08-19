@@ -192,10 +192,9 @@ impl<'run> Host<'run> {
     /// read off the ambient context by the apply itself. Restore is a bracket by construction: an
     /// early return restores on the way out, an unwind through the backstop's `Drop`.
     ///
-    /// The bracket installs the node's non-optional cart, and an invoke never empties
-    /// `active_frame` — a `FreshTail` placement mints its own fresh cart rather than touching the
-    /// active one — so `active_frame` is `Some` for the whole step. It stays `Option` because it is
-    /// legitimately `None` *between* steps.
+    /// The bracket installs the node's non-optional cart, so `active_frame` is `Some` for the whole
+    /// step; it stays `Option` because it is legitimately `None` *between* steps
+    /// ([frames.md § Active-frame propagation](../../../design/per-call-region/frames.md#active-frame-propagation)).
     pub(in crate::machine::execute) fn with_slot_step<R>(
         &mut self,
         node_frame: Rc<CallFrame>,

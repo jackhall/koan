@@ -438,10 +438,9 @@ pub(super) struct OperatorForm<'a> {
 
 /// Register the fixed triple every unary operator consists of: the list-form overload under
 /// [`unary_key`], the binary-form overload under [`binary_key`], and the size-1
-/// [`ReductionMode::Unary`] group entry (key derived through [`powerset_probes`]). The bodies
-/// are the caller's own — `UNARY OP`
-/// synthesizes koan-AST bodies, the builtin `|` supplies native ones. Returns the list-form
-/// function's object and stored reach: the list body is the operator's primary value.
+/// [`ReductionMode::Unary`] group entry (key derived through [`powerset_probes`]). The bodies ride
+/// in already built, koan-AST or native alike. Returns the list-form function's object and stored
+/// reach: the list body is the operator's primary value.
 ///
 /// Registration derives each bucket key from the signature the caller hands in, so a caller that
 /// spells a signature the use site never computes would register into a bucket no koan expression

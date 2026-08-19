@@ -51,8 +51,7 @@ pub fn interpret_with_writer_path(
     let (root, top) = unseeded_scopes(&run_storage);
     let mut runtime = KoanRuntime::new(program.brand(), out);
     // The run frame adopts `top`, the same scope `run_program` dispatches top-level statements
-    // against. Establishing it before seeding puts the builtins in the run's own type registry —
-    // the only registry in the tree.
+    // against. Establishing it before seeding puts the builtins in the run's own type registry.
     runtime.ensure_run_frame(top);
     let types = runtime
         .type_registry()

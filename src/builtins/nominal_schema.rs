@@ -1,11 +1,11 @@
-//! Shared `Action`-harness elaboration for a nominal type declarator's field-list schema —
-//! the path UNION and NEWTYPE's record repr both walk: elaborate the `(tag/field :Type, …)` list
-//! threading the binder name, then either fold the sealed pairs into the carrier synchronously or
-//! defer one dep-finish over the parked binder claims + sigil sub-Dispatches.
+//! Shared `Action`-harness elaboration for a nominal type declarator's field-list schema:
+//! elaborate the `(tag/field :Type, …)` list threading the binder name, then either fold the
+//! sealed pairs into the carrier synchronously or defer one dep-finish over the parked binder
+//! claims + sigil sub-Dispatches.
 //!
-//! The two callers differ only in the parameters threaded through here (diagnostic context,
-//! field-name policy, error frame) and the `finalize` that folds the sealed `(name, KType)` pairs
-//! into the right carrier (`finalize_union` / `finalize_record_newtype`).
+//! A declarator states the parameters threaded through here (diagnostic context, field-name
+//! policy, error frame) and the `finalize` that folds the sealed `(name, KType)` pairs into its
+//! own carrier.
 
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::DeclWindow;

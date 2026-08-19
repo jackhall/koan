@@ -1,9 +1,8 @@
-//! The one "run a block, return the tail" constructor. EVAL, MATCH / TRY arms, and USING all mean
+//! "Run a block, return the tail" as one constructor. EVAL, MATCH / TRY arms, and USING all mean
 //! the same thing — run a body and yield its last statement as this slot's own structural terminal —
 //! and each is a pure configuration of [`block_tail`]: a frame policy, a block scope, an optional
-//! seed, and how the body maps to the tail. It is the sole site that builds an
-//! [`Action::Tail`](crate::machine::Action::Tail); no builtin constructs one
-//! elsewhere, so every "block, return the tail" terminal is one structural shape.
+//! seed, and how the body maps to the tail, so the shape of the
+//! [`Action::Tail`](crate::machine::Action::Tail) they produce is settled in one place.
 
 use std::rc::Rc;
 

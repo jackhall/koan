@@ -32,7 +32,7 @@ mod tests;
 /// The resolved verb-carrier decides which shape it admits; the mismatched shape surfaces a
 /// loud `DispatchFailed`.
 enum CallBody<'step> {
-    /// A `{x = 1}` record literal — the sole named-argument surface.
+    /// A `{x = 1}` record literal — named arguments.
     Named(&'step [(&'step str, ExpressionPart<'step>)]),
     /// A `(Error "x")` paren group — positional construction (tagged unions, newtypes).
     Positional(&'step [Spanned<ExpressionPart<'step>>]),
@@ -220,7 +220,7 @@ fn apply_named_type_args<'step>(
     fields: &[(&'step str, ExpressionPart<'step>)],
 ) -> Outcome<'step> {
     // An empty argument record supplies no dep to park on, so it decides here — against the same
-    // key check every other arity runs.
+    // key check the non-empty path runs.
     if fields.is_empty() {
         return Outcome::Done(
             build_apply_args(identity, &param_names, Vec::new(), ctx.types()).map(|args| {

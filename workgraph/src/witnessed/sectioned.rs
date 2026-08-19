@@ -25,8 +25,7 @@
 //! a per-cell `(payload, reach verdict, weight)`: grouping into runs, interning, pin folding, the
 //! value-level union, and the weight total. Interning is what makes grouping cheap — within one
 //! region a description's *address* is its member set ([`Region::intern_reach_retained`]), so a run
-//! boundary is one pointer compare per cell rather than a set comparison. The module's only
-//! `unsafe` is [`CellRef`]'s [`Reattachable`] impl.
+//! boundary is one pointer compare per cell rather than a set comparison.
 
 use std::marker::PhantomData;
 use std::ops::Range;
@@ -294,7 +293,7 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     /// destination handle carries — so whatever pin keeps `dest`'s region alive covers both a
     /// projected cell and its run description. Cell *storage* is the embedder's: it allocates its
     /// cell block through the region's bump and hands the resident borrows in, rather than workgraph
-    /// re-declaring a cell family it has no other use for.
+    /// declaring a cell family of its own.
     ///
     /// Per input, the mint source is the verdict read literally: nothing for [`CellReach::Owned`]
     /// (so owned data costs no walk), the stored description's members — plus its home region under

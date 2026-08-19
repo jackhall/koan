@@ -80,8 +80,8 @@ pub fn register(file: SourceFile) -> FileId {
 }
 
 /// Borrow the registered `SourceFile` for the duration of `f`. Panics if `id`
-/// is out of range — the registry is append-only so the only way to hit that
-/// is to forge a `FileId`, which the public API never returns.
+/// is out of range; the registry is append-only, so a `FileId` returned by
+/// [`register`] always resolves.
 pub fn with<R>(id: FileId, f: impl FnOnce(&SourceFile) -> R) -> R {
     SOURCES.with(|s| {
         let v = s.borrow();

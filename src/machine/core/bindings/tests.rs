@@ -305,16 +305,11 @@ fn distinct_statement_redeclare_rebinds() {
 }
 
 // --- Cross-kind exclusion (AC1/AC4) -----------------------------------------
-// Each declarator routes to one of these write primitives (LET-value →
-// `write_value`; LET-type-alias / VAL / NEWTYPE-sigil → `write_type`;
-// MODULE / SIG / UNION / NEWTYPE-record / RECURSIVE-finalize →
-// `UpsertEqual write`; module/USING replay → `try_bulk_install_from`).
-// `partition_guard` is the single enforcement point every one of these primitives calls, so
-// `value_token_may_not_bind_type_side` / `type_token_may_not_bind_value_side` below — exercised
-// against a plain `Bindings::new()` — prove the exclusion for every bind site: a name's token
-// class fixes which map it may ever enter, so the same name can never land in both. The reverse —
-// a bare `FN`, which binds neither `data` nor `types` — is exempt; that is covered Scope-side in
-// `core::tests::register`.
+// `partition_guard` classifies a name by its token class alone (`parse::is_type_name`): a value
+// token may not bind type-side, a type token may not bind value-side, so the same name never lands
+// in both maps. `value_token_may_not_bind_type_side` / `type_token_may_not_bind_value_side` below
+// drive the write primitives against a plain `Bindings::new()`. A bare `FN` binds neither `data`
+// nor `types`, so it has nothing to partition.
 
 /// The token-class partition: `types` and `data` are different universes, and a name's token class
 /// decides which one it belongs to. A value token may not name a type…
@@ -458,10 +453,10 @@ fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
     assert_eq!(bindings.expect_type("Wrapper"), KType::NUMBER);
 }
 
-/// **All five tables past their resize thresholds, in one scope.** Every other test here binds a
-/// handful of names, which never leaves hashbrown's initial capacity — so nothing else exercises a
-/// table that has actually reallocated its bucket array into the bump, nor a purge that empties a
-/// bucket and strands its key, nor a powerset install against a table already holding entries.
+/// **All five tables past their resize thresholds, in one scope.** Binding a handful of names
+/// never leaves hashbrown's initial capacity, so this test binds past it: a table that has actually
+/// reallocated its bucket array into the bump, a purge that empties a bucket and strands its key,
+/// and a powerset install against a table already holding entries.
 ///
 /// Behavioural, not a memory audit: the allocator seam itself is pinned under tree borrows by
 /// workgraph's own slate (`a_bump_backed_table_survives_growth_overwrite_and_removal`), and what
@@ -525,7 +520,7 @@ fn bump_backed_tables_full_churn() {
             .expect("the seal lands in the claim it finalizes");
 
         // A second producer's claim on its own bucket, purged so the bucket empties and its key is
-        // removed — the one path that strands bump bytes, exercised so the leak check sees it.
+        // removed — a bucket purge strands bump bytes, exercised so the leak check sees it.
         let purged_key: UntypedKey = SignatureDraft {
             return_type: ReturnType::Resolved(KType::ANY),
             elements: vec![SignatureElement::Keyword("BAR")],

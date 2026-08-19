@@ -4,25 +4,22 @@
 //! answers "bound or parked" from one probe and finalization overwrites that slot in place rather
 //! than moving the entry between containers. `data` and `functions` are
 //! separate surfaces: a `data` entry is a value binding, callable by **name** alone (the
-//! `FunctionValueCall` lane), while a `functions` bucket holds the keyworded overloads that only
-//! the `FN` / `OP` registration doors and the builtin seeds write — binding a function *value*
-//! publishes no keyworded expression. Nominal type
-//! declarations (NEWTYPE / UNION / SIG) install their identity into `types`
-//! only — there is no value-side carrier; a module is a value and binds into
-//! `data`. The `data` and `types` maps
-//! are a structural partition: a name is committed to one xor the other, never
-//! both, enforced by the cross-kind check the value and type write paths run.
+//! `FunctionValueCall` lane), while a `functions` bucket holds the keyworded overloads a `FN` /
+//! `OP` registration installs — binding a function *value* publishes no keyworded expression.
+//! Nominal type declarations (NEWTYPE / UNION / SIG) install their identity into `types` only —
+//! there is no value-side carrier; a module is a value and binds into `data`. The `data` and
+//! `types` maps are a structural partition: a name is committed to one xor the other, never both,
+//! enforced by the cross-kind check the value and type write paths run.
 //!
-//! Every write verb here takes a [`WriteGate`] — the zero-sized capability minted only inside
-//! `crate::machine`, at the run loop's door and the construction-time door for scopes no other
-//! node can reach. A builtin body cannot mint one, so it cannot name a write verb: "one path
-//! mutates a published table" is a resolution rule, not a convention. That is what lets the verbs
-//! take firm `borrow_mut`s — no koan frame is on the stack to hold a competing borrow, so
-//! contention is unrepresentable. See [`gate`] for the capability, [`ops`] for the currency, and
+//! Every write verb here takes a [`WriteGate`] — the zero-sized capability whose constructors are
+//! `pub(in crate::machine)`. A builtin body cannot mint one, so it cannot name a write verb: the
+//! write discipline is a resolution rule, not a convention. That is what lets the verbs take firm
+//! `borrow_mut`s — no koan frame is on the stack to hold a competing borrow, so contention is
+//! unrepresentable. See [`gate`] for the capability, [`ops`] for the currency, and
 //! [design/memory-model.md](../../../design/memory-model.md).
 //!
-//! There is no borrow order to keep: reads never overlap the single gated write site, so every
-//! verb takes exactly one borrow of the one cell and a cross-map write is atomic under it.
+//! There is no borrow order to keep: every verb takes exactly one borrow of the one cell, and a
+//! cross-map write is atomic under it.
 //!
 //! Every table lives in the scope's own **region bump** — bucket arrays, keys, and the text an
 //! entry carries alike — so dropping a table frees nothing and runs no per-entry glue, and frame
@@ -170,8 +167,7 @@ impl<'a> ValueSlot<'a> {
 /// flight, and the finalize gate parks on that binder's edge
 /// ([`Bindings::type_placeholder_producer`]). The third arm makes that coexistence — and the
 /// impossibility of an empty slot — type-level facts, so a reader cannot mistake the slot for an
-/// exclusive one. Reads go through [`Self::bound`] / [`Self::pending`]; only the three transition
-/// sites match the arms directly.
+/// exclusive one. Reads go through [`Self::bound`] / [`Self::pending`].
 pub(crate) enum TypeSlot {
     Bound(KType, DeclarationSite),
     Pending(PendingBinding),
@@ -444,13 +440,12 @@ struct Tables<'a> {
     data: BumpBackedMap<'a, &'a str, ValueSlot<'a>>,
     /// Each sealed bucket slot stores its callable fused to its reach claim in one dormant
     /// [`SealedFunction`], beside the precomputed data the write path dedupes on
-    /// ([`FunctionBucketEntry`]). Written only by the `FN` / `OP` registration doors — an `FN`
-    /// registration binds no value, and a value bind writes no bucket. Like `data`, the entry
-    /// owns nothing: the reached regions are held by the region's union bundle, and a read hands
-    /// out a bit-copy the caller re-anchors under a pin. Sibling binders that have dispatched but
-    /// not finalized sit in the same bucket as [`OverloadSlot::Pending`]; consumers park on the
-    /// earliest-index visible one, and a finalize overwrites only its own slot, leaving the other
-    /// siblings as wake sources.
+    /// ([`FunctionBucketEntry`]). An `FN` registration binds no value, and a value bind writes no
+    /// bucket. Like `data`, the entry owns nothing: the reached regions are held by the region's
+    /// union bundle, and a read hands out a bit-copy the caller re-anchors under a pin. Sibling
+    /// binders that have dispatched but not finalized sit in the same bucket as
+    /// [`OverloadSlot::Pending`]; consumers park on the earliest-index visible one, and a finalize
+    /// overwrites only its own slot, leaving the other siblings as wake sources.
     /// Keyed on the **stored** run rather than an owned [`UntypedKey`] so a node dispatching
     /// through its own bumped key probes without materializing one; an owned key probes the same
     /// bucket through [`UntypedKeyProbe`].
@@ -461,8 +456,8 @@ struct Tables<'a> {
     /// one entry per nonempty subset of its declared operators (the per-group powerset), each
     /// subset key holding a bit-copy of the same seal over the same region-hosted record, so any
     /// subset used in one expression resolves in a single hit, a cross-group mix simply misses, and
-    /// the whole install allocates nothing past its probe keys. Walked through the scope chain like
-    /// every other name (innermost visible wins).
+    /// the whole install allocates nothing past its probe keys. Walked through the scope chain:
+    /// innermost visible wins.
     operators: BumpBackedMap<'a, &'a str, OperatorEntry<'a>>,
 }
 
@@ -642,9 +637,8 @@ impl<'a> Bindings<'a> {
 
     /// [`Self::lookup_function_stored`]'s **pending-only** peer: the earliest-index visible claim in
     /// `functions[key]`, and nothing else. For a caller that only ever reads
-    /// [`FunctionLookup::pending`] — the operator chain's park probe, which asks two keys of every
-    /// ancestor scope per operator — the full lookup would build the bucket's visible finalized
-    /// overloads and drop them unread, once per question.
+    /// [`FunctionLookup::pending`], the full lookup would otherwise build the bucket's visible
+    /// finalized overloads and drop them unread, once per question.
     ///
     /// Copies nothing out, so the `tables` borrow is over before the answer is: a `ProducerId` is a
     /// plain edge name, unlike the sealed carriers `overloads` has to duplicate to let a candidate
@@ -685,8 +679,7 @@ impl<'a> Bindings<'a> {
     }
 
     /// The bucket's earliest-index visible claim — most likely to finalize first, and so the one a
-    /// consumer parks on. Written once so the full lookup and the pending-only probe cannot drift
-    /// on which claim they name.
+    /// consumer parks on.
     fn earliest_pending(bucket: &Bucket<'a>, cutoff: Option<usize>) -> Option<ProducerId> {
         bucket
             .iter()
@@ -835,8 +828,8 @@ impl<'a> Bindings<'a> {
         })
     }
 
-    /// Visibility predicate — the only place a cutoff is applied. `cutoff = None` (the reader is
-    /// off this scope's chain, so the scope is complete) ⇒ visible; `Some(c)` ⇒ `idx < c`.
+    /// Visibility predicate. `cutoff = None` (the reader is off this scope's chain, so the scope
+    /// is complete) ⇒ visible; `Some(c)` ⇒ `idx < c`.
     fn visible(b: BindingIndex, cutoff: Option<usize>) -> bool {
         match cutoff {
             None => true,
@@ -1282,10 +1275,10 @@ impl<'a> Bindings<'a> {
     /// key participates. The argument is a slot's own claim list, so it is short and a linear scan
     /// of it per slot is the whole cost.
     ///
-    /// This is the one path that strands bump bytes: a removed key's text and an emptied bucket's
-    /// buffer are abandoned rather than freed. It is bounded by the number of binders that fail —
-    /// every success path overwrites its claim where it sits — so a table's peak occupancy stays
-    /// its final binding count plus that error tail.
+    /// Strands bump bytes: a removed key's text and an emptied bucket's buffer are abandoned rather
+    /// than freed. Bounded by the number of binders that fail — a success path overwrites its claim
+    /// where it sits — so a table's peak occupancy stays its final binding count plus that error
+    /// tail.
     pub fn clear_placeholders_for_producers(
         &self,
         producers: &[ProducerId],

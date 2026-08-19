@@ -120,7 +120,7 @@ fn generative(types: &TypeRegistry) -> KType {
 /// A genuinely mutually-recursive pair, declared **out of name order** (`Odd` at declared index 0,
 /// `Even` at 1) so the pins below record that declaration order is not identity.
 ///
-/// These are the three values ruling 10 deliberately re-pins. Member identity is the computed
+/// These values are what ruling 10 deliberately re-pins. Member identity is the computed
 /// strongly-connected component, and a mutually recursive pair is one two-member component whose
 /// canonical order is *name* order — so `Even` presents at position 0 and `Odd` at 1, and the
 /// intra-component references re-encode against that order rather than the declared one. Every

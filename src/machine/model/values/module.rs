@@ -88,7 +88,7 @@ pub struct Module<'a> {
 impl<'a> Module<'a> {
     /// **Build a module at its child scope's region and store it there** — the co-located door for a
     /// `Module`, and the reason a stored module never names a region other than the one owning the
-    /// scope `MODULE` opened for its body. Its one sibling is the fold brand named below.
+    /// scope `MODULE` opened for its body.
     ///
     /// The destination is derived from `child_scope`'s own brand rather than passed alongside it, so
     /// pairing a module with a foreign region is unrepresentable. `path` and the draft's keys may
@@ -115,11 +115,8 @@ impl<'a> Module<'a> {
 
     /// Assemble a module value over `child_scope`, re-homing `path` and every draft key into
     /// `brand`'s region and freezing both member tables there
-    /// ([`BumpAllocator::frozen_table`](crate::witnessed::BumpAllocator::frozen_table)). Crate-internal and
-    /// never a
-    /// store: the two doors that place one are [`Self::alloc_at_child_scope`] and the fold brand's
-    /// [`FoldingBrand::alloc_module_folded`](crate::machine::core::FoldingBrand), which is how a
-    /// transparent-ascribe view re-tags a foreign child scope.
+    /// ([`BumpAllocator::frozen_table`](crate::witnessed::BumpAllocator::frozen_table)).
+    /// Crate-internal, and never a store: the caller places the assembled value.
     ///
     /// The single `brand` parameter is the residence discipline: path bytes, key bytes and both
     /// bucket arrays land in one region, and it is the destination's — a `String` key would fail

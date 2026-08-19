@@ -127,7 +127,7 @@ pub struct PendingMember {
     /// The binder that owns this member: a `UNION`'s name, whose variants are reachable only
     /// through it. `None` for a member that is a standalone type in its own right.
     pub owner: Option<String>,
-    /// One of the three nominal families `Tagged` / `NewType` / `TypeConstructor`.
+    /// The nominal family this member declares.
     pub kind: KKind,
     fill: RefCell<Option<RelativeSchema>>,
 }
@@ -463,8 +463,7 @@ impl RecursiveGroupWindow {
     }
 }
 
-/// One filled member handed to [`seal_group`] — the pure boundary both window representations
-/// cross into the identity computation.
+/// One filled member handed to [`seal_group`] — the pure boundary into the identity computation.
 pub struct SealMemberInput<'m> {
     /// The declared name: the bare tag for a variant. Digested, and the primary canonical sort key.
     pub name: &'m str,
@@ -484,8 +483,7 @@ pub struct SealBinderInput<'m> {
 
 /// Turn a filled group into interned content: one absolute handle per member in announcement
 /// order, plus each binder's union over the members it owns. Implements the per-component identity
-/// described in this module's header, and is the single sealing seam both window representations
-/// reach.
+/// described in this module's header.
 pub fn seal_group(
     members: &[SealMemberInput<'_>],
     binders: &[SealBinderInput<'_>],

@@ -134,9 +134,9 @@ fn fold_cells(
 /// A key is never folded (it is a scalar, reaching no region), so it is read out and converted in
 /// place.
 ///
-/// **Dict keys are owned data by language rule** — a function or module key is meaningless — and
-/// this is the one site that turns a carrier into a key, so it is where the rule is enforced. The
-/// check is O(1) on the key's own **stored envelope**: a carrier naming any reach member is
+/// **Dict keys are owned data by language rule** — a function or module key is meaningless — so
+/// turning a carrier into a key is where the rule is enforced. The check is O(1) on the key's own
+/// **stored envelope**: a carrier naming any reach member is
 /// rejected outright, no walk over the value. [`KKey`] then admits only `String` / `Number` /
 /// `Bool`, so the two together leave a borrow-carrying key unrepresentable downstream.
 fn scalar_key(
@@ -222,8 +222,8 @@ type AggAssemble = Box<
 >;
 
 impl<'step> Host<'step> {
-    /// The one scheduling path behind the three aggregate literals. A non-scalar dict key errors
-    /// before the fold, under the dict-literal frame (only a dict row carries a key slot), and
+    /// Schedule an aggregate literal's element deps and its assembling fold. A non-scalar dict key
+    /// errors before the fold, under the dict-literal frame (only a dict row carries a key slot), and
     /// `assemble` runs inside the witness closure so the aggregate names every region it reaches by
     /// construction.
     fn schedule_aggregate(

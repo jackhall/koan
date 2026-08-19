@@ -30,10 +30,8 @@ impl KType {
     }
 
     /// Lower a parser `TypeIdentifier` into a `KType` against the builtin table only — no
-    /// scope-aware resolver. The single entry point onto the [`KType::from_name`]
-    /// builtin-table fallback: both the bind-time scopeless caller and the scope-aware
-    /// [`elaborate_type_identifier`](crate::machine::model::types::elaborate_type_identifier)
-    /// route their builtin fallback through here. Unknown names surface as `Err(_)`.
+    /// scope-aware resolver. Wraps the [`KType::from_name`] builtin-table fallback; unknown
+    /// names surface as `Err(_)`.
     pub fn from_type_identifier(
         t: &TypeIdentifier,
         _types: &TypeRegistry,

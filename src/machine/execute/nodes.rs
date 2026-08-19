@@ -24,7 +24,10 @@ pub(super) use crate::scheduler::nodes::NodeWork;
 /// for the incarnation it installs, which is a different node than the one that retired.
 #[derive(Clone, Copy)]
 pub(super) enum WorkLabel {
-    Source { span: Span, file: FileId },
+    Source {
+        span: Span,
+        file: FileId,
+    },
     /// A run with no source extent at all. Names the dispatch shape, which is as much as such a
     /// node can say about itself.
     Shape(DispatchShape),
@@ -190,13 +193,10 @@ impl SlotFrame {
     }
 }
 
-/// The lexical-chain reshape the harness's `Continue` apply performs, decided at the
-/// [`Outcome::Continue`](super::outcome::Outcome::Continue) construction site from the tail's
-/// `block_entry` and the contract *variant* (while still live), then assembled in the apply against
-/// the post-step frame. Splitting the decision (contract-reading, at the construction site) from the
-/// assembly (frame-reading, in the apply) is what keeps the replacement payload `'run`-free: the
-/// variant is read before erasure and frozen into this lifetime-free tag, which then rides
-/// [`Outcome::Continue`](super::outcome::Outcome::Continue) to the harness.
+/// The lexical-chain reshape the harness's `Continue` apply performs: decided at the
+/// [`Outcome::Continue`](super::outcome::Outcome::Continue) construction site while the contract is
+/// live, assembled in the apply against the post-step frame, so the anchor's stored chain names no
+/// lifetime ([frames.md § Lexical-chain reshape](../../../design/per-call-region/frames.md#lexical-chain-reshape-at-the-replace)).
 pub(super) enum ChainOp {
     /// TCO in the same lexical block — chain unchanged.
     Unchanged,
@@ -256,26 +256,17 @@ impl ChainOp {
     }
 }
 
-/// Slot-stored scope handle, carrying no lifetime so the node it sits on does not pin `'run`
-/// through its scope. Both arms are **cart-witnessed** — re-projected from the slot's live frame at
-/// read time, never re-anchored at a free `'run`:
-///
-/// - `Yoked` — no pointer at all: the slot's scope *is* its own per-call cart's scope, re-projected
-///   from the [`SlotFrame::cart`] through [`CallFrame::with_scope`](crate::machine::CallFrame).
-///   Single-cart: the frame `Rc` already on the slot is the sole liveness witness, so there is no
-///   second `Rc` clone aliasing the shell.
-/// - `YokedChild` — a [`SealedExtern<ScopeRefFamily>`] carrier (a `&'static Scope`) to a block scope a
-///   builtin allocated in a cart *ancestor* region (an `InScope` body — USING / MODULE / SIG / TRY).
-///   Opened at read against the slot's frame `Rc` ([`SealedExtern::open`] at a `for<'b>` brand), sound
-///   because the cart's `FrameStorage.outer` chain pins that ancestor region for as long as the slot
-///   holds the cart.
-///
-/// Storing an erased, frame-witnessed carrier keeps the borrow honest across a tail-call cart swap
-/// (nothing persisted points into a stale region; the live frame is re-read each step) and keeps the
-/// slot from naming `'run` in its node-stored scope state.
+/// Slot-stored scope handle. It names no lifetime, so the node it sits on pins no `'run` through its
+/// scope; both arms are cart-witnessed, re-projected from the slot's live frame at read time rather
+/// than re-anchored at a free `'run`, which is what keeps the borrow honest across a tail-call cart
+/// swap ([scope-handles.md § Slot-table scope handle](../../../design/per-call-region/scope-handles.md#slot-table-scope-handle)).
 #[derive(Clone, Copy)]
 pub(super) enum NodeScope {
+    /// A scope in a region the cart holds a pin claim on, opened at read against the slot's frame
+    /// `Rc` at a `for<'b>` brand.
     YokedChild(SealedExtern<ScopeRefFamily>),
+    /// The cart's own scope. No pointer at all, so the frame `Rc` already on the slot is the sole
+    /// liveness witness.
     Yoked,
 }
 

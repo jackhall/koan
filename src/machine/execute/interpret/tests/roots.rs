@@ -29,8 +29,8 @@ fn assert_edges_all_released(test_run: &TestRun<'_>, source: &str) {
     );
 }
 
-/// Run `source` through the real `run_program` door — the one that mints and releases the root
-/// edges — rather than the dispatch-then-execute shape the rest of this suite's helper takes.
+/// Run `source` through the real `run_program` door, which mints and releases the root edges,
+/// rather than the dispatch-then-execute shape this suite's other helper takes.
 fn run_program_in<'run>(
     program: &'run ProgramStorage,
     region: &'run Rc<FrameStorage>,

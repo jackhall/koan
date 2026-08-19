@@ -2,9 +2,8 @@
 //!
 //! Every node step — a fresh dispatch decide, a finish, a builtin body, an invoke — decides
 //! against a read-only [`DecideCtx`](super::decide::DecideCtx) and **returns** an [`Outcome`];
-//! the harness's apply ([`super::harness`]) is the sole place that turns an outcome into the
-//! scheduler-graph writes it implies and the [`StepVerdict`](crate::scheduler::StepVerdict) the
-//! drain applies. The scheduler never learns *what* a step ran (dispatch / invoke / builtin) nor
+//! the harness's apply ([`super::harness`]) turns an outcome into the scheduler-graph writes it
+//! implies and the [`StepVerdict`](crate::scheduler::StepVerdict) the drain applies. The scheduler never learns *what* a step ran (dispatch / invoke / builtin) nor
 //! *whether* it ran before — only a read view in and an outcome out.
 //!
 //! The taxonomy is AST-free — no variant names a `KFunction` or a `KExpression`:
@@ -183,10 +182,9 @@ pub(in crate::machine::execute) enum ParkDeps<'step> {
     Block(BlockRequest<'step>),
 }
 
-/// The envelope builder — the sole production constructor of an [`Outcome::Park`] carrying a
-/// [`Continuation::Finish`]. A witnessed finish is projected onto the terminal delivery at
-/// construction, so the projection never rides as data. Skipping `error_frame` propagates a dep
-/// error frameless. (`Resume` / `Catch` continuations are built at their own sites.)
+/// The envelope builder for an [`Outcome::Park`] carrying a [`Continuation::Finish`]. A witnessed
+/// finish is projected onto the terminal delivery at construction, so the projection never rides as
+/// data. Skipping `error_frame` propagates a dep error frameless.
 pub(in crate::machine::execute) struct Await<'step> {
     deps: ParkDeps<'step>,
     dep_error_frame: Option<TraceFrame>,
@@ -266,21 +264,16 @@ pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
         + 'a,
 >;
 
-/// `Reattachable` family for the [`NodeContinuation`] — the scheduler's stored slot work rests it on
-/// the **owned tier** (`SealedPinned<ContinuationFamily, Rc<SlotFrame>>`, sealed against the slot's
-/// anchor at install) and opens it once per step through that tier's one open verb. The continuation
-/// captures run-lived data (the parked AST, a finish closure's captured scope) in the run region or a
-/// strict ancestor of the slot's per-call cart, which the seal's own bundled anchor `Rc` keeps live
-/// for the whole dormant life — so a parked slot torn down unopened drops its continuation's glue
-/// while the memory that glue reads is still pinned. It is a `Box<dyn FnOnce>` consumed once, so the
-/// family is not `Copy` and the open consumes the carrier by value.
+/// `Reattachable` family for the [`NodeContinuation`]: a one-shot `Box<dyn FnOnce>` owning its
+/// captures, so it takes the `droppable` arm and rests as
+/// `SealedPinned<ContinuationFamily, Rc<SlotFrame>>`, sealed against the slot's anchor at install.
+/// That anchor is what covers the run-lived data the continuation captures — the parked AST, a
+/// finish closure's captured scope, held in the run region or a strict ancestor of the slot's
+/// per-call cart — for the whole dormant life, which is the owned tier's standing obligation
+/// ([workgraph/design/witnessed-memory.md § What a droppable family
+/// accepts](../../../workgraph/design/witnessed-memory.md#what-a-droppable-family-accepts)).
 pub(in crate::machine::execute) struct ContinuationFamily;
 
-// `NodeContinuation<'r>` is one type generic only in `'r` (a boxed trait object); its fat-pointer
-// layout is identical for every `'r`, so the shared `reattachable!` macro discharges the obligation.
-// The `droppable` arm: a boxed `FnOnce` owns its captures, so this family certifies no `DropFree` and
-// rests only on the owned tier, which runs that glue. It is koan's sole `droppable`-arm family —
-// every other koan family is `Drop`-free and rests in the Copy tier.
 reattachable!(droppable ContinuationFamily => NodeContinuation<'r>);
 
 fn all_or_first_error<'r, 'd>(

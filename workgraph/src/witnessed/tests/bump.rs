@@ -358,10 +358,9 @@ fn an_empty_bumped_map_holds_nothing() {
     assert_eq!(index.get(&0), None);
 }
 
-/// A table may key on bytes from **its own region**, like every other bumped value — and region
-/// death is chunk release, with the table's own `Drop` never run. Under Miri's leak check that is
-/// the acceptance criterion made observable: the bucket array is bump memory, so forgoing its
-/// deallocation strands nothing.
+/// A table may key on bytes from **its own region** — and region death is chunk release, with the
+/// table's own `Drop` never run. Under Miri's leak check that is the acceptance criterion made
+/// observable: the bucket array is bump memory, so forgoing its deallocation strands nothing.
 #[test]
 fn a_bumped_map_keys_on_its_own_regions_bytes_and_dies_with_it() {
     let dest = frame();

@@ -386,6 +386,42 @@ no koan-shaped diagnostic of its own — and the harness renders that anchor's
 [`WorkLabel`](../../src/machine/execute/nodes.rs) into `sample`, so the diagnostic
 points at code the reader can act on.
 
+### The step's binding writes
+
+A decide writes no binding table. A builtin body returns the write it decided as
+data on its `Action`, `run_action` deposits it into the step's harness-owned sink (a
+private field on [`DecideCtx`](../../src/machine/execute/decide/ctx.rs) with one
+deposit method the execute layer alone reaches), and the harness drains that sink at
+exactly one point in the step tail: after the continuation has returned and before
+the outcome is realized ([`Host::step`](../../src/machine/execute/harness.rs)). Both
+halves of that position carry weight:
+
+- **After the continuation returns**, no koan frame is left on the stack to hold a
+  competing borrow, so each table write takes a firm `borrow_mut` rather than
+  negotiating for one.
+- **Before the outcome is realized**, the writes land while the step's scope is still
+  open — the `Done` arm is what closes it — and before `Host::apply` installs any
+  graph edge an errored step would otherwise strand.
+
+Ops apply in deposit order, which is program order within the step. On the first
+failure the remaining ops are dropped and the step becomes the node's error terminal,
+so the ordinary error arms clear the producer's placeholders and attribute the error
+exactly as for an in-step error.
+
+That drain is the only path by which a *decided* binding reaches a published scope's
+table — not the only write the run loop performs. The same
+[`WriteGate::for_run_loop`](../../src/machine/core/bindings/gate.rs) capability gates
+two claim-bookkeeping writes on either side of it: the submission-time placeholder
+and pending-overload stamp
+([`submit_expression`](../../src/machine/execute/decide/submit.rs), see [Submission-time
+binder install and the position
+rule](name-placeholders.md#submission-time-binder-install-and-the-position-rule)) and
+the retirement-time clear of the placeholders a slot's own edges name
+(`KoanWorkload::retiring`). Writes into a scope no other node can reach take a
+separate construction gate instead. The `WriteOp` variants, the gate, and those
+unpublished-scope doors are
+[memory-model.md § Binding writes ride the step outcome](../memory-model.md#binding-writes-ride-the-step-outcome).
+
 ### Dispatch birth and resume
 
 A dispatch slot is the one [`NodeWork`](../../src/machine/execute/nodes.rs) shape with

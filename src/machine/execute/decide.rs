@@ -393,9 +393,20 @@ fn classify_dispatch<'step>(
             single_poll::bare_type_leaf(view, view.current_scope(), t)
         }
         DispatchShape::BareIdentifier => {
-            let name = match expr.parts[0].value {
-                WorkingPart::Ast(ExpressionPart::Identifier(n)) => n,
-                _ => unreachable!("BareIdentifier shape implies single Identifier part"),
+            // The shape's other member is a lone `StagedSlot`, which no node carries into a
+            // classify: a part walk's holes are all spliced by `install_eager_subs`'s finish,
+            // which routes the filled node to its pick or its re-resolve, never back through here.
+            let [
+                Spanned {
+                    value: WorkingPart::Ast(ExpressionPart::Identifier(name)),
+                    ..
+                },
+            ] = expr.parts
+            else {
+                unreachable!(
+                    "BareIdentifier routes a lone Identifier part; a lone StagedSlot shares the \
+                     shape but is spliced before its node is classified"
+                )
             };
             single_poll::bare_identifier(view, view.current_scope(), name)
         }
@@ -403,8 +414,8 @@ fn classify_dispatch<'step>(
         DispatchShape::TypeCall => single_poll::type_call(view, expr),
         DispatchShape::HeadDeferred => head_deferred::initial_expr(view, expr),
         DispatchShape::TypeHeadDeferred => head_deferred::initial_type(view, expr),
-        // Slot-terminal (TRY-catchable), uniform with every other dispatch failure —
-        // a non-callable head is a runtime error, not a fatal drive abort.
+        // Slot-terminal (TRY-catchable): a non-callable head is a runtime error, not a fatal
+        // drive abort.
         DispatchShape::NonCallableHead => {
             Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),

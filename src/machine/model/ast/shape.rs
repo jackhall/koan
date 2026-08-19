@@ -15,8 +15,8 @@ use crate::source::Spanned;
 use super::working::WorkingExpression;
 use super::{KExpression, TypeIdentifier};
 
-/// The structural family a part belongs to — the one axis shape classification, the bucket key, and
-/// the operator probe read. A keyword carries its text because all three readers need it.
+/// The structural family a part belongs to — the axis shape classification, the bucket key and the
+/// operator probe read. A keyword carries its text because those readers need it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PartClass<'a> {
     Keyword(&'a str),
@@ -106,8 +106,8 @@ pub enum DispatchShape {
     LiteralPassThrough,
     /// Chainable operator run: a slot-led key whose keywords alternate with slots,
     /// with two or more keyword positions (`Slot (Keyword Slot)+`, first keyword at
-    /// index 1). A refinement of `Keyworded`: nothing else produces that shape, so it
-    /// carves a track that the fold pre-pass folds into nested binary sub-dispatches.
+    /// index 1). A refinement of `Keyworded` the classifier carves out as its own track,
+    /// which the fold pre-pass folds into nested binary sub-dispatches.
     OperatorChain,
     /// Head-deferred call: head is a nested `Expression` followed by ≥1 non-keyword
     /// parts. The head is evaluated first; its resulting value (a function or a
@@ -154,10 +154,8 @@ pub fn classify_dispatch_shape<'a, P: Part<'a>>(parts: &[Spanned<P>]) -> Dispatc
             | PartClass::ListLiteral
             | PartClass::DictLiteral
             | PartClass::RecordLiteral => DispatchShape::LiteralPassThrough,
-            // A single staged slot is reachable: the post-pick, no-keyword named-argument tail
-            // freezes the freshly staged parts before any dep resolves, and a one-argument
-            // reconstructed call stages that sole part when it is eager. A lone hole classifies as
-            // a bare identifier — the shape a resolvable single part takes.
+            // A lone hole classifies as a bare identifier — the shape a resolvable single part
+            // takes.
             PartClass::StagedSlot => DispatchShape::BareIdentifier,
             PartClass::Keyword(_) => {
                 unreachable!("no-keyword precondition: the sweep above caught every Keyword part")

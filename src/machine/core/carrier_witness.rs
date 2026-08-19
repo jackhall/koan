@@ -26,9 +26,9 @@ pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage>;
 /// Koan's **delivery envelope**: the library [`Delivered`](crate::witnessed::Delivered) carrying a
 /// [`CarrierWitness`]-witnessed value carrier paired with its retained [`FrameStorage`] owner. The
 /// in-transit form of a value's liveness — from a scheduler pull (or a resident seal) to its
-/// adoption — and the only surface that materializes a producer frame into a minted reach set
-/// (`adopt_into` / `open_adopted` / `transfer_into`), so koan never holds a bare frame pin at a
-/// consumer site. The
+/// adoption. The retained frame is private to the envelope and materializes into a minted reach set
+/// only through the envelope's own verbs (`adopt_into` / `open_adopted` / `transfer_into`), so koan
+/// never holds a bare frame pin at a consumer site. The
 /// envelope's member set pins the value's home region alongside everything else it reaches, and the
 /// residence itself is the host of the description the carrier references — so a site that needs the
 /// home back reads it off the value's own record rather than off a side channel on the envelope, and
@@ -111,9 +111,10 @@ pub type OpenedFunction<'a> = crate::witnessed::Opened<'a, KFunctionFamily, Carr
 /// one moment the callable is open under its home pin — so no write verb ever opens a carrier.
 /// `sealed` is what the `functions` bucket stores; the rest is plain data with no region lifetime.
 ///
-/// A keyworded expression becomes dispatchable **only** through one of these — the `FN` / `OP`
-/// registration doors and the builtin seeds. Binding a function *value* (`LET g = (f)`) publishes
-/// nothing here: a value binding is callable by name alone.
+/// A keyworded expression becomes dispatchable by registering one of these: the dispatch bucket is
+/// private to its tables and its write verb (`write_overload`) takes an `OverloadSeal` by value, so
+/// a bucket entry cannot exist without one. Binding a function *value* (`LET g = (f)`) publishes
+/// nothing here: a value binding is called by name.
 pub(crate) struct OverloadSeal<'a> {
     /// The dormant callable carrier the dispatch bucket stores.
     pub sealed: SealedFunction<'a>,
@@ -203,14 +204,13 @@ impl<'a> GroupSeal<'a> {
 /// destination — still borrows `region`, one of the regions the envelope pins. Answered by
 /// [`retains_home`], a read over `product`'s stored reach; no probe walks its shape.
 ///
-/// Only the value's **home** region is ever released, and `region` is home exactly when it is the
-/// region the value's own reach description names as its host — read off the carrier through the
-/// envelope's open, so residence is answered per region by identity against the value's own record
-/// rather than a side channel on the envelope.
-/// Every other member is kept: a foreign member may be reached through structure the product's own
-/// stored reach does not cover (a `KFunction`'s captured environment reaches on transitively), so
-/// releasing it here would dangle. Home is exact — the question is whether the copy left a leaf
-/// behind in the region it was copied out of, which is precisely what a run naming that region says.
+/// A copy releases only the value's own home region
+/// ([value-substrates.md § Sectioned reach](../../../design/value-substrates.md#sectioned-reach)).
+/// `region` is home exactly when the value's own reach description names it as host — read off the
+/// carrier through the envelope's open, so residence is answered by identity against the value's own
+/// record rather than a side channel on the envelope. A non-home member is kept because it may be
+/// reached through structure the product's stored reach does not cover (a `KFunction`'s captured
+/// environment reaches on transitively), so releasing it would dangle.
 ///
 /// A `product` of `None` (the fold built no object — a type-channel cell) keeps every member.
 /// Releasing home is what frees a tail loop's retiring region once its delivered carrier drops,

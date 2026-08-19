@@ -138,7 +138,7 @@ fn name_of(key: StoredBinderKey<'_>) -> Option<String> {
 }
 
 /// A redundant single-`Expression` paren wrapper is the same statement, so it carries the child's
-/// plan through — the one structural exception, and no aggregation.
+/// plan through, with no aggregation.
 #[test]
 fn redundant_parens_pass_through() {
     let program = program_storage();

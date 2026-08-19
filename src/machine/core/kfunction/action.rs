@@ -251,13 +251,12 @@ pub struct BodyCtx<'program: 'a, 'a, 'c> {
     /// rather than sharing ownership.
     pub types: &'c TypeRegistry,
     /// The run's output sink, borrowed from the scheduler view at the call — the same channel and
-    /// the same run-frame owner as [`Self::types`]. `PRINT` is its only consumer; every other body
-    /// leaves it untouched.
+    /// the same run-frame owner as [`Self::types`]. A body that emits program output writes here.
     pub out: &'c RunWriter,
     /// The run's program storage allocation capability, threaded down from the scheduler view. A
-    /// body that has to synthesize a node reaching the **value channel** builds it through this
-    /// (`OP`'s bridge body is the one such site), since the marker those arms carry is mintable
-    /// only here. Everything a body builds merely to dispatch takes [`Self::brand`] instead.
+    /// body that has to synthesize a node reaching the **value channel** builds it through this,
+    /// since the marker those arms carry is mintable only here. Everything a body builds merely to
+    /// dispatch takes [`Self::brand`] instead.
     ///
     /// Minted once per run and carried at its own `'program`, related to the step lifetime only by
     /// the struct's `'program: 'a` bound: a door reached through this brand pins its parts at
@@ -505,7 +504,7 @@ pub enum ActionKind<'a> {
     /// by construction rather than paired with an asserted witness at finalize. The construction
     /// terminal for **both** channels: a builtin that allocates a `KObject` or a `KType` seals it here.
     /// The carrier rides the step brand `'a` from the door that built it (a [`StepCarried`]), so it
-    /// cannot be stashed past the step; the sole exit to node storage is finalize's seal.
+    /// cannot be stashed past the step; reaching node storage means going through finalize's seal.
     Done(Result<StepCarried<'a>, KError>),
     /// Tail-replace into `tail`, carrying `contract` (see [`TailContract`]), in a cart per
     /// `frame_placement`. When `leading` (the body's non-tail statements) is non-empty the slot
@@ -629,7 +628,7 @@ pub enum BlockRequest<'a> {
 pub enum BodyPlacement<'a> {
     /// Dispatch as body-chain siblings in `frame`'s own scope (`KoanRuntime::dispatch_body`) — a
     /// deferred-return FN's first-call body (its non-tail body + the return-type expression) and
-    /// MATCH / TRY arm leading statements. The only dep that carries its own frame.
+    /// MATCH / TRY arm leading statements.
     Frame(Rc<CallFrame>),
     /// Enter `overlay` as a fresh lexical block without a per-call frame (`KoanRuntime::enter_block`)
     /// — USING's leading statements, which bind into the transparent overlay inside the inherited

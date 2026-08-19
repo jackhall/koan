@@ -444,6 +444,35 @@ anti-escape guarantee is untouched — the bound points one way, so nothing
 `'b`-branded gains a route into the result or into `'outer`-typed storage, and an
 invariant family still cannot unify `'b` with anything.
 
+### What a droppable family accepts
+
+The `droppable` arm is a narrower contract than the default one, not the same
+declaration with a marker left off. Three things come with it.
+
+**The value is opened once, by move.** The tier's open takes `self`: the erased
+value leaves the slot, re-anchors, and is consumed inside the brand. The Copy
+tier's `&self` reads — which copy the erased form out before re-anchoring it —
+have no counterpart here, because a value that owns its contents cannot be
+copied out of a slot that still holds it. A one-shot `Box<dyn FnOnce>` is the
+tier's native shape: it neither has nor needs a `Copy` erased form, and its
+single consumption is the single open.
+
+**Coverage is dated from the erase, not from the open.** A Copy-tier witness has
+to hold only while a re-anchored reference is live, because nothing else ever
+touches the resting value. A droppable one is touched again at teardown: a
+carrier dropped unopened still runs the value's glue, and that glue dereferences
+whatever the value's contents point at. The pins bundled at the erase door
+therefore have to cover every region the value reads for its whole dormant life.
+Choosing that witness is thereby a claim about what the value holds — a
+droppable family may hold what its pin transitively keeps alive and nothing
+else, and the difference shows up at a teardown the read path never reaches.
+
+**Layout invariance stays the family's to argue.** The `droppable` arm relaxes
+`DropFree` alone; the `Reattachable` obligation is unchanged. A boxed trait
+object generic only in `'r` discharges it exactly as a plain reference family
+does — a fat pointer's layout is identical for every choice of the lifetime —
+which is what lets an owning one-shot closure be a family at all.
+
 The scheduler's node slot is the tier's production instance. `Workload::Continuation`
 is `Reattachable` alone — no `DropFree` — because the slot rests it as
 `SealedPinned<W::Continuation, Rc<W::Frame>>`

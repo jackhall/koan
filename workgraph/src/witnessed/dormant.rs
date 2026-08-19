@@ -2,20 +2,11 @@
 //! resting tier built over it ([design/witnessed-memory.md § The dormant slot and the two resting
 //! tiers](../../design/witnessed-memory.md#the-dormant-slot-and-the-two-resting-tiers)).
 //!
-//! A dormant carrier's value is *not* live: nothing may be assumed about it until a witnessed
-//! re-anchor. A struct field typed as a reference says the opposite to the abstract machine — a
-//! function-entry retag descends into by-value aggregate arguments and *protects* every reference
-//! it finds, so a by-value carrier whose own pins hold the last `Rc` on the region its contents
-//! point into would deallocate memory carrying a protected tag when those pins drop in-call.
-//! Retag does not descend into unions, which is what keeps a by-value carrier drop sound: the slot
-//! is a one-field union, [`Dormant<V>`], so a resting value carries no protected tag.
-//!
-//! A union field has no drop glue and `Copy + Drop` cannot share a type, so the resting surface
-//! splits in two tiers. The **Copy tier** — [`Erased`](super::Erased), [`Sealed`](super::Sealed),
-//! [`SealedExtern`](super::SealedExtern) and everything built over them — bounds its family
-//! `T:` [`DropFree`](super::DropFree) and stores a bare [`Dormant`]. A **droppable** family rests on
-//! the owned tier, [`SealedPinned`], whose slot is [`DormantGlue`] (the value's drop glue runs)
-//! and which co-locates the pins covering the value at its erase door.
+//! The slot is a one-field union, [`Dormant<V>`], because a function-entry retag does not descend
+//! into unions: a resting value carries no protected tag, so a by-value carrier whose own pins
+//! hold the last `Rc` on the region its contents point into is sound to drop in-call. A union
+//! field has no drop glue, so a droppable family rests on the owned tier, [`SealedPinned`], over
+//! [`DormantGlue`] — the same union wrapped in the one type that owns the value's destructor.
 //!
 //! This module is the single audited home for union reads, each leaning on one invariant:
 //!
@@ -113,14 +104,11 @@ pub struct Within<'b, 'outer: 'b> {
 }
 
 /// The **internally witnessed** dormant form for a droppable family: the slot keeps its drop glue
-/// and the pins that cover the value are bundled at the erase door. Where
-/// [`SealedExtern`] is externally witnessed — the pin supplied at the open — a `SealedPinned` owns
-/// its pin for its whole dormant life, so dropping it unopened is sound: the value's glue runs
-/// while the pins still hold every region it reads.
-///
-/// This is the resting tier for a family whose `At<'static>` needs drop — a boxed continuation, an
-/// accumulator owning heap contents — which the Copy tier's `DropFree` bound excludes. A droppable
-/// *and* region-pointing family is the shape it exists for.
+/// and the pins that cover the value are bundled at the erase door, so dropping the seal unopened
+/// is sound — the value's glue runs while the pins still hold every region it reads. Where
+/// [`SealedExtern`] is externally witnessed, its pin supplied at each open, a `SealedPinned` owns
+/// its pin for its whole dormant life ([design/witnessed-memory.md § What a droppable family
+/// accepts](../../design/witnessed-memory.md#what-a-droppable-family-accepts)).
 pub struct SealedPinned<T: Reattachable, W: Witness> {
     // Field order is load-bearing: struct fields drop in declaration order, so the value's drop
     // glue runs while `pins` is still alive — a droppable family's drop may freely dereference

@@ -204,8 +204,8 @@ unsafe fn retype<A, B>(value: A) -> B {
 /// Erase a single-lifetime family value to its `'static` storage form — the **safe** half of the
 /// erase/reattach pair, mirroring [`Erased::erase`] for a value stored raw rather than wrapped.
 /// Forgetting a lifetime for storage cannot fabricate one (the value is stored, never used at
-/// `'static`, until a witnessed re-anchor), so this is sound to call without `unsafe`. Every
-/// erasure routes here, keeping [`retype`] the single audited home for value lifetime-erasure.
+/// `'static`, until a witnessed re-anchor), so this is sound to call without `unsafe`. The safe
+/// erasure door onto the module-private [`retype`].
 pub fn erase_to_static<T: Reattachable>(value: T::At<'_>) -> T::At<'static> {
     // SAFETY: lifetime-only retype for storage of a single-lifetime family (the `Reattachable`
     // layout-invariance contract); the erased value is stored, not used, until a re-anchor.
@@ -237,9 +237,9 @@ pub(crate) fn with_branded_ref<T: Reattachable, R>(
 /// The `E0582` witness a token-form fold closure takes — an input mentioning `'b`, without which
 /// `impl for<'b> FnOnce(..) -> P::At<'b>` is rejected — anchoring the closure's work to the fresh
 /// fold brand. A pure brand marker: no door takes a `FoldToken` as a key — a fold that stores into
-/// its destination carries a [`FoldedPlacement`] instead. Minted only by the fold engines, which
-/// hand it to the closure they run at the brand; the private field keeps an embedder from forging
-/// one, and the `'b` brand keeps it from escaping the closure.
+/// its destination carries a [`FoldedPlacement`] instead. Minted crate-internally and handed to the
+/// closure run at the brand; the private field keeps an embedder from forging one, and the `'b`
+/// brand keeps it from escaping the closure.
 ///
 /// `Copy` is safe: the token cannot outlive its closure (`'b` is unnameable outside), so
 /// duplicating it inside the closure grants nothing new.
@@ -253,7 +253,7 @@ pub(crate) fn with_branded_ref<T: Reattachable, R>(
 ///
 /// ```compile_fail
 /// use workgraph::witnessed::FoldToken;
-/// // `mint` is crate-internal — only the fold engines mint a token.
+/// // `mint` is crate-internal — an embedder cannot mint a token.
 /// let _t: FoldToken<'static> = FoldToken::mint();
 /// ```
 ///
@@ -270,7 +270,7 @@ pub(crate) fn with_branded_ref<T: Reattachable, R>(
 pub struct FoldToken<'b>(PhantomData<&'b ()>);
 
 impl<'b> FoldToken<'b> {
-    /// Mint a fold token — crate-internal, so only the fold engines can produce one.
+    /// Mint a fold token — crate-internal, so no embedder can produce one.
     pub(crate) fn mint() -> Self {
         FoldToken(PhantomData)
     }
@@ -307,7 +307,7 @@ impl<'b> FoldToken<'b> {
 /// use workgraph::witnessed::RegionHandle;
 /// let cart = fresh_cart();
 /// let handle = RegionHandle::from_owner(&*cart);
-/// // `mint` is crate-internal — only the fold engines mint a placement.
+/// // `mint` is crate-internal — an embedder cannot mint a placement.
 /// let _p = FoldedPlacement::mint(handle);
 /// ```
 pub struct FoldedPlacement<'b, W: StorageProfile> {
@@ -584,13 +584,10 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     ///
     /// Co-location — that the witness pins *this* value's references — is **caller-asserted** here:
     /// the value and witness arrive independently, so this is the crate-private substrate
-    /// primitive and its visibility is what holds the assertion in. Every carrier an embedder can
-    /// reach is born co-located through a door that derives one side from the other — via
-    /// [`yoke`](Self::yoke) (sourced from the witness's region), [`resident`](Self::resident) (a
-    /// region-pure value under the empty witness), [`RegionHandle::seal_reaching`] and its delivered
-    /// twin [`RegionHandle::deliver_resident`] (value, description and home pin all off the same
-    /// handle), or the envelope merge (folding two co-located carriers) — so no embedder site pairs
-    /// an arbitrary value with an arbitrary witness.
+    /// primitive and its visibility is what holds the assertion in. An embedder never reaches it, so
+    /// no embedder site pairs an arbitrary value with an arbitrary witness: the public doors derive
+    /// one side from the other — [`yoke`](Self::yoke) sources the value from the witness's region,
+    /// [`resident`](Self::resident) fixes the witness to the empty one.
     pub(crate) fn from_erased(value: Erased<T>, witness: W) -> Self {
         Witnessed { value, witness }
     }
@@ -655,8 +652,9 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
 
     /// Re-anchor the carrier bounded by the `&self` borrow **under an externally supplied pin**,
     /// for a carrier whose bundled witness pins nothing (the reference-only [`Carrier`]).
-    /// Module-private, and every caller holds that external pin — or the `'home` brand standing in
-    /// for one — across the whole call: that, not the bundle, keeps the pointee live for the borrow.
+    /// Module-private, so the pin obligation rests on the wrapping verb: it holds that external pin
+    /// — or the `'home` brand standing in for one — across the whole call, and that, not the bundle,
+    /// keeps the pointee live for the borrow.
     fn read_pinned(&self) -> T::At<'_>
     where
         T::At<'static>: Copy,
@@ -715,8 +713,8 @@ impl<T: Reattachable + DropFree, W> Witnessed<T, W> {
     /// operand witnesses and both live forms are in scope there, so a composition that must see the
     /// *product* — the retention predicate at a relocation verb, which asks what the folded bytes
     /// still borrow — is expressible without a second re-anchor. Crate-private because a
-    /// caller-supplied composition could under-cover; the callers pass [`ComposeWitness::compose`]
-    /// or the hosted carrier composition, both of which discharge the coverage obligation.
+    /// caller-supplied composition could under-cover; the composition passed in owes the coverage
+    /// obligation.
     ///
     /// `fold` returns the projected value, the composed witness, and a threaded value `X` — the
     /// freshly-minted owned reach bundle for a reference-only carrier merge (threaded to the next
@@ -936,7 +934,7 @@ impl<T: Reattachable + DropFree, W: Witness> Witnessed<T, W> {
 
     /// [`Self::yoke`] for a witness pinning a library [`Region`]: the closure receives the region's
     /// [`RegionHandle`] allocation capability instead of the bare region, so a yoked construction
-    /// allocates through the same handle every other site uses. Sound for the same reason `yoke` is —
+    /// allocates through the region's own handle. Sound for the same reason `yoke` is —
     /// the `for<'b>` quantifier admits only region-derived or owned references, and nothing
     /// handle-flavoured escapes the closure.
     pub fn yoke_handle<P, F>(witness: W, f: F) -> Self
@@ -1285,9 +1283,8 @@ impl<T: Reattachable + DropFree, W> Retained<T, W> {
     }
 
     /// Re-brand this carrier against the region `home` names — the door back into pin-free reads.
-    /// Only [`Delivered::rest_into`](delivered::Delivered::rest_into) calls it, and only after
-    /// lodging the envelope's coverage in that same region, so the brand it mints is backed by
-    /// retention the caller cannot skip.
+    /// Crate-internal, and its contract is that the envelope's coverage is already lodged in that
+    /// same region, so the brand it mints is backed by retention rather than by assertion.
     pub(crate) fn brand_to<'home, P: StorageProfile>(
         self,
         home: RegionHandle<'home, P>,
@@ -1330,11 +1327,9 @@ impl<T: Reattachable + DropFree, W> Retained<T, W> {
     }
 
     /// Read under an externally supplied pin, at a **rank-2** (`for<'b>`) brand. Crate-internal by
-    /// design: this is the door where "does this pin cover this carrier?" is unchecked, so every
-    /// caller derives the pin from the structure that owns the retention rather than accepting one
-    /// — [`Delivered`](delivered::Delivered) supplies its own bundled coverage, and the scheduler
-    /// supplies the destination region's owner, upgraded off the edge's region host back-link, which
-    /// is where the resident lives. An embedder never reaches it, which is the whole point of the
+    /// design: this is the door where "does this pin cover this carrier?" is unchecked, so its
+    /// contract is that the pin is derived from the structure that owns the retention rather than
+    /// accepted from outside. An embedder never reaches it, which is the whole point of the
     /// [`Sealed`]/`Retained` split.
     pub(crate) fn open_with<Wx: Witness, R>(
         &self,

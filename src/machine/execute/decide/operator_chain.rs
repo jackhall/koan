@@ -4,7 +4,7 @@
 //! Recognition is structural and parse-cached (see
 //! [`crate::machine::model::ast::classify_dispatch_shape`]); this arm resolves the
 //! chain's cached operator probe against the per-scope operator registry, walked
-//! through the scope chain (innermost visible wins, like every other name; see
+//! through the scope chain (innermost visible wins; see
 //! [the lookup protocol](../../../../design/typing/lookup-protocol.md)).
 //!
 //! A registry miss first probes for a **visible pending** `OP` declaration: the declaration's
@@ -270,7 +270,7 @@ fn reduce_unary<'step>(
 }
 
 /// Reduces a `Pairwise`-mode run: `f x < g y < h z` must evaluate `g y` **once**, its value feeding
-/// both the `x<y` and `y<z` pairs, so — unlike the three modes above — this cannot be a pure
+/// both the `x<y` and `y<z` pairs, so — unlike the other modes — this cannot be a pure
 /// syntactic rewrite (there every operand appears exactly once in the output tree; here a middle
 /// operand appears in two places). See [`install_pairwise_fold`] for the staging + finish mechanics.
 fn reduce_pairwise<'step>(

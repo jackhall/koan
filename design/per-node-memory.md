@@ -256,6 +256,44 @@ scope's region, reach lives entirely on carriers: a value's reach is read off it
 own carrier witness, never recovered by walking the value, and no scope-level
 accumulator or deposit list exists to keep consistent alongside it.
 
+## The step's coverage
+
+Every re-anchor a step performs runs under one pin bundle: the **step's coverage**,
+a [`FrameCoverage`](../src/machine/core/arena/frame.rs) built at step start over the
+slot anchor's own region owner
+([`Host::step`](../src/machine/execute/harness.rs)). A single `Rc` is the whole of
+it, because that owner's `FrameStorage.outer` chain already pins every ancestor
+backing a step can name.
+
+Two things re-anchor at the step brand, and the coverage is what proves each of them
+live:
+
+- **The active scope**, which enters the open as its extern operand — so the
+  coverage is exactly that operand's
+  [`SealedExtern::open`](../workgraph/src/witnessed.rs) obligation, discharged once.
+  A `Yoked` slot's scope lives in the anchor's own region; a `YokedChild`'s lives in
+  an ancestor region the `outer` chain holds.
+- **Every dep terminal.** A resolved dep is a resident cell the producer's finalize
+  walk adopted into that edge's *destination* region, so the coverage has to pin that
+  region rather than the producer's. It does, without enumerating anything: an owned
+  dep's edge is destined at this slot's own anchor region
+  ([`mint_source`](../src/machine/execute/harness.rs)), and a park's edge inherits
+  the destination its source named
+  ([`Scheduler::install_edge_from`](../workgraph/src/scheduler.rs)) — a claim edge
+  destined at the scope introducing the name, which the consumer's lexical chain
+  reaches and its `outer` chain therefore pins. Each cell re-brands **once** against
+  the coverage ([`Retained::brand_with`](../workgraph/src/witnessed.rs)), and every
+  read after that opens pin-free.
+
+The continuation needs no coverage from here: its seal bundles a clone of the same
+anchor at install ([`seal_work`](../workgraph/src/scheduler/nodes.rs)), so the owned
+tier carries the liveness its own dormant captures read.
+
+The bundle is assembled **before** the open and held **across** it, so it outlives
+the step brand `'b` by construction — a carrier re-anchored to `'b` cannot outlive
+the pin covering it, and the ordering is a local's scope rather than a rule to
+remember.
+
 ## The run loop nests inside the access brand
 
 The substrate's rank-2 brand forces the entire per-step consumption to nest inside
@@ -265,11 +303,14 @@ owned tier's single consuming `open` on the slot's `SealedPinned` continuation, 
 nothing branded crosses the step boundary.
 
 - **The dep slice** rides no carrier and enters the step `open` through no channel
-  of its own: each `DepTerminal` is exactly the producer's lifetime-free delivery
-  envelope — value, reach, and the retained producer-frame pins as one unit — so
-  the slice is plain step-local data. A reader opens an envelope under its *own*
-  pins (`Delivered::open_at`) at the borrow of the guard it binds, which is why no
-  dep value has to reach the shared step brand at all.
+  of its own: each [`DepTerminal`](../src/machine/core/kfunction/action.rs) is a
+  resident cell of a region the step's coverage already pins, re-branded against it
+  once at step start (above), so the slice is plain step-local data every reader
+  opens pin-free (`Sealed::open_at`) at the borrow of the guard it binds. A
+  construction finish that folds a dep into a longer-lived result lifts it back to a
+  delivery envelope first
+  ([`Scope::lift_spliced`](../src/machine/core/scope/reach.rs)), which owns the reach
+  the fold composes.
 - **The active scope** opens at that same brand: its carrier — the frame's own
   `SealedExtern<ScopeRefFamily>` for a `Yoked` slot, the node's own for a
   `YokedChild` — is zipped into the step `open` alongside the continuation, so the

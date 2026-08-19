@@ -91,15 +91,10 @@ fn invoke_builtin<'step>(
 /// Enter a resolved **user-defined** call: mint the per-call cart and bind the call's arguments into
 /// it, then hand the body's statements on to the reinstalled incarnation as a [`Outcome::Continue`].
 ///
-/// **This is the whole of the tail hop's region crossing, and it runs before the replace.** Every
-/// read of `working_expr` — the parts run, its cache, and the cells resting in it — happens here, in
-/// the step that still owns that region; `run_user_fn`'s bind deep-clones each argument into the
-/// fresh cart's region under the argument's own delivered reach, deliberately leaving the retiring
-/// frame out of the binding. So the reinstalled incarnation's first step reads nothing in the region
-/// the replace retires, and the scheduler needs no hold spanning the hop
-/// ([workgraph/design/reach.md § Retention model](../../../../workgraph/design/reach.md#retention-model)).
-/// The cart rides the [`FramePlacement::FreshTail`] rather than being minted at apply, which is what
-/// puts the bind on this side of the boundary.
+/// **The tail hop's whole region crossing runs here, before the replace**: every read of
+/// `working_expr` and every argument adoption into the fresh cart happens while the retiring region
+/// is still this step's own, so no hold spans the hop
+/// ([tail-call-optimization.md § Soundness](../../../../design/tail-call-optimization.md#soundness)).
 fn enter_user_fn<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     picked: OpenedFunction<'step>,

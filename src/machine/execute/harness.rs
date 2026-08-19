@@ -299,8 +299,7 @@ impl<'run> KoanRuntime<'run> {
     }
 }
 
-/// Test-only forwarders. No `&mut Scheduler` escapes — the accessor hands out `&Scheduler`,
-/// keeping the harness the sole writer.
+/// Test-only forwarders. No `&mut Scheduler` escapes — the accessor hands out `&Scheduler`.
 #[cfg(test)]
 impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<KoanWorkload> {
@@ -338,17 +337,11 @@ impl<'run> Host<'run> {
         let cart = Rc::clone(&anchor.cart);
         let node_scope = anchor.payload.scope;
         let chain = anchor.payload.chain.clone();
-        // The step's open witness — the **step's coverage**: the anchor's projected region owner,
-        // which pins the continuation and the dest region plus their ancestor backings via the
-        // storage `outer` chain. That is the whole of it, and it already covers every dep: an owned
-        // dep's edge is destined at this slot's own anchor region, and a park's inherits the region
-        // its source named — a scope region this anchor's `outer` chain pins. Assembled before the
-        // open so it outlives `'b`, and held across it, so re-anchoring the carriers to `'b`
-        // cannot dangle.
+        // The **step's coverage**: one bundle covering every re-anchor the open performs — the
+        // scope operand and each dep cell — assembled before the open so it outlives `'b`. See
+        // [the step's coverage](../../../design/per-node-memory.md#the-steps-coverage).
         let combined: FrameCoverage = FrameCoverage::of(Rc::clone(anchor.owner()));
-        // Re-brand each delivered resident **once**, here: a retained cell proves no liveness of
-        // its own, and `combined` is exactly the pin covering every region a dep landed in. From
-        // here the step's readers open pin-free.
+        // Re-brand each delivered resident **once**, here, so every later read opens pin-free.
         let dep_sources: Vec<Result<DepTerminal<'_>, KError>> = dep_results
             .iter()
             .map(
@@ -401,12 +394,9 @@ impl<'run> Host<'run> {
                             &dep_sources,
                             id,
                         );
-                        // The **only** path that mutates a published binding table: it runs after
-                        // the continuation returned — so no koan frame holds a competing borrow —
-                        // and before the outcome is realized, so the writes land while the scope is
-                        // still open and before any graph edge an errored step would strand is
-                        // installed. On the first failure the remaining ops are dropped and the
-                        // step becomes the node's error terminal.
+                        // Drained here so the writes take a firm borrow and land before any edge
+                        // an errored step would strand. See [the step's binding
+                        // writes](../../../design/execution/classify-and-apply.md#the-steps-binding-writes).
                         let mut gate = WriteGate::for_run_loop();
                         let outcome = match step_effects
                             .borrow_mut()
@@ -424,9 +414,8 @@ impl<'run> Host<'run> {
     }
 
     /// **The apply**: turn a decided [`Outcome`] into the scheduler writes it implies and the
-    /// [`StepVerdict`] the drain applies — the sole graph-writing tail a step reaches. Runs inside
-    /// the step's ambient bracket, so the step-end frame and the deposited obligation are ambient
-    /// reads.
+    /// [`StepVerdict`] the drain applies. Runs inside the step's ambient bracket, so the step-end
+    /// frame and the deposited obligation are ambient reads.
     fn apply<'step>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
@@ -684,7 +673,7 @@ fn replace_verdict(
     }
 }
 
-// ---------- Dep wiring: the one door ----------
+// ---------- Dep wiring ----------
 
 impl<'run> Host<'run> {
     /// **The dep-wiring door.** Resolve `deps` to source edges, mint the consumer's own edge off
@@ -795,9 +784,8 @@ impl<'run> Host<'run> {
         source
     }
 
-    /// Realize one [`DepRequest`] to **its** producer node — the one realizer behind every
-    /// single-producer path. `brand` is the realizing step's, where an aggregate literal's
-    /// per-element dispatch node is bumped.
+    /// Realize one [`DepRequest`] to **its** producer node. `brand` is the realizing step's, where
+    /// an aggregate literal's per-element dispatch node is bumped.
     ///
     /// `OwnScope` re-dispatches against the executing slot's own scope; `InScope` enters a fresh
     /// **single-statement** block (so an inner `LET` stays local). A body that splits across

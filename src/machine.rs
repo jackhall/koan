@@ -1,10 +1,5 @@
 //! Machine — the runtime that maps a parsed `KExpression` to a value by selecting the
-//! `KFunction` whose signature matches its parts and running its `Body`. Submodules:
-//!
-//! - `core` — `Scope`, `KoanRegion`, `KError`, scheduler glue, and the
-//!   `kfunction` submodule (`KFunction`, `Body`).
-//! - `model` — `KType`, `KObject`, `Module`, `SigSchema`, signature traits.
-//! - `execute` — top-level interpret loop and scheduler driver.
+//! `KFunction` whose signature matches its parts and running its `Body`.
 
 pub(crate) mod core;
 pub(crate) mod execute;

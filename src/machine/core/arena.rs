@@ -144,9 +144,9 @@ impl<'a> RegionBrand<'a> {
         self.0.allocator()
     }
 
-    /// The witnessed-allocation surface for an owned leaf built fresh inside the brand — the
-    /// arithmetic and comparison builtins' one store. Born under a description hosted in this region
-    /// with **no members**: [`Self::alloc_scalar`] stores the value and [`Self::seal_resident`] names
+    /// The witnessed-allocation surface for an owned leaf built fresh inside the brand. Born under
+    /// a description hosted in this region with **no members**: [`Self::alloc_scalar`] stores the
+    /// value and [`Self::seal_resident`] names
     /// the region-pure obligation, so the active frame is deliberately excluded from the pins. The
     /// producing frame is folded in only at finalize/close (the scope-reach seal), so a
     /// region-resident value never strong-owns its own frame (the `region → object → frame` cycle that
@@ -155,8 +155,8 @@ impl<'a> RegionBrand<'a> {
     /// The within-step transient invariant is typed: the member-less carrier pins nothing, so it
     /// returns as a [`StepCarried`] branded at this brand's own `'a` — in production a step's
     /// rank-2 open lifetime — and the borrow checker rejects any use past the step. The active
-    /// frame pins the region across the step, and the sole exit to node storage is the seal door in
-    /// `step_carried.rs`, where finalize's fold names the producer in the carrier's own reach.
+    /// frame pins the region across the step; the seal that moves the product into node storage is
+    /// where finalize's fold names the producer in the carrier's own reach.
     ///
     /// [`Scalar`] is region-purity as a signature: a value that references another region cannot
     /// spell itself as one, and takes the `yoke` / `merge` path or
@@ -180,9 +180,8 @@ impl<'a> RegionBrand<'a> {
         self.allocator().value(KObject::KExpression(expression))
     }
 
-    /// [`Self::alloc_expression`] bundled as the resident carrier — the quote terminal's one call,
-    /// sealed under the same member-less own-region description
-    /// [`Self::alloc_scalar_witnessed`] mints.
+    /// [`Self::alloc_expression`] bundled as the resident carrier, sealed under the same
+    /// member-less own-region description [`Self::alloc_scalar_witnessed`] mints.
     pub(crate) fn alloc_expression_witnessed(
         self,
         expression: ProgramExpression<'a>,
@@ -445,9 +444,9 @@ pub(crate) trait KoanRegionExt {
     /// `owner`'s region *inside* a **zero-dep fold**, returning it bundled with the [`FrameReach`]
     /// singleton pinning `owner` so it is co-located by construction rather than paired with an
     /// asserted witness. The closure receives a per-construction [`FoldingBrand`] confined to the
-    /// `for<'b>` brand (it cannot escape the closure), so it allocates through the same capability as
-    /// every other construction site. One primitive for both value families — the closure returns a
-    /// `Carried::Object` (an [`alloc_object_folded`](FoldingBrand::alloc_object_folded)) or a
+    /// `for<'b>` brand (it cannot escape the closure). One primitive for both value families — the
+    /// closure returns a `Carried::Object`
+    /// (an [`alloc_object_folded`](FoldingBrand::alloc_object_folded)) or a
     /// `Carried::Type` (a `Copy` `KType` handle, needing no storage door). A value that *references*
     /// another region's resident value folds that in with the envelope merge instead,
     /// unioning its reach; this primitive covers the case whose references are all region-derived or
@@ -473,10 +472,10 @@ pub(crate) trait KoanRegionExt {
     ) -> DeliveredCarried;
 
     /// `yoke` a value of **any** carrier family into `owner`'s region, handing the build closure a
-    /// per-construction [`RegionBrand`] (confined to the `for<'b>` brand) so it allocates through the
-    /// one capability. Generalizes [`alloc_witnessed`](Self::alloc_witnessed) (the `CarriedFamily`
-    /// case) for the operand yokes over a non-carried family (`RegionTypeFamily`,
-    /// `OperatorGroupFamily`) whose closures alloc into the dest region. The yoke hands a
+    /// per-construction [`RegionBrand`] confined to the `for<'b>` brand. Generalizes
+    /// [`fold_witnessed`](Self::fold_witnessed) (the `CarriedFamily` case) for the operand yokes
+    /// over a non-carried family (`RegionTypeFamily`, `OperatorGroupFamily`) whose closures alloc
+    /// into the dest region. The yoke hands a
     /// `&'b KoanRegion`; wrapping it as the brand is sound for the same reason
     /// the yoke is — the `for<'b>` quantifier admits only region-derived/owned references, so
     /// co-location holds by construction and nothing branded escapes the closure.

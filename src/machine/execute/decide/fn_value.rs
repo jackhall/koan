@@ -1,6 +1,6 @@
 //! FunctionValueCall dispatch shape.
 //!
-//! A bare `Identifier` head is the one head shape a scope walk alone can resolve, so it gets a
+//! A bare `Identifier` head resolves by scope walk alone, so it gets a
 //! fast lane: head resolution runs before any part walk — a value-bound head dispatches the call
 //! immediately, an unbound name errors, and a still-finalizing head placeholder parks via a
 //! [`park_resume`] closure that re-runs the fast lane on resume.
@@ -53,7 +53,7 @@ fn dispatch_callable_value<'step>(
             let got = delivered.open(|live| live.summarize(ctx.types()));
             return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
-                expected: "KFunction or Type".to_string(),
+                expected: "KFunction".to_string(),
                 got,
             })));
         }

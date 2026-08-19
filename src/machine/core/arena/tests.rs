@@ -1027,12 +1027,12 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
 /// each carrying a string leaf so the bump holds re-homed bytes as well as cells and index metadata,
 /// and with a run of **callables**, whose signatures put a bumped element run and re-homed keyword /
 /// parameter-name bytes in the same region, with **modules**, whose paths, member-map keys and
-/// member-table bucket arrays land there too, and with a chain of **scopes**, the one family that
-/// keeps *mutating in place* after it is stored: its five binding tables and its SIG slot collector
+/// member-table bucket arrays land there too, and with a chain of **scopes**, which keep *mutating
+/// in place* after they are stored: a scope's five binding tables and its SIG slot collector
 /// grow past their resize thresholds against the same bump while the scope sits resident, so what
 /// dies unfreed if a table's suppressed destructor was load-bearing is a bucket array written long
-/// after the store. That is the leak claim a `Copy` bound cannot state — a scope is not `Copy`, and
-/// only the `!needs_drop` asserts stand between it and a silently-stranded spine. The region is then
+/// after the store. That is the leak claim a `Copy` bound cannot state — a scope is not `Copy`, so
+/// the `!needs_drop` asserts are what stand between it and a silently-stranded spine. The region is then
 /// dropped while nothing outside it holds a borrow. No slot in any of those shapes has a destructor to run, so the whole teardown is the
 /// bump's chunk free; Miri's process-exit leak check is the assertion. A family that quietly
 /// reintroduced an owning slot — a `Vec` spine, a `String` name, an `Rc` — leaks its buffer here,

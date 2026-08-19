@@ -224,8 +224,7 @@ impl<'a> Scope<'a> {
     /// The mutable run scope: the direct child of the immutable run-global root. Unlike the
     /// generic [`Self::child_under`] — which copies the parent's *own* `root` handle — this stamps
     /// `root` to `run_root` itself, because the run-global root carries no `root` of its own
-    /// (`root: None` marks "I am the root"). The only caller is `unseeded_scopes`, which holds the
-    /// root as a genuine `&'a`.
+    /// (`root: None` marks "I am the root").
     fn run_child(run_root: &'a Scope<'a>) -> Scope<'a> {
         let mut child = Self::child_under(run_root);
         child.root = Some(run_root);
@@ -268,10 +267,9 @@ impl<'a> Scope<'a> {
     /// parent and the fresh region arrive already coupled at one generative `'a` — the door
     /// ([`build_frame_child_witnessed`](crate::machine::core::arena::frame::build_frame_child_witnessed)) brands them
     /// together — so every field stores by plain coercion, honouring `Scope`'s invariance with no
-    /// retype of its own. The door is the only caller; the brand `'a` is un-nameable and the result
-    /// erases witness-less, so nothing at the brand escapes. The frame `Rc` pins the real parent (via
-    /// `FrameStorage.outer`) and the run-global root, so the coupled references never out-claim a live
-    /// pointee.
+    /// retype of its own. The brand `'a` is un-nameable and the result erases witness-less, so
+    /// nothing at the brand escapes. The frame `Rc` pins the real parent (via `FrameStorage.outer`)
+    /// and the run-global root, so the coupled references never out-claim a live pointee.
     pub(crate) fn child_for_frame_witnessed(
         outer: &'a Scope<'a>,
         brand: RegionBrand<'a>,
@@ -462,9 +460,10 @@ impl<'a> Scope<'a> {
     /// independently is exactly what `Scope`'s invariance rejects). The pin is this scope's own
     /// region.
     ///
-    /// Cluster-private: a bare window states no claim on the region its table lives in, so the only
-    /// caller outside the test fixture below is `Scope::open_module_window`, which reads the table
-    /// off a module's own delivery envelope and roots that envelope's coverage first.
+    /// Cluster-private (`pub(in crate::machine::core::scope)`): a bare window states no claim on
+    /// the region its table lives in, so the visibility holds the call inside this cluster, where
+    /// the table is read off a module's own delivery envelope with that envelope's coverage rooted
+    /// first.
     pub(in crate::machine::core::scope) fn alloc_child_transparent(
         &'a self,
         module_bindings: SealedExtern<BindingsReferenceFamily>,
@@ -479,9 +478,9 @@ impl<'a> Scope<'a> {
     }
 
     /// Test fixture: a transparent window onto a bare scope's binding table, for a suite that builds
-    /// the opened side as a plain scope rather than a module value in an envelope. Production takes
-    /// `Scope::open_module_window`, which reads the table off the envelope whose coverage it roots;
-    /// this door states no such claim, so a fixture reaching it mints the root itself.
+    /// the opened side as a plain scope rather than a module value in an envelope. The window door
+    /// reads the table off the envelope whose coverage it roots; this door states no such claim, so
+    /// a fixture reaching it mints the root itself.
     #[cfg(test)]
     pub(crate) fn alloc_transparent_window_for_test(
         &'a self,
@@ -557,7 +556,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Snapshot of every `(name, declared type)` slot pair — the schema projection's read. Empty
-    /// for any scope that is not a SIG decl_scope, which is the only kind carrying slots.
+    /// for any scope that is not a SIG decl_scope.
     pub(crate) fn sig_value_slots(&self) -> Vec<(String, KType)> {
         match &self.kind {
             ScopeKind::Sig { slots, .. } => slots

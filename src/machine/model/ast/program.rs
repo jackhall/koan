@@ -5,7 +5,7 @@
 //! The claim is about the **parts slice**, not the node struct. [`KExpression`] is `Copy` and rides
 //! by value in a [`KObject::KExpression`](crate::machine::model::KObject) cell, so what a holder can
 //! outlive is the run of parts the node borrows — and, transitively, everything reachable from it.
-//! That is why the marker sits on the *references inside* the four expression-holding
+//! That is why the marker sits on the *references inside* the expression-holding
 //! [`ExpressionPart`](super::ExpressionPart) arms and on the value-channel cell, and why re-homing
 //! the node struct itself at any brand ([`ProgramExpression::rehost`]) is sound.
 //!
@@ -57,10 +57,10 @@ use super::{ExpressionPart, KExpression, RunIter};
 #[derive(Clone, Copy, Debug)]
 pub struct ProgramExpression<'a>(KExpression<'a>);
 
-/// A marked `&'a KExpression<'a>` — the payload of the four expression-holding
-/// [`ExpressionPart`](super::ExpressionPart) arms (`Expression`, `SigiledTypeExpr`, `RecordType`,
-/// `QuotedExpression`), which are the only conduits from the AST into the value channel. Matching
-/// one out of an arm is what lets a value-channel door compile its proof out of the match.
+/// A marked `&'a KExpression<'a>` — the payload of the expression-holding
+/// [`ExpressionPart`](super::ExpressionPart) arms, the conduits from the AST into the value
+/// channel. Matching one out of an arm is what lets a value-channel door compile its proof out of
+/// the match.
 #[derive(Clone, Copy, Debug)]
 pub struct ProgramNode<'a>(&'a KExpression<'a>);
 

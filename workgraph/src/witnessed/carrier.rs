@@ -6,10 +6,9 @@
 //! The carrier **owns no pin**: cloning is a reference-copy, and a carrier's death releases nothing.
 //! What keeps its description (and the value it describes) alive is external — the home region's
 //! liveness at rest, the [`Delivered`](super::Delivered) envelope's own pin bundle while a terminal
-//! walks to its destinations. The description a carrier references is never owned by it: it comes
-//! to exist only at a resident mint ([`ReachDescription::mint_resident`] and its threaded twin),
-//! which always lands it in the value's home region's own side table, so whatever covers the home
-//! region covers the reference. The description is non-owning (host and members are `Weak`); what
+//! walks to its destinations. The description a carrier references is never owned by it: a resident
+//! mint ([`ReachDescription::mint_resident`] and its threaded twin) lands it in the value's home
+//! region's own side table, so whatever covers the home region covers the reference. The description is non-owning (host and members are `Weak`); what
 //! pins the reached regions is the retention that mint established in the home region, plus a
 //! transit bundle a delivery envelope carries while the value walks — never the carrier.
 //!
@@ -17,9 +16,9 @@
 //! channel for either: its `host` is where the value lives (residence, read through
 //! [`Opened::with_home_region`]), its members are what the value's borrows reach (read through
 //! [`Opened::reach_covers`]). "Does this value borrow into its own home?" is therefore the ordinary
-//! membership query [`Opened::borrows_home`], not a bit. The one asymmetry is the self rule at the
-//! owned-upgrade boundary — a region never pins itself — which the mint applies to the bundle it
-//! retains, never to the description.
+//! membership query [`Opened::borrows_home`], not a bit. The self rule at the owned-upgrade
+//! boundary — a region never pins itself — applies to the bundle the mint retains, never to the
+//! description.
 //!
 //! `Carrier` is deliberately **not** a [`super::Witness`]: it pins nothing, so the bundled-witness
 //! tier is closed to it ([`seal_bundled`](super::Sealed::seal_bundled) is `W: Witness`-gated) and a
@@ -157,8 +156,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// Returns the composed carrier paired with a freshly-minted owned bundle: the mint retains the
     /// product's reach into `dest`'s region for the region's life (what keeps a product consumed in
     /// place alive without re-enveloping it), and the returned bundle is the transit copy that
-    /// threads to the next fold step or the terminal seal. Needing both tiers is what makes this the
-    /// sole production caller of [`ReachDescription::mint_resident_threaded`].
+    /// threads to the next fold step or the terminal seal.
     pub(in crate::witnessed) fn compose_into<'b, P>(
         left_bundle: &PinBundle<F>,
         right_bundle: &PinBundle<F>,
@@ -235,8 +233,7 @@ impl<'b, T: Reattachable + DropFree, F: PinsRegion + 'static> Opened<'b, T, Carr
     ///
     /// This is what lets a value parted from a container ([`Sectioned::project`](super::Sectioned))
     /// travel. The projection is `'b`-confined by its type and states *exactly* its own run's reach;
-    /// this is the one place that reach becomes owned, and it stays exact — the container's union
-    /// never enters. The upgrade runs under the `'b` the open borrows, which is the holder rule.
+    /// the upgrade here stays exact — the container's union never enters. The upgrade runs under the `'b` the open borrows, which is the holder rule.
     pub fn lift_out(self) -> Delivered<T, Carrier<F>, F>
     where
         F: RegionOwner,
@@ -259,8 +256,7 @@ mod tests {
         type FrameOwner = TestFrame;
     }
 
-    /// A `FrameStorage` stand-in: a region, an `outer` ancestor link, and the eternal-tier flag,
-    /// mirroring the shape every production `PinsRegion` frame owner shares.
+    /// A `FrameStorage` stand-in: a region, an `outer` ancestor link, and the eternal-tier flag.
     struct TestFrame {
         region: Region<TestProfile>,
         outer: Option<Rc<TestFrame>>,
