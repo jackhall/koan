@@ -64,11 +64,11 @@ pub(in crate::machine::execute) enum Outcome<'step> {
         label: WorkLabel,
     },
     /// Park the slot on `deps` and run `continuation` when they resolve. `dep_error_frame` labels
-    /// the dep-error short-circuit that runs before the finish.
+    /// the dep-error short-circuit that runs before the finish, rendering only if one fires.
     Park {
         deps: ParkDeps<'step>,
         continuation: Continuation<'step>,
-        dep_error_frame: Option<TraceFrame>,
+        dep_error_frame: Option<DeferredTraceFrame<'step>>,
     },
     /// The slot's result *is* the result behind `source` (a bare name resolving to a binding): the
     /// harness splices the slot out rather than installing a forwarding node, so the
@@ -164,10 +164,44 @@ pub(in crate::machine::execute) enum Continuation<'step> {
     },
 }
 
+/// A dep-error frame in retained form: a `Copy` capture that renders into a [`TraceFrame`] only at
+/// error-construction time, so a step that completes without a dep error allocates no trace text.
+///
+/// Every park holding one also holds the captured expression alive through its continuation's
+/// anchor, so [`render`](Self::render) always runs while the expression's region is live.
+#[derive(Clone, Copy)]
+pub(in crate::machine::execute) enum DeferredTraceFrame<'step> {
+    /// A scheduler-internal frame keyed off the expression the slot dispatches.
+    Working {
+        function: &'static str,
+        expr: WorkingExpression<'step>,
+    },
+    /// A frame with fixed label text and no originating expression.
+    Bare {
+        function: &'static str,
+        expression: &'static str,
+    },
+}
+
+impl DeferredTraceFrame<'_> {
+    pub(in crate::machine::execute) fn render(&self) -> TraceFrame {
+        match self {
+            Self::Working { function, expr } => TraceFrame::from_expr(*function, expr),
+            Self::Bare {
+                function,
+                expression,
+            } => TraceFrame::bare(*function, *expression),
+        }
+    }
+}
+
 /// The fallback error-frame label for the frameless dep-finish paths (an action-harness combine or a
 /// literal builder). A dispatch finish carries the consuming call's own frame instead.
-pub(in crate::machine::execute) fn dep_error_frame() -> TraceFrame {
-    TraceFrame::bare("<deps>", "deps")
+pub(in crate::machine::execute) fn dep_error_frame() -> DeferredTraceFrame<'static> {
+    DeferredTraceFrame::Bare {
+        function: "<deps>",
+        expression: "deps",
+    }
 }
 
 /// What a park waits on — the two dep-wiring doors, told apart by whether the dep count is known at
@@ -187,7 +221,7 @@ pub(in crate::machine::execute) enum ParkDeps<'step> {
 /// data. Skipping `error_frame` propagates a dep error frameless.
 pub(in crate::machine::execute) struct Await<'step> {
     deps: ParkDeps<'step>,
-    dep_error_frame: Option<TraceFrame>,
+    dep_error_frame: Option<DeferredTraceFrame<'step>>,
 }
 
 impl<'step> Await<'step> {
@@ -208,7 +242,7 @@ impl<'step> Await<'step> {
 
     pub(in crate::machine::execute) fn error_frame(
         mut self,
-        frame: impl Into<Option<TraceFrame>>,
+        frame: impl Into<Option<DeferredTraceFrame<'step>>>,
     ) -> Self {
         self.dep_error_frame = frame.into();
         self
@@ -278,13 +312,13 @@ reattachable!(droppable ContinuationFamily => NodeContinuation<'r>);
 
 fn all_or_first_error<'r, 'd>(
     results: &'r [Result<DepTerminal<'d>, KError>],
-    dep_error_frame: &Option<TraceFrame>,
+    dep_error_frame: Option<DeferredTraceFrame<'_>>,
 ) -> Result<Vec<&'r DepTerminal<'d>>, KError> {
     let mut terminals = Vec::with_capacity(results.len());
     for r in results {
         match r {
             Ok(t) => terminals.push(t),
-            Err(e) => return Err(propagate_dep_error(e, dep_error_frame.clone())),
+            Err(e) => return Err(propagate_dep_error(e, dep_error_frame)),
         }
     }
     Ok(terminals)
@@ -301,11 +335,11 @@ pub(in crate::machine::execute) type TerminalDepFinish<'a> = Box<
 /// `dep_error_frame`), else hand the resolved dep terminals to `finish`. The one delivery loop
 /// every dep-finish runs through.
 pub(in crate::machine::execute) fn short_circuit<'a>(
-    dep_error_frame: Option<TraceFrame>,
+    dep_error_frame: Option<DeferredTraceFrame<'a>>,
     finish: TerminalDepFinish<'a>,
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _id| {
-        let terminals = match all_or_first_error(results, &dep_error_frame) {
+        let terminals = match all_or_first_error(results, dep_error_frame) {
             Ok(terminals) => terminals,
             Err(e) => return Outcome::Done(Err(e)),
         };

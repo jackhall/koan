@@ -147,3 +147,45 @@ fn frame_chain_walks_nested_user_fn_calls() {
         Ok(()) => panic!("expected error from undefined name in INNER"),
     }
 }
+
+/// The scheduler's own `<bind>` frame is captured deferred — the eager-subs park retains a `Copy`
+/// capture and renders it only when a dep error surfaces. Pins that what reaches the user is a
+/// fully rendered frame: the label, `summarize()` text for the expression the bind dispatched, and
+/// a real `path:line:col` resolved from that expression's span.
+#[test]
+fn deferred_bind_frame_renders_expression_and_location() {
+    let result = interpret_with_writer_path(
+        "FN (INNER) -> Any = (undefined)\n\
+         FN (OUTER) -> Any = (LET xx = (INNER))\n\
+         OUTER",
+        Some("trace.koan"),
+        Box::new(std::io::sink()),
+    );
+    let Err(e) = result else {
+        panic!("expected the undefined name inside INNER to surface as an error")
+    };
+    let bind = e
+        .frames
+        .iter()
+        .find(|f| f.function == "<bind>")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a <bind> frame, got {:?}",
+                e.frames.iter().map(|f| &f.function).collect::<Vec<_>>(),
+            )
+        });
+    assert_eq!(
+        bind.expression, "LET xx = <staged>",
+        "the <bind> frame renders the staged bind expression",
+    );
+    let location = bind
+        .location
+        .as_ref()
+        .expect("the bind expression carries a span and a file, so it resolves a location");
+    assert_eq!(&*location.path, "trace.koan");
+    assert_eq!(
+        (location.line, location.col_utf16),
+        (2, 21),
+        "the location resolves to OUTER's `LET xx = ...` on line 2",
+    );
+}

@@ -77,8 +77,8 @@ moved it.
 
 | shape | what it exercises | allocations | scaling term |
 |---|---|---|---|
-| `shapes/tail_loop.koan` | 100 tail-recursive steps | 25 567 | 206.0 per step, linear |
-| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 11 628 | ≈55 per dispatch, mildly superlinear |
+| `shapes/tail_loop.koan` | 100 tail-recursive steps | 22 537 | 176.0 per step, linear |
+| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 10 867 | ≈49 per dispatch, mildly superlinear |
 | *(empty program)* | interpreter startup and builtin seeding | 2 874 | — |
 
 Neither shape can use comments: koan has none, and `#` is reserved for quoting. The prose
@@ -90,17 +90,17 @@ is one flat left fold, so every `+` is a dispatch — a bucket walk, a pick, and
 working-expression rebuild — and its total is a per-*dispatch* cost. Between them they cover
 the two places the execute path's allocation traffic scales.
 
-The step term is exactly linear — 206.0 flat at 10, 50, 100 and 200 steps. The dispatch term
-is not: marginal cost rises 53.9 → 54.5 → 55.4 → 56.3 across the 16→32, 32→64, 64→128 and
+The step term is exactly linear — 176.0 flat at 10, 50, 100 and 200 steps. The dispatch term
+is not: marginal cost rises 47.9 → 48.5 → 49.4 → 50.3 across the 16→32, 32→64, 64→128 and
 128→256 operand doublings, so a chain pays slightly more per operator the longer it gets.
-Below 16 operands the term sits flat near 53.3 and the fixed cost swamps it, so the rise is
+Below 16 operands the term sits flat near 47.4 and the fixed cost swamps it, so the rise is
 only readable over the larger sizes. Whatever drives it is unmeasured; the shapes are sized
 to the linear-enough middle rather than to the tail.
 
 ## The regression test
 
 `tests/allocation_baseline.rs` asserts each shape's bracketed count against a stated bound —
-23 808 for the loop, 9 869 for the chain, each carrying 41 allocations of headroom. The
+20 778 for the loop, 9 108 for the chain, each carrying 41 allocations of headroom. The
 bounds are tight by design: the margin is smaller than the 100 (loop) or 127 (chain) a single
 new allocation on the scaling path would add, so one added allocation fails a test.
 Rebaselining is meant to be a deliberate edit, and the failure message says so.

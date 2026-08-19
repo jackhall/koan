@@ -14,7 +14,7 @@ use crate::machine::core::{
     ReturnContract, TailContract,
 };
 use crate::machine::model::{Carried, ExpressionPart, WorkingExpression, WorkingPart};
-use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
+use crate::machine::{KError, KErrorKind, NodeId};
 use crate::source::Spanned;
 
 use super::harness::KoanWorkload;
@@ -50,7 +50,9 @@ pub(in crate::machine::execute) use submit::SubmitContext;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::machine::execute) use super::outcome::{Await, Continuation, Outcome};
+pub(in crate::machine::execute) use super::outcome::{
+    Await, Continuation, DeferredTraceFrame, Outcome,
+};
 pub(crate) use constructors::{build_type_operand, seal_type_identity};
 pub(in crate::machine::execute) use ctx::{DecideCtx, with_node_scope};
 pub(crate) use field_list::{BrandCompose, FieldListDeferral};
@@ -179,37 +181,29 @@ pub(in crate::machine::execute) fn staged_slot_placeholder<'a>() -> Spanned<Work
     Spanned::bare(WorkingPart::StagedSlot)
 }
 
-/// [`TraceFrame::from_expr`]'s peer for the scheduler's own per-call node. `function` is a label
-/// (`"<bind>"`, `"<dispatch-park>"`) for a scheduler-internal frame with no `KFunction` behind it.
-pub(in crate::machine::execute) fn working_frame(
-    function: impl Into<String>,
-    expr: &WorkingExpression<'_>,
-) -> TraceFrame {
-    TraceFrame {
-        function: function.into(),
-        expression: expr.summarize(),
-        location: expr.span.zip(expr.file).map(|(span, file)| {
-            crate::source::with(file, |f| {
-                let (line, col_utf16) = f.resolve(span.start);
-                crate::source::SourceLoc {
-                    path: f.path.clone(),
-                    line,
-                    col_utf16,
-                }
-            })
-        }),
+/// [`TraceFrame::from_expr`](crate::machine::TraceFrame::from_expr)'s deferred peer for the
+/// scheduler's own per-call node: captures the label and the `Copy` expression, so the frame costs
+/// nothing until a dep error renders it. `function` is a label (`"<bind>"`, `"<dispatch-park>"`)
+/// for a scheduler-internal frame with no `KFunction` behind it.
+pub(in crate::machine::execute) fn working_frame<'step>(
+    function: &'static str,
+    expr: &WorkingExpression<'step>,
+) -> DeferredTraceFrame<'step> {
+    DeferredTraceFrame::Working {
+        function,
+        expr: *expr,
     }
 }
 
-/// Clone a dep's terminal error and attach a caller-chosen frame.
-/// `frame = None` is the frameless variant.
+/// Clone a dep's terminal error and attach a caller-chosen frame, rendering it here — the one point
+/// a [`DeferredTraceFrame`] becomes trace text. `frame = None` is the frameless variant.
 pub(in crate::machine::execute) fn propagate_dep_error(
     e: &KError,
-    frame: Option<TraceFrame>,
+    frame: Option<DeferredTraceFrame<'_>>,
 ) -> KError {
     let cloned = e.clone_for_propagation();
     match frame {
-        Some(f) => cloned.with_frame(f),
+        Some(f) => cloned.with_frame(f.render()),
         None => cloned,
     }
 }
@@ -230,7 +224,7 @@ pub(in crate::machine::execute) fn park_resume<'step>(
 /// source names an already-errored producer is framed at the park site rather than arriving bare.
 pub(in crate::machine::execute) fn park_resume_labelled<'step>(
     sources: Vec<ProducerId>,
-    dep_error_frame: Option<TraceFrame>,
+    dep_error_frame: Option<DeferredTraceFrame<'step>>,
     resume: ResumeFn<'step>,
 ) -> Outcome<'step> {
     Outcome::Park {

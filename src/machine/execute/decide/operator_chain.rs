@@ -21,14 +21,15 @@ use crate::machine::core::Scope;
 use crate::machine::model::Part;
 use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode, StoredElement};
-use crate::machine::{KError, KErrorKind, ProducerId, TraceFrame};
+use crate::machine::{KError, KErrorKind, ProducerId};
 use crate::scheduler::Deps;
 use crate::source::{Span, Spanned};
 
 use super::super::TerminalDepFinish;
 use super::ctx::DecideCtx;
 use super::{
-    Await, DepPlacement, DepRequest, Outcome, become_dispatch, park_resume_labelled, working_frame,
+    Await, DeferredTraceFrame, DepPlacement, DepRequest, Outcome, become_dispatch,
+    park_resume_labelled, working_frame,
 };
 
 pub(in crate::machine::execute) fn run<'step, 'b>(
@@ -310,7 +311,7 @@ fn install_pairwise_fold<'step>(
     combiner: String,
     direction: FoldDirection,
     chain: WorkingExpression<'step>,
-    dep_error_frame: Option<TraceFrame>,
+    dep_error_frame: Option<DeferredTraceFrame<'step>>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
     let operand_spans: Vec<Option<Span>> = operands.iter().map(|operand| operand.span).collect();

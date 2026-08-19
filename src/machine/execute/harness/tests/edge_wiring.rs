@@ -12,11 +12,11 @@ use std::rc::Rc;
 
 use super::super::super::decide::park_resume_labelled;
 use super::super::super::nodes::NodeWork;
-use super::super::super::outcome::{Outcome, ignore_results};
+use super::super::super::outcome::{DeferredTraceFrame, Outcome, ignore_results};
 use crate::builtins::test_support::TestRun;
 use crate::machine::ProducerId;
 use crate::machine::core::{program_storage, run_root_storage};
-use crate::machine::{KError, KErrorKind, TraceFrame};
+use crate::machine::{KError, KErrorKind};
 
 /// A park whose source edge is already filled with an **error** surfaces that producer's error,
 /// labelled with the park's own trace frame, and never runs the resume. The install door hands back
@@ -48,7 +48,10 @@ fn park_on_errored_producer_propagates_producer_error() {
 
     let resumed: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let resumed_in_step = Rc::clone(&resumed);
-    let frame = TraceFrame::bare("<test-park>", "park on two producers");
+    let frame = DeferredTraceFrame::Bare {
+        function: "<test-park>",
+        expression: "park on two producers",
+    };
     let consumer = runtime.add(
         NodeWork::new(ignore_results(Box::new(move |_view, _id| {
             park_resume_labelled(

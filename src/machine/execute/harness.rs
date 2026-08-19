@@ -549,8 +549,7 @@ impl<'run> Host<'run> {
                         continue;
                     };
                     if let Err(dep_error) = sched.edge_result_error(*edge) {
-                        let error =
-                            super::decide::propagate_dep_error(dep_error, park_error_frame.clone());
+                        let error = super::decide::propagate_dep_error(dep_error, park_error_frame);
                         return self.apply(sched, Outcome::Done(Err(error)), brand, id, anchor);
                     }
                 }
