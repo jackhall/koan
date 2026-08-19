@@ -214,7 +214,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     let program = program_storage();
     let inner = ExpressionPart::expression(
         program.brand(),
-        vec![Spanned::bare(ExpressionPart::Identifier("deep_call"))],
+        &[Spanned::bare(ExpressionPart::Identifier("deep_call"))],
     );
     let expr = working(
         brand,
@@ -382,7 +382,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
     let program = program_storage();
     let nested = ExpressionPart::expression(
         program.brand(),
-        vec![Spanned::bare(ExpressionPart::Identifier("deep_call"))],
+        &[Spanned::bare(ExpressionPart::Identifier("deep_call"))],
     );
     let expr = working(
         brand,
@@ -653,7 +653,7 @@ fn parked_bare_name_parks_before_any_pick() {
     let program = program_storage();
     let inner = ExpressionPart::expression(
         program.brand(),
-        vec![
+        &[
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
             Spanned::bare(ExpressionPart::Keyword("OP")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(2.0))),
@@ -699,7 +699,7 @@ fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
             brand,
             KExpression::new(
                 brand,
-                vec![
+                &[
                     Spanned::bare(ExpressionPart::Keyword("LET")),
                     Spanned::bare(name),
                     Spanned::bare(ExpressionPart::Keyword("=")),

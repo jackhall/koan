@@ -134,6 +134,17 @@ nothing built through one outlives the region whose bytes it holds; where `'b` i
 a rank-2 fold brand, that same lifetime is the confinement, which is why the
 allocator needs no mint privacy of its own to serve as a fold's write surface.
 
+**A fill may allocate from the bump it is filling.** `slice_from_iter` reserves
+its destination run before it computes the first element, so the iterator's own
+per-element step is free to bump more out of the same region — the shape a caller
+takes when each slot re-homes a name through `text`. A `Bump` never moves an
+allocation, so the reserved run and whatever the step takes stay disjoint and a
+nested allocation that needs a fresh chunk leaves the earlier one where it is.
+That is what lets a caller build a run of region-resident elements without an
+owned staging run in between, and it is pinned by
+`a_fill_may_allocate_from_the_bump_it_is_filling` in the
+[audit slate](../observe/miri_slate.md).
+
 **A frozen keyed index is a verb, not a relaxation of `value`.** A table header is
 glue-free without being `Copy`: a `hashbrown` map owns its bucket array, so it has a
 `Drop`. `frozen_table` is the verb that admits it, and it *builds* the table rather

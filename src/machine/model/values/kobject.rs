@@ -754,13 +754,10 @@ fn alloc_record<'a>(
 ) -> &'a RecordSubstrate<'a> {
     let mut pairs: Vec<(String, Held<'a>)> = fields.into_pairs().collect();
     pairs.sort_by(|left, right| left.0.cmp(&right.0));
-    let mut names: Vec<&'a str> = Vec::with_capacity(pairs.len());
-    let mut cells: Vec<Held<'a>> = Vec::with_capacity(pairs.len());
-    for (name, cell) in pairs {
-        names.push(door.allocator().text(&name));
-        cells.push(cell);
-    }
-    let names = door.allocator().slice(&names);
+    let names = door
+        .allocator()
+        .slice_from_iter(pairs.iter().map(|(name, _)| door.allocator().text(name)));
+    let cells: Vec<Held<'a>> = pairs.into_iter().map(|(_, cell)| cell).collect();
     let (cells, reach) = section_cells(door, &cells);
     door.alloc_substrate_folded(ContainerSubstrate::new(
         RecordLayout::new(names),

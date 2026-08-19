@@ -546,14 +546,11 @@ fn bridge_body<'a>(program: ProgramBrand<'a>, sym: &str) -> KExpression<'a> {
     let brand = program.region();
     let sym = brand.allocator().text(sym);
     let operand = |name: &'a str| {
-        ExpressionPart::expression(
-            program,
-            vec![Spanned::bare(ExpressionPart::Identifier(name))],
-        )
+        ExpressionPart::expression(program, &[Spanned::bare(ExpressionPart::Identifier(name))])
     };
     KExpression::new(
         brand,
-        vec![
+        &[
             Spanned::bare(ExpressionPart::Keyword(sym)),
             Spanned::bare(ExpressionPart::ListLiteral(
                 brand.allocator().slice(&[operand(LEFT), operand(RIGHT)]),

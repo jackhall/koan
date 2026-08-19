@@ -250,7 +250,7 @@ pub fn body_record_schema<'a>(
             inputs.prebuilt_elements = Some(elements);
             defer(
                 ctx.scope,
-                crate::machine::model::KExpression::new(ctx.scope.brand(), Vec::new()),
+                crate::machine::model::KExpression::new(ctx.scope.brand(), &[]),
                 inputs,
                 body_expr,
                 FnKind::Anonymous,

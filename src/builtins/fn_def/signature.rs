@@ -147,7 +147,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                         let brand = elaborator.scope.brand();
                         let wrapped = KExpression::new(
                             brand,
-                            vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(inner))],
+                            &[Spanned::bare(ExpressionPart::SigiledTypeExpr(inner))],
                         );
                         sub_dispatches.push((slot_idx, wrapped));
                         i += 2;
@@ -157,7 +157,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                         let brand = elaborator.scope.brand();
                         let wrapped = KExpression::new(
                             brand,
-                            vec![Spanned::bare(ExpressionPart::RecordType(inner))],
+                            &[Spanned::bare(ExpressionPart::RecordType(inner))],
                         );
                         sub_dispatches.push((slot_idx, wrapped));
                         i += 2;

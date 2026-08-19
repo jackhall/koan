@@ -58,7 +58,7 @@ fn build_attr<'a>(
     // value field (lowercase `Identifier`, e.g. `M.x`) stays the value-context `Expression`.
     let type_context = matches!(rhs.value, ExpressionPart::Type(_));
     let kw = Spanned::at(ExpressionPart::Keyword("ATTR"), trigger);
-    let kexp = brand.build_expression(vec![kw, lhs, rhs], Some(outer), source::current());
+    let kexp = brand.build_expression(&[kw, lhs, rhs], Some(outer), source::current());
     let part = if type_context {
         ExpressionPart::SigiledTypeExpr(brand.alloc_node(kexp))
     } else {
@@ -78,7 +78,7 @@ fn build_try<'a>(
         end: trigger.end,
     };
     let kw = Spanned::at(ExpressionPart::Keyword("TRY"), trigger);
-    let kexp = brand.build_expression(vec![kw, lhs], Some(outer), source::current());
+    let kexp = brand.build_expression(&[kw, lhs], Some(outer), source::current());
     Spanned::at(ExpressionPart::Expression(brand.alloc_node(kexp)), outer)
 }
 

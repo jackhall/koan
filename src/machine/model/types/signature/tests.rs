@@ -23,7 +23,7 @@ fn one_slot(brand: RegionBrand<'_>, kt: KType) -> ExpressionSignature<'_> {
 }
 
 fn expr_with_keyword<'a>(brand: RegionBrand<'a>, kw: &'a str) -> KExpression<'a> {
-    KExpression::new(brand, vec![Spanned::bare(ExpressionPart::Keyword(kw))])
+    KExpression::new(brand, &[Spanned::bare(ExpressionPart::Keyword(kw))])
 }
 
 #[test]
@@ -92,18 +92,18 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
             elements: vec![SignatureElement::Keyword("FOO")],
         },
     );
-    let empty: KExpression<'_> = KExpression::new(brand, vec![]);
+    let empty: KExpression<'_> = KExpression::new(brand, &[]);
     assert!(!sig.matches(&empty, &types));
 
     let mismatched = KExpression::new(
         brand,
-        vec![Spanned::bare(ExpressionPart::Literal(
+        &[Spanned::bare(ExpressionPart::Literal(
             crate::machine::model::ast::KLiteral::Number(1.0),
         ))],
     );
     assert!(!sig.matches(&mismatched, &types));
 
-    let matching = KExpression::new(brand, vec![Spanned::bare(ExpressionPart::Keyword("FOO"))]);
+    let matching = KExpression::new(brand, &[Spanned::bare(ExpressionPart::Keyword("FOO"))]);
     assert!(sig.matches(&matching, &types));
 }
 

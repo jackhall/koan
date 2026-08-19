@@ -89,14 +89,18 @@ this node's own spine only; nothing a slot contains joins it. All of it is a
 pure function of expression structure — no scope, no types — so it is computed
 once and read by the dispatch driver on every call of the enclosing function
 rather than re-derived per call. The plan is read once, at statement submission,
-before any splice. The cache is filled at the one
-construction chokepoint, `KExpression::build`, which bumps the parts run and
-derives the cache from the frozen slice in the same call — so a node cannot exist
-with a stale or unfilled cache, and nothing mutates a part run afterwards. The
+before any splice. The cache is filled at one private construction chokepoint,
+which derives it from a parts run already resident in the node's region — so a
+node cannot exist with a stale or unfilled cache, and nothing mutates a part run
+afterwards. The public doors — `KExpression::{new, build, nested}` and the
+`ProgramBrand` mints that wrap them — differ only in how the run reaches the
+region: each takes a borrowed run to copy in, and each has a `_from_iter` peer
+that fills the region's bytes straight from an exact-length iterator, so a
+caller whose slots are computed one at a time pays no owned staging run. The
 parser's incremental sites (frame finalization in
 [frame.rs](../src/parse/frame.rs), the redundant-wrapper peel in
-[expression_tree.rs](../src/parse/expression_tree.rs)) push into a scratch `Vec`
-and freeze through that door once. The cache is invariant under the dispatch-time
+[expression_tree.rs](../src/parse/expression_tree.rs)) take the iterator doors,
+freezing each run through the chokepoint once. The cache is invariant under the dispatch-time
 splice that swaps a `StagedSlot` for the resolved sub-result's `Spliced` cell —
 one part for one part, no structural change — so a working node copies it from
 the AST node it derives from rather than re-deriving it.

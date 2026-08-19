@@ -77,7 +77,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
     let brand = region.brand();
     let expr = KExpression::new(
         brand,
-        vec![
+        &[
             Spanned::bare(ExpressionPart::Keyword("OP")),
             Spanned::bare(ExpressionPart::Identifier("someName")),
         ],
@@ -120,7 +120,7 @@ fn classify_excludes_literal_name_slots_from_wrap() {
     let program = program_storage();
     let inner = ExpressionPart::expression(
         program.brand(),
-        vec![
+        &[
             Spanned::bare(ExpressionPart::Identifier("x")),
             Spanned::bare(ExpressionPart::Keyword(":")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
@@ -128,7 +128,7 @@ fn classify_excludes_literal_name_slots_from_wrap() {
     );
     let expr = KExpression::new(
         brand,
-        vec![
+        &[
             Spanned::bare(ExpressionPart::Identifier("myFn")),
             Spanned::bare(inner),
         ],
@@ -151,7 +151,7 @@ fn classify_excludes_binder_name_slot_from_wrap() {
     let brand = region.brand();
     let expr = KExpression::new(
         brand,
-        vec![
+        &[
             Spanned::bare(ExpressionPart::Keyword("LET")),
             Spanned::bare(ExpressionPart::Identifier("x")),
             Spanned::bare(ExpressionPart::Keyword("=")),
@@ -198,7 +198,7 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
     let brand = region.brand();
     let expr = KExpression::new(
         brand,
-        vec![
+        &[
             Spanned::bare(ExpressionPart::Keyword("OP")),
             Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("IntOrd"))),
         ],
@@ -267,7 +267,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
     let brand = region.brand();
     let expr = KExpression::new(
         brand,
-        vec![
+        &[
             Spanned::bare(ExpressionPart::Keyword("OP")),
             Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Number"))),
         ],

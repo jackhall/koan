@@ -95,7 +95,7 @@ pub(super) fn let_ast<'a>(program: &'a ProgramStorage, name: &str, value: f64) -
     let brand = program.brand().region();
     KExpression::new(
         brand,
-        vec![
+        &[
             Spanned::bare(ExpressionPart::Keyword(brand.allocator().text("LET"))),
             Spanned::bare(ExpressionPart::Identifier(brand.allocator().text(name))),
             Spanned::bare(ExpressionPart::Keyword(brand.allocator().text("="))),

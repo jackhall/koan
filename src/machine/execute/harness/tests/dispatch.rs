@@ -98,7 +98,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
 
     let expr = KExpression::new(
         program.brand().region(),
-        vec![
+        &[
             Spanned::bare(ExpressionPart::Keyword("MARK")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
         ],
@@ -151,7 +151,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
 
     let expr = KExpression::new(
         program.brand().region(),
-        vec![Spanned::bare(ExpressionPart::Identifier("foo"))],
+        &[Spanned::bare(ExpressionPart::Identifier("foo"))],
     );
     let mut runtime = KoanRuntime::new(program.brand(), Box::new(std::io::sink()));
     let slot = runtime.dispatch_in_scope(working(&program, expr), scope, 1);
@@ -201,7 +201,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
 
     let expr = KExpression::new(
         program.brand().region(),
-        vec![
+        &[
             Spanned::bare(ExpressionPart::Keyword("FOO")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
         ],

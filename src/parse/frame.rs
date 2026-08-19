@@ -75,8 +75,9 @@ impl<'a> BracketFrame<'a> {
     }
 
     /// `end` is the cursor just past the closer (exclusive end of the span). The collected run is
-    /// complete here, so this is where each frame freezes it into a node through
-    /// [`ProgramBrand::build_expression`] and bumps it into program storage. The only failure path is
+    /// complete here, so this is where each frame freezes it into a node — through
+    /// [`ProgramBrand::build_expression_from_iter`], which consumes the accumulated run into program
+    /// storage rather than copying out of it. The only failure path is
     /// `DictFrame::finish` for the Dict variant; closer-vs-variant pairing is assumed valid (see
     /// `matches_closer`).
     pub(super) fn into_part(
@@ -96,7 +97,7 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
-                let expr = brand.build_expression(parts, Some(span), file);
+                let expr = brand.build_expression_from_iter(parts, Some(span), file);
                 Ok(Spanned::at(
                     ExpressionPart::Expression(brand.alloc_node(expr)),
                     span,
@@ -112,7 +113,7 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
-                let expr = brand.build_expression(parts, Some(body_span), file);
+                let expr = brand.build_expression_from_iter(parts, Some(body_span), file);
                 let sc =
                     sigil_cursor.expect("sigil-headed Expression frame must carry sigil_cursor");
                 let outer_span = Span { start: sc, end };
@@ -121,7 +122,7 @@ impl<'a> BracketFrame<'a> {
                     end: sc + 1,
                 };
                 let wrapped = brand.build_expression(
-                    vec![
+                    &[
                         Spanned::at(ExpressionPart::Keyword(head), sigil_span),
                         Spanned::at(
                             ExpressionPart::Expression(brand.alloc_node(expr)),
@@ -146,7 +147,7 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
-                let expr = brand.build_expression(parts, Some(body_span), file);
+                let expr = brand.build_expression_from_iter(parts, Some(body_span), file);
                 let outer_span = Span {
                     start: sigil_cursor,
                     end,
@@ -162,7 +163,7 @@ impl<'a> BracketFrame<'a> {
                     end,
                 };
                 Ok(Spanned::at(
-                    ExpressionPart::ListLiteral(brand.region().allocator().slice(&items)),
+                    ExpressionPart::ListLiteral(brand.region().allocator().slice_from_iter(items)),
                     span,
                 ))
             }
@@ -172,12 +173,12 @@ impl<'a> BracketFrame<'a> {
                     end,
                 };
                 let part = match dict.finish()? {
-                    BraceContents::Dict(pairs) => {
-                        ExpressionPart::DictLiteral(brand.region().allocator().slice(&pairs))
-                    }
-                    BraceContents::Record(fields) => {
-                        ExpressionPart::RecordLiteral(brand.region().allocator().slice(&fields))
-                    }
+                    BraceContents::Dict(pairs) => ExpressionPart::DictLiteral(
+                        brand.region().allocator().slice_from_iter(pairs),
+                    ),
+                    BraceContents::Record(fields) => ExpressionPart::RecordLiteral(
+                        brand.region().allocator().slice_from_iter(fields),
+                    ),
                 };
                 Ok(Spanned::at(part, span))
             }
@@ -186,7 +187,7 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
-                let expr = brand.build_expression(parts, Some(span), file);
+                let expr = brand.build_expression_from_iter(parts, Some(span), file);
                 Ok(Spanned::at(
                     ExpressionPart::SigiledTypeExpr(brand.alloc_node(expr)),
                     span,
@@ -200,7 +201,7 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
-                let expr = brand.build_expression(parts, Some(span), file);
+                let expr = brand.build_expression_from_iter(parts, Some(span), file);
                 Ok(Spanned::at(
                     ExpressionPart::RecordType(brand.alloc_node(expr)),
                     span,

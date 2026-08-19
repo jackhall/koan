@@ -90,7 +90,7 @@ mod tests {
     fn type_named_pair<'a>(brand: RegionBrand<'a>) -> KExpression<'a> {
         KExpression::new(
             brand,
-            vec![
+            &[
                 Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Ty"))),
                 Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Signature"))),
             ],

@@ -18,7 +18,7 @@ use std::ops::Deref;
 use crate::machine::core::{ProgramBrand, RegionBrand};
 use crate::source::{FileId, Span, Spanned};
 
-use super::{ExpressionPart, KExpression};
+use super::{ExpressionPart, KExpression, RunIter};
 
 /// A node whose parts run — and everything reachable from it — is hosted in eternal program
 /// storage. Minted only by [`ProgramBrand`]'s doors below; holding one **is** the proof the value
@@ -33,7 +33,7 @@ use super::{ExpressionPart, KExpression};
 /// let storage = koan::machine::program_storage();
 /// let program = storage.brand();
 /// // A bare `KExpression`, whatever brand built it, is not a `ProgramExpression`.
-/// let node = koan::machine::model::ast::KExpression::new(program.region(), Vec::new());
+/// let node = koan::machine::model::ast::KExpression::new(program.region(), &[]);
 /// let _cell = koan::machine::model::KObject::KExpression(node);
 /// ```
 ///
@@ -42,7 +42,7 @@ use super::{ExpressionPart, KExpression};
 /// ```compile_fail
 /// let storage = koan::machine::program_storage();
 /// let program = storage.brand();
-/// let node = koan::machine::model::ast::KExpression::new(program.region(), Vec::new());
+/// let node = koan::machine::model::ast::KExpression::new(program.region(), &[]);
 /// let _marked = koan::machine::model::ast::program::ProgramExpression(node);
 /// ```
 ///
@@ -51,7 +51,7 @@ use super::{ExpressionPart, KExpression};
 /// ```
 /// let storage = koan::machine::program_storage();
 /// let program = storage.brand();
-/// let marked = program.new_expression(Vec::new());
+/// let marked = program.new_expression(&[]);
 /// let _cell = koan::machine::model::KObject::KExpression(marked);
 /// ```
 #[derive(Clone, Copy, Debug)]
@@ -111,8 +111,9 @@ impl<'a> Deref for ProgramExpression<'a> {
 /// The mint doors. Every one takes a [`ProgramBrand`], so the storage tier is checked at the call
 /// site rather than argued about afterwards.
 ///
-/// No door carries a prose obligation: the parameter types are the tier. `parts` is
-/// `Vec<Spanned<ExpressionPart<'a>>>` at the brand's own `'a`, and the brand is invariant in `'a`,
+/// No door carries a prose obligation: the parameter types are the tier. `parts` carries
+/// `Spanned<ExpressionPart<'a>>` at the brand's own `'a` — as a borrowed run or as an exact-length
+/// iterator, per [`RunIter`] — and the brand is invariant in `'a`,
 /// so a caller cannot shorten it to reach a door with shorter-lived parts. Everything reachable
 /// from `parts` therefore outlives the program-storage borrow — program-hosted, another
 /// eternal-tier region, or `'static`, each of which the eternal rule already prices as reaching
@@ -130,7 +131,7 @@ impl<'a> Deref for ProgramExpression<'a> {
 ///     program: ProgramBrand<'program>,
 ///     part: Spanned<ExpressionPart<'step>>,
 /// ) -> ProgramExpression<'step> {
-///     program.new_expression(vec![part])
+///     program.new_expression(&[part])
 /// }
 /// ```
 ///
@@ -139,18 +140,48 @@ impl<'a> Deref for ProgramExpression<'a> {
 /// brand's invariance refuses it.
 impl<'a> ProgramBrand<'a> {
     /// Spanless mint — [`KExpression::new`] with the tier proof attached.
-    pub fn new_expression(self, parts: Vec<Spanned<ExpressionPart<'a>>>) -> ProgramExpression<'a> {
+    pub fn new_expression(self, parts: &[Spanned<ExpressionPart<'a>>]) -> ProgramExpression<'a> {
         ProgramExpression(KExpression::new(self.region(), parts))
+    }
+
+    /// [`new_expression`](Self::new_expression)'s peer for a computed run —
+    /// [`KExpression::new_from_iter`] with the tier proof attached.
+    pub fn new_expression_from_iter<I>(self, parts: I) -> ProgramExpression<'a>
+    where
+        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
+        RunIter<I>: ExactSizeIterator,
+    {
+        ProgramExpression(KExpression::new_from_iter(self.region(), parts))
     }
 
     /// Full mint — [`KExpression::build`] with the tier proof attached.
     pub fn build_expression(
         self,
-        parts: Vec<Spanned<ExpressionPart<'a>>>,
+        parts: &[Spanned<ExpressionPart<'a>>],
         span: Option<Span>,
         file: Option<FileId>,
     ) -> ProgramExpression<'a> {
         ProgramExpression(KExpression::build(self.region(), parts, span, file))
+    }
+
+    /// [`build_expression`](Self::build_expression)'s peer for a computed run —
+    /// [`KExpression::build_from_iter`] with the tier proof attached.
+    pub fn build_expression_from_iter<I>(
+        self,
+        parts: I,
+        span: Option<Span>,
+        file: Option<FileId>,
+    ) -> ProgramExpression<'a>
+    where
+        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
+        RunIter<I>: ExactSizeIterator,
+    {
+        ProgramExpression(KExpression::build_from_iter(
+            self.region(),
+            parts,
+            span,
+            file,
+        ))
     }
 
     /// Bump a marked node into program storage, yielding the reference an arm payload holds.
@@ -160,7 +191,17 @@ impl<'a> ProgramBrand<'a> {
 
     /// Build and bump in one step — the [`ExpressionPart::Expression`] analogue of
     /// [`KExpression::nested`], for the arm constructions that mint a fresh child node.
-    pub fn nested_node(self, parts: Vec<Spanned<ExpressionPart<'a>>>) -> ProgramNode<'a> {
+    pub fn nested_node(self, parts: &[Spanned<ExpressionPart<'a>>]) -> ProgramNode<'a> {
         ProgramNode(KExpression::nested(self.region(), parts))
+    }
+
+    /// [`nested_node`](Self::nested_node)'s peer for a computed run —
+    /// [`KExpression::nested_from_iter`] with the tier proof attached.
+    pub fn nested_node_from_iter<I>(self, parts: I) -> ProgramNode<'a>
+    where
+        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
+        RunIter<I>: ExactSizeIterator,
+    {
+        ProgramNode(KExpression::nested_from_iter(self.region(), parts))
     }
 }

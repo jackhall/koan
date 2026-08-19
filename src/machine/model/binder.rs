@@ -7,6 +7,8 @@
 //! against the live builtin registration table by the spec⟺registration consistency test, so an
 //! entry whose builtin was renamed, re-shaped, or dropped fails the suite.
 
+use smallvec::SmallVec;
+
 use crate::machine::core::{KError, KErrorKind, RegionBrand};
 #[cfg(test)]
 use crate::machine::model::UntypedElement;
@@ -161,7 +163,11 @@ pub(crate) fn fn_def_binder_bucket<'a>(
 ) -> Option<BucketKeys<'a>> {
     let signature_expr = signature_expr_part(expr)?;
     let parts = signature_expr.parts;
-    let mut key: Vec<StoredElement<'a>> = Vec::with_capacity(parts.len());
+    // Staged on the stack, not the heap: the stride is data-dependent (`+= 2` collapses a
+    // `<name> :<Type>` pair), so no exact-length iterator spells the run and the fill needs a length
+    // before its first element. A signature longer than the inline capacity spills, which is the one
+    // case that allocates.
+    let mut key: SmallVec<[StoredElement<'a>; 8]> = SmallVec::new();
     let mut i = 0;
     while i < parts.len() {
         match parts[i].value {
@@ -180,7 +186,7 @@ pub(crate) fn fn_def_binder_bucket<'a>(
             }
         }
     }
-    Some(BucketKeys::one(brand.allocator().slice(&key)))
+    Some(BucketKeys::one(brand.allocator().slice_from_iter(key)))
 }
 
 /// True iff the part at `index` is a type ascription — the second half of a `<name> :<Type>` pair,

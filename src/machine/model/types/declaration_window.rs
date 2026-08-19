@@ -156,26 +156,26 @@ impl<'a> AnnouncedWindow<'a> {
     /// Bump `data`'s names and index runs into `brand`'s region and open the window over them. The
     /// caller is the scope-construction door, so `brand` is the region the carrying scope lives in.
     pub fn bump(brand: RegionBrand<'a>, data: &AnnouncedData) -> AnnouncedWindow<'a> {
-        let members: Vec<AnnouncedMember<'a>> = data
-            .members
-            .iter()
-            .map(|(name, owner)| AnnouncedMember {
-                name: brand.allocator().text(name),
-                owner: owner.as_deref().map(|o| brand.allocator().text(o)),
-            })
-            .collect();
-        let binders: Vec<AnnouncedBinder<'a>> = data
-            .binders
-            .iter()
-            .map(|(name, owned)| AnnouncedBinder {
-                name: brand.allocator().text(name),
-                members: brand.allocator().slice(owned),
-            })
-            .collect();
         AnnouncedWindow {
-            members: brand.allocator().slice(&members),
-            binders: brand.allocator().slice(&binders),
-            fills: Cell::new(brand.allocator().slice(&vec![None; data.members.len()])),
+            members: brand
+                .allocator()
+                .slice_from_iter(data.members.iter().map(|(name, owner)| AnnouncedMember {
+                    name: brand.allocator().text(name),
+                    owner: owner.as_deref().map(|o| brand.allocator().text(o)),
+                })),
+            binders: brand
+                .allocator()
+                .slice_from_iter(data.binders.iter().map(|(name, owned)| AnnouncedBinder {
+                    name: brand.allocator().text(name),
+                    members: brand.allocator().slice(owned),
+                })),
+            // Reserved and filled straight from the repeat, so an unfilled window costs the region
+            // one run and the heap nothing.
+            fills: Cell::new(
+                brand
+                    .allocator()
+                    .slice_from_iter(std::iter::repeat_n(None, data.members.len())),
+            ),
             sealed: Cell::new(None),
         }
     }
@@ -262,9 +262,16 @@ impl<'a> AnnouncedWindow<'a> {
         brand: RegionBrand<'a>,
         types: &TypeRegistry,
     ) -> Option<&'a SealedAnnounced<'a>> {
-        let mut fills: Vec<Option<KType>> = self.fills.get().to_vec();
-        fills[index] = Some(repr);
-        self.fills.set(brand.allocator().slice(&fills));
+        // The replacement run is filled from the old one with `index`'s slot swapped, so the fill
+        // needs no owned copy to mutate — and every read below is off the bumped run.
+        let fills = brand.allocator().slice_from_iter(
+            self.fills
+                .get()
+                .iter()
+                .enumerate()
+                .map(|(slot, fill)| if slot == index { Some(repr) } else { *fill }),
+        );
+        self.fills.set(fills);
         if let Some(sealed) = self.sealed.get() {
             return Some(sealed);
         }
@@ -292,15 +299,17 @@ impl<'a> AnnouncedWindow<'a> {
             .collect();
         // An ambient window is never generative: a `:|` mint opens its own declarator-local one.
         let group = seal_group(&inputs, &binder_inputs, None, types);
-        let binder_types: Vec<(&'a str, KType)> = group
-            .binder_types
-            .iter()
-            .zip(self.binders.iter())
-            .map(|((_, kt), binder)| (binder.name, *kt))
-            .collect();
+        // `binder_types` is filled first because `members` consumes `group`'s run, and a field
+        // initializer runs in source order.
         let sealed = brand.allocator().value(SealedAnnounced {
-            members: brand.allocator().slice(&group.members),
-            binder_types: brand.allocator().slice(&binder_types),
+            binder_types: brand.allocator().slice_from_iter(
+                group
+                    .binder_types
+                    .iter()
+                    .zip(self.binders.iter())
+                    .map(|((_, kt), binder)| (binder.name, *kt)),
+            ),
+            members: brand.allocator().slice_from_iter(group.members),
         });
         self.sealed.set(Some(sealed));
         Some(sealed)

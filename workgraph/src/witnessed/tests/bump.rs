@@ -477,6 +477,31 @@ fn a_fold_allocator_writes_a_self_referential_value_into_its_own_destination() {
     );
 }
 
+/// The fill's own per-element step may allocate **from the same bump it is filling into** — the
+/// shape a caller takes when each slot re-homes a name (`allocator().text(…)` inside the `map`).
+/// The destination run is reserved before the first element is computed and written to across every
+/// nested allocation, so this is a raw write held live over further bumps of the same arena; a
+/// chunk that moved, or a retag that invalidated the destination, is UB tree borrows sees.
+///
+/// Sound because a `Bump` never moves an allocation: the reserved run and whatever the closure takes
+/// are disjoint, and a nested allocation that needs a fresh chunk leaves the earlier one where it is.
+#[test]
+fn a_fill_may_allocate_from_the_bump_it_is_filling() {
+    let dest = frame();
+    let allocator = placement(&dest).allocator();
+
+    let words = ["alpha", "beta", "gamma", "delta"];
+    let run: &[&str] = allocator.slice_from_iter(words.iter().map(|word| allocator.text(word)));
+
+    assert_eq!(run, words);
+    for (stored, source) in run.iter().zip(words.iter()) {
+        assert!(
+            !ptr::eq(*stored, *source),
+            "each slot names the copy the fill bumped, not the literal it was built from"
+        );
+    }
+}
+
 /// [`BumpAllocator::slice_from_iter`] fills the run from the iterator with no owned staging run in
 /// between: the elements land in the region's own bytes, and the reserved length is the iterator's
 /// exact one.

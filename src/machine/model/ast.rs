@@ -160,15 +160,35 @@ impl<'a> Part<'a> for ExpressionPart<'a> {
     }
 }
 
+/// A parts run on its way into a node's region, as a construction door takes it: either a borrowed
+/// run to copy in, or an exact-length iterator to fill the region's bytes straight from. One alias
+/// for both expression families — [`KExpression`] and
+/// [`WorkingExpression`](working::WorkingExpression) split their doors the same way.
+///
+/// Both forms exist because both shapes of call site do. A fixed-length run — an operator chain's
+/// `[left, op, right]`, a wrapped single operand — is a stack array the door copies; a run whose
+/// slots are computed one at a time is an iterator, and staging it through an owned `Vec` first
+/// would pay a heap allocation and a second copy for bytes the region was going to hold anyway.
+pub(crate) type RunIter<I> = <I as IntoIterator>::IntoIter;
+
 impl<'a> ExpressionPart<'a> {
     /// Wrap a run of parts as a nested `Expression` part, bumping both the run and the node into
     /// the program storage `brand` names. Takes a [`ProgramBrand`] because the arm it builds is a
     /// value-channel conduit: the marker on its payload is the proof the cell doors cite.
     pub fn expression(
         brand: ProgramBrand<'a>,
-        parts: Vec<Spanned<ExpressionPart<'a>>>,
+        parts: &[Spanned<ExpressionPart<'a>>],
     ) -> ExpressionPart<'a> {
         ExpressionPart::Expression(brand.nested_node(parts))
+    }
+
+    /// [`expression`](Self::expression)'s peer for a run whose slots are computed — see [`RunIter`].
+    pub fn expression_from_iter<I>(brand: ProgramBrand<'a>, parts: I) -> ExpressionPart<'a>
+    where
+        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
+        RunIter<I>: ExactSizeIterator,
+    {
+        ExpressionPart::Expression(brand.nested_node_from_iter(parts))
     }
 
     /// Per-part subset of [`KExpression::summarize`].
@@ -350,21 +370,55 @@ pub struct KExpression<'a> {
 reattachable! { KExpression<'static> => KExpression<'r> }
 
 impl<'a> KExpression<'a> {
-    /// Spanless construction door; `span`/`file` populated by later phases.
-    pub fn new(brand: RegionBrand<'a>, parts: Vec<Spanned<ExpressionPart<'a>>>) -> Self {
+    /// Spanless construction door for a borrowed run; `span`/`file` populated by later phases.
+    pub fn new(brand: RegionBrand<'a>, parts: &[Spanned<ExpressionPart<'a>>]) -> Self {
         Self::build(brand, parts, None, None)
     }
 
-    /// Construction chokepoint: bumps the parts run into `brand`'s region and fills the structural
-    /// cache from it. Every node routes here, so none ships with a stale or unfilled cache and no
-    /// part run is mutated after it is frozen.
+    /// [`new`](Self::new)'s peer for a run whose slots are computed — see [`RunIter`].
+    pub fn new_from_iter<I>(brand: RegionBrand<'a>, parts: I) -> Self
+    where
+        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
+        RunIter<I>: ExactSizeIterator,
+    {
+        Self::build_from_iter(brand, parts, None, None)
+    }
+
+    /// Construction door for a borrowed run: copy it into `brand`'s region, then fill the
+    /// structural cache.
     pub fn build(
         brand: RegionBrand<'a>,
-        parts: Vec<Spanned<ExpressionPart<'a>>>,
+        parts: &[Spanned<ExpressionPart<'a>>],
         span: Option<Span>,
         file: Option<FileId>,
     ) -> Self {
-        let parts = brand.allocator().slice(&parts);
+        Self::from_run(brand, brand.allocator().slice(parts), span, file)
+    }
+
+    /// [`build`](Self::build)'s peer for a run whose slots are computed — see [`RunIter`].
+    pub fn build_from_iter<I>(
+        brand: RegionBrand<'a>,
+        parts: I,
+        span: Option<Span>,
+        file: Option<FileId>,
+    ) -> Self
+    where
+        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
+        RunIter<I>: ExactSizeIterator,
+    {
+        Self::from_run(brand, brand.allocator().slice_from_iter(parts), span, file)
+    }
+
+    /// Construction chokepoint, over a parts run **already resident** in `brand`'s region: fills the
+    /// structural cache from it and does nothing else. Every door above lands here, differing only
+    /// in how the run reached the region — so none ships with a stale or unfilled cache and no part
+    /// run is mutated after it is frozen.
+    fn from_run(
+        brand: RegionBrand<'a>,
+        parts: &'a [Spanned<ExpressionPart<'a>>],
+        span: Option<Span>,
+        file: Option<FileId>,
+    ) -> Self {
         let untyped_key = stored_untyped_key(brand, parts);
         let shape = classify_dispatch_shape(parts);
         let mut expression = KExpression {
@@ -393,9 +447,18 @@ impl<'a> KExpression<'a> {
     /// its sigil siblings hold `&'a KExpression<'a>`).
     pub fn nested(
         brand: RegionBrand<'a>,
-        parts: Vec<Spanned<ExpressionPart<'a>>>,
+        parts: &[Spanned<ExpressionPart<'a>>],
     ) -> &'a KExpression<'a> {
         brand.allocator().value(Self::new(brand, parts))
+    }
+
+    /// [`nested`](Self::nested)'s peer for a run whose slots are computed — see [`RunIter`].
+    pub fn nested_from_iter<I>(brand: RegionBrand<'a>, parts: I) -> &'a KExpression<'a>
+    where
+        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
+        RunIter<I>: ExactSizeIterator,
+    {
+        brand.allocator().value(Self::new_from_iter(brand, parts))
     }
 
     /// This node's own binder plan — `Some` iff this node is itself a binder.

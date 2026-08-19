@@ -601,9 +601,9 @@ pub fn build_tree<'a>(
 /// survivor so diagnostics point at the user-visible region, not the innermost
 /// wrapper.
 ///
-/// The survivor is a fresh node: its parts are rewritten into a scratch `Vec` and frozen once,
-/// through [`ProgramBrand::build_expression`], so the structural cache is filled from the shape the
-/// parse exit actually hands on.
+/// The survivor is a fresh node: its parts are rewritten slot by slot straight into program
+/// storage, through [`ProgramBrand::build_expression_from_iter`], so the structural cache is filled
+/// from the shape the parse exit actually hands on.
 fn peel_redundant<'a>(
     brand: ProgramBrand<'a>,
     expression: KExpression<'a>,
@@ -620,13 +620,8 @@ fn peel_redundant<'a>(
     {
         survivor = **inner;
     }
-    let parts: Vec<Spanned<ExpressionPart<'a>>> = survivor
-        .parts
-        .iter()
-        .map(|part| peel_spanned(brand, *part))
-        .collect();
-    brand.build_expression(
-        parts,
+    brand.build_expression_from_iter(
+        survivor.parts.iter().map(|part| peel_spanned(brand, *part)),
         outer_span.or(survivor.span),
         outer_file.or(survivor.file),
     )
@@ -653,25 +648,26 @@ fn peel_part<'a>(brand: ProgramBrand<'a>, part: ExpressionPart<'a>) -> Expressio
         ExpressionPart::QuotedExpression(inner) => {
             ExpressionPart::QuotedExpression(brand.alloc_node(peel_redundant(brand, *inner)))
         }
-        ExpressionPart::ListLiteral(items) => {
-            let peeled: Vec<ExpressionPart<'a>> =
-                items.iter().map(|item| peel_part(brand, *item)).collect();
-            ExpressionPart::ListLiteral(brand.region().allocator().slice(&peeled))
-        }
-        ExpressionPart::DictLiteral(pairs) => {
-            let peeled: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)> = pairs
-                .iter()
-                .map(|(k, v)| (peel_part(brand, *k), peel_part(brand, *v)))
-                .collect();
-            ExpressionPart::DictLiteral(brand.region().allocator().slice(&peeled))
-        }
-        ExpressionPart::RecordLiteral(pairs) => {
-            let peeled: Vec<(&'a str, ExpressionPart<'a>)> = pairs
-                .iter()
-                .map(|(name, v)| (*name, peel_part(brand, *v)))
-                .collect();
-            ExpressionPart::RecordLiteral(brand.region().allocator().slice(&peeled))
-        }
+        ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(
+            brand
+                .region()
+                .allocator()
+                .slice_from_iter(items.iter().map(|item| peel_part(brand, *item))),
+        ),
+        ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(
+            brand.region().allocator().slice_from_iter(
+                pairs
+                    .iter()
+                    .map(|(key, value)| (peel_part(brand, *key), peel_part(brand, *value))),
+            ),
+        ),
+        ExpressionPart::RecordLiteral(pairs) => ExpressionPart::RecordLiteral(
+            brand.region().allocator().slice_from_iter(
+                pairs
+                    .iter()
+                    .map(|(name, value)| (*name, peel_part(brand, *value))),
+            ),
+        ),
         other => other,
     }
 }
@@ -718,9 +714,7 @@ pub fn parse_with_source<'a>(
                     value: peel_part(program, quoted),
                     span,
                 };
-                Ok(program
-                    .build_expression(vec![peeled], span, Some(id))
-                    .node())
+                Ok(program.build_expression(&[peeled], span, Some(id)).node())
             }
             other => Err(KError::parse(
                 format!("unexpected top-level part: {:?}", other),

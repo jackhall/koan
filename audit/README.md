@@ -77,9 +77,9 @@ moved it.
 
 | shape | what it exercises | allocations | scaling term |
 |---|---|---|---|
-| `shapes/tail_loop.koan` | 100 tail-recursive steps | 25 723 | 206.0 per step, linear |
-| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 11 772 | ≈55 per dispatch, mildly superlinear |
-| *(empty program)* | interpreter startup and builtin seeding | 3 016 | — |
+| `shapes/tail_loop.koan` | 100 tail-recursive steps | 25 567 | 206.0 per step, linear |
+| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 11 628 | ≈55 per dispatch, mildly superlinear |
+| *(empty program)* | interpreter startup and builtin seeding | 2 874 | — |
 
 Neither shape can use comments: koan has none, and `#` is reserved for quoting. The prose
 that would have headed each file is here instead.
@@ -100,7 +100,7 @@ to the linear-enough middle rather than to the tail.
 ## The regression test
 
 `tests/allocation_baseline.rs` asserts each shape's bracketed count against a stated bound —
-23 964 for the loop, 10 013 for the chain, each carrying 41 allocations of headroom. The
+23 808 for the loop, 9 869 for the chain, each carrying 41 allocations of headroom. The
 bounds are tight by design: the margin is smaller than the 100 (loop) or 127 (chain) a single
 new allocation on the scaling path would add, so one added allocation fails a test.
 Rebaselining is meant to be a deliberate edit, and the failure message says so.

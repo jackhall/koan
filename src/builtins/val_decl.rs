@@ -131,7 +131,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     };
 
     let brand = ctx.scope.brand();
-    let expr = KExpression::new(brand, vec![Spanned::bare(ExpressionPart::Type(te))]);
+    let expr = KExpression::new(brand, &[Spanned::bare(ExpressionPart::Type(te))]);
     dispatch_type_then(brand, expr, "VAL type slot", move |fctx, kt| {
         finalize_val(fctx, name, kt)
     })

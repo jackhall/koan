@@ -56,12 +56,12 @@ fn allocations_for(source: &str, path: &str) -> u64 {
 }
 
 /// 100 tail-recursive steps, 206.0 allocations each — exactly linear, measured flat at
-/// 10/50/100/200. Measured 2026-08-18 at 23 964; the bound is that plus 41, less than the 100
+/// 10/50/100/200. Measured 2026-08-18 at 23 808; the bound is that plus 41, less than the 100
 /// a single new per-step allocation would add. Tight on purpose: a looser bound cannot see
 /// one allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
-    const BOUND: u64 = 24_005;
+    const BOUND: u64 = 23_849;
     let delta = allocations_for(
         include_str!("../audit/shapes/tail_loop.koan"),
         "audit/shapes/tail_loop.koan",
@@ -77,11 +77,11 @@ fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
 /// A 128-operand `+` chain, so 127 dispatches at ≈55 allocations each — mildly superlinear,
 /// with marginal cost rising 53.9 → 56.3 across the 16→32 … 128→256 operand doublings (below
 /// 16 operands it is flat near 53.3). Measured 2026-08-18 at
-/// 10 013; the bound is that plus 41, under the 127 a single new per-dispatch allocation
+/// 9 869; the bound is that plus 41, under the 127 a single new per-dispatch allocation
 /// would add. Same headroom rule as the loop.
 #[test]
 fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
-    const BOUND: u64 = 10_054;
+    const BOUND: u64 = 9_910;
     let delta = allocations_for(
         include_str!("../audit/shapes/operator_chain.koan"),
         "audit/shapes/operator_chain.koan",

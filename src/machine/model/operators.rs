@@ -105,10 +105,6 @@ impl<'a> OperatorGroup<'a> {
         let mut sorted: Vec<&str> = members.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
-        let hosted: Vec<&'a str> = sorted
-            .iter()
-            .map(|member| brand.allocator().text(member))
-            .collect();
         let mode = match mode {
             ReductionMode::Unary => ReductionMode::Unary,
             ReductionMode::FoldLeft => ReductionMode::FoldLeft,
@@ -122,7 +118,9 @@ impl<'a> OperatorGroup<'a> {
             },
         };
         brand.allocator().value(OperatorGroup {
-            members: brand.allocator().slice(&hosted),
+            members: brand
+                .allocator()
+                .slice_from_iter(sorted.iter().map(|member| brand.allocator().text(member))),
             mode,
         })
     }

@@ -21,7 +21,7 @@ use super::shape::{
     DispatchShape, FieldSlot, Part, PartClass, classify_dispatch_shape, operator_probe_for,
     stored_untyped_key,
 };
-use super::{ExpressionPart, KExpression};
+use super::{ExpressionPart, KExpression, RunIter};
 use crate::machine::model::StoredBinderKey;
 
 /// One slot of a working expression.
@@ -238,15 +238,6 @@ fn parts_extent(parts: &[Spanned<WorkingPart<'_>>]) -> Option<Span> {
             end: a.end.max(b.end),
         })
 }
-
-/// A parts run on its way into a node's region, as a construction door takes it: either a borrowed
-/// run to copy in, or an exact-length iterator to fill the region's bytes straight from.
-///
-/// Both forms exist because both shapes of call site do. A fixed-length run — an operator chain's
-/// `[left, op, right]`, a wrapped single operand — is a stack array the door copies; a run whose
-/// slots are computed one at a time is an iterator, and staging it through an owned `Vec` first
-/// would pay a heap allocation and a second copy for bytes the region was going to hold anyway.
-type RunIter<I> = <I as IntoIterator>::IntoIter;
 
 impl<'a> WorkingExpression<'a> {
     /// Spanless construction door for a borrowed run the scheduler built itself.

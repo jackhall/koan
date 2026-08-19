@@ -59,13 +59,13 @@ fn later_expression_sees_earlier_binding_via_lookup() {
     let brand = program.brand().region();
     let lookup_a = KExpression::new(
         brand,
-        vec![
+        &[
             Spanned::bare(ExpressionPart::Keyword("LET")),
             Spanned::bare(ExpressionPart::Identifier("b")),
             Spanned::bare(ExpressionPart::Keyword("=")),
             Spanned::bare(ExpressionPart::expression(
                 program.brand(),
-                vec![Spanned::bare(ExpressionPart::Identifier("a"))],
+                &[Spanned::bare(ExpressionPart::Identifier("a"))],
             )),
         ],
     );

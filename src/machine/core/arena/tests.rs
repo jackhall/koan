@@ -908,12 +908,11 @@ fn raw_expression_seals_through_the_expression_door() {
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
 
-    let expression =
-        program
-            .brand()
-            .new_expression(vec![Spanned::bare(ExpressionPart::Identifier(
-                brand.allocator().text("x"),
-            ))]);
+    let expression = program
+        .brand()
+        .new_expression(&[Spanned::bare(ExpressionPart::Identifier(
+            brand.allocator().text("x"),
+        ))]);
     let carried = scope.brand().alloc_expression_witnessed(expression);
     let parts = carried.inspect_at(Rc::clone(&storage), |c| match c.object() {
         KObject::KExpression(e) => e.parts.len(),

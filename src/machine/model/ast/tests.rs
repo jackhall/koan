@@ -20,33 +20,35 @@ fn ty(s: &str) -> ExpressionPart<'_> {
 fn num<'a>(n: f64) -> ExpressionPart<'a> {
     ExpressionPart::Literal(KLiteral::Number(n))
 }
-fn parts_of<'a>(items: Vec<ExpressionPart<'a>>) -> Vec<Spanned<ExpressionPart<'a>>> {
-    items.into_iter().map(Spanned::bare).collect()
+fn parts_of<'a>(
+    items: Vec<ExpressionPart<'a>>,
+) -> impl ExactSizeIterator<Item = Spanned<ExpressionPart<'a>>> {
+    items.into_iter().map(Spanned::bare)
 }
 fn expr<'a>(brand: ProgramBrand<'a>, parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
-    ExpressionPart::expression(brand, parts_of(parts))
+    ExpressionPart::expression_from_iter(brand, parts_of(parts))
 }
 fn list<'a>(brand: ProgramBrand<'a>, items: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
-    ExpressionPart::ListLiteral(brand.region().allocator().slice(&items))
+    ExpressionPart::ListLiteral(brand.region().allocator().slice_from_iter(items))
 }
 fn dict<'a>(
     brand: ProgramBrand<'a>,
     pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
 ) -> ExpressionPart<'a> {
-    ExpressionPart::DictLiteral(brand.region().allocator().slice(&pairs))
+    ExpressionPart::DictLiteral(brand.region().allocator().slice_from_iter(pairs))
 }
 fn record<'a>(
     brand: ProgramBrand<'a>,
     fields: Vec<(&'a str, ExpressionPart<'a>)>,
 ) -> ExpressionPart<'a> {
-    ExpressionPart::RecordLiteral(brand.region().allocator().slice(&fields))
+    ExpressionPart::RecordLiteral(brand.region().allocator().slice_from_iter(fields))
 }
 fn sigil<'a>(brand: ProgramBrand<'a>, parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
-    ExpressionPart::SigiledTypeExpr(brand.nested_node(parts_of(parts)))
+    ExpressionPart::SigiledTypeExpr(brand.nested_node_from_iter(parts_of(parts)))
 }
 /// Freeze a run of parts into a node at `brand` — the door every hand-built AST here goes through.
 fn build<'a>(brand: ProgramBrand<'a>, items: Vec<ExpressionPart<'a>>) -> KExpression<'a> {
-    KExpression::new(brand.region(), parts_of(items))
+    KExpression::new_from_iter(brand.region(), parts_of(items))
 }
 
 #[test]
@@ -160,9 +162,12 @@ fn structural_equal_and_ktype_for_kexpression() {
     let brand = program.brand();
     let types = TypeRegistry::new();
     use crate::machine::model::values::KObject;
-    let a = KObject::KExpression(brand.new_expression(parts_of(vec![kw("LET"), ident("x")])));
-    let b = KObject::KExpression(brand.new_expression(parts_of(vec![kw("LET"), ident("x")])));
-    let c = KObject::KExpression(brand.new_expression(parts_of(vec![kw("LET"), ident("y")])));
+    let a =
+        KObject::KExpression(brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("x")])));
+    let b =
+        KObject::KExpression(brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("x")])));
+    let c =
+        KObject::KExpression(brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("y")])));
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     assert_eq!(a.value_equal(&c, &types), Ok(false));
     assert_eq!(a.ktype(), KType::KEXPRESSION);

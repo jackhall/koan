@@ -206,7 +206,13 @@ Embedders hold that line at their own declarations (koan's binding tables assert
 `!needs_drop` on every key and value where each table is built); this test is the dynamic check that
 the bump-side half — abandoned bucket arrays and vec buffers — is released with the chunks.
 
+The group's second shape is the *fill* rather than the collection: `slice_from_iter` reserves its
+destination run and then writes into it while the iterator's own step bumps more out of the same
+arena, so a raw destination pointer stays live across later allocations on the allocator it came
+from. Nothing above covers a write held over an interleaved bump.
+
 - `a_bump_backed_table_survives_growth_overwrite_and_removal`
+- `a_fill_may_allocate_from_the_bump_it_is_filling`
 
 **The three carrier states and the transform verbs between them**
 ([src/witnessed.rs](../src/witnessed.rs), [src/witnessed/delivered.rs](../src/witnessed/delivered.rs))

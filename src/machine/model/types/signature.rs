@@ -148,14 +148,12 @@ pub fn owned_untyped_key(stored: &[StoredElement<'_>]) -> UntypedKey {
 /// keyword's bytes are copied, so the key outlives the owned form it was built from and lives
 /// exactly as long as the table holding it.
 pub fn store_untyped_key<'a>(brand: RegionBrand<'a>, key: &UntypedKey) -> &'a [StoredElement<'a>] {
-    let elements: Vec<StoredElement<'a>> = key
-        .iter()
-        .map(|element| match element {
+    brand
+        .allocator()
+        .slice_from_iter(key.iter().map(|element| match element {
             UntypedElement::Keyword(text) => StoredElement::Keyword(brand.allocator().text(text)),
             UntypedElement::Slot => StoredElement::Slot,
-        })
-        .collect();
-    brand.allocator().slice(&elements)
+        }))
 }
 
 /// [`store_untyped_key`] from a run already stored **somewhere else** — a bulk install replaying a
@@ -165,14 +163,12 @@ pub fn restore_stored_key<'a>(
     brand: RegionBrand<'a>,
     key: &[StoredElement<'_>],
 ) -> &'a [StoredElement<'a>] {
-    let elements: Vec<StoredElement<'a>> = key
-        .iter()
-        .map(|element| match element {
+    brand
+        .allocator()
+        .slice_from_iter(key.iter().map(|element| match element {
             StoredElement::Keyword(text) => StoredElement::Keyword(brand.allocator().text(text)),
             StoredElement::Slot => StoredElement::Slot,
-        })
-        .collect();
-    brand.allocator().slice(&elements)
+        }))
 }
 
 /// Bucket key produced by both `ExpressionSignature::untyped_key` and
@@ -214,17 +210,14 @@ pub enum StoredDispatchTokenElement<'a> {
 impl DispatchToken {
     /// Re-home this token into `brand`'s region as the run a bucket entry stores.
     pub fn store_in<'a>(&self, brand: RegionBrand<'a>) -> &'a [StoredDispatchTokenElement<'a>] {
-        let elements: Vec<StoredDispatchTokenElement<'a>> = self
-            .0
-            .iter()
-            .map(|element| match element {
+        brand
+            .allocator()
+            .slice_from_iter(self.0.iter().map(|element| match element {
                 DispatchTokenElement::Keyword(text) => {
                     StoredDispatchTokenElement::Keyword(brand.allocator().text(text))
                 }
                 DispatchTokenElement::Slot(kt) => StoredDispatchTokenElement::Slot(*kt),
-            })
-            .collect();
-        brand.allocator().slice(&elements)
+            }))
     }
 
     /// The duplicate-overload predicate against a stored run — element-wise, so the incoming owned
@@ -461,22 +454,19 @@ impl<'a> ExpressionSignature<'a> {
     /// builtin literal, so "a signature's text lives in the signature's own region" holds with no
     /// exceptions and a draft is free to name text borrowed from anywhere at `'a`.
     pub fn mint(brand: RegionBrand<'a>, draft: SignatureDraft<'a>) -> Self {
-        let elements: Vec<SignatureElement<'a>> = draft
-            .elements
-            .into_iter()
-            .map(|element| match element {
-                SignatureElement::Keyword(s) => {
-                    SignatureElement::Keyword(brand.allocator().text(&normalized_keyword(s)))
-                }
-                SignatureElement::Argument(argument) => SignatureElement::Argument(Argument {
-                    name: brand.allocator().text(argument.name),
-                    ktype: argument.ktype,
-                }),
-            })
-            .collect();
         ExpressionSignature {
             return_type: draft.return_type,
-            elements: brand.allocator().slice(&elements),
+            elements: brand
+                .allocator()
+                .slice_from_iter(draft.elements.into_iter().map(|element| match element {
+                    SignatureElement::Keyword(s) => {
+                        SignatureElement::Keyword(brand.allocator().text(&normalized_keyword(s)))
+                    }
+                    SignatureElement::Argument(argument) => SignatureElement::Argument(Argument {
+                        name: brand.allocator().text(argument.name),
+                        ktype: argument.ktype,
+                    }),
+                })),
         }
     }
 

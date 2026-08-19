@@ -335,15 +335,15 @@ fn kexpression_structural_equality() {
     let types = TypeRegistry::new();
     let program = program_storage();
     let brand = program.brand();
-    let a = KObject::KExpression(brand.new_expression(vec![
+    let a = KObject::KExpression(brand.new_expression(&[
         part(ExpressionPart::Keyword("LET")),
         part(ExpressionPart::Identifier("x")),
     ]));
-    let b = KObject::KExpression(brand.new_expression(vec![
+    let b = KObject::KExpression(brand.new_expression(&[
         part(ExpressionPart::Keyword("LET")),
         part(ExpressionPart::Identifier("x")),
     ]));
-    let c = KObject::KExpression(brand.new_expression(vec![
+    let c = KObject::KExpression(brand.new_expression(&[
         part(ExpressionPart::Keyword("LET")),
         part(ExpressionPart::Identifier("y")),
     ]));
@@ -356,15 +356,15 @@ fn kexpression_number_literal_is_ieee() {
     let types = TypeRegistry::new();
     let program = program_storage();
     let brand = program.brand();
-    let nan = KObject::KExpression(brand.new_expression(vec![part(ExpressionPart::Literal(
-        KLiteral::Number(f64::NAN),
-    ))]));
+    let nan = KObject::KExpression(
+        brand.new_expression(&[part(ExpressionPart::Literal(KLiteral::Number(f64::NAN)))]),
+    );
     assert_eq!(nan.value_equal(&nan, &types), Ok(false));
     let one = KObject::KExpression(
-        brand.new_expression(vec![part(ExpressionPart::Literal(KLiteral::Number(1.0)))]),
+        brand.new_expression(&[part(ExpressionPart::Literal(KLiteral::Number(1.0)))]),
     );
     let one2 = KObject::KExpression(
-        brand.new_expression(vec![part(ExpressionPart::Literal(KLiteral::Number(1.0)))]),
+        brand.new_expression(&[part(ExpressionPart::Literal(KLiteral::Number(1.0)))]),
     );
     assert_eq!(one.value_equal(&one2, &types), Ok(true));
 }
@@ -374,14 +374,14 @@ fn kexpression_length_and_variant_mismatch() {
     let types = TypeRegistry::new();
     let program = program_storage();
     let brand = program.brand();
-    let a = KObject::KExpression(brand.new_expression(vec![part(ExpressionPart::Keyword("LET"))]));
-    let longer = KObject::KExpression(brand.new_expression(vec![
+    let a = KObject::KExpression(brand.new_expression(&[part(ExpressionPart::Keyword("LET"))]));
+    let longer = KObject::KExpression(brand.new_expression(&[
         part(ExpressionPart::Keyword("LET")),
         part(ExpressionPart::Identifier("x")),
     ]));
     // Different part variants at the same position.
     let variant =
-        KObject::KExpression(brand.new_expression(vec![part(ExpressionPart::Identifier("LET"))]));
+        KObject::KExpression(brand.new_expression(&[part(ExpressionPart::Identifier("LET"))]));
     assert_eq!(a.value_equal(&longer, &types), Ok(false));
     assert_eq!(a.value_equal(&variant, &types), Ok(false));
 }
@@ -405,7 +405,7 @@ fn a_function<'a>(
     let f = KFunction::alloc_captured_for_test(
         scope,
         sig,
-        Body::UserDefined(KExpression::new(storage.brand(), Vec::new())),
+        Body::UserDefined(KExpression::new(storage.brand(), &[])),
         types,
     );
     KObject::KFunction(f)

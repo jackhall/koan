@@ -43,15 +43,13 @@ fn render_key(key: &[super::UntypedElementSpec]) -> Vec<String> {
 /// Build a bucket-shaped `KExpression` from a spec key (keywords verbatim, slots as bare
 /// identifiers) so its cached `DispatchShape` can be inspected.
 fn expression_for_key<'a>(brand: RegionBrand<'a>, spec: &BinderSpec) -> KExpression<'a> {
-    let parts = spec
-        .key
-        .iter()
-        .map(|element| match element {
+    KExpression::new_from_iter(
+        brand,
+        spec.key.iter().map(|element| match element {
             super::UntypedElementSpec::Keyword(k) => Spanned::bare(ExpressionPart::Keyword(k)),
             super::UntypedElementSpec::Slot => Spanned::bare(ExpressionPart::Identifier("x")),
-        })
-        .collect();
-    KExpression::new(brand, parts)
+        }),
+    )
 }
 
 /// Every spec entry names a bucket the seeded root actually registers, and every spec key
@@ -148,8 +146,8 @@ fn redundant_parens_pass_through() {
     let inner = parse_one(brand, "LET x = 1");
     let wrapped = KExpression::new(
         brand.region(),
-        vec![Spanned::bare(ExpressionPart::Expression(
-            brand.nested_node(inner.parts.to_vec()),
+        &[Spanned::bare(ExpressionPart::Expression(
+            brand.nested_node(inner.parts),
         ))],
     );
     let child = match wrapped.parts[0].value {

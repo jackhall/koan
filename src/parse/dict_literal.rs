@@ -55,7 +55,7 @@ fn single_or_wrapped<'a>(
     match <[ExpressionPart<'a>; 1]>::try_from(parts) {
         Ok([single]) => single,
         Err(parts) => {
-            ExpressionPart::expression(brand, parts.into_iter().map(Spanned::bare).collect())
+            ExpressionPart::expression_from_iter(brand, parts.into_iter().map(Spanned::bare))
         }
     }
 }

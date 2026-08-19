@@ -177,7 +177,7 @@ fn defer_resolved_sigil<'a>(
     let brand = scope.brand();
     let wrapped = KExpression::new(
         brand,
-        vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
+        &[Spanned::bare(ExpressionPart::SigiledTypeExpr(
             inner.rehost(brand),
         ))],
     );

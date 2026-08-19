@@ -1098,7 +1098,7 @@ mod seam_verb_table {
         let types = TypeRegistry::new();
 
         // Program storage is where a raw AST node lives; an expression cell points into it.
-        let expr = KObject::KExpression(program.brand().new_expression(Vec::new()));
+        let expr = KObject::KExpression(program.brand().new_expression(&[]));
         let fields = Record::from_pairs(vec![("e".to_string(), Held::Object(expr))]);
         let value = build_record(&home, fields, &types);
 

@@ -77,7 +77,7 @@ impl<'a> ParseStack<'a> {
                 None,
             ));
         }
-        Ok(KExpression::new(self.brand.region(), self.root))
+        Ok(KExpression::new_from_iter(self.brand.region(), self.root))
     }
 }
 
