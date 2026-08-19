@@ -1,12 +1,10 @@
-//! The dispatch-side `invoke` — the single entry that runs a resolved call. A builtin runs through
+//! The dispatch-side invoke — the single entry that runs a resolved call. A builtin runs through
 //! the action harness (its bound args handed to `BodyCtx` as a transient owned record); a
 //! user-defined body runs through [`crate::machine::core::kfunction::exec::run_user_fn`] and its
-//! [`ExecOutcome`] is lowered to an [`Action::Tail`] the shared
-//! [`run_action`](super::super::runtime::run_action) interprets.
-//! `invoke` is a **pure decide**: it reads a [`DecideCtx`] and the per-call `frame` the harness
-//! already acquired (frame acquisition is the harness's write), and hands the deferred body dispatch
-//! to `run_action` declaratively. Kept out of `ctx.rs` (the dispatcher facade) so the dispatcher core
-//! stays thin; pure body semantics live one layer down in [`crate::machine::core::kfunction::exec`].
+//! [`ExecOutcome`] is lowered to an [`Action::tail`] the shared
+//! [`run_action`](super::run_action) interprets.
+//! Kept out of `ctx.rs` (the dispatcher facade) so the dispatcher core stays thin; pure body
+//! semantics live one layer down in [`crate::machine::core::kfunction::exec`].
 
 use super::super::harness::KoanWorkload;
 use super::super::ignore_results;
@@ -31,9 +29,6 @@ use crate::machine::{DeliveredCarried, KError, KErrorKind};
 /// - **user-defined** → [`enter_user_fn`], which mints the per-call cart and binds the arguments
 ///   into it *here*, in the step that emits the replace.
 ///
-/// Every call reaches here with its value parts already `Spliced`/literal-resolved (the eager-subs
-/// and synchronous bind paths splice them first), so there is no fall-through.
-///
 /// The invoke carries no contract of its own — `picked`'s return is resolved by `run_user_fn` (or
 /// skipped when this is a nested tail). So an invoke that lands inside an established chain wraps
 /// the continuation it installs with the ambient obligation, keeping the first caller's declared
@@ -55,10 +50,8 @@ pub(super) fn invoke_continue<'step>(
     }
 }
 
-/// A dep-free decide [`NodeWork`] whose closure runs [`invoke_builtin`] against the cart the slot
-/// already holds. `carrier` is the call's deadlock-summary sample. `obligation` wraps the
-/// continuation (before the [`NodeWork::new`] erase) so the replacement step re-deposits the
-/// established declared-return checker.
+/// `obligation` wraps the continuation before the [`NodeWork::new`] erase, so the replacement step
+/// re-deposits the established declared-return checker.
 fn builtin_work<'step>(
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
@@ -71,9 +64,9 @@ fn builtin_work<'step>(
     NodeWork::new(continuation)
 }
 
-/// Run a resolved **builtin** call through the action harness. Frameless (`Inherit`), so the working
-/// expression and the slot's cart are the same region here as at the decide that folded the call —
-/// nothing crosses a region boundary and the read is an ordinary resident read.
+/// Frameless (`Inherit`), so the working expression and the slot's cart are the same region here as
+/// at the decide that folded the call — nothing crosses a region boundary and the read is an
+/// ordinary resident read.
 fn invoke_builtin<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     picked: OpenedFunction<'step>,
@@ -84,8 +77,7 @@ fn invoke_builtin<'step>(
         unreachable!("invoke_builtin is installed only for a builtin body");
     };
     let f = *f;
-    // Per-argument reach carriers, read back off the spliced cells (value and reach as one unit). A
-    // literal arg is region-pure and contributes no cell — on the builtin lane nothing binds at a
+    // A literal arg is region-pure and contributes no cell — on the builtin lane nothing binds at a
     // `for<'b>` brand, so an absent entry reads as "no foreign reach".
     let arg_carriers = carriers_from_expr(view, &working_expr);
     let arg_carriers = map_arg_carriers(function, &arg_carriers);
@@ -115,7 +107,7 @@ fn enter_user_fn<'step>(
 ) -> Outcome<'step> {
     let function = picked.value();
     // A uniquely-picked call is admitted shape-only by dispatch, so validate each argument against
-    // its declared parameter type before the type-trusting `bind_by_name` — a non-satisfying typed
+    // its declared parameter type before the type-trusting frame bind — a non-satisfying typed
     // argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
     if let Err(e) = function.validate_call_args(working_expr.parts, view.types()) {
         return Outcome::Done(Err(e));
@@ -124,20 +116,19 @@ fn enter_user_fn<'step>(
     if let Err(e) = deliver_value_args(view, &working_expr, &mut arg_carriers) {
         return Outcome::Done(Err(e));
     }
-    // The single re-key onto parameter names: one walk of the signature over the slot-indexed
-    // carriers, producing the argument record `run_user_fn` binds from. Each envelope's relocation
-    // at the bind door mints that binding's reach in the per-call region, so every foreign region an
-    // argument borrows into is pinned for the call's life — no separate deposit here.
+    // Each envelope's relocation at the bind door mints that binding's reach in the per-call region,
+    // so every foreign region an argument borrows into is pinned for the call's life — no separate
+    // deposit here.
     let named_carriers = map_arg_carriers(function, &arg_carriers);
-    // The callee's cart: chained off the closure's captured (definition) scope, so a closure's
-    // captured per-call frame survives the hop while the caller's cart does not.
+    // Chained off the closure's captured (definition) scope, so a closure's captured per-call frame
+    // survives the hop while the caller's cart does not.
     let frame = CallFrame::new(function.captured_scope());
     let exec_frame = ExecFrame {
         region: Rc::clone(&frame),
     };
-    // A deferred-return FN dispatched as a tail call inside an established contract chain skips
-    // resolving its own (keep-first-discarded) return type — see `run_user_fn`. An established
-    // chain is exactly one with a live obligation, so the duplicate's presence answers both reads.
+    // An established contract chain is exactly one with a live obligation, so the duplicate's
+    // presence answers both reads: a deferred-return FN dispatched as a tail call inside one skips
+    // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
     let obligation = view.current_obligation_duplicate();
     let in_chain = obligation.is_some();
     let label = WorkLabel::of(&working_expr);
@@ -149,10 +140,9 @@ fn enter_user_fn<'step>(
         view.types(),
     ) {
         ExecOutcome::Tail { leading, tail, ret } => {
-            // A resolved return reads its type off the signature; a deferred `Type` return carries
-            // the per-call type (a `Copy` handle from `run_user_fn`) as a `PerCall` contract,
-            // checked + stamped at the lift boundary like any FN return, so a recursive deferred
-            // body stays TCO-flat.
+            // A deferred `Type` return's per-call type rides a `PerCall` contract, checked +
+            // stamped at the lift boundary like any FN return, so a recursive deferred body stays
+            // TCO-flat.
             let contract = match ret {
                 PerCallReturn::FromSignature => ReturnContract::Function(picked.reseal()),
                 PerCallReturn::Resolved(ret) => ReturnContract::PerCall {
@@ -174,12 +164,10 @@ fn enter_user_fn<'step>(
             leading,
             tail,
         } => {
-            // First-call deferred `Expression` return: the leading body statements and the
-            // return-type expression run as body-chain siblings in the installed cart; the
-            // lowering's finish reads the last result (the resolved type) into a `PerCall` contract
-            // before tail-replacing into the body terminal, so the recursion — subsequent calls skip
-            // resolution — stays TCO-flat. The type expression is a body sibling, so it joins the
-            // leading run.
+            // First-call deferred `Expression` return: the return-type expression is a body-chain
+            // sibling, so it joins the leading run and the lowering's finish reads the last result
+            // (the resolved type) into a `PerCall` contract before tail-replacing into the body
+            // terminal — subsequent calls skip resolution, so the recursion stays TCO-flat.
             let mut leading: Vec<KExpression<'step>> = leading.into_iter().copied().collect();
             leading.push(type_expr);
             body_continue(
@@ -216,8 +204,6 @@ fn body_continue<'step>(
 ) -> Outcome<'step> {
     let work_frame = Rc::clone(&frame);
     let continuation = ignore_results(Box::new(move |view: &DecideCtx<'_, 'step, '_>, _idx| {
-        // The body crosses into the scheduler here, one working node per statement: each is a
-        // slice copy of the parsed run into the installed cart's own region.
         let brand = view.current_scope().brand();
         super::run_action(
             view,
@@ -243,15 +229,14 @@ fn body_continue<'step>(
     }
 }
 
-/// Lift each spliced cell off the working expression, **one entry per part**: `Some(envelope)` for a
-/// `Spliced` part, `None` for every other (a literal arg is region-pure — "no entry = no foreign
-/// reach"). Parallel to `working_expr.parts` rather than a sparse `(slot, …)` list, so every reader
-/// below addresses a part and its envelope by the same index with nothing to keep in step.
+/// Lift each spliced cell off the working expression, **one entry per part** — parallel to
+/// `working_expr.parts` rather than a sparse `(slot, …)` list, so every reader addresses a part and
+/// its envelope by the same index with nothing to keep in step. A `None` entry reads as "no foreign
+/// reach".
 ///
 /// The cells rest in the region the dispatching step put them in; the lift re-owns each one's reach
-/// under the step's coverage, so every reader downstream (the per-call reach store, a
-/// value-embedding builtin's fold) works off an envelope that survives the call independently of
-/// that region. Once per call, not once per reader.
+/// under the step's coverage, so every reader downstream works off an envelope that survives the
+/// call independently of that region. Once per call, not once per reader.
 fn carriers_from_expr<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     working_expr: &WorkingExpression<'step>,
@@ -266,10 +251,9 @@ fn carriers_from_expr<'step>(
         .collect()
 }
 
-/// Re-key the slot-indexed arg carriers onto their parameter names — the **one** walk of the
-/// signature over the carriers on either lane. A committed call's parts line up 1:1 with `picked`'s
-/// signature elements (`validate_call_args` enforces it), so the element at a carrier's slot names
-/// its parameter. A `None` entry is read as "no foreign reach" and contributes no record field — the
+/// Re-key the slot-indexed arg carriers onto their parameter names. A committed call's parts line up
+/// 1:1 with `picked`'s signature elements ([`KFunction::validate_call_args`] enforces it), so the
+/// element at a carrier's slot names its parameter. A `None` entry contributes no record field — the
 /// shape a region-pure arg takes on the builtin lane, where nothing binds at a `for<'b>` brand. A
 /// user-defined call fills every value slot ([`deliver_value_args`]), so the record this returns
 /// there holds one envelope per parameter and is the whole argument currency the frame bind reads.
@@ -288,11 +272,9 @@ fn map_arg_carriers<'e, 'step>(
     record
 }
 
-/// Lower an action-harness builtin: hand its owned `args` to the `BodyCtx` by reference — a
-/// transient record, never a `KObject`, never region-allocated — call the `ActionFn`, then
-/// interpret the returned `Action` through the shared `run_action`. `arg_carriers` are the
-/// per-parameter reach carriers (a value-embedding body folds / merges the one it embeds; an
-/// absent entry is region-pure).
+/// `args` reaches the `BodyCtx` by reference as a transient record — never a `KObject`, never
+/// region-allocated. `arg_carriers` are the per-parameter reach carriers (a value-embedding body
+/// folds / merges the one it embeds; an absent entry is region-pure).
 fn run_action_builtin<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     f: crate::machine::core::ActionFn,
@@ -318,20 +300,15 @@ fn run_action_builtin<'step>(
         };
         f(&body_ctx)
     };
-    // `run_action` lowers the `Action` to an `Outcome`; the harness applies the result. The step
-    // view carries the ambient obligation a tail action keep-firsts against.
     super::run_action(view, action)
 }
 
-/// Deliver the call's value arguments: after this, every value part of `working_expr` has a delivery
-/// envelope in its own slot of `arg_carriers`, which is what the frame bind takes. A `Spliced` part
-/// already holds the one [`carriers_from_expr`] lifted for it — the cells rest in the *dispatching*
-/// step's region, whose shell a framed tail hop has retired, so that lift runs under the step's own
-/// coverage and is paid once per call, not once per reader. The two resolving arms **fill their own
-/// slot**: the value is placed in the call scope's region and enveloped there
-/// ([`Scope::deliver_resident_object`]) — `view.current_scope()` *is* the call scope (the run loop
-/// opens each step's scope from the Continue-installed cart), so the fold never lands in the caller's
-/// scope. The envelope's own coverage is empty, so a literal argument still pins nothing.
+/// After this, every value part of `working_expr` has a delivery envelope in its own slot of
+/// `arg_carriers`, which is what the frame bind takes. The two resolving arms place their value in
+/// the call scope's region and envelope it there (`deliver_resident_object`) —
+/// `view.current_scope()` *is* the call scope (the run loop opens each step's scope from the
+/// Continue-installed cart), so the fold never lands in the caller's scope. The envelope's own
+/// coverage is empty, so a literal argument still pins nothing.
 ///
 /// The envelope is what the bind's `for<'b>` brand admits
 /// ([`CallFrame::with_scope`](crate::machine::CallFrame::with_scope)) — a bare `&'step

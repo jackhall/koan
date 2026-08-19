@@ -153,7 +153,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                         i += 2;
                     }
                     (Some(ExpressionPart::RecordType(inner)), None) => {
-                        // A `:{…}` record param type sub-Dispatches to a `KType::Record` carrier.
+                        // A `:{…}` record param type sub-Dispatches to a record `KType` carrier.
                         let brand = elaborator.scope.brand();
                         let wrapped = KExpression::new(
                             brand,

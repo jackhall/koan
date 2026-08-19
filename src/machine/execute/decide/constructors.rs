@@ -1,11 +1,6 @@
-//! NewType + tagged-union construction dispatch. Both the `TypeCall` fast lane (single_poll)
-//! and the `FunctionValueCall` fast lane (fn_value) route a resolved verb-carrier here. Args
-//! resolve through per-value eager sub-Dispatches; when all are bound, `finish` validates
-//! types and emits the `KObject::Wrapped` / `KObject::Tagged` directly — no bucket lookup, no
-//! re-dispatch. Reusing the eager-subs `AwaitDeps` machinery (rather than a
-//! standalone `AwaitDeps`) is load-bearing: it stages an already-ready value in place and parks
-//! a deferred one on the construction node itself, so a newtype built from a still-pending
-//! reference (`(Boxed (p))` where `p` is a sibling construction) finalizes correctly.
+//! NewType + tagged-union construction dispatch. Args resolve through one sub-Dispatch per value
+//! cell; once every cell is bound, [`finish_witnessed`] type-checks them and emits the
+//! `KObject::Wrapped` / `KObject::Tagged` directly — no bucket lookup, no re-dispatch.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -33,65 +28,49 @@ use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
 use crate::scheduler::Deps;
 
-/// Schema-keyed selector for [`finish_witnessed`]'s match: which construction shape `launch`'s
-/// value subs feed once every slot resolves. `identity` / `constructor` is the sealed member's
-/// handle, stamped onto the produced `KObject`; `schema` is the member's variant schema, used for
-/// per-value type-checking.
+/// Which construction shape the resolved value subs feed. The carried `KType` is the sealed
+/// member's own handle, stamped onto the produced `KObject` as its identity.
 pub(in crate::machine::execute) enum CtorKind {
-    /// NewType construction (record-repr or scalar) from a single positional value. One value
-    /// cell carrying the whole value expression; the finish type-checks it against the
-    /// member's `repr`, peels any `Wrapped` layer, and tags it with `identity`.
+    /// NewType construction (record-repr or scalar) from a single positional value, checked
+    /// against the member's `repr`.
     NewType { identity: KType },
     /// Record-repr newtype construction from a named record-literal body (`Point {x = 1, y =
-    /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind)
-    /// instead of deferring the whole record literal; the
-    /// finish builds the `KObject::Record` and wraps it with `identity`.
+    /// 2}`), with one value cell per field.
     RecordNewType {
         identity: KType,
         field_names: Vec<String>,
     },
     Tagged {
         schema: Rc<HashMap<String, KType>>,
-        /// The sealed union member's own handle — what the built `Tagged` carries as its
-        /// `identity`, and what its `ktype()` reports.
         member: KType,
         tag: String,
     },
     /// Identity-wrapper construction over a `NEWTYPE (Type AS Wrapper)`-declared constructor
-    /// family (empty-schema `TypeConstructor` member). One value cell carrying the whole value
-    /// expression; the finish stamps the value's full type as the sole applied arg, peels any
-    /// `Wrapped` layer, and wraps the payload with a fresh
-    /// `ConstructorApply(Wrapper, {<param> = <arg>})`
-    /// type id — so the built value inhabits `:(<v's type> AS Wrapper)`.
+    /// family (empty-schema `TypeConstructor` member). The value's own full type becomes the sole
+    /// applied arg, so the built value inhabits `:(<value's type> AS Wrapper)`.
     ApplyConstructor { constructor: KType },
 }
 
 /// Relocation product for a record-repr newtype: the destination region plus the field values
 /// gathered from the value deps, relocated as one run so the product's witness composes by minting
 /// into that region (the [`HasRegionHandle`](crate::witnessed::HasRegionHandle) seam).
-/// The final `merge` with [`RegionTypeFamily`] builds the `Record` and wraps it with the identity.
-/// Layout-invariant: a thin region pointer and a slice of layout-invariant field values — the same
-/// shape as [`dispatch::literal`](super::literal)'s `AggBuildFamily`, and bumped exactly once for
-/// the same reason: the run rides the Copy tier, whose dormant slot runs no drop glue, so an owned
-/// buffer could not live there.
+/// Layout-invariant, and bumped exactly once: the run rides the Copy tier, whose dormant slot runs
+/// no drop glue, so an owned buffer could not live there.
 ///
 /// Only the *values* ride the carrier. The field **names** are owned data with no region lifetime,
-/// so they stay beside the relocation and pair back with the relocated values at the final merge —
-/// one less thing the carrier has to be honest about.
+/// so they stay beside the relocation and pair back with the relocated values at the final merge.
 struct RecordFieldsFamily;
 reattachable!(RecordFieldsFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [KObject<'r>]));
 
-/// The per-source cell family the field relocation hands back: one rebuilt field value per term.
-/// The relocation door pairs each with its own source envelope to derive that field's retention
-/// claim. Layout-invariant in `'r`: [`KObject`] is one type up to its lifetime.
+/// The per-source cell family the field relocation hands back: one rebuilt field value per term,
+/// each paired with its own source envelope to derive that field's retention claim.
+/// Layout-invariant in `'r`: [`KObject`] is one type up to its lifetime.
 struct KObjectFamily;
 reattachable!(KObjectFamily => KObject<'r>);
 
-/// Validate a tagged-union call site's args shape: exactly two parts, the first a
-/// `Type`-token tag (tags are capitalized variant types). The value part rides through
-/// unchanged so the dispatcher can sub-Dispatch it before construction sees its resolved
-/// value — the tag/value-type checks and the witnessed `KObject::Tagged` build live in
-/// [`finish_witnessed`], which folds the value carrier's reach onto the result.
+/// Validate a tagged-union call site's args shape: exactly two parts, the first a `Type`-token tag
+/// (tags are capitalized variant types). The value part rides through unchanged — the tag/value
+/// type checks and the witnessed build wait for its resolved value in [`finish_witnessed`].
 pub(in crate::machine::execute) fn prepare_args<'step>(
     args_parts: &[Spanned<ExpressionPart<'step>>],
 ) -> Result<(String, ExpressionPart<'step>), KError> {
@@ -116,10 +95,9 @@ pub(in crate::machine::execute) fn prepare_args<'step>(
 #[cfg(test)]
 mod tests;
 
-/// One dep's worth of construction value, in whichever form it already has: a parsed part
-/// straight out of the body, or a node the dispatcher synthesized for a multi-part value. Local to
-/// this file — [`launch`] is its only consumer, and it exists so the multi-part case never has to
-/// mint an AST arm.
+/// One dep's worth of construction value, in whichever form it already has: a parsed part straight
+/// out of the body, or a synthesized node for a multi-part value — so the multi-part case never has
+/// to mint an AST arm.
 enum ValueCell<'step> {
     /// A part lifted verbatim out of the construction body.
     Part(ExpressionPart<'step>),
@@ -127,17 +105,13 @@ enum ValueCell<'step> {
     Synthesized(WorkingExpression<'step>),
 }
 
-/// Paren-unwrap a construction's value parts to a single value cell: a redundant `(...)`
-/// wrapper group unwraps first, so `(Distance 3.0)` / `Distance (3.0)` construct identically
-/// and `Distance ()` is arity-zero (rejected here). A single remaining part dispatches
-/// directly (a bare `(p)` reference resolves in place when ready, the way tagged construction
-/// dispatches its lone value); a multi-part value (`Bar (Foo 3.0)`) becomes one synthesized
-/// [`WorkingExpression`] so `launch` dispatches it as one unit.
+/// Paren-unwrap a construction's value parts to a single value cell: a redundant `(...)` wrapper
+/// group unwraps first, so `(Distance 3.0)` / `Distance (3.0)` construct identically and
+/// `Distance ()` is arity-zero (rejected here).
 ///
-/// The multi-part case groups in **working** form rather than wrapping an AST `Expression` arm
-/// around it. The group exists only to be dispatched, and it is minted per call — so the lane
-/// scheduler-synthesized nodes already take (`WorkingPart::Expression`) is the one it belongs on,
-/// and the per-call node never has to claim the eternal-tier residence an AST arm's payload does.
+/// A multi-part value (`Bar (Foo 3.0)`) groups in **working** form rather than under an AST
+/// `Expression` arm: the group exists only to be dispatched and is minted per call, so it never has
+/// to claim the eternal-tier residence an AST arm's payload does.
 fn single_value_cell<'step>(
     brand: RegionBrand<'step>,
     mut value_parts: &[Spanned<ExpressionPart<'step>>],
@@ -185,9 +159,8 @@ fn value_parts_of<'step>(
         .collect()
 }
 
-/// Construct a newtype value (record-repr or scalar). `value_parts` is the whole value
-/// expression (`expr.parts[1..]`), collapsed to one value cell by [`single_value_cell`]; the
-/// finish type-checks it against the member's `repr` and wraps with `identity`.
+/// Construct a newtype value (record-repr or scalar). `value_parts` is the whole value expression
+/// (`expr.parts[1..]`), collapsed to one value cell by [`single_value_cell`].
 pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
     brand: RegionBrand<'step>,
     identity: KType,
@@ -200,10 +173,8 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
     launch(brand, vec![value_cell], CtorKind::NewType { identity })
 }
 
-/// Direct-construct a record-repr newtype from a named record-literal body. Launches one
-/// value cell per field — a literal field stages in place, so a record over literal fields
-/// binds synchronously; a chained construction like `(Boxed (p))` depends on that. The finish
-/// builds the `KObject::Record` and wraps it.
+/// Direct-construct a record-repr newtype from a named record-literal body, one value cell per
+/// field — so a field resolves on its own rather than through a dispatch of the whole literal.
 pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
     brand: RegionBrand<'step>,
     identity: KType,
@@ -227,13 +198,12 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
     )
 }
 
-/// Type-check `value` against the newtype member's projected `repr` and decide how the wrap folds
-/// its payload. The check runs **before** the witness-closure build (read out of the value carrier),
-/// so the build inside the brand is infallible. Returns whether to **collapse** one wrapper layer:
-/// a transparent re-tag (`NEWTYPE Bar = Foo` over a `Foo` value — the payload's identity is exactly
-/// this repr) collapses so identities never stack; a self-recursive newtype (`NEWTYPE List =
-/// :{head :Number, tail :List}`) wraps a payload whose identity differs from the record repr, so it
-/// preserves the nested value — the recursion a linked structure needs.
+/// Type-check `value` against the newtype member's `repr`. The check runs **before** the
+/// witness-closure build, so the build inside the brand is infallible. Returns whether to
+/// **collapse** one wrapper layer: a transparent re-tag (`NEWTYPE Bar = Foo` over a `Foo` value —
+/// the payload's identity is exactly this repr) collapses so identities never stack; a
+/// self-recursive newtype (`NEWTYPE List = :{head :Number, tail :List}`) wraps a payload whose
+/// identity differs from the repr, preserving the nested value a linked structure needs.
 fn check_newtype_repr<'a>(
     identity: KType,
     value: &KObject<'a>,
@@ -260,11 +230,10 @@ fn check_newtype_repr<'a>(
 }
 
 /// Record-shaped twin of [`check_newtype_repr`] for [`CtorKind::RecordNewType`]: checks the
-/// assembled field values against the newtype's declared record repr directly, field by field —
-/// never building a probe `KObject::Record` to run [`KType::matches_value`] against, since a
-/// record's substrate is now born only through the fold door, and this ambient check runs before
-/// any brand is in hand. A record-repr newtype's collapse question never arises (a bare field
-/// record is never itself a `Wrapped`), so this returns no collapse bit.
+/// assembled field values against the declared record repr field by field, never building a probe
+/// `KObject::Record` to run [`KType::matches_value`] against — a record's substrate is born only
+/// through the fold door, and this check runs before any brand is in hand. A record-repr newtype's
+/// collapse question never arises (a bare field record is never itself a `Wrapped`).
 fn check_record_newtype_repr(
     identity: KType,
     fields: &Record<KObject<'_>>,
@@ -300,9 +269,7 @@ fn check_record_newtype_repr(
 
 /// Construct an identity-wrapper value over a `NEWTYPE (Type AS Wrapper)`-declared constructor
 /// family. `value_parts` collapses to one value cell via [`single_value_cell`], the same shape
-/// [`dispatch_construct_newtype`] uses. The finish ([`finish_witnessed`]'s `ApplyConstructor`
-/// arm) stamps the value's type as the applied arg and wraps it with a
-/// `ConstructorApply(<ctor SetMember>, {<param> = arg})` identity.
+/// [`dispatch_construct_newtype`] uses.
 pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
     brand: RegionBrand<'step>,
     constructor: KType,
@@ -335,10 +302,8 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
     construct_tagged(brand, member, schema, tag, value_part)
 }
 
-/// Construct a tagged value from an already-split `(tag, value)` pair — the core both the
-/// positional-body [`dispatch_construct_tagged`] (builtin `Result`) and the user-`UNION`
-/// variant path ([`apply_union_construct`](super::apply_callable)) share. The finish type-checks
-/// the value against `schema[tag]` and builds `KObject::Tagged { tag, value, identity: member }`.
+/// Construct a tagged value from an already-split `(tag, value)` pair. The finish type-checks the
+/// value against `schema[tag]` and builds `KObject::Tagged { tag, value, identity: member }`.
 pub(in crate::machine::execute) fn construct_tagged<'step>(
     brand: RegionBrand<'step>,
     member: KType,
@@ -357,12 +322,9 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
     )
 }
 
-/// Decide a constructor park: every value part is a fresh sub-Dispatch dep (a single-part
-/// `Expression` wrapping routes through normal classification), and a freshly-minted sub is never
-/// terminal in the same step (submission is enqueue-then-drain), so there is no inline-ready case —
-/// the slot always parks as an [`Outcome::Park`]. The finish folds the resolved value
-/// carriers into the wrapped value **inside the witness closure** ([`finish_witnessed`]) so it names
-/// every region it reaches; dep errors propagate frameless.
+/// Decide a constructor park. A freshly-minted sub is never terminal in the same step (submission
+/// is enqueue-then-drain), so there is no inline-ready case — the slot always parks as an
+/// [`Outcome::Park`]. Dep errors propagate frameless.
 fn launch<'step>(
     brand: RegionBrand<'step>,
     value_parts: Vec<ValueCell<'step>>,
@@ -391,13 +353,10 @@ fn launch<'step>(
 }
 
 /// Build the construction operand carrying `(dest brand, nominal identity)` across the build brand.
-/// The whole operand is `yoke`d into `dest_frame`'s own region — witnessed by it — with the identity
-/// moved into the brand closure alongside the handle. `KType` is a bare interned handle (a `u128`
-/// into the registry) that points into no region, so it is region-pure data the yoke may carry in:
-/// nothing is composed, and the operand's reach is exactly the dest region's own, born co-located
-/// rather than paired with an asserted witness. The envelope it seals into is
-/// [`Delivered::destination`]'s shape exactly — homed in `dest_frame`, covering nothing beyond it —
-/// since a handle plus a scalar reaches nothing else.
+/// `KType` is a bare interned handle that points into no region, so it is region-pure data the yoke
+/// may carry in: nothing is composed, and the operand's reach is exactly the dest region's own,
+/// born co-located rather than paired with an asserted witness — [`Delivered::destination`]'s shape
+/// exactly, homed in `dest_frame` and covering nothing beyond it.
 pub(crate) fn build_type_operand(
     dest_frame: Rc<FrameStorage>,
     identity: KType,
@@ -407,26 +366,22 @@ pub(crate) fn build_type_operand(
 
 /// Seal a declaration's nominal identity as a `Carried::Type` terminal. A `KType` is a `Copy`
 /// handle, so the identity reaches no region and the carrier seals under a member-less description
-/// hosted in `scope`'s own region — the read travels under the home-frame pin alone. The type channel mints no reach;
-/// [`finish_witnessed`]'s construction fold is the value-side counterpart, where the wrapped object
-/// genuinely reaches its deps' regions.
+/// hosted in `scope`'s own region — the read travels under the home-frame pin alone.
 pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: KType) -> StepCarried<'a> {
     StepCarried::born(scope.resident(Carried::Type(identity)))
 }
 
-/// All value subs have resolved. Build the wrapped value **inside the witness closure**, folding the
-/// value carriers' reach onto the result so the constructed object names every region it reaches by
-/// construction. The nominal type identity crosses the brand as a non-object operand
-/// ([`RegionTypeFamily`]), `merge`d in via [`build_type_operand`] so it rides the brand witnessed by
-/// its own reach rather than an asserted co-location. Type-checks run before the build (read out of
-/// the carrier), so the closure is infallible.
+/// All value subs have resolved. The wrapped value is built **inside the witness closure**, folding
+/// the value carriers' reach onto the result so the constructed object names every region it
+/// reaches by construction. The nominal type identity crosses the brand as a non-object operand
+/// ([`RegionTypeFamily`]) via [`build_type_operand`], so it rides the brand witnessed by its own
+/// reach rather than an asserted co-location. Type-checks run before the build, so the closure is
+/// infallible.
 fn finish_witnessed<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     kind: &CtorKind,
     terminals: &[&DepTerminal<'_>],
 ) -> Result<DeliveredCarried, KError> {
-    // A constructor's deps are its value subs and nothing else, so its results are exactly the whole
-    // dep list — read as one slice.
     match kind {
         CtorKind::NewType { identity } => {
             debug_assert_eq!(terminals.len(), 1);
@@ -439,8 +394,8 @@ fn finish_witnessed<'step>(
             let home = build_type_operand(view.dest_frame(), *identity);
             // The wrap keeps the value verbatim, so a payload substrate that stays foreign rides as
             // the payload cell's own stored run; the term's coverage is the holder-rule proof for
-            // reading it, captured before the fold closure. `transfer_into` and `.coverage()` need
-            // an owned envelope, so the term's resident cell is lifted back to one first.
+            // reading it. `transfer_into` and `.coverage()` need an owned envelope, so the term's
+            // resident cell is lifted back to one first.
             let delivered = view.current_scope().lift_spliced(&terminals[0].cell);
             let holder = delivered.coverage().clone();
             // The type operand is empty-reach, so the transfer composes the value's reach alone and
@@ -467,10 +422,6 @@ fn finish_witnessed<'step>(
             identity,
             field_names,
         } => {
-            // Check the assembled record's field values against the newtype repr first (read out
-            // of the carriers, no probe `KObject::Record` built — see
-            // `check_record_newtype_repr`'s doc), then fold the field carriers into the witnessed
-            // record and wrap it.
             // Each field value is read at its own resident brand — a pin-free read; the guards stay
             // bound across the probe build, and the deep clone is owned data that outlives them.
             let opened: Vec<_> = terminals.iter().map(|t| t.cell.open_at()).collect();
@@ -483,13 +434,12 @@ fn finish_witnessed<'step>(
             check_record_newtype_repr(*identity, &probe, view.types())?;
             drop(opened);
             // The whole field run relocates in one act against a bare destination handle over the
-            // dest frame's region (mirroring `dispatch::literal`'s `AggBuildFamily`), so every
-            // field's reach is minted into that region's own arena rather than unioned by hand,
-            // and the fields are bumped once.
+            // dest frame's region (mirroring `literal`'s `AggBuildFamily`), so every field's reach
+            // is minted into that region's own arena rather than unioned by hand, and the fields
+            // are bumped once.
             let dest_frame = view.dest_frame();
             // The relocation takes owned envelopes, so each term's resident cell is lifted back to
-            // one first. The `Vec` is the envelopes' own storage, not a slice built to fit the
-            // door: the door takes it as it stands.
+            // one first.
             let lifted: Vec<DeliveredCarried> = terminals
                 .iter()
                 .map(|term| view.current_scope().lift_spliced(&term.cell))
@@ -519,14 +469,10 @@ fn finish_witnessed<'step>(
             );
             let home = build_type_operand(Rc::clone(&dest_frame), *identity);
             let types = view.types();
-            // Each field cell is a pointer copy of its term's value, so a field substrate that
-            // stays foreign rides as that field's own stored run. The holder for the **record's**
-            // birth is therefore the union across the run — the relocated envelope's coverage,
-            // naming every region any field reaches — because the value born at this door is the
-            // record, whose stored run spans every field. No per-field narrowing applies here:
-            // unlike a literal cell, a field is not rebuilt through a door of its own (the
-            // relocation `deep_clone`s its top node), so there is no per-cell rebuild to prove
-            // against a narrower coverage.
+            // The value born at this door is the record, whose stored run spans every field, so
+            // its holder is the union across the run — the relocated envelope's coverage. No
+            // per-field narrowing applies: the relocation `deep_clone`s each field's top node
+            // rather than rebuilding it through a door of its own.
             let holder = fields.coverage().clone();
             // The type operand is empty-reach; merge the relocated fields into it, yielding the
             // wrapped record homed in the dest frame.
@@ -586,14 +532,9 @@ fn finish_witnessed<'step>(
                     }));
                 }
             }
-            // The member handle crosses the brand as a `Copy` operand so the built `Tagged`
-            // names its identity at the brand. The handle borrows no region — it is one `u128`
-            // naming registry-owned content — so the operand's reach stays empty.
             let home = build_type_operand(view.dest_frame(), *member);
             let tag = tag.clone();
-            // The tag keeps the value verbatim — see the `NewType` arm's holder. `transfer_into` and
-            // `.coverage()` need an owned envelope, so the term's resident cell is lifted back to one
-            // first.
+            // The tag keeps the value verbatim — see the `NewType` arm's holder.
             let delivered = view.current_scope().lift_spliced(&terminals[0].cell);
             let holder = delivered.coverage().clone();
             Ok(
@@ -615,9 +556,6 @@ fn finish_witnessed<'step>(
         }
         CtorKind::ApplyConstructor { constructor } => {
             debug_assert_eq!(terminals.len(), 1);
-            // The constructor handle crosses the brand as a `Copy` operand so the built value's
-            // `ConstructorApply` type id names its constructor at the brand. The handle borrows no
-            // region, so the operand's reach stays empty.
             let identity: KType = *constructor;
             // An identity wrapper takes exactly one type parameter; its name keys the applied
             // arg in the built `ConstructorApply`.
@@ -633,9 +571,7 @@ fn finish_witnessed<'step>(
             };
             let home = build_type_operand(view.dest_frame(), identity);
             let types = view.types();
-            // The wrap keeps the value verbatim — see the `NewType` arm's holder. `transfer_into`
-            // and `.coverage()` need an owned envelope, so the term's resident cell is lifted back
-            // to one first.
+            // The wrap keeps the value verbatim — see the `NewType` arm's holder.
             let delivered = view.current_scope().lift_spliced(&terminals[0].cell);
             let holder = delivered.coverage().clone();
             Ok(
@@ -648,15 +584,12 @@ fn finish_witnessed<'step>(
                         // Stamp the value's FULL type — including a `Wrapped` payload's own
                         // nominal identity — as the sole applied arg before collapsing.
                         let arg = value.object().ktype();
-                        // The type id is the interned `ConstructorApply(<constructor>,
-                        // {<param> = arg})` — one handle, built where the registry is in scope.
                         let type_id = types.constructor_apply(
                             identity_ty,
                             Record::from_pairs([(param_name, arg)]),
                         );
-                        // Collapse: `wrapped_peel` peels any single `Wrapped` layer so `Wrapped.inner`
-                        // is never itself `Wrapped` (the single-layer invariant); the peeled identity
-                        // is not lost — it lives in `arg`.
+                        // `wrapped_peel` keeps the single-layer invariant (`Wrapped.inner` is never
+                        // itself `Wrapped`); the peeled identity is not lost — it lives in `arg`.
                         Carried::Object(region.alloc_object_folded(KObject::wrapped_peel(
                             region.with_holder(&holder),
                             value.object(),

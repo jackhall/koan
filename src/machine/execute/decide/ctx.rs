@@ -6,8 +6,8 @@
 //! question is either the install's answer (the park verdicts the harness reads off
 //! [`InstalledEdge`](crate::scheduler::InstalledEdge)) or foreclosed by the language's lexical
 //! well-foundedness rule (a park can never wait forward, so no decide probes for cycles). A shape
-//! handler decides against this and returns an [`Outcome`](super::Outcome); the harness
-//! ([`super::super::harness`]) holds the sole `&mut Scheduler` and applies it.
+//! handler decides against this and returns an [`Outcome`](super::Outcome) that the harness
+//! ([`super::super::harness`]) applies, so no shape module mutates the scheduler.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -42,9 +42,9 @@ pub(in crate::machine::execute) fn with_node_scope<R>(
     }
 }
 
-/// Run `f` with the active slot's scope from the ambient payload — the read the `&mut` harness
-/// classify and submit paths use (they hold the ambient context, not the step's branded scope).
-/// Panics outside a slot step; within a step the scope is always present.
+/// Run `f` with the active slot's scope recovered from the ambient payload, for a path that holds
+/// the ambient context rather than the step's branded scope. Panics outside a slot step; within a
+/// step the scope is always present.
 pub(in crate::machine::execute) fn with_current_node_scope<R>(
     ambient: &AmbientContext,
     f: impl for<'b> FnOnce(&'b Scope<'b>) -> R,
@@ -56,7 +56,7 @@ pub(in crate::machine::execute) fn with_current_node_scope<R>(
 }
 
 /// The frame storage owning the active slot's scope region, read through the ambient payload — the
-/// `&mut` harness path's analogue of [`DecideCtx::dest_frame`]. Routes through `scope_frame`, the
+/// ambient-context analogue of [`DecideCtx::dest_frame`]. Routes through `scope_frame`, the
 /// liveness invariant's single owner.
 pub(in crate::machine::execute) fn current_dest_frame(
     ambient: &AmbientContext,
@@ -122,20 +122,16 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
         }
     }
 
-    /// This run's program storage capability — see the [`program`](Self::program) field.
     pub(in crate::machine::execute) fn program(&self) -> ProgramBrand<'program> {
         self.program
     }
 
     /// Append this step's next batch of binding writes to the harness-owned sink, preserving the
-    /// order the bodies decided them in. The only way into `effects`; called once per interpreted
-    /// `Action` by [`run_action`](super::run_action).
+    /// order the bodies decided them in. The only way into `effects`.
     pub(in crate::machine::execute) fn deposit_effects(&self, ops: Vec<WriteOp<'step>>) {
         self.effects.borrow_mut().extend(ops);
     }
 
-    /// The installing declaration's identity — the statement this slot is running — which a binder
-    /// body threads into its `types` entry via [`BodyCtx::declaration_site`].
     pub(in crate::machine::execute) fn installer(&self) -> Installer {
         self.installer
     }
@@ -202,9 +198,9 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
         self.ambient.current_obligation_duplicate()
     }
 
-    /// Build the per-part `bare_outcomes` cache: one [`resolve_name`] per bare-name part,
-    /// `None` otherwise. Every part resolves — a producer's error reaches this consumer through
-    /// the park the harness installs, not through the cache.
+    /// Build the per-part `bare_outcomes` cache: one [`resolve_name`] per bare-name part, `None`
+    /// otherwise. The cache carries no error channel — a producer's failure reaches this consumer
+    /// through the park the harness installs instead.
     pub(super) fn build_bare_outcomes(
         &self,
         parts: &[Spanned<WorkingPart<'step>>],

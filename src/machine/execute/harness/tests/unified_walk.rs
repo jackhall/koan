@@ -1,19 +1,17 @@
-//! Cache-driven strict-only dispatch surface tests not covered elsewhere:
-//! self-reference `LET Ty = Ty` (cache `Unbound`, wrap-slot terminalizes
-//! without entering cycle detection) and bare-name forward reference to a
-//! nominal-binder placeholder (cache `Parked`, splice walk installs combined
-//! park, slot commits on wake).
+//! Cache-driven strict-only dispatch surface: self-reference `LET Ty = Ty`
+//! (cache `Unbound`) and a bare-name reference to a still-pending binder
+//! placeholder (cache `Parked`, park installed at dispatch, slot commits on
+//! wake).
 
 use super::working_all;
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::core::{program_storage, run_root_storage};
 
-/// Self-reference `LET Ty = Ty`: the consumer sees its own placeholder as
-/// hidden under index-gating (same idx, LET binders aren't nominal), so the
+/// Self-reference `LET Ty = Ty`: index gating is a strict `idx <` predicate, so
+/// the in-progress binding is invisible to its own RHS at the same idx. The
 /// cache holds `Unbound("Ty")` and the wrap-slot terminal surfaces
-/// `UnboundName`. Cycle detection only fires on visible Parked outcomes — a
-/// separate path.
+/// `UnboundName` rather than self-parking.
 #[test]
 fn self_referential_let_surfaces_unbound_name() {
     let program = program_storage();
@@ -37,17 +35,17 @@ fn self_referential_let_surfaces_unbound_name() {
     );
 }
 
-/// Bare-name forward reference to a placeholder: cache holds
-/// `Parked(producer)`, LET admits shape-only, the wrap-slot installs a
-/// combined park, and on wake the rebuilt cache resolves and dispatch commits.
+/// Bare-name reference to a still-finalizing binder: the cache holds
+/// `Parked(producer)`, LET's binder slot admits shape-only, and on wake the
+/// rebuilt cache resolves and dispatch commits.
 #[test]
 fn forward_reference_parks_then_resolves_on_wake() {
     let program = program_storage();
     let region = run_root_storage();
     let (mut test_run, buf) = TestRun::with_buf(&program, &region);
     let scope = test_run.scope;
-    // STRUCT (like MODULE) is a nominal binder, so the placeholder is visible
-    // to the forward reference and parks rather than reading as Unbound.
+    // `Foo` is declared in an earlier statement, so it is index-visible to
+    // `Fwd`; its pending slot answers `Parked` rather than reading as Unbound.
     let exprs = working_all(
         &program,
         "NEWTYPE Foo = :{x :Number}\n\
@@ -60,8 +58,8 @@ fn forward_reference_parks_then_resolves_on_wake() {
         .execute()
         .expect("dispatch with bare-name park should complete");
     let captured = buf.borrow().clone();
-    // `Fwd` aliases the struct's type identity (Type-classified name); exact
-    // rendering of that type value isn't load-bearing here.
+    // `Fwd` aliases `Foo`'s type identity; the exact rendering of that type
+    // value is not what this test pins.
     assert!(
         !captured.is_empty(),
         "PRINT Fwd should produce output after the forward reference resolves",

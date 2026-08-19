@@ -2,8 +2,7 @@
 //! continuation rests as `SealedPinned<W::Continuation, Rc<W::Frame>>`, sealed against the slot's
 //! anchor at install and opened once per step. The two shapes that matter are the ones the tier
 //! exists for — a parked slot dropped *unopened* (the seal's glue must run while its own pin still
-//! holds the region the continuation borrows into) and the park → wake → open → run round trip
-//! (the erased continuation re-anchors and reads a real borrow after every direct handle drops).
+//! holds the region the continuation borrows into) and the park → wake → open → run round trip.
 //!
 //! Fails on UB, not values; the fixtures it runs on live in the parent module.
 
@@ -32,8 +31,7 @@ impl Drop for DropProbe<'_> {
 /// slot still `PreRun`, and by then the seal's bundled pin is the last `Rc` on the region the
 /// continuation's captured probe dereferences in its destructor. `Scheduler`'s field order drops
 /// `deps` (which holds the slot's anchor row) before `store`, so the seal's own pin is what keeps
-/// the region alive while the glue runs — the whole point of co-locating the pin at the erase.
-/// Fails on UB, not values; the assertions only confirm the glue ran and the region then died.
+/// the region alive while the glue runs.
 #[test]
 fn parked_continuation_drops_under_its_own_pin() {
     let anchor = TestAnchor::fresh();
@@ -49,7 +47,6 @@ fn parked_continuation_drops_under_its_own_pin() {
         let continuation: Box<dyn FnOnce() -> u32 + '_> = Box::new(move || *probe.last);
         sched.alloc_node(NodeWork::new(continuation), &[], Rc::clone(&anchor), false);
     }
-    // The scheduler's own holds are now the only ones on the region.
     drop(anchor);
     assert!(
         alive.upgrade().is_some(),
@@ -64,8 +61,7 @@ fn parked_continuation_drops_under_its_own_pin() {
 /// **Park → wake → open → run.** The installed continuation is erased to `'static` behind the
 /// dormant union slot, popped off the ready queue, re-anchored by the owned tier's one open verb
 /// beside a trivial extern operand, and invoked inside the brand — reading its captured region
-/// borrow after every direct handle on that region is gone. Fails on UB; the value assertion
-/// confirms the read landed on the right cell.
+/// borrow after every direct handle on that region is gone.
 #[test]
 fn parked_continuation_opens_and_runs_after_its_handles_drop() {
     let anchor = TestAnchor::fresh();
@@ -76,7 +72,6 @@ fn parked_continuation_opens_and_runs_after_its_handles_drop() {
         let continuation: Box<dyn FnOnce() -> u32 + '_> = Box::new(move || *captured);
         sched.alloc_node(NodeWork::new(continuation), &[], Rc::clone(&anchor), false)
     };
-    // Only the scheduler's holds remain — the seal's bundled pin and the slot's anchor row.
     drop(anchor);
 
     let ready = sched.pop_next().expect("a dep-free slot is ready");

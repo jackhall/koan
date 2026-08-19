@@ -14,11 +14,10 @@ use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::KObject;
 use crate::machine::model::{FoldDirection, ReductionMode};
 
-/// Registers the `%` pairwise group in the given mode, the `%` pair body (a sum), and the `MINUS`
-/// combiner the pair results fold through — declared with `OP`, the surface that gives a combiner
-/// the infix keyword shape the reducer synthesizes. The `%` body is a plain `FN` rather than an
-/// `OP`: `OP` would write its own singleton `%` registry entry, and a fold-left singleton conflicts
-/// with the pairwise group the fixture registers by hand under the same probe.
+/// The combiner is declared with `OP`, the surface that gives it the infix keyword shape the
+/// reducer synthesizes. The `%` body is a plain `FN` rather than an `OP`: `OP` would write its own
+/// size-1 `%` registry entry, and a fold-left singleton conflicts with the pairwise group
+/// registered by hand under the same probe.
 fn register_pairwise_fixture<'a>(
     test_run: &mut TestRun<'a>,
     combiner: &str,
@@ -44,9 +43,6 @@ fn register_pairwise_fixture<'a>(
     test_run.run("OP #(MINUS) OVER Number = (left - right)");
 }
 
-/// The combiner fold: the reducer synthesizes `[pair, MINUS, pair]` over the pair results, an
-/// infix keyworded expression that re-enters ordinary dispatch and binds the pair results
-/// positionally against the `OP`-declared body.
 #[test]
 fn pairwise_combiner_folds_left() {
     let program = program_storage();
@@ -77,11 +73,9 @@ fn pairwise_combiner_folds_right() {
     );
 }
 
-/// Once-evaluation: the shared middle operand feeds both the `1 % 2` and `2 % 3` pairs, but it
-/// dispatches — and its `PRINT` side effect runs — exactly once. `LOUD` is a `:Number`-typed
-/// stand-in whose leading statement prints its argument and whose tail returns it unchanged, so the
-/// chain still reduces (pairs `3` and `5`, folded through `MINUS` to `-2`) while leaving an
-/// observable trace of how many times the operand actually ran.
+/// The shared middle operand feeds both the `1 % 2` and `2 % 3` pairs, but it dispatches — and its
+/// `PRINT` side effect runs — exactly once. `LOUD` returns its argument unchanged, so the chain
+/// still reduces while the printed trace counts the operand's runs.
 #[test]
 fn pairwise_combiner_evaluates_a_shared_operand_once() {
     let program = program_storage();

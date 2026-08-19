@@ -1,25 +1,11 @@
 //! Dispatch shape router, classifier, and shared spine — the *decide* phase.
 //!
-//! [`classify_dispatch`] classifies the slot via [`classify_dispatch_shape`]
-//! and routes by shape:
+//! [`classify_dispatch`] routes a slot on its cached [`DispatchShape`] to the matching per-shape
+//! decide. State and transitions live with their shape; this file keeps the cross-shape glue plus
+//! [`run_action`], the shared *action* harness (a pure `Action -> Outcome` lowering).
 //!
-//! - **Keyworded** (a keyword is present) → [`keyworded::initial`]
-//! - **FunctionValueCall** (lowercase Identifier head) →
-//!   [`fn_value::initial`]
-//! - **HeadDeferred** / **TypeHeadDeferred** (an `Expression` or `:(…)`
-//!   head that evaluates before dispatching on its result) →
-//!   [`head_deferred`]
-//! - **OperatorChain** → [`operator_chain`]
-//! - **TypeCall**, **BareIdentifier**, **BareTypeLeaf**,
-//!   **SigiledTypeExpr**, **LiteralPassThrough** → [`single_poll`] handlers
-//! - **NonCallableHead** (a literal/empty/lazy head) → a direct
-//!   `DispatchFailed` raise carrying the offending head
-//!
-//! State and transitions live with their shape; this file keeps the cross-shape glue plus
-//! [`run_action`], the shared *action* harness (a pure `Action -> Outcome` lowering). Every
-//! per-shape handler *decides* against a read-only [`DecideCtx`] and returns an [`Outcome`] that
-//! the harness ([`super::harness`]) applies — the harness holds the only `&mut Scheduler`, so the
-//! shape modules never mutate the scheduler (nor spell its field names).
+//! Every per-shape handler decides against a read-only [`DecideCtx`] and returns an [`Outcome`]
+//! that the harness ([`super::harness`]) applies, so no shape module mutates the scheduler.
 
 use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
@@ -40,8 +26,6 @@ use super::outcome::{
 };
 use crate::scheduler::{Dep, Deps};
 
-// The dep currency lives in core (`action.rs`) so an `Action` can carry it; re-exported here as the
-// decide-side view `Outcome` consumers reach through `super::decide`.
 pub(in crate::machine::execute) use crate::machine::core::{
     BodyPlacement, DepPlacement, DepRequest, SubDispatch,
 };
@@ -76,30 +60,24 @@ pub use resolve_dispatch::{DispatchOutcome, Resolved};
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 
-/// The shape classification and classifier live in
-/// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse
-/// time); re-exported here so decide-internal call sites and tests keep the
-/// `decide::{DispatchShape, classify_dispatch_shape}` path.
+/// Shape classification is pure-structural and cached on the node at parse time; re-exported so
+/// decide-internal call sites and tests keep the `decide::` path.
 #[allow(unused_imports)]
 pub(crate) use crate::machine::model::{DispatchShape, classify_dispatch_shape};
 
-/// The staged form of one eager part shape. Private plumbing: exists so the
-/// six-shape set is written exactly once (in [`eager_shape`]) while staging
-/// stays by-value. Adding a shape here forces a `stage_eager_part` arm via
+/// The staged form of one eager part shape. Adding a variant forces a [`stage_eager_part`] arm via
 /// match exhaustiveness.
 enum EagerShape {
     /// `(...)` — the nested inner expression dispatches directly.
     Subexpression,
-    /// `:(…)` / `:{…}` — the whole part rewraps as a one-part sub-Dispatch
-    /// to a type-side carrier.
+    /// `:(…)` / `:{…}` — the whole part rewraps as a one-part sub-Dispatch to a type-side carrier.
     TypeExpression,
     ListLiteral,
     DictLiteral,
     RecordLiteral,
 }
 
-/// THE six-shape eager match — the only place the eager part-shape set is
-/// enumerated. `None` means the part is not eager.
+/// The only place the eager part-shape set is enumerated. `None` means the part is not eager.
 fn eager_shape(part: &ExpressionPart<'_>) -> Option<EagerShape> {
     match part {
         ExpressionPart::Expression(_) => Some(EagerShape::Subexpression),
@@ -118,15 +96,12 @@ pub(in crate::machine::execute) fn is_eager_part(part: &ExpressionPart<'_>) -> b
     eager_shape(part).is_some()
 }
 
-/// [`is_eager_part`] read through a dispatch slot: only a slot still holding raw AST can be eager —
-/// the scheduler's own arms (a synthesized node, a resolved cell, a staging hole) are past staging.
+/// [`is_eager_part`] read through a dispatch slot: a synthesized node or a threaded record-type
+/// body stages exactly as its parsed `(...)` / `:{…}` counterpart does, while a resolved cell or a
+/// staging hole is already past staging.
 pub(in crate::machine::execute) fn is_eager_working_part(part: &WorkingPart<'_>) -> bool {
     match part {
-        // A node the scheduler synthesized is an operand awaiting its own dispatch, exactly as a
-        // parsed `(...)` is — the operator-chain fold's accumulator is the one that reaches here.
         WorkingPart::Expression(_) => true,
-        // A threaded record-type body is the `:{…}` eager shape with its co-declared references
-        // already sealed in — staged the same way, as a one-part sub-Dispatch.
         WorkingPart::RecordType(_) => true,
         WorkingPart::Ast(ast) => is_eager_part(ast),
         WorkingPart::Spliced { .. } | WorkingPart::StagedSlot => false,
@@ -134,9 +109,8 @@ pub(in crate::machine::execute) fn is_eager_working_part(part: &WorkingPart<'_>)
 }
 
 /// Stage one slot of a working expression. A slot still holding raw AST classifies through
-/// [`stage_eager_part`]; a node the scheduler synthesized (the operator-chain fold's accumulator)
-/// is already a working expression, so it dispatches directly with no crossing. Every other
-/// scheduler-side arm — a resolved cell, a staging hole — rides through as `Err`.
+/// [`stage_eager_part`]; a synthesized node is already a working expression, so it dispatches
+/// directly. Every other arm — a resolved cell, a staging hole — rides through as `Err`.
 pub(in crate::machine::execute) fn stage_eager_working_part<'a>(
     brand: RegionBrand<'a>,
     part: WorkingPart<'a>,
@@ -147,8 +121,8 @@ pub(in crate::machine::execute) fn stage_eager_working_part<'a>(
             expr: *inner,
             placement: DepPlacement::OwnScope,
         }),
-        // Rewrap the whole part, as the AST `:{…}` shape does: the record-type wrapper is the
-        // handler, so the sub-Dispatch must see a one-part `RecordType`-shaped node, not the body.
+        // The record-type wrapper is the handler, so the sub-Dispatch must see a one-part
+        // `RecordType`-shaped node, not the body.
         WorkingPart::RecordType(_) => Ok(DepRequest::Dispatch {
             expr: WorkingExpression::new(brand, &[Spanned::bare(part)]),
             placement: DepPlacement::OwnScope,
@@ -173,8 +147,8 @@ pub(in crate::machine::execute) fn stage_eager_part<'a>(
             })
         }
         Some(EagerShape::TypeExpression) => Ok(DepRequest::Dispatch {
-            // Rewrap the whole part — the same shape `classify_aggregate_part`
-            // builds, equivalent to the destructure-and-rewrap the walks did.
+            // The type-expression wrapper is the handler, so the sub-Dispatch sees the whole
+            // part rewrapped — the same shape `classify_aggregate_part` builds.
             expr: WorkingExpression::new(brand, &[Spanned::bare(WorkingPart::Ast(part))]),
             placement: DepPlacement::OwnScope,
         }),
@@ -199,17 +173,14 @@ pub(in crate::machine::execute) fn stage_eager_part<'a>(
     }
 }
 
-/// The [`WorkingPart::StagedSlot`] hole a staged slot leaves in `new_parts`, holding the
-/// slot's position/index until the eager-subs finish rebuilds the run with the resolved
-/// `Spliced` cell in its place.
+/// The hole a staged slot leaves behind, holding its position until the eager-subs finish rebuilds
+/// the run with the resolved `Spliced` cell in its place.
 pub(in crate::machine::execute) fn staged_slot_placeholder<'a>() -> Spanned<WorkingPart<'a>> {
     Spanned::bare(WorkingPart::StagedSlot)
 }
 
-/// The trace frame for a dispatch node — [`TraceFrame::from_expr`]'s peer for the scheduler's own
-/// per-call node, resolving `span` / `file` to a source location the same way. `function` is the
-/// caller-chosen label (`"<bind>"`, `"<dispatch-park>"`) for a scheduler-internal frame with no
-/// `KFunction` behind it.
+/// [`TraceFrame::from_expr`]'s peer for the scheduler's own per-call node. `function` is a label
+/// (`"<bind>"`, `"<dispatch-park>"`) for a scheduler-internal frame with no `KFunction` behind it.
 pub(in crate::machine::execute) fn working_frame(
     function: impl Into<String>,
     expr: &WorkingExpression<'_>,
@@ -248,8 +219,6 @@ pub(in crate::machine::execute) fn propagate_dep_error(
 /// Park the slot on `sources` — the binder edges its names resolved to — and re-run its `resume`
 /// decide on wake. The park carries no deadlock sample of its own: it keeps the slot's anchor, so
 /// the [`WorkLabel`] minted at submission is what a stuck slot renders through.
-/// `dep_error_frame` labels the propagation when one of those sources turns out to name an
-/// already-errored producer, which the harness rules on when it installs.
 pub(in crate::machine::execute) fn park_resume<'step>(
     sources: Vec<ProducerId>,
     resume: ResumeFn<'step>,
@@ -257,9 +226,8 @@ pub(in crate::machine::execute) fn park_resume<'step>(
     park_resume_labelled(sources, None, resume)
 }
 
-/// [`park_resume`] carrying an explicit dep-error frame — the park sites that label their
-/// propagation (`<dispatch-park>`, `<operator-chain>`) reach for this one, so an error the install
-/// surfaces is framed at the site that asked for the park rather than arriving bare.
+/// [`park_resume`] carrying an explicit dep-error frame, so an error the install surfaces when a
+/// source names an already-errored producer is framed at the park site rather than arriving bare.
 pub(in crate::machine::execute) fn park_resume_labelled<'step>(
     sources: Vec<ProducerId>,
     dep_error_frame: Option<TraceFrame>,
@@ -275,8 +243,8 @@ pub(in crate::machine::execute) fn park_resume_labelled<'step>(
 }
 
 /// A bare-identifier slot whose name binds to the binder behind `source`: the slot's result *is*
-/// that producer's result, so the harness splices the slot out (no forwarding node) — see
-/// [`Outcome::Forward`].
+/// that producer's result, so the harness splices the slot out rather than keeping a forwarding
+/// node.
 pub(in crate::machine::execute) fn forward_to_producer<'step>(
     source: ProducerId,
 ) -> Outcome<'step> {
@@ -284,10 +252,9 @@ pub(in crate::machine::execute) fn forward_to_producer<'step>(
 }
 
 /// Replace the slot with a fresh frameless `Dispatch` of `inner` — the decide reduced its
-/// expression to a nested one to re-classify (`(inner)`, `:(...)` unwrap). A re-classification that
-/// carries an established tail-chain obligation wraps the successor continuation with it (via
-/// [`decide_tail`]), so the re-classified step re-deposits the checker rather than dropping it —
-/// this slot holds no contract of its own, so the ambient obligation is the whole winner.
+/// expression to a nested one to re-classify (`(inner)`, `:(...)` unwrap). The slot holds no
+/// contract of its own, so any established tail-chain obligation rides along and the re-classified
+/// step re-deposits the checker rather than dropping it.
 pub(in crate::machine::execute) fn become_dispatch<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     inner: WorkingExpression<'step>,
@@ -299,14 +266,11 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
     )
 }
 
-/// What a dispatch part walk produced — the splice / stage pass over a node's slots, as both
-/// [`stage_all_eager_parts`] and the keyworded walk report it.
+/// What a dispatch part walk produced — the splice / stage pass over a node's slots.
 ///
-/// [`Unchanged`](PartWalk::Unchanged) is the arm that costs nothing. A walk that splices no slot
-/// and stages no sub provably produced the run it was handed, so the caller keeps the node it
-/// already holds: no parts run re-bumped, no bucket key re-bumped, and no structural cache
-/// recomputed from a run that did not move. Every other walk hands back the rebuilt node, since a
-/// parts run is frozen once its door bumps it.
+/// A walk that splices no slot and stages no sub provably produced the run it was handed, so
+/// [`Unchanged`](PartWalk::Unchanged) lets the caller keep its node: nothing re-bumped, no
+/// structural cache recomputed from a run that did not move.
 pub(in crate::machine::execute) enum PartWalk<'step> {
     /// Nothing spliced and nothing staged — the node the walk was given already holds this run.
     Unchanged,
@@ -318,22 +282,17 @@ pub(in crate::machine::execute) enum PartWalk<'step> {
     },
 }
 
-/// Walk raw parts emitting a [`StagedSlot`](WorkingPart::StagedSlot) marker at every
-/// eager slot and a parallel staged-subs Vec; non-eager parts pass
-/// through unchanged.
+/// Walk raw parts emitting a [`StagedSlot`](WorkingPart::StagedSlot) marker at every eager slot
+/// and a parallel staged-subs Vec; non-eager parts pass through unchanged.
 ///
-/// `wrap_indices` names bare-name value slots (the `wrap_indices` set from
-/// [`KFunction::classify_for_pick`](crate::machine::core::KFunction::classify_for_pick))
-/// to resolve before bind. The keyword path resolves these via `bare_outcomes`
-/// because it must know their carried type *during* overload selection; the
-/// post-pick named-argument / function-value tail has already committed to one
-/// callable, so it resolves them by sub-Dispatch through the same eager-subs
-/// parking/resume path as `Expression` parts. Callers with no committed pick
-/// (the keyworded `Deferred` arm, which re-resolves on finish) pass `&[]`.
+/// `wrap_indices` names bare-name value slots (from
+/// [`KFunction::classify_for_pick`](crate::machine::core::KFunction::classify_for_pick)) to
+/// resolve before bind. Only a caller that has already committed to one callable passes them: with
+/// a pick outstanding the carried type must be known *during* overload selection, which the
+/// `bare_outcomes` lookup answers, so those callers pass `&[]`.
 ///
 /// Staged first, rebuilt second: every slot this walk touches becomes a staging hole, so the
-/// staged list alone decides whether the run moved, and a walk that stages nothing builds no run
-/// at all.
+/// staged list alone decides whether the run moved.
 pub(super) fn stage_all_eager_parts<'step>(
     brand: RegionBrand<'step>,
     origin: &WorkingExpression<'step>,
@@ -343,11 +302,9 @@ pub(super) fn stage_all_eager_parts<'step>(
     let mut staged: Vec<(usize, DepRequest<'step>)> = Vec::new();
     for (i, part) in parts.iter().enumerate() {
         if wrap_indices.contains(&i) {
-            // Bare-name value slot: resolve the name through a single-part
-            // sub-Dispatch (the `BareIdentifier` / `BareTypeLeaf` fast lane), so
-            // the resolved `Spliced` carrier reaches `accepts_part` at bind. Not
-            // one of the six eager shapes (it wraps bare Identifier/Type parts),
-            // so this stays a pre-check before the stager.
+            // Resolve the name through a single-part sub-Dispatch so the resolved `Spliced`
+            // carrier reaches `accepts_part` at bind. Not one of the eager shapes, hence a
+            // pre-check before the stager.
             let wrapped = WorkingExpression::synthesized(brand, std::slice::from_ref(part), origin);
             staged.push((
                 i,
@@ -365,8 +322,8 @@ pub(super) fn stage_all_eager_parts<'step>(
     if staged.is_empty() {
         return PartWalk::Unchanged;
     }
-    // Staging ran in slot order, so a single ascending cursor over the staged indices places every
-    // hole in one pass — the run fills the region's bytes directly, with no owned copy in between.
+    // Staging ran in slot order, so one ascending cursor over the staged indices places every hole
+    // in a single pass that fills the region's bytes directly, with no owned copy in between.
     let mut holes = staged.iter().map(|(slot, _)| *slot).peekable();
     let expr = origin.respliced(
         brand,
@@ -387,20 +344,18 @@ pub(super) fn stage_all_eager_parts<'step>(
 // ---------- Resume closure ----------
 
 /// A dispatch slot's decide — the `DecideCtx -> Outcome` closure a dispatch
-/// [`NodeWork`](super::nodes::NodeWork) runs.
-/// A birth decide classifies the carried `expr` and routes; a park's resume re-runs
-/// the decide its park captured (a bare leaf, an evolving `working_expr`). Boxing keeps the router
-/// blind to which family it is — every park wakes through the drain's step uniformly.
+/// [`NodeWork`](super::nodes::NodeWork) runs. Boxing keeps the router blind to whether it holds a
+/// birth decide or a park's captured resume, so every park wakes through the drain's step
+/// uniformly.
 pub(in crate::machine::execute) type ResumeFn<'step> =
     Box<dyn for<'view> FnOnce(&DecideCtx<'_, 'step, 'view>, NodeId) -> Outcome<'step> + 'step>;
 
 // ---------- Cross-shape driver ----------
 
-/// Build a birth dispatch [`NodeWork`](super::nodes::NodeWork) for `expr`, wrapping the birth-dispatch
-/// continuation with the tail chain's declared-return `obligation` when one is present (via
-/// [`with_obligation`], so the replacement step re-deposits the checker into the ambient slot-step
-/// state before classifying — the keep-first capture that carries the first caller's declared return
-/// down the chain). Pass `None` for a plain birth dispatch that carries no inherited obligation.
+/// Build a birth dispatch [`NodeWork`](super::nodes::NodeWork) for `expr`. A declared-return
+/// `obligation` re-deposits into the ambient slot-step state before classifying — the keep-first
+/// capture that carries the first caller's declared return down a tail chain. `None` inherits no
+/// obligation.
 pub(in crate::machine::execute) fn decide_tail<'step>(
     expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
@@ -410,10 +365,9 @@ pub(in crate::machine::execute) fn decide_tail<'step>(
     NodeWork::new(with_obligation(obligation, continuation))
 }
 
-/// Build a [`NodeWork`](super::nodes::NodeWork) that fails on its first poll with `error`. Used by
-/// submission to pre-error a nested binder in an eager sub-dispatch position: the node is slot-terminal
-/// (TRY-catchable) and propagates through its dep like any other failed dep. `carrier` renders the
-/// offending expression for the deadlock report.
+/// Build a [`NodeWork`](super::nodes::NodeWork) that fails on its first poll with `error`. The node
+/// is slot-terminal (TRY-catchable) and propagates through its dep like any other failed dep, so a
+/// pre-errored slot needs no special case downstream.
 pub(in crate::machine::execute) fn decide_error<'step>(
     error: KError,
 ) -> NodeWork<'step, KoanWorkload> {
@@ -423,10 +377,9 @@ pub(in crate::machine::execute) fn decide_error<'step>(
     NodeWork::new(continuation)
 }
 
-/// Classify a freshly-born dispatch expression's shape and route to the matching per-shape decide,
-/// returning the [`Outcome`] for the harness to apply. Fast-lane shapes terminalize or
-/// single-producer-park in one poll; a shape that parks returns a `Park` whose resume
-/// closure re-enters the drain's step, never back through here.
+/// Classify a freshly-born dispatch expression's shape and route to the matching per-shape decide.
+/// A shape that parks returns a `Park` whose resume closure re-enters the drain's step, never back
+/// through here.
 fn classify_dispatch<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
@@ -474,16 +427,6 @@ fn classify_dispatch<'step>(
 
 // ---------- The action harness ----------
 
-/// Lower an [`Action`] into the [`Outcome`] currency — an `Action -> Outcome` transform
-/// that issues no graph write: an `AwaitDeps`/`Catch` declares its deps (and a wrapped finish that
-/// recurses `run_action` on the `AwaitContinue`/`CatchContinue` it produces) as an
-/// [`Outcome::Park`], and the harness wires and applies. Every scheduler read the body needs is
-/// deferred into the finish, which sees a read-only [`DecideCtx`] at wake.
-///
-/// `view` is the executing step's read view: a tail `Action` reads its established
-/// declared-return obligation off it (the ambient slot-step state) to decide keep-first and wrap the
-/// replacement continuation. A finish that emits its `Continue` later reads its own wake-time view
-/// instead, so the obligation it sees is the one its park deposit re-installed.
 /// Project a builtin's [`AwaitContinue`] onto the terminal-finish delivery: assemble the wake-time
 /// [`FinishCtx`] and recurse `run_action` on the `Action` it returns. Shared by the two await
 /// currencies — the dep list and the block — which differ only in how their deps are named.
@@ -498,18 +441,20 @@ fn wrap_await_continue<'step>(finish: AwaitContinue<'step>) -> TerminalDepFinish
     })
 }
 
+/// Lower an [`Action`] into the [`Outcome`] currency, issuing no graph write of its own: an await
+/// or catch declares its deps as an [`Outcome::Park`] and the harness wires and applies. Every
+/// scheduler read the body needs is deferred into a finish, which sees its own wake-time
+/// [`DecideCtx`] — so the obligation a finish reads is the one its park deposit re-installed,
+/// while a tail `Action` reads the executing step's established obligation off `view`.
 pub(in crate::machine::execute) fn run_action<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     action: Action<'step>,
 ) -> Outcome<'step> {
-    // The step's binding-table writes travel as outcome data: deposit them into the harness-owned
-    // sink in the order the bodies decided them, before interpreting what happens next. Every
-    // recursive arm below (a wake-time finish's `Action`) deposits through this same call, so a
-    // chain of finishes contributes its writes in program order.
+    // Binding-table writes travel as outcome data, so they must reach the harness-owned sink in
+    // the order the bodies decided them — a chain of finishes recurses through here and so
+    // contributes its writes in program order.
     view.deposit_effects(action.effects);
     match action.next {
-        // Already a step-branded carrier (or error): `finalize` seals it as-is, no co-location
-        // bundle.
         ActionKind::Done(result) => Outcome::Done(result),
 
         ActionKind::Tail {
@@ -527,7 +472,6 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 leading.len() + 1
             };
             if leading.is_empty() {
-                // No leading statements: tail-replace directly into the tail body.
                 let contract = match contract {
                     TailContract::Eager(contract) => contract,
                     TailContract::FromLastResult { .. } => {
@@ -545,11 +489,9 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     body_index,
                 );
             }
-            // Leading statements become owned siblings in the block (one `BlockRequest::Body`); the slot
-            // parks on them so they run — and reclaim — before the tail continues. Where they
-            // bind is what `block_entry` names: the block frame's own scope (MATCH / TRY arms via a
-            // pre-built `FreshChild` cart, FN-body tails re-entering the already-installed cart with
-            // `Inherit`), or a caller-allocated overlay under the inherited call-site cart (USING).
+            // Leading statements become owned siblings in the block, and the slot parks on them so
+            // they run — and reclaim — before the tail continues. `block_entry` names where they
+            // bind: the block frame's own scope, or an overlay under the inherited call-site cart.
             let placement = match &block_entry {
                 BlockEntry::FrameScope(frame) => BodyPlacement::Frame(std::rc::Rc::clone(frame)),
                 BlockEntry::Overlay(overlay) => BodyPlacement::Overlay(overlay),
@@ -564,10 +506,9 @@ pub(in crate::machine::execute) fn run_action<'step>(
             let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
                 let contract = match contract {
                     TailContract::Eager(contract) => contract,
-                    // The return-type expression is the last leading statement (all owned), so its
-                    // resolved value is the last owned terminal, read in place in the region it was
-                    // delivered into. The per-call type is re-homed into the captured-scope region —
-                    // a strict ancestor the cart keeps live — like the `Type` form's `PerCall.ret`.
+                    // The return-type expression is the last leading statement, so its resolved
+                    // value is the last terminal, read in place in the region it was delivered
+                    // into.
                     TailContract::FromLastResult { func } => {
                         let terminal = terminals[terminals.len() - 1];
                         let opened = terminal.cell.open_at();
@@ -587,15 +528,14 @@ pub(in crate::machine::execute) fn run_action<'step>(
                                 ))));
                             }
                         };
-                        // The resolved type is a `Copy` handle, so the contract carries it directly
-                        // and outlives the sub-dispatch's terminal without naming any region.
+                        // `KType` is a `Copy` handle, so the contract outlives the sub-dispatch's
+                        // terminal without naming any region.
                         Some(ReturnContract::PerCall { func, ret: kt })
                     }
                 };
-                // The same tail-replace as the leading-free path, against this finish's own
-                // wake-time view: the park that carried the leading statements re-deposited the
-                // established obligation, so a chain checks its first caller's declared return
-                // rather than this resolving tail's.
+                // Against this finish's own wake-time view: the park re-deposited the established
+                // obligation, so a chain checks its first caller's declared return rather than
+                // this resolving tail's.
                 tail_continue(
                     view,
                     tail,
@@ -614,11 +554,9 @@ pub(in crate::machine::execute) fn run_action<'step>(
         }
 
         ActionKind::AwaitDeps { deps, finish } => {
-            // The builtin assembled the dep list itself, and results come back in that order — one
-            // per entry, so an index it banked at `Deps::request` still addresses its own result.
-            // This arm maps each sub-dispatch request into the library dep currency, leaving the
-            // entries the builtin already named alone, and rebuilds the `Deps` envelope `Await::on`
-            // consumes.
+            // Results come back in the order the builtin assembled the list — one per entry — so
+            // the lowering must preserve it: an index banked at `Deps::request` still addresses
+            // its own result.
             let mut lowered: Deps<DepRequest<'step>> = Deps::new();
             for entry in deps.into_entries() {
                 match entry {
@@ -634,8 +572,8 @@ pub(in crate::machine::execute) fn run_action<'step>(
         }
 
         ActionKind::AwaitBlock { block, finish } => {
-            // The block's dep count is the statement split's, so there is nothing to lower entry by
-            // entry — it rides the block door whole and the finish reads its results in order.
+            // The block's dep count is the statement split's, so there is nothing to lower entry
+            // by entry — it rides the block door whole.
             Await::on_block(block)
                 .error_frame(dep_error_frame())
                 .finish_terminal(wrap_await_continue(finish))

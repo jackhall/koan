@@ -1,18 +1,5 @@
-//! Scheduler tests, split by surface:
-//!
-//! - [`execute`], [`reclaim`], [`dep_finish`], [`dispatch`],
-//!   [`lexical_provenance`], [`index_gated`], [`unified_walk`].
-//! - [`dispatch_shapes`] — no-keyword shapes bypass
-//!   `resolve_dispatch`; keyword-bearing shapes enter it.
-//! - [`combined_binder_submission`] — a combined `LET <name> = FN …` statement installs both
-//!   channels at submission, before any sibling can dispatch, closing the race independent of
-//!   FIFO ordering.
-//! - [`nested_binder_positions`] — the position rule: a binder outside statement position and a
-//!   lazily-captured body is a TRY-catchable `NestedBinder` error.
-//! - [`ambient_bracket`] — the slot-step bracket restores ambient values on
-//!   unwind, not just on normal return.
-//! - [`edge_wiring`] — install-and-inspect: a park whose source edge is already filled is ruled on
-//!   at the install door, and the producer's own error is what reaches the consumer.
+//! Scheduler tests, one module per surface, over the shared expression-building helpers below.
+//! Each submodule's own header states the rule it pins.
 
 mod ambient_bracket;
 mod combined_binder_submission;
@@ -34,7 +21,7 @@ use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::parse::parse;
 use crate::source::Spanned;
 
-/// Parse `src` and cross each top-level statement into the scheduler — the shape
+/// Parse `src` into the shape
 /// [`dispatch_in_scope`](crate::machine::execute::KoanRuntime::dispatch_in_scope) and
 /// [`enter_block`](crate::machine::execute::KoanRuntime::enter_block) take.
 pub(super) fn working_all<'a>(
@@ -49,10 +36,8 @@ pub(super) fn working_all<'a>(
         .collect()
 }
 
-/// Wire a watch edge onto every slot in `ids`, destined at `scope`'s own region — the bulk form of
-/// [`install_edge_for_test`](crate::machine::execute::KoanRuntime::install_edge_for_test), for a
-/// block submission that hands back one slot per statement. Slots reclaim at finalize, so a reader
-/// holds an edge; wiring here, before `execute`, is the same pre-terminal wiring production does.
+/// Wire a watch edge onto every slot in `ids`, destined at `scope`'s own region. Slots reclaim at
+/// finalize, so a reader must hold an edge, wired before `execute` as production does.
 pub(super) fn watch_all(
     runtime: &mut crate::machine::execute::KoanRuntime<'_>,
     ids: &[crate::scheduler::NodeId],
@@ -70,7 +55,6 @@ pub(super) fn working_one<'a>(program: &'a ProgramStorage, src: &str) -> Working
     all.remove(0)
 }
 
-/// Cross a hand-built AST node into the scheduler at the shared program brand.
 pub(super) fn working<'a>(
     program: &'a ProgramStorage,
     expr: KExpression<'a>,
@@ -89,7 +73,7 @@ pub(super) fn keyword_expr<'a>(program: &'a ProgramStorage, name: &str) -> Worki
     )
 }
 
-/// `LET <name> = <value>` as parsed AST, so the node carries the binder plan a statement
+/// `LET <name> = <value>` at AST level, so the node carries the binder plan a statement
 /// submission installs from.
 pub(super) fn let_ast<'a>(program: &'a ProgramStorage, name: &str, value: f64) -> KExpression<'a> {
     let brand = program.brand().region();

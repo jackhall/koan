@@ -1,15 +1,14 @@
-//! Miri slate (tree borrows) for the abstract carrier shapes the witnessed substrate admits —
-//! home riding a delivery envelope's pins as an ordinary member, the copy-versus-pin choice a
-//! relocation site makes through its source-pins claim, envelope duplication, the
-//! [`ReachDescription::mint_resident`] self rule, the three carrier states and the transform verbs between
-//! them, the drop to rest that lodges a value's coverage in a region so its cell rides as plain
-//! data, and the [`StepContext::alloc_with`] finish-surface dep-run relocation. Everything routes
-//! production
-//! verbs over a library-only profile ([`ShapeProfile`] /
-//! `RegionHost` frames, `u32` content) — no embedder type. Each test frees every frame handle a
-//! regression would leave the value dangling into, then reads the value back: a use-after-free
-//! under tree borrows the instant a mint under-counts, and a leak the instant a release
-//! over-counts. Fails on UB / leaks, not values.
+//! Miri slate (tree borrows) for the carrier shapes the witnessed substrate admits: home riding a
+//! delivery envelope's pins as an ordinary member, the copy-versus-pin choice a relocation site
+//! makes through its source-pins claim, envelope duplication, the
+//! [`ReachDescription::mint_resident`] self rule, the three carrier states and the transform verbs
+//! between them, the drop to rest, and the [`StepContext::alloc_with`] dep-run relocation.
+//!
+//! Everything routes production verbs over a library-only profile ([`ShapeProfile`] / `RegionHost`
+//! frames, `u32` content) — no embedder type. Each test frees every frame handle a regression would
+//! leave the value dangling into, then reads the value back: a use-after-free under tree borrows
+//! the instant a mint under-counts, a leak the instant a release over-counts. Fails on UB / leaks,
+//! not values.
 
 use std::rc::Rc;
 
@@ -48,14 +47,12 @@ fn frame() -> Rc<ShapeFrame> {
     RegionHost::fresh(None)
 }
 
-/// Store `v` into `frame`'s region and hand back the co-located borrow.
 fn store_val(frame: &Rc<ShapeFrame>, v: u32) -> &u32 {
     RegionHandle::from_owner(&**frame).allocator().value(v)
 }
 
-/// A destination accumulator born through the step context: the dest frame's own handle under the
-/// empty reference-only carrier — the `HasRegionHandle` operand every `transfer_into_token` composes
-/// against.
+/// The dest frame's own handle under the empty reference-only carrier — the [`HasRegionHandle`]
+/// operand `transfer_into_token` composes against.
 fn dest_handle_acc(
     dest: &Rc<ShapeFrame>,
 ) -> Delivered<RegionHandleFamily<ShapeProfile>, Carrier<ShapeFrame>, ShapeFrame> {
@@ -67,20 +64,18 @@ fn dest_handle_acc(
     )
 }
 
-/// An element whose value lives in a region other than its home: the value lives in `content`'s
-/// region, the carrier references a reach set naming `content` minted into `home`'s arena
-/// ([`Carrier::new`], the entry-re-read constructor), and the envelope's pins are `home` ∪ that
-/// set. When `home` is the consuming destination itself (the defined-in-current-scope shape), the
-/// self rule drops the home member from the fold's bundle and the reach union alone pins `content`.
+/// An element whose value lives in a region other than its home: the carrier references a reach set
+/// naming `content` minted into `home`'s arena, and the envelope's pins are `home` ∪ that set. When
+/// `home` is the consuming destination itself, the self rule drops the home member from the fold's
+/// bundle and the reach union alone pins `content`.
 fn reach_element(
     home: &Rc<ShapeFrame>,
     content: &Rc<ShapeFrame>,
     v: u32,
 ) -> Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> {
     let value: &u32 = store_val(content, v);
-    // `content` is foreign to `home`, so it survives the mint into `home`'s arena; the returned
-    // bundle is the value's owned reach, threaded into the envelope at `seal` (which unions `home`
-    // in as an ordinary member) so each holder owns its pins.
+    // `content` is foreign to `home`, so the self rule leaves it in the threaded bundle; `seal`
+    // unions `home` back in, so each holder owns its pins.
     let (reach, bundle) = ReachDescription::mint_resident_threaded(
         RegionHandle::from_owner(&**home),
         &[&PinBundle::singleton(Rc::clone(content))],
@@ -115,12 +110,11 @@ fn transfer_composes_the_source_home_from_its_pins() {
     assert_eq!(merged.open(|r| *r), 7);
 }
 
-/// **Reach across chained folds** — two elements homed in the destination itself (the
-/// defined-in-current-scope shape: the self rule drops the home member, so home contributes
-/// nothing) whose carriers reach two independently-dying content regions. Each fold must union the
-/// element's reach onto the accumulator's minted set — and the second fold must re-mint the first's
-/// members (`compose_into` composes both operands, never the newcomer alone). Every content handle
-/// drops; the destination's minted set is the sole pin on both regions when the pair reads back.
+/// **Reach across chained folds** — two elements homed in the destination itself (the self rule
+/// drops the home member, so home contributes nothing) whose carriers reach two independently-dying
+/// content regions. Each fold unions the element's reach onto the accumulator's minted set, and the
+/// second re-mints the first's members ([`Carrier::compose_into`] composes both operands, never the
+/// newcomer alone). Every content handle drops before the pair reads back.
 #[test]
 fn transfer_unions_element_reach_across_folds() {
     let dest = frame();
@@ -150,8 +144,6 @@ fn transfer_unions_element_reach_across_folds() {
         acc1,
         |_product, _region| true,
         |value, (handle, values), _brand| {
-            // The accumulated views ride a region-bumped slice, so the accumulator rests in the
-            // Copy tier between folds; each fold re-bumps the grown run.
             let mut grown = values.to_vec();
             grown.push(value);
             (handle, handle.allocator().slice(&grown))
@@ -170,11 +162,9 @@ fn transfer_unions_element_reach_across_folds() {
 
 /// **Both liveness channels in one chained fold** — element A travels producer-hosted (its home
 /// rides the envelope's own pins: the residence channel), element B rides a reach set minted into a
-/// *reader* region foreign to the destination, hosted by that reader (the reach channel — the
-/// LET-bind → entry-re-read shape). Each fold must materialize the foreign host AND union the
-/// element's reach onto the accumulator: host materialization alone covers only the reader, and a
-/// reach-only union drops the producer. All three source regions drop; the destination's minted set
-/// is the sole pin under both reads.
+/// *reader* region foreign to the destination, hosted by that reader (the reach channel). Each fold
+/// must materialize the foreign host AND union the element's reach onto the accumulator: host
+/// materialization alone covers only the reader, a reach-only union drops the producer.
 #[test]
 fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
     let dest = frame();
@@ -195,8 +185,6 @@ fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
         acc0,
         |_product, _region| true,
         |value, (handle, values), _brand| {
-            // The accumulated views ride a region-bumped slice, so the accumulator rests in the
-            // Copy tier between folds; each fold re-bumps the grown run.
             let mut grown = values.to_vec();
             grown.push(value);
             (handle, handle.allocator().slice(&grown))
@@ -207,8 +195,6 @@ fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
         acc1,
         |_product, _region| true,
         |value, (handle, values), _brand| {
-            // The accumulated views ride a region-bumped slice, so the accumulator rests in the
-            // Copy tier between folds; each fold re-bumps the grown run.
             let mut grown = values.to_vec();
             grown.push(value);
             (handle, handle.allocator().slice(&grown))
@@ -236,7 +222,7 @@ fn transfer_chain_materializes_hosts_and_unions_reach_across_channels() {
 fn copied_transfer_pins_the_producer_when_the_product_still_borrows() {
     let producer = frame();
     // The value borrows into its own birth region, so the mint composes `producer` in as an
-    // ordinary member — the shape a substrate value born at a fold door carries.
+    // ordinary member.
     let value = store_val(&producer, 5);
     let (reach, bundle) = ReachDescription::mint_resident_threaded(
         RegionHandle::from_owner(&*producer),
@@ -251,8 +237,7 @@ fn copied_transfer_pins_the_producer_when_the_product_still_borrows() {
     let merged = element
         .transfer_into_token::<RegionHandleFamily<ShapeProfile>, RefValFamily, ShapeProfile>(
             dest_handle_acc(&dest),
-            // The product's leaves still point into the producer's region, so the predicate keeps
-            // every member and the fold composes the producer in.
+            // The product's leaves still point into the producer's region: keep every member.
             |_product, _region| true,
             |value, _handle, _brand| value,
         );
@@ -263,9 +248,9 @@ fn copied_transfer_pins_the_producer_when_the_product_still_borrows() {
 
 /// **The release half — a true deep copy.** The copy leaves no borrow into the producer, so the
 /// site claims the **empty** bundle and the fold pins nothing on the source side: once the envelope
-/// and the producer handle drop, the producer's region genuinely frees (the tail-loop turnover
-/// rule) while the copy stays readable in the destination. A phantom member here is the leak this
-/// test gates, and it is what an unconditional "home is always a member" fold would produce.
+/// and the producer handle drop, the producer's region genuinely frees while the copy stays
+/// readable in the destination. A phantom member here — what an unconditional "home is always a
+/// member" fold would produce — is a leak.
 #[test]
 fn copied_transfer_releases_the_producer_when_nothing_borrows_it() {
     let producer = frame();
@@ -277,8 +262,7 @@ fn copied_transfer_releases_the_producer_when_nothing_borrows_it() {
     let copied = element
         .transfer_into_token::<RegionHandleFamily<ShapeProfile>, ValFamily, ShapeProfile>(
             dest_handle_acc(&dest),
-            // The product is an owned `u32` — it borrows nothing, so the predicate releases every
-            // member and the fold pins nothing on the source side.
+            // The product is an owned `u32` — it borrows nothing, so every member releases.
             |_product, _region| false,
             |value, _handle, _brand| *value,
         );
@@ -293,10 +277,9 @@ fn copied_transfer_releases_the_producer_when_nothing_borrows_it() {
 
 /// **Envelope duplication shares the description, clones the owned pins** — duplicating for another
 /// consumer bit-copies the reference-only carrier, so the reach **description** rides by reference
-/// (never re-minted); but the envelope owns its liveness now, so each duplicate clones the whole
+/// and is never re-minted; the envelope owns its liveness, so each duplicate clones the whole
 /// [`PinBundle`] — one `Rc` per member, home among them — giving every fan-out consumer its own
-/// pins for the parked period. A re-mint of the description here is the regression this gates; the
-/// leak detector is the backstop.
+/// pins for the parked period.
 #[test]
 fn duplicate_shares_reach_and_clones_owned_pins() {
     let home = frame();
@@ -328,8 +311,7 @@ fn duplicate_shares_reach_and_clones_owned_pins() {
 /// **The mint's self rule** — a description hosted in region A *does* name `A` (membership is
 /// exact, so a later lift re-owns it), but the **owned bundle** the mint retains there and hands on
 /// as transit pins does not: a region holding an `Rc` on its own owner is a cycle that frees
-/// neither. Dropping the bundle releases the foreign member; dropping A frees A, proving no
-/// self-cycle — the Miri leak audit over this test signs off the split-membership shape.
+/// neither.
 #[test]
 fn mint_keeps_home_in_the_description_but_not_the_bundle() {
     let a = frame();
@@ -360,7 +342,6 @@ fn mint_keeps_home_in_the_description_but_not_the_bundle() {
     );
     drop(a);
     assert!(weak_a.upgrade().is_none(), "no self-cycle: a freed on drop");
-    // The member is owned by the bundle now, not A's arena, so freeing A does not release it.
     drop(bundle);
     assert!(
         weak_b.upgrade().is_none(),
@@ -372,10 +353,8 @@ fn mint_keeps_home_in_the_description_but_not_the_bundle() {
 /// value's own home region, so the re-stamp re-anchors where the value already resides: the
 /// composed description names home as an ordinary member (membership stays exact), but the self
 /// rule strips it from every owned bundle — the transit pins and the retention the mint folds into
-/// the home region itself. A regression that kept the self pin would seat an `Rc<producer>` inside
-/// the producer's own region: a strong self-cycle the region never drops, the leak this test gates.
-/// Every intermediate handle drops before the read, so the caller's own frame handle is the sole
-/// pin — and the final drop proves the region actually frees.
+/// the home region itself. Keeping the self pin would seat an `Rc<producer>` inside the producer's
+/// own region: a strong self-cycle the region never drops.
 #[test]
 fn restamp_in_place_keeps_home_in_the_description_but_pins_nothing_on_itself() {
     let producer = frame();
@@ -412,12 +391,10 @@ fn restamp_in_place_keeps_home_in_the_description_but_pins_nothing_on_itself() {
     );
 }
 
-/// **`Delivered::lift`** — the `Sealed → Delivered` transform re-owns the sealed carrier's reach
+/// **[`Delivered::lift`]** — the `Sealed → Delivered` transform re-owns the sealed carrier's reach
 /// description (`Weak → Rc`) into an owned inline bundle under the host pin, so the value survives
-/// its description's hosting arena dying in transit. A seal whose carrier references a set naming
-/// `content` (hosted in `host`) is lifted; the lifted bundle owns `content`, so dropping the `host`
-/// handle (the description's arena) leaves the value readable. A missed upgrade is a dangling `Weak`
-/// read — a UAF under tree borrows.
+/// its description's hosting arena dying in transit. A missed upgrade is a dangling `Weak` read — a
+/// UAF under tree borrows.
 #[test]
 fn lift_reowns_description_into_transit_bundle() {
     let host = frame();
@@ -440,27 +417,22 @@ fn lift_reowns_description_into_transit_bundle() {
         delivered.pins().pins_region(host.region()),
         "and unions home in as an ordinary member of the same bundle"
     );
-    // Drop the description's hosting arena; the lifted owned bundle keeps `content` (the value's
-    // backing) alive on its own.
+    // The lifted bundle keeps `content` — the value's backing — alive on its own.
     drop(host);
     assert_eq!(delivered.open(|r| *r), 5);
-    // Drop the envelope **by value** while its own bundle holds the last `Rc` on `host`: the
-    // function-entry retag descends into the by-value argument, and the in-call drop deallocates
-    // that region. The dormant slot is a union, which retag does not descend into, so nothing the
-    // deallocation frees carries a protected tag.
+    // The envelope's bundle holds the last `Rc` on `host`, so this by-value drop deallocates that
+    // region inside the call. The dormant slot is a union, which the function-entry retag does not
+    // descend into, so nothing the deallocation frees carries a protected tag.
     std::mem::drop(delivered);
     drop(content);
 }
 
 /// **The lift of a bump-hosted `Copy` pointee with an empty member set** — the degenerate reach,
 /// where home is the whole of a value's liveness. The content is bumped straight into the region
-/// rather than stored in a family arena, and nothing refcounts it: a `Drop`-free `Copy` record
-/// reached only through a reference-only carrier. So the `Weak → Rc` upgrade the lift performs at
-/// the hosting region is the single thing standing between the envelope and a use-after-free once
-/// the declaring handle drops — and the union that upgrade produces is the sole pin the envelope
-/// can hand on. A lift that retained the wrong region dangles at the read; one that strong-chained
-/// the region it lives in leaks at process exit. Embedder twin: koan's declared operator-group
-/// registry entry.
+/// and nothing refcounts it, so the `Weak → Rc` upgrade the lift performs at the hosting region is
+/// what stands between the envelope and a use-after-free once the declaring handle drops. A lift
+/// that retained the wrong region dangles at the read; one that strong-chained the region it lives
+/// in leaks at process exit. Embedder twin: koan's declared operator-group registry entry.
 #[test]
 fn lift_of_a_bump_hosted_value_with_no_members_outlives_its_declaring_handle() {
     let declaring = frame();
@@ -490,10 +462,9 @@ fn lift_of_a_bump_hosted_value_with_no_members_outlives_its_declaring_handle() {
     );
     assert_eq!(delivered.open(|r| *r), 37);
 
-    // Release the envelope **by value**: it holds the last `Rc` on the hosting region, so the
-    // in-call drop frees that region — the shape the union slot makes sound, and the reason this
-    // needs no `into_parts` split to observe it. The pins are the whole of the envelope's
-    // ownership, so the region frees whole.
+    // The envelope holds the last `Rc` on the hosting region, so this by-value drop frees that
+    // region in-call — the shape the union slot makes sound. The pins are the whole of the
+    // envelope's ownership, so the region frees whole.
     std::mem::drop(delivered);
     assert!(
         alive.upgrade().is_none(),
@@ -501,13 +472,11 @@ fn lift_of_a_bump_hosted_value_with_no_members_outlives_its_declaring_handle() {
     );
 }
 
-/// **A `Delivered` dropped by value while it holds the last pin on its own pointee's region** —
-/// the by-value carrier drop. Every external handle on `host` is released first, so the envelope's
-/// own bundle is the sole `Rc`; passing it by value to `drop` fires a function-entry retag over the
-/// aggregate, and the in-call deallocation frees the very region the carrier's erased payload and
-/// erased reach reference point into. Both of those rest in dormant union slots, which retag does
-/// not descend into, so neither carries a protected tag when the region dies. Fails on UB, not
-/// values.
+/// **A `Delivered` dropped by value while it holds the last pin on its own pointee's region.**
+/// Passing it by value to `drop` fires a function-entry retag over the aggregate, and the in-call
+/// deallocation frees the very region the carrier's erased payload and erased reach reference point
+/// into. Both rest in dormant union slots, which retag does not descend into, so neither carries a
+/// protected tag when the region dies. Fails on UB, not values.
 #[test]
 fn delivered_by_value_drop_frees_region_in_call() {
     let host = frame();
@@ -520,7 +489,6 @@ fn delivered_by_value_drop_frees_region_in_call() {
     );
     let delivered = Delivered::lift(sealed, Rc::clone(&host));
 
-    // Release the frame handle: the envelope's bundle is now the last `Rc` on the region.
     drop(host);
     assert!(
         alive.upgrade().is_some(),
@@ -535,14 +503,13 @@ fn delivered_by_value_drop_frees_region_in_call() {
 }
 
 /// **A region's union pins what its own members reach** — the two-level chain. A member resting in
-/// `child` carries a reach naming `foreign`, and the mint that froze that reach folded `foreign`'s
-/// owning bundle into `child`'s union. A second value's description, minted a region up, names
-/// `child` **alone** — `foreign` is absent from it, because a value whose only region borrow is
-/// `child` reaches no further by its own description. Drop both direct handles and the chain is the
-/// whole story: `parent`'s union pins `child`, `child`'s union pins `foreign`. A fold that dropped
-/// the wrong member frees a region still pointed into; one that named `foreign` in the outer
-/// description would over-claim membership the value does not have. Embedder twin: koan's stored
-/// module value, whose description names its child scope's region and nothing else.
+/// `child` carries a reach naming `foreign`, so the mint that froze it folded `foreign`'s owning
+/// bundle into `child`'s union. A second value's description, minted a region up, names `child`
+/// **alone**: a value whose only region borrow is `child` reaches no further by its own
+/// description. Once both direct handles drop, `parent`'s union pins `child` and `child`'s union
+/// pins `foreign`. Naming `foreign` in the outer description would over-claim membership the value
+/// does not have. Embedder twin: koan's stored module value, whose description names its child
+/// scope's region and nothing else.
 #[test]
 fn a_regions_union_pins_what_its_own_members_reach() {
     let foreign = frame();
@@ -550,13 +517,11 @@ fn a_regions_union_pins_what_its_own_members_reach() {
     let child = frame();
     let child_alive = Rc::downgrade(&child);
 
-    // The member: its reach is minted into `child`'s arena, which is the act that folds `foreign`
-    // into `child`'s union.
+    // Minting into `child`'s arena is the act that folds `foreign` into `child`'s union.
     let child_handle = RegionHandle::from_owner(&*child);
     let _member_reach = child_handle.mint_retained(&[&StepCoverage::of(Rc::clone(&foreign))]);
     let value: &u32 = child_handle.allocator().value(5u32);
 
-    // The outer value, hosted a region up, describing `child` and nothing else.
     let parent = frame();
     let reach =
         RegionHandle::from_owner(&*parent).mint_retained(&[&StepCoverage::of(Rc::clone(&child))]);
@@ -597,14 +562,12 @@ fn a_regions_union_pins_what_its_own_members_reach() {
     );
 }
 
-/// **`Delivered::lift` under a transitive root** — the contract relaxation the lift's `home`
+/// **[`Delivered::lift`] under a transitive root** — the contract relaxation the lift's `home`
 /// parameter states: `home` must *cover* the description's hosting arena, not host it. Here the
 /// description lives in `module`'s arena and `window` merely retains `module` in its own union, so
-/// the upgrade reads a `&ReachDescription` through a region pinned two links away. Every direct
-/// handle on both the hosting arena and the region its description names drops **before** the lift
-/// runs, which makes a missing root a use-after-free at the upgrade rather than at the read.
-/// Embedder twin: koan's `USING` window, whose overlay fold roots the module region into the call
-/// site's arena before any read through the window.
+/// the upgrade reads a [`ReachDescription`] through a region pinned two links away. Every direct
+/// handle drops **before** the lift runs, which makes a missing root a use-after-free at the
+/// upgrade rather than at the read. Embedder twin: koan's `USING` window.
 #[test]
 fn lift_reads_a_description_hosted_under_a_transitive_root() {
     let foreign = frame();
@@ -612,8 +575,7 @@ fn lift_reads_a_description_hosted_under_a_transitive_root() {
     let module = frame();
     let module_alive = Rc::downgrade(&module);
 
-    // The value rests in `module`'s region under a description hosted in that same arena, naming
-    // `foreign` — whose owning bundle the mint folds into `module`'s union.
+    // The mint folds `foreign`'s owning bundle into `module`'s union.
     let module_handle = RegionHandle::from_owner(&*module);
     let value: &u32 = module_handle.allocator().value(19u32);
     let reach = module_handle.mint_retained(&[&StepCoverage::of(Rc::clone(&foreign))]);
@@ -621,8 +583,8 @@ fn lift_reads_a_description_hosted_under_a_transitive_root() {
         Witnessed::from_erased(Erased::erase(value), Carrier::new(reach)),
     );
 
-    // The reading window roots the hosting arena transitively — the only thing that makes its own
-    // handle a legitimate cover for an arena it does not host.
+    // Rooting the hosting arena transitively is what makes the window's own handle a legitimate
+    // cover for an arena it does not host.
     let window = frame();
     RegionHandle::from_owner(&*window).retain_reach(StepCoverage::of(Rc::clone(&module)));
 
@@ -650,11 +612,10 @@ fn lift_reads_a_description_hosted_under_a_transitive_root() {
     assert!(foreign_alive.upgrade().is_none());
 }
 
-/// **`Delivered::open_adopted`** — the adoption mints the value's reach into `dest` and retains the
-/// owned bundle there in the same act, so the resealed carrier rests resident with its liveness
-/// carried by `dest`'s region. A value living in its producer is adopted into `dest`; after the
-/// producer handle drops, `dest`'s own pin is the sole coverage under which the resident seal reads
-/// back. A mint that failed to name the producer, or a retention the mint skipped, is a UAF here.
+/// **[`Delivered::open_adopted`]** — the adoption mints the value's reach into `dest` and retains
+/// the owned bundle there in the same act, so the resealed carrier rests resident with its liveness
+/// carried by `dest`'s region. A mint that failed to name the producer, or a retention the mint
+/// skipped, is a UAF here.
 #[test]
 fn adopt_settles_resident_value_into_dest() {
     let producer = frame();
@@ -671,13 +632,11 @@ fn adopt_settles_resident_value_into_dest() {
     assert_eq!(sealed.open(|r| *r), 7);
 }
 
-/// **The region's union bundle** — a region retains ONE deduped [`PinBundle`], folded through
-/// [`PinBundle::absorb`], never a bundle per retention: adopting the same producer twice costs one
-/// `Rc` in total, and retaining an ancestor of an already-retained member costs none (the member's
-/// own `outer` chain already pins it). What survives is an antichain of the deepest owners, and it
-/// is the sole pin under the read once every producer handle drops — a fold that dropped the wrong
-/// member is a use-after-free here, and the counts gate the refcount a bundle-per-retention list
-/// would hold.
+/// **The region's union bundle** — a region retains ONE deduped [`PinBundle`], never a bundle per
+/// retention: adopting the same producer twice costs one `Rc` in total, and retaining an ancestor
+/// of an already-retained member costs none (the member's own `outer` chain already pins it). What
+/// survives is an antichain of the deepest owners, and it is what covers the read once every
+/// producer handle drops.
 #[test]
 fn region_retention_folds_into_one_deduped_bundle() {
     let outer = frame();
@@ -688,8 +647,7 @@ fn region_retention_folds_into_one_deduped_bundle() {
     let dest = frame();
     let handle = RegionHandle::from_owner(&*dest);
 
-    // Each adoption mints the producer into `dest` and folds the owned bundle into the region's
-    // union; the second finds the region already pinned and drops its clone.
+    // The second adoption finds the region already pinned and drops its clone.
     let adopted: &u32 = element.adopt_into(handle);
     let retained = Rc::strong_count(&producer);
     let _second: &u32 = element.adopt_into(handle);
@@ -718,10 +676,9 @@ fn region_retention_folds_into_one_deduped_bundle() {
 
 /// **The three states and the four transform verbs, end to end** — `Delivered → open_adopted →
 /// Opened → reseal → Sealed → open_at → Opened → reseal → Sealed → lift → Delivered`, with every
-/// intermediate handle dropped before the final read. The value lives in `producer`'s region
-/// throughout; the only thing keeping that region alive after the drops is the chain of pins each
-/// verb hands to the next — the adoption's own retention into `dest`, then `dest`'s pin — so a verb
-/// that loses a member is a use-after-free here and one that gains a phantom member is a leak.
+/// intermediate handle dropped before the final read. What keeps `producer`'s region alive after
+/// the drops is the chain of pins each verb hands to the next, so a verb that loses a member is a
+/// use-after-free here and one that gains a phantom member is a leak.
 #[test]
 fn transform_verb_round_trip_preserves_liveness() {
     let producer = frame();
@@ -730,7 +687,7 @@ fn transform_verb_round_trip_preserves_liveness() {
             .deliver_resident(store_val(&producer, 11));
     let dest = frame();
 
-    // Delivered → Sealed: at rest in `dest`'s table, its pins retained by `dest`'s own region.
+    // At rest in `dest`'s table, its pins retained by `dest`'s own region.
     let sealed = element
         .open_adopted(RegionHandle::from_owner(&*dest))
         .reseal();
@@ -742,31 +699,27 @@ fn transform_verb_round_trip_preserves_liveness() {
     drop(element);
     drop(producer);
 
-    // Sealed → Opened → Sealed: the in-use state answers membership, then returns to rest.
     let opened = sealed.open_at();
     assert_eq!(*opened.value(), 11);
     let resealed = opened.reseal();
 
-    // Sealed → Delivered: the lift re-owns the description into a transit bundle of its own, so the
-    // holder's pins can go.
+    // The lift re-owns the description into a transit bundle of its own, so the holder's pins go.
     let delivered = Delivered::lift(Retained::from_sealed(resealed), Rc::clone(&dest));
     drop(pins);
     drop(dest);
     assert_eq!(delivered.open(|r| *r), 11);
 }
 
-/// **The unhosted pair carries the whole reach across a hostless interval.** `unhost` drops the home
-/// pin and keeps the carrier fused to its coverage; `host` pins a new home back on. The value here
-/// lives in `producer`'s region and reaches `reached`, and *both* handles die while the pair is
-/// unhosted — so the coverage the pair carried is the only thing that kept either region alive, and
-/// the eventual host is a third frame that pins neither. A `born` pair, which claims an empty reach,
-/// would drop them both here; an `unhost` that dropped the home member would drop `producer`.
+/// **The unhosted pair carries the whole reach across a hostless interval.** `unhost` drops the
+/// home pin and keeps the carrier fused to its coverage; `host` pins a new home back on. Both
+/// source handles die while the pair is unhosted and the eventual host is a third frame that pins
+/// neither, so only the coverage the pair carried keeps either region alive. A pair claiming an
+/// empty reach drops them both; an `unhost` that dropped the home member would drop `producer`.
 #[test]
 fn an_unhosted_pair_pins_its_whole_reach_until_it_is_hosted() {
     let producer = frame();
     let reached = frame();
-    // A value living in `producer`'s region whose borrow reaches `reached`: the merge mints both
-    // regions into the product's description, homed in `producer`.
+    // The merge mints both regions into the product's description, homed in `producer`.
     let far: Delivered<RefValFamily, Carrier<ShapeFrame>, ShapeFrame> =
         RegionHandle::<ShapeProfile>::from_owner(&*reached)
             .deliver_resident(store_val(&reached, 29));
@@ -791,7 +744,7 @@ fn an_unhosted_pair_pins_its_whole_reach_until_it_is_hosted() {
     drop(producer);
 
     // A frame that pins neither region: the read below is covered by what the pair carried across
-    // the drops, never by the host.
+    // the drops.
     let host = frame();
     assert_eq!(
         pair.host(Rc::clone(&host)).open(|r| *r),
@@ -800,13 +753,12 @@ fn an_unhosted_pair_pins_its_whole_reach_until_it_is_hosted() {
     );
 }
 
-/// **Finish-surface relocation** — `alloc_with` relocates the whole dep run in one act, so every
-/// listed dep's envelope composes into the result's carrier *by construction*, before the build
-/// closure can embed a dep view. The run is staged and re-anchored at one brand under the borrowed
-/// slice of the deps' own pin bundles, so this also pins that staged re-anchor. The built value
-/// here IS a dep view (a borrow into the producer's region, riding the result un-copied); the
-/// producer handle drops, and the by-construction composition is the sole pin under the read — the
-/// mirror of the behavioral membership test above it in `tests.rs`, UAF-shaped.
+/// **Finish-surface relocation** — [`StepContext::alloc_with`] relocates the whole dep run in one
+/// act, so every listed dep's envelope composes into the result's carrier *by construction*, before
+/// the build closure can embed a dep view. The run is staged and re-anchored at one brand under the
+/// borrowed slice of the deps' own pin bundles, so this pins that staged re-anchor too. The built
+/// value here IS a dep view, so the by-construction composition is what covers the read once the
+/// producer handle drops.
 #[test]
 fn alloc_with_folds_dep_reach_before_result_read() {
     let dep_frame = frame();
@@ -825,11 +777,10 @@ fn alloc_with_folds_dep_reach_before_result_read() {
 }
 
 /// **`open_adopted` — the adopt that stays open at the destination's own lifetime.** It is
-/// [`Delivered::adopt_into`]'s re-anchor without its consumption of the borrow: the mint stores the
-/// value's reach in `dest`'s side table and retains the owning bundle there in the same act, so the
-/// returned [`Opened`] borrows at `'d` rather than at a pin borrow — and every handle the value's
-/// backing came from can go before it is read. The open's witness is the adopted one, so
-/// [`Opened::reseal`] hands back a resident seal readable under `dest`'s own pin.
+/// [`Delivered::adopt_into`]'s re-anchor without its consumption of the borrow, so the returned
+/// [`Opened`] borrows at `'d` rather than at a pin borrow and every handle the value's backing came
+/// from can go before it is read. The open's witness is the adopted one, so [`Opened::reseal`]
+/// hands back a resident seal readable under `dest`'s own pin.
 #[test]
 fn open_adopted_reads_at_the_destination_lifetime_after_the_producer_drops() {
     let producer = frame();
@@ -884,12 +835,11 @@ fn project_refamilies_under_the_envelopes_own_pins() {
 /// **A region never retains a pin on itself.** [`RegionHandle::retain_reach`] applies the same self
 /// rule the mint does, so a caller may hand over a whole coverage — a resting cell's claim, home
 /// included — without first asking whether that home happens to be this very region. Folding the
-/// self-`Rc` in would close a cycle nothing breaks: the region would keep its own owner alive, and
-/// the leak detector would report the whole arena at exit.
+/// self-`Rc` in would close a cycle nothing breaks: the region would keep its own owner alive and
+/// leak the whole arena at exit.
 ///
-/// The rule is on the *door*, not on `rest_in`, so it holds for every retention — a resident bind's
-/// coverage and a run-teardown rehome as much as a splice install. Both cases below run through the
-/// one door; the foreign member proves the strip is targeted, not a blanket refusal to retain.
+/// The rule is on the *door*, so it holds for every retention alike. The foreign member below
+/// proves the strip is targeted, not a blanket refusal to retain.
 #[test]
 fn retain_reach_never_folds_a_regions_own_pin_into_itself() {
     let dest = frame();
@@ -919,9 +869,8 @@ fn retain_reach_never_folds_a_regions_own_pin_into_itself() {
 }
 
 /// The resting cell an embedder stores inside its own bit-copy value — an expression part holding a
-/// resolved sub-result. Deriving `Copy` here is the whole point: it compiles only because the seal
-/// is `Copy`, and the assert below pins that the part carries no `Drop` glue, so region death runs
-/// nothing per cell.
+/// resolved sub-result. The `Copy` derive compiles only because the seal is `Copy`, and the assert
+/// below pins that the part carries no `Drop` glue, so region death runs nothing per cell.
 #[derive(Clone, Copy)]
 struct RestingPart<'a>(Sealed<'a, RefValFamily, Carrier<ShapeFrame>>);
 
@@ -933,9 +882,8 @@ const _: () = assert!(
 /// **`rest_in` — the drop to rest, with the pins lodged one level down.** The envelope's whole
 /// coverage (its value's home among the members) goes into the destination region's union bundle,
 /// and what comes back is a bit-copy cell owning nothing. Every handle the value's backing came
-/// from is dropped before the read, so the retained bundle is the only pin left: a `rest_in` that
-/// lodged nothing is a use-after-free here. Fanning a second cell out of the same envelope costs no
-/// extra `Rc` — the union dedupes the region it already pins.
+/// from drops before the read, so a `rest_in` that lodged nothing is a use-after-free here. Fanning
+/// a second cell out of the same envelope costs no extra `Rc` — the union dedupes the region.
 #[test]
 fn rest_in_lodges_coverage_for_the_destination_regions_life() {
     let producer = frame();

@@ -754,7 +754,7 @@ fn deferred_return_surface_eq_and_hash() {
     assert_ne!(a, c);
 }
 
-// --- KType::Union admissibility and specificity ------------------------------------
+// --- Union-type admissibility and specificity ------------------------------------
 
 /// A union slot admits a value any of its members admits, and refuses one no member
 /// admits — via both `accepts_carried` and `matches_value`.

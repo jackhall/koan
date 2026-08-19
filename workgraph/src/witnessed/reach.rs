@@ -3,54 +3,40 @@
 //! ([`PinsRegion`], the outer-chain subsumption hook a workload's frame-owner type supplies):
 //!
 //! - [`ReachDescription<F>`] — the **non-owning** description: a `Weak<F>` host plus `Weak<F>`
-//!   members, interned in a region's append-stable side table ([`Region::intern_reach_retained`]) and
-//!   *referenced* (never owned) by a [`Carrier`](super::Carrier). It keeps nothing alive; it answers
-//!   membership queries ([`Self::pins_region`]) and residence queries
-//!   ([`Self::with_home_region`]) by upgrading under a pinned
-//!   read. Whoever holds a description's coverage also holds the owning [`PinBundle`] that pins its
-//!   members, so every upgrade succeeds under the holder rule — a failed upgrade is a coverage bug
-//!   (`debug_assert` in debug, treated as non-pinning in release).
+//!   members, interned in a region's append-stable side table and *referenced* (never owned) by a
+//!   [`Carrier`](super::Carrier). It keeps nothing alive; it answers membership and residence
+//!   queries by upgrading under a pinned read. Whoever holds a description's coverage also holds
+//!   the owning [`PinBundle`] that pins its members, so every upgrade succeeds under the holder
+//!   rule — a failed upgrade is a coverage bug.
 //! - [`PinBundle<F>`] — the **owned** witness: the antichain of `Rc<F>` owners a holder keeps to
 //!   pin every member region. It plays the open-[`Witness`] role the description cannot, and
-//!   releases its pins by ordinary `Drop` (a binding entry drops it at entry death, the delivery
-//!   envelope carries it across the parked period).
+//!   releases its pins by ordinary `Drop`.
 //!
 //! Mechanism (subsumption, folding, union) is library-owned; member semantics (what "pins" means
 //! for a workload's frame type) is workload-supplied through [`PinsRegion`]. Both types are frozen
-//! together at a [`ReachDescription::mint_resident`] — the description into the destination's side
-//! table, the owned bundle into that same region's retention — from the source **bundles** the
-//! composition folds (strong `Rc` members, never a description's `Weak`). A description is never
-//! upgraded to build an owned bundle: ownership flows forward from a mint, into the destination's
-//! own retention and, for a value that travels on, a threaded transit copy
-//! ([`ReachDescription::mint_resident_threaded`]). No constructor builds either type from loose
-//! parts.
+//! together at a [`ReachDescription::mint_resident`] from the source **bundles** the composition
+//! folds — strong `Rc` members, never a description's `Weak`. Ownership flows forward from a mint;
+//! no constructor builds either type from loose parts.
 //!
-//! **A mint IS a retention.** Every mint is a resident mint: the value it describes lives in the
-//! destination, so the destination is what owns the pins keeping its reach alive, and no caller ever
-//! receives an owned bundle to fold by hand. That is what makes an intern hit *proof* — an entry
-//! exists in a region's table only because a miss retained an identical member set there — so the
-//! table needs no side record of which entries the region already pins.
+//! **A mint IS a retention.** The value a mint describes lives in the destination, so the
+//! destination owns the pins keeping its reach alive and no caller ever receives an owned bundle to
+//! fold by hand. That is what makes an intern hit *proof* that the region already pins what the
+//! entry names, so the table needs no side record of it.
 //!
-//! A description records **two facts, not one**: its `host` is where the value *lives* (the owner of
-//! the region the description is hosted in, stamped from `dest` at the mint); its `members` are the
-//! regions the value's borrows *reach*. Home appears among the members only when the value genuinely
-//! borrows into its own region, so membership stays exact and residence is answerable without one.
+//! A description records **two facts, not one**: its `host` is where the value *lives*; its
+//! `members` are the regions the value's borrows *reach*. Home appears among the members only when
+//! the value genuinely borrows into its own region, so membership stays exact and residence is
+//! answerable without one.
 //!
-//! The description a mint stores and the bundle it retains differ in exactly one member, the **self
-//! rule** (design/reach.md § Composition): the description keeps every composed member,
-//! `dest`'s own region included, so membership is exact; the retained bundle drops any member whose
-//! region *is* `dest`'s, because a region owning a pin on itself is a reference cycle. The asymmetry
-//! is what makes the `Sealed → Delivered` lift correct for a value resting in its own scope's region
-//! — [`ReachDescription::to_bundle`] upgrades a home *member* along with everything else when the
-//! value travels out.
-//!
-//! The self rule bounds a *mint*. A second rule, the **eternal rule**
-//! ([`PinBundle::without_eternal`]), bounds a *region-lifetime retention*
+//! Two rules keep the retention graph acyclic, and neither alone suffices. The **self rule**
+//! ([design/reach.md § Composition](../../design/reach.md#composition-minting-a-description-and-retaining-its-pins))
+//! bounds a *mint*: the stored description keeps every composed member, `dest`'s own region
+//! included, so membership is exact, while the retained bundle drops any member whose region *is*
+//! `dest`'s, because a region owning a pin on itself is a reference cycle. The **eternal rule**
+//! ([`PinBundle::without_eternal`]) bounds a *region-lifetime retention*
 //! ([`Region::retain_reach`]): a member declaring [`PinsRegion::needs_no_pin`] — storage that
-//! already outlives every region — is dropped there. Between them they are what keeps the retention
-//! graph acyclic. Neither one alone suffices: an owner outside `dest`'s own region can still hold a
-//! chain back to it, and the two-region ring that closes when a run-root region retains a per-call
-//! owner while that owner's region retains the run root is exactly what the eternal rule cuts.
+//! already outlives every region — is dropped there, which cuts the two-region ring an owner
+//! outside `dest`'s own region can still close back to it.
 
 use std::rc::{Rc, Weak};
 
@@ -80,11 +66,11 @@ pub unsafe trait PinsRegion: RegionOwner {
     /// rests on it, which is why it is compiled only under `debug_assertions`.
     ///
     /// Two obligations, neither a safety one. It must not **mint** a region as a side effect — a
-    /// walk that asks "what do you pin?" would otherwise create the very storage it is surveying,
-    /// so an owner with a lazily-minted region peeks (`minted()`) rather than forcing. And it must
-    /// not **under-report**: a region omitted here is an edge the detector cannot follow, which
-    /// hides a ring rather than reporting one. There is deliberately no default body for the same
-    /// reason — a silently-empty default would make every unimplemented owner a blind spot.
+    /// walk that asks "what do you pin?" would otherwise create the very storage it surveys, so an
+    /// owner with a lazily-minted region peeks rather than forces. And it must not
+    /// **under-report**: an omitted region is an edge the detector cannot follow, which hides a
+    /// ring rather than reporting one. Hence no default body — a silently-empty one would make
+    /// every unimplemented owner a blind spot.
     #[cfg(debug_assertions)]
     fn for_each_pinned_region(&self, visit: &mut dyn FnMut(&Self::Region));
 
@@ -106,19 +92,15 @@ pub unsafe trait PinsRegion: RegionOwner {
 
 /// The non-owning reach description: a `Weak<F>` **host** naming the owner of the region the
 /// description lives in — the value's residence — and the `Weak<F>` **members** naming the regions
-/// the value's borrows reach. Hosted in the value's home region's own side table and referenced by
-/// the carrier. The member set is a singleton for a single-region value (a lifted closure over one
-/// source region), larger for a multi-region value, and empty for a region-pure value, which still
-/// gets a description because that is where its residence is recorded. Holding a description pins
-/// **nothing**: host and members are all `Weak`, and the owning `PinBundle` the holder keeps is
-/// what keeps them alive.
+/// the value's borrows reach. A region-pure value still gets one — with empty members — because
+/// that is where its residence is recorded. Holding a description pins **nothing**: host and
+/// members are all `Weak`, and the owning [`PinBundle`] the holder keeps is what keeps them alive.
 ///
-/// Queries ([`Self::pins_region`] / [`Self::any_member_region`] / [`Self::with_home_region`]) run
-/// under a pinned read: they upgrade, sound because whoever can reach this description holds the
-/// coverage that keeps the `Rc`s alive (the holder rule). A failed upgrade is a bug — a read with no
-/// covering pin — so it `debug_assert`s and, in release, is treated as naming nothing. The host is
-/// strictly safer than the members: the description lives *inside* its host region's side table, so
-/// reaching it at all implies the host storage is alive.
+/// Every query upgrades, sound because whoever can reach this description holds the coverage that
+/// keeps the `Rc`s alive (the holder rule). A failed upgrade is a bug — a read with no covering
+/// pin — so it `debug_assert`s and, in release, is treated as naming nothing. The host is strictly
+/// safer than the members: the description lives *inside* its host region's side table, so reaching
+/// it at all implies the host storage is alive.
 pub struct ReachDescription<F: PinsRegion> {
     /// The owner of the region this description is hosted in — the value's residence.
     host: Weak<F>,
@@ -129,27 +111,24 @@ pub struct ReachDescription<F: PinsRegion> {
 /// The storage a reach member set takes, in both the owned ([`PinBundle`]) and the described
 /// ([`ReachDescription`]) form: **inline up to two members, heap past that**.
 ///
-/// Two slots is where the shapes are. A reach is empty for a region-pure value and a singleton for a
-/// single-region one — a lifted closure over one source region, a value borrowing its producer
-/// frame, a step's own anchor — and those two shapes dominate every table and every fold. The pair
-/// is the next commonest: a product composed from two operands living in different regions. Past
-/// that a reach is a genuine multi-region antichain and pays for a heap buffer, as it did before.
+/// Two slots is where the shapes are: empty for a region-pure value and a singleton for a
+/// single-region one dominate every table and every fold, and the pair — a product composed from
+/// two operands in different regions — is next. Past that a reach is a genuine multi-region
+/// antichain and pays for a heap buffer.
 ///
-/// The inline slots are free at this width: under smallvec's `union` representation (enabled in this
-/// crate's manifest for exactly this reason) `SmallVec<[T; 2]>` measures 24 bytes for a
-/// pointer-sized member — what the `Vec<T>` it replaced measured — so the common cases lose their
-/// allocation without the uncommon ones growing the type. The default enum representation would
-/// spend a discriminant word and cost 32.
+/// The inline slots are free at this width: under smallvec's `union` representation (enabled in
+/// this crate's manifest for exactly this reason) `SmallVec<[T; 2]>` measures 24 bytes for a
+/// pointer-sized member, so the common cases lose their allocation without the uncommon ones
+/// growing the type. The default enum representation would spend a discriminant word and cost 32.
 ///
 /// This shrinks an allocation *count*; it moves nothing. A description stays heap-owned and
 /// `Drop`-bearing whatever its arity — its members are `Weak`, whose counts must be released at
-/// region death — which is what keeps it out of the region's bump ([`Region::intern_reach_retained`]).
+/// region death — which is what keeps it out of the region's bump.
 type ReachSet<T> = SmallVec<[T; 2]>;
 
 impl<F: PinsRegion> ReachDescription<F> {
-    /// The description mirror of an antichain of owners — `Weak` members for side-table hosting,
-    /// under the `host` the mint stamps from its destination. The sole builder; a description's
-    /// members always mirror some [`PinBundle`]'s antichain.
+    /// The sole builder: a description's members always mirror some [`PinBundle`]'s antichain,
+    /// downgraded for side-table hosting under the `host` the mint stamps from its destination.
     fn from_members(host: Weak<F>, members: &[Rc<F>]) -> Self {
         ReachDescription {
             host,
@@ -189,9 +168,9 @@ impl<F: PinsRegion> ReachDescription<F> {
     }
 
     /// Run `f` against the region the value **lives in** — its residence, stamped at the mint from
-    /// the destination the description was frozen into. This is the region a workload's escape-seam
-    /// policy prices a crossing *out of*, and the one member a relocation's retention predicate can
-    /// release. No owner reference escapes: the upgraded host is dropped at the end of the call.
+    /// the destination the description was frozen into, and the region a workload's escape-seam
+    /// policy prices a crossing *out of*. No owner reference escapes: the upgraded host is dropped
+    /// at the end of the call.
     pub fn with_home_region<R>(&self, f: impl FnOnce(&F::Region) -> R) -> R {
         f(RegionOwner::region(&*self.host_owner()))
     }
@@ -218,9 +197,7 @@ impl<F: PinsRegion> ReachDescription<F> {
     }
 
     /// Whether any member's owner chain keeps `region`'s storage alive — the set-level lift of
-    /// [`PinsRegion::pins_region`], run under a pinned read. The reach-covers query a carrier layers
-    /// its finalize gate and its [`Self::borrows_home`] answer on: "does this reach already name the
-    /// region I'm about to fold?".
+    /// [`PinsRegion::pins_region`], run under a pinned read.
     pub fn pins_region(&self, region: &F::Region) -> bool {
         let mut hit = false;
         self.for_each_owner(|owner| {
@@ -245,26 +222,24 @@ impl<F: PinsRegion> ReachDescription<F> {
         hit
     }
 
-    /// Upgrade every member `Weak → Rc` under a pinned read, collecting the owned [`PinBundle`] that
-    /// pins each member region — the description-to-bundle upgrade the `Sealed → Delivered` **lift**
-    /// routes (a value read out of an arena-hosted seal is re-owned so the source frame may die in
-    /// transit). The one sanctioned production upgrade of a description into an owned bundle: it runs
-    /// under the holder rule (the caller holds a pin covering this description's hosting arena for the
-    /// whole call), so every member upgrade succeeds — a failure is the same coverage bug
+    /// Upgrade every member `Weak → Rc`, collecting the owned [`PinBundle`] that pins each member
+    /// region, so a value read out of an arena-hosted seal is re-owned before its source frame may
+    /// die. The one route from a description back into the ownership tier: it runs under the holder
+    /// rule — the caller holds a pin covering this description's hosting arena for the whole call —
+    /// so every member upgrade succeeds, and a failure is the coverage bug
     /// [`Self::for_each_owner`] `debug_assert`s. Subsumption is re-applied through
-    /// `PinBundle::insert`, so the result is an antichain of the deepest owners.
+    /// [`PinBundle::insert`], so the result is an antichain of the deepest owners.
     ///
-    /// Confined to this module: it hands out the ownership tier, which the embedder has no
-    /// vocabulary for — every embedder-facing owned witness is a [`StepCoverage`].
+    /// Confined to this module: the ownership tier is something the embedder has no vocabulary for
+    /// — every embedder-facing owned witness is a [`StepCoverage`].
     pub(in crate::witnessed) fn to_bundle(&self) -> PinBundle<F> {
         let mut bundle = PinBundle::empty();
         self.for_each_owner(|owner| bundle.insert(Rc::clone(owner)));
         bundle
     }
 
-    /// The description's live members, upgraded under a pinned read — white-box reach introspection.
-    /// No library-internal caller, so gated entirely behind `test-hooks` for an embedder's own
-    /// white-box tests (mirroring `Scheduler::anchor_of`'s gate).
+    /// The description's live members — white-box reach introspection with no library-internal
+    /// caller, so gated entirely behind `test-hooks` for an embedder's own tests.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn members(&self) -> Vec<Rc<F>> {
         let mut members = Vec::new();
@@ -272,61 +247,40 @@ impl<F: PinsRegion> ReachDescription<F> {
         members
     }
 
-    /// Compose `sources` into one antichain — the shared front half of both mint doors. Folds each
-    /// source bundle's **exact** strong members (never "everything a region reaches", never a
-    /// description's `Weak`) through [`PinBundle::insert`], so outer-chain subsumption normalizes
-    /// the result to the deepest owners.
+    /// The shared front half of both mint doors: each source bundle's **exact** strong members —
+    /// never "everything a region reaches", never a description's `Weak` — folded under
+    /// outer-chain subsumption.
     fn compose_sources(sources: &[&PinBundle<F>]) -> PinBundle<F> {
-        PinBundle::union_all(sources) // exact members + subsumption
+        PinBundle::union_all(sources)
     }
 
-    /// **The resident mint**: freeze the composed description into `dest`'s side table and establish
-    /// its retention there in the same act (design/reach.md § Composition). Returns the
-    /// description alone — the value rests in `dest`, so `dest`'s region owns the pins that keep its
-    /// reach alive and no caller ever holds them.
+    /// **The resident mint**: freeze the composed description into `dest`'s side table and
+    /// establish its retention there in the same act
+    /// ([design/reach.md § Composition](../../design/reach.md#composition-minting-a-description-and-retaining-its-pins)).
+    /// Returns the description alone — the value rests in `dest`, so `dest`'s region owns the pins
+    /// that keep its reach alive and no caller ever holds them.
     ///
-    /// The description's `host` is stamped from `dest`'s own owner, so the value's residence is
-    /// recorded by the same act that records its reach — `dest` **is** the home, since a description
-    /// always lands in its value's home region's side table.
+    /// `host` is stamped from `dest`'s own owner: a description always lands in its value's home
+    /// region's side table, so `dest` **is** the home and one act records both residence and reach.
+    /// A region-pure value mints with empty members rather than no description, because there is
+    /// nowhere else to put the host; the empty member set is a key like any other, so a region has
+    /// one such entry shared by every region-pure value in it.
     ///
-    /// Every value gets a description: a region-pure value mints one with empty members, because
-    /// there is nowhere else to put the host. The empty member set is a key like any other, so
-    /// every region-pure value in a region shares that region's one empty description.
-    ///
-    /// Composes every source bundle in `sources` — its **exact** strong members, never "everything a
-    /// region reaches" — applying exactly two rules, and no caller-supplied policy:
-    ///
-    /// 1. **Outer-chain subsumption** — via [`PinsRegion`], built into [`PinBundle::insert`]: a
-    ///    member kept alive by another member's owner chain is dropped.
-    /// 2. **The self rule**, applied to the **retention only**: a member whose region *is* `dest`'s
-    ///    is dropped from the bundle the region retains (a region owning a pin on itself is a cycle)
-    ///    while staying a member of the stored description, so membership remains exact. Every other
-    ///    member survives in both; a mint is not where eternal storage is filtered out — that is the
-    ///    retention's own eternal rule ([`PinBundle::without_eternal`]), applied at
-    ///    [`Region::retain_reach`], because only a region-lifetime pin can close a ring.
-    ///
-    /// A minted description is therefore **exact**: it is the value's whole reach, not a reach
-    /// narrowed against what some destination's container happened to pin, so every consumer reads
-    /// the answer off it directly instead of re-deriving what a narrowing dropped.
-    ///
-    /// The fold runs over the sources' **strong** `Rc` members (no `Weak` upgrade — ownership flows
-    /// forward from the mint, never recovered from a description), then the composed antichain is
-    /// downgraded into the stored description, so the description's members mirror it.
-    ///
-    /// The composed antichain is **interned with its retention**
-    /// ([`Region::intern_reach_retained`]): a member set already described in `dest` yields that
-    /// existing entry and folds nothing, because the entry's own miss already folded an identical
-    /// bundle into the region's union. One description exists per distinct reach per region, pointer
-    /// identity over descriptions *is* member-set equality within a region, and an entry's existence
-    /// *is* the proof that `dest` pins what it names.
+    /// Two rules apply, and no caller-supplied policy. Outer-chain subsumption (built into
+    /// [`PinBundle::insert`]) drops a member another member's owner chain already keeps alive. The
+    /// **self rule** drops a member whose region *is* `dest`'s from the **retained bundle only**,
+    /// leaving it in the stored description, so a minted description is **exact** — the value's
+    /// whole reach, never narrowed against what a destination happened to pin — and every consumer
+    /// reads the answer off it directly. Eternal storage is not filtered here: that is
+    /// [`PinBundle::without_eternal`] at [`Region::retain_reach`], because only a region-lifetime
+    /// pin can close a ring.
     pub(crate) fn mint_resident<'a, W>(
         dest: RegionHandle<'a, W>,
         sources: &[&PinBundle<F>],
     ) -> &'a ReachDescription<F>
     where
-        // `W::FrameOwner = F` ties the destination's reach side table to this member type, so the
-        // minted description lands in `dest`'s own [`Region::intern_reach_retained`] table. Binding
-        // `Region` on `RegionOwner` (the trait that DECLARES it, not `PinsRegion`) avoids E0220 — a
+        // `W::FrameOwner = F` ties the destination's reach side table to this member type. Binding
+        // `Region` on `RegionOwner` (the trait that DECLARES it, not `PinsRegion`) avoids E0220: a
         // supertrait's associated type is not bindable through the subtrait.
         W: StorageProfile<FrameOwner = F>,
         F: RegionOwner<Region = Region<W>>,
@@ -335,14 +289,14 @@ impl<F: PinsRegion> ReachDescription<F> {
             .intern_reach_retained(Self::compose_sources(sources))
     }
 
-    /// [`Self::mint_resident`] additionally handing back the self-rule-stripped composed bundle —
-    /// for the composition engine alone, whose product travels on inside a delivery envelope and so
-    /// needs **transit pins of its own** on top of the destination's own region-lifetime retention.
-    /// The retention is the resident mint's verbatim; the extra bundle duplicates it rather than
-    /// replacing it, so the two liveness tiers are independent.
+    /// [`Self::mint_resident`] additionally handing back the self-rule-stripped composed bundle,
+    /// for a product that travels on inside a delivery envelope and so needs **transit pins of its
+    /// own** on top of the destination's region-lifetime retention. The retention is the resident
+    /// mint's verbatim; the extra bundle duplicates it rather than replacing it, so the two
+    /// liveness tiers are independent.
     ///
     /// Crate-internal and deliberately narrow: handing the pins out is what a resident mint exists
-    /// to avoid, so the only caller is the one that must re-own them to travel.
+    /// to avoid, so only a holder that must re-own them to travel may ask for them.
     pub(in crate::witnessed) fn mint_resident_threaded<'a, W>(
         dest: RegionHandle<'a, W>,
         sources: &[&PinBundle<F>],
@@ -363,16 +317,13 @@ impl<F: PinsRegion> ReachDescription<F> {
 }
 
 /// The owned reach witness: the antichain of `Rc<F>` owners whose regions a value's borrows reach.
-/// A singleton for a single-region value (a scope, a same-region value, a producer frame) — the
-/// common case — and larger for a multi-region value. Holding it pins every member region; the
-/// empty bundle pins nothing (a frameless / run-region terminal is backed by a region that outlives
-/// the carrier, so no held pin is required) and allocates nothing.
+/// Holding it pins every member region; the empty bundle pins nothing — a frameless / run-region
+/// terminal is backed by a region that outlives the carrier — and allocates nothing.
 ///
-/// A holder owns its bundle and releases it by ordinary `Drop`: a binding entry drops it at entry
-/// death (scope/region death, evacuation), the delivery envelope carries it across the parked
-/// period, the run loop's step pin holds it for the step. Composition ([`Self::union`]) is set union
-/// with outer-chain subsumption: a member is dropped when another member's [`PinsRegion::pins_region`]
-/// chain already keeps its region alive, so the bundle stays an antichain of the deepest owners.
+/// A holder owns its bundle and releases it by ordinary `Drop`. Composition is set union with
+/// outer-chain subsumption: a member is dropped when another member's
+/// [`PinsRegion::pins_region`] chain already keeps its region alive, so the bundle stays an
+/// antichain of the deepest owners.
 pub struct PinBundle<F: PinsRegion> {
     members: ReachSet<Rc<F>>,
 }
@@ -401,9 +352,9 @@ impl<F: PinsRegion> PinBundle<F> {
     /// [`PinsRegion::pins_region`] over the bundle's **strong** members. No `Weak` upgrade, since
     /// the bundle already owns its members.
     ///
-    /// White-box membership introspection with no production caller — a live holder queries the
-    /// description, which answers the same question without upgrading the owned tier — so gated
-    /// behind `test-hooks` like [`Self::members`].
+    /// White-box introspection with no production caller — a live holder asks the description,
+    /// which answers the same question without touching the owned tier — so gated behind
+    /// `test-hooks` like [`Self::members`].
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn pins_region(&self, region: &F::Region) -> bool {
         self.members.iter().any(|m| m.pins_region(region))
@@ -413,9 +364,8 @@ impl<F: PinsRegion> PinBundle<F> {
     /// its region (dedup + the newcomer-is-an-ancestor case), else drop every existing member the
     /// newcomer subsumes and add it. Keeps the bundle an antichain of the deepest owners.
     ///
-    /// The in-place counterpart of [`Self::union`], for a holder that folds a lifted set into a
-    /// long-lived bundle it already owns (a scope's union bundle at each bind) rather than
-    /// rebuilding through a fresh allocation per fold.
+    /// The in-place counterpart of [`Self::union`], so a holder folding into a long-lived bundle it
+    /// already owns pays no fresh allocation per fold.
     pub fn insert(&mut self, owner: Rc<F>) {
         if self.members.iter().any(|m| m.pins_region(owner.region())) {
             return;
@@ -424,20 +374,17 @@ impl<F: PinsRegion> PinBundle<F> {
         self.members.push(owner);
     }
 
-    /// Fold every member of `other` in through [`Self::insert`], consuming it — the whole-bundle
-    /// in-place counterpart of [`Self::union`], as [`Self::insert`] is for a single owner. Consuming
-    /// `other` moves its `Rc`s rather than cloning them, so a retention that hands its pins over
-    /// adds no refcount traffic. This is how a long-lived holder accumulates one deduped bundle
-    /// across many folds (a region's [`retain_reach`](Region::retain_reach) list, collapsed to a
-    /// single antichain of the deepest owners) instead of keeping a bundle per fold.
+    /// Fold every member of `other` in through [`Self::insert`] — the whole-bundle in-place
+    /// counterpart of [`Self::union`]. Consuming `other` moves its `Rc`s rather than cloning them,
+    /// so a holder that hands its pins over adds no refcount traffic, and a long-lived holder
+    /// accumulates one deduped antichain across many folds instead of a bundle per fold.
     pub fn absorb(&mut self, other: Self) {
         for owner in other.members {
             self.insert(owner);
         }
     }
 
-    /// The set union of `left` and `right` under outer-chain subsumption — the owner-side compose
-    /// the run loop's step pin and the envelope's liveness bundle fold through.
+    /// The set union of `left` and `right` under outer-chain subsumption.
     pub fn union(left: &Self, right: &Self) -> Self {
         let mut result = left.clone();
         for owner in &right.members {
@@ -448,9 +395,7 @@ impl<F: PinsRegion> PinBundle<F> {
 
     /// [`Self::union`] over a whole batch — one pass over every source's members through the same
     /// antichain [`Self::insert`], so N bundles cost one deduped walk rather than N-1 intermediate
-    /// clones. The shared front half of both mint doors
-    /// ([`ReachDescription::compose_sources`]) and of the composition an N-ary relocation
-    /// ([`Delivered::transfer_all_into`](super::Delivered::transfer_all_into)) performs.
+    /// clones.
     pub fn union_all(sources: &[&Self]) -> Self {
         let mut composed = PinBundle::empty();
         for source in sources {
@@ -461,19 +406,16 @@ impl<F: PinsRegion> PinBundle<F> {
         composed
     }
 
-    /// [`Self::union_all`] with the **retention predicate** applied per source as it walks — the
-    /// composed source side of an N-ary relocation, built directly. `keep` is asked for source `i`
-    /// and one of that source's member regions, and only the members it answers `true` for reach
-    /// the composed antichain.
+    /// [`Self::union_all`] with the **retention predicate** applied per source as it walks: `keep`
+    /// is asked for source `i` and one of that source's member regions, and only the members it
+    /// answers `true` for reach the composed antichain. Fusing the filter into the union allocates
+    /// the one antichain it returns, where a per-source [`Self::retaining`] would allocate a bundle
+    /// per source plus a gather to union them.
     ///
-    /// Fusing the filter into the union is what keeps the door's fixed cost at small N at or below
-    /// the pairwise path's: a per-source [`Self::retaining`] would allocate one bundle per source
-    /// and a gather to union them, where this allocates the one antichain it returns.
-    ///
-    /// The `usize` names *whose* claim is being derived, so the same walk serves N distinct
-    /// predicates. It is engine plumbing: the relocation door translates it to the (source
-    /// envelope, its product cell) pair before any embedder-supplied code sees it, so no public
-    /// signature carries an index into a run a caller would have to trust.
+    /// The `usize` names *whose* claim is being derived, so one walk serves N distinct predicates.
+    /// It is engine plumbing, translated to a (source envelope, its product cell) pair before any
+    /// embedder-supplied code sees it — no public signature carries an index into a run a caller
+    /// would have to trust.
     pub(in crate::witnessed) fn union_all_retained<'s>(
         sources: impl Iterator<Item = &'s Self>,
         mut keep: impl FnMut(usize, &F::Region) -> bool,
@@ -493,31 +435,33 @@ impl<F: PinsRegion> PinBundle<F> {
     }
 
     /// This bundle without any member whose region **is** `region` — the self rule
-    /// (design/reach.md § Composition), applied where a bundle is about to be owned by
-    /// `region` itself: a region holding a pin on its own owner is a reference cycle that frees
-    /// neither. Exact-region only, by pointer identity: an *ancestor* of `region` stays, since
-    /// owning a pin on an outer frame closes no cycle.
+    /// ([design/reach.md § Composition](../../design/reach.md#composition-minting-a-description-and-retaining-its-pins)),
+    /// applied where a bundle is about to be owned by `region` itself: a region holding a pin on
+    /// its own owner is a reference cycle that frees neither. Exact-region only, by pointer
+    /// identity — an *ancestor* of `region` stays, since owning a pin on an outer frame closes no
+    /// cycle.
     pub fn without_region(&self, region: &F::Region) -> Self {
         let mut without = self.clone();
         without.remove_region(region);
         without
     }
 
-    /// [`Self::without_region`] applied **in place**, for a caller that already owns the bundle it
-    /// is about to hand on — the composed antichain at a [`ReachDescription::mint_resident`], an
-    /// operand's pins moved out of a consumed envelope. Dropping the self member is a `retain` over
-    /// storage the caller has already paid for, so the self rule costs no second buffer and no
-    /// refcount traffic: the surviving members are moved, never cloned and re-dropped.
+    /// [`Self::without_region`] applied **in place**, for a holder that already owns the bundle it
+    /// is about to hand on. Dropping the self member is a `retain` over storage already paid for,
+    /// so the self rule costs no second buffer and no refcount traffic: the surviving members are
+    /// moved, never cloned and re-dropped.
     pub(in crate::witnessed) fn remove_region(&mut self, region: &F::Region) {
         self.members
             .retain(|m| !std::ptr::eq(m.region() as *const _, region as *const _));
     }
 
     /// This bundle keeping only the members whose region satisfies `keep` — the **retention
-    /// predicate**'s filter (design/witness-hosting.md § Escape). A relocation verb derives a source
-    /// claim by running the embedder's `still_borrows` over the product against each member region
-    /// in turn, so a claim is a checked property of the folded bytes rather than a bundle assembled
-    /// by hand. No member reference escapes: `keep` sees each member's region, never its owner.
+    /// predicate**'s filter
+    /// ([design/reach.md § The library boundary](../../design/reach.md#the-library-boundary)). A
+    /// relocation verb *derives* a source claim, by running the embedder's `still_borrows` over the
+    /// product against each member region in turn, so a claim is a checked property of the folded
+    /// bytes rather than a bundle assembled by hand. No member reference escapes: `keep` sees each
+    /// member's region, never its owner.
     pub fn retaining(&self, mut keep: impl FnMut(&F::Region) -> bool) -> Self {
         PinBundle {
             members: self
@@ -546,9 +490,7 @@ impl<F: PinsRegion> PinBundle<F> {
     }
 
     /// The description mirror of this bundle's antichain — `Weak` members for side-table hosting,
-    /// under `host` (the owner of the region the description is frozen into). Called on an intern
-    /// miss, where the bundle is the freshly-composed antichain and the description it yields is
-    /// stored frozen alongside it.
+    /// under `host`, the owner of the region the description is frozen into.
     pub(in crate::witnessed) fn describe(&self, host: Weak<F>) -> ReachDescription<F> {
         ReachDescription::from_members(host, &self.members)
     }
@@ -568,9 +510,8 @@ impl<F: PinsRegion> PinBundle<F> {
     /// Returned in the same inline-up-to-two storage the members use ([`ReachSet`]), because a key
     /// is built on **every** mint and kept only by the one that misses. A hot path's reach shape is
     /// invariant across iterations — reach is a property of the regions involved, not the values —
-    /// so the table's steady state is all hits, and a probe that allocated would allocate and free a
-    /// key per mint to rediscover an entry the table already holds. [`Region::intern_reach_retained`] boxes
-    /// the key at the insert, where the map keeps it.
+    /// so the table's steady state is all hits, and an allocating probe would allocate and free a
+    /// key per mint to rediscover an entry the table already holds.
     pub(in crate::witnessed) fn intern_key(&self) -> ReachSet<usize> {
         let mut key: ReachSet<usize> = self
             .members
@@ -582,16 +523,16 @@ impl<F: PinsRegion> PinBundle<F> {
     }
 
     /// The bundle's members — white-box reach introspection, gated behind `test-hooks` for an
-    /// embedder's white-box tests (mirroring `Scheduler::anchor_of`'s gate).
+    /// embedder's own tests.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn members(&self) -> &[Rc<F>] {
         &self.members
     }
 
-    /// The bundle's members for the debug-mode pin-cycle detector
-    /// ([`Region::retain_reach`]) — the crate-internal twin of [`Self::members`], which is a
-    /// `test-hooks` surface and so absent from an ordinary debug build of an embedder. Same
-    /// gate as the detector that reads it, and no wider a surface: the members are only walked.
+    /// The crate-internal twin of [`Self::members`] for the debug-mode pin-cycle detector
+    /// ([`Region::retain_reach`]): [`Self::members`] is a `test-hooks` surface and so absent from
+    /// an ordinary debug build of an embedder. Same gate as the detector that reads it, and no
+    /// wider a surface — the members are only walked.
     #[cfg(debug_assertions)]
     pub(in crate::witnessed) fn detector_members(&self) -> &[Rc<F>] {
         &self.members
@@ -636,9 +577,8 @@ unsafe impl<F: PinsRegion, B: Reattachable> ComposeWitness<B> for PinBundle<F> {
 
 /// The **embedder-facing** owned-coverage holder: a `PinBundle` an embedder may hold, clone,
 /// thread and drop — but not compute with. It is the "step's coverage" of
-/// design/reach.md § Threading, and the shape every owned pin crosses the library
-/// boundary in: a step carries one from the fold that composed it to the seal that consumes it, a
-/// finalize hands one to the delivery walk, a region retains one for its life.
+/// [design/reach.md § Threading](../../design/reach.md#threading-how-pins-reach-each-holder), and
+/// the shape every owned pin crosses the library boundary in.
 ///
 /// The point is what it *lacks*. `PinBundle`'s arithmetic — `union`, `without_region`, `retaining`,
 /// `insert`, `absorb` — is crate-private, so an embedder cannot narrow a claim, strip a member, or

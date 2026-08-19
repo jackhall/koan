@@ -1,17 +1,14 @@
-//! Dispatch-layer submission: the one entry point that turns a [`WorkingExpression`] into a
-//! submitted dispatch slot. Binder discovery is parse-static and **per-statement**: a node caches
-//! what it itself installs ([`KExpression::binder_plan`]), so submission reads one field and does
-//! no AST recursion. It allocates the slot via [`Scheduler::alloc_node`] and, for a statement
-//! submission, stamps that binder's placeholder / pending-overload entries on the scope before the
-//! slot is ever popped, so a later sibling parks rather than surfacing `UnboundName` /
-//! `DispatchFailed`.
+//! Dispatch-layer submission: turns a [`WorkingExpression`] into a freshly allocated dispatch slot
+//! via [`Scheduler::alloc_node`]. Binder discovery is parse-static and **per-statement** — a node
+//! caches what it itself installs ([`WorkingExpression::binder_plan`]), so submission reads one
+//! field and does no AST recursion. A statement submission stamps that binder's placeholder /
+//! pending-overload entries on the scope before the slot is ever popped, so a later sibling parks
+//! rather than surfacing `UnboundName` / `DispatchFailed`.
 //!
-//! A submission carries a [`SubmitContext`]: a `Statement` position installs; a `SubDispatch`
-//! rejects a binder with
-//! [`KErrorKind::NestedBinder`](crate::machine::KErrorKind::NestedBinder). Binding is a
-//! statement-level act — the legal positions are exactly statement position and a lazily-captured
-//! body (see
-//! [design/execution/name-placeholders.md](../../../../design/execution/name-placeholders.md)).
+//! Binding is a statement-level act — the legal positions are exactly statement position and a
+//! lazily-captured body (see
+//! [design/execution/name-placeholders.md](../../../../design/execution/name-placeholders.md)); a
+//! [`SubmitContext::SubDispatch`] binder is rejected with [`KErrorKind::NestedBinder`].
 
 use crate::machine::ProducerId;
 use crate::machine::model::BinderKey;
@@ -23,26 +20,21 @@ use super::super::harness::{Host, KoanWorkload};
 use super::super::nodes::{NodeScope, SlotFrame, WorkLabel};
 use crate::scheduler::Scheduler;
 
-/// Where a [`KoanRuntime::submit_expression`] lands, deciding how its cached binder plan is
-/// treated.
+/// Where a [`Host::submit_expression`] lands, deciding how its cached binder plan is treated.
 #[derive(Clone, Copy)]
 pub(in crate::machine::execute) enum SubmitContext {
-    /// A statement position (top level, a block/body statement, or a fresh single-statement block):
-    /// the expression's cached binder plan installs on the scope at the freshly allocated node.
+    /// Top level, a block/body statement, or a fresh single-statement block.
     Statement,
-    /// An eagerly-evaluated sub-dispatch (dep realization). A binder here is a slot-terminal
-    /// [`KErrorKind::NestedBinder`], with no exceptions: the eager positions are all value
-    /// positions, and a value position is not where a name is introduced.
+    /// An eagerly-evaluated sub-dispatch (dep realization). A binder here is rejected with no
+    /// exceptions: the eager positions are all value positions, and a value position is not where a
+    /// name is introduced.
     SubDispatch,
 }
 
 impl<'run> Host<'run> {
-    /// Submit `expr` as a dispatch slot against `scope` (with handle `node_scope` and
-    /// `explicit_chain`, resolved by the calling submission wrapper). For a
-    /// [`SubmitContext::Statement`] submission, installs the statement's own parse-time binder plan
-    /// ([`KExpression::binder_plan`]) on the scope with this slot's freshly allocated node id —
-    /// before the slot is ever popped, so a later sibling parks rather than failing. A
-    /// [`SubmitContext::SubDispatch`] carrying a binder pre-errors the node.
+    /// `node_scope` and `explicit_chain` are resolved by the calling submission wrapper. A
+    /// [`SubmitContext::Statement`] binder plan installs against this slot's freshly allocated node
+    /// id before the slot is ever popped, so a later sibling parks rather than failing.
     pub(in crate::machine::execute) fn submit_expression<'a, 'step>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
@@ -56,14 +48,10 @@ impl<'run> Host<'run> {
         .or_else(|| self.ambient.active_payload().map(|p| p.chain.clone()))
         .expect("every dispatched node has a chain — submission outside enter_block / ambient payload is a bug");
 
-        // Eager-position binder: pre-error the slot. Slot-terminal (TRY-catchable), propagates
-        // through the dep like any failed dep. Every binder form is rejected here — name-installing
-        // declarations (LET, TYPE, MODULE, SIG, UNION, NEWTYPE, GROUP) and named
-        // `FN` / `OP` definitions alike: an eager sub-dispatch cannot install into the enclosing scope
-        // soundly, and a definition whose registration silently vanished would be worse than an error.
-        // A value position takes the anonymous form (`FN :{…} -> T = (…)`, which installs nothing);
-        // a definition that must also bind a name is one statement, in the combined `LET <name> = FN …`
-        // spelling.
+        // Eager-position binder: pre-error the slot, slot-terminal and TRY-catchable. No binder
+        // form is exempt — an eager sub-dispatch cannot install into the enclosing scope soundly,
+        // and a definition whose registration silently vanished would be worse than an error. A
+        // value position takes the anonymous `FN :{…} -> <Return> = (…)`, which installs nothing.
         let installs = statement_binder_plan(&expr);
         if let (SubmitContext::SubDispatch, Some(key)) = (ctx, &installs) {
             let carrier = expr.summarize();
@@ -93,24 +81,21 @@ impl<'run> Host<'run> {
             framed,
         );
 
-        // Stamp each cached binder's placeholder at the enclosing statement's lexical position — the
-        // SAME `BindingIndex` the eventual `register_*` call at finalize installs. Installs are
-        // best-effort: lenient when `data[name]` is already a KFunction or the same slot re-installs.
+        // The stamp carries the SAME `BindingIndex` the finalize write does, so a consumer's
+        // visibility test stays consistent across the pending → finalized transition.
         if let Some(key) = installs {
             let bind_index = BindingIndex::value(chain.index);
-            // The claim's edge is destined at **this** scope's region — the scope the name is being
-            // introduced into — so a consumer parking on the claim inherits that destination and its
-            // delivery lands where the binding lives. Holding the owner across the install is the
-            // wiring-time proof the region is pinned; the slot was allocated on the line above, so
-            // the install cannot see a terminal producer.
+            // The claim's edge is destined at **this** scope's region — the scope the name is
+            // being introduced into — so a consumer parking on the claim inherits that destination
+            // and its delivery lands where the binding lives. Holding the owner across the install
+            // is the wiring-time proof the region is pinned; the slot is allocated before the
+            // stamp, so no install can name a terminal producer.
             let destination = scope
                 .region_owner()
                 .upgrade()
                 .expect("a live scope reference implies a live region owner");
             let mut edges: Vec<EdgeId> = Vec::new();
             let claim = |sched: &mut Scheduler<KoanWorkload>| sched.install_edge(id, &destination);
-            // The submission-channel stamp is run-loop-owned: dispatch submits the binder with no
-            // koan frame on the stack, the same footing the apply loop writes on.
             let mut gate = WriteGate::for_run_loop();
             if let Some((name, kind)) = key.name {
                 let edge = claim(sched);
@@ -142,10 +127,9 @@ impl<'run> Host<'run> {
 }
 
 /// What a statement installs, read back off the working node the parsed statement crossed over as.
-/// Per-statement and nothing more: the node's *own* plan key, never anything its slots contain — the
-/// namespace a block introduces is legible from its statement spines alone. A node the scheduler
-/// synthesized carries no plan and installs nothing, which is the whole rule for it: a binder is
-/// always a parsed statement.
+/// The node's *own* plan key, never anything its slots contain — the namespace a block introduces is
+/// legible from its statement spines alone. A scheduler-synthesized node carries no plan and
+/// installs nothing: a binder is always a parsed statement.
 fn statement_binder_plan(expr: &WorkingExpression<'_>) -> Option<BinderKey> {
     // A redundant single-`Expression` paren wrapper (`((…))`) is the same statement, so it reads
     // its child's plan straight through. A binder is always keyword-led, so this never co-occurs

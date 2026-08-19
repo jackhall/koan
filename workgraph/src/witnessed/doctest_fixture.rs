@@ -18,17 +18,14 @@ pub struct RefFamily;
 unsafe impl Reattachable for RefFamily {
     type At<'r> = &'r u32;
 }
-// A shared reference needs no drop.
 impl DropFree for RefFamily {}
 
-/// A text carrier family: `&'r str` — the shape a bump-stored string takes. It carries no storage
-/// policy of its own, because the bump needs none: a family declares only its lifetime shape.
+/// A text carrier family: `&'r str` — the shape a bump-stored string takes.
 pub struct StrFamily;
 // SAFETY: `&'r str` is one type generic only in `'r` (a fat pointer, layout-invariant).
 unsafe impl Reattachable for StrFamily {
     type At<'r> = &'r str;
 }
-// A shared reference needs no drop.
 impl DropFree for StrFamily {}
 
 /// An invariant carrier family: `Cell<&'r u32>`.
@@ -37,7 +34,6 @@ pub struct InvFamily;
 unsafe impl Reattachable for InvFamily {
     type At<'r> = Cell<&'r u32>;
 }
-// A `Cell` of a shared reference needs no drop.
 impl DropFree for InvFamily {}
 
 /// A local witness owning its region — the `Vec`'s heap buffer stays at a fixed
@@ -75,42 +71,38 @@ unsafe impl PinsRegion for Cart {
 
 /// Build a bundle-witnessed carrier over a cart: yoked from the cart's own region (so the value is
 /// provably region-derived), then re-bundled under the singleton `PinBundle` that pins the same
-/// cart. Fixture-only: the doctests for the set-witnessed merge/transfer verbs need one, and the
-/// crate-internal witness-retype they route is not part of the module's real surface.
+/// cart. Fixture-only: the crate-internal witness-retype it routes is not part of the module's real
+/// surface.
 pub fn set_witnessed(cart: std::rc::Rc<Cart>) -> Witnessed<RefFamily, PinBundle<Cart>> {
     Witnessed::<RefFamily, std::rc::Rc<Cart>>::yoke(std::rc::Rc::clone(&cart), |region| &region[0])
         .rewitness(PinBundle::singleton(cart))
 }
 
-/// Build a [`SealedExtern`] from a live carrier. `SealedExtern`'s constructors are all
-/// crate-private (no production caller builds one from an arbitrary borrow), but a doctest
-/// compiles as an external crate, so the `SealedExtern::open` guard and its compiling twin need
-/// this in-crate wrapper to construct one at all.
+/// Build a [`SealedExtern`] from a live carrier — a turbofish-friendly spelling
+/// (`seal_extern::<RefFamily>(..)`) for doctests that pass a sealed operand.
 pub fn seal_extern<T: Reattachable + DropFree>(live: T::At<'_>) -> SealedExtern<T> {
     SealedExtern::erase(live)
 }
 
 /// A value that names the region it is resident in, so its residence is legible in the value rather
-/// than in a table kept beside it. The born doors' doctests build one at the brand and read its
-/// `home` back, which is what makes "the value's region pointer is the destination's" observable.
+/// than in a table kept beside it — what makes "the value's region pointer is the destination's"
+/// observable at all.
 #[derive(Clone, Copy)]
 pub struct HomedRef<'r> {
-    /// The region this value lives in — read back to show it is the destination the door built at.
+    /// The region this value lives in.
     pub home: &'r Region<FixtureProfile>,
-    /// The borrowed payload.
     pub value: &'r u32,
 }
 
 /// A homed-reference carrier family: [`HomedRef`], the simplest shape whose residence is readable
-/// off the stored value — [`RegionHandle::bump_born_with`](super::RegionHandle)'s doctests build one
-/// at the brand and its `compile_fail` twin tries to build one over an ambient region instead.
+/// off the stored value — [`RegionHandle::bump_born_with`](super::RegionHandle::bump_born_with)
+/// builds one at the brand, and its `compile_fail` twin tries to build one over an ambient region.
 pub struct HomedRefFamily;
 // SAFETY: `HomedRef<'r>` is one type generic only in `'r`, a pair of thin pointers whose layout is
 // identical for every choice of `'r`.
 unsafe impl Reattachable for HomedRefFamily {
     type At<'r> = HomedRef<'r>;
 }
-// A pair of thin pointers needs no drop.
 impl DropFree for HomedRefFamily {}
 
 /// Profile for the region/handle doctests. It declares only its frame-owner type: a region's value
@@ -122,9 +114,8 @@ impl StorageProfile for FixtureProfile {
 
 /// A fresh region owner for the fixture profile, built through `Rc::new_cyclic` so its region is
 /// handed the owner's own `Weak` at construction — the back-link every reach description minted into
-/// that region stamps as its host. `Region::new` is `pub(crate)` to `workgraph`, so a doctest —
-/// which compiles as an external crate — has no direct route to one; this wraps the crate-internal
-/// constructor for that one purpose.
+/// that region stamps as its host. `Region::new` is `pub(crate)`, so a doctest — which compiles as
+/// an external crate — has no direct route to one.
 pub fn fresh_cart() -> Rc<RegionCart> {
     Rc::new_cyclic(|me| RegionCart(Region::new(me.clone())))
 }

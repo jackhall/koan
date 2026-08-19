@@ -1,14 +1,14 @@
 //! Ambient per-step context — the driver-side state a pure DAG runtime does not own.
 //!
 //! [`Scheduler`](crate::scheduler::Scheduler) is a workload-independent DAG of dispatch/execution
-//! work; the *ambient* values that float across a single step (the active per-call frame, the run
-//! frame, the executing slot's opaque payload, and the declared-return obligation) live here on the
-//! driver's [`Host`](super::harness::Host), which is the [`KoanWorkload`](super::harness::KoanWorkload)
-//! side of the split and so may name the concrete Koan types. The scheduler stores only its own
-//! graph state; the host brackets the ambient context per step ([`Host::with_slot_step`]) and step
-//! code reads it back through the methods below.
+//! work, so the values that float across a single step — the active per-call frame, the run frame,
+//! the executing slot's opaque payload, the declared-return obligation — live here on the driver's
+//! [`Host`](super::harness::Host), the [`KoanWorkload`](super::harness::KoanWorkload) side of the
+//! split and so free to name concrete Koan types. The host brackets this context per step
+//! ([`Host::with_slot_step`]); step code reads it back through the methods below.
 //!
-//! See design/per-call-region/README.md and design/execution/README.md.
+//! See [per-call-region](../../../design/per-call-region/README.md) and
+//! [execution](../../../design/execution/README.md).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -21,30 +21,23 @@ use super::nodes::NodePayload;
 use super::obligation::ReturnObligation;
 
 /// The ambient per-step context the host carries while a decided
-/// [`Outcome`](super::outcome::Outcome) is realized. Concrete Koan types: the host is the workload,
-/// so the erasure the scheduler core needs is unnecessary here.
+/// [`Outcome`](super::outcome::Outcome) is realized.
 #[derive(Default)]
 pub(in crate::machine::execute) struct AmbientContext {
-    /// Active per-call cart (`Rc<CallFrame>`) of the slot currently being executed. See
+    /// Active per-call cart of the slot currently being executed. See
     /// [per-call-region/frames.md § Active-frame propagation](../../../design/per-call-region/frames.md#active-frame-propagation).
     active_frame: Option<Rc<CallFrame>>,
-    /// The run frame: a non-dying frame adopting the top-level run scope, lazily built on the first
-    /// run-lifetime submission. Top-level slots carry it as their `frame` cart, so `active_frame` is
-    /// never `None` during a top-level step and a body's re-dispatch against its own scope is
-    /// uniformly framed (Yoked) at every depth.
+    /// A non-dying frame adopting the top-level run scope, lazily minted on the first run-lifetime
+    /// submission. Top-level slots carry it as their cart, so `active_frame` is never `None` during
+    /// a top-level step and a body's re-dispatch against its own scope is uniformly framed (Yoked)
+    /// at every depth.
     run_frame: Option<Rc<CallFrame>>,
-    /// The executing slot's opaque workload payload (scope handle + lexical chain), installed per
-    /// step. A body that re-dispatches *against its own scope*, or that needs the ambient chain,
-    /// reads it back through [`Self::active_payload`]. `None` between slot steps.
+    /// The executing slot's opaque workload payload (scope handle + lexical chain). `None` between
+    /// slot steps.
     active_payload: Option<NodePayload>,
-    /// The declared-return obligation the executing slot carries — the continuation capture the
-    /// slot-step wrapper deposits at the top of the step (`None` when the slot has no obligation, so
-    /// it is a tail call *within* an established chain exactly when this is `Some`). A deferred-return
-    /// FN dispatched into an established chain is a subsequent tail call whose own contract loses to
-    /// the kept-first one, so it skips resolving its (possibly async `Expression`-form) return type
-    /// and just tail-replaces its body. Held behind a `RefCell` because the depositor reaches it
-    /// through `&AmbientContext` (via [`DecideCtx`](super::decide::DecideCtx)); callers asking "is
-    /// this a tail call within a chain?" read [`Self::current_obligation_duplicate`]`.is_some()`.
+    /// The declared-return obligation the executing slot carries: the slot is a tail call *within*
+    /// an established chain exactly when this is `Some`. Held behind a `RefCell` because the
+    /// depositor reaches it through `&AmbientContext` (via [`DecideCtx`](super::decide::DecideCtx)).
     active_obligation: RefCell<Option<ReturnObligation>>,
 }
 
@@ -57,8 +50,7 @@ struct SlotStepSave {
 }
 
 impl AmbientContext {
-    /// Borrow the active per-call cart — the witness the workload binds a `Yoked` slot's
-    /// re-anchored scope borrow to.
+    /// The witness the workload binds a `Yoked` slot's re-anchored scope borrow to.
     pub(in crate::machine::execute) fn active_frame_ref(&self) -> Option<&Rc<CallFrame>> {
         self.active_frame.as_ref()
     }
@@ -76,9 +68,8 @@ impl AmbientContext {
             .expect("run frame (and its type registry) established before any step")
     }
 
-    /// [`Self::type_registry`] cloned out, `None` before the run frame exists — the detached read
-    /// `interpret` hands to builtin seeding while still holding the runtime, and the test harness
-    /// keeps readable after the run ends.
+    /// [`Self::type_registry`] cloned out — a detached read, valid before the run frame exists and
+    /// after the run ends.
     pub(in crate::machine::execute) fn type_registry_cloned(&self) -> Option<Rc<TypeRegistry>> {
         self.run_frame
             .as_ref()
@@ -87,7 +78,7 @@ impl AmbientContext {
     }
 
     /// The run's output sink, owned by the run frame exactly as the type registry is, and reached
-    /// the same way. `PRINT` is its only consumer, through [`BodyCtx::out`](crate::machine::BodyCtx).
+    /// the same way.
     pub(in crate::machine::execute) fn writer(&self) -> &RunWriter {
         self.run_frame
             .as_ref()
@@ -95,8 +86,6 @@ impl AmbientContext {
             .expect("run frame (and its writer) established before any step")
     }
 
-    /// Deposit `obligation` as the executing slot's active obligation — the whole body of the
-    /// slot-step wrapper closure, run through `&AmbientContext`.
     pub(in crate::machine::execute) fn deposit_obligation(&self, obligation: ReturnObligation) {
         *self.active_obligation.borrow_mut() = Some(obligation);
     }
@@ -106,8 +95,7 @@ impl AmbientContext {
         self.active_obligation.borrow_mut().take()
     }
 
-    /// Duplicate the active obligation without removing it — keep-first and park propagation hand
-    /// copies onward while the current step keeps its own.
+    /// Keep-first and park propagation hand copies onward while the current step keeps its own.
     pub(in crate::machine::execute) fn current_obligation_duplicate(
         &self,
     ) -> Option<ReturnObligation> {
@@ -117,30 +105,25 @@ impl AmbientContext {
             .map(ReturnObligation::duplicate)
     }
 
-    /// Whether the run frame is established. The workload mints it (adopting the run scope) on the
-    /// first run-lifetime submission via [`Self::set_run_frame`].
     pub(in crate::machine::execute) fn has_run_frame(&self) -> bool {
         self.run_frame.is_some()
     }
 
-    /// Borrow the run frame cart (the non-dying frame adopting the run root scope). A top-level
-    /// submission carries it as the slot's cart, so the root re-projects from it as `Yoked` rather
-    /// than anchoring at `'run` — see [`Host::resolve_node_scope`](super::harness::Host).
+    /// The non-dying frame adopting the run root scope. A top-level submission carries it as the
+    /// slot's cart, so the root re-projects from it as `Yoked` rather than anchoring at `'run` —
+    /// see [`Host::resolve_node_scope`](super::harness::Host).
     pub(in crate::machine::execute) fn run_frame_ref(&self) -> Option<&Rc<CallFrame>> {
         self.run_frame.as_ref()
     }
 
-    /// Install the run frame the workload minted by adopting the top-level run scope. Idempotent at
-    /// the call site (the workload guards on [`Self::has_run_frame`]).
     pub(in crate::machine::execute) fn set_run_frame(&mut self, frame: Rc<CallFrame>) {
         self.run_frame = Some(frame);
     }
 
     /// Resolve the cart a submission's slot carries, plus whether a frame was active. Top-level
-    /// submissions (no active frame) fall back to the run frame, so every slot carries a cart and
-    /// the active frame is `Some` during its step. `run_frame` is established by `ensure_run_frame`
-    /// before the first submission, so the fallback is always `Some`. The `framed` flag (the active
-    /// frame was present) drives `alloc_node`'s fresh-vs-in-flight queue split.
+    /// submissions (no active frame) fall back to the run frame, which `ensure_run_frame`
+    /// establishes before the first submission, so every slot carries a cart. The `framed` flag
+    /// drives `alloc_node`'s fresh-vs-in-flight queue split.
     pub(in crate::machine::execute) fn submission_cart(&self) -> (Rc<CallFrame>, bool) {
         let framed = self.active_frame.is_some();
         let cart = self.active_frame.clone().unwrap_or_else(|| {
@@ -165,7 +148,7 @@ impl AmbientContext {
         }
     }
 
-    /// Swap the saved values back in. Never panics: the unwind backstop runs it mid-panic.
+    /// Never panics: the unwind backstop runs it mid-panic.
     fn restore_slot_step(&mut self, save: SlotStepSave) {
         self.active_frame = save.prev_frame;
         self.active_payload = save.prev_payload;
@@ -173,8 +156,8 @@ impl AmbientContext {
     }
 }
 
-/// Unwind backstop for [`Host::with_slot_step`]: restores the saved ambient values if the step body
-/// panics. On the normal path `save` is taken out first, so the drop is a no-op.
+/// Unwind backstop for [`Host::with_slot_step`]. On the normal path `save` is taken out first, so
+/// the drop is a no-op.
 struct SlotStepBracket<'a, 'run> {
     host: &'a mut Host<'run>,
     save: Option<SlotStepSave>,
@@ -188,9 +171,8 @@ impl Drop for SlotStepBracket<'_, '_> {
     }
 }
 
-/// Unwind backstop for [`Host::with_active_frame`]: puts the displaced ambient frame back on
-/// every exit path. This one restores on the normal path too — there is no data to hand back, so
-/// the drop is the single restore point.
+/// Unwind backstop for [`Host::with_active_frame`]. This one restores on the normal path too —
+/// there is no data to hand back, so the drop is the single restore point.
 struct ActiveFrameBracket<'a, 'run> {
     host: &'a mut Host<'run>,
     prev: Option<Option<Rc<CallFrame>>>,
@@ -205,13 +187,10 @@ impl Drop for ActiveFrameBracket<'_, '_> {
 }
 
 impl<'run> Host<'run> {
-    /// Bracket one slot step: install `node_frame` / `node_payload` as the ambient values (resetting
-    /// the obligation slot, which the step's wrapper deposits into), run `body`, restore the previous
-    /// values, and return `body`'s result. The whole step — decide, effects, and the apply that
-    /// realizes the outcome — runs inside the bracket, so the step-end frame and the deposited
-    /// obligation are read off the ambient context by the apply itself. Restore is a bracket by
-    /// construction — an early return restores on the way out, and an unwind restores through the
-    /// backstop's `Drop`.
+    /// Bracket one slot step. The whole step — decide, effects, and the apply that realizes the
+    /// outcome — runs inside the bracket, so the step-end frame and the deposited obligation are
+    /// read off the ambient context by the apply itself. Restore is a bracket by construction: an
+    /// early return restores on the way out, an unwind through the backstop's `Drop`.
     ///
     /// The bracket installs the node's non-optional cart, and an invoke never empties
     /// `active_frame` — a `FreshTail` placement mints its own fresh cart rather than touching the
@@ -237,9 +216,8 @@ impl<'run> Host<'run> {
         result
     }
 
-    /// Bracket `frame` as the ambient cart for the duration of `body` — the sub-slot dispatch in
-    /// [`dispatch_body`](Self::dispatch_body) inherits it rather than the caller's — restoring the
-    /// previous cart on every exit path, unwind included.
+    /// Bracket `frame` as the ambient cart for the duration of `body`, restoring the previous cart
+    /// on every exit path, unwind included.
     pub(in crate::machine::execute) fn with_active_frame<R>(
         &mut self,
         frame: Rc<CallFrame>,

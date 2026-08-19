@@ -5,11 +5,10 @@
 //! immediately, an unbound name errors, and a still-finalizing head placeholder parks via a
 //! [`park_resume`] closure that re-runs the fast lane on resume.
 //!
-//! The shape covers more than that one head, though: a head is callable whenever it *evaluates* to
-//! something callable. Every other head this shape admits — a slot the scheduler filled or staged —
-//! carries no name to walk, so it takes the general lane
-//! ([`head_deferred::defer_head`](super::head_deferred::defer_head)), which evaluates the head and
-//! applies its resolved value through the same apply-a-callable tail.
+//! A head is callable whenever it *evaluates* to something callable, so the shape also admits a
+//! slot the scheduler staged or filled. That head carries no name to walk, so it takes the general
+//! lane ([`head_deferred::defer_head`](super::head_deferred::defer_head)), which evaluates the head
+//! and applies its resolved value through the same apply-a-callable tail.
 
 use crate::machine::ProducerId;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
@@ -28,34 +27,26 @@ pub(super) fn initial<'step>(
     };
     let chain = ctx.chain_deref();
     match ctx.current_scope().resolve_value_delivered(head, chain) {
-        // The head is **adopted** into the calling scope's region rather than read bare: the adopt
-        // mints the callable's reach there and retains it, so the captured foreign environment
-        // outlives the application and the re-anchored value is valid at `'step`. Same door the
-        // deferred-head lane takes (`head_deferred::classify_head`).
         Some(NameLookup::Bound(delivered)) => dispatch_callable_value(ctx, expr, &delivered),
-        // Head placeholder: park on the binder's claim and re-run the fast lane on resume. A binder
-        // that failed before binding the head propagates its error through this park (the harness
-        // rules on an already-terminal producer when it installs); one that bound the head wakes
-        // the resume onto the `Bound` arm above.
+        // A binder that failed before binding the head propagates its error through the park (the
+        // harness rules on an already-terminal producer when it installs); one that bound the head
+        // wakes the resume onto the `Bound` arm above.
         Some(NameLookup::Parked(source)) => install_head_park(source, expr),
         None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head.to_string())))),
     }
 }
 
-/// Resolve the already-bound head value to a [`ResolvedCallable`] and hand
-/// off to the shared apply-a-callable tail. The head is a value-bound
-/// lowercase identifier, so only a `KFunction` is callable —
-/// the partition invariant keeps a type out of `bindings.data`, so a
-/// constructor-typed head reaches dispatch through the type channel
-/// (`HeadDeferred`), never here. Anything else is a non-callable `TypeMismatch`.
+/// Only a `KFunction` is admitted: a Type-token head never lands in `bindings.data` (the
+/// token-class partition), so it is classified by its own head shape rather than here. Anything
+/// else this lane resolves is a non-callable `TypeMismatch`.
 fn dispatch_callable_value<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
     delivered: &DeliveredCarried,
 ) -> Outcome<'step> {
-    // The head is **adopted** into the calling scope's region as a callable rather than read bare:
-    // the adopt mints its reach there and retains it, so the captured foreign environment outlives
-    // the application and the callable rides the apply tail with that reach still proven.
+    // Adopted as a callable rather than read bare: the adopt mints its reach in the calling
+    // scope's region and retains it, so the captured foreign environment outlives the application
+    // and the callable rides the apply tail with that reach still proven.
     let callable = match ctx.current_scope().adopt_delivered_function(delivered) {
         Some(function) => ResolvedCallable::Function(function),
         None => {
@@ -70,8 +61,6 @@ fn dispatch_callable_value<'step>(
     apply_callable(ctx, callable, &expr)
 }
 
-/// Park the whole call on its head's still-finalizing binder edge `source` and re-run the fast
-/// lane on resume.
 fn install_head_park<'step>(source: ProducerId, expr: WorkingExpression<'step>) -> Outcome<'step> {
     park_resume(vec![source], Box::new(move |ctx, _idx| initial(ctx, expr)))
 }

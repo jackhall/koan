@@ -11,15 +11,13 @@
 //! builds. Slots still parked when the queues drain are therefore an invariant breach; `drain`
 //! surfaces them as its deadlock error rather than panicking on a result read.
 //!
-//! Generic over a single [`Workload`] `W`: an inter-node value `W::Value` passed along dep edges, a
-//! terminal error `W::Error`, a per-slot memory anchor `W::Frame` managed by `Rc`, a storage profile
-//! `W::Profile` its destination regions are built over, and a one-shot `W::Continuation`. The
-//! scheduler stores all of these and hands them back but inspects none beyond [`Anchor::owner`] and
-//! the two behavioural hooks, [`Workload::deliver`] and [`Workload::retiring`]. An embedder's
-//! interpreter instantiates the scheduler and drives it through the inherent-method contract; Koan's
-//! `machine` module is the first such instantiation.
+//! Generic over a single [`Workload`] `W`: the scheduler stores `W`'s value, error, anchor,
+//! profile, and continuation types and hands them back, but inspects none of them beyond
+//! [`Anchor::owner`] and the two behavioural hooks, [`Workload::deliver`] and
+//! [`Workload::retiring`].
 //!
-//! See design/execution/README.md and design/memory-model.md.
+//! See [design/dag-scheduler.md](../design/dag-scheduler.md) and
+//! [design/reach.md](../design/reach.md).
 
 use std::rc::Rc;
 
@@ -42,20 +40,12 @@ mod splice;
 mod work_queues;
 mod workload;
 
-/// The scheduler's white-box slates: the owned-tier continuation slot under Miri (a parked
-/// droppable continuation dropped unopened under the seal's own pin, and the park → wake → open →
-/// run round trip), the edge slab's alloc/release recycling and install branches, and the drain
-/// protocol (verdict application, retirement, dep reads, deadlock).
 #[cfg(test)]
 mod tests;
 
-// The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
-// `machine` and `scheduler`); imported here so the scheduler's carriers name it unqualified. A
-// private `use`: `witnessed` is the one public path to these types, and a `pub use` here would
-// double it for every one of them.
+// Kept private: `witnessed` is the public path to these, and re-exporting them here would double it.
 use crate::witnessed::{DropFree, Reattachable};
-// `pub` (not `pub(crate)`) like [`NodeId`]: `Deps` appears in the `pub` `Action::AwaitDeps` field,
-// so a narrower visibility would leak.
+// `pub`, because an embedder assembles a dep list before submitting it.
 pub use deps::{Dep, Deps};
 // The realized dep list is scheduler currency: the install doors write it onto the slot's dep row
 // and `drain` consumes it there, so no embedder ever holds one.
@@ -71,6 +61,9 @@ pub use workload::{
 /// A dynamic DAG of dispatch and execution work. See the module docs for the queue-priority and
 /// cycle contract.
 pub struct Scheduler<W: Workload> {
+    // Declaration order is drop order and is load-bearing: `deps` holds each slot's anchor row, so
+    // it must drop before `store` releases the slots whose sealed continuations run destructor glue
+    // against those regions.
     pub(in crate::scheduler) queues: WorkQueues,
     pub(in crate::scheduler) deps: DepGraph<W>,
     pub(in crate::scheduler) store: NodeStore<W>,
@@ -87,15 +80,13 @@ impl<W: Workload> Scheduler<W> {
         }
     }
 
-    /// Pop the next ready slot — [`drain`](Self::drain)'s iterator (in-flight slots ahead of fresh
-    /// dispatches). `None` when the queue drains.
+    /// Pop the next ready slot, in-flight slots ahead of fresh dispatches.
     pub(in crate::scheduler) fn pop_next(&mut self) -> Option<NodeId> {
         self.queues.pop_next()
     }
 
-    /// Take a slot's stored work to run it (`PreRun` → `Running`), together with a clone of the
-    /// slot's memory anchor (kept on the row). The slot sits empty until the drain applies the
-    /// step's verdict.
+    /// Take a slot's stored work to run it (`PreRun` → `Running`). The slot sits empty until the
+    /// drain applies the step's verdict.
     pub(in crate::scheduler) fn take_for_run(
         &mut self,
         id: NodeId,
@@ -103,15 +94,14 @@ impl<W: Workload> Scheduler<W> {
         (self.store.take_for_run(id), self.deps.anchor_clone(id))
     }
 
-    /// Reinstall a tail-replaced slot's work and re-enqueue it if its deps are already satisfied —
-    /// the whole `Replace` apply in one step. `anchor` is the reinstalled incarnation's memory anchor
-    /// at a framed tail replace (`None` for a frameless `Inherit` replace, which turns over no
-    /// region).
+    /// Reinstall a tail-replaced slot's work and re-enqueue it if its deps are already satisfied.
+    /// `anchor` is the reinstalled incarnation's memory anchor at a framed tail replace (`None` for
+    /// a frameless replace, which turns over no region).
     ///
-    /// Returns the **displaced** anchor a framed replace retires. The scheduler keeps no hold of its
-    /// own past this call: an embedder relocates whatever the next incarnation reads into the new
-    /// anchor's region *before* replacing, so ordering the retiring region's free is a local
-    /// variable in the apply path, not a row field spanning a step
+    /// Returns the **displaced** anchor a framed replace retires, and the scheduler keeps no hold of
+    /// its own past this call: an embedder relocates whatever the next incarnation reads into the
+    /// new anchor's region *before* replacing, so ordering the retiring region's free stays a local
+    /// of the apply path rather than a row field spanning a step
     /// ([design/reach.md § Retention model](../design/reach.md#retention-model)).
     pub(in crate::scheduler) fn replace(
         &mut self,
@@ -119,9 +109,9 @@ impl<W: Workload> Scheduler<W> {
         work: NodeWork<'_, W>,
         anchor: Option<Rc<W::Frame>>,
     ) -> Option<Rc<W::Frame>> {
-        // Seal the incoming continuation against the incarnation's *effective* anchor — the new one
-        // at a framed replace, the row's current one at a frameless `Inherit` replace — so the
-        // resting continuation is pinned by the anchor whose region it will read.
+        // Seal against the incarnation's *effective* anchor — the new one at a framed replace, the
+        // row's current one otherwise — so the resting continuation is pinned by the anchor whose
+        // region it will read.
         let stored = match &anchor {
             Some(new) => seal_work(work, new),
             None => seal_work(work, &self.deps.anchor_clone(id)),
@@ -135,18 +125,17 @@ impl<W: Workload> Scheduler<W> {
         displaced
     }
 
-    /// Slots still `PreRun` after the queue drained — each is parked on a dependency that can no
-    /// longer fire. `(count, anchor)` for the drain's deadlock error, pairing the stuck count with
-    /// the first stuck slot's memory anchor, or `None` when every slot has reclaimed. The anchor is
-    /// the workload's own per-slot type, so an embedder renders the report off data it wrote
-    /// itself — the scheduler stores nothing diagnostic.
+    /// Slots still `PreRun` after the queue drained — each parked on a dependency that can no longer
+    /// fire — as `(count, first stuck slot's anchor)`. The sample is the workload's own anchor type
+    /// so an embedder renders the deadlock report off data it wrote itself; the scheduler stores
+    /// nothing diagnostic.
     pub(in crate::scheduler) fn unresolved(&self) -> Option<(usize, Rc<W::Frame>)> {
         self.store
             .unresolved()
             .map(|(count, first)| (count, self.deps.anchor_clone(first)))
     }
 
-    /// A clone of the slot's memory anchor, or `None` for a slot with none installed. Test-only.
+    /// A clone of the slot's memory anchor, or `None` for a slot with none installed.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn anchor_of(&self, id: NodeId) -> Option<Rc<W::Frame>> {
         self.deps.anchor_of(id)
@@ -160,12 +149,12 @@ impl<W: Workload> Scheduler<W> {
     }
 
     /// True iff `producer` is forward-reachable from `consumer` — i.e. parking `consumer` on
-    /// `producer` would deadlock. The install door's debug assertion: the embedder's dispatch rule
-    /// keeps every claim wait lexically backward, so a cycling park is unconstructible upstream and
-    /// this walk only guards that invariant.
+    /// `producer` would deadlock. Debug-assertion-only: the embedder's dispatch rule keeps every
+    /// claim wait lexically backward, so a cycling park is unconstructible upstream and this walk
+    /// only guards that invariant.
     ///
-    /// The walk follows each slot's notify list to the consumers its edges name, skipping released
-    /// entries (Inv-C) and consumer-less ones (a root or placeholder edge continues no chain).
+    /// The walk skips released notify entries (Inv-C) and consumer-less ones — a root or placeholder
+    /// edge continues no chain.
     fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
         if producer == consumer {
             return true;
@@ -192,35 +181,28 @@ impl<W: Workload> Scheduler<W> {
         false
     }
 
-    /// **The one door a consumer's dep list is wired through.** The embedder hands the dep *sources*
-    /// it holds — one edge per dep, in dep order; the door mints the consumer's own slab edge off
-    /// each, writes the realized list onto the consumer's dep row, and hands back each dep's
-    /// **filled-or-parked** verdict. Producer `NodeId`s never leave the scheduler: resolving a source
-    /// edge to one is this door's job.
+    /// **The one door a consumer's dep list is wired through** ([`alloc_node`](Self::alloc_node),
+    /// the submit-time sibling for a fresh row, routes through it too). The embedder hands the dep
+    /// *sources* it holds — one edge per dep, in dep order — and the door mints the consumer's own
+    /// slab edge off each. Producer `NodeId`s never leave the scheduler: resolving a source edge to
+    /// one is this door's job.
     ///
-    /// Every dep's edge inherits its source's destination — one rule, applied uniformly. A dep on a
-    /// placeholder delivers into the region that placeholder named; a dep on sub-work the embedder
-    /// spawned delivers into the region that sub-work's source named, which the embedder minted at
-    /// the consumer's own anchor region.
+    /// Every dep's edge inherits its source's destination, uniformly: a dep on a placeholder
+    /// delivers into the region that placeholder named, a dep on spawned sub-work into the region
+    /// that sub-work's source named.
     ///
     /// The returned `Vec<InstalledEdge>` is index-aligned with `sources`. A *filled* verdict is the
     /// caller's to act on — its producer has already delivered, so an errored one propagates at once
     /// rather than waiting for a wake that will not come. A *parked* one is asserted acyclic in
     /// debug builds: the embedder's lexical dispatch rule means a park can never wait forward, so a
     /// cycling edge here is an upstream bug, not a runtime condition.
-    ///
-    /// It serves an already-allocated consumer slot, which is why it takes the dep list separately
-    /// from the work; the submit-time sibling is [`alloc_node`](Self::alloc_node), which initializes
-    /// a fresh row and its wires as one atomic step. Two doors, one primitive — so no wiring path can
-    /// skew a row's invariants.
     pub fn install_deps(&mut self, consumer: NodeId, sources: &[EdgeId]) -> Vec<InstalledEdge> {
         let mut installed = Vec::with_capacity(sources.len());
         for &source in sources {
             let verdict = self.install_edge_from(source);
             self.edges.bind_consumer(verdict.edge_id(), consumer);
             // The mint already listed a parked edge on its producer, so only the pending half of
-            // the wire is left: this consumer waits on one more unfilled edge. A filled verdict
-            // waits on nothing — its producer has already delivered.
+            // the wire is left. A filled verdict waits on nothing.
             if let InstalledEdge::Parked(edge) = verdict {
                 debug_assert!(
                     !self.would_create_cycle(
@@ -247,10 +229,9 @@ impl<W: Workload> Scheduler<W> {
     /// owner's teardown verb.
     ///
     /// The edge always parks, and its producer must be live: a slot reclaims at its own finalize, so
-    /// a `NodeId` that names a terminal producer names nothing. Both production callers — the run's
-    /// roots and a binder's placeholder claim — wire immediately after allocating the slot. An edge
-    /// wired from a *name the embedder already holds* takes
-    /// [`install_edge_from`](Self::install_edge_from), which is where the filled branch lives.
+    /// a `NodeId` that names a terminal producer names nothing. Wiring off a *name the embedder
+    /// already holds* takes [`install_edge_from`](Self::install_edge_from) instead, which is where
+    /// the filled branch lives.
     ///
     /// The edge carries no consumer: it wakes nobody and counts against no pending. It receives
     /// delivery like every other listed edge, which is what makes a root or a placeholder readable.
@@ -283,13 +264,10 @@ impl<W: Workload> Scheduler<W> {
     ///   slot alive), so the new edge parks on it too and registers on its notify list.
     ///
     /// Inheriting the destination is what makes the filled branch a *share*: the resident already
-    /// sits in the region the new edge names, so duplicating the cell is the whole of the work. The
-    /// door has no cross-destination form. A consumer wanting the terminal in a region `source` does
-    /// not name would need the filled branch to lift that resident under its own owner (reached
-    /// through the region host back-link) and adopt across — a second destination for one delivery,
-    /// on a lattice that currently derives the new edge's coverage from `source`'s owner standing.
-    /// Wiring from a name is how an embedder joins a delivery already aimed somewhere; an embedder
-    /// that needs its own destination names one, through [`install_edge`](Self::install_edge).
+    /// sits in the region the new edge names, so duplicating the cell is the whole of the work.
+    /// There is no cross-destination form — the lattice derives the new edge's coverage from
+    /// `source`'s owner standing. An embedder that needs a destination of its own names one, through
+    /// [`install_edge`](Self::install_edge).
     pub fn install_edge_from(&mut self, source: EdgeId) -> InstalledEdge {
         match self.edges.producer_of(source) {
             Some(producer) => {
@@ -304,10 +282,10 @@ impl<W: Workload> Scheduler<W> {
         }
     }
 
-    /// Release one edge. Rides its owner's teardown verb — a consumer or frame teardown calls this
-    /// with the names it still holds; an [`EdgeId`] is a name, not a lifecycle handle its holder
-    /// manages. A parked edge's slab index is withheld from circulation until the walk that still
-    /// lists it drops the entry (Inv-C). Panics in debug builds on a name whose index was recycled.
+    /// Release one edge. Rides its owner's teardown verb: an [`EdgeId`] is a name, not a lifecycle
+    /// handle its holder manages. A parked edge's slab index is withheld from circulation until the
+    /// walk that still lists it drops the entry (Inv-C). Panics in debug builds on a name whose
+    /// index was recycled.
     pub fn release_edge(&mut self, id: EdgeId) {
         self.edges.release(id);
     }
@@ -317,17 +295,16 @@ impl<W: Workload> Scheduler<W> {
 /// it. There is no slot behind these — the producer reclaimed at its own finalize, and what the edge
 /// holds is an ordinary resident of the destination region the edge names.
 impl<W: Workload> Scheduler<W> {
-    /// The delivered terminal's error, or `Ok(())` for a value terminal — the borrow-free
-    /// success/failure probe that reads no value.
+    /// The delivered terminal's error, or `Ok(())` for a value terminal — the success/failure probe
+    /// that borrows no value.
     pub fn edge_result_error(&self, id: EdgeId) -> Result<(), &W::Error> {
         self.edges.resident_error(id)
     }
 
-    /// Open the delivered terminal at a rank-2 brand and hand it to `f` as
-    /// `Result<Live<'b>, &W::Error>` — the destination-verb read, so the value nests inside the
-    /// access rather than riding the `&self` borrow up-stack. The pin is the destination region's
-    /// own owner, upgraded off its back-link: the value lives in that region, so the region's own
-    /// liveness is what covers the read.
+    /// Open the delivered terminal at a rank-2 brand, so the value nests inside the access rather
+    /// than riding the `&self` borrow up-stack. The pin is the destination region's own owner,
+    /// upgraded off its back-link: the value lives in that region, so the region's own liveness is
+    /// what covers the read.
     pub fn read_edge_result_with<R>(
         &self,
         id: EdgeId,
@@ -338,10 +315,10 @@ impl<W: Workload> Scheduler<W> {
     }
 
     /// Duplicate the delivered terminal's sealed cell — value + reach description — leaving the
-    /// edge's own copy intact. The drain's step-start read: the cell is `Copy`-shaped data whose
-    /// pointee lives in the destination region, so a consumer that holds that region takes this and
-    /// re-brands it ([`Retained::brand_with`](crate::witnessed::Retained::brand_with)) rather than
-    /// carrying pins of its own.
+    /// edge's own copy intact. The cell is `Copy`-shaped data whose pointee lives in the destination
+    /// region, so a consumer that holds that region re-brands it
+    /// ([`Retained::brand_with`](crate::witnessed::Retained::brand_with)) rather than carrying pins
+    /// of its own.
     pub(in crate::scheduler) fn edge_resident(
         &self,
         id: EdgeId,
@@ -349,11 +326,10 @@ impl<W: Workload> Scheduler<W> {
         self.edges.resident_duplicate(id)
     }
 
-    /// [`edge_resident`](Self::edge_resident), widened for a driving crate's own white-box tests.
-    /// The sealed cell a delivered edge holds, duplicated (leaving the edge's own copy intact,
-    /// releasing and consuming nothing) so a test can re-brand it into an owned envelope at a
-    /// lifetime of its own choosing — the capability [`read_edge_result_with`](Self::read_edge_result_with)
-    /// withholds, since its callback's value is scoped to the read rather than escaping it.
+    /// [`edge_resident`](Self::edge_resident), widened for a driving crate's own white-box tests: a
+    /// test can re-brand the duplicate into an owned envelope at a lifetime of its own choosing —
+    /// the capability [`read_edge_result_with`](Self::read_edge_result_with) withholds, since its
+    /// callback's value is scoped to the read rather than escaping it.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn edge_resident_duplicate(&self, id: EdgeId) -> Result<SealedTerminal<W>, W::Error> {
         self.edge_resident(id)
@@ -377,11 +353,9 @@ impl<W: Workload> Default for Scheduler<W> {
     }
 }
 
-/// `#[cfg(any(test, feature = "test-hooks"))]` forwarders that let the driver's white-box tests
-/// poke slot/edge state without exposing the `store` / `deps` / `queues` / `edges` fields. Each
-/// wraps an already-test-only primitive on the inner store, dep graph, or edge slab. The
-/// `test-hooks` feature widens this for an embedder compiling as a dependent crate, where
-/// `cfg(test)` is off.
+/// Forwarders that let white-box tests poke slot/edge state without exposing the `store` / `deps` /
+/// `queues` / `edges` fields. The `test-hooks` feature widens them for an embedder compiling as a
+/// dependent crate, where `cfg(test)` is off.
 #[cfg(any(test, feature = "test-hooks"))]
 impl<W: Workload> Scheduler<W> {
     pub fn clear_node(&mut self, id: NodeId) {

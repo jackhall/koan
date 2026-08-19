@@ -1,10 +1,9 @@
 //! Miri slate (tree borrows) for the lifetime-erasure carrier. Every test carries a *real* borrow
 //! into the erased store and reads it back after the original binding drops, so the erase → reattach
 //! → read round-trip pins the lifetime-fabricated read under tree borrows. Names only stand-in
-//! families (a covariant `&'r u32`, an invariant `Cell<&'r u32>`, a mutable-scope-plus-pool family)
-//! and a stand-in cart (`TestCart`: a region-backing `Vec` plus an `outer` ancestor chain), never a
-//! koan type. Fails on UB, not values. The escape-can't-compile guards live as `compile_fail`
-//! doctests on [`Witnessed::with`] / [`Witnessed::map`] / [`Witnessed::yoke`].
+//! families and a stand-in cart (`TestCart`: a region-backing `Vec` plus an `outer` ancestor
+//! chain), never a koan type. Fails on UB, not values. The escape-can't-compile guards live as
+//! `compile_fail` doctests on [`Witnessed::with`] / [`Witnessed::map`] / [`Witnessed::yoke`].
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -36,8 +35,8 @@ mod bump;
 /// store, over an invariant family that names its own region and a parent in another one.
 mod born;
 
-/// Covariant stand-in: a plain shared reference. `At<'r>` is a `&'r u32`, whose lifetime the borrow
-/// checker can't track across the `'static` store.
+/// Covariant stand-in — a shared reference whose lifetime the borrow checker cannot track across
+/// the `'static` store.
 struct RefFamily;
 
 /// Invariant stand-in — the case that actually matters. `Cell<&'r u32>` is invariant in `'r`
@@ -64,16 +63,15 @@ struct BoxFamily;
 struct DynContinuationFamily;
 type TestContinuation<'r> = Box<dyn FnOnce() -> u32 + 'r>;
 
-// Each stand-in is one type generic only in `'r` with a lifetime-independent layout (a reference, a
-// cell of a reference, a struct of both, a boxed reference); the shared `reattachable!` macro
-// discharges the obligation.
+// Each stand-in is one type generic only in `'r` with a lifetime-independent layout; the shared
+// `reattachable!` macro discharges the obligation.
 reattachable! {
     RefFamily => &'r u32,
     InvFamily => Cell<&'r u32>,
     ScopeFamily => ScopeAndPool<'r>,
 }
-// Both boxed stand-ins carry drop glue, so they rest on the owned tier (`SealedPinned`) and take
-// the `droppable` arm, which emits no `DropFree`.
+// These three carry drop glue, so they rest on the owned tier (`SealedPinned`) and take the
+// `droppable` arm, which emits no `DropFree`.
 reattachable! {
     droppable
     BoxFamily => Box<&'r u32>,
@@ -147,8 +145,7 @@ unsafe impl PinsRegion for TestCart {
     }
 }
 
-/// The witness-less primitive still routed by the value-carrier path: `Erased` storage, exercised
-/// over a real borrow.
+/// The witness-less primitive: [`Erased`] storage over a real borrow.
 #[test]
 fn erased_roundtrip() {
     let backing = [7u32, 8, 9];
@@ -162,15 +159,11 @@ fn erased_roundtrip() {
 }
 
 /// `with_branded_ref`: re-anchor a reference-to-an-erased-store behind the rank-2 brand and copy a
-/// scalar out — the witnessed read the deleted free-`'b` reattach is replaced by. Mirrors the
-/// production region-store flow: erase a borrow to the `'static` store, then read it back under the
-/// brand, the fabricated `'b` confined to the closure (`R` is a copied scalar that cannot name it).
+/// scalar out — the region's store-side read. The fabricated `'b` stays confined to the closure
+/// because `R` is a copied scalar that cannot name it.
 #[test]
 fn branded_ref_reads_erased_store() {
     let backing = [11u32, 22, 33];
-    // Erase a borrow to the `'static` store, then re-anchor behind the brand — the shape the region's
-    // store-side read routes. The pointee (`backing`) is kept live across the call; the brand keeps the
-    // view from escaping it.
     let stored: <RefFamily as Reattachable>::At<'static> =
         erase_to_static::<RefFamily>(&backing[0]);
     let value: u32 = with_branded_ref::<RefFamily, _>(&stored, |reref| **reref);
@@ -218,8 +211,6 @@ fn continuation_binds_cart_coherent_value_via_map() {
         };
         Witnessed::from_erased(Erased::erase(carrier), Rc::clone(&backing))
     };
-    // At the brand, bind pool[2] into the invariant scope slot — sound only because scope and bound
-    // value share the brand — then re-seal.
     let post: Witnessed<ScopeFamily, Rc<Vec<u32>>> = pre.map(|c, _token: FoldToken<'_>| {
         c.scope.set(Some(&c.pool[2]));
         c
@@ -312,8 +303,6 @@ fn compose_binds_ancestor_ref_into_descendant_scope() {
     let fn_w: Witnessed<RefFamily, PinBundle<TestCart>> =
         Witnessed::yoke(Rc::clone(&ancestor), |region| &region[1])
             .rewitness(PinBundle::singleton(Rc::clone(&ancestor)));
-    // Bind the ancestor ref into the descendant scope at the shared brand, then re-seal under the
-    // total union.
     let merged: Witnessed<ScopeFamily, PinBundle<TestCart>> =
         merge_for_test::<ScopeFamily, RefFamily, ScopeFamily>(
             scope_w,
@@ -330,8 +319,8 @@ fn compose_binds_ancestor_ref_into_descendant_scope() {
         merged.witness().members(),
         [only] if Rc::ptr_eq(only, &descendant)
     ));
-    // Drop both call handles. `merged`'s witness is the descendant clone; its `outer` chain still
-    // pins the ancestor backing the bound `&200` points into.
+    // `merged`'s witness is the descendant clone; its `outer` chain still pins the ancestor backing
+    // the bound `&200` points into.
     drop(descendant);
     drop(ancestor);
     assert_eq!(merged.with(|c| *c.scope.get().unwrap()), 200);
@@ -367,13 +356,11 @@ fn compose_keeps_unrelated_carts_as_a_two_member_set() {
     );
 }
 
-/// `Sealed::open_at` + `Opened::reseal`: the borrow-tied in-use state. A real borrow is sealed,
-/// opened at a step lifetime pinned by a separately-held `Rc`, read out of the `Opened`, then
-/// resealed; after every original handle drops the resealed carrier's own bundled witness keeps the
-/// pointee live and it reads back. The step lifetime `'b` rides the pin borrow (a `&'b Rc`), so the
-/// read cannot outlive the frame — Miri must stay clean across the reseal round-trip. (`open_at`
-/// copies the value out, so it is a `Copy`-family verb — the invariant-`Cell` stress lives on the
-/// rank-2 `with` / `map` round-trips.)
+/// [`Sealed::open_at`] + [`Opened::reseal`]: the borrow-tied in-use state. The step lifetime `'b`
+/// rides the pin borrow, so the read cannot outlive the frame, and the resealed carrier's own
+/// bundled witness keeps the pointee live once every original handle drops. (`open_at` copies the
+/// value out, so it is a `Copy`-family verb — the invariant-`Cell` stress lives on the rank-2
+/// `with` / `map` round-trips.)
 #[test]
 fn open_at_reseal_roundtrip() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![5, 6, 7]);
@@ -399,13 +386,10 @@ fn open_at_reseal_roundtrip() {
     assert_eq!(resealed.open(|r| *r), 7);
 }
 
-/// `SealedExtern::open` — the **consuming, externally-witnessed** rank-2 open, distinct from the
-/// bundled-witness [`Sealed::open`] (which this slate covers via its own `compile_fail` doctest and
-/// the `Witnessed` round-trips). A real borrow is erased into the witness-less `SealedExtern`, opened
-/// against a *separately-held* `Rc` witness, and the invariant value read back inside the brand after
-/// the original binding drops; the witness pins the pointee for the call, and the `for<'b>` brand
-/// confines the read. A sibling mutation after the open catches a tree-borrows regression. Fails on
-/// UB, not values.
+/// [`SealedExtern::open`] — the **consuming, externally-witnessed** rank-2 open, distinct from the
+/// bundled-witness [`Sealed::open`]. The invariant value is read back after its original binding
+/// drops: the separately-held witness pins the pointee for the call, and the `for<'b>` brand
+/// confines the read. Fails on UB, not values.
 #[test]
 fn sealed_extern_open_externally_witnessed() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![5, 6, 7]);
@@ -419,15 +403,14 @@ fn sealed_extern_open_externally_witnessed() {
     // model, where bundling it would be a redundant owner). The brand confines the read to the call.
     let seen: u32 = sealed.open(&backing, |cell: Cell<&u32>| *cell.get());
     assert_eq!(seen, 6);
-    // Mutate the region through a sibling `Rc` after the open to catch a stacked/tree-borrow regression.
+    // Re-read the region through a sibling `Rc` after the open to catch a tree-borrows regression.
     let _again: &u32 = &backing[2];
 }
 
-/// `SealedPinned::open` over a **non-`Copy`** carrier: a `Box<&u32>` is moved (not copied) through
-/// the seal and consumed by the open, proving the owned tier admits the boxed continuation shape
-/// the Copy tier's `DropFree` bound excludes. The boxed borrow is read inside the brand after the
-/// source borrow ends; the seal's own bundled pin keeps it live. The trivial extern operand is what
-/// a caller with nothing to zip passes — the tier has one open verb. Fails on UB, not values.
+/// [`SealedPinned::open`] over a **non-`Copy`** carrier: a `Box<&u32>` moves through the seal and is
+/// consumed by the open, so the owned tier admits the boxed continuation shape the Copy tier's
+/// `DropFree` bound excludes. The trivial extern operand is what a caller with nothing to zip
+/// passes — the tier has one open verb. Fails on UB, not values.
 #[test]
 fn sealed_pinned_open_consumes_non_copy() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![10, 20]);
@@ -445,11 +428,10 @@ fn sealed_pinned_open_consumes_non_copy() {
     let _again: &u32 = &backing[1];
 }
 
-/// `SealedPinned::open` over a **fat-pointer** carrier: a `Box<dyn FnOnce>` continuation capturing a
-/// real borrow is erased to the `'static` store with its pin co-located, and **invoked inside the
-/// brand** — so the retype runs over a two-word data + vtable pointer (the stored-continuation
-/// shape) and tree borrows checks the capture read through the lifetime-fabricated box. The
-/// single-shot call consumes the non-`Copy` carrier by value. Fails on UB, not values.
+/// [`SealedPinned::open`] over a **fat-pointer** carrier: a `Box<dyn FnOnce>` continuation is
+/// **invoked inside the brand**, so the retype runs over a two-word data + vtable pointer (the
+/// stored-continuation shape) and tree borrows checks the capture read through the
+/// lifetime-fabricated box. Fails on UB, not values.
 #[test]
 fn sealed_pinned_open_invokes_a_fat_pointer_continuation() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![7, 8, 9]);
@@ -467,7 +449,7 @@ fn sealed_pinned_open_invokes_a_fat_pointer_continuation() {
         |_within, continuation: TestContinuation<'_>, other: &u32| continuation() + *other,
     );
     assert_eq!(got, 17);
-    // Mutate the region through a sibling `Rc` after the open to catch a tree-borrows regression.
+    // Re-read the region through a sibling `Rc` after the open to catch a tree-borrows regression.
     let _again: &u32 = &backing[0];
 }
 
@@ -513,18 +495,16 @@ fn sealed_pinned_drop_runs_value_glue_before_pins() {
 }
 
 /// The **step-open shape** under the two-tier split: an owned-tier continuation opens beside its
-/// zipped `SealedExtern` operands at a **single** brand — the run-loop step's (continuation,
-/// contract, region) miniature. The droppable boxed carrier rests on `SealedPinned` with its pin
+/// zipped [`SealedExtern`] operands at a **single** brand — the run-loop step's (continuation,
+/// contract, region) miniature. The droppable boxed carrier rests on [`SealedPinned`] with its pin
 /// co-located; the `DropFree` side — an *optional* present carrier and a plain reference — zips into
-/// one `SealedExtern`. All three are read at one `'b` through the tier's single open verb, and a
-/// sibling mutation after catches a regression.
+/// one `SealedExtern`, and all three read at one `'b`.
 #[test]
 fn sealed_pinned_opens_beside_a_zipped_extern_operand() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![1, 2, 3]);
     let boxed: SealedPinned<BoxFamily, Rc<Vec<u32>>> =
         SealedPinned::erase(Box::new(&backing[0]), Rc::clone(&backing));
-    // The optional operand is sealed via `seal`-of-`Erased` then folded into an `Option` carrier; the
-    // `Some` arm proves a present optional opens to `Some(..)` at the brand.
+    // The `Some` arm: a present optional opens to `Some(..)` at the brand.
     let contract: SealedExtern<OptionOf<RefFamily>> = seal_option(Some(Erased::erase(&backing[1])));
     let region: SealedExtern<RefFamily> = SealedExtern::seal(Erased::erase(&backing[2]));
     let sum: u32 = boxed.open(

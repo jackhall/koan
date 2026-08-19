@@ -3,8 +3,8 @@
 //! NEWTYPE record repr, the UNION schema, and the standalone record-type sigil.
 //!
 //! [`FieldListDeferral`] bundles the forward-ref producers, the sigil sub-Dispatches, and the
-//! elaborator state a re-walk needs; its three consuming finish methods each declare one dep-finish
-//! that waits on `[awaited_producers ++ sub_dispatches]` and re-walks the field list through
+//! elaborator state a re-walk needs. Its finish methods declare a dep-finish that waits on
+//! `[awaited_producers ++ sub_dispatches]` and re-walks the field list through
 //! [`parse_typed_field_list_via_elaborator`], feeding the resolved sub-Dispatch carriers back through
 //! that walker's `results` channel in DFS order. Two composition surfaces consume the resulting
 //! `(name, KType)` pairs:
@@ -41,16 +41,15 @@ use super::SubDispatch;
 use super::ctx::DecideCtx;
 
 /// Composes the final `KType` from the elaborated pairs, plus whatever owned type content the
-/// caller closed over (e.g. the FN return type). Runs in [`compose_field_list`], which allocates
-/// the composed value into the consumer's own region through the single type door.
+/// caller closed over (e.g. the FN return type). The composed value is allocated into the
+/// consumer's own region through the single type door.
 pub(crate) type BrandCompose<'step> = Box<
     dyn for<'r> FnOnce(Vec<(String, KType)>, &'r TypeRegistry) -> Result<KType, KError> + 'step,
 >;
 
 /// `Action`-path finalize, returning a witnessed carrier beside the binding writes the declarator
-/// decided — used by [`FieldListDeferral::action`], whose finish lifts the pair straight into
-/// [`Action::done_writing`](crate::machine::core::Action::done_writing). Takes the
-/// [`FinishCtx`] the `AwaitContinue` wrapper already holds, for the same reason.
+/// decided; the pair lifts straight into
+/// [`Action::done_writing`](crate::machine::core::Action::done_writing).
 pub(crate) type FieldListFinalizeAction<'a> = Box<
     dyn for<'r, 'w> FnOnce(
             &FinishCtx<'a, 'r>,
@@ -60,12 +59,10 @@ pub(crate) type FieldListFinalizeAction<'a> = Box<
         + 'a,
 >;
 
-/// The deferred re-walk both currencies run once their deps resolve: rebuild the elaborator, feed the
-/// sub-Dispatch carriers back through the field walker in DFS order, and produce the
-/// `(name, KType)` pairs. The re-walk consumes only the sub-Dispatch tail (`awaited_producers` are
-/// notify-only forward-ref waits). The `Err` arm labels a shape error with `error_frame`; a still-`Pending` walk is
-/// a scheduling inconsistency (every producer waited on is terminal by the dep-finish invariant, so a
-/// second park is not a recoverable forward ref) and errors loudly.
+/// The deferred re-walk both currencies run once their deps resolve. It consumes only the
+/// sub-Dispatch tail; `awaited_producers` are notify-only forward-ref waits. A still-`Pending` walk
+/// is a scheduling inconsistency — every producer waited on is terminal by the dep-finish
+/// invariant, so a second park is not a recoverable forward ref — and so it errors loudly.
 struct FieldListRewalk<'step> {
     parts: FieldParts<'step>,
     context: FieldListContext,
@@ -77,13 +74,10 @@ struct FieldListRewalk<'step> {
 }
 
 impl<'step> FieldListRewalk<'step> {
-    /// Re-walk the field list: the sub-Dispatch results arrive as `feed`, and each elaborated field
-    /// type is cloned out as owned data. The expression stays at `'step` (only walked, never
-    /// embedded), while the output pairs are owned `KType`s; the parser carries the two lifetimes
-    /// separately so they can diverge. `'f` is likewise independent of the scope's own `'b`: the walk
-    /// reads a fed value only to extract its `KType` or render it into an error string, so the feed
-    /// may arrive at the short borrow of a dep envelope's open guard. `ResultFeed` is always
-    /// installed: a `Done`-shaped walk never pops it, and a popped-dry feed hits the loud "fewer
+    /// `'f` is independent of `'step`: the walk reads a fed value only to extract its `KType` or
+    /// render it into an error string, so the feed may arrive at the short borrow of a dep
+    /// envelope's open guard, while the output pairs are owned `KType`s. `ResultFeed` is always
+    /// installed — a `Done`-shaped walk never pops it, and a popped-dry feed hits the loud "fewer
     /// resolved sub-dispatches" error inside the walker.
     fn run<'f>(
         &self,
@@ -122,12 +116,6 @@ impl<'step> FieldListRewalk<'step> {
     }
 }
 
-/// The construction site the scheduler-currency finish calls: re-walk the field list against the
-/// resolved sub-Dispatch results, compose the result `KType` from the interned pairs, and carry the
-/// handle through [`StepAllocator::type_carried`]. The `Action`-currency finish composes through the
-/// [`FieldListDeferral::action_composed`] adapter, which wraps this same step around a
-/// [`FinishCtx`]'s allocator.
-///
 /// `feed` is the sub-Dispatch tail of the dep terminals in DFS order — the forward-ref deps are
 /// notify-only waits, so they never reach the walk. Every field type the walk produces is
 /// owned data, so the composed type embeds no borrow of a producer region.
@@ -144,10 +132,7 @@ fn compose_field_list<'step, 'f>(
 }
 
 /// One field-list deferral, ready to finish into either dispatch currency. Holds the forward-ref
-/// producers, the sigil sub-Dispatches (DFS order), and the elaborator state a re-walk rebuilds; the
-/// required fields are set at [`new`](Self::new) and the optionals thread in through the `with_*`
-/// setters. The three consuming finish methods each assemble the shared
-/// `[awaited_producers ++ sub_dispatches]` dep vector once through [`into_parts`](Self::into_parts).
+/// producers, the sigil sub-Dispatches (DFS order), and the elaborator state a re-walk rebuilds.
 pub(crate) struct FieldListDeferral<'a> {
     parts: FieldParts<'a>,
     awaited_producers: Vec<ProducerId>,
@@ -161,9 +146,7 @@ pub(crate) struct FieldListDeferral<'a> {
 }
 
 impl<'a> FieldListDeferral<'a> {
-    /// The five fields every deferral names: the parked field-list `parts`, its forward-ref
-    /// `awaited_producers`, the sigil `sub_dispatches` (DFS order), and the `context` / `name_kind`
-    /// diagnostic and field-name policy. The elaborator-rebuild optionals default empty/absent.
+    /// The elaborator-rebuild optionals default empty/absent; the `with_*` setters thread them in.
     pub(crate) fn new(
         parts: FieldParts<'a>,
         awaited_producers: Vec<ProducerId>,
@@ -210,14 +193,13 @@ impl<'a> FieldListDeferral<'a> {
         self
     }
 
-    /// Split the deferral into the deferred re-walk, the shared dep vector (the forward-ref producers
-    /// it merely waits on, then each sub-Dispatch in DFS order), and the index its sub-Dispatch
-    /// results start at. The one place the dep vector is assembled.
+    /// Splits into the re-walk, the dep vector (forward-ref producers first, then each sub-Dispatch
+    /// in DFS order), and the index the sub-Dispatch results start at.
     ///
-    /// This is the one finish that cannot read its results in order: it waits on forward-ref
-    /// producers it never reads while the re-walk resolves those names from the now-populated scope,
-    /// so it slices its own deps out rather than consuming the list. The sub-Dispatches are appended
-    /// last, so that slice is the tail from this index on.
+    /// A field-list finish cannot read its results in order: it waits on forward-ref producers it
+    /// never reads, while the re-walk resolves those names from the now-populated scope. So it
+    /// slices its own deps out rather than consuming the list, and the sub-Dispatches go last so
+    /// that slice is the tail from `first_sub` on.
     fn into_parts(self) -> (FieldListRewalk<'a>, Deps<SubDispatch<'a>>, usize) {
         let rewalk = FieldListRewalk {
             parts: self.parts,
@@ -249,11 +231,9 @@ impl<'a> FieldListDeferral<'a> {
     pub(in crate::machine::execute) fn outcome(self, compose: BrandCompose<'a>) -> Outcome<'a> {
         let (rewalk, deps, first_sub) = self.into_parts();
         let finish: TerminalDepFinish<'a> = Box::new(move |view, terminals| {
-            // The sub-Dispatch tail — each terminal already resident in a region this step covers and
-            // read pin-free at its brand — is the walk's feed; the deps ahead of it are notify-only
-            // waits on a forward reference. The opens stay bound across the walk, so every value is
-            // read at one common brand. Each field type the walk yields is cloned out as owned data,
-            // so the composed type needs no operand fold.
+            // The sub-Dispatch tail feeds the walk; the deps ahead of it are notify-only waits on a
+            // forward reference. The opens stay bound across the walk, so every value is read at one
+            // common brand, and each field type is cloned out as owned data — no operand fold.
             let opened: Vec<_> = terminals[first_sub..]
                 .iter()
                 .map(|t| t.cell.open_at())
@@ -297,11 +277,9 @@ impl<'a> FieldListDeferral<'a> {
         use crate::machine::core::{Action, AwaitContinue};
         let (rewalk, deps, first_sub) = self.into_parts();
         let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-            // The sub-Dispatch tail — each terminal already resident in a region this step covers and
-            // read pin-free at its brand — feeds the re-walk; the deps ahead of it are notify-only
-            // waits on a forward reference. The opens stay bound across the walk, so every value is
-            // read at one common brand. Each field type the walk yields is cloned out as owned data,
-            // so the composed type needs no operand fold.
+            // The sub-Dispatch tail feeds the walk; the deps ahead of it are notify-only waits on a
+            // forward reference. The opens stay bound across the walk, so every value is read at one
+            // common brand, and each field type is cloned out as owned data — no operand fold.
             let opened: Vec<_> = results[first_sub..]
                 .iter()
                 .map(|t| t.cell.open_at())
@@ -332,11 +310,10 @@ impl<'a> FieldListDeferral<'a> {
     }
 }
 
-/// Elaborate a standalone `:{…}` record type to `Carried::Type(KType::Record { .. })`.
-/// The `fields` expression is the record's `(name :Type, …)` field list. A record type at a
-/// value/type position declares no binder, so the elaborator threads no self-reference; a
-/// field naming a forward type parks and a sigil field type sub-dispatches, both deferred
-/// through one dep-finish (the field walker's own re-walk handles nested records).
+/// Elaborate a standalone `:{…}` record type to a `Carried::Type` record handle. A record type at a
+/// value/type position declares no binder, so the elaborator threads no self-reference; a field
+/// naming a forward type parks and a sigil field type sub-dispatches, both deferred through one
+/// dep-finish (the field walker's own re-walk handles nested records).
 pub(crate) fn elaborate_record_value<'step, 'view>(
     view: &DecideCtx<'_, 'step, 'view>,
     fields: FieldParts<'step>,

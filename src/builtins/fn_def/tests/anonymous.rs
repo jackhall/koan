@@ -1,5 +1,5 @@
 //! Anonymous functions: the keyword-less `FN :{<record schema>} -> T = (body)`
-//! binder. The record schema resolves to a `KType::Record` before the FN body
+//! binder. The record schema resolves to a record `KType` before the FN body
 //! fires; each field becomes a keyword-less `Argument`, so the function
 //! registers no dispatch keyword and is reachable only through its value —
 //! bound by `LET` or dropped into a function-typed slot, and called by record

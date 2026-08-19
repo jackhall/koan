@@ -16,7 +16,7 @@ against the consumer's lexical position by `idx < cutoff` — exactly the value
 language's rule. A type binding declared lexically later than its consumer is
 invisible, so a forward type reference is a *position error*, not a silent
 success or a park.
-[`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs) takes the chain, so a
+[`Scope::resolve_type_identifier`](../../src/machine/execute/decide/resolve_type_identifier.rs) takes the chain, so a
 forward and a backward consumer at the same scope reach different verdicts. The
 `NameLookup::Parked` arm parks only on an *earlier still-finalizing* type (a binder visible
 at the consumer's position whose body has not finished); the binder's type-side placeholder
@@ -113,7 +113,7 @@ cross-link this section rather than restating its slice.
   `Scope::resolve_type_identifier` consumes it. Runs at `KFunction::bind` time, which has no
   `Scope` in hand, so it is builtin-only and scope-independent.
 - **Layer 2 — scope-bound resolution**, reached through
-  [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs), which takes the
+  [`Scope::resolve_type_identifier`](../../src/machine/execute/decide/resolve_type_identifier.rs), which takes the
   consumer's chain and returns the three-outcome
   `TypeResolution<KType>::{Done, Park, Unbound}`. It runs the elaborator on every call
   and caches nothing: interning in the
@@ -404,7 +404,7 @@ is the same: interning in the [`TypeRegistry`](../../src/machine/model/types.rs)
 already makes a re-elaborated form yield the *same* handle, so a per-scope memo
 would buy only the elaborator walk while owning an invalidation question.
 
-- [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs) runs the
+- [`Scope::resolve_type_identifier`](../../src/machine/execute/decide/resolve_type_identifier.rs) runs the
   elaborator against `self` on every call and returns the three-outcome
   `TypeResolution<KType>::{Done(KType), Park(Vec<NodeId>), Unbound(String)}` — the
   handle alone, with no stored reach beside it, since a `KType` owns all its content.

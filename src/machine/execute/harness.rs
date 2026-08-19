@@ -6,16 +6,12 @@
 //! is the drain callback — it opens the sealed continuation at the step brand, re-brands the
 //! pre-read dep terminals against the step's coverage, brackets the ambient frame, runs the decide
 //! to an [`Outcome`], drains the step's `WriteOp` effects sink, and hands the outcome to
-//! [`Host::apply`] — the **only** `&mut Scheduler` code in koan — which maps it onto the
-//! [`StepVerdict`] the drain applies. Dep wiring has one door, [`Host::wire_deps`]; slot
-//! retirement is the [`Workload::retiring`] hook.
+//! [`Host::apply`], which maps it onto the [`StepVerdict`] the drain applies. Dep wiring has one
+//! door, [`Host::wire_deps`]; slot retirement is the [`Workload::retiring`] hook. The
+//! dispatch-submission wrappers live on the host too — the apply side's other writers.
 //!
-//! The dispatch-submission wrappers ([`Host::enter_block`], [`Host::dispatch_in_own_scope`],
-//! [`Host::dispatch_body`], the literal scheduling in [`super::decide`]) also live on the host —
-//! they are the apply side's other writers, all reached from within a step or from
-//! [`KoanRuntime::run_program`].
-//!
-//! See design/execution/README.md and design/memory-model.md.
+//! See [execution](../../../design/execution/README.md) and
+//! [memory-model](../../../design/memory-model.md).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -54,8 +50,7 @@ use super::{
 };
 
 /// The Koan instantiation of the scheduler's [`Workload`] interface — the marker that binds the
-/// opaque scheduler types to their concrete Koan forms. The scheduler is generic over `W: Workload`
-/// and names none of these directly; the workload side (this module, `decide/**`) supplies them.
+/// opaque scheduler types to their concrete Koan forms.
 pub(in crate::machine::execute) struct KoanWorkload;
 
 impl Workload for KoanWorkload {
@@ -65,9 +60,8 @@ impl Workload for KoanWorkload {
     type Frame = SlotFrame;
     type Continuation = ContinuationFamily;
 
-    /// Koan's half of delivery: the value-level escape seam ([`relocate_seam`]) — the cost-driven
-    /// copy-or-pin verdict with the retention claim derived from the rebuilt product. The walk
-    /// decides which destinations a terminal lands in; this decides what the crossing costs.
+    /// Koan's half of delivery: the walk decides which destinations a terminal lands in;
+    /// [`relocate_seam`] decides what the crossing costs.
     fn deliver(
         terminal: &DeliveredCarried,
         dest: DeliveryDestination<KoanWorkload>,
@@ -75,13 +69,10 @@ impl Workload for KoanWorkload {
         relocate_seam(terminal, dest)
     }
 
-    /// The slot-retirement hook: the edges this slot still owns — the binder claims its submission
-    /// stamped onto its scope, and a bare-name forward's classification edge — released by the
-    /// drain exactly once, at the one point the slot stops being able to release them. The clear
-    /// first drops any pending binding arm still naming one, which is what keeps a table from ever
-    /// holding a [`ProducerId`] whose edge is gone; a successful binder's write path finalizes its
-    /// own claim in place, so the clear usually finds nothing. `take` empties the anchor, so the
-    /// release is exactly-once by construction.
+    /// The slot-retirement hook: the edges this slot still owns, released by the drain at the one
+    /// point the slot stops being able to release them. The clear first drops any pending binding
+    /// arm still naming one, which keeps a table from ever holding a [`ProducerId`] whose edge is
+    /// gone. `take` empties the anchor, so the release is exactly-once by construction.
     fn retiring(anchor: &SlotFrame) -> Vec<EdgeId> {
         let edges = anchor.take_owned_edges();
         if edges.is_empty() {
@@ -99,29 +90,25 @@ impl Workload for KoanWorkload {
     }
 }
 
-/// The koan-side state the drain callback runs against: the ambient per-step context, the run's
-/// program storage capability, and the run's output sink (held only until the run frame is minted,
-/// which is the writer's real home). Split from the scheduler so `drain` can hold `&mut Scheduler`
-/// while the step body holds `&mut Host`.
+/// The koan-side state the drain callback runs against. Split from the scheduler so `drain` can
+/// hold `&mut Scheduler` while the step body holds `&mut Host`.
 pub(in crate::machine::execute) struct Host<'run> {
-    /// The ambient per-step context — the active per-call frame, run frame, the executing slot's
-    /// payload, and the declared-return obligation. See [`super::ambient`].
+    /// The ambient per-step context. See [`super::ambient`].
     pub(in crate::machine::execute) ambient: AmbientContext,
     /// This run's program storage capability, handed to every step through its [`DecideCtx`]. It
     /// also carries `'run`: the scheduler is value-erased (`Scheduler<KoanWorkload>`), so without
     /// this the run lifetime would live only in the harness's own method signatures.
     pub(in crate::machine::execute) program: ProgramBrand<'run>,
-    /// The run's output sink, held only until [`ensure_run_frame`](Self::ensure_run_frame) mints
-    /// the run frame and moves it onto that frame — the writer's real home, beside the run's
-    /// [`TypeRegistry`](crate::machine::model::TypeRegistry). It waits here rather than being
-    /// passed at the mint because the mint is lazy: a dispatch into the run scope establishes the
-    /// frame if nothing has yet, and that call site has no writer to supply.
+    /// The run's output sink, waiting for [`ensure_run_frame`](Self::ensure_run_frame) to move it
+    /// onto the run frame — the writer's real home. It waits here rather than being passed at the
+    /// mint because the mint is lazy: a dispatch into the run scope establishes the frame if
+    /// nothing has yet, and that call site has no writer to supply.
     out: Option<Box<dyn std::io::Write>>,
 }
 
 /// The embedder handle: the scheduler and the host, owned side by side. The embedder API is the
-/// [`interpret`](super::interpret) ladder; everything on this type beyond [`Self::new`] and
-/// [`Self::run_program`] is the crate-internal drive-and-read surface the test harness uses.
+/// [`interpret`](super::interpret) ladder; the rest of this type is the crate-internal
+/// drive-and-read surface.
 pub struct KoanRuntime<'run> {
     pub(in crate::machine::execute) sched: Scheduler<KoanWorkload>,
     pub(in crate::machine::execute) host: Host<'run>,
@@ -144,8 +131,7 @@ impl<'run> KoanRuntime<'run> {
     /// **The run loop**: drain the scheduler to quiescence, stepping every ready slot through
     /// [`Host::step`]. Slots still parked after the drain are on a dependency that can never fire —
     /// surfaced as [`KErrorKind::SchedulerDeadlock`] rather than a panic on the top-level result
-    /// read. Public so a test harness that submits its own work can drive it; production routes
-    /// through [`Self::run_program`].
+    /// read.
     pub fn execute(&mut self) -> Result<(), KError> {
         let KoanRuntime { sched, host } = self;
         sched.drain(|sched, step| host.step(sched, step)).map_err(
@@ -167,16 +153,12 @@ impl<'run> KoanRuntime<'run> {
         root: &'run Scope<'run>,
         exprs: Vec<KExpression<'run>>,
     ) -> Result<(), KError> {
-        // Each top-level statement crosses into the scheduler here — one slice copy of its parts run
-        // into the run region, the door every AST node enters dispatch through.
         let statements: Vec<WorkingExpression<'run>> = exprs
             .into_iter()
             .map(|expr| WorkingExpression::from_ast(root.brand(), expr))
             .collect();
-        // The run's roots leave submission as edges. Each names the run frame's region as its
-        // destination — where a root's producer delivers at finalize — and holding that owner across
-        // the install is the wiring-time proof the region is pinned. The submit-time `NodeId`s are
-        // transient currency and go out of scope right here.
+        // Each root edge names the run frame's region as its destination; holding that owner
+        // across the install is the wiring-time proof the region is pinned.
         let run_owner = root
             .region_owner()
             .upgrade()
@@ -187,8 +169,7 @@ impl<'run> KoanRuntime<'run> {
             .map(|id| self.sched.install_edge(id, &run_owner))
             .collect();
         let outcome = self.drive_roots(root, &roots);
-        // Koan is the roots' owner, so koan releases them — before the harness (and with it the run
-        // frame these edges name) tears down.
+        // Koan owns the roots, so koan releases them — before the run frame they name tears down.
         for &edge in &roots {
             self.sched.release_edge(edge);
         }
@@ -200,16 +181,13 @@ impl<'run> KoanRuntime<'run> {
     /// root-edge release.
     fn drive_roots(&mut self, root: &'run Scope<'run>, roots: &[EdgeId]) -> Result<(), KError> {
         self.execute()?;
-        // Each root edge was destined at the run frame's region, so its producer delivered there at
-        // finalize — under the seam's own copy-or-pin verdict — and the terminal has been an
-        // ordinary resident of the run region ever since. A boundary read is a resident read.
         // Seal the run root's reach-set; it is run-global and never reopens.
         root.close();
-        // A bare top-level expression is an untyped resolution boundary: an unstamped
-        // empty `[]` / `{}` reaching it has no element type to infer, so reject rather
-        // than silently resolve to `List<Any>` / `Dict<Any, Any>`.
+        // A bare top-level expression is an untyped resolution boundary: an unstamped empty `[]` /
+        // `{}` reaching it has no element type to infer, so reject rather than silently resolving
+        // to `List<Any>` / `Dict<Any, Any>`.
         for &edge in roots {
-            // Copy out the empty-container verdict from inside the open — the carrier never escapes.
+            // Copy the verdict out from inside the open — the carrier never escapes.
             let is_unannotated_empty = match self.sched.read_edge_result_with(edge, |value| {
                 value
                     .as_object()
@@ -255,10 +233,9 @@ impl<'run> KoanRuntime<'run> {
 
     /// Submit an unresolved expression for the scheduler to dispatch + execute against `scope`,
     /// inheriting the ambient lexical chain — or, with no step installed, placed at `index`: the
-    /// caller-declared statement position, exactly as if the expression were the `index`-th line
-    /// of a file. Only the submission's driver (a REPL session, the test harness's cursor) knows
-    /// the position, so it is a parameter. The statement-at-a-time submission door; production
-    /// submission is [`Self::run_program`]'s `enter_block`.
+    /// caller-declared statement position, numbered exactly as if the expression were the
+    /// `index`-th line of a file. Only the submission's driver knows that position, so it is a
+    /// parameter. The statement-at-a-time door; whole programs go through [`Self::run_program`].
     pub(crate) fn dispatch_in_scope<'a>(
         &mut self,
         expr: WorkingExpression<'a>,
@@ -270,16 +247,13 @@ impl<'run> KoanRuntime<'run> {
             .dispatch_in_scope_with_chain(&mut self.sched, expr, scope, chain)
     }
 
-    /// An edge's delivered terminal's error, or `Ok(())` on success — the value-free probe. Public
-    /// for the integration suite, which reads its watched statements' dispositions through it.
+    /// An edge's delivered terminal's error, or `Ok(())` on success — the value-free probe.
     pub fn edge_result_error(&self, edge: EdgeId) -> Result<(), &KError> {
         self.sched.edge_result_error(edge)
     }
 
     /// Open an edge's delivered terminal at a rank-2 brand and hand the value to `f`, returning its
-    /// result or the terminal's error — the destination-verb read. See
-    /// [`Scheduler::read_edge_result_with`]. In-crate tests read values through this; production
-    /// reads go through the scheduler directly.
+    /// result or the terminal's error. See [`Scheduler::read_edge_result_with`].
     #[cfg(test)]
     pub(crate) fn read_edge_result_with<R>(
         &self,
@@ -290,12 +264,9 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Wire an edge onto `producer`, destined at `scope`'s own region — the test harness's
-    /// stand-in for the root edge `run_program` installs, and for the placeholder edge a real
-    /// binder plan claims. Slots reclaim at finalize, so a test that reads a result holds an edge
-    /// exactly as production does; wiring it here, right after the dispatch that allocated the
-    /// slot, is the same pre-terminal wiring both production callers do. Crate-internal: the
-    /// unconditional test-support harness (compiled for the integration suite) reaches it, so it
-    /// cannot ride `#[cfg(test)]`.
+    /// stand-in for the root edge `run_program` installs. Slots reclaim at finalize, so a test that
+    /// reads a result must hold an edge exactly as production does. Not `#[cfg(test)]`: the
+    /// unconditional `builtins::test_support` harness reaches it.
     pub(crate) fn install_edge_for_test(
         &mut self,
         producer: NodeId,
@@ -312,11 +283,10 @@ impl<'run> KoanRuntime<'run> {
     /// with it the run's [`TypeRegistry`](crate::machine::model::TypeRegistry) and every binding
     /// already installed on the run root. Call at quiescence.
     ///
-    /// This is the teardown a test needs between phases when it measures something the drained
-    /// slots hold onto: the scheduler's slot store is a free-list whose length is a high-water
-    /// mark, and a finished slot's terminal retains its producer frame. Both are program-lifetime
-    /// facts about the scheduler, not the run, so a test measuring one program's slot footprint or
-    /// frame retention releases the prior phase's slots first.
+    /// The slot store is a free-list whose length is a high-water mark, and a finished slot's
+    /// terminal retains its producer frame. Both are program-lifetime facts about the scheduler,
+    /// not the run, so a test measuring one phase's slot footprint or frame retention releases the
+    /// prior phase's slots first.
     #[cfg(test)]
     pub(crate) fn reset_slots(&mut self) {
         self.sched = Scheduler::new();
@@ -329,9 +299,8 @@ impl<'run> KoanRuntime<'run> {
     }
 }
 
-/// Test-only forwarders: an immutable `&Scheduler` view (`resolve_name` fixtures) plus a slot's
-/// stored chain. No `&mut Scheduler` escapes — the accessor hands out `&Scheduler`, keeping the
-/// harness the sole writer.
+/// Test-only forwarders. No `&mut Scheduler` escapes — the accessor hands out `&Scheduler`,
+/// keeping the harness the sole writer.
 #[cfg(test)]
 impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<KoanWorkload> {
@@ -347,14 +316,12 @@ impl<'run> KoanRuntime<'run> {
 
 impl<'run> Host<'run> {
     /// The drain callback: one slot's step, start to finish. Opens the sealed continuation beside
-    /// the active-scope carrier at one rank-2 `for<'b>` step brand — the seal carries its own
-    /// anchor pin, and the step's coverage witnesses the operand — re-brands the pre-read dep
-    /// terminals once against that coverage, brackets the ambient frame
+    /// the active-scope carrier at one rank-2 `for<'b>` step brand, re-brands the pre-read dep
+    /// terminals once against the step's coverage, brackets the ambient frame
     /// ([`Self::with_slot_step`]), runs the continuation to an [`Outcome`], applies the step's
     /// binding writes, and maps the outcome onto the returned [`StepVerdict`] through
     /// [`Self::apply`]. The closure's result cannot name `'b`, so a `Replace` verdict's
-    /// continuation exits through [`erase_to_static`] — stored, never used, until the drain seals
-    /// it against the slot's effective anchor and the next step re-anchors it at a fresh brand.
+    /// continuation exits through [`erase_to_static`].
     fn step(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
@@ -366,9 +333,8 @@ impl<'run> Host<'run> {
             continuation: sealed_continuation,
             dep_results,
         } = step;
-        // Source the step's context off the scheduler-held anchor: the cart, the slot's scope
-        // handle, and its lexical chain. Read as values up front so nothing holds a scope borrow
-        // across the step's work or a tail hop's frame swap.
+        // Read the step's context off the anchor as values up front, so nothing holds a scope
+        // borrow across the step's work or a tail hop's frame swap.
         let cart = Rc::clone(&anchor.cart);
         let node_scope = anchor.payload.scope;
         let chain = anchor.payload.chain.clone();
@@ -380,10 +346,9 @@ impl<'run> Host<'run> {
         // open so it outlives `'b`, and held across it, so re-anchoring the carriers to `'b`
         // cannot dangle.
         let combined: FrameCoverage = FrameCoverage::of(Rc::clone(anchor.owner()));
-        // Re-brand each delivered resident **once**, here, against the step's coverage: a retained
-        // cell proves no liveness of its own, and `combined` is exactly the pin covering every
-        // region a dep landed in. From this point the step's readers open pin-free — a dep value
-        // rides no shared step brand and needs no envelope of its own.
+        // Re-brand each delivered resident **once**, here: a retained cell proves no liveness of
+        // its own, and `combined` is exactly the pin covering every region a dep landed in. From
+        // here the step's readers open pin-free.
         let dep_sources: Vec<Result<DepTerminal<'_>, KError>> = dep_results
             .iter()
             .map(
@@ -395,15 +360,12 @@ impl<'run> Host<'run> {
                 },
             )
             .collect();
-        // The active scope as a carrier, per node-scope shape: `Yoked` takes the cart's own
-        // child-scope carrier; `YokedChild` reuses the carrier it already holds. `combined` pins
-        // both.
+        // The active scope as a carrier; `combined` pins it either way.
         let scope_carrier = match node_scope {
             NodeScope::Yoked => cart.scope_sealed(),
             NodeScope::YokedChild(carrier) => carrier,
         };
-        // Open the owned-tier continuation beside the active-scope operand at one rank-2 `for<'b>`
-        // brand. The `Within` token's declared `'run: 'b` is what lets `self.program` — a live
+        // The `Within` token's declared `'run: 'b` is what lets `self.program` — a live
         // borrow-checked `ProgramBrand<'run>`, not a sealed carrier — be stored in the view at its
         // own `'program = 'run`, discharging the `DecideCtx`'s `'program: 'step` bound without
         // shortening the brand.
@@ -413,16 +375,13 @@ impl<'run> Host<'run> {
             |_within: Within<'_, 'run>,
              continuation: super::outcome::NodeContinuation<'_>,
              scope| {
-                // The step's binding-write sink: every `Action` the step interprets deposits its
-                // `WriteOp`s here through `run_action`, and the drain below applies them against
-                // the step scope. Declared inside the step brand because a `WriteOp` carries seals
-                // branded to `scope`'s region — so "nothing crosses steps" is the borrow checker's
-                // rule here, not a convention.
+                // The step's binding-write sink. Declared inside the step brand because a
+                // `WriteOp` carries seals branded to `scope`'s region — so "nothing crosses steps"
+                // is the borrow checker's rule here, not a convention.
                 let step_effects: RefCell<Vec<WriteOp<'_>>> = RefCell::new(Vec::new());
-                // Bracket the step's ambient frame/payload — restored on every exit path,
-                // including unwinds, by `with_slot_step` itself. The whole tail — decide, effects,
-                // apply — runs inside the bracket, so the apply reads the step-end frame and the
-                // deposited obligation off the ambient context directly.
+                // The whole tail — decide, effects, apply — runs inside the ambient bracket, so
+                // the apply reads the step-end frame and the deposited obligation off the ambient
+                // context directly.
                 self.with_slot_step(
                     Rc::clone(&cart),
                     NodePayload {
@@ -442,17 +401,12 @@ impl<'run> Host<'run> {
                             &dep_sources,
                             id,
                         );
-                        // Apply the step's binding writes against the step scope, in the order the
-                        // bodies decided them. This is the **only** path that mutates a published
-                        // binding table: it runs after the continuation returned — so no koan frame
-                        // holds a competing borrow — and before the outcome is realized, so the
-                        // writes land while the scope is still open and before any graph edge an
-                        // errored step would strand is installed. On the first failure the
-                        // remaining ops are dropped and the step becomes the node's error terminal,
-                        // so the drain's finalize drops the producer's pending arms and attributes
-                        // the error exactly as for an in-step error. A body that errors before
-                        // deciding its write installs nothing at all: the writes are outcome data,
-                        // and an error terminal carries none.
+                        // The **only** path that mutates a published binding table: it runs after
+                        // the continuation returned — so no koan frame holds a competing borrow —
+                        // and before the outcome is realized, so the writes land while the scope is
+                        // still open and before any graph edge an errored step would strand is
+                        // installed. On the first failure the remaining ops are dropped and the
+                        // step becomes the node's error terminal.
                         let mut gate = WriteGate::for_run_loop();
                         let outcome = match step_effects
                             .borrow_mut()
@@ -484,10 +438,10 @@ impl<'run> Host<'run> {
         match outcome {
             Outcome::Done(result) => {
                 anchor.close_opened_scope();
-                // The producer's per-call frame gates the return obligation (the contract label and
-                // the finalize fold): a frameless / run-frame producer folds in nothing. Retention
-                // seeds independently — the scheduler reads the slot's own anchor owner at
-                // finalize — so the gate makes no memory decision.
+                // The producer's per-call frame gates the return obligation: a frameless /
+                // run-frame producer folds in nothing. Retention seeds independently — the
+                // scheduler reads the slot's own anchor owner at finalize — so the gate makes no
+                // memory decision.
                 let step_frame = self
                     .ambient
                     .active_frame_ref()
@@ -498,13 +452,11 @@ impl<'run> Host<'run> {
                     .flatten();
                 match result {
                     Ok(carrier) => {
-                        // Seal the value terminal into a delivery envelope pinned by the anchor's
-                        // own region owner — the same owner the scheduler seeds as the slot's
-                        // retention host. [`StepCarried::seal_at_step`] is the sole exit from the
-                        // step brand: it discharges `'step` into the lifetime-free envelope.
-                        // `finalize_terminal` hands the envelope on whole; the delivery walk reads
-                        // its coverage to adopt into each destination, so no consumer re-derives
-                        // the reach and no call site here names one.
+                        // `seal_at_step` is the sole exit from the step brand: it discharges
+                        // `'step` into a lifetime-free envelope pinned by the anchor's own region
+                        // owner — the same owner the scheduler seeds as the slot's retention host.
+                        // The delivery walk reads the envelope's coverage to adopt into each
+                        // destination, so no call site here names a reach.
                         let envelope = carrier.seal_at_step(Rc::clone(anchor.owner()));
                         StepVerdict::Done(self.finalize_terminal(
                             envelope,
@@ -532,10 +484,8 @@ impl<'run> Host<'run> {
                     anchor.close_opened_scope();
                 }
                 let new_frame = frame.fresh_frame();
-                // An `Overlay` block entry rides the tail slot's scope: erased to a cart-witnessed
-                // carrier here (where the overlay is still live) so the frameless replace installs
-                // it as the slot's `YokedChild` — the frameless analogue of the `Yoked` a framed
-                // tail re-projects from its own cart.
+                // Erased here, where the overlay is still live, so the frameless replace below
+                // can install it as the slot's `YokedChild`.
                 let overlay_scope = match block_entry {
                     BlockEntry::Overlay(overlay) => {
                         Some(SealedExtern::<ScopeRefFamily>::erase(overlay))
@@ -543,9 +493,7 @@ impl<'run> Host<'run> {
                     BlockEntry::None | BlockEntry::FrameScope(_) => None,
                 };
                 // The frame the body runs in: the freshly minted cart, else the slot's current one
-                // (an `Inherit` FN-body re-enters the cart a prior `Continue` installed). The
-                // `ChainOp` reads it to assemble the body's lexical chain. Read off the ambient —
-                // the slot's cart at step end.
+                // (an `Inherit` FN-body re-enters the cart a prior `Continue` installed).
                 let step_frame = self
                     .ambient
                     .active_frame_ref()
@@ -560,20 +508,14 @@ impl<'run> Host<'run> {
                 let new_chain = chain.apply(anchor.payload.chain.clone(), body_frame);
                 let next_anchor = match new_frame {
                     Some(f) => {
-                        // A framed tail re-projects `Yoked` from its own cart; the overlay scope is
-                        // the frameless (`Inherit`) path.
                         debug_assert!(
                             overlay_scope.is_none(),
                             "a framed tail-replace carries no overlay scope"
                         );
                         // The claims and the statement identity belong to the slot, not to the
-                        // anchor it happens to be wearing, so the incoming anchor takes them over
-                        // from the retiring one. `opening` rather than `replacing` because `f` is a
-                        // cart minted for this slot: the slot opens its scope here and closes it at
-                        // its own finish. The retiring cart's region has nothing left the next
-                        // incarnation reads — the decide that emitted this replace relocated the
-                        // callee's arguments into `f`'s region — so the drain drops the displaced
-                        // anchor at the reinstall.
+                        // anchor it wears, so the incoming anchor takes them over from the retiring
+                        // one. `opening` rather than `replacing` because `f` is a cart minted for
+                        // this slot: it opens its scope here and closes it at its own finish.
                         Some(SlotFrame::opening(
                             f,
                             NodeScope::Yoked,
@@ -583,12 +525,10 @@ impl<'run> Host<'run> {
                         ))
                     }
                     None => {
-                        // A frameless replace keeps the prior cart. A tail entering an overlay
-                        // without a fresh frame (USING) installs the overlay as the slot's scope —
-                        // a `YokedChild` whose `outer` chain pins the overlay's cart-ancestor
-                        // region — otherwise the slot keeps its scope. Mint a fresh anchor only
-                        // when the overlay scope or the chain changed; a pure park-free re-decide
-                        // (same cart, scope, and chain) keeps the anchor.
+                        // A frameless replace keeps the prior cart, and a tail entering an overlay
+                        // without a fresh frame (USING) takes the overlay as its scope. Mint a
+                        // fresh anchor only when the overlay scope or the chain changed; a pure
+                        // re-decide (same cart, scope, and chain) keeps the anchor.
                         let has_overlay = overlay_scope.is_some();
                         let scope =
                             overlay_scope.map_or(anchor.payload.scope, NodeScope::YokedChild);
@@ -610,15 +550,11 @@ impl<'run> Host<'run> {
                 continuation,
                 dep_error_frame: park_error_frame,
             } => {
-                // Wire the whole declaration through the one door; each dep's filled-or-parked
-                // verdict comes back, one per wired dep.
                 let installed = self.wire_deps(sched, anchor, id, brand, deps);
                 // **Install-and-inspect**: a decide never probes a producer's standing, so a park
                 // whose producer had already finalized is classified here. An errored one is
                 // propagated now rather than waited on — a terminal slot never notifies again, so
-                // the park would never wake. The first error wins, matching the step-start pull's
-                // short-circuit. Rows and holds already installed discharge through this slot's
-                // ordinary death path.
+                // the park would never wake.
                 for verdict in &installed {
                     let InstalledEdge::Filled(edge) = verdict else {
                         continue;
@@ -633,12 +569,10 @@ impl<'run> Host<'run> {
                 let continuation = match continuation {
                     // A dispatch finish carries its own dep-error frame (the consuming call's, or
                     // `None` frameless); an action/literal dep-finish carries the
-                    // `dep_error_frame()` label. The short-circuit is baked into the continuation
-                    // by `short_circuit` — the one loop the terminal delivery runs through.
+                    // `dep_error_frame()` label.
                     Continuation::Finish(finish) => short_circuit(park_error_frame, finish),
-                    // The action-harness catch carries its single watched dep unrealized. Realized
-                    // here and wired through the same door as every other dep list.
-                    // `catch_continuation` runs the finish without short-circuiting on a dep error.
+                    // The catch carries its single watched dep unrealized; `catch_continuation`
+                    // runs the finish without short-circuiting on a dep error.
                     Continuation::Catch { watched, finish } => {
                         let _watched_verdict = self.wire_deps(
                             sched,
@@ -649,14 +583,12 @@ impl<'run> Host<'run> {
                         );
                         catch_continuation(finish)
                     }
-                    // The resume closure carries the evolving `working_expr` from here on. A
-                    // decide takes no dep values, so `ignore_results` drops the results slice.
+                    // A decide takes no dep values, so `ignore_results` drops the results slice.
                     Continuation::Resume { resume } => ignore_results(resume),
                 };
-                // Carry the ambient obligation across the park: the resumed step re-deposits it so
-                // the chain's declared-return check still fires. The wrap sits on the outermost
-                // closure, so every variant — including the dep-error short-circuit inside
-                // `short_circuit` — runs under it and its error arm still gets the trace label.
+                // Carry the ambient obligation across the park so the resumed step's
+                // declared-return check still fires. The wrap sits on the outermost closure, so
+                // every variant — including the dep-error short-circuit — runs under it.
                 let continuation =
                     with_obligation(self.ambient.current_obligation_duplicate(), continuation);
                 // The degenerate replace: same cart, scope, and chain, so no anchor swaps in —
@@ -666,19 +598,12 @@ impl<'run> Host<'run> {
             Outcome::Forward(source) => {
                 // The slot's result *is* the result behind `source`. Classification is the
                 // install's, not a probe's: wiring a second edge off `source` answers
-                // filled-or-parked and leaves a name this slot can read through. Filled: the
-                // producer already delivered into the destination `source` names, and the new edge
-                // inherits that destination, so the terminal is resident where this slot reads it
-                // and nothing relocates. Parked: the probe edge has said all it can, so `Alias`
-                // drives the splice — move consumers onto the producer and alias the slot.
-                // A forward is the one shape that wants no destination of its own: the slot is
-                // standing in for the producer, so landing the terminal where the producer's own
-                // consumers already look is the correct answer rather than a limitation — no site
-                // here asks for a delivery aimed at a region `source` does not already name.
-                // The classification edge joins the slot's owned list: retirement releases it when
-                // the slot terminalizes (or splices out), which is what lets a checker micro-step
-                // re-emit `Forward` on an edge of its own rather than on a foreign claim its binder
-                // may have retired in the meantime.
+                // filled-or-parked and leaves a name this slot can read through. A forward wants
+                // no destination of its own — the slot stands in for the producer — so the new edge
+                // inherits `source`'s destination and nothing relocates; parked, `Alias` drives the
+                // splice instead. The classification edge joins the slot's owned list, so a checker
+                // micro-step can re-emit `Forward` on an edge of its own rather than on a foreign
+                // claim its binder may have retired in the meantime.
                 let installed = sched.install_edge_from(source);
                 anchor.own_edges([installed.edge_id()]);
                 let Some(obligation) = self.ambient.current_obligation_duplicate() else {
@@ -687,20 +612,14 @@ impl<'run> Host<'run> {
                         InstalledEdge::Parked(_) => StepVerdict::Alias(source),
                     };
                 };
-                // A residual declared-return obligation on this splice must be discharged before
-                // the rehomed terminal reaches any consumer. Take it out of the ambient so neither
-                // this step's finalize (the obligation is spent here) nor the not-ready
-                // micro-step's continuation re-observes it; `obligation` is captured (never
-                // re-deposited), so the check runs obligation-free.
+                // A residual declared-return obligation must be discharged before the rehomed
+                // terminal reaches any consumer. Take it out of the ambient so neither this step's
+                // finalize nor the not-ready micro-step's continuation re-observes it.
                 self.ambient.take_obligation();
                 match installed {
                     // The producer resolved: run the declared-return check inline against its
-                    // terminal, then behave as the obligation-free ready path. An errored producer
-                    // carries no value to check — the forward relocates its error as the
-                    // obligation-free path would.
+                    // terminal, then behave as the obligation-free ready path.
                     InstalledEdge::Filled(edge) => {
-                        // The producer's value is already resident in the edge's destination; the
-                        // check reads it in place, under the region's own owner.
                         let checked = match sched.read_edge_result_with(edge, |value| {
                             super::finalize::check_spliced_return(
                                 &obligation,
@@ -719,18 +638,14 @@ impl<'run> Host<'run> {
                             }
                         }
                     }
-                    // The producer is not yet resolved: park a checker micro-step on it (an
-                    // already-terminal producer never re-notifies, so a park is sound only here).
-                    // Its finish runs the declared-return check un-relocated and re-emits `Forward`
-                    // on a pass — which re-enters this arm with no ambient obligation (the
-                    // micro-step ran obligation-free) and, the producer now resolved, takes the
-                    // plain ready path. No re-check, no loop. Both the park and the re-emission
-                    // name `edge`, this slot's own name for the producer, which outlives the wait
-                    // whatever the binder that first published it does.
+                    // Not yet resolved: park a checker micro-step on it (an already-terminal
+                    // producer never re-notifies, so a park is sound only here). Its finish
+                    // re-emits `Forward` on a pass, re-entering this arm obligation-free with the
+                    // producer now resolved — no re-check, no loop. Both the park and the
+                    // re-emission name `edge`, this slot's own name for the producer.
                     InstalledEdge::Parked(edge) => {
                         let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
-                            // The single parked dep is the producer behind `edge`, delivered
-                            // un-relocated at index 0.
+                            // The single parked dep is the producer behind `edge`, at index 0.
                             let producer_terminal = terminals[0];
                             let checked = producer_terminal.cell.open(|value| {
                                 super::finalize::check_spliced_return(
@@ -758,8 +673,7 @@ impl<'run> Host<'run> {
 /// Erase a step-branded replacement's continuation into the `Replace` verdict: the continuation is
 /// **stored**, never used, until the drain seals it against the slot's effective anchor
 /// ([`SealedPinned::erase`](crate::witnessed::SealedPinned)) and the next step re-anchors it at a
-/// fresh brand — the same storage discipline every dormant continuation rides, with the erase
-/// running at the verdict boundary instead of inside a scheduler door.
+/// fresh brand.
 fn replace_verdict(
     work: NodeWork<'_, KoanWorkload>,
     anchor: Option<Rc<SlotFrame>>,
@@ -773,11 +687,9 @@ fn replace_verdict(
 // ---------- Dep wiring: the one door ----------
 
 impl<'run> Host<'run> {
-    /// **The dep-wiring door.** Resolve `deps` to source edges — through
-    /// [`Self::named_sources`] or [`Self::block_sources`], whichever arm the park declared — then
-    /// mint the consumer's own edge off each source through [`Scheduler::install_deps`] and release
-    /// the minted sources, whose only job was carrying producer and destination into the install.
-    /// Returns each dep's filled-or-parked verdict, one per wired dep.
+    /// **The dep-wiring door.** Resolve `deps` to source edges, mint the consumer's own edge off
+    /// each source, then release the minted sources, whose only job was carrying producer and
+    /// destination into the install. Returns one filled-or-parked verdict per wired dep.
     fn wire_deps<'a>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
@@ -802,10 +714,9 @@ impl<'run> Host<'run> {
     }
 
     /// [`Self::wire_deps`]'s naming half for a **dep list**, shared with the submission path (which
-    /// hands its sources to [`Scheduler::alloc_node`] instead of `install_deps`, the slot not
-    /// existing yet): resolve the list to one **source edge** per entry, in dep order, plus the
-    /// sources this call minted — which the caller releases once the door it feeds has minted the
-    /// consumer's own edges.
+    /// has no slot yet, so it hands its sources to [`Scheduler::alloc_node`]): resolve the list to
+    /// one **source edge** per entry, in dep order, plus the sources this call minted — which the
+    /// caller releases once the door it feeds has minted the consumer's own edges.
     ///
     /// One entry in, one source out. That is the whole reason the block fan-out lives in
     /// [`Self::block_sources`] rather than here: it is what makes a caller's [`Deps::request`] index
@@ -844,8 +755,7 @@ impl<'run> Host<'run> {
     ) -> (Vec<EdgeId>, Vec<EdgeId>) {
         let producers = match block {
             // A body block fans out one producer per statement: into a fresh per-call frame's own
-            // scope (`dispatch_body`), or — under `Inherit` — into a caller-allocated overlay via
-            // the same `enter_block` fan-out a declaration builtin's child-scope body uses (USING).
+            // scope, or — under `Inherit` — into a caller-allocated overlay (USING).
             BlockRequest::Body {
                 statements,
                 placement: BodyPlacement::Frame(frame),
@@ -886,9 +796,8 @@ impl<'run> Host<'run> {
     }
 
     /// Realize one [`DepRequest`] to **its** producer node — the one realizer behind every
-    /// single-producer path: eager staging ([`stage_eager_part`](super::decide::stage_eager_part)),
-    /// a park's dep list, and a [`Continuation::Catch`]'s watched dep. `brand` is the realizing
-    /// step's, where an aggregate literal's per-element dispatch node is bumped.
+    /// single-producer path. `brand` is the realizing step's, where an aggregate literal's
+    /// per-element dispatch node is bumped.
     ///
     /// `OwnScope` re-dispatches against the executing slot's own scope; `InScope` enters a fresh
     /// **single-statement** block (so an inner `LET` stays local). A body that splits across
@@ -918,8 +827,7 @@ impl<'run> Host<'run> {
 /// Split a body block into the statements it fans out to, one working node apiece. The
 /// scheduler-side peer of [`split_body_statements`](crate::machine::split_body_statements): a block
 /// (two or more parts, every one an expression) yields its children, and any other body is the one
-/// statement it already is. A parsed child crosses into the scheduler here, at `brand`; a child the
-/// scheduler synthesized is already working form.
+/// statement it already is.
 fn split_working_body<'a>(
     brand: RegionBrand<'a>,
     body: WorkingExpression<'a>,
@@ -958,10 +866,8 @@ impl<'run> Host<'run> {
     /// The explicit chain when no slot step is installed: a fresh single-frame chain placing the
     /// submission at `index` — the caller-declared statement position, numbered exactly as if the
     /// statement were the `index`-th line of a file, so the visibility cutoff hides its own claims
-    /// and everything later while showing every earlier binding. Only the submission's driver (a
-    /// REPL session, the test harness's cursor) knows the position, so it is a parameter, never
-    /// stored or derived. With a slot step installed this is `None`, inheriting the ambient
-    /// payload's chain.
+    /// and everything later while showing every earlier binding. With a slot step installed this is
+    /// `None`, inheriting the ambient payload's chain.
     pub(in crate::machine::execute) fn statement_chain(
         &self,
         scope: &Scope<'_>,
@@ -978,26 +884,19 @@ impl<'run> Host<'run> {
     /// scheduler owns the minted frame's lifecycle.
     pub(in crate::machine::execute) fn ensure_run_frame<'a>(&mut self, scope: &'a Scope<'a>) {
         if !self.ambient.has_run_frame() {
-            // The writer moves onto the frame it belongs to. A lazily-established run frame — a
-            // dispatch that reached here before any entry point mint — gets the sink, which is
-            // what a run with no caller-supplied writer already meant.
+            // A lazily-established run frame — one reached before any entry-point mint — gets the
+            // sink, which is what a run with no caller-supplied writer already meant.
             let out = self.out.take().unwrap_or_else(|| Box::new(std::io::sink()));
             self.ambient.set_run_frame(CallFrame::adopting(scope, out));
         }
     }
 
     /// Decide a run-scope submission's [`NodeScope`] handle — always cart-witnessed, never anchored
-    /// at a free `'run`. Cases, in order:
-    ///
-    /// - The active cart's *own* scope is `scope` → [`NodeScope::Yoked`] (re-projected from the cart).
-    /// - The active cart pins `scope`'s region ([`CallFrame::pins_scope_region`]) →
-    ///   [`NodeScope::YokedChild`]: `scope` is a block scope a builtin allocated in a cart
-    ///   *ancestor* region, held by the cart's `FrameStorage.outer` chain. Stored erased,
-    ///   reattached frame-bounded.
-    /// - No active frame and the `run_frame` (which adopts the run root) *is* `scope` → `Yoked`.
-    /// - No active frame and the run frame pins `scope`'s region → `YokedChild`, the frameless peer
-    ///   of the second case: `scope` is a child allocated in the run region, so the run frame pins
-    ///   it just as a cart pins an ancestor-region block scope.
+    /// at a free `'run`. The witnessing frame is the active cart, else the run frame: its *own*
+    /// scope yields [`NodeScope::Yoked`], and a scope whose region it merely pins
+    /// ([`CallFrame::pins_scope_region`]) yields [`NodeScope::YokedChild`] — a block scope
+    /// allocated in an ancestor region, held by the frame's `FrameStorage.outer` chain, stored
+    /// erased and reattached frame-bounded.
     pub(in crate::machine::execute) fn resolve_node_scope<'a>(
         &self,
         scope: &'a Scope<'a>,
@@ -1082,8 +981,7 @@ impl<'run> Host<'run> {
     ) -> NodeId {
         self.ensure_run_frame(scope);
         let node_scope = self.resolve_node_scope(scope);
-        // Every caller (top-level `enter_block`, the test harness's `dispatch_in_scope`, an
-        // `InScope` dep's fresh block) is a statement position, so a binder installs its plan here.
+        // Every caller of this door is a statement position, so a binder installs its plan here.
         self.submit_expression(
             sched,
             expr,
@@ -1118,8 +1016,7 @@ impl<'run> Host<'run> {
 
     /// Dispatch `expr` against the executing slot's own scope handle (the `OwnScope` dep placement).
     /// A `YokedChild` slot reuses its erased cart-ancestor pointer; a `Yoked` slot re-projects via
-    /// [`Self::dispatch_in_active_frame`]. Both route through [`Self::submit_expression`] as a
-    /// [`SubmitContext::SubDispatch`], so a binder staged into an eager slot is rejected.
+    /// [`Self::dispatch_in_active_frame`].
     pub(in crate::machine::execute) fn dispatch_in_own_scope<'a>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
@@ -1150,9 +1047,8 @@ impl<'run> Host<'run> {
     /// Dispatch a body's non-tail `statements` as sibling sub-slots in `frame`, each at body-chain
     /// index `i + 1` (params / `it` sit at idx 0) over the frame's body scope, with the parent chain
     /// reconstructed from the call site via
-    /// [`assemble_body_chain`](crate::machine::core::assemble_body_chain). The shared "execute a
-    /// block of expressions" primitive (FN body, deferred return-type dep, MATCH/TRY arm body); the
-    /// caller tail-replaces into the last statement separately.
+    /// [`assemble_body_chain`](crate::machine::core::assemble_body_chain). The caller tail-replaces
+    /// into the last statement separately.
     fn dispatch_body<'a>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
@@ -1177,10 +1073,8 @@ impl<'run> Host<'run> {
         let mut ids = Vec::with_capacity(statements.len());
         for (i, statement) in statements.into_iter().enumerate() {
             let statement_chain = LexicalFrame::push(parent.clone(), body_scope_id, i + 1);
-            // Bracket `frame` as the ambient cart so the sub-slot inherits it (not the caller's),
-            // restoring the previous on every exit path.
+            // Bracket `frame` as the ambient cart so the sub-slot inherits it, not the caller's.
             let bid = self.with_active_frame(Rc::clone(frame), |host| {
-                // A body's non-tail statements are statement positions in the body scope.
                 host.dispatch_in_active_frame(
                     sched,
                     statement,
@@ -1194,10 +1088,8 @@ impl<'run> Host<'run> {
     }
 
     /// Schedule a witnessed dep-finish against the slot's own scope: the finish folds the resolved
-    /// deps into a witnessed aggregate carrier, naming every region the result reaches. `deps`
-    /// mixes binder edges the cell classifier resolved with sub-dispatches this slot spawned (whose
-    /// slots reclaim at their own finalize); the finish reads their results in dep order. The one
-    /// submission door behind the aggregate literals.
+    /// deps into a witnessed aggregate carrier, naming every region the result reaches, and reads
+    /// their results in dep order. The one submission door behind the aggregate literals.
     ///
     /// No apply-time inspect here: an already-errored dep surfaces at the slot's first poll,
     /// through the step-start pull and the short-circuit the continuation bakes in.
@@ -1207,7 +1099,6 @@ impl<'run> Host<'run> {
         deps: Deps<NodeId>,
         finish: super::WitnessedDepFinish<'a>,
     ) -> NodeId {
-        // Clone the payload off the ambient before taking the scheduler for the submit.
         let payload = self
             .ambient
             .active_payload()
@@ -1215,8 +1106,6 @@ impl<'run> Host<'run> {
             .clone();
         let (cart, framed) = self.ambient.submission_cart();
         let anchor = SlotFrame::new(cart, payload.scope, payload.chain, WorkLabel::None);
-        // The witnessed finish rides the same delivery every dep-finish does: the short-circuit
-        // gate over the `seal_witnessed` projection, run under the frameless dep-error label.
         let work = NodeWork::new(short_circuit(
             Some(dep_error_frame()),
             seal_witnessed(finish),
@@ -1233,9 +1122,8 @@ impl<'run> Host<'run> {
 
 // ---------- Test-fixture submission prims ----------
 
-/// Test-fixture submission prims that mint a run-lifetime [`SlotFrame`] anchor from a raw `scope`, so
-/// scheduler tests stand up raw `NodeWork` slots through the harness. The run path routes a
-/// `Dispatch` through [`Host::submit_expression`] instead.
+/// Test-fixture submission prims that mint a run-lifetime [`SlotFrame`] anchor from a raw `scope`,
+/// so scheduler tests stand up raw `NodeWork` slots through the harness.
 #[cfg(test)]
 impl<'run> KoanRuntime<'run> {
     /// A bare dep-finish work item that waits on its wired deps, short-circuits on the first

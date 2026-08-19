@@ -6,17 +6,6 @@
 //! first) — funnels its resolved callable through [`apply_callable`]. The lane
 //! does the resolution; this tail does the body-shape branching and launches
 //! construction or a function call.
-//!
-//! A [`ResolvedCallable`] has exactly two execution arms:
-//!
-//! - `Constructor { identity: KType }` — build a value from a type schema (struct / tagged /
-//!   newtype / `TypeConstructor` identity), reusing the `constructors` module
-//!   (`CtorKind` + `launch`); or, when the head is a type constructor and the body is a
-//!   record literal, apply that constructor to named type arguments
-//!   (`:(Result {Ok = Number, Error = MyError})`) and yield the resulting
-//!   `ConstructorApply` type as a type value.
-//! - `Function(&KFunction)` — call a `KFunction` by name. Every function rides this
-//!   arm, whatever it returns.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -40,20 +29,18 @@ mod tests;
 
 /// The argument body of a `head (...)` / `head {...}` call, classified by surface shape.
 ///
-/// - `Named` — a `{x = 1}` record literal: the sole named-argument surface (function
-///   calls, struct construction).
-/// - `Positional` — a `(err "x")` paren group: positional construction (tagged unions,
-///   newtypes). The verb-carrier decides which shape it admits; the mismatched shape
-///   surfaces a loud `DispatchFailed`.
+/// The resolved verb-carrier decides which shape it admits; the mismatched shape surfaces a
+/// loud `DispatchFailed`.
 enum CallBody<'step> {
+    /// A `{x = 1}` record literal — the sole named-argument surface.
     Named(&'step [(&'step str, ExpressionPart<'step>)]),
+    /// A `(Error "x")` paren group — positional construction (tagged unions, newtypes).
     Positional(&'step [Spanned<ExpressionPart<'step>>]),
 }
 
 /// Classify the single body part of a `head (...)` / `head {...}` call from
 /// `expr.parts[1..]`. The body must be exactly one nested-parens (`Positional`) or one
-/// record literal (`Named`); anything else is a non-match. Both surfaces are raw syntax, so the
-/// body rides out as the AST run the parser froze.
+/// record literal (`Named`); anything else is a non-match.
 fn extract_call_body<'step>(expr: &WorkingExpression<'step>) -> Result<CallBody<'step>, KError> {
     match &expr.parts[1..] {
         [
@@ -82,7 +69,6 @@ const NAMED_ONLY: &str =
 const POSITIONAL_ONLY: &str =
     "positional construction takes `(value)`, not a record literal `{name = value}`";
 
-/// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
 fn body_shape_err<'step>(expr: &WorkingExpression<'step>, reason: &str) -> Outcome<'step> {
     Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
         expr: expr.summarize(),
@@ -90,30 +76,26 @@ fn body_shape_err<'step>(expr: &WorkingExpression<'step>, reason: &str) -> Outco
     })))
 }
 
-/// A head resolved to something callable. The lane decides which arm; the tail
-/// branches on the body surface and launches.
+/// A head resolved to something callable. The resolving lane decides which arm.
 pub(in crate::machine::execute) enum ResolvedCallable<'step> {
-    /// Build from a sealed nominal member (a `SetMember` node — struct / tagged / newtype /
-    /// `TypeConstructor`).
+    /// Build from a type identity — a sealed nominal member, an anonymous union, or a type
+    /// constructor applied to named type arguments.
     Constructor { identity: KType },
     /// Call a callable by name, in the **in-use** carrier state its resolving lane adopted it into
     /// — so the callable rides the apply tail fused to the reach that proves it.
     Function(OpenedFunction<'step>),
 }
 
-/// Body-shape-branch the resolved callable and launch. `expr.parts[1..]` is the
-/// call body; `extract_call_body` admits one `{name = value}` record literal
-/// (`Named`) or one `(value)` paren group (`Positional`).
+/// Body-shape-branch the resolved callable and launch. `expr.parts[1..]` is the call body.
 pub(in crate::machine::execute) fn apply_callable<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     callable: ResolvedCallable<'step>,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     match callable {
-        // A constructor branches on the projected schema before deciding what body shape it
-        // admits; the newtype arm in particular takes the trailing parts directly (so
-        // `(Point r)` works), so body extraction lives per-arm inside `apply_constructor`
-        // rather than here.
+        // A constructor decides its admitted body shape per schema arm — the newtype arm takes
+        // the trailing parts directly, so `(Point r)` works — hence body extraction lives inside
+        // `apply_constructor` rather than here.
         ResolvedCallable::Constructor { identity } => apply_constructor(ctx, identity, expr),
         ResolvedCallable::Function(f) => {
             let body = match extract_call_body(expr) {
@@ -125,14 +107,14 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
     }
 }
 
-/// Construct from a sealed nominal member identity, or apply a type constructor to named type
-/// arguments. A record-literal body on a constructor-kind head (`Wrap {Elem = Number}`) is *type
+/// Construct from a type identity, or apply a type constructor to named type arguments.
+///
+/// A record-literal body on a constructor-kind head (`Wrap {Elem = Number}`) is *type
 /// application*, yielding a `ConstructorApply` type value. Otherwise a newtype bypasses the
 /// `{name = value}` / `(value)` body split — it takes the trailing parts directly as its
 /// value expression, so `(Point {x = 1, y = 2})` builds a record and `(Point r)` /
-/// `(Distance 3.0)` wrap a value. Tagged / `TypeConstructor` take a positional `(value)` body
-/// (named is a loud `DispatchFailed`). A SIG's abstract constructor slot is a witness-less kind
-/// and rejects construction by name; any other non-constructible identity is a `TypeMismatch`.
+/// `(Distance 3.0)` wrap a value. The tagged and identity-wrapper arms take a positional
+/// `(value)` body; a named one there is a loud `DispatchFailed`.
 fn apply_constructor<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     identity: KType,
@@ -144,10 +126,8 @@ fn apply_constructor<'step>(
     if let TypeNode::Union { members } = ctx.types().node(identity) {
         return apply_union_construct(ctx, members, expr);
     }
-    // Named type application: a type-constructor head — a declared family (`SetMember`, empty or
-    // non-empty schema) or a SIG's abstract constructor slot — with a record-literal body binds
-    // each of the family's parameters to a type. It precedes every construction arm: the two
-    // surfaces are disjoint, and the record body is a type-argument list here, not a value.
+    // Named type application precedes every construction arm: on a type-constructor head the
+    // record body is a type-argument list, not a value, and the two surfaces are disjoint.
     if let Some(param_names) = constructor_param_names(identity, ctx.types())
         && let Some(
             [
@@ -180,8 +160,8 @@ fn apply_constructor<'step>(
         })));
     };
     match schema {
-        // A record-literal body builds per-field (literal fields bind synchronously); any
-        // other trailing expression is wrapped as a single positional value.
+        // A record-literal body builds per-field; any other trailing expression is wrapped as a
+        // single positional value.
         NodeSchema::NewType(_) => match expr.parts.get(1..) {
             Some(
                 [
@@ -230,11 +210,9 @@ fn apply_constructor<'step>(
 }
 
 /// Apply a type constructor to a record of named type arguments — `:(Result {Ok = Number, Error =
-/// MyError})`. Each field value rides its own sub-Dispatch (the same `DepRequest::Dispatch` shape
-/// construction launches), so a compound argument like `{Elem = (LIST OF Number)}` elaborates
-/// through the ordinary type-expression lanes and the slot parks until it lands. The finish checks
-/// the supplied keys against `param_names` and builds the args record in the constructor's declared
-/// order.
+/// MyError})`. Each field value rides its own sub-Dispatch, so a compound argument like
+/// `{Elem = (LIST OF Number)}` elaborates through the ordinary type-expression lanes and the slot
+/// parks until it lands.
 fn apply_named_type_args<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     identity: KType,
@@ -294,9 +272,8 @@ fn apply_named_type_args<'step>(
 }
 
 /// Key-check the supplied type arguments against the constructor's declared parameters and
-/// re-order them into that declaration order. The supplied key set must equal the parameter set;
-/// a mismatch names the missing and the unknown keys. (`Record` identity is order-blind, so the
-/// declared order is presentation — it is what `KType::name()` renders and re-parses.)
+/// re-order them into that declaration order. `Record` identity is order-blind, so the declared
+/// order is presentation — it is what `KType::name()` renders and re-parses.
 fn build_apply_args(
     identity: KType,
     param_names: &[String],
@@ -352,15 +329,12 @@ fn quoted_list(names: &[&str]) -> String {
 /// (a bare `Type` token body) yields the variant member's type value, reached through its union;
 /// `Maybe (Some v)` (a paren-group body) constructs the named member as a `KObject::Tagged` —
 /// the same value shape builtin `Result` produces — so `MATCH` dispatches user unions by tag
-/// string through the shared `TaggedByTag` path. An unknown variant name in either form is a
-/// schema error listing the union's members.
+/// string through the shared `TaggedByTag` path.
 fn apply_union_construct<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     members: Vec<KType>,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    // Bare variant-tag token with no payload (`Maybe Some`) names the variant *type*, reached
-    // through its union — yielded as a first-class type value.
     if let [
         Spanned {
             value: WorkingPart::Ast(ExpressionPart::Type(t)),
@@ -374,10 +348,7 @@ fn apply_union_construct<'step>(
             None => Outcome::Done(Err(unknown_variant_error(&members, &name, ctx.types()))),
         };
     }
-    // Payload construction: `Maybe (Some v)` (paren-group body) builds the variant value. A
-    // user-union variant is a `Tagged` — the same value shape builtin `Result` produces — so
-    // `MATCH` dispatches user unions by tag string through the shared `TaggedByTag` path. The tag
-    // names which member; the value's `identity` is that member's own sealed handle.
+    // The tag names which member; the built value's `identity` is that member's own sealed handle.
     match extract_call_body(expr) {
         Ok(CallBody::Positional(parts)) => {
             let (tag, value_part) = match constructors::prepare_args(parts) {
@@ -402,7 +373,7 @@ fn apply_union_construct<'step>(
 
 /// The variant schema of an anonymous union of sealed newtype members: each member's tag mapped
 /// to its declared payload type (its `NewType` repr). This is the per-value type-check table the
-/// `Tagged` finish reads (`schema[tag]`), matching the shape builtin `Result` supplies.
+/// `Tagged` finish reads (`schema[tag]`).
 fn union_variant_schema(members: &[KType], types: &TypeRegistry) -> HashMap<String, KType> {
     members
         .iter()
@@ -448,9 +419,9 @@ fn union_member_names(members: &[KType], types: &TypeRegistry) -> String {
     names.join(", ")
 }
 
-/// Call a `KFunction` by name. A function takes `{name = value}` only; a
-/// positional body is a loud `DispatchFailed`. Named args reconstruct the exact-arity
-/// positional expression, then eager-resolve the value slots before binding.
+/// Apply a resolved function to its call body. A function takes `{name = value}` only; a
+/// positional body is a loud `DispatchFailed`. The named record reconstructs the exact-arity
+/// keyworded expression, whose value slots then eager-resolve before binding.
 fn apply_function<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     f: OpenedFunction<'step>,
@@ -458,8 +429,6 @@ fn apply_function<'step>(
     body: CallBody<'step>,
 ) -> Outcome<'step> {
     match body {
-        // The rebuilt call is the record's own value parts re-ordered onto the signature's
-        // keywords, minted straight in working form for the eager-subs track.
         CallBody::Named(fields) => {
             let brand = ctx.current_scope().brand();
             let fields = fields
@@ -475,28 +444,23 @@ fn apply_function<'step>(
     }
 }
 
-/// Stage every eager part of the reconstructed call as a sub-Dispatch and hand the staged call to
-/// the shared eager-subs door, [`keyworded::install_eager_subs`](super::keyworded::install_eager_subs),
-/// with the committed pick — its finish splices each resolved dep back into its staged slot and
-/// folds the call via [`exec::invoke_continue`](super::exec::invoke_continue). Shared by the
-/// `FunctionValueCall` lane and every head-deferred / type-call function arm.
+/// Stage every eager part of a reconstructed call as a sub-Dispatch and hand the staged call to
+/// [`install_eager_subs`](super::keyworded::install_eager_subs) with the committed pick.
 pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
     picked: OpenedFunction<'step>,
 ) -> Outcome<'step> {
-    // `picked` is already committed (the head uniquely resolved to it), so bare-name value slots
-    // resolve by sub-Dispatch rather than the keyword path's pre-pick `bare_outcomes` lookup —
-    // each rides `bare_identifier`'s reach carrier through the eager-subs finish and reaches
-    // `accepts_part` at bind. No slot resolves inline here.
+    // `picked` is already committed, so bare-name value slots resolve by sub-Dispatch rather than
+    // the keyword path's pre-pick `bare_outcomes` lookup — each rides `bare_identifier`'s reach
+    // carrier through the eager-subs finish and reaches `accepts_part` at bind.
     let brand = ctx.current_scope().brand();
     let wrap_indices = picked
         .value()
         .classify_for_pick(&expr, ctx.types())
         .wrap_indices;
-    // A call whose slots are all filled already stages nothing, and then the node the walk was
-    // handed is the one the committed call folds over — no rebuild, and the eager-subs door routes
-    // it straight to the invoke.
+    // A call whose slots are all filled stages nothing, so the node handed to the walk is the one
+    // the committed call folds over — no rebuild.
     let (working_expr, staged_subs) = match stage_all_eager_parts(brand, &expr, &wrap_indices) {
         PartWalk::Unchanged => (expr, Vec::new()),
         PartWalk::Respliced { expr, staged_subs } => (expr, staged_subs),

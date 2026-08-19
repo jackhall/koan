@@ -1,20 +1,14 @@
 //! Head-deferred dispatch shapes — `HeadDeferred` and `TypeHeadDeferred`.
 //!
-//! Both evaluate the head (`parts[0]`) first as a sub-dispatch and park the
-//! slot on it; once it resolves, the finish classifies the value and applies it to
-//! `parts[1..]` via the shared apply-a-callable tail. The `type_only` flag selects
-//! the admitted arm set (see [`classify_head`]):
+//! Both evaluate the head (`parts[0]`) first as a sub-dispatch and park the slot on it; once it
+//! resolves, the finish classifies the value and applies it to `parts[1..]` via the shared
+//! apply-a-callable tail. The `type_only` flag selects the admitted arm set (see
+//! [`classify_head`]):
 //!
-//! - `HeadDeferred` (`type_only = false`): admits any `KFunction` value or any type identity
-//!   applied as a constructor.
-//! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): admits any type identity
-//!   applied as a constructor; a value-channel callable surfaces a type-shaped `TypeMismatch`.
-//!
-//! What a type identity admits when applied is decided once, in `apply_callable`'s constructor
-//! arm — the classifier here does not pre-gate it.
-//!
-//! The park/resume pair mirrors `park_on_literal` + the `type_call`
-//! head-placeholder resume, no new scheduler primitive.
+//! - `HeadDeferred` (`type_only = false`): any `KFunction` value, or any type identity applied
+//!   as a constructor.
+//! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): type identities only; a
+//!   value-channel callable surfaces a type-shaped `TypeMismatch`.
 
 use crate::machine::core::DepPlacement;
 use crate::machine::model::Carried;
@@ -30,8 +24,6 @@ use super::{Await, DepRequest, Outcome};
 use crate::machine::AdoptSeam;
 use crate::scheduler::Deps;
 
-/// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
-/// applied to `parts[1..]` once it resolves.
 pub(in crate::machine::execute) fn initial_expr<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
@@ -47,9 +39,8 @@ pub(in crate::machine::execute) fn initial_expr<'step>(
     park_on_head(expr, head, false)
 }
 
-/// `TypeHeadDeferred` entry: head is a `:(...)` sigil. Wrap it as a one-part
-/// node so the type marker survives the sub-dispatch (mirrors
-/// `stage_all_eager_parts`).
+/// Wraps the sigil head as a one-part node rather than unwrapping it, so the type marker
+/// survives the sub-dispatch.
 pub(in crate::machine::execute) fn initial_type<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
@@ -67,12 +58,10 @@ pub(in crate::machine::execute) fn initial_type<'step>(
     park_on_head(expr, head, true)
 }
 
-/// Evaluate `expr`'s head as a one-part sub-dispatch and apply the resolved value to `parts[1..]`.
 /// The general head lane: a head is callable whenever it *evaluates* to something callable, so any
 /// part shape the `FunctionValueCall` name fast lane cannot resolve by a scope walk — a resolved
-/// cell, a synthesized node, a slot still awaiting its sibling — routes here instead. Wrapping the
-/// part rather than unwrapping it keeps whatever marker the part carries (mirrors
-/// [`initial_type`]).
+/// cell, a synthesized node, a slot still awaiting its sibling — routes here instead. Wraps the
+/// part rather than unwrapping it, keeping whatever marker it carries (as [`initial_type`] does).
 pub(in crate::machine::execute) fn defer_head<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
@@ -81,10 +70,9 @@ pub(in crate::machine::execute) fn defer_head<'step>(
     park_on_head(expr, head, false)
 }
 
-/// Park the slot on the head sub-dispatch. When the head resolves, the finish classifies it into a
-/// [`ResolvedCallable`] and hands off to the shared apply-a-callable tail; that tail may itself
-/// re-park, so the finish must be re-park-capable. A dep error short-circuits frameless in
-/// `run_step`, so the finish only runs on a resolved head.
+/// The apply-a-callable tail the finish hands off to may itself re-park, so the finish must be
+/// re-park-capable. A dep error short-circuits frameless in the harness before the finish runs, so
+/// the finish only ever sees a resolved head.
 fn park_on_head<'step>(
     expr: WorkingExpression<'step>,
     head: WorkingExpression<'step>,
@@ -92,12 +80,10 @@ fn park_on_head<'step>(
 ) -> Outcome<'step> {
     let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
         let head_terminal = terminals[0];
-        // The head dep is resident in a region this step already covers; lift it back to an
-        // owned envelope so its reach can fold into the classified callable, which outlives this
-        // finish. Adopt the head's carrier copy-free: fold its reach so a callable's captured
-        // foreign environment outlives the application, and re-anchor the value at the consumer
-        // scope brand. The callable arm adopts as a callable, so it arrives fused to the reach it
-        // was minted under; every other head takes the whole-value adopt for its classification.
+        // The head dep rests in a region this step already covers; lift it to an owned envelope
+        // so the adopt below can fold its reach into the classified callable, which outlives this
+        // finish. The callable arm adopts *as a callable* so it arrives fused to the reach it was
+        // minted under; every other head takes the whole-value adopt for its classification.
         let head_delivered = ctx.current_scope().lift_spliced(&head_terminal.cell);
         let callable = match ctx
             .current_scope()
@@ -124,20 +110,19 @@ fn park_on_head<'step>(
     .finish_terminal(finish)
 }
 
-/// Branch a resumed head value into a [`ResolvedCallable`]. A type identity is always admitted
-/// as a constructor — `apply_callable`'s constructor arm is the single authority on what a type
-/// admits when applied. The admitted value callable is taken by the caller's callable adopt before
-/// this runs, so what reaches here is a type identity or a diagnostic: a `KFunction` gets here only
-/// under `type_only`, where the value channel is pruned and it surfaces a type-shaped
-/// `TypeMismatch`; any other value is a non-callable `DispatchFailed`.
+/// A type identity is admitted as a constructor without pre-gating: `apply_callable`'s constructor
+/// arm is the single authority on what a type admits when applied — unions, named type application,
+/// every `SetMember` schema — and surfaces a `TypeMismatch: "constructible Type"` for the rest.
+///
+/// The caller's callable adopt takes an admitted value callable before this runs, so an object
+/// reaching here is a diagnostic: under `type_only` the value channel is pruned and any object
+/// surfaces a type-shaped `TypeMismatch`, otherwise it is a non-callable `DispatchFailed`.
 fn classify_head<'step>(
     head: Carried<'step>,
     type_only: bool,
     types: &TypeRegistry,
 ) -> Result<ResolvedCallable<'step>, KError> {
     match head {
-        // A function value is the pruned arm under `type_only` — the type-only lane admits no
-        // value-channel callable — and falls through to the `TypeMismatch`.
         Carried::Object(obj) => match obj {
             other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
@@ -151,9 +136,6 @@ fn classify_head<'step>(
         },
         // A head is resolved before it is classified, so an unlowered name names no callable.
         Carried::UnresolvedType(ti) => Err(KError::new(KErrorKind::UnboundName(ti.render()))),
-        // A type identity is applied as a constructor; `apply_callable`'s constructor arm is the
-        // single authority on what a type admits when applied — unions, named type application,
-        // every `SetMember` schema — surfacing a `TypeMismatch: "constructible Type"` for the rest.
         Carried::Type(kt) => Ok(ResolvedCallable::Constructor { identity: kt }),
     }
 }

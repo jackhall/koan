@@ -1,22 +1,17 @@
 //! Overload resolution for a [`WorkingExpression`] against the lexical scope chain.
 //!
-//! Read-only consumer of the dispatch table, and the sole owner of bare-name parking. The caller
-//! builds a `bare_outcomes` cache (one [`Resolution`] per bare-name part) consulted by admission
-//! instead of re-resolving each part per scope. A `Parked` entry pre-empts everything: resolution
-//! parks on the still-finalizing producers *before* any admission runs, so every candidate decides
-//! against the same landed facts and no pick commits ahead of a value it depends on. Exempt from
-//! the pre-scan are the slots a binder form's own machinery owns — the declared-name position
-//! ([`WorkingExpression::binder_name_slot`], off the spec table) and a binder form's `Type`-token
-//! operands, which the binder body resolves through the declaration-window / type-resolution
-//! protocol.
+//! Read-only consumer of the dispatch table. The caller builds a `bare_outcomes` cache (one
+//! [`Resolution`] per bare-name part) consulted by admission instead of re-resolving each part per
+//! scope. A `Parked` entry pre-empts everything: resolution parks on the still-finalizing producers
+//! *before* any admission runs, so every candidate decides against the same landed facts and no
+//! pick commits ahead of a value it depends on. Exempt from that pre-admission park are the slots a
+//! binder form's own machinery owns — the declared-name position
+//! ([`WorkingExpression::binder_name_slot`]) and a binder form's `Type`-token operands, which the
+//! binder body resolves through the declaration-window / type-resolution protocol.
 //!
-//! Each scope is then decided in walk order (innermost first): a visible in-flight pending
-//! overload parks the scope (it would shadow once finalized); a strict
-//! [`OverloadBucket::pick_strict`] picks (tie ⇒ `Ambiguous`, or `Deferred` when an eager part may
-//! break it); a strict-Empty bucket runs one relaxed-admission pass per candidate that may park
-//! (an exempt slot's producers) or defer (eager parts). Only a *dead* unbound bare-name lean and
-//! total non-admission are post-walk terminals — a dead lean must not pre-empt an outer scope
-//! that could strict-pick the bare name as an `:Identifier` slot.
+//! Scopes are then decided in walk order, innermost first. Only a *dead* unbound bare-name lean and
+//! total non-admission are post-walk terminals — a dead lean must not pre-empt an outer scope that
+//! could strict-pick the bare name as an `:Identifier` slot.
 
 use crate::machine::ProducerId;
 use crate::machine::core::{ClassifiedSlots, OpenedFunction};
@@ -27,11 +22,6 @@ use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 
 use super::is_eager_working_part;
 
-// The per-part cache entry is the one bare-name resolution currency, [`Resolution`] — built once
-// per dispatch into a slice paralleling `expr.parts` (`None` for non-bare-name parts) and consumed
-// by strict admission and the relaxed pass. Its three arms are exhaustive: the ladder that builds
-// them is total, and a producer's error is not one of them — it reaches the consumer through the
-// park the harness installs, never through a probe at cache-build time.
 use super::resolve::Resolution;
 
 // Test-only entry counter: fast-lane dispatch shapes must route around the
@@ -51,10 +41,8 @@ pub fn reset_resolve_dispatch_entry_count() {
     RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(0));
 }
 
-/// Picked function plus the per-slot classification the dispatch driver needs
-/// for auto-wrap and eager-sub scheduling. Sole carrier of the disjoint
-/// `(eager_indices | wrap_indices)` invariant from
-/// [`crate::machine::core::ClassifiedSlots`].
+/// Picked function plus the per-slot classification the dispatch driver needs for auto-wrap and
+/// eager-sub scheduling.
 ///
 /// `function` is the pick **in use**: adopted into its own binding region, so the mint that
 /// re-anchored it named its reach there and the region retains the pins — which is what lets the
@@ -69,14 +57,11 @@ pub enum DispatchOutcome<'step> {
     Resolved(Resolved<'step>),
     Ambiguous(usize),
     Deferred,
-    /// Park on forward-reference placeholders (or an in-flight sibling
-    /// FN's pending slot in `functions[key]`) and re-dispatch once they bind.
-    /// Distinct from `Deferred`: waits on existing producers without
-    /// scheduling new work.
+    /// Distinct from `Deferred`: waits on existing producers (forward-reference placeholders, or a
+    /// pending slot in `functions[key]`) without scheduling new work.
     ParkOnProducers(Vec<ProducerId>),
-    /// A bare-name arg resolves to nothing — no binding and no placeholder.
-    /// The unbound name is the precise cause, so it surfaces here rather than
-    /// as a dispatch miss.
+    /// A bare-name arg resolves to nothing — no binding and no placeholder. The unbound name is the
+    /// precise cause, so it surfaces here rather than as a dispatch miss.
     UnboundName(String),
     Unmatched,
 }
@@ -84,12 +69,10 @@ pub enum DispatchOutcome<'step> {
 impl<'step> Scope<'step> {
     /// Chain-gated, cache-driven dispatch resolution.
     ///
-    /// Each candidate is filtered against the visibility predicate before
-    /// admission — per-overload tagging matters because overloads in a bucket
-    /// may sit at different lexical positions. `chain = None` is reserved for
-    /// test-only callers; production paths always supply the slot's chain.
-    /// An empty `bare_outcomes` reverts admission to shape-only
-    /// `arg.matches(part)`.
+    /// Each candidate is filtered against the visibility predicate before admission — per-overload
+    /// tagging matters because overloads in a bucket may sit at different lexical positions.
+    /// `chain = None` (no active payload names a frame) leaves every scope complete to the reader,
+    /// and an empty `bare_outcomes` reverts admission to shape-only `arg.matches`.
     pub(crate) fn resolve_dispatch<'e>(
         &self,
         expr: &WorkingExpression<'e>,
@@ -99,20 +82,17 @@ impl<'step> Scope<'step> {
     ) -> DispatchOutcome<'step> {
         #[cfg(test)]
         RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(c.get() + 1));
-        // Bare-name parking pre-empts admission: with a still-finalizing producer behind any
-        // non-exempt bare-name part, no pick may commit — which overload wins can depend on the
-        // carried type the producer has yet to land, and deciding early would make dispatch a
-        // function of drain order.
+        // Which overload wins can depend on the carried type a still-finalizing producer has yet to
+        // land, so committing a pick before it does would make dispatch a function of drain order.
         let parked = parked_producers(expr, bare_outcomes);
         if !parked.is_empty() {
             return DispatchOutcome::ParkOnProducers(parked);
         }
-        // The node's own bumped run, read where it rests: dispatch is the hottest read in the
-        // machine, and materializing an owned key per call would clone every keyword's text.
+        // Read where it rests: dispatch is the hottest read in the machine, and materializing an
+        // owned key per call would clone every keyword's text.
         let key = expr.stored_key();
-        // Builtin dispatch buckets are unshadowable, so the root bucket is authoritative:
-        // consult it directly and short-circuit on a `Terminal` decision. A non-terminal
-        // root falls through to the full walk below unchanged, preserving precedence.
+        // Builtin dispatch buckets are unshadowable, so the root bucket is authoritative. A
+        // non-terminal root falls through to the full walk, preserving precedence.
         let root = self.root_scope();
         if root.bindings().has_builtin_function_stored(key) {
             let lookup = root
@@ -124,8 +104,6 @@ impl<'step> Scope<'step> {
                 return outcome;
             }
         }
-        // Innermost dead unbound bare-name lean, surfaced post-walk only if no
-        // scope reached a terminal decision.
         let mut dead_lean: Option<String> = None;
         for scope in self.ancestors() {
             let lookup = scope
@@ -152,11 +130,11 @@ impl<'step> Scope<'step> {
 /// scan. Exempt are the slots a binder form's own machinery resolves:
 ///
 /// - the declared-name position (`binder_name_slot`, cached off
-///   [`BinderSpec::name_slot`](crate::machine::model::binder::BinderSpec)): the slot *owns* the
-///   name, so an inner shadowing binder must not wait on a same-named outer binder still in
-///   flight (its own claim is already invisible to it by the exclusive visibility cutoff);
-/// - a binder form's `Type`-token operands (`NEWTYPE M = Alias`, `LET T = OtherT`, a combined
-///   form's return type): the binder body resolves these through the declaration-window /
+///   [`BinderSpec::name_slot`](crate::machine::model::binder::BinderSpec::name_slot)): the slot
+///   *owns* the name, so an inner shadowing binder must not wait on a same-named outer binder still
+///   in flight (its own claim is already invisible to it by the exclusive visibility cutoff);
+/// - a binder form's `Type`-token operands (`NEWTYPE Meters = Length`, `LET Thing = OtherThing`, a
+///   combined form's return type): the binder body resolves these through the declaration-window /
 ///   type-resolution protocol, which answers a declarator's reference to a co-declared sibling
 ///   without waiting — parking here instead could deadlock a recursive declaration group.
 ///
@@ -184,10 +162,9 @@ fn parked_producers(
     producers
 }
 
-/// Per-scope precedence: the innermost scope with a `Terminal` decision wins.
-/// `DeadLean` records an unbound bare-name blocker without terminating (an
-/// outer scope may strict-Pick the bare name); `Continue` means this scope
-/// raised nothing.
+/// Per-scope precedence: the innermost scope with a `Terminal` decision wins. `DeadLean` records an
+/// unbound bare-name blocker *without* terminating, since an outer scope may still strict-Pick the
+/// bare name.
 enum ScopeDecision<'step> {
     Terminal(DispatchOutcome<'step>),
     DeadLean(String),
@@ -195,16 +172,6 @@ enum ScopeDecision<'step> {
 }
 
 /// Decide one scope's contribution from its [`FunctionLookup`].
-///
-/// 1. A visible pending overload parks the scope — once finalized it would
-///    shadow any finalized sibling here, so it takes precedence even over a
-///    finalized strict-Pick at the same scope (the leaned-on parked producers
-///    from the relaxed pass union in).
-/// 2. Otherwise the strict gate Picks / ties / is empty over the finalized
-///    overloads.
-/// 3. A strict-Empty bucket runs the relaxed pass: leaned-parked ⇒ park,
-///    else leaned-eager ⇒ defer, else leaned-dead ⇒ `DeadLean` (continue),
-///    else `Continue`.
 ///
 /// The candidate walk reads signatures only, so it opens each dormant overload at `scope`'s own
 /// region-owner borrow — a candidate that loses the tournament is never re-anchored past this call.
@@ -225,10 +192,10 @@ fn decide_scope<'step, 'e>(
     let bucket = OverloadBucket {
         candidates: &candidates,
     };
-    // Pending always parks at its scope, even over a finalized Pick: the
-    // pending sibling would shadow once it finalizes, so resolve nothing until
-    // it does (Decision 5). Union in any parked producers the relaxed pass
-    // would have leaned on so a single wake re-runs the full resolution.
+    // Pending parks at its scope even over a finalized Pick: the pending sibling would shadow once
+    // it finalizes, so resolve nothing until it does (Decision 5 in
+    // ../../../../design/typing/scheduler.md). The relaxed pass's parked producers union in so a
+    // single wake re-runs the full resolution.
     if let Some(pending) = lookup.pending {
         let mut producers = vec![pending];
         for p in bucket.relaxed_parked_producers(expr, bare_outcomes, types) {
@@ -242,10 +209,9 @@ fn decide_scope<'step, 'e>(
         PickPass::Picked(index) => ScopeDecision::Terminal(DispatchOutcome::Resolved(
             build_resolved(scope.open_function(&lookup.overloads[index]), expr, types),
         )),
-        // Tie with an unevaluated eager part may break once it evaluates: a
-        // typed `Spliced(List …)` re-dispatch is element-aware where the bare
-        // literal is shape-only. Defer; a genuine tie resurfaces as `Ambiguous`
-        // on the post-eager-subs pass.
+        // A tie may break once an unevaluated eager part lands: the typed `Spliced(List …)`
+        // re-dispatch is element-aware where the bare literal is shape-only. A genuine tie
+        // resurfaces as `Ambiguous` on the post-eager-subs pass.
         PickPass::Tie(n) if expr_has_eager_part(expr) => {
             let _ = n;
             ScopeDecision::Terminal(DispatchOutcome::Deferred)
@@ -255,12 +221,10 @@ fn decide_scope<'step, 'e>(
     }
 }
 
-/// Strict-Empty relaxed pass: one assume-every-unresolved-slot-satisfiable pass
-/// per candidate, classifying which unresolved-slot kinds each leaned on.
-/// Parked beats eager; a dead unbound lean only records a `DeadLean` blocker —
-/// it never parks, since an unbound name never arrives. A candidate that rejects
-/// on a hard already-resolved /
-/// literal / keyword slot does not admit even relaxed and contributes nothing.
+/// Strict-Empty relaxed pass: one assume-every-unresolved-slot-satisfiable pass per candidate.
+///
+/// Parked beats eager; a dead unbound lean never parks, since an unbound name never arrives, so it
+/// only records a `DeadLean` blocker.
 fn decide_relaxed<'step, 'e>(
     bucket: &OverloadBucket<'_, '_>,
     expr: &WorkingExpression<'e>,
@@ -337,9 +301,7 @@ impl OverloadBucket<'_, '_> {
         }
     }
 
-    /// Deduped `Parked` producers any candidate leans on under the relaxed pass.
-    /// The caller unions these into a pending park so a single wake re-runs the
-    /// full resolution.
+    /// Deduped so a single wake re-runs the whole resolution.
     fn relaxed_parked_producers<'e>(
         &self,
         expr: &WorkingExpression<'e>,
@@ -364,19 +326,18 @@ impl OverloadBucket<'_, '_> {
     }
 }
 
-/// Policy-free outcome of one filter→`most_specific` pass; the `Tie` →
-/// `Ambiguous` / `Deferred` translation lives at the call site. `Picked` names the winner's bucket
-/// index rather than the callable, so the pick is re-anchored once, at the call site.
+/// Policy-free outcome of one filter→`most_specific` pass: the `Tie` → `Ambiguous` / `Deferred`
+/// translation is decided outside. `Picked` names the winner's bucket index rather than the
+/// callable, so the pick is re-anchored exactly once.
 enum PickPass {
     Picked(usize),
     Tie(usize),
     Empty,
 }
 
-/// Which unresolved-slot kind the relaxed pass leaned on at a rejecting slot.
-/// `Parked` carries the forward-reference producer to park on; `Eager` a
-/// not-yet-evaluated eager part; `Dead` an unbound bare name (no producer will
-/// ever bind it — only labels the `UnboundName` terminal, never waits).
+/// Which unresolved-slot kind the relaxed pass leaned on at a rejecting slot. `Dead` names an
+/// unbound bare name: no producer will ever bind it, so it labels the `UnboundName` terminal and
+/// never waits.
 enum Lean {
     Parked(ProducerId),
     Eager,
@@ -411,19 +372,13 @@ fn signature_admits_strict<'e>(
         })
 }
 
-/// Relaxed admission: assume every *unresolved* slot satisfiable and report
-/// which kinds were leaned on. `None` ⇒ the candidate rejects even relaxed (a
-/// hard already-resolved / literal / keyword slot rejects, which no arriving
-/// input or binding can flip). `Some(leans)` ⇒ admits relaxed, leaning on the
-/// returned unresolved slots.
+/// Relaxed admission: assume every *unresolved* slot satisfiable and report which kinds were leaned
+/// on. `None` ⇒ the candidate rejects even relaxed, on a hard already-resolved / literal / keyword
+/// slot no arriving input or binding can flip.
 ///
-/// "Leaned on" = strict rejects at the slot but the assume-satisfiable
-/// relaxation passes it: an unevaluated eager part (`Eager`), a `Dead` unbound
-/// bare name, or — on a pre-scan-exempt slot only, the pre-scan having parked
-/// every other `Parked` part before admission — a still-finalizing bare name
-/// (`Parked`). One per-candidate pass names every leaned-on kind — which
-/// arriving (`Eager` / `Parked`) slots, and any `Dead` blocker — so the caller
-/// decides park / defer / unbound at the scope rather than re-deriving it.
+/// "Leaned on" = strict rejects at the slot but the assume-satisfiable relaxation passes it. A
+/// `Parked` lean can only arise on a pre-admission-park-exempt slot, the park having already
+/// pre-empted every other `Parked` part.
 fn relaxed_admits<'e>(
     sig: &ExpressionSignature<'_>,
     expr: &WorkingExpression<'e>,
@@ -446,10 +401,8 @@ fn relaxed_admits<'e>(
         ) {
             continue;
         }
-        // Strict rejected — admit relaxed only if this is an unresolved slot the
-        // relaxation assumes satisfiable. An unevaluated eager part in an
-        // *argument* slot routes through `eager_indices` post-pick; a keyword
-        // element can't be satisfied by an eager part.
+        // An unevaluated eager part in an *argument* slot routes through `eager_indices` post-pick;
+        // a keyword element can never be satisfied by an eager part.
         if is_eager_working_part(&part.value) && matches!(el, SignatureElement::Argument(_)) {
             leans.push(Lean::Eager);
             continue;
@@ -457,18 +410,16 @@ fn relaxed_admits<'e>(
         match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
             Some(Resolution::Parked(p)) => leans.push(Lean::Parked(*p)),
             Some(Resolution::Unbound(name)) => leans.push(Lean::Dead(name.clone())),
-            // Resolved / keyword / literal mismatch: a hard reject no arriving
-            // input or binding can flip.
+            // Hard reject: no arriving input or binding can flip it.
             _ => return None,
         }
     }
     Some(leans)
 }
 
-/// Lazy-candidate gate: a `KType::KExpression` slot bound by an
-/// `ExpressionPart::Expression` relaxes other non-`KExpression` slots to admit
-/// `Expression` / `SigiledTypeExpr` parts speculatively (they route through
-/// `eager_indices` post-pick). Required by FN overloads.
+/// Lazy-candidate gate: a `KType::KEXPRESSION` slot bound by an `ExpressionPart::Expression`
+/// relaxes the other slots to admit parts speculatively (they route through `eager_indices`
+/// post-pick), which is what lets the `FN` overloads capture an unevaluated body.
 fn has_lazy_kexpr_slot(sig: &ExpressionSignature<'_>, expr: &WorkingExpression<'_>) -> bool {
     sig.elements()
         .iter()
@@ -481,9 +432,8 @@ fn has_lazy_kexpr_slot(sig: &ExpressionSignature<'_>, expr: &WorkingExpression<'
         })
 }
 
-/// Per-slot strict admission — the element walk body of
-/// [`signature_admits_strict`] and the per-slot gate the relaxed pass leans on
-/// when it rejects.
+/// Per-slot strict admission, shared by [`signature_admits_strict`] and [`relaxed_admits`] so the
+/// two passes cannot drift on what "strict rejects here" means.
 fn slot_admits_strict<'e>(
     el: &SignatureElement,
     slot: &WorkingPart<'e>,
@@ -504,11 +454,10 @@ fn slot_admits_strict<'e>(
         },
         (SignatureElement::Argument(arg), Some(part_value)) => {
             let part_value = &part_value;
-            // Binder declaration slot: the slot owns the name, so admission is shape-only. A
-            // `ProperType` slot still admits SigiledTypeExpr / RecordType speculatively (they
-            // sub-dispatch to a type-side carrier — the FN record-schema overload's `ProperType`
-            // signature slot taking a `:{…}`). An `Identifier` slot does not: it is part-kind-exact,
-            // so a `:{…}` return type is not mistaken for a value-named one.
+            // A declaration slot owns the name, so admission is shape-only. `ProperType` still
+            // admits SigiledTypeExpr / RecordType speculatively, since they sub-dispatch to a
+            // type-side carrier; `Identifier` stays part-kind-exact, so a `:{…}` return type is
+            // never mistaken for a value-named one.
             if matches!(arg.ktype, KType::PROPER_TYPE) {
                 if matches!(
                     part_value,
@@ -521,12 +470,10 @@ fn slot_admits_strict<'e>(
             if matches!(arg.ktype, KType::IDENTIFIER) {
                 return arg.matches(part_value, types);
             }
-            // A sigil / record-type part in a slot that is neither `:KExpression` nor the
-            // *other* lazy raw-capture kind sub-dispatches to a type-side carrier. The two
-            // lazy raw-capture slots (`:SigiledTypeExpr`, `:RecordType`) are part-kind-exact
-            // and mutually exclusive — a `:{…}` must not be admitted to a `:SigiledTypeExpr`
-            // slot, nor a `:(…)` to a `:RecordType` slot — else the two overloads tie
-            // incomparably and the eager fallback wins (dropping the lazy raw capture).
+            // The two lazy raw-capture slots are part-kind-exact and mutually exclusive: admitting
+            // a `:{…}` to a `:SigiledTypeExpr` slot (or a `:(…)` to a `:RecordType` one) would tie
+            // the two overloads incomparably, and the eager fallback would win — dropping the lazy
+            // raw capture. Anywhere else, such a part sub-dispatches to a type-side carrier.
             match part_value {
                 ExpressionPart::SigiledTypeExpr(_)
                     if !matches!(arg.ktype, KType::KEXPRESSION | KType::RECORD_TYPE) =>
@@ -556,10 +503,9 @@ fn slot_admits_strict<'e>(
                 Some(Resolution::Resolved(delivered)) => arg
                     .ktype
                     .accepts_carried(delivered.open_at().value(), types),
-                // A name that resolves to nothing satisfies no typed value slot; the relaxed
-                // pass's `Dead` lean carries the precise `UnboundName`. `Parked` reaches this
-                // consult only on a pre-scan-exempt slot (a binder form's own operand), where the
-                // reject leaves the pick to the binder overloads' shape-only slots.
+                // The relaxed pass's `Dead` lean carries the precise `UnboundName`. `Parked` reaches
+                // here only on a slot exempt from the pre-admission park (a binder form's own
+                // operand), where rejecting leaves the pick to the shape-only binder slots.
                 Some(Resolution::Parked(_)) | Some(Resolution::Unbound(_)) => false,
                 None => arg.matches(part_value, types),
             }
@@ -567,14 +513,13 @@ fn slot_admits_strict<'e>(
     }
 }
 
-/// True iff `expr` carries any part shape the scheduler's eager loop would
-/// schedule as a sub-Dispatch.
 fn expr_has_eager_part(expr: &WorkingExpression<'_>) -> bool {
     expr.parts.iter().any(|p| is_eager_working_part(&p.value))
 }
 
-/// Sole producer of the embedded `slots`; disjointness lives in
-/// [`KFunction::classify_for_pick`].
+/// The one place `Resolved` is built; the disjoint `(eager_indices | wrap_indices)` invariant its
+/// `slots` carries is established by
+/// [`KFunction::classify_for_pick`](crate::machine::core::KFunction::classify_for_pick).
 fn build_resolved<'step, 'e>(
     picked: OpenedFunction<'step>,
     expr: &WorkingExpression<'e>,

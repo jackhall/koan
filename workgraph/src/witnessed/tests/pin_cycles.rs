@@ -1,19 +1,17 @@
-//! The **pin-ring** slate: [`Region::retain_reach`]'s debug-mode cycle detector, which reports the
-//! over-pinning direction every other residence audit passes silently. A mutual pin — region A's
-//! union bundle retaining owner B while region B's retains owner A — is expressible in safe code,
-//! defeats the refcount-driven region free, and is unreachable from any live root the moment the
-//! external references drop, which is why detection runs online at the fold that closes the ring.
+//! The **pin-ring** slate: [`Region::retain_reach`]'s debug-mode cycle detector. A mutual pin —
+//! region A's union bundle retaining owner B while region B's retains owner A — is expressible in
+//! safe code, defeats the refcount-driven region free, and is unreachable from any live root the
+//! moment the external references drop, which is why detection runs online at the fold that closes
+//! the ring.
 //!
-//! Runs over a library-only profile (`RegionHost` frames, no storage families), so what is measured
-//! is the retention graph alone. Each test resets the thread-local log first; test threads see it in
-//! isolation.
+//! Each test resets the thread-local report log first; test threads see it in isolation.
 
 use std::rc::Rc;
 
 use super::super::*;
 
-/// The library-only profile the ring slate runs over — reach retention is independent of family
-/// storage, so there is none.
+/// The profile the ring slate runs over — reach retention is independent of value storage, so what
+/// the slate measures is the retention graph alone.
 struct CycleProfile;
 
 impl StorageProfile for CycleProfile {
@@ -22,8 +20,8 @@ impl StorageProfile for CycleProfile {
 
 type CycleFrame = RegionHost<CycleProfile>;
 
-/// A fresh per-call frame, optionally chained under `outer` — the chain edge the detector expands
-/// through [`PinsRegion::for_each_pinned_region`].
+/// Chaining under `outer` is the chain edge the detector expands through
+/// [`PinsRegion::for_each_pinned_region`].
 fn frame(outer: Option<Rc<CycleFrame>>) -> Rc<CycleFrame> {
     RegionHost::fresh(outer)
 }
@@ -40,10 +38,9 @@ fn retain(holder: &Rc<CycleFrame>, member: &Rc<CycleFrame>) {
         .retain_reach(PinBundle::singleton(Rc::clone(member)));
 }
 
-/// Dismantle a ring the test built on purpose. A reported ring is a **real** leak — that is the
-/// whole point of detecting it — so every host in one stays allocated to process exit and the Miri
-/// leak audit reports it. A test that constructs a ring owes this teardown; one that constructs an
-/// acyclic graph does not, because ordinary `Drop` reclaims it.
+/// A reported ring is a **real** leak: every host in one stays allocated to process exit and the
+/// Miri leak audit reports it. A test that builds a ring therefore owes this teardown; one that
+/// builds an acyclic graph does not, because ordinary `Drop` reclaims it.
 fn dismantle(frames: &[&Rc<CycleFrame>]) {
     for frame in frames {
         frame.region().release_retained_for_test();
@@ -51,22 +48,19 @@ fn dismantle(frames: &[&Rc<CycleFrame>]) {
 }
 
 /// The acceptance case: a mutual pin between two per-call regions is reported, and the one-way half
-/// of it is not. Blame names the region that closed the ring, and the path names the owners walked
-/// from the newly retained member back to it.
+/// of it is not.
 #[test]
 fn mutual_pin_is_reported() {
     reset_pin_cycle_reports();
     let a = frame(None);
     let b = frame(None);
 
-    // Half a ring: A retains B. B pins only its own region, which A's retention does not name.
     retain(&a, &b);
     assert!(
         pin_cycle_reports().is_empty(),
         "one-way retention is no ring"
     );
 
-    // The closing edge: B retains A, whose region's bundle holds B, which pins B's own region.
     retain(&b, &a);
     let reports = pin_cycle_reports();
     assert_eq!(reports.len(), 1);
@@ -117,7 +111,7 @@ fn acyclic_retention_reports_nothing() {
     let _ = middle.region();
     let _ = leaf.region();
 
-    // Built innermost-first, so the last fold walks the whole chain: b → c → leaf → its ancestors.
+    // Innermost-first, so the last fold walks the whole chain: b → c → leaf → its ancestors.
     retain(&c, &leaf);
     retain(&b, &c);
     retain(&a, &b);

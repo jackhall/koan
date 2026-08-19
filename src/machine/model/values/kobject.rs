@@ -946,8 +946,9 @@ pub(crate) fn retains_home(value: &KObject<'_>, home: &KoanRegion) -> bool {
     }
 }
 
-/// The [`RegionEscape`] verb for a top-level record, chosen per value in O(1) from its memos and the
-/// producer host's allocated total. Non-record values never reach this — they always copy.
+/// The escape verb for a top-level container value, chosen per value in O(1) from its memos and the
+/// producer host's allocated total. Values with no container substrate never reach this — they
+/// always copy.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum RegionEscape {
     /// Borrow rides, the producer region transfers by hold; the relocate hook pointer-copies the
@@ -970,8 +971,8 @@ const ALPHA_DIVISOR: u64 = 4;
 /// The escape-seam copy-vs-pin decision for a top-level container value (whose cell substrate is
 /// `substrate`) crossing out of producer `host`. O(1), every read a stored fact: the home-crossing
 /// test compares the home the substrate's own reach description records against `host` by region
-/// identity. Generic over the substrate's cell payload `C`; only records instantiate it today. See
-/// design/value-substrates.md § Cost-driven copy.
+/// identity. Generic over the substrate's cell payload `C`. See
+/// [Cost-driven copy](../../../../design/value-substrates.md#cost-driven-copy-the-optimization).
 pub(crate) fn copy_or_pin<C>(
     substrate: &ContainerSubstrate<'_, C>,
     host: &KoanRegion,

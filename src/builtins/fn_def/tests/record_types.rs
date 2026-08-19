@@ -67,7 +67,7 @@ fn fn_returning_record_accepts_matching_value() {
     assert_eq!(bytes, b"{x = 1, y = a}\n");
 }
 
-/// A record value (`ktype()` carries the field-type record) reports a `KType::Record`.
+/// A record value (`ktype()` carries the field-type record) reports a record `KType`.
 #[test]
 fn record_value_reports_record_ktype() {
     let program = program_storage();

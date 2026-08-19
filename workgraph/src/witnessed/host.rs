@@ -2,8 +2,10 @@
 //! per-call frame storage is (or wraps) a `RegionHost<P>` — the region it names is created on first
 //! [`region()`](RegionHost::region) access, not at construction, so a frame that never allocates
 //! mints nothing. `outer` is the ancestor-frame link [`RegionHost::pins_region`] walks for
-//! [`PinBundle`](super::PinBundle) subsumption; the same shape [`RegionOwner`] / [`PinsRegion`] are
-//! implemented against everywhere in the workgraph model.
+//! [`PinBundle`](super::PinBundle) subsumption.
+//!
+//! Design: [witnessed-memory.md](../../design/witnessed-memory.md),
+//! [reach.md](../../design/reach.md).
 
 use std::cell::OnceCell;
 use std::rc::{Rc, Weak};
@@ -20,34 +22,28 @@ use super::{PinsRegion, Region, RegionOwner, StorageProfile};
 /// `outer` link is a strong pin on the ancestor's storage, so a chain of `RegionHost`s keeps every
 /// ancestor region alive for as long as the deepest descendant is held.
 pub struct RegionHost<P: StorageProfile> {
-    /// Lazily minted on first [`region()`](Self::region) access — the library's mint point.
-    /// Declared before `outer` so the region drops before the ancestor storage it may reference
-    /// (field order is load-bearing, mirroring every `RegionHost`-shaped frame owner).
+    /// Declared before `outer` so the region drops before the ancestor storage it may reference —
+    /// field order is load-bearing.
     region: OnceCell<Region<P>>,
     /// The parent's storage: both a liveness pin — held so the ancestor's storage outlives this
-    /// host's own borrows into it — and the link [`Self::pins_region`] walks for subsumption. Drop
-    /// tears down the chain in order.
+    /// host's own borrows into it — and the link [`Self::pins_region`] walks for subsumption.
     outer: Option<Rc<RegionHost<P>>>,
     /// The host's **tier**: `true` for an eternal host ([`Self::fresh_eternal`]), whose region
     /// outlives every region that could retain it; `false` for every per-call host
     /// ([`Self::fresh`]). Not derivable from the chain — a per-call host started at a fresh tail
-    /// also has `outer: None` — so the owner carries the bit, and a workload asking "is this
-    /// eternal?" reads it here rather than stamping a shadow copy on every structure the region
-    /// backs.
+    /// also has `outer: None` — so the owner carries the bit.
     eternal: bool,
-    /// This host's own `Weak`, captured at construction through `Rc::new_cyclic` — the back-link
-    /// [`Self::region`] hands the region it mints, so every reach description frozen into that
-    /// region's side table can stamp the owner it is hosted by ([`Region::host`]). A `Weak`, so it
-    /// closes no cycle on the `Rc` that owns this host.
+    /// This host's own `Weak`, captured through `Rc::new_cyclic` and handed to the region it mints,
+    /// so every reach description frozen into that region's side table can stamp the owner it is
+    /// hosted by ([`Region::host`]). `Weak`, so it closes no cycle on the `Rc` owning this host.
     me: Weak<P::FrameOwner>,
 }
 
 /// The constructors — available for a profile whose frame owner **is** this host type. A
 /// `RegionHost<P>` mints `Region<P>`, whose descriptions are typed at `P::FrameOwner`, so the
-/// back-link a fresh host captures for itself is only well-typed when the two coincide. Every
-/// workload that owns its regions through `RegionHost` satisfies it by definition.
+/// back-link a fresh host captures for itself is only well-typed when the two coincide.
 impl<P: StorageProfile<FrameOwner = RegionHost<P>>> RegionHost<P> {
-    /// Build a fresh **per-call** host with no region minted yet, chained to `outer`.
+    /// A **per-call** host, chained to `outer`.
     pub fn fresh(outer: Option<Rc<RegionHost<P>>>) -> Rc<Self> {
         Rc::new_cyclic(|me| RegionHost {
             region: OnceCell::new(),
@@ -57,10 +53,9 @@ impl<P: StorageProfile<FrameOwner = RegionHost<P>>> RegionHost<P> {
         })
     }
 
-    /// Build an **eternal** host: no region minted yet, no ancestor, and marked at the eternal tier
-    /// ([`Self::is_eternal`]) — its region outlives every region that could retain it, so nothing
-    /// ever takes an owning pin on it. A workload's run root is one; so is storage a workload stands
-    /// up ahead of the run and holds for the whole of it.
+    /// A host at the **eternal** tier ([`Self::is_eternal`]): its region outlives every region that
+    /// could retain it, so nothing ever takes an owning pin on it. A workload's run root is one; so
+    /// is storage a workload stands up ahead of the run and holds for the whole of it.
     pub fn fresh_eternal() -> Rc<Self> {
         Rc::new_cyclic(|me| RegionHost {
             region: OnceCell::new(),
@@ -73,17 +68,15 @@ impl<P: StorageProfile<FrameOwner = RegionHost<P>>> RegionHost<P> {
 
 impl<P: StorageProfile> RegionHost<P> {
     /// Whether this host is at the eternal tier ([`Self::fresh_eternal`]) rather than a per-call
-    /// frame. The tier a caller consults to decide whether chaining a strong pin to this storage is
-    /// meaningful: an eternal region outlives everything that could retain it, so pinning it buys
-    /// nothing and closes an `Rc` cycle.
+    /// frame. An eternal region outlives everything that could retain it, so pinning it buys nothing
+    /// and closes an `Rc` cycle.
     pub fn is_eternal(&self) -> bool {
         self.eternal
     }
 
-    /// The backing region, minting it on first call. This is the **sole** mint point: nothing else
-    /// in the library or a workload ever constructs a `Region<P>` directly against a `RegionHost`.
-    /// The fresh region is handed this host's own `Weak`, so every description it later hosts names
-    /// the owner it lives in.
+    /// The backing region, minting it on first call — the one place a `RegionHost` mints. The fresh
+    /// region is handed this host's own `Weak`, so every description it later hosts names the owner
+    /// it lives in.
     ///
     /// The `get_or_init` result is deliberately discarded and the reference re-derived through a
     /// plain `get`: the reference `get_or_init` returns on the minting call descends from the init
@@ -100,21 +93,19 @@ impl<P: StorageProfile> RegionHost<P> {
     }
 
     /// A non-minting peek at the region — `Some` iff [`region()`](Self::region) has already been
-    /// called. Used by identity walks ([`Self::pins_region`]) that must not mint as a side effect of
-    /// checking whether something is pinned.
+    /// called. Identity walks go through this so that asking whether something is pinned never mints
+    /// a region as a side effect.
     pub fn minted(&self) -> Option<&Region<P>> {
         self.region.get()
     }
 
-    /// The parent host, if any.
     pub fn outer(&self) -> Option<&Rc<RegionHost<P>>> {
         self.outer.as_ref()
     }
 
-    /// True iff holding `self`'s `Rc` keeps the region at `region` alive — `self`'s own (already
-    /// minted) region or any of its `outer` ancestors' (each pinned by the chain). A host whose own
-    /// region is not yet minted has nothing of its own to compare, so the walk simply continues to
-    /// its ancestors.
+    /// True iff holding `self`'s `Rc` keeps `region` alive — `self`'s own (already minted) region or
+    /// any of its `outer` ancestors' (each pinned by the chain). A host whose own region is unminted
+    /// has nothing of its own to compare, so the walk continues to its ancestors.
     pub fn pins_region(&self, region: &Region<P>) -> bool {
         let mut node = self;
         loop {
@@ -158,8 +149,8 @@ unsafe impl<P: StorageProfile> PinsRegion for RegionHost<P> {
     }
 
     /// The chain [`Self::pins_region`] walks, reported as regions rather than as an answer to one
-    /// query. A host whose own region is unminted contributes nothing — nothing can be retained in
-    /// a region that does not exist — and `minted()` is what keeps the survey from minting one.
+    /// query. A host whose own region is unminted contributes nothing — nothing can be retained in a
+    /// region that does not exist — and going through `minted()` keeps the survey from minting one.
     #[cfg(debug_assertions)]
     fn for_each_pinned_region(&self, visit: &mut dyn FnMut(&Region<P>)) {
         let mut node = self;
@@ -176,9 +167,8 @@ unsafe impl<P: StorageProfile> PinsRegion for RegionHost<P> {
 }
 
 /// One detected **pin ring**: a chain of region owners along which liveness flows back to the region
-/// whose retention closed it, so neither end can ever be freed. Recorded by the debug-mode detector
-/// at [`Region::retain_reach`](super::Region::retain_reach) — the one moment both ends of the ring
-/// are in hand.
+/// whose retention closed it, so neither end can ever be freed. Recorded by the debug-mode ring
+/// detector as a retention is folded in.
 ///
 /// Addresses are `Rc::as_ptr` owner identities rather than references: a report outlives the walk
 /// that produced it, and a ring by definition holds its own members alive, so the identities stay
@@ -198,7 +188,6 @@ thread_local! {
     static PIN_CYCLES: RefCell<Vec<PinCycleReport>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Record one detected ring. Called from the detector alone.
 #[cfg(debug_assertions)]
 pub(super) fn note_pin_cycle(report: PinCycleReport) {
     PIN_CYCLES.with(|log| log.borrow_mut().push(report));
@@ -219,9 +208,8 @@ pub fn reset_pin_cycle_reports() {
 }
 
 /// Snapshot of the thread-local region counters — region mints, plus the reach side table's intern
-/// and retention traffic. `peak` and every `_total`-shaped counter are monotonic across
-/// [`reset_region_metrics`] calls only in the sense that a reset zeroes them; within one measurement
-/// window they only grow, while `live` also falls as hosts drop.
+/// and retention traffic. Every counter but `live` only grows within a measurement window; a
+/// [`reset_region_metrics`] zeroes them all.
 ///
 /// The reach counters live here rather than on [`Region`] so a region grows no `cfg`-gated field:
 /// they are per-thread totals across every region, which is what a test measuring one region's
@@ -235,11 +223,11 @@ pub struct RegionMetrics {
     pub peak: usize,
     /// Total number of mints since the last reset (never decremented).
     pub minted_total: usize,
-    /// Reach descriptions allocated — intern **misses** ([`Region::intern_reach_retained`]).
+    /// Reach descriptions allocated — intern **misses**.
     pub reach_interned: usize,
     /// Intern **hits**: a mint that found its member set already described in the region.
     pub reach_intern_hits: usize,
-    /// Folds into a region's union bundle ([`Region::retain_reach`]).
+    /// Folds into a region's union bundle.
     pub reach_retention_folds: usize,
 }
 
@@ -271,8 +259,8 @@ pub(super) fn note_reach_retention_fold() {
     REACH_RETENTION_FOLDS.with(|c| c.set(c.get() + 1));
 }
 
-/// Records a mint: increments `live` and `minted_total`, folding `peak` to the new `live` if it
-/// grew. Called exactly once per `RegionHost`, from inside its `OnceCell::get_or_init` closure.
+/// Records a mint, folding `peak` to the new `live` if it grew. Runs once per `RegionHost`, inside
+/// the `OnceCell` init.
 #[cfg(any(test, feature = "test-hooks"))]
 fn note_mint() {
     LIVE.with(|live| {

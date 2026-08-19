@@ -1,11 +1,11 @@
 //! [`StepContext`] — the step construction context: a library-owned handle a step loop hands to a
-//! finish, whose two verbs are guarantees 3 and 5 of the scheduler-library design made structural.
-//! [`StepContext::alloc`] builds a value reachable only through the held frame's own region (reach =
-//! own region only, by the `yoke` brand); [`StepContext::alloc_with`] relocates the whole run of
-//! delivered dep envelopes in one act first, so the built value's carrier names every dep's whole
-//! reach — its home region among the ordinary members of the envelope's pins —
-//! and a dep's payload is viewable only inside the build closure's brand — it cannot be smuggled out
-//! and stored unwitnessed.
+//! finish, whose two verbs make guarantees 3 and 5 of
+//! [scheduler-library.md § The guarantees](../../../design/scheduler-library.md#the-guarantees)
+//! structural. [`StepContext::alloc`] builds a value reachable only through the held frame's own
+//! region (reach = own region only, by the `yoke` brand); [`StepContext::alloc_with`] relocates the
+//! whole run of delivered dep envelopes in one act first, so the built value's carrier names every
+//! dep's whole reach, and a dep's payload is viewable only inside the build closure's brand — it
+//! cannot be smuggled out and stored unwitnessed.
 
 use std::rc::Rc;
 
@@ -14,8 +14,8 @@ use super::{
     RegionHandle, RegionHandleFamily, RegionOwner, StorageProfile, Witnessed,
 };
 
-/// The step construction context — handed to a finish by the step loop, whose held region owner is
-/// what makes [`Self::region`] infallible (guarantee 4, reused). Cheap to clone (an `Rc` clone).
+/// The step construction context. Holding the region owner is what makes [`Self::region`]
+/// infallible (guarantee 4); cloning is an `Rc` clone.
 pub struct StepContext<F: RegionOwner> {
     frame: Rc<F>,
 }
@@ -29,7 +29,6 @@ impl<F: RegionOwner> Clone for StepContext<F> {
 }
 
 impl<F: RegionOwner> StepContext<F> {
-    /// Wrap the step loop's held region owner.
     pub fn new(frame: Rc<F>) -> Self {
         StepContext { frame }
     }
@@ -39,7 +38,6 @@ impl<F: RegionOwner> StepContext<F> {
         RegionOwner::region(&*self.frame)
     }
 
-    /// The held owner, for callers that need the `Rc` itself.
     pub fn frame(&self) -> Rc<F> {
         Rc::clone(&self.frame)
     }
@@ -47,8 +45,8 @@ impl<F: RegionOwner> StepContext<F> {
 
 impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// [`Self::alloc`] handing `build` the bare `&F::Region` instead of its [`RegionHandle`] — the
-    /// raw yoke the public door adapts. Crate-internal: every embedder allocation goes through the
-    /// handle capability.
+    /// raw yoke the public door adapts. Crate-internal, so an embedder allocation always goes
+    /// through the handle capability.
     pub(in crate::witnessed) fn alloc_in_region<T, P>(
         &self,
         build: impl for<'b> FnOnce(&'b F::Region) -> T::At<'b>,
@@ -77,9 +75,8 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     {
         // One relocation over the whole dep run against a bare handle on this context's own frame:
         // the destination's coverage is that frame, every dep's reach composes into it, and `build`
-        // sees all the views at the shared brand — so there is no accumulator carrying a gathered
-        // run between steps, and no projection to re-anchor one afterward. The deps arrive as a
-        // slice of borrows, which the engine takes directly; nothing is gathered to adapt.
+        // sees all the views at the shared brand. The crate-internal engine takes the deps as the
+        // slice of borrows they already are, so nothing is gathered to adapt.
         Delivered::transfer_each_into::<RegionHandleFamily<P>, T, V, P>(
             deps.iter().copied(),
             Delivered::destination(Rc::clone(&self.frame)),
@@ -93,11 +90,10 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// Build a value reachable only through the held frame's own region: reach = own region only,
     /// so the carrier references a description with empty members hosted in that same region — its
     /// liveness is the frame the step loop holds (guarantee 4), then each destination region the
-    /// finalize walk delivers into. `build` receives the region's [`RegionHandle`], the one
-    /// allocation capability, and
-    /// the `for<'b>` brand on it admits only region-derived or owned references — so purity is
-    /// structural rather than asserted: the value is yoked from the frame's own region and only then
-    /// re-bundled under the pin-free carrier.
+    /// finalize walk delivers into. The `for<'b>` brand on the [`RegionHandle`] `build` receives
+    /// admits only region-derived or owned references, so purity is structural rather than
+    /// asserted: the value is yoked from the frame's own region and only then re-bundled under the
+    /// pin-free carrier.
     ///
     /// ```
     /// use std::rc::Rc;
@@ -140,13 +136,12 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     }
 
     /// Build a value whose carrier names the held frame's own region implicitly plus every named
-    /// dep's whole reach, folded by the call shape (guarantee 5). Each dep arrives as its delivery
-    /// envelope, and each fold is an envelope-bearing
-    /// [`transfer_into`](Delivered::transfer_into) claiming the dep's own pins — the dep's payload
-    /// keeps living in its producer's region while its view is embedded, so the producer's frame
-    /// (an ordinary member of those pins) composes into the minted set. A dep's payload is handed
-    /// to `build` only inside the shared `for<'b>` brand — the [`compile_fail`] guard below pins
-    /// that a view cannot be smuggled out of the closure and stored unwitnessed.
+    /// dep's whole reach, folded by the call shape (guarantee 5). The deps arrive as their delivery
+    /// envelopes and relocate in one act claiming each dep's own pins — a dep's payload keeps
+    /// living in its producer's region while its view is embedded, so the producer's frame (an
+    /// ordinary member of those pins) composes into the minted set. A dep's payload is handed to
+    /// `build` only inside the shared `for<'b>` brand — the `compile_fail` guard below pins that a
+    /// view cannot be smuggled out of the closure and stored unwitnessed.
     ///
     /// `build` receives a [`FoldedPlacement`] over the destination region: it carries the
     /// destination handle and is itself the fold-brand proof, minted over the same region this door
@@ -202,10 +197,9 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         for<'b> V::At<'b>: Copy,
     {
         self.alloc_with_in_region::<T, V, P>(deps, |region, views, token| {
-            // The relocation's destination is a bare handle over this frame's own region and it
-            // composes every dep's reach into that region, so a placement over its handle is
-            // honestly minted here; the fold token is subsumed by the placement as the `'b` brand
-            // proof.
+            // The relocation composes every dep's reach into this frame's own region, so a
+            // placement over that region's handle is honestly minted here; the fold token is
+            // subsumed by the placement as the `'b` brand proof.
             let _ = token;
             build(FoldedPlacement::mint(RegionHandle::new(region)), views)
         })
@@ -213,22 +207,19 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
 }
 
 /// [`StepContext::alloc_with`]'s build step, adapting the embedder's closure to the shape
-/// [`Delivered::transfer_all_into`]'s `relocate` takes — the region read off the destination
+/// [`Delivered::transfer_each_into`]'s `relocate` takes — the region read off the destination
 /// operand's own handle, and the placement's brand handed on as the fold token. The views run back
 /// out beside the built value as the relocation's per-source cells: each dep's product cell **is**
-/// its own view, un-copied, so the staging-order pairing the door asks for is the identity.
+/// its own view, un-copied, so the staging-order pairing the door asks for is the identity. That
+/// is sound because the relocation claimed every dep's own pins, so each view's producer frame is
+/// a member of the product's minted set, pinned for the built value's life.
 ///
 /// Factored into its own generic function that carries no `V::At<'static>: Copy` bound. Binding a
 /// `V::At<'b>` view directly inside a scope that *also* carries that bound (as `alloc_with` must,
 /// to relocate the envelopes) trips a rustc region-inference gap over GAT projections — a fresh,
-/// non-`'static` instantiation gets spuriously required to outlive `'static`. Building the closure
-/// here, where no such bound is in scope, and handing back only the finished opaque
-/// `impl for<'b> FnOnce(..)` value sidesteps it: `alloc_with` itself never binds a `V::At<'b>`
-/// value, only moves this closure around.
-///
-/// The views ride the product un-copied — sound because the relocation claimed every dep's own
-/// pins, so each view's producer frame is a member of the product's minted set, pinned by the
-/// consumer's own arena for the built value's life.
+/// non-`'static` instantiation gets spuriously required to outlive `'static`. Handing back only
+/// the finished opaque `impl for<'b> FnOnce(..)` value sidesteps it: `alloc_with` itself never
+/// binds a `V::At<'b>` value.
 #[allow(clippy::type_complexity)]
 fn finalize_alloc_with<F, T: Reattachable, V: Reattachable, P>(
     build: impl for<'b> FnOnce(&'b F::Region, &'b [V::At<'b>], FoldToken<'b>) -> T::At<'b>,

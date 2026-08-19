@@ -8,38 +8,32 @@ use super::workload::{DeliveredTerminal, SealedTerminal};
 use super::{EdgeId, NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {
-    /// **The delivery walk.** The terminal arrives as a [`DeliveredTerminal`] — the carrier bundled
-    /// with the owned coverage the workload's finalize hook composed — and is distributed to every
-    /// live edge on this slot's notify list before the slot reclaims.
+    /// **The delivery walk.** Distributes the terminal to every live edge on this slot's notify
+    /// list, then reclaims the slot.
     ///
     /// Three things happen per edge, in one pass:
     ///
-    /// - A **released** entry is skipped and its slab index recycled. That is the second half of
-    ///   Inv-C: release withholds a listed index from circulation precisely so this walk can be the
-    ///   one that returns it, which is what makes a consumer's death before its producer fires
-    ///   order-free.
+    /// - A **released** entry is skipped and its slab index recycled. That is half of Inv-C:
+    ///   release withholds a listed index from circulation precisely so that dropping the entry —
+    ///   here or at a splice — is what returns it, which is what makes a consumer's death before
+    ///   its producer fires order-free.
     /// - A **live** entry receives the terminal *at its own destination*. Adoption is per distinct
-    ///   destination region, not per edge: a linear look-back over the entries already visited finds
-    ///   an earlier edge naming the same region and shares its resident, so the second write into
-    ///   one region is free. The scan allocates nothing and keeps no state past the walk. An error
-    ///   terminal carries no value to adopt, so it simply clones per edge.
-    /// - Its **consumer's pending** drops by one, and a consumer that reaches zero is woken. Wakes
-    ///   all land before any queue push, so a later wake re-reading the slot observes the prior
-    ///   transition.
+    ///   destination region, not per edge, so the second write into one region is free; an error
+    ///   terminal carries no value to adopt and clones per destination instead.
+    /// - Its **consumer's pending** drops by one, and a consumer that reaches zero is woken. Every
+    ///   edge fills before any consumer is queued.
     ///
-    /// The envelope is held across the whole walk, so its transit pins cover every adopt; it drops
-    /// when the walk ends. Then the slot's anchor is released and the slot reclaims —
-    /// unconditionally, with no retention condition of any kind, because delivery has already moved
-    /// everything this producer made into regions that outlive it.
+    /// The envelope is held across the whole walk, so its transit pins cover every adopt. The slot
+    /// then reclaims unconditionally, with no retention condition of any kind, because delivery has
+    /// already moved everything this producer made into regions that outlive it.
     pub(in crate::scheduler) fn finalize(
         &mut self,
         id: NodeId,
         output: Result<DeliveredTerminal<W>, W::Error>,
     ) {
         let mut notify = self.deps.take_notify(id);
-        // Inv-C's recycle point: drop every entry whose edge its owner already released, returning
-        // each index to circulation now that no list names it. Doing it up front leaves the walk
-        // below over live entries alone, so the look-back scan never has to re-test.
+        // Scrubbed up front so the walk below runs over live entries alone and the look-back scan
+        // never has to re-test. Inv-C's recycle point: no list names the index once the entry drops.
         let edges = &mut self.edges;
         notify.retain(|&edge| {
             if edges.is_free(edge) {
@@ -74,13 +68,10 @@ impl<W: Workload> Scheduler<W> {
     }
 
     /// Finalize `slot` with the terminal already resting on `edge` — the forward-a-ready-producer
-    /// path, where a slot's result *is* the value another edge already carries. The resident is
-    /// lifted back into an envelope under its own destination's owner, then delivered onward by the
-    /// ordinary walk, so a forward costs one relocation per distinct onward destination and no
-    /// special case in `finalize`.
-    ///
-    /// The drain names the source by the edge the step's `Forward` verdict carries and the slot by
-    /// the id it is stepping.
+    /// path, where a slot's result *is* the value another edge already carries. Lifting the
+    /// resident back into an envelope under its own destination's owner and re-entering the
+    /// ordinary walk costs one relocation per distinct onward destination and keeps `finalize` free
+    /// of a special case.
     pub(in crate::scheduler) fn finalize_forward(&mut self, slot: NodeId, edge: EdgeId) {
         let output = match self.edges.resident_duplicate(edge) {
             Ok(cell) => Ok(Delivered::lift(cell, self.edges.destination_host(edge))),
@@ -89,9 +80,8 @@ impl<W: Workload> Scheduler<W> {
         self.finalize(slot, output);
     }
 
-    /// The look-back half of per-destination dedup: an already-visited edge naming the same
-    /// destination region, whose resident this edge shares. `None` when this destination is new to
-    /// the walk and the terminal must be adopted into it.
+    /// The look-back half of per-destination dedup. `None` when this destination is new to the walk
+    /// and the terminal must be adopted into it.
     fn shared_resident(
         &self,
         visited: &[EdgeId],
@@ -104,11 +94,10 @@ impl<W: Workload> Scheduler<W> {
             .map(|&earlier| self.edges.resident_duplicate(earlier))
     }
 
-    /// **Adopt** the terminal into `edge`'s destination region and leave it there at rest. The
-    /// destination operand is a bare handle on that region, built through the one public door
-    /// ([`Delivered::destination`]) off the destination's own owner; [`Workload::deliver`] runs the
-    /// embedder's relocation across it — deepcopy or pin, with the retention claim the verdict
-    /// implies — and the product rests in the destination, lodging its coverage in that region's
+    /// **Adopt** the terminal into `edge`'s destination region and leave it there at rest.
+    /// [`Workload::deliver`] runs the embedder's relocation across a bare handle on that region —
+    /// built through the one public door, [`Delivered::destination`] — deepcopy or pin, with the
+    /// retention claim the verdict implies, and the product's coverage lodges in that region's
     /// union bundle for the region's life.
     fn adopt_at(&self, edge: EdgeId, envelope: &DeliveredTerminal<W>) -> SealedTerminal<W> {
         let dest = Delivered::destination(self.edges.destination_host(edge));

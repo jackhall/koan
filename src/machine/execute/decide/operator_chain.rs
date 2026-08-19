@@ -1,5 +1,5 @@
-//! Operator-chain dispatch arm: resolve the operator group for a
-//! `Slot (Keyword Slot)+` chain.
+//! Operator-chain dispatch arm: resolve the operator group for a `Slot (Keyword Slot)+` chain and
+//! reduce the run by the group's declared mode.
 //!
 //! Recognition is structural and parse-cached (see
 //! [`crate::machine::model::ast::classify_dispatch_shape`]); this arm resolves the
@@ -12,19 +12,9 @@
 //! earlier declaration is still in flight parks on that declaration's claim and re-runs on wake
 //! (see [`park_on_pending_operators`]). Visibility is the binding tables' exclusive cutoff, so the
 //! wait is always lexically backward — a lexically-later declaration is not visible, and a
-//! statement's own claim is ruled out by [`DecideCtx::is_own_claim`] on the chains that carry no
-//! cutoff. With nothing pending the miss is real — a cross-group operator mix, or an operator no
-//! visible module declared — and surfaces directly as a structured
-//! [`KErrorKind::DispatchFailed`]. A hit reduces the run by the resolved group's
-//! declared mode: [`ReductionMode::FoldLeft`] rewrites the chain into nested binary dispatches
-//! (see [`reduce_fold_left`]), [`ReductionMode::FoldRight`] mirrors it right-associated (see
-//! [`reduce_fold_right`]), [`ReductionMode::Unary`] rewrites it into one keyword-first call over
-//! a list literal (see [`reduce_unary`]), and [`ReductionMode::Pairwise`] stages every operand as
-//! its own dispatch and, once they all resolve, splices each result into the up-to-two adjacent
-//! pairs it feeds before folding the pairs through the group's combiner in its declared direction
-//! (see [`reduce_pairwise`] and [`combine`]) — the one mode that actually runs sub-dispatches
-//! itself rather than purely rewriting syntax, since a shared middle operand must evaluate exactly
-//! once.
+//! statement's own claim is invisible to its own subtree. With nothing pending the miss is real —
+//! a cross-group operator mix, or an operator no visible module declared — and surfaces directly
+//! as a structured [`KErrorKind::DispatchFailed`].
 
 use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
@@ -41,11 +31,6 @@ use super::{
     Await, DepPlacement, DepRequest, Outcome, become_dispatch, park_resume_labelled, working_frame,
 };
 
-/// The probe is `Some` for every `OperatorChain` (the classifier guarantees it), so a
-/// `None` probe is a classification bug.
-///
-/// Every path but the pending-`OP` park is terminal (no scheduler write), so this decides against
-/// a read-only [`DecideCtx`] and returns [`Outcome::Done`].
 pub(in crate::machine::execute) fn run<'step, 'b>(
     ctx: &DecideCtx<'_, 'step, '_>,
     s: &'b Scope<'b>,
@@ -58,12 +43,10 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
     match s.resolve_operator_group_delivered(probe, chain) {
         None => park_on_pending_operators(ctx, s, expr, probe),
         Some(delivered) => {
-            // Everything the reducers need is read out inside the envelope's one open, so the
-            // record's own borrow never escapes and the envelope's pins drop before the reduce.
             let operators = chain_operators(expr);
             match delivered.open(|group| ChainPlan::of(group, &operators)) {
-                // Guard against a registry-build bug: a hit whose probe operators aren't all
-                // members surfaces as a clean cross-group non-match rather than a wrong fold.
+                // The powerset keys mean a hit already covers the probe, so a non-cover is a
+                // registry-build bug — surface it as a clean non-match rather than a wrong fold.
                 None => Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                     expr: expr.summarize(),
                     reason: cross_group_reason(probe),
@@ -80,9 +63,8 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
     }
 }
 
-/// What a resolved group tells this arm to do, as owned data — the reduction mode with a pairwise
-/// combiner copied out of the region-hosted record. Read inside the delivery envelope's open, so the
-/// reducers run with nothing borrowed from the declaring region.
+/// The reduction mode as owned data, read inside the delivery envelope's open so the reducers run
+/// with nothing borrowed from the declaring region.
 enum ChainPlan {
     FoldLeft,
     FoldRight,
@@ -126,9 +108,8 @@ fn chain_operators<'a>(expr: &WorkingExpression<'a>) -> Vec<&'a str> {
         .collect()
 }
 
-/// Splits `expr.parts` into operands (even indices) and operator keywords (odd indices),
-/// cloning each `Spanned` wrapper whole — not just the inner value — so source spans survive
-/// into any error message the inner dispatch produces.
+/// Operands (even indices) and operator keywords (odd indices), each keeping its `Spanned` wrapper
+/// so source spans survive into any error message an inner dispatch produces.
 fn split_chain_parts<'step>(
     expr: &WorkingExpression<'step>,
 ) -> (
@@ -147,7 +128,7 @@ fn split_chain_parts<'step>(
     (operands, operator_keywords)
 }
 
-/// Wraps a built-up accumulator as the next level's leading operand, carrying its own span
+/// Wraps a built-up accumulator as an operand of the next nesting level, carrying its own span
 /// forward rather than inventing a fresh one.
 fn wrap_as_operand<'step>(
     brand: RegionBrand<'step>,
@@ -160,13 +141,12 @@ fn wrap_as_operand<'step>(
     }
 }
 
-/// Rewrites a `FoldLeft`-mode run into nested binary dispatches — a pure syntactic rewrite,
-/// since every operand appears exactly once there is no evaluation-order question:
+/// Rewrites a `FoldLeft`-mode run into nested binary dispatches — a pure syntactic rewrite, since
+/// every operand appears exactly once and so there is no evaluation-order question:
 ///
-/// `a + b + c` ⇒ `[ Expression([a, +, b]), +, c ]`, a bare 3-part expression whose nested
-/// `Expression` operand resolves through the existing eager-subs sub-dispatch track before the
-/// outer `+` runs as ordinary binary keyworded dispatch (the bodies `arithmetic::register`
-/// installs). The outermost expression stays a bare 3-part expression — never itself wrapped in
+/// `a + b + c` ⇒ `[ Expression([a, +, b]), +, c ]`. The nested `Expression` operand resolves
+/// through the eager-subs sub-dispatch track before the outer `+` runs as ordinary binary
+/// keyworded dispatch. The outermost expression stays bare — never itself wrapped in
 /// `Expression(..)` — so [`become_dispatch`] re-enters ordinary dispatch on it directly.
 fn reduce_fold_left<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
@@ -203,14 +183,8 @@ fn reduce_fold_left<'step>(
     become_dispatch(ctx, acc)
 }
 
-/// Rewrites a `FoldRight`-mode run into nested binary dispatches — the mirror image of
-/// [`reduce_fold_left`], nesting right-associated instead of left-associated:
-///
-/// `a - b - c` ⇒ `[ a, -, Expression([b, -, c]) ]`, a bare 3-part expression whose nested
-/// `Expression` operand resolves through the existing eager-subs sub-dispatch track before the
-/// outer `-` runs as ordinary binary keyworded dispatch. The outermost expression stays a bare
-/// 3-part expression — never itself wrapped in `Expression(..)` — so [`become_dispatch`]
-/// re-enters ordinary dispatch on it directly.
+/// The mirror image of [`reduce_fold_left`], nesting right-associated:
+/// `a - b - c` ⇒ `[ a, -, Expression([b, -, c]) ]`.
 fn reduce_fold_right<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
@@ -246,15 +220,15 @@ fn reduce_fold_right<'step>(
     become_dispatch(ctx, acc)
 }
 
-/// Rewrites a `Unary`-mode run into one keyword-first call over a list literal — the prefix
-/// surface `sym [x1 x2 x3]` and the infix chain `x1 sym x2 sym x3` are one dispatch shape for a
-/// unary operator (the roadmap's "prefix and infix coincide" direction): both become the bare
-/// 2-part expression `[ Keyword(sym), ListLiteral([x1, x2, x3]) ]`, the same shape `HEAD [1 2 3]`
-/// dispatches through (a keyword-first call whose single slot carries a list). Unary is
-/// homogeneous — a well-formed run names one operator throughout — so the first operator
-/// keyword's span and text stand in for the whole run. Each operand rides into the literal
-/// verbatim: a list literal's own element scheduling resolves a bare name against scope and
-/// dispatches a parenthesized element, so a run's operands need no per-kind rewrite.
+/// Rewrites a `Unary`-mode run into one keyword-first call over a list literal: the prefix surface
+/// `sym [x1 x2 x3]` and the infix chain `x1 sym x2 sym x3` both become the bare 2-part expression
+/// `[ Keyword(sym), ListLiteral([x1, x2, x3]) ]`, the shape `HEAD [1 2 3]` dispatches through — so
+/// prefix and infix coincide on one body
+/// ([design/expressions-and-parsing.md](../../../../design/expressions-and-parsing.md)).
+///
+/// A well-formed unary run names one operator throughout, so the first operator keyword's span and
+/// text stand in for the whole run. A list literal's own element scheduling resolves each element,
+/// so the operands need no per-kind rewrite.
 fn reduce_unary<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
@@ -272,8 +246,7 @@ fn reduce_unary<'step>(
     let PartClass::Keyword(sym) = operator.value.class() else {
         unreachable!("odd-index chain parts are keywords by shape")
     };
-    // A chain is parsed syntax, so every operand is still a parser part and rides straight into the
-    // literal run the brand bumps.
+    // A chain is parsed syntax, so every operand is still a parser part.
     let list_items = brand
         .allocator()
         .slice_from_iter(operands.into_iter().map(|operand| {
@@ -296,17 +269,10 @@ fn reduce_unary<'step>(
     )
 }
 
-/// Reduces a `Pairwise`-mode run: `f x < g y < h z` must evaluate `g y` **once**, its value
-/// feeding both the `x<y` and `y<z` pairs, so — unlike the three modes above — this cannot be a
-/// pure syntactic rewrite (each operand there appears exactly once in the output tree; here a
-/// middle operand appears in two places). Every operand is staged as its own dep
-/// (whatever its part kind — a bare identifier, a literal, or a parenthesized sub-expression all
-/// dispatch through their normal lane via the one-part wrapper `install_pairwise_fold` builds);
-/// once every operand resolves, the finish splices each resolved cell into the up-to-two pair
-/// expressions it feeds (a `.duplicate()` per embed site) and folds the pairs through the group's
-/// combiner in the declared direction. See [`install_pairwise_fold`] for the staging + finish
-/// mechanics (mirrors the shared eager-subs pattern in `ctx.rs`, but splices into a fresh pair-tree
-/// rather than back into the original expression's own slots).
+/// Reduces a `Pairwise`-mode run: `f x < g y < h z` must evaluate `g y` **once**, its value feeding
+/// both the `x<y` and `y<z` pairs, so — unlike the three modes above — this cannot be a pure
+/// syntactic rewrite (there every operand appears exactly once in the output tree; here a middle
+/// operand appears in two places). See [`install_pairwise_fold`] for the staging + finish mechanics.
 fn reduce_pairwise<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
@@ -330,15 +296,13 @@ fn reduce_pairwise<'step>(
     )
 }
 
-/// Stage every pairwise operand as its own single-part sub-dispatch (whatever its part kind — a
-/// bare identifier, a literal, or a parenthesized sub-expression all dispatch through their normal
-/// lane via the one-part wrapper below); once every operand resolves, splice each resolved cell
-/// into the up-to-two adjacent pair expressions it feeds and fold the pairs through the group's
-/// combiner in the declared direction. A pairwise run has ≥3 operands and ≥2 operators (the chain
-/// shape guarantees it), so there are always at least 2 pairs — the combiner-fold loop below always
-/// runs at least once. `combiner` is the group's combiner symbol and `direction` its declared fold
-/// (see [`combine`] for the synthesized shape); `chain_span` labels the synthesized combiner parts,
-/// which have no single source token of their own.
+/// Stage every pairwise operand as its own single-part sub-dispatch — whatever its part kind, the
+/// one-part wrapper routes it through its normal dispatch lane — then splice each resolved cell
+/// into the adjacent pairs it feeds and fold the pairs through the group's combiner.
+///
+/// The chain shape guarantees ≥3 operands and ≥2 operators, so there are always at least 2 pairs
+/// and the combiner-fold loop always runs at least once. `chain` labels the synthesized combiner
+/// parts, which have no source token of their own (see [`combine`]).
 fn install_pairwise_fold<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     operands: Vec<Spanned<WorkingPart<'step>>>,
@@ -358,10 +322,9 @@ fn install_pairwise_fold<'step>(
         })
         .collect();
     let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
-        // Every operand resolved. Build one pair per operator, resting each shared middle
-        // operand's resolved cell into both of the adjacent pairs it feeds — the splice that
-        // makes evaluation once-only. The region's union bundle dedupes the repeated coverage, so
-        // a middle operand costs one retention however many pairs read it.
+        // Resting a shared middle operand's cell into both adjacent pairs is the splice that makes
+        // evaluation once-only; the region's union bundle absorbs the repeated coverage, so a
+        // middle operand costs one retention however many pairs read it.
         let mut pairs = Vec::with_capacity(operators.len());
         let scope = ctx.current_scope();
         let brand = scope.brand();
@@ -384,8 +347,6 @@ fn install_pairwise_fold<'step>(
                 &chain,
             ));
         }
-        // Fold the pairs through the combiner in the declared direction, nesting exactly like
-        // `reduce_fold_left` / `reduce_fold_right`'s accumulator loops.
         let acc = match direction {
             FoldDirection::Left => {
                 let mut pairs = pairs.into_iter();
@@ -411,21 +372,15 @@ fn install_pairwise_fold<'step>(
         .finish_terminal(finish)
 }
 
-/// A pairwise run has one pair per operator and the chain shape guarantees ≥2 operators, so the
-/// pair list the combiner fold consumes is never empty.
 const PAIRWISE_HAS_TWO_PAIRS: &str =
     "pairwise always has ≥2 pairs (chain shape guarantees ≥2 operators)";
 
-/// One combiner application over two already-built sub-expressions — the fold step
-/// [`install_pairwise_fold`] repeats over a pairwise run's pair results.
-///
-/// The combiner is an **operator**, invoked infix: the synthesized shape is the 3-part keyworded
-/// expression `[left, Keyword(<sym>), right]`, which re-enters ordinary keyworded dispatch and so
-/// binds its two inputs *positionally*, by signature shape — the builtin comparison group's `AND`,
-/// or a group member declared `OP #(<sym>) OVER <PairResult> = (…)`. Resolution is the ordinary
-/// scope walk at the chain's *use site* (a group's `USING` window surfaces the combiner alongside
-/// the operator bodies), so a missing, non-callable, or wrong-arity combiner surfaces as an
-/// ordinary error there.
+/// One combiner application over two already-built pair results. The combiner is an **operator**,
+/// invoked infix: the synthesized 3-part shape `[left, Keyword(<sym>), right]` re-enters ordinary
+/// keyworded dispatch, so it binds its two inputs *positionally* and resolution is the ordinary
+/// scope walk at the chain's *use site* — a missing, non-callable, or wrong-arity combiner surfaces
+/// as an ordinary error there (see
+/// [design/operators.md](../../../../design/operators.md)).
 ///
 /// `chain` is the originating operator chain: the synthesized keyword part has no source token of
 /// its own, so it takes the chain's extent, and the combined node names the chain's file.
@@ -452,12 +407,10 @@ pub(super) fn combine<'step>(
 
 /// Park the chain on every still-finalizing `OP` declaration that would register one of its
 /// operators — an `OP`'s registry write lands at its body's finalize, so a miss while the
-/// declaration is in flight is a wait, not an error (see `builtins::op_def`). The wake re-runs
-/// [`run`] against the original chain. Visibility gating makes the wait always lexically
-/// backward. With no source found the miss is real and surfaces as the undeclared-operator
-/// diagnostic. Whether a claim's binder has already terminalized is the
-/// harness's to rule on when it installs the park; the `<operator-chain>` frame rides along on
-/// `dep_error_frame` so a propagated error keeps this site's label.
+/// declaration is in flight is a wait, not an error (see `builtins::op_def`). Visibility gating
+/// makes the wait always lexically backward; with no source found the miss is real and surfaces as
+/// the undeclared-operator diagnostic. Whether a claim's binder has already terminalized is the
+/// harness's to rule on when it installs the park.
 fn park_on_pending_operators<'step, 'b>(
     ctx: &DecideCtx<'_, 'step, '_>,
     s: &'b Scope<'b>,
@@ -487,8 +440,6 @@ fn park_on_pending_operators<'step, 'b>(
 /// `builtins::op_def`), so the probe reads those, not the operator registry. Both keys an operator
 /// can be declared under are probed — binary `[Slot, Keyword(sym), Slot]` and unary
 /// `[Keyword(sym), Slot]` — since the chain cannot know the declaration's arity until it lands.
-/// The scope walk mirrors `resolve_dispatch`'s read of `FunctionLookup::pending`: per-scope,
-/// visibility-gated by the chain's cutoff, innermost first.
 fn pending_operator_sources<'b>(
     ctx: &DecideCtx<'_, '_, '_>,
     s: &'b Scope<'b>,
@@ -500,8 +451,8 @@ fn pending_operator_sources<'b>(
     operators.dedup();
     let mut sources: Vec<ProducerId> = Vec::new();
     for operator in operators {
-        // Both shapes as stack runs over the operator's own borrowed text — a stored probe needs
-        // no allocation at all, where an owned key would clone the symbol twice per scope walk.
+        // Stack runs over the operator's own borrowed text: a stored probe allocates nothing,
+        // where an owned key would clone the symbol twice per scope walk.
         for key in [
             [
                 StoredElement::Slot,

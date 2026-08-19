@@ -27,41 +27,36 @@ use crate::machine::Scope;
 use crate::scheduler::{Deps, Scheduler};
 use crate::witnessed::RegionHandleFamily;
 
-/// Build-time product family for an aggregate relocation: the destination region paired with the
-/// run of relocated cells. Every cell carrier rides one `transfer_all_into` — relocating the values
-/// and composing their reach onto the product's witness — and the caller's final `merge_into`
-/// allocates the aggregate from the region. Layout-invariant in `'r`: a thin region pointer and a
-/// slice of layout-invariant cells.
+/// Build-time product family for an aggregate relocation. Layout-invariant in `'r`: a thin region
+/// pointer and a slice of layout-invariant cells.
 ///
-/// The cells ride a **region-bumped slice** rather than an owned `Vec`, which is what keeps the
-/// family on the Copy tier: that tier's dormant slot is glue-free, so an owned buffer resting there
-/// would be dropped by nobody. The run is bumped exactly once, inside the relocation's single
-/// brand, so its bytes are proportional to the aggregate rather than to the walk that built it.
+/// The cells ride a **region-bumped slice** rather than an owned `Vec`, which keeps the family on
+/// the Copy tier: that tier's dormant slot is glue-free, so an owned buffer resting there would be
+/// dropped by nobody. The run is bumped once, inside the relocation's single brand, so its bytes
+/// are proportional to the aggregate rather than to the walk that built it.
 struct AggBuildFamily;
 reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [Held<'r>]));
 
 /// One cell of a list / dict / record literal. A `Static` cell is wrapped into a delivery envelope
-/// **at its source** (when the literal is classified), so the layout is lifetime-free and every cell
-/// — static or dep — folds uniformly, each carrying the frame owner its value lives under. A `Dep`
-/// cell carries no index: the classifier appends one dep per such cell as it walks the rows, so cell
-/// order *is* dep order and the finish's walk over those same rows reads results off a
-/// [`ResultFeed`] cursor.
+/// **at its source**, so the layout is lifetime-free and every cell folds uniformly, each carrying
+/// the frame owner its value lives under. A `Dep` cell carries no index: the classifier appends one
+/// dep per such cell as it walks the rows, so cell order *is* dep order and the finish's walk reads
+/// results off a [`ResultFeed`] cursor.
 enum Slot {
     Static(DeliveredCarried),
     Dep,
 }
 
 impl Slot {
-    /// Add `id` as a sub-dependency and return the cell that reads its result.
     fn spawned(deps: &mut Deps<NodeId>, id: NodeId) -> Self {
         deps.request(id);
         Slot::Dep
     }
 }
 
-/// Pops resolved dep terminals in dep order — the cursor that replaces a stored per-cell index. The
-/// classify walk and the finish walk visit the rows in the same order (a dict row's key before its
-/// value), so popping in that walk is exactly the alignment a stored index used to assert.
+/// Pops resolved dep terminals in dep order. The classify walk and the finish walk visit the rows
+/// in the same order (a dict row's key before its value), so popping in that order *is* the
+/// alignment — no cell stores an index.
 struct ResultFeed<'t, 'd> {
     terminals: &'t [&'t DepTerminal<'d>],
     next: usize,
@@ -79,11 +74,9 @@ impl<'t, 'd> ResultFeed<'t, 'd> {
     }
 }
 
-/// The per-cell envelope the relocation consumes: a static cell's source-built envelope, or a dep
-/// terminal's resident lifted back into one. The relocation needs the reach *owned* — it moves each
-/// cell into the aggregate's region while minting its reach and residence host onto the product's
-/// carrier — so a dep arm lifts rather than reads, and the envelope it hands back is the cell's own
-/// description upgraded, never a fresh bundle pairing a read-out value with a separately-read
+/// The relocation needs the reach *owned* — it moves each cell into the aggregate's region while
+/// minting its reach and residence host onto the product's carrier — so the dep arm lifts the
+/// terminal's resident into an envelope rather than pairing a read-out value with a separately-read
 /// reach.
 fn cell_carrier(
     slot: Slot,
@@ -97,14 +90,12 @@ fn cell_carrier(
 }
 
 /// Relocate a run of cell envelopes into a witnessed `(region, &[Held])` product over the consumer
-/// scope's region: one `transfer_all_into` staging every cell against a bare destination handle, so
+/// scope's region: one `transfer_all_into` stages every cell against a bare destination handle, so
 /// [`copy_held_from_carried`] rebuilds all of them at a single brand and the run is bumped once. A
-/// cell rebuilt through the container door (a top-level record totally rebuilt so its substrate is
-/// container-resident) releases its producer when it is plain data, while a cell that still borrows
-/// its producer (a closure's captured environment) materializes the host — the same copied-adoption
-/// rule the param binds apply, asked here per cell by [`relocated_cell_still_borrows`]. The final
-/// aggregate shape (`list_of_held` / `dict_of_held` / `record_of_held`) is built by the caller's
-/// pinned map.
+/// cell rebuilt through the container door releases its producer when it is plain data, while a
+/// cell that still borrows its producer (a closure's captured environment) materializes the host —
+/// the same copied-adoption rule the param binds apply, asked per cell by
+/// [`relocated_cell_still_borrows`].
 fn fold_cells(
     view: &DecideCtx<'_, '_, '_>,
     cells: &[DeliveredCarried],
@@ -119,10 +110,9 @@ fn fold_cells(
         Delivered::destination(view.dest_frame()),
         relocated_cell_still_borrows,
         |run, dest_handle, placement| {
-            // Staging order: `run[i]` is `cells[i]`'s live form, so the zip pairs each rebuild with
-            // its own envelope. Each cell therefore rebuilds under **its own** source coverage —
-            // the holder-rule proof for whatever part of it stays foreign — rather than under a
-            // union across the run, which is the pairwise door's per-cell rule kept exactly.
+            // `run[i]` is `cells[i]`'s live form, so each cell rebuilds under **its own** source
+            // coverage — the holder-rule proof for whatever part of it stays foreign — rather than
+            // under a union across the run.
             let helds: SmallVec<[Held<'_>; 8]> = run
                 .iter()
                 .zip(cells)
@@ -133,29 +123,28 @@ fn fold_cells(
                     )
                 })
                 .collect();
-            // The one bump of the run: the cells the relocation just built are also the per-source
-            // cells the door pairs back with the envelopes, so the same slice serves both.
+            // Bumped once: the cells the relocation built are also the per-source cells the door
+            // pairs back with the envelopes, so the same slice serves both.
             let slice = placement.allocator().slice(&helds);
             ((dest_handle, slice), slice)
         },
     )
 }
 
-/// Read a dict key cell as a scalar [`KKey`]: a key is never folded (it is a scalar, reaching no
-/// region), so it is read out and converted in place. A `Type` arm or a non-scalar value errors.
+/// A key is never folded (it is a scalar, reaching no region), so it is read out and converted in
+/// place.
 ///
 /// **Dict keys are owned data by language rule** — a function or module key is meaningless — and
 /// this is the one site that turns a carrier into a key, so it is where the rule is enforced. The
 /// check is O(1) on the key's own **stored envelope**: a carrier naming any reach member is
 /// rejected outright, no walk over the value. [`KKey`] then admits only `String` / `Number` /
-/// `Bool`, so the two together leave a borrow-carrying key unrepresentable downstream of here.
+/// `Bool`, so the two together leave a borrow-carrying key unrepresentable downstream.
 fn scalar_key(
     slot: &Slot,
     terminals: &mut ResultFeed<'_, '_>,
     types: &TypeRegistry,
 ) -> Result<PendingKey, String> {
-    // The reach probe and the key read are the same two verbs on either carrier — a static cell's
-    // envelope or a dep's resident cell — so each arm answers both inside its own borrow.
+    // Each arm answers the reach probe and the key read inside its own borrow.
     let (borrows, key) = match slot {
         Slot::Static(delivered) => (
             delivered.open_at().has_reach_members(),
@@ -184,13 +173,11 @@ fn key_from_carried(c: Carried<'_>, types: &TypeRegistry) -> Result<PendingKey, 
     }
 }
 
-/// A resolved dict key held **owned** across the gap between reading it and assembling the dict.
-/// The key is read inside its producer envelope's own open, whose lifetime ends there, and the dict
-/// is built later at a fold brand no earlier borrow can reach — so a string key's bytes have to be
-/// staged rather than carried. Transient by construction: [`Self::as_key`] hands the dict door a
-/// borrow and the door bumps the bytes into the dict's own region, after which this is dropped. It
-/// is not a value-family slot and never reaches a region, so owning a `String` here costs no
-/// teardown.
+/// A resolved dict key held **owned** across the gap between reading it and assembling the dict:
+/// the key is read inside its producer envelope's own open, whose lifetime ends there, and the dict
+/// is built later at a fold brand no earlier borrow can reach, so a string key's bytes have to be
+/// staged rather than carried. Transient by construction — the dict door bumps the bytes into the
+/// dict's own region — and it never reaches a region, so owning a `String` here costs no teardown.
 enum PendingKey {
     String(String),
     Number(f64),
@@ -206,7 +193,6 @@ impl PendingKey {
         }
     }
 
-    /// This key as a [`KKey`] borrowing the staged bytes — what the dict door re-homes.
     fn as_key(&self) -> KKey<'_> {
         match self {
             PendingKey::String(s) => KKey::String(s),
@@ -223,12 +209,9 @@ struct AggRow {
     value: Slot,
 }
 
-/// Finish-side assemble hook: the resolved keys (empty unless the rows carry key slots) and the
-/// relocated value cells become the aggregate object. Boxed higher-ranked so the record variant
-/// captures its field names and each shape builds its own `KObject` at the substrate door. Most
-/// cells [`fold_cells`] staged were rebuilt at this very brand, but a borrow leaf rides its source
-/// borrow verbatim, so the door carries the relocated envelope's own coverage as its holder — the
-/// union across the run, the pins every cell's reach composed into.
+/// Finish-side assemble hook — the keys are empty unless the rows carry key slots. Boxed
+/// higher-ranked so the record variant can capture its field names and each shape builds its own
+/// `KObject` at the substrate door.
 type AggAssemble = Box<
     dyn for<'r, 'h> FnOnce(
         SubstrateDoor<'r, 'h>,
@@ -239,11 +222,10 @@ type AggAssemble = Box<
 >;
 
 impl<'step> Host<'step> {
-    /// The one scheduling path behind the three aggregate literals: park a witnessed dep-finish on
-    /// `deps`; on resolve, read each row's key (a non-scalar dict key errors before the fold, under the
-    /// dict-literal frame — only a dict row carries a key slot), fold the value cells into the consumer
-    /// region, and `assemble` the aggregate inside the witness closure so it names every region it
-    /// reaches by construction.
+    /// The one scheduling path behind the three aggregate literals. A non-scalar dict key errors
+    /// before the fold, under the dict-literal frame (only a dict row carries a key slot), and
+    /// `assemble` runs inside the witness closure so the aggregate names every region it reaches by
+    /// construction.
     fn schedule_aggregate(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
@@ -253,8 +235,7 @@ impl<'step> Host<'step> {
     ) -> NodeId {
         let finish: WitnessedDepFinish<'step> = Box::new(move |view, terminals| {
             let n = rows.len();
-            // Keys stay scalar (reaching no region): read them out eagerly, erroring before the fold.
-            // The value cells relocate as one run, paired back with the keys at `map`.
+            // Keys stay scalar (reaching no region): read out eagerly, erroring before the fold.
             let mut keys: Vec<PendingKey> = Vec::new();
             let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(n);
             let mut feed = ResultFeed::new(terminals);
@@ -269,12 +250,11 @@ impl<'step> Host<'step> {
                 cells.push(cell_carrier(row.value, &mut feed, view.current_scope()));
             }
             let acc = fold_cells(view, &cells);
-            // The relocated envelope's coverage carries every region the `Held` views point into,
-            // and its home is the destination frame the relocation minted into. Merging it into a
-            // bare handle on that same region assembles the aggregate at a fold door and mints its
-            // description there in one step: `dest_frame`'s region is the product's host, and it
-            // rides the members too — a record literal's fresh substrate borrows into the very
-            // region it was built in, which the relocated envelope's own pins name.
+            // The relocated envelope's coverage names every region the `Held` views point into and
+            // its home is the destination frame the relocation minted into, so merging into a bare
+            // handle on that region assembles the aggregate and mints its description in one step:
+            // a record literal's fresh substrate borrows into the very region it was built in,
+            // which the relocated envelope's own pins name.
             let dest_frame = view.dest_frame();
             let types = view.types();
             // The holder for the **aggregate's own** birth is the union across the run — the
@@ -389,9 +369,7 @@ impl<'step> Host<'step> {
         )
     }
 
-    /// Plan one slot of a list / dict literal. The bare-name ladder does no cycle check — the
-    /// dep-finish slot does not yet exist, so a still-finalizing name parks and cycles are caught
-    /// post-submission against the dep-finish ID.
+    /// Plan one slot of a list / dict / record literal.
     fn classify_aggregate_part<'a>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
@@ -408,7 +386,7 @@ impl<'step> Host<'step> {
                 // A quote rides its own one-part sub-dispatch (the `LiteralPassThrough` lane, which
                 // seals it through the expression door) rather than a static cell: a
                 // `KObject::KExpression` is invariant in its region lifetime with no `'static`
-                // rebuild, so `resolve_region_pure` cannot build it at the `yoke` brand below.
+                // rebuild, so `resolve_region_pure` cannot build it at the fold brand below.
                 let wrapped =
                     WorkingExpression::new(brand, &[Spanned::bare(WorkingPart::Ast(part))]);
                 Slot::spawned(
@@ -423,11 +401,10 @@ impl<'step> Host<'step> {
                 self.resolve_aggregate_bare_name(sched, brand, p, deps)
             }
             other => {
-                // A static literal (keyword / literal): region-pure — every borrow it carries
+                // A static literal (keyword / literal) is region-pure — every borrow it carries
                 // points into the classify scope's own frame, a string literal's bumped bytes
                 // included — so the cell is built **inside** a zero-dep fold, born co-located with
-                // that frame as its reach rather than resolved at the ambient lifetime and bundled
-                // under an asserted witness. The cell then folds uniformly with the dep cells.
+                // that frame as its reach.
                 let frame = current_dest_frame(&self.ambient);
                 Slot::Static(KoanRegion::fold_witnessed(frame, move |brand| {
                     Carried::Object(brand.alloc_object_folded(other.resolve_region_pure(*brand)))
@@ -440,7 +417,7 @@ impl<'step> Host<'step> {
     /// binding-scope carrier — value and reach as one cell, witnessed by its binding scope's home
     /// frame — straight into a static slot; a still-finalizing name parks on its claim edge. An
     /// unbound name falls back to a sub-Dispatch so the `BareIdentifier` fast lane's error path
-    /// (and the dep-finish's dep-error short-circuit) handles it uniformly.
+    /// handles it uniformly.
     fn resolve_aggregate_bare_name<'a>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
@@ -466,8 +443,6 @@ impl<'step> Host<'step> {
                 deps.on(source.scheduler_edge());
                 Slot::Dep
             }
-            // Unbound: fall back to a sub-Dispatch so the `BareIdentifier` fast lane's error path
-            // surfaces it uniformly.
             Resolution::Unbound(_) => {
                 let expr = WorkingExpression::new(brand, &[Spanned::bare(WorkingPart::Ast(*part))]);
                 Slot::spawned(

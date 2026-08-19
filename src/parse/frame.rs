@@ -51,7 +51,7 @@ pub(super) enum BracketFrame<'a> {
         span_start: u32,
     },
     /// Opened by a glued `:{` sigil. Collects a typed field list verbatim and folds into a
-    /// first-class [`ExpressionPart::RecordType`] the elaborator turns into a `KType::Record`
+    /// first-class [`ExpressionPart::RecordType`] the elaborator turns into a record `KType`
     /// directly. `span_start` is the cursor of the leading `:`.
     RecordTypeExpr {
         parts: Vec<Spanned<ExpressionPart<'a>>>,
@@ -194,7 +194,7 @@ impl<'a> BracketFrame<'a> {
                 ))
             }
             // `:{x :Number}` → `RecordType(<field list>)` — a first-class part the
-            // elaborator folds straight to `KType::Record`. The inner `KExpression` is the
+            // elaborator folds straight to a record `KType`. The inner `KExpression` is the
             // bare `(x :Number, …)` field list; `span_start` is the leading `:`.
             BracketFrame::RecordTypeExpr { parts, span_start } => {
                 let span = Span {

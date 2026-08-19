@@ -16,8 +16,6 @@ fn run_program(source: &str) -> Vec<u8> {
     captured.borrow().clone()
 }
 
-/// A single quoted part classifies `LiteralPassThrough`, so the expression's value *is* the
-/// quoted body as data.
 #[test]
 fn bare_quote_evaluates_to_the_quoted_expression() {
     assert_eq!(run_program("PRINT #(1)"), b"1\n");
@@ -33,7 +31,6 @@ fn let_binds_the_quoted_expression_without_evaluating_it() {
     assert_eq!(run_program("LET q = #(PRINT 1)\n$(q)"), b"1\n");
 }
 
-/// `#(2)` reads the same in every continuation form the whitespace collapse produces.
 #[test]
 fn quote_round_trips_through_every_continuation_form() {
     assert_eq!(run_program("PRINT $(#(2))"), b"2\n");

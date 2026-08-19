@@ -1,8 +1,7 @@
-//! Execute — drives parsed `KExpression`s through a work-stealing scheduler to final
-//! `KObject`s. A statement crosses into the scheduler as a `WorkingExpression` — the dispatcher's
-//! own per-call node, whose slots the scheduler writes resolved sub-results into — and enters as a
-//! `Dispatch` node against a run-root scope; a consumer parks on a producer through an edge and
-//! wakes when the producer's finalize walk delivers into it.
+//! Execute — drives parsed `KExpression`s through a work-stealing scheduler to final `KObject`s.
+//! A statement crosses into the scheduler as a `WorkingExpression`, the dispatcher's own per-call
+//! node; a consumer parks on a producer through an edge and wakes when the producer's finalize
+//! walk delivers into it.
 //!
 //! The layer is two phases with one door each: a *decide* ([`decide`]) runs against a read-only
 //! [`DecideCtx`](decide::DecideCtx) and returns an [`Outcome`](outcome::Outcome); the *apply* half

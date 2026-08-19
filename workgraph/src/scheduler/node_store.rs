@@ -1,28 +1,27 @@
-//! Slot-table state. A single `slots` vector of [`SlotState`] enums encodes the per-slot lifecycle:
-//! every slot moves through `alloc_slot -> take_for_run -> reinstall -> free_one`.
+//! Slot-table state. A single `slots` vector of [`SlotState`] enums encodes the per-slot
+//! lifecycle: `alloc_slot` parks work, `take_for_run` moves it out, `reinstall` re-parks the index
+//! on a tail replace, and `free_one` reclaims it.
 //!
 //! There is no terminal state. A finalizing slot's value is delivered into its consumers'
 //! destination regions by the walk in [`lifecycle`](super::lifecycle), so the slot itself has
 //! nothing left to hold and reclaims immediately: `Free` is the only state a finished slot rests
 //! in, and a slot whose result *is* another producer's is spliced out rather than kept as an alias.
 //!
+//! See [design/dag-scheduler.md § Slots and the node-store lifecycle](../../design/dag-scheduler.md#slots-and-the-node-store-lifecycle).
+//!
 //! ## Invariants
 //!
-//! - `alloc_slot` is the only path that picks an index (recycle from
-//!   `free_list` or extend `slots`).
-//! - `slots` is wrapped in [`SlotVec<T>`], which only impls `Index<NodeId>` /
-//!   `IndexMut<NodeId>`, so a `NodeId` always names a live slot.
-//! - `free_one` is the sole pusher onto `free_list`. Outer `Scheduler`
-//!   orchestrates the delivery walk and the reclaim across this store and
-//!   `DepGraph`.
+//! - `alloc_slot` is the only path that picks a slot index (recycle from `free_list` or extend
+//!   `slots`); `free_one` is the sole pusher onto `free_list`.
+//! - `slots` is wrapped in [`SlotVec<T>`], which impls only `Index<NodeId>` / `IndexMut<NodeId>`,
+//!   so no raw index reaches the table.
 
 use std::ops::{Index, IndexMut};
 
 use super::nodes::StoredWork;
 use super::{NodeId, Workload};
 
-/// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
-/// by [`NodeStore::alloc_slot`].
+/// `Vec` behind a [`NodeId`]-only indexing surface, so a raw slot index cannot reach the table.
 struct SlotVec<T>(Vec<T>);
 
 impl<T> SlotVec<T> {
@@ -38,8 +37,6 @@ impl<T> SlotVec<T> {
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-    /// Walk the slots paired with the id naming each — the store's own mint, so a scan that
-    /// reports a slot hands back a currency the rest of the surface speaks.
     fn iter_ids(&self) -> impl Iterator<Item = (NodeId, &T)> {
         self.0.iter().enumerate().map(|(i, v)| (NodeId::new(i), v))
     }
@@ -60,18 +57,15 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
 
 enum SlotState<W: Workload> {
     PreRun(StoredWork<W>),
-    /// Node work has been moved out by `take_for_run`. A matching
-    /// `reinstall` / `free_one` exits this state.
+    /// Work moved out for the run; `reinstall` or `free_one` exits.
     Running,
-    /// Reclaimed; the index sits on the free list. Every slot reaches this state at its own
-    /// finalize, once the delivery walk has drained — there is no terminal state in between.
+    /// Reclaimed; the index sits on the free list.
     Free,
 }
 
 pub(in crate::scheduler) struct NodeStore<W: Workload> {
     slots: SlotVec<SlotState<W>>,
-    /// Reclaimed slot indices. `alloc_slot` pulls from here before
-    /// extending `slots`, giving constant scheduler memory across
+    /// Recycled ahead of extending `slots`, giving constant scheduler memory across
     /// tail-recursive bodies.
     free_list: Vec<NodeId>,
 }
@@ -84,9 +78,7 @@ impl<W: Workload> NodeStore<W> {
         }
     }
 
-    /// The only path that picks an index, and the only mint of a [`NodeId`].
-    /// `DepGraph::install_for_slot` mirrors the recycle-vs.-extend choice by
-    /// testing the consumer against its own row count.
+    /// The only path that picks a slot index.
     pub(super) fn alloc_slot(&mut self, work: StoredWork<W>) -> NodeId {
         match self.free_list.pop() {
             Some(id) => {
@@ -114,22 +106,18 @@ impl<W: Workload> NodeStore<W> {
         self.slots[id] = SlotState::PreRun(work);
     }
 
-    /// Reclaim the slot and return its index to circulation — what every finalize does once its
-    /// delivery walk has drained. Pairs with the row's own anchor clear in `DepGraph`.
-    ///
     /// The id goes straight back on the free list, so the next `alloc_slot` hands out one equal to
-    /// the id that just died. Nothing holds a `NodeId` across a reclaim, so there is no incarnation
-    /// to tell apart.
+    /// the id that just died. Nothing holds a [`NodeId`] across a reclaim, so there is no
+    /// incarnation to tell apart.
     pub(super) fn free_one(&mut self, id: NodeId) {
         self.slots[id] = SlotState::Free;
         self.free_list.push(id);
     }
 
-    /// Scan for slots still parked (`PreRun`) after the work queues drained — each is a node
-    /// waiting on a dependency that can no longer fire (a dependency cycle). Returns
-    /// `(count, first)` where `first` names the lowest-indexed such slot, or `None` when every slot
-    /// has reclaimed. What that slot renders as is the embedder's to answer off its anchor; the
-    /// store holds no diagnostic payload of its own.
+    /// A slot still parked (`PreRun`) after the work queues drained waits on a dependency that can
+    /// no longer fire — a dependency cycle. Returns the count and the lowest-indexed such slot;
+    /// what it renders as is the embedder's to answer off its anchor, since the store holds no
+    /// diagnostic payload of its own.
     pub(super) fn unresolved(&self) -> Option<(usize, NodeId)> {
         let mut count = 0usize;
         let mut first: Option<NodeId> = None;

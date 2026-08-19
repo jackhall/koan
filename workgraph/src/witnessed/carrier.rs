@@ -4,48 +4,42 @@
 //! [design/reach.md § The carrier states](../../design/reach.md#the-carrier-states).
 //!
 //! The carrier **owns no pin**: cloning is a reference-copy, and a carrier's death releases nothing.
-//! What keeps its description (and the value it describes) alive is external —
-//! the container's liveness when resident, the [`Delivered`](super::Delivered) envelope's own pin
-//! bundle while a terminal walks to its destinations — so every re-anchor of the erased reach
-//! reference happens under a named pin. The description a carrier references is never owned by it:
-//! [`ReachDescription::mint_resident`] is the only way one comes to exist, and it always
-//! lands in the value's home region's own side table, so whatever covers the home region covers the
-//! reference. The description is non-owning (host and members are `Weak`); what pins the reached
-//! regions is the retention that mint established in the home region, plus a transit bundle a
-//! delivery envelope carries while the value walks — never the carrier.
+//! What keeps its description (and the value it describes) alive is external — the home region's
+//! liveness at rest, the [`Delivered`](super::Delivered) envelope's own pin bundle while a terminal
+//! walks to its destinations. The description a carrier references is never owned by it: it comes
+//! to exist only at a resident mint ([`ReachDescription::mint_resident`] and its threaded twin),
+//! which always lands it in the value's home region's own side table, so whatever covers the home
+//! region covers the reference. The description is non-owning (host and members are `Weak`); what
+//! pins the reached regions is the retention that mint established in the home region, plus a
+//! transit bundle a delivery envelope carries while the value walks — never the carrier.
 //!
 //! The description carries **both** of the value's region facts, so the carrier needs no side
 //! channel for either: its `host` is where the value lives (residence, read through
 //! [`Opened::with_home_region`]), its members are what the value's borrows reach (read through
 //! [`Opened::reach_covers`]). "Does this value borrow into its own home?" is therefore the ordinary
 //! membership query [`Opened::borrows_home`], not a bit. The one asymmetry is the self rule at the
-//! owned-upgrade boundary — a region never pins itself — which
-//! [`ReachDescription::mint_resident`] applies to the bundle it retains, never to the description.
+//! owned-upgrade boundary — a region never pins itself — which the mint applies to the bundle it
+//! retains, never to the description.
 //!
-//! `Carrier` is deliberately **not** a [`super::Witness`]: a bare [`super::Sealed::open`] under it
-//! does not compile. Reads name their coverage — [`super::Sealed::open_with`] under an external
-//! pin, the envelope's [`Delivered::open`](super::Delivered::open), or the borrow-tied
-//! [`Opened`](super::Opened) state, which is the only state that answers a membership query —
-//! and relocations run through the envelope-bearing mint verbs
-//! ([`Delivered::adopt_into`](super::Delivered::adopt_into),
-//! [`Delivered::transfer_into`](super::Delivered::transfer_into)). [`Self::compose_into`] is the
-//! crate-internal composition core the latter routes through; it is not part of the public
-//! surface.
+//! `Carrier` is deliberately **not** a [`super::Witness`]: it pins nothing, so the bundled-witness
+//! tier is closed to it ([`seal_bundled`](super::Sealed::seal_bundled) is `W: Witness`-gated) and a
+//! carrier seal is region-branded instead — its reads covered by that brand
+//! ([`open_at`](super::Sealed::open_at)) or by the envelope's own pins
+//! ([`Delivered::open`](super::Delivered::open)). Membership is answerable only from the
+//! borrow-tied [`Opened`](super::Opened) state, and relocations run through the envelope-bearing
+//! mint verbs ([`Delivered::adopt_into`](super::Delivered::adopt_into),
+//! [`Delivered::transfer_into`](super::Delivered::transfer_into)).
 
 use std::rc::Rc;
 
 use super::{
     Delivered, DropFree, Erased, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable,
-    Region, RegionHandle, RegionOwner, Retained, StorageProfile, Witness,
+    Region, RegionHandle, RegionOwner, Retained, StorageProfile, Witness, with_branded_ref,
 };
-// `with_branded_ref` re-anchors the erased reach reference: for the `Sealed → Delivered` lift's
-// description-to-bundle upgrade ([`Carrier::upgrade_bundle`]) and for the membership queries the
-// [`Opened`] state exposes.
-use super::with_branded_ref;
 
 /// [`Reattachable`] family for a lifetime-erased `&ReachDescription<F>` — the erased reach
-/// reference a [`Carrier`] re-anchors under an externally supplied pin. Module-private: the pinned
-/// reader on [`Carrier`] is the sole re-anchor site, so no branded reader escapes this module.
+/// reference a [`Carrier`] re-anchors under external coverage. Module-private: the reader on
+/// [`Carrier`] is the sole re-anchor site, so no branded reader escapes this module.
 struct HostedSetRef<F>(std::marker::PhantomData<F>);
 
 // SAFETY: `&'r ReachDescription<F>` is a thin pointer whose layout does not depend on `'r`.
@@ -91,14 +85,12 @@ unsafe impl<'b, P: StorageProfile, T> HasRegionHandle<'b, P> for (RegionHandle<'
 
 /// The reference-only carrier witness: a reference to the reach description living in the value's
 /// home region's own arena. `F` is the workload's frame-owner type (`Rc<F>` is the home pin the
-/// *envelope*, not the carrier, holds). Clone is a reference-copy — no refcount traffic; the carrier
-/// keeps nothing alive.
+/// *envelope*, not the carrier, holds). Clone is a reference-copy — no refcount traffic.
 ///
 /// There is no empty carrier: every value has a description, because that is where its residence is
 /// recorded. A region-pure value references one with empty members.
 pub struct Carrier<F: PinsRegion + 'static> {
-    /// The value's reach description — residence and reach in one record — erased and re-anchored
-    /// only under an externally supplied pin.
+    /// Residence and reach in one record, erased and re-anchored only under external coverage.
     reach: Erased<HostedSetRef<F>>,
 }
 
@@ -111,11 +103,10 @@ impl<F: PinsRegion + 'static> Clone for Carrier<F> {
 impl<F: PinsRegion + 'static> Copy for Carrier<F> {}
 
 impl<F: PinsRegion + 'static> Carrier<F> {
-    /// Reference an already-minted reach description as a carrier — the resident-read constructor:
-    /// a binding entry stores the description reference this rebuilds a read carrier from. The
-    /// description was minted by the library at bind time into the value's home arena; this
-    /// constructor only re-packages the reference, so reach totality and residence both still rest
-    /// on the mint. The carrier pins nothing — the read that re-anchors `reach` names its pin there.
+    /// Reference an already-minted reach description as a carrier — the resident-read constructor a
+    /// binding entry's stored description reference rebuilds a read carrier from. Reach totality and
+    /// residence both rest on the mint; this only re-packages the reference, and the carrier pins
+    /// nothing, so the read that re-anchors `reach` is where coverage is named.
     pub fn new(reach: &ReachDescription<F>) -> Self {
         Carrier {
             reach: Erased::erase(reach),
@@ -129,9 +120,6 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// whole call (the holder rule), so [`ReachDescription::to_bundle`]'s member upgrades all
     /// succeed. A region-pure carrier (empty members) yields the empty bundle.
     pub(in crate::witnessed) fn upgrade_bundle<Pin: Witness>(&self, pin: &Pin) -> PinBundle<F> {
-        // `pin` keeps the description's hosting arena live for the whole call — the same role the
-        // envelope host plays for a reach read; the branded re-anchor confines the reference exactly
-        // as `with_reach_impl` does, and the upgrade re-owns the members before it ends.
         let _ = pin;
         self.with_reach_impl(|reach| reach.to_bundle())
     }
@@ -144,10 +132,9 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         self.with_reach_impl(|reach| reach.host_owner())
     }
 
-    /// Read the reach description this carrier references, re-anchored for the call. The
-    /// crate-internal core behind [`Opened::with_reach`] — the caller is responsible for the
-    /// coverage the re-anchor needs, which is why the only public route in is through the
-    /// [`Opened`] state, whose `'b` **is** the pin borrow.
+    /// Read the reach description this carrier references, re-anchored for the call. The caller owes
+    /// the coverage the re-anchor needs, which is why the only public route in is the [`Opened`]
+    /// state, whose `'b` is bounded by the seal's home brand or by the envelope's own pins.
     fn with_reach_impl<R>(&self, f: impl FnOnce(&ReachDescription<F>) -> R) -> R {
         with_branded_ref::<HostedSetRef<F>, R>(self.reach.as_static(), |set_ref: &&_| f(set_ref))
     }
@@ -159,20 +146,19 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// pairwise accumulator, everything its prior steps folded) and the newly-relocated source
     /// side's (`left_bundle`, the composed antichain across the run where the source side is a run)
     /// — into `dest`'s arena. Never the source alone, or a multi-step accumulator fold would drop
-    /// everything folded before this step. Both operand bundles are owned and threaded in — the composition folds strong `Rc`s,
-    /// never a description's `Weak` — and `left_bundle` is where the folded value's home enters, as
-    /// an ordinary member.
+    /// everything folded before this step. Both operand bundles are owned — the composition folds
+    /// strong `Rc`s, never a description's `Weak` — and `left_bundle` is where the folded value's
+    /// home enters, as an ordinary member.
     ///
     /// Neither operand *carrier* is an input: everything the product reaches arrives through the two
     /// threaded bundles, and everything it resides in is `dest`, which the mint stamps as the fresh
     /// description's host.
     ///
-    /// Returns the composed carrier paired with a freshly-minted owned bundle: the mint itself
-    /// retains the product's reach into `dest`'s region for the region's life (what keeps the
-    /// relocated value's reach alive when the product is consumed in place — read directly rather
-    /// than re-enveloped), and the returned bundle is the transit copy that threads to the next fold
-    /// step or the terminal seal. This is the one site that needs both tiers, and so the only caller
-    /// of [`ReachDescription::mint_resident_threaded`].
+    /// Returns the composed carrier paired with a freshly-minted owned bundle: the mint retains the
+    /// product's reach into `dest`'s region for the region's life (what keeps a product consumed in
+    /// place alive without re-enveloping it), and the returned bundle is the transit copy that
+    /// threads to the next fold step or the terminal seal. Needing both tiers is what makes this the
+    /// sole production caller of [`ReachDescription::mint_resident_threaded`].
     pub(in crate::witnessed) fn compose_into<'b, P>(
         left_bundle: &PinBundle<F>,
         right_bundle: &PinBundle<F>,
@@ -189,9 +175,9 @@ impl<F: PinsRegion + 'static> Carrier<F> {
 }
 
 /// The membership and residence queries, on the **in-use** carrier state: an [`Opened`] borrows at
-/// `'b` under the pin that was presented to open it, and that borrow is exactly the coverage
-/// re-anchoring the erased reach reference requires — so these need no `pin` argument, and there is
-/// no way to ask the question without one (design/reach.md § The carrier states).
+/// `'b`, bounded by the coverage it was opened under, and that borrow is exactly what re-anchoring
+/// the erased reach reference requires — so these need no `pin` argument, and there is no way to ask
+/// the question without one (design/reach.md § The carrier states).
 impl<'b, T: Reattachable + DropFree, F: PinsRegion + 'static> Opened<'b, T, Carrier<F>> {
     /// Whether the value's borrows reach `region` — home included when the borrows genuinely reach
     /// it, which is the question [`Self::borrows_home`] asks against the value's own residence.
@@ -225,9 +211,8 @@ impl<'b, T: Reattachable + DropFree, F: PinsRegion + 'static> Opened<'b, T, Carr
     }
 
     /// Read the reach description this open's carrier references, re-anchored under the open's own
-    /// `'b` pin borrow — the core the predicates above are written in terms of. Library-internal:
-    /// reach is a question an embedder *asks*, never a record it holds, so the shipped surface is
-    /// the verdicts and not the description.
+    /// `'b` borrow. Library-internal: reach is a question an embedder *asks*, never a record it
+    /// holds, so the shipped surface is the verdicts and not the description.
     pub(in crate::witnessed) fn with_reach<R>(
         &self,
         f: impl FnOnce(&ReachDescription<F>) -> R,
@@ -251,7 +236,7 @@ impl<'b, T: Reattachable + DropFree, F: PinsRegion + 'static> Opened<'b, T, Carr
     /// This is what lets a value parted from a container ([`Sectioned::project`](super::Sectioned))
     /// travel. The projection is `'b`-confined by its type and states *exactly* its own run's reach;
     /// this is the one place that reach becomes owned, and it stays exact — the container's union
-    /// never enters. The upgrade runs under the `'b` pin the open borrows, which is the holder rule.
+    /// never enters. The upgrade runs under the `'b` the open borrows, which is the holder rule.
     pub fn lift_out(self) -> Delivered<T, Carrier<F>, F>
     where
         F: RegionOwner,

@@ -108,7 +108,7 @@ pub enum ExpressionPart<'a> {
     /// First-class record type `:{x :Number, y :Str}`. The nested `KExpression` is the
     /// field-list `(x :Number, y :Str)` — the same `<name> :<Type>` pair shape a SIG member
     /// or FN parameter list uses. Unlike `SigiledTypeExpr`, this is matched
-    /// structurally (the elaborator folds it straight to `KType::Record`); there is no
+    /// structurally (the elaborator folds it straight to a record `KType`); there is no
     /// internal type-constructor builtin behind it. See
     /// [design/typing/type-language-via-dispatch.md](../../../design/typing/type-language-via-dispatch.md).
     RecordType(ProgramNode<'a>),
@@ -318,7 +318,7 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Type(t) => KObject::KString(brand.allocator().text(t.as_str())),
             ExpressionPart::Literal(lit) => lit.to_kobject(brand),
             // A quote's `KObject::KExpression` is invariant in `'a` with no `'static` rebuild, so it
-            // cannot be constructed at the caller's `yoke` brand — the classifier routes a quote to
+            // cannot be constructed at the caller's fold brand — the classifier routes a quote to
             // its own sub-dispatch (which seals it through the expression door) before any static cell.
             ExpressionPart::Expression(_)
             | ExpressionPart::SigiledTypeExpr(_)

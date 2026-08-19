@@ -68,7 +68,7 @@ group just to silence the stale-anchor check.
 - `src/machine/execute/outcome.rs` — pointer-only group: the fat-pointer (`Box<dyn>`)
   erase → open → invoke round trip is pinned library-side
   (`sealed_extern_open_invokes_a_fat_pointer_continuation`); the family's `unsafe impl` is
-  `reattachable!`-generated, so outcome.rs carries none, and `run_step` runs the transmute
+  `reattachable!`-generated, so outcome.rs carries none, and `Host::step` runs the transmute
   end-to-end every step.
 - `src/machine/model/values/module.rs` — pointer-only groups: a `Module` is `Copy` and assembled
   complete, so both its store doors are plain bump allocations whose destination brand discharges
@@ -91,12 +91,12 @@ group just to silence the stale-anchor check.
   The group pins the escaping-value **retention** discipline — a surviving closure / module borrow
   kept alive by the reach set the witnessed transfer mints into the destination — which tree
   borrows catches if it regresses.
-- `src/machine/execute/run_loop.rs` — `run_step`'s dep-union `pin` is built entirely through safe
+- `src/machine/execute/harness.rs` — `Host::step`'s dep-union `pin` is built entirely through safe
   envelope/`RegionSet` verbs (`Delivered::liveness_frameset`, `FrameSet::union`/`singleton`); the
   file carries no `unsafe` of its own. The group pins the retention redundancy claim — a dep's
   producer frame is held by its `DepTerminal`'s duplicated delivery envelope across the step open,
-  not by `run_step`'s `pin` alone — the real `unsafe` it exercises is the shared `retype` in
-  `witnessed.rs`, routed through the `Sealed`/`SealedExtern` opens `run_step` and the dep reads
+  not by `Host::step`'s `pin` alone — the real `unsafe` it exercises is the shared `retype` in
+  `witnessed.rs`, routed through the `Sealed`/`SealedExtern` opens `Host::step` and the dep reads
   perform.
 - `src/machine/core/scope/reach.rs` — the reach/carrier derivation cluster is safe code end to end:
   every store door composes through the library's envelope verbs (`merge_into`,
@@ -257,8 +257,8 @@ with nothing outside borrowing in. Miri's process-exit leak count is the asserti
 
 - `region_death_frees_every_drop_free_family`
 
-**Dep envelopes held across a step's own open** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
-— `run_step`'s consumer-step coverage is a plain `FrameCoverage` that absorbs each dep envelope's
+**Dep envelopes held across a step's own open** ([src/machine/execute/harness.rs](../src/machine/execute/harness.rs))
+— `Host::step`'s consumer-step coverage is a plain `FrameCoverage` that absorbs each dep envelope's
 own [`coverage`](../workgraph/src/witnessed/delivered.rs) (retained host ∪ reach). The
 redundancy claim this is sound on: `dep_sources`' own `DepTerminal`s each hold the dep's *duplicated*
 delivery envelope (owning the retention hold's `Rc` directly) across the whole step brand, so a
@@ -373,7 +373,7 @@ open of a `YokedChild` carrier: it materializes the executing slot's scope from 
 `NodeScope` handle (the scheduler core hands the handle back but no longer interprets it), passing the
 slot's cart `Rc` as the witness to the `for<'b>` `SealedExtern::open` — a **safe** call, no `unsafe`
 here. The decide-phase read (`current_scope`, via `SchedulerView`), the Done-boundary post-step read
-([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs)), and the `OwnScope`
+([src/machine/execute/harness.rs](../src/machine/execute/harness.rs)), and the `OwnScope`
 re-dispatch (`KoanRuntime::dispatch_in_own_scope` in
 [src/machine/execute/runtime/submit.rs](../src/machine/execute/runtime/submit.rs), which clones the
 cart `Rc` locally and routes this helper) all funnel through it — none carries an `unsafe` of its own.
@@ -409,15 +409,15 @@ library-side (`sealed_extern_open_invokes_a_fat_pointer_continuation`,
 `parked_continuation_drops_under_its_own_pin`, and
 `parked_continuation_opens_and_runs_after_its_handles_drop` in the workgraph slate). The open call
 site in
-[src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs) (`run_step`) runs the same
+[src/machine/execute/harness.rs](../src/machine/execute/harness.rs) (`Host::step`) runs the same
 transmute end-to-end every step, exercised by every scheduler-driving slate test. No separate
 minimal test here.
 
-The run-loop step-tail open (`run_step`, opening the sealed continuation and the active-scope
+The run-loop step-tail open (`Host::step`, opening the sealed continuation and the active-scope
 operand together at one generative brand) and the doctest fixture markers backing the
 `compile_fail` soundness guards are audited in
 [workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md) alongside the `retype` group they
-route through — [src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs)'s and
+route through — [src/machine/execute/harness.rs](../src/machine/execute/harness.rs)'s and
 `finalize.rs`'s call sites carry no `unsafe` of their own.
 
 **MODULE body Combine continuation** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — the
@@ -456,7 +456,7 @@ both the wake and the re-dispatch.
 — a finalized terminal rests on its edge as a reference-only carrier, pinning nothing, in the
 destination region the edge names; `Scheduler::read_edge_result_with` re-anchors it under that
 region's own owner, upgraded off the edge's host back-link (`open_with`). Deps reach a step the same
-way: `run_step` duplicates each dep's resident straight off its edge — a `Copy` cell whose pointee
+way: `Host::step` duplicates each dep's resident straight off its edge — a `Copy` cell whose pointee
 already lives in a region the step's coverage pins — and re-brands it once at `'b`, so no envelope
 crosses to a consumer. Exercised end-to-end by every scheduler-driving program;
 the listed test pins the hardest shape — a tail-chain return-type **coarsening** re-homed in the
@@ -490,7 +490,7 @@ points at, which only tree borrows observes — a normal build reads the freed b
 
 **Record escape seam — cost-driven copy vs pin** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
 — two distinct seams relocate a top-level `Record` out of a dying producer, each pinned here. The
-**container-cell** seam (`relocated_cell_still_borrows`, Ruling 4: fresh containers stay
+**container-cell** seam (`relocated_cell_still_borrows`: fresh containers stay
 self-contained, never a pin) picks each crossing cell's release: the producer frees when the
 retention predicate reads no surviving borrow leaf into the cell's own producer host off the
 rebuilt cell's stored reach (the cell is totally rebuilt via `copy_held_from_carried`), and the

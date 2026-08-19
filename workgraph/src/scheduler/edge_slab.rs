@@ -1,10 +1,10 @@
 //! The **edge slab** — first-class edges, addressed by [`EdgeId`], mirroring the node store's
 //! shape: a state vector plus a free list of recyclable indices.
 //!
-//! An [`EdgeId`] is a *name*, not the edge: holding one grants the scheduler's wiring verbs and
-//! confers no ownership and no lifecycle duty. Edges are released by their owner — a
-//! teardown-bearing structure (the consumer node, or the frame whose teardown verb carries the
-//! release) — so a live edge implies a live owner by construction.
+//! An [`EdgeId`] is a *name*, not the edge: holding one confers no ownership and no lifecycle
+//! duty. Edges are released by their owner — a teardown-bearing structure (the consumer node, or
+//! the frame whose teardown verb carries the release) — so a live edge implies a live owner by
+//! construction.
 //!
 //! An edge is also **where a delivered terminal lives**. The producer's finalize walk adopts its
 //! terminal into each distinct destination region and rests the product on the edges waiting there,
@@ -14,7 +14,7 @@
 //! Each edge names its destination region by raw pointer plus, in debug builds, a weak shadow of
 //! the region's owner. Validity is the containment lattice — destination outlives owner outlives
 //! edge — rather than a refcount, so nothing here owns the destination. The one deref
-//! ([`Destination::region_ref`]) is this crate's only `unsafe`.
+//! ([`Destination::region_ref`]) is the scheduler's only `unsafe`.
 //!
 //! Recycling is deferred for a **listed** edge (Inv-C): a parked edge sits on its producer's notify
 //! list, so releasing it sets `Free` but leaves the index out of the free list until the walk (or
@@ -34,28 +34,25 @@ use crate::witnessed::{Region, RegionHandle, RegionOwner};
 use super::workload::{OwnerOf, SealedTerminal};
 use super::{NodeId, Workload};
 
-/// Stable name for an edge in the slab. A name, not the edge: holding one grants the scheduler's
-/// wiring verbs and confers no ownership.
-///
-/// The index is private and unreadable outside the crate — like [`NodeId`], the whole surface
-/// speaks this currency and never a raw slab index.
+/// Stable name for an edge in the slab: a name, not the edge, conferring no ownership. The index is
+/// private and unreadable outside the crate — like [`NodeId`], the whole surface speaks this
+/// currency and never a raw slab index.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EdgeId {
     index: usize,
-    /// Debug-only stamp matched against the slab's per-index generation, so a name outliving its
-    /// edge is loud rather than silently renaming a recycled index. Bumped when the index is
-    /// **recycled**, not when the edge is released: a released-but-listed index is still addressed
-    /// by the walk entry that will drop it, and only re-minting can rename it.
+    /// Matched against the slab's per-index generation, so a name outliving its edge is loud rather
+    /// than silently renaming a recycled index. Bumped when the index is **recycled**, not when the
+    /// edge is released: a released-but-listed index is still addressed by the walk entry that will
+    /// drop it, and only re-minting can rename it.
     #[cfg(debug_assertions)]
     generation: u32,
 }
 
 impl EdgeId {
-    /// Fabricate a name for a white-box test that drives no slab — a binding table asserted on
-    /// directly, with no scheduler behind it. Gated so it cannot reach production code, and widened
-    /// past `cfg(test)` for an embedder's own white-box tests, which compile against this crate as
-    /// a dependency. The generation is the fresh-index stamp, so a fabricated name never collides
-    /// with a released one.
+    /// Fabricate a name for a white-box test that drives no slab. Gated so it cannot reach
+    /// production, and widened past `cfg(test)` for an embedder's own tests, which compile against
+    /// this crate as a dependency. The generation is the fresh-index stamp, so a fabricated name
+    /// never collides with a released one.
     #[cfg(any(test, feature = "test-hooks"))]
     pub const fn for_test(index: usize) -> Self {
         EdgeId {
@@ -102,7 +99,7 @@ impl<W: Workload> Destination<W> {
         }
     }
 
-    /// **The crate's one `unsafe`**: borrow the destination region a live edge names.
+    /// **The scheduler's one `unsafe`**: borrow the destination region a live edge names.
     ///
     /// The witness is the containment lattice — *destination outlives owner outlives edge*
     /// ([design/dag-scheduler.md § Edges and the boundary](../../design/dag-scheduler.md#edges-and-the-boundary)).
@@ -147,9 +144,9 @@ enum EdgeState<W: Workload> {
         consumer: Option<NodeId>,
         destination: Destination<W>,
     },
-    /// **Delivered.** The producer's walk adopted its terminal into this edge's destination and
-    /// rested the product here. The consumer is kept for symmetry with the parked state; its
-    /// `pending` decrement already fired at the fill.
+    /// **Delivered**: the producer's walk adopted its terminal into this edge's destination. The
+    /// consumer is kept for symmetry with the parked state; its `pending` decrement already fired
+    /// at the fill.
     Filled {
         resident: Result<SealedTerminal<W>, W::Error>,
         consumer: Option<NodeId>,
@@ -180,8 +177,8 @@ impl InstalledEdge {
 
 pub(in crate::scheduler) struct EdgeSlab<W: Workload> {
     entries: Vec<EdgeState<W>>,
-    /// Recyclable indices. [`alloc`](Self::alloc) pulls from here before extending `entries`,
-    /// giving constant slab memory across a run's churn.
+    /// Recyclable indices, preferred over extending `entries`, so slab memory stays roughly
+    /// constant across a run's churn.
     free_list: Vec<usize>,
     /// Per-index generation, bumped at recycle. Parallel to `entries` so a recycled index's
     /// outstanding names all go stale at once.
@@ -199,9 +196,8 @@ impl<W: Workload> EdgeSlab<W> {
         }
     }
 
-    /// Wire one parked edge to `producer` toward `destination`, named by its region's owner. The
-    /// caller registers it on `producer`'s notify list — every parked edge is listed, which is what
-    /// makes Inv-C's deferred recycle exact.
+    /// Wire one parked edge toward the region `destination` owns. Every parked edge is registered
+    /// on its producer's notify list, which is what makes Inv-C's deferred recycle exact.
     pub(in crate::scheduler) fn install_parked(
         &mut self,
         producer: NodeId,
@@ -215,9 +211,8 @@ impl<W: Workload> EdgeSlab<W> {
         })
     }
 
-    /// [`install_parked`](Self::install_parked) toward the destination `source` already names — the
-    /// wire-from-a-source path, whose destination is inherited rather than supplied (see
-    /// [`Destination::inherit`] for why that is sound).
+    /// [`install_parked`](Self::install_parked) toward the destination `source` already names —
+    /// inherited rather than supplied (see [`Destination::inherit`] for why that is sound).
     pub(in crate::scheduler) fn install_parked_inheriting(
         &mut self,
         source: EdgeId,
@@ -232,9 +227,9 @@ impl<W: Workload> EdgeSlab<W> {
         })
     }
 
-    /// Mint an already-**delivered** edge toward `source`'s destination: the late-wire filled branch,
-    /// whose resident the caller has already produced (shared with the source when the destination
-    /// matches, adopted afresh when it does not).
+    /// Mint an already-**delivered** edge toward `source`'s destination: the late-wire filled
+    /// branch, whose resident is shared with the source when the destination matches and adopted
+    /// afresh when it does not.
     pub(in crate::scheduler) fn install_filled_inheriting(
         &mut self,
         source: EdgeId,
@@ -249,8 +244,8 @@ impl<W: Workload> EdgeSlab<W> {
         })
     }
 
-    /// **Deliver**: rest `resident` on a parked edge, preserving its consumer and destination. The
-    /// walk's write, once per live edge on the producer's notify list.
+    /// **Deliver**: rest `resident` on a parked edge, preserving its consumer and destination. Runs
+    /// once per live edge on the producer's notify list.
     pub(in crate::scheduler) fn fill(
         &mut self,
         id: EdgeId,
@@ -273,7 +268,7 @@ impl<W: Workload> EdgeSlab<W> {
     }
 
     /// The producer a **parked** edge waits on, `None` once it is delivered — the parked/filled
-    /// split itself, which is what the wiring doors and the cycle walk classify on.
+    /// split itself.
     pub(in crate::scheduler) fn producer_of(&self, id: EdgeId) -> Option<NodeId> {
         match &self.entries[self.slot_index(id)] {
             EdgeState::Parked { producer, .. } => Some(*producer),
@@ -290,8 +285,8 @@ impl<W: Workload> EdgeSlab<W> {
         }
     }
 
-    /// Bind a freshly minted edge to the consumer that owns it — the install door's second half,
-    /// which runs once the consumer slot exists (the submit-time door mints before it allocates).
+    /// Bind a freshly minted edge to the consumer that owns it, once that consumer's slot exists —
+    /// an edge can be minted before its consumer is allocated.
     pub(in crate::scheduler) fn bind_consumer(&mut self, id: EdgeId, consumer: NodeId) {
         let index = self.slot_index(id);
         match &mut self.entries[index] {
@@ -303,8 +298,7 @@ impl<W: Workload> EdgeSlab<W> {
     }
 
     /// Duplicate a delivered edge's resident — the sealed cell bit-copied and its reference-only
-    /// witness cloned, or the error cloned. The read every consumer of a filled edge takes, and the
-    /// fan-out within a delivery bucket.
+    /// witness cloned, or the error cloned.
     pub(in crate::scheduler) fn resident_duplicate(
         &self,
         id: EdgeId,
@@ -318,8 +312,8 @@ impl<W: Workload> EdgeSlab<W> {
         }
     }
 
-    /// The delivered resident's error, or `Ok(())` for a value terminal — the borrow-free
-    /// success/failure probe that duplicates nothing.
+    /// The delivered resident's error, or `Ok(())` for a value terminal — the success/failure probe
+    /// that duplicates nothing.
     pub(in crate::scheduler) fn resident_error(&self, id: EdgeId) -> Result<(), &W::Error> {
         match &self.entries[self.slot_index(id)] {
             EdgeState::Filled {
@@ -333,8 +327,7 @@ impl<W: Workload> EdgeSlab<W> {
         }
     }
 
-    /// The delivered resident, borrowed — the read that duplicates nothing, for a caller opening it
-    /// under a pin it holds.
+    /// The delivered resident, borrowed — the read that duplicates nothing.
     pub(in crate::scheduler) fn resident_ref(
         &self,
         id: EdgeId,
@@ -345,8 +338,8 @@ impl<W: Workload> EdgeSlab<W> {
         }
     }
 
-    /// **The adopt capability** on the edge's destination region — minted off the one deref, which
-    /// is what makes this the sole route to a destination's allocation door.
+    /// **The adopt capability** on the edge's destination region, minted off the one deref — the
+    /// scheduler's only route to a destination's allocation door.
     pub(in crate::scheduler) fn destination_handle(
         &self,
         id: EdgeId,
@@ -354,20 +347,18 @@ impl<W: Workload> EdgeSlab<W> {
         RegionHandle::new(self.destination(id).region_ref())
     }
 
-    /// The destination's owner as an owned pin — the region's own back-link, upgraded. What a read
-    /// of the resident opens under, and what a lift back into an envelope hosts on.
+    /// The destination's owner as an owned pin — the region's own back-link, upgraded.
     pub(in crate::scheduler) fn destination_host(&self, id: EdgeId) -> Rc<OwnerOf<W>> {
         self.destination(id).host()
     }
 
-    /// The destination region this edge was wired toward, as a bare pointer for identity comparison
-    /// — the walk's bucket key and the same-destination install shortcut. Never dereferenced.
+    /// The destination region this edge was wired toward, as a bare pointer for identity
+    /// comparison. Never dereferenced.
     pub(in crate::scheduler) fn destination_region(&self, id: EdgeId) -> *const Region<W::Profile> {
         self.destination(id).region
     }
 
-    /// The destination record behind either live state — the single state match every destination
-    /// reader goes through.
+    /// The single state match every destination reader here goes through.
     fn destination(&self, id: EdgeId) -> &Destination<W> {
         match &self.entries[self.slot_index(id)] {
             EdgeState::Parked { destination, .. } | EdgeState::Filled { destination, .. } => {
@@ -377,13 +368,13 @@ impl<W: Workload> EdgeSlab<W> {
         }
     }
 
-    /// Whether this index has been released. The walk's skip test: a consumer that died before its
-    /// producer fired released its edges, and the entries naming them are still on the notify list.
+    /// Whether this index has been released — a consumer that dies before its producer fires
+    /// releases its edges while notify entries still name them.
     pub(in crate::scheduler) fn is_free(&self, id: EdgeId) -> bool {
         matches!(self.entries[self.slot_index(id)], EdgeState::Free)
     }
 
-    /// Release one edge. Rides its owner's teardown. A **parked** edge is listed on its producer's
+    /// Release one edge, riding its owner's teardown. A **parked** edge is listed on its producer's
     /// notify list, so its index is withheld from the free list until that entry is dropped
     /// ([`recycle_released`](Self::recycle_released)) — Inv-C, and correctness rather than debug
     /// hygiene: generation stamps are debug-only, so a release-build walk meeting a recycled index
@@ -397,9 +388,8 @@ impl<W: Workload> EdgeSlab<W> {
         }
     }
 
-    /// Recycle the index behind a released listed edge — called by the walk (and the splice) as it
-    /// drops the notify entry naming it, the second and last half of Inv-C. A no-op on an entry
-    /// that is not `Free`, so a caller need not re-test.
+    /// Recycle the index behind a released listed edge, once the notify entry naming it is dropped
+    /// — the second and last half of Inv-C. A no-op on an entry that is not `Free`.
     pub(in crate::scheduler) fn recycle_released(&mut self, id: EdgeId) {
         let index = self.slot_index(id);
         if matches!(self.entries[index], EdgeState::Free) {
@@ -417,8 +407,8 @@ impl<W: Workload> EdgeSlab<W> {
         }
     }
 
-    /// The only path that picks an index, and the only mint of an [`EdgeId`] — recycle from
-    /// `free_list` or extend, mirroring `NodeStore::alloc_slot`.
+    /// The only path that picks an index — recycle from `free_list` or extend, mirroring
+    /// `NodeStore::alloc_slot`.
     fn alloc(&mut self, state: EdgeState<W>) -> EdgeId {
         let index = match self.free_list.pop() {
             Some(index) => {

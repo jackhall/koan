@@ -4,12 +4,11 @@
 //! Each test is a *timeline* — what is alive when, and for how long — rather than a value check.
 //! Under Miri they fail on UB; run natively they fail on a liveness probe.
 //!
-//! A reinstall is the one boundary where a slot turns over its own memory. The scheduler holds
+//! A reinstall is the one boundary where a slot turns over its own memory, and the scheduler holds
 //! nothing across it: `replace` hands the displaced anchor straight back, and whatever the next
 //! incarnation reads is the embedder's to relocate into the new anchor's region *before* it
 //! replaces. So the ordering — free the retiring region only after the relocation reads it — is a
-//! local variable in the caller, and the two shapes below are the two verdicts that ordering has to
-//! serve:
+//! local of the caller, and the two shapes below are the two verdicts that ordering has to serve:
 //!
 //! 1. a **copy** verdict frees the retiring region at the replace, and
 //! 2. a **pin** verdict transfers it by hold into the new incarnation's anchor bundle.
@@ -28,9 +27,8 @@ use crate::witnessed::{Delivered, NoPins, SealedExtern};
 
 /// Relocate a loop-carried argument into `into`'s region through the workload's own delivery hook —
 /// the embedder's act, run on the deciding side of a replace, and the one place the verdict is
-/// asked. Hands back the reinstalled incarnation's work: a continuation reading the relocated value
-/// back out of the cell it rests in, which is the read the retiring region must not be freed ahead
-/// of.
+/// asked. The work handed back reads the relocated value back out, which is the read the retiring
+/// region must not be freed ahead of.
 fn carry_into<'a, W>(argument: &DeliveredTerminal<W>, into: &'a TestAnchor) -> NodeWork<'a, W>
 where
     W: Workload<
@@ -41,17 +39,15 @@ where
         >,
 {
     let handle = into.handle();
-    // The destination operand comes off the one public door — the same operand the delivery walk
-    // builds per distinct destination.
     let dest = Delivered::destination(Rc::clone(into.owner()));
     let cell = W::deliver(argument, dest).rest_into(handle);
     let continuation: Box<dyn FnOnce() -> u32 + 'a> = Box::new(move || cell.open(|v| *v));
     NodeWork::new(continuation)
 }
 
-/// Run the reinstalled incarnation's step: take its work and open the continuation the way the run
-/// loop does, under the anchor the seal bundled. The read is the point — every strong hold on the
-/// retiring region is gone by the time this runs.
+/// Opens the reinstalled incarnation's continuation the way the run loop does, under the anchor the
+/// seal bundled. The read is the point — every strong hold on the retiring region is gone by the
+/// time this runs.
 fn run_reinstalled<W>(sched: &mut Scheduler<W>, id: NodeId) -> u32
 where
     W: Workload<Continuation = DynContinuation>,
@@ -73,8 +69,6 @@ where
 fn copy_verdict_frees_the_retiring_region_at_the_replace() {
     let mut sched: Scheduler<TestWorkload> = Scheduler::new();
     let (id, retiring_anchor, retiring_region) = alloc_slot(&mut sched);
-    // The loop-carried argument, produced by the incarnation that is about to retire and therefore
-    // living in the region that is about to go.
     let argument = terminal::<TestWorkload>(&retiring_anchor, 41);
     let incoming = TestAnchor::fresh();
     // The deciding side: relocate before installing, so the install has nothing left to order.
@@ -137,7 +131,6 @@ fn pin_verdict_transfers_the_retiring_region_into_the_new_anchor_bundle() {
         "the reinstalled incarnation reads its argument through the pin",
     );
 
-    // Tear the new incarnation down: its union bundle is the last hold on the retiring region.
     drop(sched);
     drop(incoming);
     assert!(

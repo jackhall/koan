@@ -5,20 +5,18 @@
 //!
 //! The bump routes **no lifetime erasure**: the allocator is lifetime-free, so `'a` enters only at
 //! the allocating call, which is what lets a bumped value hold an `&'a` back into its own region
-//! with no residence check. Every writer reaches it as a [`BumpAllocator`](super::BumpAllocator),
-//! which is where the bump verbs are defined once: the library's own container metadata through the
-//! crate-private [`allocator`](Region::allocator), an embedder through [`RegionHandle::allocator`]
-//! for bare bytes, through [`RegionHandle::bump_born_with`] for a value embedding a *foreign*
-//! operand, or through the reach-composing door
+//! with no residence check. Every writer reaches it as a [`BumpAllocator`](super::BumpAllocator) —
+//! the crate-private [`allocator`](Region::allocator) for the library's own container metadata,
+//! [`RegionHandle::allocator`] for an embedder's bare bytes, [`RegionHandle::bump_born_with`] for a
+//! value embedding a *foreign* operand, or the reach-composing door
 //! ([`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)).
 //!
-//! No cycle gate: a stored value holds no owning `Rc` back to a region (a closure / future / module
-//! is a bare borrow into its defining region, kept alive by its carrier's witness set), so storing
-//! it where requested can never form an allocation back-edge. The *retention* graph is where a ring
-//! is expressible — two regions' union bundles holding each other's owners — and the self and
-//! eternal rules cut the two shapes that arise by construction. A debug-build detector
-//! ([`Region::retain_reach`]) reports whatever is left, online at the fold that closes the ring; it
-//! is diagnostic and compiles out of a release build entirely
+//! No cycle gate on storage: a stored value holds no owning `Rc` back to a region, so storing it
+//! where requested can never form an allocation back-edge. The *retention* graph is where a ring is
+//! expressible — two regions' union bundles holding each other's owners — and the self and eternal
+//! rules cut the two shapes that arise by construction. A debug-build detector reports whatever is
+//! left, online at the fold that would close the ring ([`Region::retain_reach`]); it is diagnostic
+//! and compiles out of a release build entirely
 //! ([design/reach.md § Debug audits](../../design/reach.md#debug-audits)).
 //!
 //! The Koan instantiation (`KoanRegion = Region<KoanStorageProfile>`) lives in the embedder's arena
@@ -45,8 +43,7 @@ use super::{
 /// Value storage needs no declaration at all — every family a region hosts is `Drop`-free and lives
 /// in the region's bump, which is untyped.
 pub trait StorageProfile: Sized {
-    /// The workload's frame-owner type — the `PinsRegion` member a region's reach descriptions
-    /// name. A [`Region`] interns its reach descriptions in a side table typed at this owner
+    /// A [`Region`] interns its reach descriptions in a side table typed at this owner
     /// ([`Region::intern_reach_retained`]), separate from the bump, so the value bytes carry no
     /// `Drop`-bearing reach state.
     type FrameOwner: PinsRegion + 'static;
@@ -61,50 +58,41 @@ pub struct Region<W: StorageProfile> {
     /// [`bump`](Self::bump) so a description is never value-page data (see
     /// [design/reach.md § The reach description](../../design/reach.md#the-reach-description)).
     /// A [`ReachDescription`] owns nothing — its members are `Weak`, so hosting it here pins no
-    /// region; every value described here is resident here, so what keeps its members alive is
-    /// [`retained_reach`](Self::retained_reach) below, folded by the same act that interned the
-    /// entry. A holder in transit (the delivery envelope) carries pins of its own on top.
+    /// region; what keeps those members alive is [`retained_reach`](Self::retained_reach) below,
+    /// folded by the same act that interned the entry.
     ///
     /// `elsa::FrozenMap` is what makes get-or-mint expressible through `&self`: it inserts through a
-    /// shared borrow and hands back a `&` to the boxed entry valid for the region's whole life — the
-    /// same fixed-address guarantee the bump gives its own allocations, plus a
-    /// read path an append-only arena has none of. The map owns the guarantee, so a carrier can share
-    /// a thin reference into it with no `Drop`-order, dangling, or hand-audited-pointer hazard.
+    /// shared borrow and hands back a `&` to the boxed entry valid for the region's whole life. The
+    /// map owns that fixed-address guarantee, so a carrier can share a thin reference into it with
+    /// no `Drop`-order, dangling, or hand-audited-pointer hazard.
     reach_table: FrozenMap<Box<[usize]>, Box<ReachDescription<W::FrameOwner>>>,
     /// The region's **bump**: the storage home for every `Drop`-free value that names the region's
-    /// own lifetime. Every writer reaches it as a [`BumpAllocator`] over this field — the library's
-    /// own container metadata (a [`Sectioned`](super::Sectioned) container's run partition and cell
-    /// index block) through the crate-private [`allocator`](Self::allocator), an embedder through
-    /// whichever door hands it one: [`RegionHandle::allocator`] for bare bytes at the handle's own
-    /// frame lifetime, [`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)
-    /// when the bytes belong to a value whose operands' reach the door must compose. Bumped rather
-    /// than arena'd because the allocator itself is lifetime-free, so `'a` enters only at the
-    /// allocating call — which is what lets a bumped value hold an `&'a` back into this same region
-    /// with no erasure and no residence audit. A lifetime-*typed* cell could not: its type would
-    /// have to name `'a`, and [`Region`] has no lifetime parameter, which is why a
-    /// [`ReachDescription`] is lifetime-free.
+    /// own lifetime, reached as a [`BumpAllocator`] over this field. Bumped rather than arena'd
+    /// because the allocator itself is lifetime-free, so `'a` enters only at the allocating call —
+    /// which is what lets a bumped value hold an `&'a` back into this same region with no erasure
+    /// and no residence audit. A lifetime-*typed* cell could not: its type would have to name `'a`,
+    /// and [`Region`] has no lifetime parameter, which is why a [`ReachDescription`] is
+    /// lifetime-free.
     ///
     /// A `Bump` runs **no destructor** for what it holds — it releases its chunks whole. That is the
     /// point: everything allocated here costs nothing at region teardown, which is what keeps a
-    /// sectioned container `Copy` and `Drop`-free so a frame drop need not walk one. The `T: Copy`
-    /// bound the allocator's value, slice and text verbs carry is what statically holds callers to
-    /// it — a `Copy` type has no `Drop` to skip. ("`Drop`-free" itself has no expressible bound;
-    /// `Copy` is the static proxy.) A **collection** built over the same allocator's raw
-    /// [`Allocator`](allocator_api2::alloc::Allocator) seam is where that bound stops travelling
-    /// with the bytes: a frozen key→value table, a churning binding table. Such a writer proves its
-    /// elements glue-free with a `const { assert!(!needs_drop::<_>()) }` at the declaration site
-    /// that names their type, which is the same proof the bound stood for.
+    /// [`Sectioned`](super::Sectioned) container `Copy` and `Drop`-free so a frame drop need not
+    /// walk one. The `T: Copy` bound the allocator's value, slice and text verbs carry is what
+    /// statically holds callers to it — a `Copy` type has no `Drop` to skip. ("`Drop`-free" itself
+    /// has no expressible bound; `Copy` is the static proxy.) A **collection** built over the same
+    /// allocator's raw [`Allocator`](allocator_api2::alloc::Allocator) seam is where that bound
+    /// stops travelling with the bytes; such a writer proves its elements glue-free with a
+    /// `const { assert!(!needs_drop::<_>()) }` at the declaration site that names their type.
     ///
     /// A cycle among bumped entries is harmless: everything here dies with the region, at once.
-    /// Occupancy is one figure for the whole bump ([`bump_capacity`](Self::bump_capacity)) — there
-    /// is no per-writer breakdown, because the copy-versus-pin decision reads a region's total
-    /// against a candidate value's own copy size and never needs one.
+    /// Occupancy is one figure for the whole bump ([`bump_capacity`](Self::bump_capacity)) —
+    /// the copy-versus-pin decision reads a region's total against a candidate value's own copy
+    /// size and never needs a per-writer breakdown.
     bump: Bump,
     /// The region's **union bundle**: one deduped [`PinBundle`] owning a pin for every region
-    /// anything resident here reaches, retained for the region's whole life. It is the liveness home
-    /// for a value **adopted** copy-free into this region ([`Region::retain_reach`], routed by
-    /// [`Delivered::adopt_into`](super::Delivered::adopt_into)), whose re-anchored reference lives as
-    /// long as the region and whose reach a non-owning description cannot pin.
+    /// anything resident here reaches, retained for the region's whole life. It is what a non-owning
+    /// description cannot supply — the liveness backing a value re-anchored at this region's
+    /// lifetime ([`Region::retain_reach`]).
     ///
     /// Every retention folds in through [`PinBundle::absorb`] rather than appending a bundle of its
     /// own, so the field stays an antichain of the deepest owners: one owning `Rc` per distinct
@@ -117,27 +105,24 @@ pub struct Region<W: StorageProfile> {
     /// dead weight — and a live edge into a region that can retain this one back, which is a cycle
     /// neither side ever frees.
     retained_reach: RefCell<PinBundle<W::FrameOwner>>,
-    /// The region's **owner** — the frame-owner value this region is a part of, named weakly. It is
-    /// what [`ReachDescription::mint_resident`] stamps as a description's host, so a value's residence is
-    /// read off the description that already lives in its home region's side table rather than
-    /// carried a second time on the envelope.
+    /// The region's **owner** — the frame-owner value this region is a part of, stamped onto every
+    /// description minted here as its host, so a value's residence is read off the description
+    /// rather than carried a second time on the envelope.
     ///
     /// `Weak` because the owner owns this region: a strong link would be a self-cycle. The upgrade
     /// is infallible wherever it is reached — a live region *is* live storage inside its owner, so
     /// anything holding a pin that keeps this region alive holds the owner alive too.
     ///
-    /// Supplied at construction (there is no un-owned region), so the back-link is established by
-    /// the same act that creates the region: an owner builds itself through `Rc::new_cyclic` and
-    /// hands its own `Weak` down.
+    /// Supplied at construction (there is no un-owned region): an owner builds itself through
+    /// `Rc::new_cyclic` and hands its own `Weak` down.
     host: Weak<W::FrameOwner>,
 }
 
 impl<W: StorageProfile> Region<W> {
-    /// The library's sole raw-region constructor — `pub(crate)` so an embedder can never mint a
-    /// bare `Region` directly. The only mint point reachable from outside `workgraph` is
-    /// [`RegionHost::region`](super::RegionHost::region), which calls this lazily on first access.
-    /// `host` is the owner this region belongs to, named weakly; an owner sources it from
-    /// `Rc::new_cyclic`, so a region cannot exist without naming the owner that holds it.
+    /// The library's raw-region constructor — `pub(crate)`, so the mint point an embedder reaches
+    /// is [`RegionHost::region`](super::RegionHost::region), which calls this lazily on first
+    /// access. An owner sources `host` from `Rc::new_cyclic`, so a region cannot exist without
+    /// naming the owner that holds it.
     pub(crate) fn new(host: Weak<W::FrameOwner>) -> Self {
         Self {
             reach_table: FrozenMap::new(),
@@ -147,36 +132,31 @@ impl<W: StorageProfile> Region<W> {
         }
     }
 
-    /// This region's owner, named weakly — the host [`ReachDescription::mint_resident`] stamps onto every
-    /// description it freezes into this region's side table.
+    /// The host stamped onto every description frozen into this region's side table.
     pub(crate) fn host(&self) -> Weak<W::FrameOwner> {
         self.host.clone()
     }
 
     /// Get-or-mint the description of `composed`'s member set in this region's side table **and
-    /// establish its retention here** — the sole reach-allocation path, reached through
-    /// [`ReachDescription::mint_resident`]. Keyed on the canonical member set
+    /// establish its retention here** — the reach-allocation path, reached through
+    /// [`ReachDescription::mint_resident`] and its threaded twin. Keyed on the canonical member set
     /// ([`PinBundle::intern_key`]): a miss builds the description, stores it, and folds `composed`
     /// (self rule then eternal rule) into this region's union bundle; a hit returns the existing
     /// entry and folds nothing, because an identical member set was already folded at that entry's
-    /// own miss. One description exists per distinct reach per region, and interning is therefore
-    /// itself the proof that this region pins what the entry names.
+    /// own miss.
     ///
-    /// Fusing the two is what makes the proof available: a mint is always a resident mint, so the
-    /// only reason an entry exists is that some earlier mint retained its members here. Nothing
-    /// records retention separately, and no caller can hold the composed bundle to fold by hand.
+    /// Fusing the two is what makes the retention proof available: one description exists per
+    /// distinct reach per region, so an entry's existence *is* the proof that this region pins what
+    /// the entry names. Nothing records retention separately, and no caller can hold the composed
+    /// bundle to fold by hand.
     ///
-    /// This touches no value storage and needs no
-    /// lifetime-retype: a [`ReachDescription`] is lifetime-free, and the map already returns a
-    /// reference valid for the `&'a self` borrow (the region's life), so the description a carrier
-    /// references outlives every read pinned by this region's owner. The description is non-owning
-    /// (`Weak` members), so hosting it pins nothing — the members' liveness is the holder's
-    /// [`PinBundle`], not this table. No `unsafe`: the append-stable guarantee is the map's, not a
-    /// hand-audited pointer extension.
+    /// No lifetime-retype and no `unsafe`: a [`ReachDescription`] is lifetime-free, and the map's
+    /// own append-stable guarantee returns a reference valid for the `&'a self` borrow — the
+    /// region's life — so the description a carrier references outlives every read pinned by this
+    /// region's owner.
     ///
-    /// The probe key is built in the caller's own frame ([`PinBundle::intern_key`], inline for the
-    /// member counts that dominate) and boxed **only on the miss**, where the map takes ownership of
-    /// it: a hit costs a hash and a compare, not an allocation.
+    /// The probe key is built in the caller's own frame and boxed **only on the miss**, where the
+    /// map takes ownership of it: a hit costs a hash and a compare, not an allocation.
     pub(crate) fn intern_reach_retained(
         &self,
         composed: PinBundle<W::FrameOwner>,
@@ -204,13 +184,11 @@ impl<W: StorageProfile> Region<W> {
         description
     }
 
-    /// This region's bump as a [`BumpAllocator`] — the one write surface for its bytes, carrying
-    /// both the `Copy`-guarded verbs and the raw allocator seam a **mutable** collection is built
-    /// over. Crate-private: an embedder reaches the same allocator through
-    /// [`RegionHandle::allocator`], which is the accessor that names a region it is authorized over.
-    /// Bytes taken either way are priced by [`bump_capacity`](Self::bump_capacity), which is what
-    /// keeps an off-verb allocation honest; the allocator's own doc states what a collection over
-    /// the raw seam owes at its declaration site in place of the guard.
+    /// This region's bump as a [`BumpAllocator`] — the write surface for its bytes, carrying both
+    /// the `Copy`-guarded verbs and the raw allocator seam a **mutable** collection is built over.
+    /// Crate-private: an embedder reaches the same allocator through [`RegionHandle::allocator`],
+    /// the accessor that names a region it is authorized over. Bytes taken either way are priced by
+    /// [`bump_capacity`](Self::bump_capacity), which is what keeps an off-verb allocation honest.
     pub(crate) fn allocator(&self) -> BumpAllocator<'_> {
         BumpAllocator::over(&self.bump)
     }
@@ -219,27 +197,22 @@ impl<W: StorageProfile> Region<W> {
     /// padding and the newest chunk's unused tail included. Capacity rather than a live-byte tally
     /// because this figure prices the copy-versus-pin decision and a pin retains chunks whole —
     /// capacity *is* what a pin costs. Reading it off the allocator also means an allocation that
-    /// reaches the bump without going through a door here (a collection built over the bump through
-    /// `allocator-api2`) is priced like any other.
-    ///
-    /// It is a whole-region figure: there is no per-family or per-writer breakdown, because that
-    /// decision never needs one (see the [`bump`](Self::bump) field). Monotonic, like the bump
-    /// itself — nothing is freed before the region dies, so nothing is ever subtracted.
+    /// bypasses the doors here (a collection built over the raw `allocator-api2` seam) is priced
+    /// like any other. Monotonic, like the bump itself: nothing is freed before the region dies.
     pub fn bump_capacity(&self) -> usize {
         self.bump.allocated_bytes()
     }
 
     /// Fold an owning [`PinBundle`] into the region's union bundle, retained for the region's whole
-    /// life — the liveness home for a value **adopted** copy-free into this region
-    /// ([`Delivered::adopt_into`](super::Delivered::adopt_into)), whose re-anchored reference lives as
-    /// long as the region. A non-owning description cannot pin the adopted value's reach, so the
-    /// bundle it was minted with folds in here and is dropped only at region death.
+    /// life — the liveness a non-owning description cannot supply for a value re-anchored at this
+    /// region's lifetime (adoption, [`Delivered::adopt_into`](super::Delivered::adopt_into); resting,
+    /// [`RegionHandle::retain_reach`]).
     ///
     /// The fold is [`PinBundle::absorb`], so retaining the same region twice costs one `Rc` in total
     /// and a retention subsumed by an outer member costs none — the field stays a single antichain
     /// rather than a bundle per retention.
     ///
-    /// The eternal rule is applied **before** the debug-mode ring detector below runs, so what the
+    /// The eternal rule is applied **before** the debug-mode ring detector runs, so what the
     /// detector walks is the retention that actually lands here: a member the rule strips closes no
     /// ring, because no pin on it is ever taken.
     pub(crate) fn retain_reach(&self, bundle: PinBundle<W::FrameOwner>)
@@ -256,7 +229,7 @@ impl<W: StorageProfile> Region<W> {
 
     /// **The pin-ring detector**: report every way `incoming`'s members lead liveness back to this
     /// region, run just before the retention that would close the ring is installed. Diagnostic
-    /// only — it reports and returns; nothing here changes what is retained.
+    /// only — nothing here changes what is retained.
     ///
     /// It runs *online*, at the fold, because a mutual pin is by construction unreachable from any
     /// live root once the external references drop — that disconnection **is** the leak — so a
@@ -312,10 +285,8 @@ impl<W: StorageProfile> Region<W> {
         }
     }
 
-    /// This region's owner, upgraded — the blame target a ring report names. Infallible wherever a
-    /// retention runs: a live region is live storage inside its owner, so anything reaching this
-    /// region holds the owner alive too (the same argument [`ReachDescription::host_owner`] rests
-    /// on).
+    /// The blame target a ring report names. Infallible wherever a retention runs: a live region is
+    /// live storage inside its owner, so anything reaching this region holds the owner alive too.
     #[cfg(debug_assertions)]
     fn host_owner(&self) -> Rc<W::FrameOwner> {
         self.host
@@ -327,18 +298,15 @@ impl<W: StorageProfile> Region<W> {
     ///
     /// A detected pin ring is a genuine leak by construction: the two regions own each other's
     /// owners, so neither ever drops and the process-exit leak detector reports every host in the
-    /// ring. A test that builds one deliberately must therefore dismantle it, which is why this
-    /// exists and why it is `cfg(test)`-only: no production caller ever releases a region's
-    /// retention early, because the retention's whole contract is that it lives exactly as long as
-    /// the region does.
+    /// ring. A test that builds one deliberately must dismantle it. `cfg(test)`-only because a
+    /// retention's whole contract is that it lives exactly as long as the region does.
     #[cfg(test)]
     pub(in crate::witnessed) fn release_retained_for_test(&self) {
         *self.retained_reach.borrow_mut() = PinBundle::empty();
     }
 
-    /// Number of distinct owners in the region's union bundle — white-box retention introspection,
-    /// gated behind `test-hooks` like the other reach white-box readers. Exposes a count, not the
-    /// bundle, so it cannot be used to narrow a claim.
+    /// Number of distinct owners in the region's union bundle. Exposes a count, not the bundle, so
+    /// it cannot be used to narrow a claim.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn retained_reach_len(&self) -> usize {
         self.retained_reach.borrow().members().len()
@@ -356,12 +324,12 @@ impl<W: StorageProfile> Region<W> {
 // destination lifetime.
 unsafe impl<W: StorageProfile> super::Witness for Region<W> {}
 
-/// The at-will allocation capability for a [`Region`] — a `Copy` newtype over `&'a Region<W>` carrying
-/// the only public allocation surface. A bare `&Region` cannot allocate (the engine's alloc methods
-/// are crate-private) and safe embedder code cannot wrap one into a handle (the field and the
-/// crate-internal constructor are private): a handle enters circulation only by [`Self::from_owner`]
-/// — minting requires the region's *owner*, whose `RegionOwner` impl is an audited, `unsafe`-opt-in
-/// declaration — or handed out at a `for<'b>` brand by the library's construction combinators
+/// The at-will allocation capability for a [`Region`] — a `Copy` newtype over `&'a Region<W>`
+/// carrying the public allocation surface. A bare `&Region` cannot allocate (the engine's alloc
+/// methods are crate-private) and safe embedder code cannot wrap one into a handle (the field and
+/// the raw constructor are crate-private): the embedder-reachable mint is [`Self::from_owner`], which
+/// requires the region's *owner* and so rests on an audited, `unsafe`-opt-in `RegionOwner` impl.
+/// The library additionally hands one out at a `for<'b>` brand from its construction combinators
 /// ([`Witnessed::yoke_handle`](super::Witnessed::yoke_handle), [`StepContext::alloc`](super::StepContext::alloc),
 /// [`StepContext::alloc_with`](super::StepContext::alloc_with)).
 ///
@@ -417,8 +385,8 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         RegionHandle { region }
     }
 
-    /// Mint the allocation capability from a region owner. The one public minter: it requires `&F`
-    /// where `F: RegionOwner` — an owner type whose (unsafe-to-implement) contract pins the region —
+    /// Mint the allocation capability from a region owner — the public minter. It requires `&F`
+    /// where `F: RegionOwner`, an owner type whose (unsafe-to-implement) contract pins the region,
     /// so an ambient bare `&Region` holder cannot mint.
     pub fn from_owner<F>(owner: &F) -> RegionHandle<'_, W>
     where
@@ -434,9 +402,8 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         self.region
     }
 
-    /// **This region's owner, named weakly** — the back-link an owner established at construction
-    /// (`Rc::new_cyclic`), so a value resident here reads the frame that owns it off the region
-    /// rather than carrying a copy of the same `Weak` in a field of its own.
+    /// **This region's owner, named weakly** — so a value resident here reads the frame that owns
+    /// it off the region rather than carrying a copy of the same `Weak` in a field of its own.
     ///
     /// On the handle rather than on a bare `&Region`: a handle holder already has the region's full
     /// allocation capability, so handing it the owner grants nothing new — where a bare `&Region`
@@ -446,26 +413,23 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         self.region.host()
     }
 
-    /// **This handle's region's bump as a [`BumpAllocator`](super::BumpAllocator)** — the frame-lifetime
-    /// bytes door, and the whole of it: the guarded `text` / `slice` / `value` verbs for what is
-    /// written once and read thereafter, and the raw allocator seam for a collection that keeps
-    /// mutating after it is built.
+    /// **This handle's region's bump as a [`BumpAllocator`](super::BumpAllocator)** — the
+    /// frame-lifetime bytes door.
     ///
     /// Deliberately not the same door as
     /// [`fold_and_bump`](super::FoldedPlacement::fold_and_bump), which exists to compose its
     /// **operands'** reach into the product's carrier. Bare bytes have no operands and no reach to
-    /// compose, so there is nothing for that machinery to do and nothing a call site could claim
-    /// wrongly. What is left is an ordinary borrow: nothing written through the returned allocator
-    /// can outlive the `&'a Region` this handle holds, which the borrow checker enforces with no
-    /// audit and no `unsafe`. A value built *around* those bytes that embeds a **foreign** operand
-    /// is gated at its own rank-2 brand ([`bump_born_with`](Self::bump_born_with),
-    /// [`FoldedPlacement::fold_and_bump`](super::FoldedPlacement::fold_and_bump)); one whose fields
-    /// are all at this handle's own `'a` needs no gate and takes
+    /// compose, so what is left is an ordinary borrow: nothing written through the returned
+    /// allocator can outlive the `&'a Region` this handle holds, which the borrow checker enforces
+    /// with no audit and no `unsafe`. A value built *around* those bytes that embeds a **foreign**
+    /// operand is gated at its own rank-2 brand ([`bump_born_with`](Self::bump_born_with),
+    /// [`fold_and_bump`](super::FoldedPlacement::fold_and_bump)); one whose fields are all at this
+    /// handle's own `'a` needs no gate and takes
     /// [`in_place`](super::BumpAllocator::in_place) directly.
     ///
     /// The destructor obligation travels on the allocator, not here: the `Copy`-bounded verbs carry
     /// it statically, and a collection over the raw seam restates it at the declaration site naming
-    /// its element type. [`BumpAllocator`](super::BumpAllocator) carries both arguments.
+    /// its element type.
     ///
     /// ```
     /// use workgraph::witnessed::doctest_fixture::{fresh_cart, FixtureProfile};
@@ -486,15 +450,13 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         self.region.allocator()
     }
 
-    /// Fold an owned [`StepCoverage`] into this handle's region's union bundle, retained for the
-    /// region's whole life — the library's own resting-cell fold onto [`Region::retain_reach`],
-    /// backing [`Delivered::rest_in`](super::Delivered::rest_in): a value dropped to rest here keeps
-    /// referencing the description its producer stamped, so nothing is minted and the coverage it
-    /// arrives with is what must be pinned for as long as this region lives.
+    /// Fold an owned [`StepCoverage`] into this handle's region's union bundle — the resting-cell
+    /// fold backing [`Delivered::rest_in`](super::Delivered::rest_in): a value dropped to rest here
+    /// keeps referencing the description its producer stamped, so nothing is minted and the coverage
+    /// it arrives with is what must be pinned for as long as this region lives.
     ///
-    /// **Crate-private.** An embedder supplies copy-or-pin verdicts and born-borrowing seeds and has
-    /// no vocabulary for folding reach into a region: every embedder-reachable retention rides a
-    /// mint ([`Self::mint_retained`]), which performs its own.
+    /// **Crate-private.** Every embedder-reachable retention rides a mint
+    /// ([`Self::mint_retained`]), which performs its own.
     ///
     /// The **self rule** applies as it does at [`Self::mint_retained`]: this region is stripped from
     /// the retained bundle, because a region owning a pin on itself is a cycle nothing ever breaks.
@@ -504,24 +466,21 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     where
         W::FrameOwner: RegionOwner<Region = Region<W>>,
     {
-        // The coverage arrives owned, so the strip is in place — no second buffer and no refcount
+        // The coverage arrives owned, so the strip is in place: no second buffer and no refcount
         // traffic, where `without_region` would clone the whole bundle to drop one member.
         let mut bundle = coverage.0;
         bundle.remove_region(self.region);
         self.region.retain_reach(bundle)
     }
 
-    /// **Mint and retain in one verb** — the embedder-facing reach-derivation door. Freezes
-    /// `sources`' composed reach into this region's side table, which is the same act that folds the
-    /// owning bundle into this region's union bundle ([`ReachDescription::mint_resident`]): the
-    /// description and the ownership that backs it are established together and there is no
+    /// **Mint and retain in one verb** — the embedder-facing reach-derivation door. Freezing
+    /// `sources`' composed reach into this region's side table is the same act that folds the owning
+    /// bundle into this region's union bundle ([`ReachDescription::mint_resident`]), so there is no
     /// in-between state where an embedder could hold the pins.
     ///
-    /// Returns the hosted description — stamped with this region's owner as its host, so the value
-    /// it describes carries its own residence. No policy is threaded in: the mint applies
-    /// subsumption and the self rule alone, so the description is the value's exact reach and the
-    /// retained bundle is that reach minus this region itself (a region owning a pin on itself is a
-    /// cycle).
+    /// No policy is threaded in: the mint applies subsumption and the self rule alone, so the
+    /// description is the value's exact reach and the retained bundle is that reach minus this
+    /// region itself (a region owning a pin on itself is a cycle).
     pub fn mint_retained(
         self,
         sources: &[&StepCoverage<W::FrameOwner>],
@@ -536,21 +495,21 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// **Bundle a value that already lives in this region** under the description minted for it —
     /// the born-witnessed door for a value the region hosts but did not allocate through a
     /// placement: a binding entry read back out, a structural resident an embedder holds an `&'a`
-    /// to. The value is not stored here; it pre-exists, and this names its reach.
+    /// to. The value pre-exists; this names its reach.
     ///
     /// It sits on the handle that [`mint_retained`](Self::mint_retained) sits on, so the residence
     /// the description is stamped with and the capability that seals under it are the *same*
-    /// handle — there is no second door for a caller to bring a foreign description to. The value
-    /// borrows for some `'v` outliving `'a`, this handle's own lifetime, so a borrow that does not
-    /// live as long as the region handle cannot be sealed under it at all. `'v` is free rather than
-    /// pinned to `'a` so an *invariant* family — one whose `At` cannot shrink — can still seal a
-    /// value that outlives the handle, which is the safe direction.
+    /// handle — there is no second door for a caller to bring a foreign description to. `'v: 'a` is
+    /// the residence check: a borrow that does not live as long as the region handle cannot be
+    /// sealed under it at all. `'v` is free rather than pinned to `'a` so an *invariant* family —
+    /// one whose `At` cannot shrink — can still seal a value that outlives the handle, which is the
+    /// safe direction.
     ///
     /// The witness is the reference-only [`Carrier`]: it names the reach without pinning it, so
     /// every read opens under an external pin — the active frame during the producing step, the
     /// delivery envelope's own bundle while the terminal walks, the destination region once it has
-    /// been adopted there. A value whose reach is genuinely empty takes
-    /// `mint_retained(&[])` for its description, the degenerate case of the same door.
+    /// been adopted there. A value whose reach is genuinely empty takes `mint_retained(&[])` for
+    /// its description, the degenerate case of the same door.
     pub fn seal_reaching<'v: 'a, T: Reattachable + DropFree>(
         self,
         value: T::At<'v>,
@@ -559,9 +518,8 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         Witnessed::from_erased(Erased::erase(value), Carrier::new(reach))
     }
 
-    /// This region's owner as an owned pin, upgraded off the back-link [`Self::host`] names.
-    /// Infallible while a handle exists: a handle borrows the region, a live region *is* live
-    /// storage inside its owner, so the owner cannot have dropped.
+    /// This region's owner as an owned pin. Infallible while a handle exists: a handle borrows the
+    /// region, a live region *is* live storage inside its owner, so the owner cannot have dropped.
     fn home_pin(self) -> Rc<W::FrameOwner> {
         self.host()
             .upgrade()
@@ -569,16 +527,13 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     }
 
     /// **Envelope a value that already lives in this region and reaches nothing** — the delivery
-    /// twin of [`seal_reaching`](Self::seal_reaching)`(value, mint_retained(&[]))`, for a resident
-    /// value handed onward to a consumer that takes an envelope.
+    /// twin of [`seal_reaching`](Self::seal_reaching)`(value, mint_retained(&[]))`.
     ///
-    /// Takes the value and nothing else. The description's residence, the seal, and the home pin the
-    /// envelope travels under all come off *this* handle — the pin is this region's own owner, read
-    /// through the back-link [`Self::host`] names — so there is no second argument for a caller to
-    /// pair wrongly, and no owned coverage to assemble: a value reaching nothing beyond the region it
-    /// lives in is covered by its home alone. `'v: 'a` is the residence check, exactly as at
-    /// [`seal_reaching`](Self::seal_reaching): a borrow that does not outlive this handle cannot be
-    /// sealed under it.
+    /// The description's residence, the seal, and the home pin the envelope travels under all come
+    /// off *this* handle, so there is no second argument for a caller to pair wrongly and no owned
+    /// coverage to assemble: a value reaching nothing beyond the region it lives in is covered by
+    /// its home alone. `'v: 'a` is the residence check, exactly as at
+    /// [`seal_reaching`](Self::seal_reaching).
     ///
     /// A value whose borrows *do* reach elsewhere never arrives here: it reaches an envelope as a
     /// composition's product, which mints its reach at the destination and owns it, or as the
@@ -601,10 +556,10 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// receives a handle on this same region, so the only references it can return are region-derived
     /// or owned, and the product's reach is exactly this region.
     ///
-    /// The delivery twin of [`Self::deliver_resident`] for a value that does not pre-exist, and the
-    /// same one-door claim: the yoke witness and the envelope's home pin are one `Rc` on this
-    /// region's own owner, so the value is *born* under the pin it travels under. Coverage is empty
-    /// by construction — nothing the brand admits reaches another region.
+    /// The delivery twin of [`Self::deliver_resident`] for a value that does not pre-exist: the yoke
+    /// witness and the envelope's home pin are one `Rc` on this region's own owner, so the value is
+    /// *born* under the pin it travels under. Coverage is empty by construction — nothing the brand
+    /// admits reaches another region.
     ///
     /// A construction that embeds a **foreign** operand composes that operand's reach instead, at
     /// [`bump_born_with`](Self::bump_born_with) or the fold doors
@@ -631,14 +586,13 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// handle's region plus `operand` re-anchored to that same `'b` — one [`zip`](SealedExtern::zip)ped
     /// open, so an invariant family is well typed at the brand. That quantifier is the residence
     /// proof and it is a compile one: `'b` has no outlives relation to any enclosing lifetime, so
-    /// the only `&'b Region<W>` a closure body can name is the placement's. `pin` discharges the
-    /// operand's own liveness exactly as it does at the typed door: borrowed for `'a`, the
-    /// destination region's lifetime, so it covers the stored reference's whole life rather than
-    /// merely the call.
+    /// the only `&'b Region<W>` a closure body can name is the placement's. `pin` is borrowed for
+    /// `'a`, the destination region's lifetime, so it covers the stored reference's whole life
+    /// rather than merely the call.
     ///
-    /// The `const` assert is the family's side of the bargain, restated at the door the value
-    /// enters through: a bump-hosted family runs **no destructor**, so it must have none to run. It
-    /// monomorphizes per family, so a field that later grows a `Drop` is a build error here.
+    /// The `const` assert is the family's side of the bargain: a bump-hosted family runs **no
+    /// destructor**, so it must have none to run. It monomorphizes per family, so a field that later
+    /// grows a `Drop` is a build error here.
     ///
     /// There is no operand-free twin. A value with nothing foreign to embed needs no brand at all:
     /// its fields are already at the caller's `'a`, so it is built there and bumped through
@@ -720,8 +674,7 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         let handle = SealedExtern::<RegionHandleFamily<W>>::erase(self);
         // The *reference* the bump hands back is what leaves the brand: a `&'b K::At<'b>` cannot be
         // named outside the closure, so it is erased on the way out and re-anchored below. The value
-        // itself never is — it is built at `'b` and stored at `'b`, which is the whole point of
-        // bumping rather than storing to a `'static`-slotted cell.
+        // itself never is — it is built at `'b` and stored at `'b`.
         let stored: Erased<ReferenceFamily<K>> =
             handle.zip(operand).open(pin, |(handle_b, operand_b)| {
                 let placement = FoldedPlacement::mint(handle_b);
@@ -739,9 +692,8 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     }
 }
 
-/// [`Reattachable`] family for a [`RegionHandle`] — a thin pointer, layout independent of `'r` — so an
-/// embedder can erase/re-anchor the capability through the witnessed substrate (the per-call
-/// construction door).
+/// [`Reattachable`] family for a [`RegionHandle`], so the capability itself can be erased and
+/// re-anchored through the witnessed substrate.
 pub struct RegionHandleFamily<W>(PhantomData<W>);
 
 // SAFETY: `RegionHandle<'r, W>` is a newtype over `&'r Region<W>`, a thin pointer whose layout is

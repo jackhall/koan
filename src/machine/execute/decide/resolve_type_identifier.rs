@@ -1,8 +1,9 @@
-//! Scope-bound resolution of a surface [`TypeIdentifier`] into an interned `KType` handle.
+//! Scope-bound resolution of a surface [`TypeIdentifier`] into an interned `KType` handle —
+//! Layer 2 of [design/typing/elaboration.md](../../../../design/typing/elaboration.md).
 //!
 //! Read-only consumer of the bindings façade: writes nothing, and of the tables reads only
-//! `types` — bound identities through the elaborator, pending arms through the finalize gate. The
-//! read-only dependency is what justifies the split from `scope.rs`.
+//! `types` — bound identities through the elaborator, pending arms through the finalize gate. That
+//! read-only dependency is what keeps this out of the rest of `Scope`.
 //!
 //! ## Invariant pinned here
 //!
@@ -28,10 +29,9 @@ use crate::machine::model::TypeIdentifier;
 use crate::machine::model::{KType, TypeNode, TypeRegistry, TypeResolution};
 
 impl<'step> Scope<'step> {
-    /// Layer-2 scope-bound TypeIdentifier resolution: elaborates against `self` and admits
-    /// the result only when a [`FinalizeGate`] passes it. The Park arm — elaborator-parked
-    /// or gate-rejected — is what keeps a mid-window consumer from observing pre-seal
-    /// opaque identity.
+    /// Elaborates against `self` and admits the result only when `FinalizeGate` passes it. The
+    /// Park arm — elaborator-parked or gate-rejected — is what keeps a mid-window consumer from
+    /// observing pre-seal opaque identity.
     pub fn resolve_type_identifier(
         &self,
         te: &TypeIdentifier,
@@ -40,8 +40,6 @@ impl<'step> Scope<'step> {
     ) -> TypeResolution<KType> {
         use crate::machine::model::{Elaborator, elaborate_type_identifier};
         let mut elaborator = Elaborator::new(self).with_chain(chain);
-        // A referenced type still in flight demotes this `Done` to a `Park`; `Park` /
-        // `Unbound` forward unchanged.
         elaborate_type_identifier(&mut elaborator, te, types).and_then_done(|kt| {
             let pending = FinalizeGate { scope: self, types }.pending_sources(kt);
             if pending.is_empty() {
@@ -60,16 +58,15 @@ impl<'step> Scope<'step> {
 /// (no type-side placeholder left there); otherwise returns the binder [`ProducerId`]s the caller
 /// parks on.
 ///
-/// Both probes read the type placeholder straight from the kind-tagged map — not via
-/// `lookup_type`, which would prefer a binding this gate must look past to find the in-flight
-/// producer.
+/// The probe reads the type placeholder straight from the `types` table — not via `lookup_type`,
+/// which prefers a bound arm this gate must look past to find the in-flight producer.
 struct FinalizeGate<'view, 'step> {
     scope: &'view Scope<'step>,
     types: &'view TypeRegistry,
 }
 
 impl FinalizeGate<'_, '_> {
-    /// Producer `NodeId`s the caller must park on; empty iff the gate admits.
+    /// Empty iff the gate admits.
     fn pending_sources(&self, kt: KType) -> Vec<ProducerId> {
         let mut pending: Vec<ProducerId> = Vec::new();
         for UserTypeRef { scope_id, name } in user_type_refs(kt, self.types) {
@@ -99,7 +96,7 @@ struct UserTypeRef {
 
 /// Every top-level [`UserTypeRef`] in `kt`.
 ///
-/// **Member discipline** (load-bearing): a sealed member node is a leaf — the walk does NOT descend
+/// **Member discipline** (load-bearing): a sealed `SetMember` is a leaf — the walk does NOT descend
 /// its schema, which holds absolute handles and may be cyclic. A sealed member is finished by
 /// definition, so it is not a dependency at all; only a relative `Sibling` names something still in
 /// flight, and its own schema's references are its binder's concern.
@@ -133,8 +130,6 @@ fn user_type_refs(kt: KType, types: &TypeRegistry) -> Vec<UserTypeRef> {
                 stack.push(constructor);
             }
             TypeNode::Union { members } => stack.extend(members.into_iter().rev()),
-            // Leaves: no nested handle. `DeferredReturn` carries only a hashable surface shadow,
-            // and `Sibling` is relative content that never escapes its window.
             _ => {}
         }
     }

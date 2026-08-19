@@ -1,5 +1,6 @@
 //! The dormant slot every resting carrier stores its lifetime-erased value in, and the owned
-//! resting tier built over it.
+//! resting tier built over it ([design/witnessed-memory.md § The dormant slot and the two resting
+//! tiers](../../design/witnessed-memory.md#the-dormant-slot-and-the-two-resting-tiers)).
 //!
 //! A dormant carrier's value is *not* live: nothing may be assumed about it until a witnessed
 //! re-anchor. A struct field typed as a reference says the opposite to the abstract machine — a
@@ -16,8 +17,7 @@
 //! the owned tier, [`SealedPinned`], whose slot is [`DormantGlue`] (the value's drop glue runs)
 //! and which co-locates the pins covering the value at its erase door.
 //!
-//! This module is the single audited home for union reads. Every one of them leans on one
-//! invariant:
+//! This module is the single audited home for union reads, each leaning on one invariant:
 //!
 //! > The slot is always initialized: the only constructor initializes `value`, no method
 //! > deinitializes it without consuming the wrapper, and the union has no other field.
@@ -37,21 +37,18 @@ pub(in crate::witnessed) union Dormant<V> {
 }
 
 impl<V> Dormant<V> {
-    /// Put a value to rest in the slot.
     pub(in crate::witnessed) fn new(value: V) -> Self {
         Dormant {
             value: ManuallyDrop::new(value),
         }
     }
 
-    /// Borrow the dormant value.
     pub(in crate::witnessed) fn get(&self) -> &V {
         // SAFETY: the always-initialized invariant (module docs) — the slot's only field is live.
         unsafe { &self.value }
     }
 
-    /// Move the dormant value out. `Dormant` has no drop glue, so the moved-out value is the sole
-    /// owner of whatever it holds.
+    /// `Dormant` has no drop glue, so the moved-out value is the sole owner of whatever it holds.
     pub(in crate::witnessed) fn into_inner(self) -> V {
         // SAFETY: the always-initialized invariant; consuming `self` means no second read can
         // observe the moved-from slot.
@@ -73,13 +70,11 @@ impl<V: Copy> Copy for Dormant<V> {}
 pub(in crate::witnessed) struct DormantGlue<V>(Dormant<V>);
 
 impl<V> DormantGlue<V> {
-    /// Put a value to rest in the slot, keeping its drop glue.
     pub(in crate::witnessed) fn new(value: V) -> Self {
         DormantGlue(Dormant::new(value))
     }
 
-    /// Move the dormant value out, handing ownership — and the destructor obligation — to the
-    /// caller.
+    /// Hands the destructor obligation to the caller along with the value.
     pub(in crate::witnessed) fn into_inner(self) -> V {
         let mut this = ManuallyDrop::new(self);
         // SAFETY: the always-initialized invariant; `this` is a `ManuallyDrop`, so the `Drop` impl
@@ -105,10 +100,9 @@ impl<V> Drop for DormantGlue<V> {
 /// This is the channel for an ambient capability that is a live, borrow-checked reference for the
 /// whole of `'outer` (an embedder's run-long allocation brand, say): such a value needs no seal, no
 /// re-anchor and no pin — its liveness is the borrow checker's, not the witness system's — it only
-/// needs the outlives fact the quantifier would otherwise erase. A value whose lifetime *was*
-/// erased still enters through the sealed operand, exactly as before. The shape is
-/// `std::thread::scope`'s: the closure's `'scope` is bounded by `'env` through the declared bound
-/// on its argument type.
+/// needs the outlives fact the quantifier would otherwise erase. A value whose lifetime was erased
+/// enters through the sealed operand instead. The shape is `std::thread::scope`'s: the closure's
+/// `'scope` is bounded by `'env` through the declared bound on its argument type.
 ///
 /// An invariant family is unaffected: nothing unifies `'b` with `'outer` — the closure must still
 /// typecheck for every `'b` inside it — and the `for<'b>` quantifier still keeps every
@@ -156,14 +150,13 @@ impl<T: Reattachable, W: Witness> SealedPinned<T, W> {
     /// This is the tier's **only** open verb: a caller with no extern operand passes a trivial one.
     ///
     /// The bundled pins cover the owned value; `operand_pin` covers the extern operand (the
-    /// [`SealedExtern::open`] obligation, unchanged). Both live values are consumed by `f` before
-    /// the pins drop, and the `for<'b>` quantifier keeps either from escaping into `R`.
+    /// [`SealedExtern::open`] obligation). Both live values are consumed by `f` before the pins
+    /// drop, and the `for<'b>` quantifier keeps either from escaping into `R`.
     ///
     /// The brand is bounded by the caller's `'outer` through the [`Within`] token the closure
     /// receives, so an ambient covariant value live for all of `'outer` shortens to `'b` inside the
     /// closure with no carrier — see [`Within`] for why that channel is borrow-checked rather than
-    /// witnessed. A caller with no ambient value to shorten binds the token `_` and lets `'outer`
-    /// infer.
+    /// witnessed.
     pub fn open<'outer, U: Reattachable + DropFree, Wx: Witness, R>(
         self,
         operand: SealedExtern<U>,

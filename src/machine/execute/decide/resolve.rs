@@ -2,12 +2,11 @@
 //!
 //! One enum, one ladder. [`resolve_name`] resolves a bare-name part (`Identifier` or leaf `Type`)
 //! to a [`Resolution`] — exactly the states a *lookup* observes: resolved to a delivered carrier,
-//! parked on a claim's edge, or unbound. It asks nothing about a parked producer's standing — a
-//! decide holds no `&mut Scheduler`, so it cannot wire the edge that would make such a read sound;
-//! the harness rules on the park when it installs it
-//! ([`InstalledEdge`](crate::scheduler::InstalledEdge)). The one variation between the dispatch
-//! ladder and the admission cache — which channel a leaf `Type` token consults first — rides as the
-//! [`TypeLeafChannels`] parameter, not a second function.
+//! parked on a claim's edge, or unbound. It asks nothing about a parked producer's standing —
+//! resolution holds no scheduler, so it cannot wire the edge that would make such a read sound; the
+//! harness rules on the park when it installs it
+//! ([`InstalledEdge`](crate::scheduler::InstalledEdge)). Which channel a leaf `Type` token consults
+//! first rides as the [`TypeLeafChannels`] parameter, not a second function.
 //!
 //! The ladder is total: every part lands on one of the three rungs, because a *producer* error
 //! reaches the consumer through the park the harness installs, never through a probe here. And it
@@ -24,19 +23,17 @@ use crate::machine::{DeliveredCarried, LexicalFrame, NameLookup, Scope};
 
 use crate::machine::model::Carried;
 
-/// Type-channel resolution with the first-source fold applied once. Folds
-/// [`resolve_type_identifier`](Scope::resolve_type_identifier)'s [`TypeResolution`]:
-/// a `Done` carries the sealed handle, a `Park` narrows to its first source edge (an
-/// empty park list is a miss, so it renders `Unbound`), and an `Unbound` forwards.
+/// Type-channel resolution with the park-source list already folded to a single edge, so no
+/// consumer has to choose among sources.
 pub(in crate::machine::execute) enum TypeChannel {
     Done(KType),
     Parked(ProducerId),
     Unbound(String),
 }
 
-/// Resolve the type channel for `t`, folding the park-source list to its first
-/// element. A visible type alias has already resolved its RHS, so a leaf parks on
-/// at most one binder; an empty list renders the miss diagnostic.
+/// Narrow [`resolve_type_identifier`](Scope::resolve_type_identifier)'s park-source list to its
+/// first element, since a [`Resolution`] parks on exactly one edge. An empty list has no edge to
+/// park on, so it renders the miss diagnostic instead.
 pub(in crate::machine::execute) fn type_channel(
     scope: &Scope<'_>,
     t: &TypeIdentifier,
@@ -54,8 +51,7 @@ pub(in crate::machine::execute) fn type_channel(
 }
 
 /// The one bare-name resolution result. Lifetime-free ([`DeliveredCarried`] is lifetime-free), so
-/// it crosses branded-scope closure boundaries without ceremony. Consumed by the dispatch walk,
-/// the admission cache, and the aggregate-literal cell classifier alike.
+/// it crosses branded-scope closure boundaries without ceremony.
 pub(crate) enum Resolution {
     /// The bound value lifted into a delivery envelope pinned by its binding scope — a consumer
     /// opens it under those pins to classify the value, so a speculative probe re-anchors nothing
@@ -65,25 +61,19 @@ pub(crate) enum Resolution {
     Unbound(String),
 }
 
-/// Which channel a leaf `Type` token consults first — the one variation between [`resolve_name`]'s
-/// two callers. (`Identifier` parts read the value channel alone either way.)
+/// Which channel a leaf `Type` token consults first. (`Identifier` parts read the value channel
+/// alone either way.)
 pub(in crate::machine::execute) enum TypeLeafChannels {
-    /// Straight to the type channel — the dispatch ladder's read of a type operand.
     TypeChannel,
-    /// The value channel first — honoring a still-finalizing claim stamped under the type's name —
-    /// then the type channel. The admission cache's read, where a park under either channel must
-    /// surface before overload selection commits.
+    /// Honor a still-finalizing claim stamped under the type's name before consulting the type
+    /// channel, so a park under either channel surfaces before overload selection commits.
     ValueChannelFirst,
 }
 
-/// THE bare-name ladder. `part` is a bare-name part (`Identifier` or leaf `Type`); anything else is
-/// unreachable.
+/// `part` must be a bare-name part (`Identifier` or leaf `Type`); anything else is unreachable.
 ///
-/// An `Identifier` reads the value channel: a bound name seals its binding-scope carrier (value and
-/// reach as one unit), a still-finalizing name yields its claim's edge, a miss is `Unbound`. A
-/// `Type` reads the type channel — under [`TypeLeafChannels::ValueChannelFirst`] after honoring a
-/// value-channel claim under the same name: a resolved leaf seals its resident type carrier, a
-/// still-finalizing referent yields its edge, a miss forwards.
+/// A bound `Identifier` seals its binding-scope carrier — value and reach as one unit — so the
+/// result stands on its own once the scope borrow closes.
 pub(in crate::machine::execute) fn resolve_name(
     scope: &Scope<'_>,
     part: &ExpressionPart<'_>,
@@ -107,8 +97,8 @@ pub(in crate::machine::execute) fn resolve_name(
                 return Resolution::Parked(source);
             }
             match type_channel(scope, t, chain.cloned(), types) {
-                // A `KType` is a `Copy` registry handle — no foreign reach — so the resident type
-                // carrier seals under an empty foreign bundle.
+                // A `KType` is a `Copy` registry handle with no foreign reach, so it delivers
+                // resident with no coverage to assemble.
                 TypeChannel::Done(kt) => {
                     Resolution::Resolved(scope.deliver_resident(Carried::Type(kt)))
                 }

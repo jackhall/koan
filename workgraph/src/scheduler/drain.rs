@@ -1,11 +1,10 @@
 //! **The run protocol, reified**: [`Scheduler::drain`] owns the pop → read-deps → step → apply
 //! loop, and [`StepVerdict`] is the closed set of things a step can decide. The embedder's whole
-//! run-loop contract is one callback: it receives a [`Step`] (the slot's identity, anchor, sealed
-//! continuation, and pre-read dep results) plus `&mut Scheduler` for the mid-step wiring a step
-//! legitimately does (realizing dep requests, minting source edges, installing deps), and returns
-//! the verdict the drain applies.
+//! contract is one callback: it receives a [`Step`] plus `&mut Scheduler` for the mid-step wiring a
+//! step legitimately does, and returns the verdict the drain applies.
+//! See [design/dag-scheduler.md § The drain protocol](../../design/dag-scheduler.md#the-drain-protocol).
 //!
-//! What this makes structural, rather than a prose rule on seven protocol methods:
+//! What owning the loop makes structural:
 //!
 //! - a popped slot always gets a verdict, and the verdict is always applied — a slot can never sit
 //!   `Running` past its step;
@@ -23,12 +22,10 @@ use super::workload::{DeliveredTerminal, SealedTerminal};
 use super::{EdgeId, NodeId, Scheduler, Workload};
 use crate::witnessed::SealedPinned;
 
-/// What one step decided — the closed protocol between the embedder's step callback and the
-/// scheduler's apply. Every arm maps onto exactly one internal transition, so returning a verdict
-/// *is* applying it.
+/// The closed protocol between the embedder's step callback and the scheduler's apply. Every arm
+/// maps onto exactly one internal transition, so returning a verdict *is* applying it.
 pub enum StepVerdict<'work, W: Workload> {
-    /// The slot terminalized: deliver the terminal (or the error) to every waiting edge and
-    /// reclaim the slot.
+    /// Deliver the terminal (or the error) to every waiting edge and reclaim the slot.
     Done(Result<DeliveredTerminal<W>, W::Error>),
     /// The slot's result *is* the value already resting on this edge — deliver that resident
     /// onward through the slot's own walk.
@@ -46,15 +43,14 @@ pub enum StepVerdict<'work, W: Workload> {
 }
 
 /// One popped slot's step, as the drain hands it to the embedder's callback: the deps are already
-/// read (and their edges released), and the continuation arrives still sealed — the embedder opens
-/// it beside its own operands, under the anchor pin the seal bundles.
+/// read (and their edges released), and the continuation arrives still sealed.
 pub struct Step<W: Workload> {
-    /// The slot being stepped — the name a mid-step install wires deps onto.
+    /// The name a mid-step install wires deps onto.
     pub id: NodeId,
     /// A clone of the slot's memory anchor (the row keeps its own).
     pub anchor: Rc<W::Frame>,
-    /// The slot's continuation, sealed against its anchor. Opened by the embedder at its own step
-    /// brand, beside its own operands.
+    /// Opened by the embedder at its own step brand, beside its own operands, under the anchor pin
+    /// the seal bundles.
     pub continuation: SealedPinned<W::Continuation, Rc<W::Frame>>,
     /// Each dep edge's delivered resident, in dep order, an errored dep in its slot. The edges
     /// themselves are already released — the values live in their destination regions, not in the
@@ -62,18 +58,16 @@ pub struct Step<W: Workload> {
     pub dep_results: Vec<Result<SealedTerminal<W>, W::Error>>,
 }
 
-/// The drain's deadlock report: slots still parked after the queues drained, each waiting on a
-/// dependency that can no longer fire. `sample` is the first stuck slot's memory anchor — the
-/// workload's own [`Workload::Frame`] — so the embedder renders the report off per-slot data it
-/// wrote itself rather than off a diagnostic string the scheduler carried for it.
+/// Slots still parked after the queues drained, each waiting on a dependency that can no longer
+/// fire. `sample` is the first stuck slot's memory anchor — the workload's own
+/// [`Workload::Frame`] — so the embedder renders the report off per-slot data it wrote itself
+/// rather than off a diagnostic string the scheduler carried for it.
 pub struct DrainDeadlock<W: Workload> {
     pub pending: usize,
     pub sample: Rc<W::Frame>,
 }
 
-// Hand-written rather than derived: `W::Frame` is the embedder's own anchor type and carries no
-// `Debug` bound, so the report shows the count it owns and defers the sample to whoever can render
-// it.
+// Hand-written because `W::Frame` is the embedder's own anchor type and carries no `Debug` bound.
 impl<W: Workload> std::fmt::Debug for DrainDeadlock<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DrainDeadlock")
@@ -83,10 +77,9 @@ impl<W: Workload> std::fmt::Debug for DrainDeadlock<W> {
 }
 
 impl<W: Workload> Scheduler<W> {
-    /// **The run loop.** Pop each ready slot, read its dep residents and release its dep edges,
-    /// hand the [`Step`] to `step`, and apply the [`StepVerdict`] it returns — until the queues
-    /// drain. `step` receives `&mut Self` for the wiring a step body legitimately does mid-step
-    /// (realizing dep requests via [`alloc_node`](Self::alloc_node), minting source edges,
+    /// **The run loop**, until the queues drain. `step` receives `&mut Self` for the wiring a step
+    /// body legitimately does mid-step (realizing dep requests via
+    /// [`alloc_node`](Self::alloc_node), minting source edges,
     /// [`install_deps`](Self::install_deps)); the verdict application is the drain's alone.
     ///
     /// `'work` is the lifetime a `Replace` verdict's live continuation is built at — one lifetime
@@ -94,7 +87,7 @@ impl<W: Workload> Scheduler<W> {
     /// sealed against its anchor the moment the verdict is applied.
     ///
     /// Errs with the deadlock report when slots are still parked after the drain — the backstop
-    /// for the acyclicity invariant the install door asserts.
+    /// for the acyclicity invariant [`install_deps`](Self::install_deps) asserts.
     pub fn drain<'work>(
         &mut self,
         mut step: impl FnMut(&mut Self, Step<W>) -> StepVerdict<'work, W>,
@@ -102,11 +95,9 @@ impl<W: Workload> Scheduler<W> {
         while let Some(id) = self.pop_next() {
             let (work, anchor) = self.take_for_run(id);
             // Step start is a read, not a graph walk: every dep was delivered into its edge's
-            // destination when its producer finalized, so each resident is duplicated straight off
-            // the edge. The slot is done with its dep edges the moment their residents are in
-            // hand — the values live in the destination regions, not in the edges — so they are
-            // released here, before the step runs. A `Replace` installs fresh edges for the next
-            // incarnation onto the row this take just emptied, so nothing is released twice.
+            // destination when its producer finalized. The slot is done with its dep edges once
+            // their residents are in hand, so they release before the step runs; a `Replace`
+            // installs fresh edges onto the row this take just emptied, so nothing releases twice.
             let dep_edges = self.deps.take_deps(id);
             let dep_results: Vec<Result<SealedTerminal<W>, W::Error>> = dep_edges
                 .all_ids()
@@ -132,8 +123,8 @@ impl<W: Workload> Scheduler<W> {
                     self.finalize(id, output);
                 }
                 StepVerdict::Forward(edge) => {
-                    // Retire after the forward read: the classification edge the verdict names is
-                    // on the slot's owned list, and the read goes through it.
+                    // Retire after the read: the edge the verdict names is on the slot's owned
+                    // list, and the read goes through it.
                     self.finalize_forward(id, edge);
                     self.release_retiring(&anchor);
                 }
@@ -147,8 +138,8 @@ impl<W: Workload> Scheduler<W> {
                     let _displaced = self.replace(id, work, new_anchor);
                 }
                 StepVerdict::Alias(edge) => {
-                    // An alias never terminalizes, so this is where its owned edges retire —
-                    // after the splice has re-pointed the slot's waiting edges at the producer.
+                    // An alias never terminalizes, so its owned edges retire here — after the
+                    // splice has re-pointed the slot's waiting edges at the producer.
                     self.splice_forward_from(id, edge);
                     self.release_retiring(&anchor);
                 }
@@ -160,9 +151,7 @@ impl<W: Workload> Scheduler<W> {
         }
     }
 
-    /// The retirement hook's application: ask the workload which edges the dying (or spliced-out)
-    /// slot still owns, and release each. Runs exactly once per slot, from the one verdict arm that
-    /// retires it.
+    /// Runs exactly once per slot, from the one verdict arm that retires it.
     fn release_retiring(&mut self, anchor: &W::Frame) {
         for edge in W::retiring(anchor) {
             self.release_edge(edge);

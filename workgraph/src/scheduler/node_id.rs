@@ -1,28 +1,24 @@
 //! [`NodeId`] — the stable handle to a node in the scheduler's DAG.
 
-/// Stable handle to a node in the scheduler's DAG. Minted only by the node store
-/// (`alloc_slot`) and used to name a slot for the lifetime of a run.
+/// Handle naming a node slot in the scheduler's DAG.
 ///
-/// The index is private and unreadable outside the crate, so a `NodeId` an embedder holds
-/// can only have come from the store — the whole scheduler surface speaks this currency,
-/// never a raw slot index, and the round-trip that would let a caller fabricate one does
-/// not exist.
+/// The index is unreadable outside the crate and there is no public round-trip, so a `NodeId`
+/// an embedder holds can only have come from the store — the whole scheduler surface speaks
+/// this currency, never a raw slot index.
 ///
-/// An id names a *position* in the slot table, not an incarnation. Slots reclaim at finalize and
-/// their indices return to circulation, so two ids for one index from different allocations
-/// compare equal — an id is only meaningful for as long as the incarnation that minted it lives.
-/// That is the whole of its contract: the drive loop pops, steps, wires, and finalizes with one
-/// inside a single step, and nothing holds one across a reclaim. A holder that needs identity to
-/// survive reclamation is asking for something else and should mint its own — as koan does, with
-/// `StatementId` for declaration identity and `ProducerId` for the producer of a value.
+/// An id names a *position* in the slot table, not an incarnation: indices recycle through the
+/// free list, so two ids for one index from different allocations compare equal, and an id is
+/// meaningful only while the incarnation that minted it lives. A holder needing identity to
+/// survive reclamation mints its own, as koan does with `StatementId` and `ProducerId`
+/// ([design/dag-scheduler.md § Slots and the node-store lifecycle](../../design/dag-scheduler.md#slots-and-the-node-store-lifecycle)).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeId {
     index: usize,
 }
 
 impl NodeId {
-    /// The store's mint. `pub(crate)`, and the node store's slot allocator is its only caller, so
-    /// every id in circulation names a slot that allocator handed out.
+    /// The mint. `pub(crate)`, so every id in circulation names a slot index this crate handed
+    /// out rather than one an embedder chose.
     pub(crate) const fn new(index: usize) -> Self {
         NodeId { index }
     }
@@ -31,9 +27,8 @@ impl NodeId {
         self.index
     }
 
-    /// Fabricate an id for a white-box test that drives no store. Gated so it cannot reach
-    /// production code, and widened past `cfg(test)` for an embedder's own white-box tests,
-    /// which compile against this crate as a dependency.
+    /// Fabricate an id for a white-box test that drives no store. Widened past `cfg(test)` for
+    /// an embedder's own white-box tests, which compile against this crate as a dependency.
     #[cfg(any(test, feature = "test-hooks"))]
     pub const fn for_test(index: usize) -> Self {
         NodeId::new(index)

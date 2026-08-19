@@ -1,16 +1,15 @@
 //! The scheduler's white-box slates and the fixtures they share.
 //!
-//! Every fixture here names only stand-in types — a `Cart`-backed anchor, a boxed `dyn FnOnce`
-//! continuation — never a koan type, so the slates exercise the generic scheduler on its own terms.
+//! Every fixture here names only stand-in types — a `RegionCart`-backed anchor, a boxed
+//! `dyn FnOnce` continuation — never a koan type, so the slates exercise the generic scheduler on
+//! its own terms.
 //!
-//! - [`continuation`] — the owned-tier continuation slot under Miri (tree borrows).
-//! - [`delivery`] — the finalize walk's timelines: copy and pin verdicts, a consumer that dies
-//!   before its producer fires, a late wire onto a delivered edge, and root-edge release.
-//! - [`drain`] — the run protocol: each verdict arm's application, the retirement hook's
-//!   exactly-once contract and ordering, the step-start dep reads, and the deadlock report.
-//! - [`edges`] — the edge slab's alloc/release recycling and the install door's branches.
-//! - [`reinstall`] — the replace boundary's timelines: a loop-carried argument relocated into the
-//!   incoming anchor's region, under both verdicts.
+//! - [`continuation`] — the owned-tier continuation slot, under Miri (tree borrows).
+//! - [`delivery`] — the finalize walk's timelines, under Miri (tree borrows).
+//! - [`drain`] — the run protocol: verdict arms, step-start dep reads, the retirement hook's
+//!   exactly-once contract and ordering, and the deadlock report.
+//! - [`edges`] — the edge slab's alloc/release recycling, the install door's branches, and splice.
+//! - [`reinstall`] — the replace boundary's timelines, under Miri (tree borrows).
 
 use std::rc::Rc;
 use std::rc::Weak;
@@ -30,7 +29,7 @@ mod reinstall;
 /// The inter-node value family: a **borrow into a region**, which is what makes a delivery verdict
 /// observable — a plain `u32` would carry no region and copy-or-pin would be unobservable.
 struct U32Value;
-/// The trivial extern operand a step with nothing to zip passes to the owned tier's one open verb.
+/// The trivial extern operand a step with nothing to zip passes to the owned tier's open.
 struct UnitOperand;
 reattachable! {
     U32Value => &'r u32,
@@ -48,13 +47,12 @@ reattachable!(droppable DynContinuation => Box<dyn FnOnce() -> u32 + 'r>);
 struct TestAnchor(Rc<RegionCart>);
 
 impl TestAnchor {
-    /// A fresh anchor over its own region — one per slot, so a test can watch a producer's region
-    /// die (or survive) independently of its consumer's.
+    /// One region per slot, so a test can watch a producer's region die (or survive) independently
+    /// of its consumer's.
     fn fresh() -> Rc<Self> {
         Rc::new(TestAnchor(crate::witnessed::doctest_fixture::fresh_cart()))
     }
 
-    /// The anchor's region handle — the allocation door a fixture builds its borrowed values through.
     fn handle(&self) -> crate::witnessed::RegionHandle<'_, FixtureProfile> {
         crate::witnessed::RegionHandle::from_owner(&*self.0)
     }
@@ -67,9 +65,9 @@ impl Anchor for TestAnchor {
     }
 }
 
-/// The delivery hook shared by both workloads below, parameterized on the verdict: `keep` is what
-/// the relocation claims it still borrows from the source, and `relocate` is the act that claim
-/// describes. Written once so the two workloads differ in exactly the verdict and nothing else.
+/// The delivery hook shared by both workloads below: `keep` is what the relocation claims it still
+/// borrows from the source, and the relocation is the act that claim describes. Written once so the
+/// two workloads differ in the verdict and nothing else.
 fn deliver_with<W>(
     terminal: &DeliveredTerminal<W>,
     dest: DeliveryDestination<W>,
@@ -83,11 +81,10 @@ where
         move |_product, _region| keep,
         move |value, _handle, placement| {
             if keep {
-                // Pin: the product *is* the source borrow, so the source region must stay alive —
-                // which is what the `true` claim above buys.
+                // The product *is* the source borrow, so the source region must stay alive — which
+                // is what the `true` claim above buys.
                 value
             } else {
-                // Copy: rebuild at the destination, claiming nothing of the source.
                 placement.handle().allocator().value(*value)
             }
         },
@@ -114,8 +111,7 @@ impl Workload for TestWorkload {
 
 /// The **pin-verdict** workload: delivery hands the source borrow through verbatim and claims it,
 /// so the producer's region transfers by hold into each destination's union bundle and lives as long
-/// as the destination does. Identical to [`TestWorkload`] in every other associated type, so the two
-/// slates differ in the verdict alone.
+/// as the destination does.
 struct PinWorkload;
 impl Workload for PinWorkload {
     type Value = U32Value;
@@ -132,9 +128,8 @@ impl Workload for PinWorkload {
     }
 }
 
-/// Allocate one dep-free slot over a **fresh region of its own**, handing back the slot, its anchor,
-/// and a weak probe on the region owner — so a test can drop every strong hold it has and ask
-/// whether the region is still alive.
+/// One dep-free slot over a **fresh region of its own**. The weak probe lets a test drop every
+/// strong hold it has and ask whether the region is still alive.
 fn alloc_slot<W>(sched: &mut Scheduler<W>) -> (NodeId, Rc<TestAnchor>, Weak<RegionCart>)
 where
     W: Workload<
@@ -151,8 +146,8 @@ where
     (id, anchor, probe)
 }
 
-/// Build the terminal `id`'s step would produce: a `u32` bumped into that slot's own region and
-/// enveloped as a resident of it. This is the value delivery relocates out.
+/// The terminal a slot's step would produce: a `u32` bumped into that slot's own region and
+/// enveloped as a resident of it — the value delivery relocates out.
 fn terminal<W>(anchor: &TestAnchor, payload: u32) -> DeliveredTerminal<W>
 where
     W: Workload<Value = U32Value, Profile = FixtureProfile, Frame = TestAnchor>,
