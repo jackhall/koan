@@ -15,12 +15,11 @@ Scaling terms the profile attributes but no item yet owns. Each entry names the 
 share and its top sites; promoting one to a work item means writing its file with
 acceptance criteria and wiring it into the dependency graph.
 
-- **Outcome and obligation boxing** — ≈30 allocations per tail-loop step: a
+- **Outcome and obligation boxing** — ≈22 allocations per tail-loop step: a
   fresh boxed continuation per step through `ignore_results`
-  ([src/machine/execute/outcome.rs](../../src/machine/execute/outcome.rs), 10/step),
-  `with_obligation` and `ReturnObligation::duplicate`
-  ([src/machine/execute/obligation.rs](../../src/machine/execute/obligation.rs), 8/step
-  each), plus `all_or_first_error` and `short_circuit`.
+  ([src/machine/execute/outcome.rs](../../src/machine/execute/outcome.rs), 10/step) and
+  `with_obligation` ([src/machine/execute/obligation.rs](../../src/machine/execute/obligation.rs),
+  8/step), plus `all_or_first_error` and `short_circuit`.
 - **Frame and scope bookkeeping** — ≈28 allocations per tail-loop step:
   `Scope::adopt_carried` ([src/machine/core/scope/reach.rs](../../src/machine/core/scope/reach.rs),
   9/step), `build_frame_child_witnessed` and `CallFrame::new`
