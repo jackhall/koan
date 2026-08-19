@@ -34,4 +34,7 @@ allocations (dhat, 2026-08-18), and every user `FN`/`OP` registration pays it ag
 
 **Requires:** none.
 
-**Unblocks:** none.
+**Unblocks:**
+
+- [Deferred return-obligation labels](deferred-return-obligation-labels.md) — shares the
+  error-time callable render this item settles.
