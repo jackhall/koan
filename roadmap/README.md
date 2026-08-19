@@ -16,6 +16,7 @@ buys the language and listing its ready-to-start items:
 [predicate_typing/](predicate_typing/README.md), [libraries/](libraries/README.md),
 [metaprogramming/](metaprogramming/README.md), [type_language/](type_language/README.md),
 [editor_tooling/](editor_tooling/README.md), [refactor/](refactor/README.md),
+[reduce_allocs/](reduce_allocs/README.md),
 [untyped_arena/](untyped_arena/README.md), and
 [compile_safety/](compile_safety/README.md).
 
@@ -45,10 +46,11 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [One kind-blind reader per shape slot](metaprogramming/one-reader-per-shape-slot.md)
 - [Parse at runtime](metaprogramming/parse-at-runtime.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
-- [Argument currency keyed by borrowed name](refactor/borrowed-argument-keying.md)
-- [Park-wiring buffer recycling](refactor/park-wiring-buffer-recycling.md)
+- [Deferred error-trace rendering](reduce_allocs/deferred-error-trace-rendering.md)
+- [Park-wiring buffer recycling](reduce_allocs/park-wiring-buffer-recycling.md)
+- [Step-scoped scratch arena](reduce_allocs/step-scratch-arena.md)
+- [Run-scoped label interning](reduce_allocs/string-interning.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
-- [Step-scoped scratch arena](refactor/step-scratch-arena.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
