@@ -82,9 +82,14 @@ data, and a single harness method applies them. The three pieces:
   (`current_scope`), the chain (`chain_deref`), the installing statement's
   identity, the step's binding-write sink, the type registry, the run's
   program storage capability, and the step's **scratch arena** (`scratch`) —
-  the drain's per-pop bump, carried at `'step` and not one lifetime longer, so a
-  staging buffer built through it that reached an `Outcome`, a park's deps or a
-  stored continuation would be a borrow-check error rather than a convention
+  the drain's per-pop bump, carried at `'step` and not one lifetime longer.
+  Anything the step itself consumes is built through it, the park dep list an
+  `Outcome` carries included
+  ([`StepDeps`](../../src/machine/execute/outcome.rs) — a `Deps` whose entries
+  are hosted on the arena, which the wiring door reads and drops inside the same
+  pop). What cannot be is a buffer reaching past the pop: the `'static`
+  continuation the harness seals, or the `StepVerdict` it returns, would be a
+  borrow-check error rather than a convention
   ([dag-scheduler.md § The drain protocol](../../workgraph/design/dag-scheduler.md#the-drain-protocol)).
   It holds **no scheduler borrow at all** — every
   graph question a decide could ask is either the install door's answer when

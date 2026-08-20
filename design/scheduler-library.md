@@ -297,6 +297,16 @@ delivery walk's per-destination dedup collapses them to a single adopt. The
 realized list the door writes into the stored work (`ResolvedDeps`) is one edge
 list, scheduler-internal from that point on.
 
+The builder is generic in the allocator its entries sit on, defaulting to the
+global one — every constructor comes in a pair, the bare name fixing the
+default and an `_in` suffix taking a handle. A submission door outside any step
+takes the default; a park decided *inside* a step builds on the drain's scratch
+arena instead (koan's `StepDeps`), and wires through `install_deps_in`, which
+hosts its filled-or-parked verdict list there too. Both lists are read and
+dropped inside the pop that made them, so the allocator parameter is what turns
+that confinement into a borrow-check fact
+([dag-scheduler.md § The drain protocol](../workgraph/design/dag-scheduler.md#the-drain-protocol)).
+
 **`Await` — the envelope builder.**
 
 ```rust

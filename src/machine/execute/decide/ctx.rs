@@ -104,9 +104,11 @@ pub(in crate::machine::execute) struct DecideCtx<'program: 'step, 'step, 'view> 
     /// reclaim.
     ///
     /// Carried at `'step` and not one lifetime longer, which is the whole confinement: a
-    /// [`BumpVec`](crate::witnessed::BumpVec) built through this handle names `'step` in its type,
-    /// so a buffer that reached an `Outcome`, a park's deps, or a stored continuation would be a
-    /// borrow-check error rather than a convention someone has to keep.
+    /// [`BumpVec`](crate::witnessed::BumpVec) built through this handle names `'step` in its type.
+    /// An `Outcome` is `'step` too, so a park's dep list ([`StepDeps`](super::StepDeps)) rides the
+    /// arena by design; what the type rules out is a buffer reaching past the pop — the `'static`
+    /// continuation the harness seals, or the `StepVerdict` it returns — as a borrow-check error
+    /// rather than a convention someone has to keep.
     scratch: BumpAllocator<'step>,
 }
 

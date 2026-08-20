@@ -155,3 +155,16 @@ added allocation — 41 allocations of headroom against the 100 (loop) or 127
 allocation was added to the execute path or an unrelated fixed cost moved;
 re-measure with `audit/measure.sh` before rebaselining, and rebaseline the table
 and the bound together.
+
+`workgraph` counts on its own, with its own copy of the scaffolding
+([`workgraph/src/tests.rs`](workgraph/src/tests.rs), a delegating counter over
+`System` installed for that crate's lib-test binary and tallying per thread, so
+a bracket is not polluted by the tests running beside it). It carries the
+scheduler's steady-state claim — a slot that parks and wakes on a fixed shape
+allocates nothing per wake once its rows have grown — as an *exact* equality
+rather than a bound
+([`scheduler/tests/recycling.rs`](workgraph/src/scheduler/tests/recycling.rs)),
+which is why a reintroduced per-wake allocation surfaces there as a `+1` before
+it reaches koan's bounds at all. The one allocation the window still admits is
+the install door's debug-only acyclicity check, named at the constant that
+expects it.

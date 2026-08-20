@@ -103,8 +103,8 @@ The step term is exactly linear — 118.0 flat at 10, 50, 100 and 200 steps. The
 is not: marginal cost rises 28.9 → 29.5 → 30.4 → 31.3 across the 16→32, 32→64, 64→128 and
 128→256 operand doublings, so a chain pays slightly more per operator the longer it gets.
 Below 16 operands the fixed cost swamps the term, so the rise is only readable over the
-larger sizes. Whatever drives it is unmeasured; the shapes are sized
-to the linear-enough middle rather than to the tail.
+larger sizes. Whatever drives it is unmeasured; the shapes are sized to the linear-enough
+middle rather than to the tail.
 
 The walk term is **flat in depth**. Differencing the two call counts at one depth cancels
 parse and setup and leaves 32 dispatches' marginal cost: 1 886 allocations at depth 2 against

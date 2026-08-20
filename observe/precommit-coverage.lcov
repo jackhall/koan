@@ -34,6 +34,7 @@ FNDA:2,_RNvNtNtCscL7XHaGYeX3_4koan5tests14counting_alloc18thread_allocations
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 FNDA:2957215,_RNvNtNtCscL7XHaGYeX3_4koan5tests14counting_alloc5tally
 >>>>>>> b2712fbc (Give Deps an allocator seam and recycle the slot rows)
 =======
@@ -67,6 +68,14 @@ FNDA:2476056,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNt
 FNDA:2481963,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc7deallocB6_
 FNDA:464825,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc7reallocB6_
 >>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
+=======
+FNDA:2947282,_RNvNtNtCscL7XHaGYeX3_4koan5tests14counting_alloc5tally
+FNDA:2947282,_RNCNvNtNtCscL7XHaGYeX3_4koan5tests14counting_alloc5tally0B7_
+FNDA:6371,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc12alloc_zeroedB6_
+FNDA:2476077,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc5allocB6_
+FNDA:2481981,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc7deallocB6_
+FNDA:464834,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc7reallocB6_
+>>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)
 FNDA:0,_RNvNtNtCscL7XHaGYeX3_4koan5tests14counting_alloc11allocations
 >>>>>>> 93b488b3 (Build the eager-subs park in the walk that stages it)
 FNF:8
@@ -77,6 +86,7 @@ DA:37,0
 DA:40,2
 DA:41,2
 DA:42,2
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
@@ -205,6 +215,27 @@ DA:76,464825
 DA:77,464825
 DA:78,464825
 >>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
+=======
+DA:52,2947282
+DA:53,2947282
+DA:54,2947282
+DA:55,2947282
+DA:61,2476077
+DA:62,2476077
+DA:63,2476077
+DA:64,2476077
+DA:66,2481981
+DA:67,2481981
+DA:68,2481981
+DA:70,6371
+DA:71,6371
+DA:72,6371
+DA:73,6371
+DA:75,464834
+DA:76,464834
+DA:77,464834
+DA:78,464834
+>>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)
 BRF:0
 BRH:0
 LF:26
@@ -20021,42 +20052,42 @@ FN:34,_RINvNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctx15with_node_sco
 FN:34,_RINvNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctx15with_node_scopeuNCNvXNtB6_7harnessNtB1h_12KoanWorkloadNtNtNtCsaIODfHv5xl1_9workgraph9scheduler8workload8Workload8retiring0EBa_
 FN:49,_RINvNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctx23with_current_node_scopeINtNtCsgW8esjfipvk_5alloc2rc2RcINtNtNtCsaIODfHv5xl1_9workgraph9witnessed4host10RegionHostNtNtNtB8_4core5arena18KoanStorageProfileEENvNtNtB2O_9kfunction6action11scope_frameEBa_
 FN:49,_RINvNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctx23with_current_node_scopeNtNtB4_7resolve10ResolutionNCNvMs1_NtB4_7literalNtNtB6_7harness4Host27resolve_aggregate_bare_names_0EBa_
-FN:171,_RNCNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB4_9DecideCtx11chain_deref0Bc_
-FN:177,_RNCNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB4_9DecideCtx12active_chain0Bc_
-FN:225,_RNCNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB4_9DecideCtx19build_bare_outcomess_0Bc_
-FN:188,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx10dest_frame
-FN:170,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx11chain_deref
-FN:176,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx12active_chain
-FN:181,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx13current_frame
-FN:154,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx13current_scope
-FN:146,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx15deposit_effects
-FN:203,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx18deposit_obligation
-FN:219,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx19build_bare_outcomes
-FN:210,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx28current_obligation_duplicate
-FN:114,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx3new
-FN:166,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx3out
-FN:160,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx5types
-FN:140,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx7program
-FN:136,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx7scratch
-FN:196,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx8step_ctx
-FN:150,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx9installer
+FN:173,_RNCNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB4_9DecideCtx11chain_deref0Bc_
+FN:179,_RNCNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB4_9DecideCtx12active_chain0Bc_
+FN:227,_RNCNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB4_9DecideCtx19build_bare_outcomess_0Bc_
+FN:190,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx10dest_frame
+FN:172,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx11chain_deref
+FN:178,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx12active_chain
+FN:183,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx13current_frame
+FN:156,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx13current_scope
+FN:148,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx15deposit_effects
+FN:205,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx18deposit_obligation
+FN:221,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx19build_bare_outcomes
+FN:212,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx28current_obligation_duplicate
+FN:116,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx3new
+FN:168,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx3out
+FN:162,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx5types
+FN:142,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx7program
+FN:138,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx7scratch
+FN:198,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx8step_ctx
+FN:152,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctxNtB2_9DecideCtx9installer
 FN:62,_RNvNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctx18current_dest_frame
-FN:188,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx10dest_frame
-FN:170,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx11chain_deref
-FN:176,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx12active_chain
-FN:181,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx13current_frame
-FN:154,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx13current_scope
-FN:146,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx15deposit_effects
-FN:203,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx18deposit_obligation
-FN:219,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx19build_bare_outcomes
-FN:210,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx28current_obligation_duplicate
-FN:114,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx3new
-FN:166,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx3out
-FN:160,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx5types
-FN:140,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx7program
-FN:136,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx7scratch
-FN:196,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx8step_ctx
-FN:150,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx9installer
+FN:190,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx10dest_frame
+FN:172,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx11chain_deref
+FN:178,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx12active_chain
+FN:183,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx13current_frame
+FN:156,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx13current_scope
+FN:148,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx15deposit_effects
+FN:205,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx18deposit_obligation
+FN:221,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx19build_bare_outcomes
+FN:212,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx28current_obligation_duplicate
+FN:116,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx3new
+FN:168,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx3out
+FN:162,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx5types
+FN:142,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx7program
+FN:138,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx7scratch
+FN:198,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx8step_ctx
+FN:152,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB2_9DecideCtx9installer
 FN:62,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctx18current_dest_frame
 FN:34,_RINvNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctx15with_node_scopeINtNtCsgW8esjfipvk_5alloc2rc2RcINtNtNtCsaIODfHv5xl1_9workgraph9witnessed4host10RegionHostNtNtNtB8_4core5arena18KoanStorageProfileEENvNtNtB2G_9kfunction6action11scope_frameEBa_
 FN:34,_RINvNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctx15with_node_scopeNtNtB4_7resolve10ResolutionNCNvMs1_NtB4_7literalNtNtB6_7harness4Host27resolve_aggregate_bare_names_0EBa_
@@ -20064,9 +20095,9 @@ FN:34,_RINvNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctx15with_node_sco
 FN:34,_RINvNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctx15with_node_scopeuNCNvXNtB6_7harnessNtB1h_12KoanWorkloadNtNtNtCsaIODfHv5xl1_9workgraph9scheduler8workload8Workload8retiring0EBa_
 FN:49,_RINvNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctx23with_current_node_scopeINtNtCsgW8esjfipvk_5alloc2rc2RcINtNtNtCsaIODfHv5xl1_9workgraph9witnessed4host10RegionHostNtNtNtB8_4core5arena18KoanStorageProfileEENvNtNtB2O_9kfunction6action11scope_frameEBa_
 FN:49,_RINvNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctx23with_current_node_scopeNtNtB4_7resolve10ResolutionNCNvMs1_NtB4_7literalNtNtB6_7harness4Host27resolve_aggregate_bare_names_0EBa_
-FN:171,_RNCNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB4_9DecideCtx11chain_deref0Bc_
-FN:177,_RNCNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB4_9DecideCtx12active_chain0Bc_
-FN:225,_RNCNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB4_9DecideCtx19build_bare_outcomess_0Bc_
+FN:173,_RNCNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB4_9DecideCtx11chain_deref0Bc_
+FN:179,_RNCNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB4_9DecideCtx12active_chain0Bc_
+FN:227,_RNCNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine7execute6decide3ctxNtB4_9DecideCtx19build_bare_outcomess_0Bc_
 FNDA:11,_RINvNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctx15with_node_scopeINtNtCsgW8esjfipvk_5alloc2rc2RcINtNtNtCsaIODfHv5xl1_9workgraph9witnessed4host10RegionHostNtNtNtB8_4core5arena18KoanStorageProfileEENvNtNtB2G_9kfunction6action11scope_frameEBa_
 FNDA:11,_RINvNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctx15with_node_scopeNtNtB4_7resolve10ResolutionNCNvMs1_NtB4_7literalNtNtB6_7harness4Host27resolve_aggregate_bare_names_0EBa_
 FNDA:23,_RINvNtNtNtNtCscy2pHVGjLyF_4koan7machine7execute6decide3ctx15with_node_scopeNtNtNtCsaIODfHv5xl1_9workgraph9scheduler7node_id6NodeIdNCNvMs2_NtB6_7harnessNtB2c_4Host21dispatch_in_own_scope0EBa_
@@ -20146,8 +20177,6 @@ DA:63,264
 DA:64,264
 DA:65,264
 DA:66,264
-DA:114,19660
-DA:115,19660
 DA:116,19660
 DA:117,19660
 DA:118,19660
@@ -20165,69 +20194,71 @@ DA:129,19660
 DA:130,19660
 DA:131,19660
 DA:132,19660
-DA:136,34331
-DA:137,34331
+DA:133,19660
+DA:134,19660
 DA:138,34331
-DA:140,4771
-DA:141,4771
+DA:139,34331
+DA:140,34331
 DA:142,4771
-DA:146,7154
-DA:147,7154
+DA:143,4771
+DA:144,4771
 DA:148,7154
-DA:150,4771
-DA:151,4771
+DA:149,7154
+DA:150,7154
 DA:152,4771
-DA:154,45386
-DA:155,45386
+DA:153,4771
+DA:154,4771
 DA:156,45386
-DA:160,29225
-DA:161,29225
+DA:157,45386
+DA:158,45386
 DA:162,29225
-DA:166,4771
-DA:167,4771
+DA:163,29225
+DA:164,29225
 DA:168,4771
-DA:170,9285
-DA:171,9285
+DA:169,4771
+DA:170,4771
 DA:172,9285
-DA:176,5027
-DA:177,5027
+DA:173,9285
+DA:174,9285
 DA:178,5027
-DA:181,4771
-DA:182,4771
+DA:179,5027
+DA:180,5027
 DA:183,4771
-DA:188,6689
-DA:189,6689
+DA:184,4771
+DA:185,4771
 DA:190,6689
-DA:196,5660
-DA:197,5660
+DA:191,6689
+DA:192,6689
 DA:198,5660
-DA:203,4381
-DA:204,4381
+DA:199,5660
+DA:200,5660
 DA:205,4381
-DA:210,10225
-DA:211,10225
+DA:206,4381
+DA:207,4381
 DA:212,10225
 DA:213,10225
 DA:214,10225
-DA:219,8077
-DA:220,8077
+DA:215,10225
+DA:216,10225
 DA:221,8077
 DA:222,8077
 DA:223,8077
 DA:224,8077
-DA:225,27839
-DA:226,5950
-DA:227,5950
+DA:225,8077
+DA:226,8077
+DA:227,27839
 DA:228,5950
 DA:229,5950
 DA:230,5950
 DA:231,5950
 DA:232,5950
 DA:233,5950
-DA:235,21889
-DA:236,27839
-DA:237,8077
-DA:238,8077
+DA:234,5950
+DA:235,5950
+DA:237,21889
+DA:238,27839
+DA:239,8077
+DA:240,8077
 BRF:0
 BRH:0
 LF:109
@@ -28413,8 +28444,8 @@ FNDA:4,_RNvMNtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB2_10BucketKeys3len
 FNDA:900,_RNvMNtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB2_10BucketKeys3one
 FNDA:439,_RNvMNtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB2_10BucketKeys4iter
 FNDA:39990,_RNvMs0_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_18UntypedElementSpec14matches_stored
-FNDA:178,_RNvMs0_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_18UntypedElementSpec7matches
-FNDA:557,_RNvMs1_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_10BinderSpec11matches_key
+FNDA:185,_RNvMs0_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_18UntypedElementSpec7matches
+FNDA:492,_RNvMs1_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_10BinderSpec11matches_key
 FNDA:20,_RNvMs1_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_10BinderSpec16installs_nothing
 FNDA:242968,_RNvMs1_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_10BinderSpec18matches_stored_key
 FNDA:2030,_RNvMs_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB4_15StoredBinderKey12to_owned_key
@@ -28439,7 +28470,7 @@ FNDA:2483,_RNvNtNtNtCscL7XHaGYeX3_4koan7machine5model6binder27identifier_part_bi
 >>>>>>> b2712fbc (Give Deps an allocator seam and recycle the slot rows)
 =======
 FNDA:3527,_RNCNCNvNtNtNtCscL7XHaGYeX3_4koan7machine5model6binder21binder_plan_from_spec00Bb_
-FNDA:178,_RNCNvMs1_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB7_10BinderSpec11matches_key0Bd_
+FNDA:185,_RNCNvMs1_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB7_10BinderSpec11matches_key0Bd_
 FNDA:39990,_RNCNvMs1_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB7_10BinderSpec18matches_stored_key0Bd_
 FNDA:1639,_RNCNvMs_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB6_15StoredBinderKey12to_owned_key0Bc_
 FNDA:439,_RNCNvMs_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB6_15StoredBinderKey12to_owned_keys_0Bc_
@@ -28589,6 +28620,7 @@ DA:315,14
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 DA:328,177
 DA:329,177
 DA:330,114
@@ -28627,6 +28659,14 @@ DA:331,60
 DA:332,1
 DA:334,178
 >>>>>>> 93b488b3 (Build the eager-subs park in the walk that stages it)
+=======
+DA:328,185
+DA:329,185
+DA:330,111
+DA:331,60
+DA:332,14
+DA:334,185
+>>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)
 DA:338,46415
 DA:339,46415
 DA:340,26446
@@ -28636,6 +28676,7 @@ DA:344,46415
 DA:390,20
 DA:391,20
 DA:392,20
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
@@ -28697,6 +28738,16 @@ DA:403,535
 =======
 DA:403,557
 >>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
+=======
+DA:396,492
+DA:397,492
+DA:398,69
+DA:399,69
+DA:400,69
+DA:401,69
+DA:402,185
+DA:403,492
+>>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)
 DA:406,280115
 DA:407,280115
 DA:408,26488
@@ -29830,7 +29881,7 @@ FNDA:0,_RNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types5ktype19render_param_r
 FNDA:0,_RNvXs_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types5ktypeNtB4_5KTypeNtNtCs27Vx93FoQ6z_4core3fmt5Debug3fmt
 FNDA:113492,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType11from_digest
 FNDA:674,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType4name
-FNDA:352571,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType6digest
+FNDA:352569,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType6digest
 FNDA:48,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType6render
 FNDA:956,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType7kind_of
 FNDA:50588,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType7of_kind
@@ -29857,9 +29908,9 @@ DA:76,55425
 DA:81,123503
 DA:82,123503
 DA:83,123503
-DA:86,398560
-DA:87,398560
-DA:88,398560
+DA:86,398558
+DA:87,398558
+DA:88,398558
 DA:93,701
 DA:94,701
 DA:95,285
@@ -30261,7 +30312,7 @@ FNDA:4149,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicates
 FNDA:21027,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType12accepts_part
 FNDA:84,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType12matches_held
 FNDA:2,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType12matches_type
-FNDA:510,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType12satisfied_by
+FNDA:509,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType12satisfied_by
 FNDA:1517,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType13matches_value
 FNDA:6330,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType15accepts_carried
 FNDA:827,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType18more_specific_walk
@@ -30400,9 +30451,9 @@ DA:178,1
 DA:179,1
 DA:180,460
 DA:182,892
-DA:187,526
-DA:188,526
-DA:189,526
+DA:187,525
+DA:188,525
+DA:189,525
 DA:196,93
 DA:197,93
 DA:198,93
@@ -32741,13 +32792,14 @@ FNDA:1175,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12
 FNDA:1223,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry4dict
 FNDA:258,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry4join
 FNDA:2414,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry4list
-FNDA:45829,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry4node
+FNDA:45827,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry4node
 FNDA:111306,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry6intern
 FNDA:6641,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry6record
 FNDA:2543,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry7verdict
 FNDA:124,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry8union_of
 FNDA:12,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry9hit_count
 FNDA:1736,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry9signature
+<<<<<<< HEAD
 <<<<<<< HEAD
 FNDA:235889,_RNvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB2_14IdentityHasherNtNtCs27Vx93FoQ6z_4core4hash6Hasher10write_u128
 FNDA:235889,_RNvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB2_14IdentityHasherNtNtCs27Vx93FoQ6z_4core4hash6Hasher6finish
@@ -32804,16 +32856,20 @@ FNDA:235893,_RNvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB2_14
 FNDA:235891,_RNvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB2_14IdentityHasherNtNtCs27Vx93FoQ6z_4core4hash6Hasher10write_u128
 FNDA:235891,_RNvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB2_14IdentityHasherNtNtCs27Vx93FoQ6z_4core4hash6Hasher6finish
 >>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
+=======
+FNDA:235889,_RNvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB2_14IdentityHasherNtNtCs27Vx93FoQ6z_4core4hash6Hasher10write_u128
+FNDA:235889,_RNvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB2_14IdentityHasherNtNtCs27Vx93FoQ6z_4core4hash6Hasher6finish
+>>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)
 FNF:29
 FNH:25
-DA:45,269700
-DA:46,269700
-DA:47,269700
+DA:45,269698
+DA:46,269698
+DA:47,269698
 DA:49,0
 DA:50,0
-DA:53,269700
-DA:54,269700
-DA:55,269700
+DA:53,269698
+DA:54,269698
+DA:55,269698
 DA:97,1260
 DA:98,1260
 DA:99,1260
@@ -32862,12 +32918,12 @@ DA:153,87054
 DA:154,87054
 DA:155,121127
 DA:156,121127
-DA:163,62760
-DA:164,62760
-DA:165,62760
-DA:166,62760
+DA:163,62758
+DA:164,62758
+DA:165,62758
+DA:166,62758
 DA:167,1
-DA:169,62760
+DA:169,62758
 DA:174,5
 DA:175,5
 DA:176,5
@@ -33766,10 +33822,10 @@ FNDA:10,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schemaNtB4_1
 FNDA:139,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema11sig_subtype
 FNDA:10,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema15name_sets_equal
 FNDA:2,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema16slot_types_equal
-FNDA:90,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema17slot_satisfied_by
+FNDA:89,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema17slot_satisfied_by
 FNDA:319,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema19canonicalize_binder
-FNDA:102,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema20substitution_binding
-FNDA:78,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema21references_sig_member
+FNDA:101,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema20substitution_binding
+FNDA:77,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema21references_sig_member
 FNDA:104,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema22is_abstract_sig_member
 FNDA:194,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema22substitute_sig_members
 FNDA:1664,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema23constructor_param_names
@@ -34017,8 +34073,8 @@ DA:459,7
 DA:460,7
 DA:461,61
 DA:465,128
-DA:466,35
-DA:467,26
+DA:466,34
+DA:467,25
 DA:468,12
 DA:469,12
 DA:470,12
@@ -34043,10 +34099,11 @@ DA:502,107
 DA:503,3
 DA:504,3
 DA:505,107
-DA:506,105
+DA:506,104
 DA:507,22
 DA:508,22
 DA:509,22
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
@@ -34077,21 +34134,27 @@ DA:512,78
 DA:514,5
 DA:516,83
 >>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
+=======
+DA:511,82
+DA:512,77
+DA:514,5
+DA:516,82
+>>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)
 DA:517,4
 DA:518,4
 DA:519,4
 DA:520,4
 DA:521,4
-DA:522,79
+DA:522,78
 DA:524,81
 DA:525,140
-DA:531,78
-DA:532,78
-DA:533,78
-DA:534,78
-DA:535,78
-DA:536,78
-DA:537,78
+DA:531,77
+DA:532,77
+DA:533,77
+DA:534,77
+DA:535,77
+DA:536,77
+DA:537,77
 DA:539,12
 DA:540,12
 DA:543,12
@@ -34116,32 +34179,32 @@ DA:565,4
 DA:566,0
 DA:567,0
 DA:568,0
-DA:570,52
-DA:572,78
-DA:576,102
-DA:577,102
-DA:578,102
-DA:579,102
-DA:580,102
-DA:581,102
-DA:582,102
+DA:570,51
+DA:572,77
+DA:576,101
+DA:577,101
+DA:578,101
+DA:579,101
+DA:580,101
+DA:581,101
+DA:582,101
 DA:584,40
 DA:585,40
 DA:588,40
-DA:589,62
-DA:591,102
-DA:599,90
-DA:600,90
-DA:601,90
-DA:602,90
-DA:603,90
-DA:604,90
-DA:605,90
-DA:606,90
+DA:589,61
+DA:591,101
+DA:599,89
+DA:600,89
+DA:601,89
+DA:602,89
+DA:603,89
+DA:604,89
+DA:605,89
+DA:606,89
 DA:607,30
-DA:608,60
-DA:609,60
-DA:610,48
+DA:608,59
+DA:609,59
+DA:610,47
 DA:611,12
 DA:612,12
 DA:613,2
@@ -34184,7 +34247,7 @@ DA:673,0
 DA:674,0
 DA:675,0
 DA:677,0
-DA:679,90
+DA:679,89
 DA:685,10
 DA:686,10
 DA:687,10
@@ -34705,8 +34768,8 @@ FNDA:20482,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature17stor
 FNDA:61360,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature18normalized_keyword0Bb_
 FNDA:0,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature18restore_stored_key0Bb_
 FNDA:0,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature19most_specific_ktype0Bb_
-FNDA:23452,_RNCNvXs1_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB7_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB7_13StoredElementE10equivalent0Bf_
-FNDA:64787,_RNCNvXs_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB6_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB6_13StoredElementE10equivalent0Be_
+FNDA:23456,_RNCNvXs1_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB7_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB7_13StoredElementE10equivalent0Bf_
+FNDA:64830,_RNCNvXs_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB6_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB6_13StoredElementE10equivalent0Be_
 FNDA:307,_RNvMs2_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_13StoredElement16to_owned_element
 FNDA:5529,_RNvMs3_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_13DispatchToken14matches_stored
 FNDA:7543,_RNvMs3_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_13DispatchToken8store_in
@@ -34733,10 +34796,10 @@ FNDA:4626,_RNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature17store_u
 FNDA:22167,_RNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature18normalized_keyword
 FNDA:0,_RNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature18restore_stored_key
 FNDA:0,_RNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature19most_specific_ktype
-FNDA:7872,_RNvXs1_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB5_13StoredElementE10equivalent
+FNDA:7911,_RNvXs1_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB5_13StoredElementE10equivalent
 FNDA:0,_RNvXs6_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_10ReturnTypeNtNtCs27Vx93FoQ6z_4core3fmt5Debug3fmt
 FNDA:0,_RNvXs7_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_14DeferredReturnNtNtCs27Vx93FoQ6z_4core3fmt5Debug3fmt
-FNDA:11433,_RNvXs_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB4_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB4_13StoredElementE10equivalent
+FNDA:11413,_RNvXs_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB4_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB4_13StoredElementE10equivalent
 FNDA:1158,_RNvMs2_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_13StoredElement16to_owned_element
 FNDA:57709,_RNvMs3_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_13DispatchToken14matches_stored
 FNDA:77645,_RNvMs3_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_13DispatchToken8store_in
@@ -34762,14 +34825,14 @@ FNDA:46090,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature17store_
 FNDA:230250,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature18normalized_keyword
 FNDA:5,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature18restore_stored_key
 FNDA:8,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature19most_specific_ktype
-FNDA:11366,_RNvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB5_13StoredElementE10equivalent
+FNDA:11302,_RNvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB5_13StoredElementE10equivalent
 FNDA:2,_RNvXs6_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_10ReturnTypeNtNtCs27Vx93FoQ6z_4core3fmt5Debug3fmt
 FNDA:3,_RNvXs7_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_14DeferredReturnNtNtCs27Vx93FoQ6z_4core3fmt5Debug3fmt
-FNDA:115780,_RNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB4_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB4_13StoredElementE10equivalent
+FNDA:115598,_RNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB4_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB4_13StoredElementE10equivalent
 FNDA:155005,_RINvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB3_15UntypedKeyProbeNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtCscZwnrSQhSgs_9hashbrown6hasher13DefaultHasherEBb_
 FNDA:12674,_RINvXs0_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_14StoredKeyProbeNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtCscZwnrSQhSgs_9hashbrown6hasher13DefaultHasherEBe_
 FNDA:872242,_RINvXsn_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_14UntypedElementNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtCscZwnrSQhSgs_9hashbrown6hasher13DefaultHasherEBe_
-FNDA:459,_RINvXsn_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_14UntypedElementNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtNtCs75vJTIYSa2J_3std4hash6random13DefaultHasherEBe_
+FNDA:456,_RINvXsn_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_14UntypedElementNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtNtCs75vJTIYSa2J_3std4hash6random13DefaultHasherEBe_
 FNDA:429324,_RINvXso_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_13StoredElementNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtCscZwnrSQhSgs_9hashbrown6hasher13DefaultHasherEBe_
 FNDA:5949,_RNCNCNvMs9_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB9_19ExpressionSignature13most_specific00Bh_
 FNDA:14,_RNCNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature19most_specific_ktype00Bd_
@@ -34790,37 +34853,38 @@ FNDA:209231,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature17sto
 FNDA:632057,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature18normalized_keyword0Bb_
 FNDA:10,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature18restore_stored_key0Bb_
 FNDA:10,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature19most_specific_ktype0Bb_
-FNDA:38095,_RNCNvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB7_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB7_13StoredElementE10equivalent0Bf_
-FNDA:669531,_RNCNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB6_13StoredElementE10equivalent0Be_
+FNDA:38096,_RNCNvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB7_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB7_13StoredElementE10equivalent0Bf_
+FNDA:669524,_RNCNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB6_13StoredElementE10equivalent0Be_
 FNDA:0,_RNvMsa_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_8Argument20matches_working_part
 FNF:54
 FNH:53
-DA:45,1448994
-DA:46,1448994
-DA:47,742706
-DA:48,742706
-DA:49,742706
-DA:50,742706
-DA:51,706288
-DA:53,1448994
+DA:45,1448991
+DA:46,1448991
+DA:47,742707
+DA:48,742707
+DA:49,742707
+DA:50,742707
+DA:51,706284
+DA:53,1448991
 DA:79,170270
 DA:80,170270
 DA:81,170270
-DA:85,127213
-DA:86,127213
-DA:87,122588
-DA:88,122588
-DA:89,122588
-DA:90,122588
-DA:91,734318
-DA:92,388684
-DA:93,345389
-DA:94,245
-DA:95,734318
-DA:96,127213
+DA:85,127011
+DA:86,127011
+DA:87,122571
+DA:88,122571
+DA:89,122571
+DA:90,122571
+DA:91,734354
+DA:92,388695
+DA:93,345426
+DA:94,233
+DA:95,734354
+DA:96,127011
 DA:109,21241
 DA:110,21241
 DA:111,21241
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
@@ -34831,10 +34895,15 @@ DA:116,19608
 DA:115,19238
 DA:116,19238
 >>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
+=======
+DA:115,19213
+DA:116,19213
+>>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)
 DA:117,19026
 DA:118,19026
 DA:119,19026
 DA:120,19026
+<<<<<<< HEAD
 <<<<<<< HEAD
 DA:121,61554
 DA:122,29313
@@ -34893,6 +34962,14 @@ DA:124,7
 DA:125,61547
 DA:126,19238
 >>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
+=======
+DA:121,61552
+DA:122,29318
+DA:123,32233
+DA:124,1
+DA:125,61552
+DA:126,19213
+>>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)
 DA:131,1465
 DA:132,1465
 DA:133,734
@@ -35465,7 +35542,7 @@ FNDA:282,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types11type_digest12uni
 FNDA:1778,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types11type_digest16component_digest0Bb_
 FNDA:889,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types11type_digest16component_digests_0Bb_
 FNDA:805,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types11type_digest16feed_named_types0Bb_
-FNDA:98,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types11type_digest16feed_named_typess_0Bb_
+FNDA:97,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types11type_digest16feed_named_typess_0Bb_
 FNDA:18,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types11type_digest21canonical_type_digest0Bb_
 FNDA:56,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types11type_digest21feed_record_canonical0Bb_
 FNDA:11,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types11type_digest21feed_record_canonicals_0Bb_
@@ -37157,6 +37234,7 @@ FNDA:48,_RNvXs2_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB5_4KKeyN
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 FNDA:30,_RNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB4_4KKeyNtNtCs27Vx93FoQ6z_4core3cmp9PartialEq2eq
 FNDA:131,_RINvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB6_4KKeyNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtCscZwnrSQhSgs_9hashbrown6hasher13DefaultHasherEBe_
 FNDA:129,_RINvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB6_4KKeyNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtNtCs75vJTIYSa2J_3std4hash6random13DefaultHasherEBe_
@@ -37175,6 +37253,9 @@ FNDA:28,_RNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB4_4KKeyNt
 =======
 FNDA:31,_RNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB4_4KKeyNtNtCs27Vx93FoQ6z_4core3cmp9PartialEq2eq
 >>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
+=======
+FNDA:30,_RNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB4_4KKeyNtNtCs27Vx93FoQ6z_4core3cmp9PartialEq2eq
+>>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)
 FNF:6
 FNH:6
 DA:35,40
@@ -37197,13 +37278,13 @@ DA:56,112
 DA:57,6
 DA:58,6
 DA:60,124
-DA:64,31
-DA:65,31
-DA:66,24
+DA:64,30
+DA:65,30
+DA:66,23
 DA:67,2
 DA:70,3
 DA:71,2
-DA:73,31
+DA:73,30
 DA:79,302
 DA:80,302
 DA:81,269

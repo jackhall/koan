@@ -138,4 +138,3 @@ fn per_dispatch_cost_does_not_grow_with_scope_walk_depth() {
          step scratch arena."
     );
 }
-

@@ -152,6 +152,20 @@ invariants:
   answered by the edge slab), and the recycle path relies on Inv-C rather than
   scrubbing itself.
 
+**A row keeps the buffer it grew.** The three verbs that must own a row's vector
+to walk it — the drain's dep read at step start, the finalize walk over
+`notify`, the splice's notify re-point — take it out and hand it back to the
+same row emptied rather than dropped, and row installation on a slot popped off
+the free list clears the dep list instead of assigning a fresh one. Capacity
+therefore survives both a wake and a recycle, so a steady-state graph shape
+stops allocating row vectors once it has been seen
+([recycling.rs](../src/scheduler/tests/recycling.rs) asserts that as an exact
+allocation count). The dep read restores *before* the step callback runs, so a
+mid-step `Replace` installs the next incarnation's list into the recycled
+allocation; each restore debug-asserts that the row it lands on is still the
+empty one the take left, which is what would catch a row re-listed while its
+buffer was out.
+
 The rows are private and mutated only through a small surface — row
 installation, the wire primitive, the finalize walk, edge release, the splice's
 notify re-point — so every change preserves the per-row invariants atomically.
@@ -180,7 +194,8 @@ takes the stored work, reads every dep edge's delivered resident (releasing
 the edge as it reads), and hands the callback one
 [`Step`](../src/scheduler/drain.rs) bundle: the slot's id, a clone of its
 memory anchor, the still-sealed continuation, the dep results in dep
-order, and a handle on the step's **scratch arena**. The callback opens the
+order — themselves hosted on the arena below, sized to the dep count — and a
+handle on the step's **scratch arena**. The callback opens the
 continuation at its own step brand, runs the
 step, and returns a [`StepVerdict`](../src/scheduler/drain.rs); returning the
 verdict *is* applying it, each arm mapping onto exactly one internal
@@ -203,8 +218,12 @@ structural, not a discipline: the loop is the only place a step is invoked, and 
 
 Confinement is the handle's own lifetime. The step callback's bound names it elided, hence
 higher-ranked, while a verdict's `'work` is fixed before the bump exists — so a
-scratch-hosted buffer cannot reach a `StepVerdict`, a park's `Deps`, or a `Replace`
-continuation. That is a borrow-check fact rather than a rule the embedder keeps, and
+scratch-hosted buffer cannot reach a `StepVerdict` or the `Replace` continuation one
+carries. What the pop itself consumes may live there, the dep list of a park wired *inside*
+the step included: [`Deps`](../src/scheduler/deps.rs) is generic in the allocator its
+entries sit on — defaulting to the global one, which is what a submission door outside any
+step builds on — and `install_deps_in` reads that list, and hands back its own verdict list,
+within the pop that made it. That is a borrow-check fact rather than a rule the embedder keeps, and
 [`drive_scratch`](../src/scheduler/drain.rs) pins it with a `compile_fail` doctest for
 scratch-hosted code with no scheduler to run under. Bump deallocation is a no-op and
 `grow` extends in place only for the newest allocation, so a scratch collection that grows

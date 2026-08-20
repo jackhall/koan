@@ -5,12 +5,16 @@
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 2026-08-20 ab28b88e+ 91.26 94.03
 =======
 =======
 =======
 =======
 =======
+=======
+2026-08-20 c95604f9+ 91.25 94.03
+>>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)
 2026-08-20 93b488b3+ 91.25 94.03
 >>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
 2026-08-20 64c0b849+ 91.25 94.03
@@ -18,6 +22,7 @@
 2026-08-20 da2c54f9+ 91.24 94.02
 >>>>>>> 64c0b849 (Host a park's dep list on the step's scratch arena)
 2026-08-20 9cb05bdb+ 91.24 94.02
+<<<<<<< HEAD
 >>>>>>> da2c54f9 (Thread the step scratch handle through the koan wiring path)
 2026-08-20 ab28b88e+ 91.25 94.03
 <<<<<<< HEAD
@@ -25,3 +30,5 @@
 2026-08-20 58c70ea0+ 91.25 94.03
 =======
 >>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
+=======
+>>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)

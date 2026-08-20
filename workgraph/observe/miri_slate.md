@@ -419,5 +419,13 @@ shape that storage-side reasoning can't rule out. Tests are minimal-shape
 mirrors of the unsafe operation, not end-to-end feature tests; they fail when
 Miri reports UB or a leak, not on values.
 
+Test scaffolding is excluded, on the same footing as the `TestCart` stand-in
+above: the `unsafe impl GlobalAlloc` in [src/tests.rs](../src/tests.rs) is the
+allocation counter installed for the lib-test binary, it forwards every request
+to `System` with the pointer and layout it was handed, and it is not reachable
+from a build of the library. It runs under Miri anyway — every slate test in
+this binary allocates through it — exactly as koan's own counter does
+([TEST.md § Miri audit slate](../../TEST.md#miri-audit-slate)).
+
 When you add or remove a slate test, update the list above and re-run the
 slate to confirm the line count matches.
