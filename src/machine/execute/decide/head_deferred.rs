@@ -16,6 +16,7 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
+use crate::witnessed::BumpAllocator;
 
 use super::super::TerminalDepFinish;
 use super::apply_callable::{ResolvedCallable, apply_callable};
@@ -36,7 +37,7 @@ pub(in crate::machine::execute) fn initial_expr<'step>(
         WorkingPart::Expression(inner) => *inner,
         _ => unreachable!("HeadDeferred shape implies nested Expression head"),
     };
-    park_on_head(expr, head, false)
+    park_on_head(expr, head, false, ctx.scratch())
 }
 
 /// Wraps the sigil head as a one-part node rather than unwrapping it, so the type marker
@@ -55,7 +56,7 @@ pub(in crate::machine::execute) fn initial_type<'step>(
         }
         _ => unreachable!("TypeHeadDeferred shape implies SigiledTypeExpr head"),
     };
-    park_on_head(expr, head, true)
+    park_on_head(expr, head, true, ctx.scratch())
 }
 
 /// The general head lane: a head is callable whenever it *evaluates* to something callable, so any
@@ -67,7 +68,7 @@ pub(in crate::machine::execute) fn defer_head<'step>(
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let head = WorkingExpression::synthesized(ctx.current_scope().brand(), &[expr.parts[0]], &expr);
-    park_on_head(expr, head, false)
+    park_on_head(expr, head, false, ctx.scratch())
 }
 
 /// The apply-a-callable tail the finish hands off to may itself re-park, so the finish must be
@@ -77,6 +78,7 @@ fn park_on_head<'step>(
     expr: WorkingExpression<'step>,
     head: WorkingExpression<'step>,
     type_only: bool,
+    scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
     let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
         let head_terminal = terminals[0];
@@ -103,10 +105,13 @@ fn park_on_head<'step>(
         };
         apply_callable(ctx, callable, &expr)
     });
-    Await::on(Deps::from_requests([DepRequest::Dispatch {
-        expr: head,
-        placement: DepPlacement::OwnScope,
-    }]))
+    Await::on(Deps::from_requests_in(
+        [DepRequest::Dispatch {
+            expr: head,
+            placement: DepPlacement::OwnScope,
+        }],
+        scratch,
+    ))
     .finish_terminal(finish)
 }
 

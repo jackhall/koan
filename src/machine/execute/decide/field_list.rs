@@ -32,11 +32,11 @@ use crate::machine::model::{
 use crate::machine::model::{KType, Record, TypeRegistry};
 use crate::machine::{KError, KErrorKind, Scope, TraceFrame};
 use crate::scheduler::{Dep, Deps};
+use crate::witnessed::BumpAllocator;
 
 use super::super::StepCarried;
 use super::super::TerminalDepFinish;
-use super::super::outcome::{Await, Outcome, dep_error_frame};
-use super::DepRequest;
+use super::super::outcome::{Await, Outcome, StepDeps, dep_error_frame};
 use super::SubDispatch;
 use super::ctx::DecideCtx;
 
@@ -228,7 +228,11 @@ impl<'a> FieldListDeferral<'a> {
     /// Finish into the scheduler currency: an [`Outcome::Park`] whose dep-finish re-walks
     /// the field list once every dep resolves, then composes the pairs
     /// through `compose`. A pure decide, no write.
-    pub(in crate::machine::execute) fn outcome(self, compose: BrandCompose<'a>) -> Outcome<'a> {
+    pub(in crate::machine::execute) fn outcome(
+        self,
+        compose: BrandCompose<'a>,
+        scratch: BumpAllocator<'a>,
+    ) -> Outcome<'a> {
         let (rewalk, deps, first_sub) = self.into_parts();
         let finish: TerminalDepFinish<'a> = Box::new(move |view, terminals| {
             // The sub-Dispatch tail feeds the walk; the deps ahead of it are notify-only waits on a
@@ -253,7 +257,7 @@ impl<'a> FieldListDeferral<'a> {
         });
         // Lower each sub-Dispatch request into the library dep currency `Await::on` consumes; the
         // entries the deferral already named pass through, keeping the tail index above valid.
-        let mut lowered: Deps<DepRequest<'a>> = Deps::new();
+        let mut lowered: StepDeps<'a> = Deps::with_capacity_in(deps.len(), scratch);
         for entry in deps.into_entries() {
             match entry {
                 Dep::Producer(source) => lowered.on(source),
@@ -344,8 +348,9 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
             FieldNameKind::Identifier,
         )
         .with_chain(chain)
-        .outcome(Box::new(|pairs, types| {
-            Ok(types.record(Record::from_pairs(pairs)))
-        })),
+        .outcome(
+            Box::new(|pairs, types| Ok(types.record(Record::from_pairs(pairs)))),
+            view.scratch(),
+        ),
     }
 }

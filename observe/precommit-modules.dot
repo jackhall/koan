@@ -642,6 +642,7 @@ digraph {
     "koan::machine::execute::decide::field_list" -> "koan::machine::execute::decide::ctx" [label="uses", style="dashed"];
     "koan::machine::execute::decide::field_list" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::decide::field_list" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::fn_value" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::fn_value" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::fn_value" -> "koan::machine::execute::decide" [label="uses", style="dashed"];
     "koan::machine::execute::decide::fn_value" -> "koan::machine::execute::decide::apply_callable" [label="uses", style="dashed"];

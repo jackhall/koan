@@ -60,6 +60,7 @@ fn park_on_errored_producer_propagates_producer_error() {
                     ProducerId::from_scheduler_edge(edge_err),
                 ],
                 Some(frame),
+                _view.scratch(),
                 Box::new(move |_view, _id| {
                     resumed_in_step.set(true);
                     Outcome::Done(Err(KError::new(KErrorKind::ShapeError(

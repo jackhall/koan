@@ -7,6 +7,7 @@ use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{DispatchOutcome, KError, KErrorKind};
 use crate::scheduler::Deps;
 use crate::source::Spanned;
+use crate::witnessed::BumpAllocator;
 
 use super::super::nodes::{NodeWork, WorkLabel};
 use super::super::obligation::with_obligation;
@@ -52,7 +53,7 @@ pub(super) fn initial<'step>(
             return install_eager_only(ctx, expr);
         }
         DispatchOutcome::ParkOnProducers(sources) => {
-            return park_on_claims(sources, expr);
+            return park_on_claims(sources, expr, ctx.scratch());
         }
     };
     // Binder name claims / pending overload slots are installed at statement submission from the
@@ -120,7 +121,9 @@ fn finish<'step>(
                 reason: "no matching function".to_string(),
             })))
         }
-        DispatchOutcome::ParkOnProducers(sources) => park_on_claims(sources, working_expr),
+        DispatchOutcome::ParkOnProducers(sources) => {
+            park_on_claims(sources, working_expr, ctx.scratch())
+        }
         DispatchOutcome::UnboundName(name) => {
             Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
         }
@@ -135,11 +138,13 @@ fn finish<'step>(
 fn park_on_claims<'step>(
     sources: Vec<ProducerId>,
     expr: WorkingExpression<'step>,
+    scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
     let frame = working_frame("<dispatch-park>", &expr);
     park_resume_labelled(
         sources,
         Some(frame),
+        scratch,
         Box::new(move |ctx, _id| initial(ctx, expr)),
     )
 }
@@ -226,7 +231,7 @@ pub(super) fn install_eager_subs<'step>(
         );
         finish_eager_subs(ctx, spliced, picked)
     });
-    Await::on(Deps::from_requests(deps))
+    Await::on(Deps::from_requests_in(deps, ctx.scratch()))
         .error_frame(dep_error_frame)
         .finish_terminal(finish)
 }

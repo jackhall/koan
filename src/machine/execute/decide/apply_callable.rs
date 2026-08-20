@@ -170,8 +170,18 @@ fn apply_constructor<'step>(
                         ..
                     },
                 ],
-            ) => constructors::dispatch_construct_record_newtype(brand, identity, fields),
-            _ => constructors::dispatch_construct_newtype(brand, identity, &expr.parts[1..]),
+            ) => constructors::dispatch_construct_record_newtype(
+                brand,
+                identity,
+                fields,
+                ctx.scratch(),
+            ),
+            _ => constructors::dispatch_construct_newtype(
+                brand,
+                identity,
+                &expr.parts[1..],
+                ctx.scratch(),
+            ),
         },
         // A non-empty schema is `Result`'s variant schema — the sealed tagged-union path. An
         // empty schema is a declared constructor family (`NEWTYPE (Elem AS Wrapper)`); it
@@ -185,6 +195,7 @@ fn apply_constructor<'step>(
                 identity,
                 Rc::new(variant_schema),
                 parts,
+                ctx.scratch(),
             ),
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
             Err(e) => Outcome::Done(Err(e)),
@@ -201,7 +212,7 @@ fn apply_constructor<'step>(
         }
         NodeSchema::TypeConstructor { .. } => match extract_call_body(expr) {
             Ok(CallBody::Positional(parts)) => {
-                constructors::dispatch_construct_apply(brand, identity, parts)
+                constructors::dispatch_construct_apply(brand, identity, parts, ctx.scratch())
             }
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
             Err(e) => Outcome::Done(Err(e)),
@@ -266,7 +277,7 @@ fn apply_named_type_args<'step>(
                 .type_carried(view.types().constructor_apply(identity, args)))
         }))
     });
-    Await::on(Deps::from_requests(deps))
+    Await::on(Deps::from_requests_in(deps, ctx.scratch()))
         .error_frame(dep_error_frame())
         .finish_terminal(finish)
 }
@@ -362,6 +373,7 @@ fn apply_union_construct<'step>(
                     Rc::new(union_variant_schema(&members, ctx.types())),
                     tag,
                     value_part,
+                    ctx.scratch(),
                 ),
                 None => Outcome::Done(Err(unknown_variant_error(&members, &tag, ctx.types()))),
             }

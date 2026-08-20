@@ -591,7 +591,7 @@ impl<'run> Host<'run> {
                             id,
                             brand,
                             scratch,
-                            ParkDeps::List(Deps::from_requests([watched])),
+                            ParkDeps::List(Deps::from_requests_in([watched], scratch)),
                         );
                         catch_continuation(finish)
                     }
@@ -676,7 +676,7 @@ impl<'run> Host<'run> {
                                 Err(error) => Outcome::Done(Err(error)),
                             }
                         });
-                        let park = Await::on(Deps::from_producers([edge]))
+                        let park = Await::on(Deps::from_producers_in([edge], scratch))
                             .error_frame(dep_error_frame())
                             .finish_terminal(finish);
                         self.apply(sched, park, brand, scratch, id, anchor)

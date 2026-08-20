@@ -20,7 +20,7 @@ use crate::machine::{
     CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, RegionTypeFamily,
 };
 use crate::source::Spanned;
-use crate::witnessed::{Delivered, RegionHandle, RegionHandleFamily, reattachable};
+use crate::witnessed::{BumpAllocator, Delivered, RegionHandle, RegionHandleFamily, reattachable};
 
 use super::super::outcome::DepTerminal;
 use super::super::{StepCarried, WitnessedDepFinish};
@@ -165,12 +165,18 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
     brand: RegionBrand<'step>,
     identity: KType,
     value_parts: &[Spanned<WorkingPart<'step>>],
+    scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
     let value_cell = match single_value_cell(brand, &value_parts_of(value_parts)) {
         Ok(cell) => cell,
         Err(e) => return Outcome::Done(Err(e)),
     };
-    launch(brand, vec![value_cell], CtorKind::NewType { identity })
+    launch(
+        brand,
+        vec![value_cell],
+        CtorKind::NewType { identity },
+        scratch,
+    )
 }
 
 /// Direct-construct a record-repr newtype from a named record-literal body, one value cell per
@@ -179,6 +185,7 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
     brand: RegionBrand<'step>,
     identity: KType,
     record_fields: &[(&'step str, ExpressionPart<'step>)],
+    scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
     let field_names: Vec<String> = record_fields
         .iter()
@@ -195,6 +202,7 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
             identity,
             field_names,
         },
+        scratch,
     )
 }
 
@@ -274,6 +282,7 @@ pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
     brand: RegionBrand<'step>,
     constructor: KType,
     value_parts: &[Spanned<ExpressionPart<'step>>],
+    scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
     let value_cell = match single_value_cell(brand, value_parts) {
         Ok(cell) => cell,
@@ -283,6 +292,7 @@ pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
         brand,
         vec![value_cell],
         CtorKind::ApplyConstructor { constructor },
+        scratch,
     )
 }
 
@@ -294,12 +304,13 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
     member: KType,
     schema: Rc<HashMap<String, KType>>,
     args_parts: &[Spanned<ExpressionPart<'step>>],
+    scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
     let (tag, value_part) = match prepare_args(args_parts) {
         Ok(v) => v,
         Err(e) => return Outcome::Done(Err(e)),
     };
-    construct_tagged(brand, member, schema, tag, value_part)
+    construct_tagged(brand, member, schema, tag, value_part, scratch)
 }
 
 /// Construct a tagged value from an already-split `(tag, value)` pair. The finish type-checks the
@@ -310,6 +321,7 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
     schema: Rc<HashMap<String, KType>>,
     tag: String,
     value_part: ExpressionPart<'step>,
+    scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
     launch(
         brand,
@@ -319,6 +331,7 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
             member,
             tag,
         },
+        scratch,
     )
 }
 
@@ -329,6 +342,7 @@ fn launch<'step>(
     brand: RegionBrand<'step>,
     value_parts: Vec<ValueCell<'step>>,
     kind: CtorKind,
+    scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
     debug_assert!(
         !value_parts.is_empty(),
@@ -349,7 +363,7 @@ fn launch<'step>(
     let combine_finish: WitnessedDepFinish<'step> = Box::new(move |view, terminals| {
         finish_witnessed(view, &kind, terminals).map(StepCarried::born_delivered)
     });
-    Await::on(Deps::from_requests(deps)).finish_witnessed(combine_finish)
+    Await::on(Deps::from_requests_in(deps, scratch)).finish_witnessed(combine_finish)
 }
 
 /// Build the construction operand carrying `(dest brand, nominal identity)` across the build brand.

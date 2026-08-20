@@ -368,7 +368,7 @@ fn install_pairwise_fold<'step>(
         };
         become_dispatch(ctx, acc)
     });
-    Await::on(Deps::from_requests(deps))
+    Await::on(Deps::from_requests_in(deps, ctx.scratch()))
         .error_frame(dep_error_frame)
         .finish_terminal(finish)
 }
@@ -430,6 +430,7 @@ fn park_on_pending_operators<'step, 'b>(
     park_resume_labelled(
         to_wait,
         Some(frame),
+        ctx.scratch(),
         Box::new(move |ctx, _id| run(ctx, ctx.current_scope(), &parked_expr)),
     )
 }

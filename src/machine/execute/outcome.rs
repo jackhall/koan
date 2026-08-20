@@ -205,13 +205,21 @@ pub(in crate::machine::execute) fn dep_error_frame() -> DeferredTraceFrame<'stat
     }
 }
 
+/// A park's dep list, hosted on the **step's scratch arena**: the list is built by the decide,
+/// read by the wiring door, and dead by the end of the pop that produced it, so the allocator
+/// parameter is what makes that confinement a compile fact rather than a convention. Every park
+/// construction site therefore holds the step's own handle — `ctx.scratch()`, or the one the apply
+/// harness carries.
+pub(in crate::machine::execute) type StepDeps<'step> =
+    Deps<DepRequest<'step>, BumpAllocator<'step>>;
+
 /// What a park waits on — the two dep-wiring doors, told apart by whether the dep count is known at
 /// declaration time. The harness has one realization path per arm; nothing converts between them.
 pub(in crate::machine::execute) enum ParkDeps<'step> {
     /// A dep list: one source per entry, in the builder's order. Every [`DepRequest`] realizes to
     /// exactly one producer, so a caller's [`Deps::request`] index is the position its result comes
     /// back at.
-    List(Deps<DepRequest<'step>>),
+    List(StepDeps<'step>),
     /// A statement block: one dep per statement, in declaration order. The count is only known once
     /// the block is split, so it is never mixed with named deps.
     Block(BlockRequest<'step>),
@@ -226,7 +234,7 @@ pub(in crate::machine::execute) struct Await<'step> {
 }
 
 impl<'step> Await<'step> {
-    pub(in crate::machine::execute) fn on(deps: Deps<DepRequest<'step>>) -> Self {
+    pub(in crate::machine::execute) fn on(deps: StepDeps<'step>) -> Self {
         Await::on_park_deps(ParkDeps::List(deps))
     }
 

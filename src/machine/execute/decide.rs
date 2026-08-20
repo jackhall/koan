@@ -21,10 +21,12 @@ use super::harness::KoanWorkload;
 use super::ignore_results;
 use super::nodes::{NodeWork, WorkLabel};
 use super::obligation::{ReturnObligation, with_obligation};
+pub(in crate::machine::execute) use super::outcome::StepDeps;
 use super::outcome::{
     ParkDeps, TerminalDepFinish, continue_inline, dep_error_frame, tail_continue,
 };
 use crate::scheduler::{Dep, Deps};
+use crate::witnessed::BumpAllocator;
 
 pub(in crate::machine::execute) use crate::machine::core::{
     BodyPlacement, DepPlacement, DepRequest, SubDispatch,
@@ -215,9 +217,10 @@ pub(in crate::machine::execute) fn propagate_dep_error(
 /// the [`WorkLabel`] minted at submission is what a stuck slot renders through.
 pub(in crate::machine::execute) fn park_resume<'step>(
     sources: Vec<ProducerId>,
+    scratch: BumpAllocator<'step>,
     resume: ResumeFn<'step>,
 ) -> Outcome<'step> {
-    park_resume_labelled(sources, None, resume)
+    park_resume_labelled(sources, None, scratch, resume)
 }
 
 /// [`park_resume`] carrying an explicit dep-error frame, so an error the install surfaces when a
@@ -225,11 +228,13 @@ pub(in crate::machine::execute) fn park_resume<'step>(
 pub(in crate::machine::execute) fn park_resume_labelled<'step>(
     sources: Vec<ProducerId>,
     dep_error_frame: Option<DeferredTraceFrame<'step>>,
+    scratch: BumpAllocator<'step>,
     resume: ResumeFn<'step>,
 ) -> Outcome<'step> {
     Outcome::Park {
-        deps: ParkDeps::List(Deps::from_producers(
-            sources.into_iter().map(ProducerId::scheduler_edge),
+        deps: ParkDeps::List(Deps::from_producers_in(
+            sources.iter().copied().map(ProducerId::scheduler_edge),
+            scratch,
         )),
         continuation: Continuation::Resume { resume },
         dep_error_frame,
@@ -562,7 +567,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
             // Results come back in the order the builtin assembled the list — one per entry — so
             // the lowering must preserve it: an index banked at `Deps::request` still addresses
             // its own result.
-            let mut lowered: Deps<DepRequest<'step>> = Deps::new();
+            let mut lowered: StepDeps<'step> = Deps::with_capacity_in(deps.len(), view.scratch());
             for entry in deps.into_entries() {
                 match entry {
                     Dep::Producer(source) => lowered.on(source),
@@ -596,7 +601,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 run_action(view, finish(&fctx, result))
             });
             Outcome::Park {
-                deps: ParkDeps::List(Deps::new()),
+                deps: ParkDeps::List(Deps::new_in(view.scratch())),
                 continuation: Continuation::Catch {
                     watched,
                     finish: wrapped,

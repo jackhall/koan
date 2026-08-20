@@ -22,7 +22,7 @@ use super::{
     type_channel,
 };
 use crate::scheduler::Deps;
-use crate::witnessed::Delivered;
+use crate::witnessed::{BumpAllocator, Delivered};
 
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
@@ -59,6 +59,7 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // lifting that value.
         TypeChannel::Parked(source) => park_resume(
             vec![source],
+            ctx.scratch(),
             Box::new(move |ctx, _idx| bare_type_leaf(ctx, ctx.current_scope(), t)),
         ),
     }
@@ -138,13 +139,13 @@ pub(super) fn literal_pass_through<'step>(
         ),
         WorkingPart::Expression(inner) => become_dispatch(ctx, *inner),
         WorkingPart::Ast(ExpressionPart::ListLiteral(items)) => {
-            park_on_literal(DepRequest::ListLit(items))
+            park_on_literal(DepRequest::ListLit(items), ctx.scratch())
         }
         WorkingPart::Ast(ExpressionPart::DictLiteral(pairs)) => {
-            park_on_literal(DepRequest::DictLit(pairs))
+            park_on_literal(DepRequest::DictLit(pairs), ctx.scratch())
         }
         WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)) => {
-            park_on_literal(DepRequest::RecordLit(fields))
+            park_on_literal(DepRequest::RecordLit(fields), ctx.scratch())
         }
         _ => unreachable!(
             "LiteralPassThrough classifier only routes Literal/Spliced/Expression/QuotedExpression/ListLiteral/DictLiteral/RecordLiteral"
@@ -155,7 +156,7 @@ pub(super) fn literal_pass_through<'step>(
 /// Park the slot on a single literal-producer dep, whose finish relocates the produced value into
 /// the consumer region — so the literal's reach rides the terminal by construction rather than
 /// being recomputed beside it. A dep error short-circuits frameless before the finish runs.
-fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
+fn park_on_literal<'step>(dep: DepRequest<'step>, scratch: BumpAllocator<'step>) -> Outcome<'step> {
     let finish: WitnessedDepFinish<'step> = Box::new(|view, deps| {
         // The destination is a bare region handle (empty reach) sealed as an envelope witnessed by
         // the consumer's own frame, so the seam composes the producer's reach into it and homes
@@ -165,7 +166,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
             Delivered::destination(view.dest_frame()),
         )))
     });
-    Await::on(Deps::from_requests([dep])).finish_witnessed(finish)
+    Await::on(Deps::from_requests_in([dep], scratch)).finish_witnessed(finish)
 }
 
 /// Bare-`Type`-head call. The head resolves on the type channel and the identity routes through
@@ -193,6 +194,7 @@ pub(super) fn type_call<'step>(
             // win; reaching here means the claim still stands.
             return park_resume(
                 vec![source],
+                ctx.scratch(),
                 Box::new(move |ctx, _idx| type_call(ctx, expr)),
             );
         }
