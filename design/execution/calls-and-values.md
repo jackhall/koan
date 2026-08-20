@@ -326,7 +326,7 @@ value-side `Scope::resolve_with_chain`, the type-side `resolve_type_with_chain`,
 bare-identifier `lookup_with_chain`, and the per-scope
 [`Bindings::lookup_value`](../../src/machine/core/bindings.rs) /
 `lookup_type` / `lookup_function` lookups (the last covering both the
-sealed-overload filter and the in-flight pending slots of the same bucket
+sealed-overload filter and the in-flight claims on the same bucket key
 in one pass) all filter through it. The gate is `chain = None`-bypassed
 for test fixtures and builtin-registration paths.
 

@@ -301,12 +301,12 @@ to two bucket keys.
 
 The bucket-keyed channel admits *sibling* overloads under one head
 keyword. Two `FN (PICK xs :A) ...` / `FN (PICK xs :B) ...`
-declarations each claim a distinct pending slot in the same
-`functions[bucket]` vec — the very bucket the sealed overloads land in; the
-earlier-index slot
+declarations each stamp a distinct claim on the same bucket key — the very key
+the sealed overloads land under; the earlier-index claim
 is the wake target for a consumer parking on the bucket, and the
-later-index siblings remain pending until their own finalize. On
-each producer's finalize, the seal overwrites only its own slot; if a parked
+later-index siblings stay claimed until their own finalize. On
+each producer's finalize, the seal lands in the bucket and retires only that
+binder's own claim; if a parked
 consumer's first wake doesn't deliver an admitting overload, the
 consumer re-dispatches and either picks from the now-live sealed slots of
 `functions[bucket]` or re-parks on the next-earliest pending sibling

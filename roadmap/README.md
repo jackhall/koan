@@ -49,7 +49,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Deferred signature summaries](reduce_allocs/deferred-signature-summaries.md)
 - [Park-wiring buffer recycling](reduce_allocs/park-wiring-buffer-recycling.md)
 - [Run-scoped label interning](reduce_allocs/string-interning.md)
-- [Give in-flight binder claims their own store](refactor/claim-store.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)

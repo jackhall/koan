@@ -386,7 +386,7 @@ picture:
   scope's region — description into the table, pins onto the binding entry —
   policy code composing library values, never inspecting them.
 - **Koan's held names are edges, and only the drive loop spells them.** Parked
-  deps, dispatch placeholders, the scope tables' pending arms, and the run's
+  deps, dispatch placeholders, the scope's claim store, and the run's
   roots are all edges, wired through the install door
   ([execution/scheduler.md § Which edges Koan installs](execution/scheduler.md#which-edges-koan-installs)).
   Each has an owner that releases it: the consumer slot for a park, the

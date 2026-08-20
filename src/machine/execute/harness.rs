@@ -853,17 +853,6 @@ fn split_working_body<'a>(
 
 // ---------- Submission ----------
 
-/// Pointer equality of two scopes (identity, not structural).
-/// The name-channel collisions among a block's statements, as `statement position → error`.
-///
-/// Ruled on here, at the fan-out, because here both declaring statements are in hand and neither
-/// has run: the diagnostic names both positions, and which one is rejected does not depend on which
-/// body finishes first. A statement's plan is its own spine, so a block's whole namespace is legible
-/// from the statement keys alone and this costs one pass over borrowed keys.
-///
-/// The **bucket** channel is deliberately absent: sibling overloads under one head keyword are the
-/// point of that channel, so a shared bucket key is a co-declaration rather than a collision, and
-/// the per-signature `DuplicateOverload` check rules on it at seal time where the signatures exist.
 /// The lexical chain of the statement at zero-based `index` in a block over `scope_id`, under the
 /// enclosing `parent` chain — the index rule, written once for both block doors. The pushed frame
 /// index is `index + 1`: visibility is strict less-than and builtins sit at idx 0, so a statement at
@@ -876,6 +865,16 @@ fn block_statement_chain(
     LexicalFrame::push(parent, scope_id, index + 1)
 }
 
+/// The name-channel collisions among a block's statements, as `statement position → error`.
+///
+/// Ruled on here, at the fan-out, because here both declaring statements are in hand and neither
+/// has run: the diagnostic names both positions, and which one is rejected does not depend on which
+/// body finishes first. A statement's plan is its own spine, so a block's whole namespace is legible
+/// from the statement keys alone and this costs one pass over borrowed keys.
+///
+/// The **bucket** channel is deliberately absent: sibling overloads under one head keyword are the
+/// point of that channel, so a shared bucket key is a co-declaration rather than a collision, and
+/// the per-signature `DuplicateOverload` check rules on it at seal time where the signatures exist.
 fn duplicate_declarations(statements: &[WorkingExpression<'_>]) -> HashMap<usize, KError> {
     let mut declared: HashMap<&str, usize> = HashMap::new();
     let mut rejected: HashMap<usize, KError> = HashMap::new();
@@ -903,6 +902,7 @@ fn duplicate_declarations(statements: &[WorkingExpression<'_>]) -> HashMap<usize
     rejected
 }
 
+/// Pointer equality of two scopes (identity, not structural).
 fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
     std::ptr::eq(
         a as *const Scope<'_> as *const (),

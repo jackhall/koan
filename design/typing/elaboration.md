@@ -2,10 +2,10 @@
 
 Type elaboration runs in the same scheduler that runs value evaluation.
 A type-binding site (`LET Ty = ...`, `NEWTYPE Ty = ...`, `UNION Ty = ...`)
-registers a placeholder in the
-[`Bindings`](../../src/machine/core/scope.rs) façade on `Scope` — a pending arm
-of the `types` slot the name will resolve into, the type-side mirror of the
-pending arm a value binding claims in `data` — and dispatches its body as
+registers a claim in the
+[`Bindings`](../../src/machine/core/scope.rs) façade on `Scope` — a claim on the
+name in the scope's claim store, the type-side use of the very entry a value
+binding claims — and dispatches its body as
 scheduler work.
 
 **Type names obey strict source order.** The elaborator carries an

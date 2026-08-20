@@ -38,6 +38,11 @@ with these `KErrorKind` variants:
 - `TypeClassBindingExpectsType` — `LET <Type-class> = <non-type>` rejected at
   bind time rather than at downstream elaboration.
 - `Rebind` — a second `LET` of a name already bound in the same scope.
+- `DuplicateDeclaration` — two statements of one block declare the same name.
+  Ruled on where the block's claim store is built, with both declaring statements
+  in hand and neither yet run, so it names both positions instead of landing on
+  whichever body committed second (see
+  [execution/name-placeholders.md](execution/name-placeholders.md#a-claim-lives-in-the-scopes-claim-store)).
 - `DuplicateOverload` — an `FN` indistinguishable from a registered overload: same
   element shape, same type in every argument slot.
 - `SchedulerDeadlock` — the scheduler reached a fixed point with work still outstanding.
@@ -248,8 +253,8 @@ success value (no wrapper). Tags are the capitalized `KErrorKind` names — a
 
 `frames` is a `List<Str>`, each entry rendered `"in <expression> (<function>)"`.
 
-The four dispatcher-internal kinds (`Rebind`, `DuplicateOverload`,
-`TypeClassBindingExpectsType`, `SchedulerDeadlock`)
+The five dispatcher-internal kinds (`Rebind`, `DuplicateDeclaration`,
+`DuplicateOverload`, `TypeClassBindingExpectsType`, `SchedulerDeadlock`)
 are only catchable via `_`; `it` is then bound to a minimal
 `{kind :Str, message :Str, frames :List<Str>}` struct.
 

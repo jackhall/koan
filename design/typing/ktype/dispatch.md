@@ -101,9 +101,8 @@ not-yet-visible registration.
 [`OverloadBucket::pick_strict`](../../../src/machine/execute/decide/resolve_dispatch.rs)
 receives the pre-filtered survivor list (the `FunctionLookup`'s `overloads`)
 and runs only the admit predicate over it. The same lookup also surfaces the
-earliest-index visible pending slot of that same `functions[key]` bucket in
-`FunctionLookup`'s
-`pending` field; a visible pending parks that scope for a park-and-replay on
+earliest-index visible *claim* on that same bucket key in `FunctionLookup`'s
+`pending` field; a visible claim parks that scope for a park-and-replay on
 wake, since it would shadow once finalized.
 
 The result: an FN reference resolves under the same lexical-position rule as a

@@ -126,13 +126,14 @@ failure is a hard slot, e.g. a non-record operand to
 diagnostic at the call rather than eagerly evaluating an unrelated operand and
 leaking its error.
 
-**Decision 5: a bucket mixing finalized and pending parks until finalize.**
-[`try_install_pending_overload`](../../src/machine/core/bindings.rs) records a
-pending sibling *alongside* any live finalized overload on the same bucket key,
-so `FunctionLookup` can surface both. When it does, the scope always parks until
-the pending finalizes, then re-resolves the now-complete bucket — resolving
-early when a finalized candidate is unambiguously most-specific is a later
-optimization.
+**Decision 5: a bucket key carrying both a finalized overload and a claim parks
+until finalize.**
+[`Bindings::install_pending_overload`](../../src/machine/core/bindings.rs) records
+a sibling's claim on a bucket key independently of any live finalized overload on
+that same key, so `FunctionLookup` — which reaches both through the one key —
+surfaces both. When it does, the scope always parks until the claim finalizes,
+then re-resolves the now-complete bucket — resolving early when a finalized
+candidate is unambiguously most-specific is a later optimization.
 
 The companion driver-side view — what each outcome routes to in the dispatch
 pipeline — lives at

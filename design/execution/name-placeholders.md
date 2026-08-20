@@ -58,25 +58,46 @@ binds into this scope. The binding maps therefore carry committed bindings only,
 and each slot type states its own table's exclusivity rule with no in-flight arm
 to admit.
 
-The store has three parts, each answering one question:
+The store ([`claims.rs`](../../src/machine/core/bindings/claims.rs)) has three
+parts, each answering one question. A `Claim` is the pair (`ProducerId`,
+`BindingIndex`) throughout:
 
-- `by_name` — name → (`ProducerId`, `BindingIndex`). The name channel's read
-  path. One map covers value and type claims alike:
+- `by_name` — name → `Claim`. The name channel's read path, and a name admits at
+  most one claim. One map covers value and type claims alike:
   [`partition_guard`](../../src/machine/core/bindings.rs) decides Value from Type
   by token class alone, so the two are disjoint by construction.
-- `by_bucket` — bucket key → (`ProducerId`, `BindingIndex`). The bucket
-  channel's read path.
-- `by_statement` — a fixed run, sized at the block fan-out and indexed by
+- `by_bucket` — bucket key → a **run** of `Claim`, in install order. The bucket
+  channel's read path. The value is a run and not a single claim because sibling
+  binders legitimately share one bucket key, each claiming at its own
+  `BindingIndex`; the read takes the earliest-index *visible* claim in the run.
+- `by_statement` — a run sized at the block fan-out and indexed by
   `BindingIndex`, each entry naming the at-most-three keys its statement claimed
   plus a live mask over them. The retirement path, and the only part keyed by
   something other than what a reader looks up.
 
-Both read paths are one hash probe, which is what the resolution walk needs:
-a claim is consulted on the miss that would otherwise raise `UnboundName`, once
-per ancestor scope. The store lives inside `Bindings` rather than beside it on
+Each read path is addressed by one hash probe, which is what the resolution walk
+needs: a claim is consulted on the miss that would otherwise raise
+`UnboundName`, once per ancestor scope. (The bucket probe then walks the run it
+lands in — bounded by the sibling binders declaring that one key, never by the
+statement run.) The store lives inside `Bindings` rather than beside it on
 `Scope` because a consumer may park on an in-flight binder in an *outer* scope —
 the walk probes each ancestor's `bindings` gated by that scope's cutoff, so a
 claim store anywhere else would be invisible to the ancestor probe.
+
+**The block fan-out is the one act that builds a store**, and it is also where a
+block rules on duplicate declarations. Every statement's binder plan is its own
+spine, so a block's whole namespace is legible from the statement keys alone
+before any statement runs: the fan-out sizes `by_statement` to the statement
+count and, in the same pass, rejects a statement whose declared name an earlier
+statement of the block already declared. That rejection is
+`KErrorKind::DuplicateDeclaration`, which names *both* declaring positions, and
+the rejected statement submits already-terminal — it never runs a body. Deciding
+it here is what makes the diagnostic deterministic: which of two colliding
+statements is rejected is a fact about lexical order, not about which body
+happened to finish first. The **bucket** channel is deliberately exempt —
+sibling overloads under one head keyword are the point of that channel, so a
+shared bucket key is a co-declaration, and per-signature collisions surface as
+`DuplicateOverload` at seal time where the signatures exist.
 
 A claim's currency is an opaque
 [`ProducerId`](../../src/machine/execute/producer_id.rs) over the claim edge,
@@ -244,6 +265,15 @@ claim as it wrote. A non-zero mask names the at-most-three keys still standing,
 and each is removed from its read map directly. Nothing is searched in either
 direction — not the binding tables by producer, and not the store by name.
 
+That index addresses a *statement*, not a slot, and the two are not one-to-one: a
+statement's eagerly-dispatched sub-slots share its lexical chain, so the index
+alone does not say whose claims sit at it. The stamping slot is therefore marked
+as it stamps — `own_claim_edges` on the
+[`SlotFrame`](../../src/machine/execute/nodes.rs) records claim ownership beside
+the edges — and the retirement hook consults the store only for a slot that
+carries the mark. A sub-slot of a still-live binder retires its own edges and
+leaves its statement's claims standing.
+
 Two properties make that indexing sound, and both are worth asserting rather than
 assuming. **A claim-owning slot never tail-replaces**, so the scope its claims
 were installed into is the scope it retires against:
@@ -281,8 +311,12 @@ window's business, and it never reaches the claim store.
 
 A driver that submits one statement at a time and runs each to completion
 therefore consults no claim at all, because every visible binder has already
-committed — which is why the statement-at-a-time door builds no claim store, and
-why a scope carrying one was fanned out into exactly once.
+committed. So the statement-at-a-time door runs no fan-out: it sizes no statement
+run and rules on no duplicate name, and a binder submitted through it stamps and
+retires its claim without any reader ever seeing it. Sizing `by_statement` at the
+fan-out is sound precisely because a fanned-into scope is fanned into exactly
+once — the assertion above — and a claim arriving outside a fan-out grows the run
+to reach its own index.
 
 ### Miri forward-splice and dispatch-park lifetime contract
 
@@ -375,9 +409,3 @@ cutoff enforces lexical well-foundedness universally: a statement's own
 claims are hidden from its whole subtree at any depth, and a forward
 reference to a lexically later top-level statement is a resolution error,
 not a park.
-
-
-## Open work
-
-- [Give in-flight binder claims their own store](../../roadmap/refactor/claim-store.md)
-  — the claim store this doc describes, and the retirement path keyed on it.

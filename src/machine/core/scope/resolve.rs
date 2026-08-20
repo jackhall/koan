@@ -63,7 +63,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Resolve `name` against this scope and the `outer` chain. Stops at the first
-    /// per-scope hit — one probe of `data`, whose slot is bound xor pending. An inner
+    /// per-scope hit — one probe of `data`, then one of the scope's claim store. An inner
     /// claim shadows an outer value binding, because the inner producer hasn't
     /// finalized and the consumer must park rather than read through.
     ///

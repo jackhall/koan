@@ -69,13 +69,14 @@ threads a chain.
 [`Bindings`](../../src/machine/core/bindings.rs) owns the per-scope
 maps — `data` (values), `types` (type-name → `&KType`), `functions`
 (registered overloads), `operators` (operator probe → the sealed carrier of a
-region-hosted [`OperatorGroup`](../../src/machine/model/operators.rs)). An
-in-flight binder gets no map of its own: it claims a *pending arm* of the slot it
-will resolve into, so each of the three tables holds bound and pending state in
-one entry ([execution/name-placeholders.md § A placeholder is a pending arm of
-the slot it resolves into](../execution/name-placeholders.md#a-placeholder-is-a-pending-arm-of-the-slot-it-resolves-into)),
+region-hosted [`OperatorGroup`](../../src/machine/model/operators.rs)). The four maps hold
+**committed bindings only**; an in-flight binder is an entry of the scope's
+separate claim store, so "is it bound?" and "is a binder for it in flight?" are
+one probe each of the structure that answers it
+([execution/name-placeholders.md § A claim lives in the scope's claim
+store](../execution/name-placeholders.md#a-claim-lives-in-the-scopes-claim-store)),
 and a [`BindKind`](../../src/machine/core/bindings.rs) — `Value` or `Type` —
-picks which table a name-keyed claim lands in. The `data`/`types`
+picks which table a name-keyed claim eventually commits into. The `data`/`types`
 split is **structural, not conventional**, and it is enforced twice over. First by
 **token class**: `Bindings::partition_guard` refuses a value token entering `types` and a
 Type token entering `data`, so a name is committed to one universe by its spelling alone,
@@ -133,7 +134,7 @@ nor the reverse.
   compares the installing [`Installer`](../../src/machine/core/bindings.rs) against the
   stored entry's. What this gate resolves is in-flight status, not identity: a nominal
   member named by a relative `Sibling` reference is in flight iff the scope carrying the
-  very group window that reference resolves against still holds a pending arm for
+  very group window that reference resolves against still holds a live claim on
   the name
   ([resolve_type_identifier.rs](../../src/machine/execute/decide/resolve_type_identifier.rs)).
   The window match is what stops a same-named in-flight declaration of a
@@ -147,20 +148,19 @@ nor the reverse.
   is a missing member, not a fall-through to a builtin or outer type — and the
   cross-kind exclusion keeps a name from matching both arms.
 - [`Bindings::lookup_function`](../../src/machine/core/bindings.rs)
-  surfaces both kinds of slot in one pass over the one bucket, as a
-  `FunctionLookup` struct: `overloads` is the visibility-filtered sealed slots of
+  answers both questions the one bucket key addresses, as a
+  `FunctionLookup` struct: `overloads` is the visibility-filtered entries of
   `functions[key]` (possibly empty) and `pending` is the earliest-index visible
-  pending slot in that same bucket (an in-flight FN binder to park on, if any).
-  The two are
-  returned together — a bucket may hold a finalized overload *and* an in-flight
-  pending sibling at once — so the scope walk decides pending-vs-finalized
+  claim on that same key (an in-flight FN binder to park on, if any). The two are
+  returned together — a key may carry a finalized overload *and* an in-flight
+  claiming sibling at once — so the scope walk decides pending-vs-finalized
   precedence with both in hand rather than the lookup shadowing one. A scope
   contributes nothing to the walk when `overloads.is_empty() &&
   pending.is_none()`.
-- [`Bindings::pending_function_stored`](../../src/machine/core/bindings.rs) is
-  that lookup's pending-only peer, for a caller that reads nothing but the
+- [`Bindings::claimed_bucket_producer`](../../src/machine/core/bindings.rs) is
+  that lookup's claim-only peer, for a caller that reads nothing but the
   in-flight claim — the operator chain's park probe, which asks two keys of every
-  ancestor scope per operator. It answers from the same bucket by the same
+  ancestor scope per operator. It answers from the same claim run by the same
   earliest-visible-index rule, written once so the two entry points cannot name
   different claims, and copies nothing out: a `ProducerId` is a plain edge name,
   where `overloads` has to duplicate its sealed carriers to let the candidate walk
@@ -338,7 +338,8 @@ What each topic doc adds beyond this protocol:
   stratification for a concrete member handle vs `OfKind(KKind)` vs `Any`, and the
   module-body announcement for mutually recursive nominals.
 - [execution/name-placeholders.md § Dispatch-time name placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)
-  — how forward references park on the pending arms of the `data` / `types` /
-  `functions` tables and resume on producer finalize, plus
+  — how references park on the scope's claim store, keyed by the same name or
+  bucket key the `data` / `types` / `functions` tables use, and resume on
+  producer finalize, plus
   the submission-time binder install that prevents `UnboundName` /
   `DispatchFailed` for not-yet-popped sibling binders.
