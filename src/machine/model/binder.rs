@@ -39,7 +39,7 @@ pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<&'a str>;
 /// overloads would compute (e.g. `(MAKESET er :Ordered)` → one key
 /// `[Keyword("MAKESET"), Slot]`; a `UNARY OP` → both the keyword-first list key
 /// `[Keyword(sym), Slot]` and the binary bridge key `[Slot, Keyword(sym), Slot]`);
-/// the driver claims a pending slot in each `bindings.functions` bucket so a sibling call
+/// the driver stamps a claim on each inner-call bucket key so a sibling call
 /// form parks on the producer instead of failing dispatch.
 ///
 /// Separate from [`BinderNameFn`] because the two key different resolvers:

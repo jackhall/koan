@@ -1,8 +1,8 @@
 //! Dispatch-layer submission: turns a [`WorkingExpression`] into a freshly allocated dispatch slot
 //! via [`Scheduler::alloc_node`]. Binder discovery is parse-static and **per-statement** — a node
 //! caches what it itself installs ([`WorkingExpression::binder_plan`]), so submission reads one
-//! field and does no AST recursion. A statement submission stamps that binder's placeholder /
-//! pending-overload entries on the scope before the slot is ever popped, so a later sibling parks
+//! field and does no AST recursion. A statement submission stamps that binder's name and bucket
+//! claims into the scope's claim store before the slot is ever popped, so a later sibling parks
 //! rather than surfacing `UnboundName` / `DispatchFailed`.
 //!
 //! Binding is a statement-level act — the legal positions are exactly statement position and a

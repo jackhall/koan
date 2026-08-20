@@ -64,7 +64,7 @@ impl<'a> Scope<'a> {
 
     /// Resolve `name` against this scope and the `outer` chain. Stops at the first
     /// per-scope hit — one probe of `data`, whose slot is bound xor pending. An inner
-    /// pending slot shadows an outer value binding, because the inner producer hasn't
+    /// claim shadows an outer value binding, because the inner producer hasn't
     /// finalized and the consumer must park rather than read through.
     ///
     /// Type-side bindings are not consulted — see [`Self::resolve_type`].

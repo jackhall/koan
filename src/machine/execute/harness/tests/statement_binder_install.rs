@@ -437,14 +437,21 @@ fn a_rejected_binding_write_is_the_binders_error_terminal() {
 }
 
 /// A binder body that errors *before* it decides its write installs nothing: the writes are outcome
-/// data, so an error terminal carries none of them.
+/// data, so an error terminal carries none of them. And it leaves **no claim** behind either — the
+/// slot's retirement drops what the commit never got to, so nothing survives naming the edge that
+/// slot is about to release.
 #[test]
-fn a_binder_that_errors_installs_nothing() {
+fn a_binder_that_errors_installs_nothing_and_leaves_no_claim() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = run_block(&program, &region, "LET x = nonexistent_name");
     assert!(
         test_run.scope.lookup("x").is_none(),
         "a failed binder must leave no binding behind",
+    );
+    assert!(
+        test_run.scope.bindings().pending_names().is_empty(),
+        "a failed binder must leave no claim behind, got {:?}",
+        test_run.scope.bindings().pending_names(),
     );
 }

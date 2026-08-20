@@ -59,7 +59,7 @@ pub enum DispatchOutcome<'step> {
     Ambiguous(usize),
     Deferred,
     /// Distinct from `Deferred`: waits on existing producers (forward-reference placeholders, or a
-    /// pending slot in `functions[key]`) without scheduling new work.
+    /// claim on `key`) without scheduling new work.
     ParkOnProducers(Vec<ProducerId>),
     /// A bare-name arg resolves to nothing — no binding and no placeholder. The unbound name is the
     /// precise cause, so it surfaces here rather than as a dispatch miss.

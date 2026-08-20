@@ -2,7 +2,7 @@
 //! Layer 2 of [design/typing/elaboration.md](../../../../design/typing/elaboration.md).
 //!
 //! Read-only consumer of the bindings façade: writes nothing, and of the tables reads only
-//! `types` — bound identities through the elaborator, pending arms through the finalize gate. That
+//! `types` — bound identities through the elaborator, claims through the finalize gate. That
 //! read-only dependency is what keeps this out of the rest of `Scope`.
 //!
 //! ## Invariant pinned here

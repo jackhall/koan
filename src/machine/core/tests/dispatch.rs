@@ -543,7 +543,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     }
 
     // Finalize the pending sibling: registering a same-bucket overload at the
-    // pending's index overwrites its pending slot in place (the real finalize path,
+    // pending's index appends beside it and retires that claim (the real finalize path,
     // which matches by `BindingIndex`).
     let pick_str = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
@@ -592,7 +592,7 @@ fn scope_install_pending<'a>(
         .expect("install_pending_overload");
 }
 
-/// Two sibling binders that share a bucket key each claim their own pending slot in
+/// Two sibling binders that share a bucket key each stamp their own claim on it in
 /// `functions[bucket]` — coalescing or rejecting the second would
 /// drop a distinct wake source. A consumer parks on the earliest-index visible
 /// one.

@@ -127,4 +127,9 @@ fn a_binder_that_fails_after_its_sibling_parked_surfaces_unbound_name() {
         matches!(&error.kind, KErrorKind::UnboundName(n) if n == "z"),
         "expected UnboundName('z') from the retired claim, got {error}",
     );
+    assert!(
+        scope.bindings().pending_names().is_empty(),
+        "the failed binder's claim is gone, got {:?}",
+        scope.bindings().pending_names(),
+    );
 }

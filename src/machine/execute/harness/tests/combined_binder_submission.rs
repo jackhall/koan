@@ -1,6 +1,6 @@
 //! The combined statement form installs both channels *atomically*, at submission: after
 //! `LET f = FN (HELPER x :Number) -> Number = (x)` is submitted and before any node runs, BOTH the
-//! name claim on `f` AND the pending slot in bucket `[HELPER, Slot]` must be in the dispatching
+//! name claim on `f` AND the bucket claim on `[HELPER, Slot]` must be in the dispatching
 //! scope's `bindings`. Otherwise a sibling dispatching a call shape matching the still-uninstalled
 //! bucket would hard-error under strict-only admission instead of parking.
 
@@ -33,7 +33,7 @@ fn combined_form_installs_both_channels_at_submission() {
             .bindings()
             .pending_overload_entries(&helper_bucket)
             .is_empty(),
-        "the combined statement's own binder plan should claim a pending slot in \
+        "the combined statement's own binder plan should claim the bucket \
          bucket [HELPER, Slot] at submission",
     );
 }

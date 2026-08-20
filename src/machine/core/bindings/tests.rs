@@ -1,6 +1,6 @@
 //! Unit coverage for the `types` map write primitive `write_type`, the cross-kind
-//! exclusion that makes the `data`/`types` partition structural (no name in both), and the
-//! pending arms a still-finalizing binder occupies in its destination table.
+//! exclusion that makes the `data`/`types` partition structural (no name in both), and the claim
+//! store a still-finalizing binder stamps beside the binding maps.
 
 use std::rc::Rc;
 
@@ -205,7 +205,7 @@ fn write_type_finalizes_pending_arm_in_place() {
             TypeWritePolicy::Insert,
             &mut crate::machine::WriteGate::for_test(),
         )
-        .expect("type register should succeed and drop the pending arm");
+        .expect("type register should succeed and retire the claim");
     assert!(bindings.pending_names().is_empty());
     assert_eq!(bindings.expect_type("Bar"), kt);
 }
@@ -357,15 +357,15 @@ fn type_token_may_not_bind_value_side() {
     assert!(bindings.data().get("IntOrd").is_none());
 }
 
-// --- Pending arms live in the destination table ------------------------------
-// A still-finalizing binder claims the slot it will resolve into, so finalizing
-// overwrites that slot rather than moving an entry between containers.
+// --- Claims live in the store, and a commit retires its own -------------------
+// A still-finalizing binder claims the name it will resolve into; the binding maps hold committed
+// bindings only, so a commit writes its map and removes its claim rather than overwriting an arm.
 
-/// A value write finalizes the name's pending arm **in place**: the slot flips to `Bound` and the
-/// claim is gone, with the key stored once. The overwrite keys on the name alone — a write whose
-/// producer differs from the one that claimed the slot still finalizes it.
+/// A value write commits into `data` and **retires its own claim** — it carries the name and the
+/// index it is writing at, so nothing is searched. Afterwards the statement's live mask is zero,
+/// which is the whole of the success path: retiring the statement finds nothing left to drop.
 #[test]
-fn value_write_finalizes_the_pending_arm_in_place() {
+fn value_write_commits_and_retires_its_own_claim() {
     let storage = run_root_storage();
     let region = storage.brand();
     let bindings = Bindings::new(region);
@@ -395,7 +395,7 @@ fn value_write_finalizes_the_pending_arm_in_place() {
             Sealed::seal(region.seal_resident(Carried::Object(val)), region.handle()),
             &mut crate::machine::WriteGate::for_test(),
         )
-        .expect("the finalize write should overwrite the pending arm");
+        .expect("the finalize write should commit and retire the claim");
     assert!(bindings.pending_value("x").is_none());
     assert!(bindings.pending_names().is_empty());
     assert!(matches!(
@@ -403,6 +403,123 @@ fn value_write_finalizes_the_pending_arm_in_place() {
         Some(NameLookup::Bound(_)),
     ));
     assert_eq!(bindings.data().len(), 1, "the key is stored once");
+
+    // The zero-mask path: the slot's retirement has nothing left to do, and does nothing.
+    bindings.retire_claims(
+        BindingIndex::value(2),
+        &mut crate::machine::WriteGate::for_test(),
+    );
+    assert!(matches!(
+        bindings.lookup_value("x", None),
+        Some(NameLookup::Bound(_)),
+    ));
+}
+
+/// One bucket-keyed binder declaring **two** buckets seals only one of them — the shape a
+/// `UNARY OP` takes when its bridge key never registers. The sealing write retires that key's claim
+/// alone, and the statement's retirement drops the other, so no claim outlives the edge its owner
+/// releases.
+#[test]
+fn a_two_bucket_binder_retires_the_key_it_did_not_seal() {
+    let types = TypeRegistry::new();
+    let region = run_root_storage();
+    let scope = run_root_bare(&region);
+    let mut gate = crate::machine::WriteGate::for_test();
+    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let sealed_key = f.open(|f| f.signature.untyped_key());
+    let bridge_key: UntypedKey = SignatureDraft {
+        return_type: ReturnType::Resolved(KType::ANY),
+        elements: vec![SignatureElement::Keyword("BRIDGE")],
+    }
+    .untyped_key();
+
+    for key in [&sealed_key, &bridge_key] {
+        scope
+            .install_pending_overload(
+                key.clone(),
+                ProducerId::for_test(4),
+                BindingIndex::value(1),
+                &mut gate,
+            )
+            .expect("one statement claims both keys it declares");
+    }
+    let bindings = scope.bindings();
+    assert_eq!(bindings.pending_overload_entries(&sealed_key).len(), 1);
+    assert_eq!(bindings.pending_overload_entries(&bridge_key).len(), 1);
+
+    scope
+        .register_function_direct("FOO".to_string(), &f, BindingIndex::value(1), &mut gate)
+        .expect("the seal lands and retires this key's claim");
+    assert!(
+        bindings.pending_overload_entries(&sealed_key).is_empty(),
+        "the sealed key's claim is retired by its own commit",
+    );
+    assert_eq!(
+        bindings.pending_overload_entries(&bridge_key).len(),
+        1,
+        "the unsealed key's claim is untouched by the other key's commit",
+    );
+
+    scope.retire_claims(BindingIndex::value(1), &mut gate);
+    assert!(
+        bindings.pending_overload_entries(&bridge_key).is_empty(),
+        "the statement's retirement drops the claim its commit did not",
+    );
+    assert_eq!(
+        bindings.lookup_function(&sealed_key, None).overloads.len(),
+        1,
+        "retirement touches no committed overload",
+    );
+}
+
+/// `bulk_install_from` copies the source's committed bindings and **nothing else**. A live claim is
+/// not filtered out of the copy — it was never in a map to be copied. That is what makes handing a
+/// view a park on an edge of the source's own scheduler run unrepresentable rather than merely
+/// unobserved.
+#[test]
+fn bulk_install_copies_committed_bindings_past_a_live_claim() {
+    let storage = run_root_storage();
+    let region = storage.brand();
+    let source = Bindings::new(region);
+    let target = Bindings::new(region);
+    let mut gate = crate::machine::WriteGate::for_test();
+
+    let val: &KObject = region.alloc_scalar(Scalar::Number(7.0));
+    source
+        .write_value(
+            "settled",
+            BindingIndex::value(1),
+            Sealed::seal(region.seal_resident(Carried::Object(val)), region.handle()),
+            &mut gate,
+        )
+        .expect("the committed binding lands");
+    source
+        .install_placeholder(
+            "in_flight",
+            ProducerId::for_test(3),
+            BindingIndex::value(2),
+            BindKind::Value,
+            &mut gate,
+        )
+        .expect("the second statement is still running");
+
+    target
+        .bulk_install_from(&source, &mut gate)
+        .expect("the view replays the source's committed surface");
+    assert!(matches!(
+        target.lookup_value("settled", None),
+        Some(NameLookup::Bound(_)),
+    ));
+    assert!(
+        target.lookup_value("in_flight", None).is_none(),
+        "a claim never crosses into a view",
+    );
+    assert!(target.pending_names().is_empty());
+    // The source keeps its own claim: the copy read past it, it did not consume it.
+    assert_eq!(
+        source.pending_value("in_flight").map(|c| c.producer),
+        Some(ProducerId::for_test(3)),
+    );
 }
 
 /// A `types` slot holds a bound identity and a pending producer at once: a parallel nominal

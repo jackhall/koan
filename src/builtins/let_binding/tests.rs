@@ -12,7 +12,7 @@ fn binder_name_extracts_let_name() {
 }
 
 /// End-to-end claim-then-finalize: statement submission claims the name's slot from the
-/// cached binder plan before the body runs; the value write overwrites the pending arm at apply.
+/// cached binder plan before the body runs; the value write commits and retires it at apply.
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::builtins::test_support::TestRun;

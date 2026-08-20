@@ -469,7 +469,7 @@ mod tests {
     /// scheduler, then constructed. The dependency's `:{…}` defers its finalize behind a
     /// sub-dispatch, so the dependent's body would run first; it must park on the
     /// dependency's producer rather than error on an unresolved repr (which would leave a
-    /// stale pending arm behind and panic the next construction).
+    /// stale claim behind and panic the next construction).
     #[test]
     fn dependent_newtype_parks_on_record_repr_dependency() {
         let program = program_storage();
@@ -477,7 +477,7 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run("NEWTYPE Point = :{x :Number, y :Number}\nNEWTYPE Boxed = Point");
-        // No pending arm may survive the declaration run: a leaked one corrupts the next
+        // No claim may survive the declaration run: a leaked one corrupts the next
         // scheduler on this REPL-persistent scope.
         assert!(
             scope.bindings().pending_names().is_empty(),

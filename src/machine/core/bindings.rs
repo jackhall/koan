@@ -232,7 +232,7 @@ pub enum MemberResolution<'a> {
 /// pending sibling at once. A no-hit lookup is `overloads.is_empty() &&
 /// pending.is_none()`.
 ///
-/// `pending` names a visible [`OverloadSlot::Pending`] in the bucket — a sibling FN
+/// `pending` names a visible claim on the bucket's key — a sibling FN
 /// binder has dispatched a matching overload whose body hasn't finalized. The
 /// consumer parks on the earliest-index visible claim's edge; on wake it
 /// re-dispatches and either picks from the now-live bucket or re-parks on the

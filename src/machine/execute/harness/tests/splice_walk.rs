@@ -45,7 +45,7 @@ fn pending_producer_parks_then_resolves_on_wake() {
     let (mut test_run, buf) = TestRun::with_buf(&program, &region);
     let scope = test_run.scope;
     // `Foo` is declared in an earlier statement, so it is index-visible to
-    // `Fwd`; its pending slot answers `Parked` rather than reading as Unbound.
+    // `Fwd`; its claim answers `Parked` rather than reading as Unbound.
     let exprs = working_all(
         &program,
         "NEWTYPE Foo = :{x :Number}\n\
