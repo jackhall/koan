@@ -34,7 +34,7 @@ fn run_collect_err(source: &str) -> Option<KError> {
     let scope = test_run.scope;
     let exprs = working_all(&program, source);
     let runtime = &mut test_run.runtime;
-    let ids: Vec<_> = runtime.enter_block(scope.id, exprs, scope);
+    let ids = runtime.enter_block(scope.id, exprs, scope);
     let watched = super::watch_all(runtime, &ids, scope);
     if let Err(e) = runtime.execute() {
         return Some(e);

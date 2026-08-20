@@ -13,6 +13,9 @@
 //! See [execution](../../../design/execution/README.md) and
 //! [memory-model](../../../design/memory-model.md).
 
+use allocator_api2::alloc::{Allocator, Global};
+use allocator_api2::vec::Vec as AllocVec;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -34,7 +37,7 @@ use crate::scheduler::{
     Anchor, Dep, Deps, DrainDeadlock, EdgeId, InstalledEdge, Scheduler, Step, StepVerdict, Workload,
 };
 use crate::scheduler::{DeliveryDestination, SealedTerminal};
-use crate::witnessed::{BumpVec, SealedExtern, Within, erase_to_static};
+use crate::witnessed::{BumpAllocator, BumpVec, SealedExtern, Within, erase_to_static};
 
 use super::ambient::AmbientContext;
 use super::decide::{
@@ -227,9 +230,9 @@ impl<'run> KoanRuntime<'run> {
         scope_id: ScopeId,
         statements: Vec<WorkingExpression<'a>>,
         scope: &'a Scope<'a>,
-    ) -> Vec<NodeId> {
+    ) -> AllocVec<NodeId> {
         self.host
-            .enter_block(&mut self.sched, scope_id, statements, scope)
+            .enter_block(&mut self.sched, scope_id, &statements, scope, Global)
     }
 
     /// Submit an unresolved expression for the scheduler to dispatch + execute against `scope`,
@@ -418,7 +421,7 @@ impl<'run> Host<'run> {
                             Ok(()) => outcome,
                             Err(error) => Outcome::Done(Err(error)),
                         };
-                        host.apply(sched, outcome, scope.brand(), id, &anchor)
+                        host.apply(sched, outcome, scope.brand(), scratch, id, &anchor)
                     },
                 )
             },
@@ -433,6 +436,7 @@ impl<'run> Host<'run> {
         sched: &mut Scheduler<KoanWorkload>,
         outcome: Outcome<'step>,
         brand: RegionBrand<'step>,
+        scratch: BumpAllocator<'step>,
         id: NodeId,
         anchor: &Rc<SlotFrame>,
     ) -> StepVerdict<'static, KoanWorkload> {
@@ -551,7 +555,7 @@ impl<'run> Host<'run> {
                 continuation,
                 dep_error_frame: park_error_frame,
             } => {
-                let installed = self.wire_deps(sched, anchor, id, brand, deps);
+                let installed = self.wire_deps(sched, anchor, id, brand, scratch, deps);
                 // **Install-and-inspect**: a decide never probes a producer's standing, so a park
                 // whose producer had already finalized is classified here. An errored one is
                 // propagated now rather than waited on — a terminal slot never notifies again, so
@@ -562,7 +566,14 @@ impl<'run> Host<'run> {
                     };
                     if let Err(dep_error) = sched.edge_result_error(*edge) {
                         let error = super::decide::propagate_dep_error(dep_error, park_error_frame);
-                        return self.apply(sched, Outcome::Done(Err(error)), brand, id, anchor);
+                        return self.apply(
+                            sched,
+                            Outcome::Done(Err(error)),
+                            brand,
+                            scratch,
+                            id,
+                            anchor,
+                        );
                     }
                 }
                 // Lower each variant to its outermost live continuation.
@@ -579,6 +590,7 @@ impl<'run> Host<'run> {
                             anchor,
                             id,
                             brand,
+                            scratch,
                             ParkDeps::List(Deps::from_requests([watched])),
                         );
                         catch_continuation(finish)
@@ -633,9 +645,14 @@ impl<'run> Host<'run> {
                         };
                         match checked {
                             Ok(()) => StepVerdict::Forward(edge),
-                            Err(error) => {
-                                self.apply(sched, Outcome::Done(Err(error)), brand, id, anchor)
-                            }
+                            Err(error) => self.apply(
+                                sched,
+                                Outcome::Done(Err(error)),
+                                brand,
+                                scratch,
+                                id,
+                                anchor,
+                            ),
                         }
                     }
                     // Not yet resolved: park a checker micro-step on it (an already-terminal
@@ -662,7 +679,7 @@ impl<'run> Host<'run> {
                         let park = Await::on(Deps::from_producers([edge]))
                             .error_frame(dep_error_frame())
                             .finish_terminal(finish);
-                        self.apply(sched, park, brand, id, anchor)
+                        self.apply(sched, park, brand, scratch, id, anchor)
                     }
                 }
             }
@@ -696,17 +713,18 @@ impl<'run> Host<'run> {
         anchor: &SlotFrame,
         consumer: NodeId,
         brand: RegionBrand<'a>,
+        scratch: BumpAllocator<'a>,
         deps: ParkDeps<'a>,
-    ) -> allocator_api2::vec::Vec<InstalledEdge> {
+    ) -> BumpVec<'a, InstalledEdge> {
         let (sources, minted) = match deps {
             ParkDeps::List(list) => {
-                self.named_sources(sched, anchor, list, |host, sched, request| {
+                self.named_sources(sched, anchor, list, scratch, |host, sched, request| {
                     host.realize_dep(sched, brand, request)
                 })
             }
-            ParkDeps::Block(block) => self.block_sources(sched, anchor, block),
+            ParkDeps::Block(block) => self.block_sources(sched, anchor, scratch, block),
         };
-        let installed = sched.install_deps(consumer, &sources);
+        let installed = sched.install_deps_in(consumer, &sources, scratch);
         for source in minted {
             sched.release_edge(source);
         }
@@ -721,16 +739,19 @@ impl<'run> Host<'run> {
     /// One entry in, one source out. That is the whole reason the block fan-out lives in
     /// [`Self::block_sources`] rather than here: it is what makes a caller's [`Deps::request`] index
     /// the position its result comes back at.
-    fn named_sources<R>(
+    fn named_sources<R, D: Allocator, A: Allocator + Copy>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
         anchor: &SlotFrame,
-        deps: Deps<R>,
+        deps: Deps<R, D>,
+        alloc: A,
         mut realize: impl FnMut(&mut Self, &mut Scheduler<KoanWorkload>, R) -> NodeId,
-    ) -> (Vec<EdgeId>, Vec<EdgeId>) {
+    ) -> (AllocVec<EdgeId, A>, AllocVec<EdgeId, A>) {
         let entries = deps.into_entries();
-        let mut sources: Vec<EdgeId> = Vec::with_capacity(entries.len());
-        let mut minted: Vec<EdgeId> = Vec::new();
+        let mut sources: AllocVec<EdgeId, A> = AllocVec::with_capacity_in(entries.len(), alloc);
+        // Sized on the same count: a list of pure producer names mints nothing, and a list of pure
+        // requests mints one apiece, so the entry count is the ceiling either way.
+        let mut minted: AllocVec<EdgeId, A> = AllocVec::with_capacity_in(entries.len(), alloc);
         for entry in entries {
             match entry {
                 Dep::Producer(source) => sources.push(source),
@@ -751,31 +772,34 @@ impl<'run> Host<'run> {
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
         anchor: &SlotFrame,
+        scratch: BumpAllocator<'a>,
         block: BlockRequest<'a>,
-    ) -> (Vec<EdgeId>, Vec<EdgeId>) {
+    ) -> (BumpVec<'a, EdgeId>, BumpVec<'a, EdgeId>) {
         let producers = match block {
             // A body block fans out one producer per statement: into a fresh per-call frame's own
             // scope, or — under `Inherit` — into a caller-allocated overlay (USING).
             BlockRequest::Body {
                 statements,
                 placement: BodyPlacement::Frame(frame),
-            } => self.dispatch_body(sched, &frame, statements),
+            } => self.dispatch_body(sched, &frame, &statements, scratch),
             BlockRequest::Body {
                 statements,
                 placement: BodyPlacement::Overlay(overlay),
-            } => self.enter_block(sched, overlay.id, statements, overlay),
+            } => self.enter_block(sched, overlay.id, &statements, overlay, scratch),
             // A declaration builtin's body splits into its top-level statements against the child
             // scope it minted (MODULE, SIG).
             BlockRequest::InScope { body, scope } => {
-                let statements = split_working_body(scope.brand(), body);
-                self.enter_block(sched, scope.id, statements, scope)
+                let statements = split_working_body(scope.brand(), body, scratch);
+                self.enter_block(sched, scope.id, &statements, scope, scratch)
             }
         };
-        let mut minted: Vec<EdgeId> = Vec::with_capacity(producers.len());
-        let sources: Vec<EdgeId> = producers
-            .into_iter()
-            .map(|producer| self.mint_source(sched, anchor, producer, &mut minted))
-            .collect();
+        // Every source here is minted, so the two buffers are the same length as the fan-out.
+        let mut minted: BumpVec<'a, EdgeId> = BumpVec::with_capacity_in(producers.len(), scratch);
+        let mut sources: BumpVec<'a, EdgeId> = BumpVec::with_capacity_in(producers.len(), scratch);
+        for producer in producers {
+            let source = self.mint_source(sched, anchor, producer, &mut minted);
+            sources.push(source);
+        }
         (sources, minted)
     }
 
@@ -788,7 +812,7 @@ impl<'run> Host<'run> {
         sched: &mut Scheduler<KoanWorkload>,
         anchor: &SlotFrame,
         producer: NodeId,
-        minted: &mut Vec<EdgeId>,
+        minted: &mut AllocVec<EdgeId, impl Allocator>,
     ) -> EdgeId {
         let source = sched.install_edge(producer, anchor.owner());
         minted.push(source);
@@ -830,25 +854,27 @@ impl<'run> Host<'run> {
 fn split_working_body<'a>(
     brand: RegionBrand<'a>,
     body: WorkingExpression<'a>,
-) -> Vec<WorkingExpression<'a>> {
+    scratch: BumpAllocator<'a>,
+) -> BumpVec<'a, WorkingExpression<'a>> {
     let is_block = body.parts.len() >= 2
         && body
             .parts
             .iter()
             .all(|part| matches!(part.value.class(), PartClass::Expression));
     if !is_block {
-        return vec![body];
+        let mut single = BumpVec::with_capacity_in(1, scratch);
+        single.push(body);
+        return single;
     }
-    body.parts
-        .iter()
-        .filter_map(|part| match part.value {
-            WorkingPart::Ast(ExpressionPart::Expression(child)) => {
-                Some(WorkingExpression::from_ast(brand, *child))
-            }
-            WorkingPart::Expression(child) => Some(*child),
-            _ => None,
-        })
-        .collect()
+    let mut statements = BumpVec::with_capacity_in(body.parts.len(), scratch);
+    statements.extend(body.parts.iter().filter_map(|part| match part.value {
+        WorkingPart::Ast(ExpressionPart::Expression(child)) => {
+            Some(WorkingExpression::from_ast(brand, *child))
+        }
+        WorkingPart::Expression(child) => Some(*child),
+        _ => None,
+    }));
+    statements
 }
 
 // ---------- Submission ----------
@@ -972,27 +998,26 @@ impl<'run> Host<'run> {
     /// Submit each `statement` as a fresh lexical block over `scope`, minting a frame `(scope_id,
     /// i+1)` per statement — the block fan-out behind top-level programs, `InScope` bodies, and
     /// overlay blocks.
-    pub(in crate::machine::execute) fn enter_block<'a>(
+    pub(in crate::machine::execute) fn enter_block<'a, A: Allocator>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
         scope_id: ScopeId,
-        statements: Vec<WorkingExpression<'a>>,
+        statements: &[WorkingExpression<'a>],
         scope: &'a Scope<'a>,
-    ) -> Vec<NodeId> {
+        alloc: A,
+    ) -> AllocVec<NodeId, A> {
         let parent = self.ambient.active_payload().map(|p| p.chain.clone());
-        let mut duplicates = duplicate_declarations(&statements);
+        let mut duplicates = duplicate_declarations(statements);
         // The one act that builds a claim store: the block's fan-out sizes the scope's statement
         // run, so every claim a statement below stamps lands at an index the run already reaches.
         scope.begin_block(statements.len(), &mut WriteGate::for_run_loop());
-        statements
-            .into_iter()
-            .enumerate()
-            .map(|(i, expr)| {
-                let chain = block_statement_chain(parent.clone(), scope_id, i);
-                let rejected = duplicates.remove(&i);
-                self.block_statement(sched, chain, expr, scope, rejected)
-            })
-            .collect()
+        let mut ids = AllocVec::with_capacity_in(statements.len(), alloc);
+        for (i, expr) in statements.iter().copied().enumerate() {
+            let chain = block_statement_chain(parent.clone(), scope_id, i);
+            let rejected = duplicates.remove(&i);
+            ids.push(self.block_statement(sched, chain, expr, scope, rejected));
+        }
+        ids
     }
 
     /// Submit `statement` as a **fresh single-statement** lexical block over `scope` —
@@ -1113,12 +1138,13 @@ impl<'run> Host<'run> {
     /// reconstructed from the call site via
     /// [`assemble_body_chain`](crate::machine::core::assemble_body_chain). The caller tail-replaces
     /// into the last statement separately.
-    fn dispatch_body<'a>(
+    fn dispatch_body<'a, A: Allocator>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
         frame: &Rc<CallFrame>,
-        statements: Vec<WorkingExpression<'a>>,
-    ) -> Vec<NodeId> {
+        statements: &[WorkingExpression<'a>],
+        alloc: A,
+    ) -> AllocVec<NodeId, A> {
         let call_site_chain = self
             .ambient
             .active_payload()
@@ -1134,8 +1160,8 @@ impl<'run> Host<'run> {
                     .clone(),
             )
         });
-        let mut ids = Vec::with_capacity(statements.len());
-        for (i, statement) in statements.into_iter().enumerate() {
+        let mut ids = AllocVec::with_capacity_in(statements.len(), alloc);
+        for (i, statement) in statements.iter().copied().enumerate() {
             let statement_chain = LexicalFrame::push(parent.clone(), body_scope_id, i + 1);
             // Bracket `frame` as the ambient cart so the sub-slot inherits it, not the caller's.
             let bid = self.with_active_frame(Rc::clone(frame), |host| {
@@ -1175,7 +1201,9 @@ impl<'run> Host<'run> {
             seal_witnessed(finish),
         ));
         let (sources, minted) =
-            self.named_sources(sched, &anchor, deps, |_host, _sched, producer| producer);
+            self.named_sources(sched, &anchor, deps, Global, |_host, _sched, producer| {
+                producer
+            });
         let id = sched.alloc_node(work, &sources, anchor, framed);
         for source in minted {
             sched.release_edge(source);
@@ -1232,6 +1260,7 @@ impl<'run> KoanRuntime<'run> {
             sched,
             &anchor,
             Deps::from_requests(sub_work.iter().copied()),
+            Global,
             |_host, _sched, producer| producer,
         );
         let id = sched.alloc_node(work, &sources, anchor, framed);

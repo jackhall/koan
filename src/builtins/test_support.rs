@@ -272,7 +272,10 @@ impl<'a> TestRun<'a> {
                 })
                 .collect();
         self.skip_block_indices(scope, statements.len());
-        self.runtime.enter_block(scope.id, statements, scope)
+        self.runtime
+            .enter_block(scope.id, statements, scope)
+            .into_iter()
+            .collect()
     }
 
     /// [`TestRun::enter_source_in`] with a watch edge wired onto each statement's slot, so a test

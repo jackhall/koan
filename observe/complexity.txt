@@ -3,11 +3,14 @@
 #  root-loc is the absolute subtree LOC, tracked for context only)
 # managed by `tools/modgraph score|regen --baseline`; newest first, capped to 5 entries
 <<<<<<< HEAD
+<<<<<<< HEAD
 2026-08-20 ab28b88e+ 6340.86 2464.28 1615.14 2261.45 23505
 =======
+=======
+2026-08-20 9cb05bdb+ 6343.86 2465.32 1615.48 2263.06 23501
+>>>>>>> da2c54f9 (Thread the step scratch handle through the koan wiring path)
 2026-08-20 ab28b88e+ 6335.84 2462.74 1613.98 2259.12 23476
 >>>>>>> b2712fbc (Give Deps an allocator seam and recycle the slot rows)
 2026-08-20 58c70ea0+ 6335.45 2462.74 1613.98 2258.73 23476
 2026-08-20 cb46e271+ 6339.94 2462.74 1613.98 2263.22 23476
 2026-08-20 6632415b+ 6339.94 2462.74 1613.98 2263.22 23476
-2026-08-20 5967a614+ 6314.57 2454.83 1609.24 2250.50 23401
