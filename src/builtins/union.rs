@@ -377,12 +377,11 @@ mod tests {
         );
     }
 
-    /// Two `UNION`s of one name in one scope are two declarations, not one, even at equal arity:
-    /// each statement is submitted under its own [`StatementId`], so the second finalize reaches
-    /// the upsert with an installer that differs from the stored entry's and the install raises
-    /// `Rebind`.
+    /// Two `UNION`s of one name in one **block** are two declarations, not one, even at equal
+    /// arity — and the block rules on it at fan-out, where both declaring statements are in hand,
+    /// so the error names both positions and the first declaration still lands.
     #[test]
-    fn same_scope_union_redeclare_rebinds() {
+    fn same_scope_union_redeclare_is_a_duplicate_declaration() {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
@@ -411,10 +410,14 @@ mod tests {
         );
         let err = runtime
             .edge_result_error(edges[1])
-            .expect_err("redeclaring Maybe in the same scope should error");
+            .expect_err("redeclaring Maybe in the same block should error");
         assert!(
-            matches!(&err.kind, KErrorKind::Rebind { name } if name == "Maybe"),
-            "expected Rebind naming Maybe, got {err}",
+            matches!(
+                &err.kind,
+                KErrorKind::DuplicateDeclaration { name, first, second }
+                    if name == "Maybe" && *first == 1 && *second == 2,
+            ),
+            "expected DuplicateDeclaration naming both statements, got {err}",
         );
     }
 
@@ -424,9 +427,10 @@ mod tests {
     /// position-free submission — and submitting is the one act that mints a fresh
     /// [`StatementId`], so the second declaration's installer differs from the first's stored
     /// entry regardless of the two schemas' matching arity, and the second install raises
-    /// `Rebind`. Redeclaration identity is decided by the installing [`StatementId`] alone,
-    /// exactly as [`same_scope_union_redeclare_rebinds`] pins for block submission — this test
-    /// pins the same identity through the statement-at-a-time door instead.
+    /// `Rebind`. Redeclaration identity is decided by the installing [`StatementId`] alone. The
+    /// statement-at-a-time door builds no claim store and so has no fan-out to rule at, which is
+    /// what makes this the `Rebind` path where
+    /// [`same_scope_union_redeclare_is_a_duplicate_declaration`] takes the block one.
     #[test]
     fn statement_at_a_time_union_redeclare_errors() {
         let program = program_storage();
@@ -472,12 +476,11 @@ mod tests {
         );
     }
 
-    /// Byte-identical `UNION` redeclaration in one scope still raises `Rebind`. The two statements
-    /// seal to the same content digest, so a content-equality gate would unify them silently;
-    /// statement identity keys the decision on the installing statement alone, so the second — a
-    /// distinct [`StatementId`] — is a rebind despite identical content.
+    /// Byte-identical `UNION` redeclaration in one block is still two declarations. A
+    /// content-equality gate would unify them silently; the fan-out rules on the declared name
+    /// before either statement runs, so identical content never gets a say.
     #[test]
-    fn identical_content_union_redeclare_rebinds() {
+    fn identical_content_union_redeclare_is_a_duplicate_declaration() {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
@@ -508,8 +511,12 @@ mod tests {
             .edge_result_error(edges[1])
             .expect_err("an identical-content redeclaration of Maybe should error");
         assert!(
-            matches!(&err.kind, KErrorKind::Rebind { name } if name == "Maybe"),
-            "expected Rebind naming Maybe on identical-content redeclare, got {err}",
+            matches!(
+                &err.kind,
+                KErrorKind::DuplicateDeclaration { name, first, second }
+                    if name == "Maybe" && *first == 1 && *second == 2,
+            ),
+            "expected DuplicateDeclaration on identical-content redeclare, got {err}",
         );
     }
 

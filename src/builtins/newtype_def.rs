@@ -514,11 +514,11 @@ mod tests {
         );
     }
 
-    /// Two record-repr `NEWTYPE`s of one name in one scope are two declarations, not one: the
-    /// second statement is submitted under a distinct [`StatementId`], so the seal mints a fresh
-    /// singleton and the install raises `Rebind`.
+    /// Two record-repr `NEWTYPE`s of one name in one **block** are two declarations, not one, and
+    /// the block rules on it at fan-out: both declaring statements are in hand there, so the error
+    /// names both positions and the first declaration still lands.
     #[test]
-    fn same_scope_record_repr_redeclare_rebinds() {
+    fn same_scope_record_repr_redeclare_is_a_duplicate_declaration() {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
@@ -548,19 +548,22 @@ mod tests {
         let err = test_run
             .runtime
             .edge_result_error(edges[1])
-            .expect_err("redeclaring Foo in the same scope should error");
+            .expect_err("redeclaring Foo in the same block should error");
         assert!(
-            matches!(&err.kind, KErrorKind::Rebind { name } if name == "Foo"),
-            "expected Rebind naming Foo, got {err}",
+            matches!(
+                &err.kind,
+                KErrorKind::DuplicateDeclaration { name, first, second }
+                    if name == "Foo" && *first == 1 && *second == 2,
+            ),
+            "expected DuplicateDeclaration naming both statements, got {err}",
         );
     }
 
-    /// Byte-identical `NEWTYPE` redeclaration in one scope still raises `Rebind`. The two statements
-    /// seal to the same content digest, so a content-equality gate would unify them silently;
-    /// statement identity keys the decision on the installing statement alone, so the second — a
-    /// distinct [`StatementId`] — is a rebind despite identical content.
+    /// Byte-identical `NEWTYPE` redeclaration in one block is still two declarations. A
+    /// content-equality gate would unify them silently; the fan-out rules on the declared name
+    /// before either statement runs, so identical content never gets a say.
     #[test]
-    fn identical_content_newtype_redeclare_rebinds() {
+    fn identical_content_newtype_redeclare_is_a_duplicate_declaration() {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
@@ -592,8 +595,12 @@ mod tests {
             .edge_result_error(edges[1])
             .expect_err("an identical-content redeclaration of Foo should error");
         assert!(
-            matches!(&err.kind, KErrorKind::Rebind { name } if name == "Foo"),
-            "expected Rebind naming Foo on identical-content redeclare, got {err}",
+            matches!(
+                &err.kind,
+                KErrorKind::DuplicateDeclaration { name, first, second }
+                    if name == "Foo" && *first == 1 && *second == 2,
+            ),
+            "expected DuplicateDeclaration on identical-content redeclare, got {err}",
         );
     }
 

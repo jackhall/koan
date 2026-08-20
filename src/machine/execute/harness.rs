@@ -14,6 +14,7 @@
 //! [memory-model](../../../design/memory-model.md).
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::KoanStorageProfile;
@@ -36,7 +37,9 @@ use crate::scheduler::{DeliveryDestination, SealedTerminal};
 use crate::witnessed::{BumpVec, SealedExtern, Within, erase_to_static};
 
 use super::ambient::AmbientContext;
-use super::decide::{BodyPlacement, DecideCtx, DepRequest, SubmitContext, with_node_scope};
+use super::decide::{
+    BodyPlacement, DecideCtx, DepRequest, SubmitContext, statement_binder_plan, with_node_scope,
+};
 use super::finalize::{NodeFinalize, finalize_error};
 use super::lift::relocate_seam;
 use super::nodes::{ChainOp, NodePayload, NodeScope, NodeWork, SlotFrame, WorkLabel};
@@ -851,6 +854,55 @@ fn split_working_body<'a>(
 // ---------- Submission ----------
 
 /// Pointer equality of two scopes (identity, not structural).
+/// The name-channel collisions among a block's statements, as `statement position → error`.
+///
+/// Ruled on here, at the fan-out, because here both declaring statements are in hand and neither
+/// has run: the diagnostic names both positions, and which one is rejected does not depend on which
+/// body finishes first. A statement's plan is its own spine, so a block's whole namespace is legible
+/// from the statement keys alone and this costs one pass over borrowed keys.
+///
+/// The **bucket** channel is deliberately absent: sibling overloads under one head keyword are the
+/// point of that channel, so a shared bucket key is a co-declaration rather than a collision, and
+/// the per-signature `DuplicateOverload` check rules on it at seal time where the signatures exist.
+/// The lexical chain of the statement at zero-based `index` in a block over `scope_id`, under the
+/// enclosing `parent` chain — the index rule, written once for both block doors. The pushed frame
+/// index is `index + 1`: visibility is strict less-than and builtins sit at idx 0, so a statement at
+/// index 1 sees them via `0 < 1`.
+fn block_statement_chain(
+    parent: Option<Rc<LexicalFrame>>,
+    scope_id: ScopeId,
+    index: usize,
+) -> Rc<LexicalFrame> {
+    LexicalFrame::push(parent, scope_id, index + 1)
+}
+
+fn duplicate_declarations(statements: &[WorkingExpression<'_>]) -> HashMap<usize, KError> {
+    let mut declared: HashMap<&str, usize> = HashMap::new();
+    let mut rejected: HashMap<usize, KError> = HashMap::new();
+    for (position, statement) in statements.iter().enumerate() {
+        let Some((name, _kind)) = statement_binder_plan(statement).and_then(|plan| plan.name)
+        else {
+            continue;
+        };
+        match declared.get(name) {
+            Some(&first) => {
+                rejected.insert(
+                    position,
+                    KError::new(KErrorKind::DuplicateDeclaration {
+                        name: name.to_string(),
+                        first: first + 1,
+                        second: position + 1,
+                    }),
+                );
+            }
+            None => {
+                declared.insert(name, position);
+            }
+        }
+    }
+    rejected
+}
+
 fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
     std::ptr::eq(
         a as *const Scope<'_> as *const (),
@@ -928,10 +980,18 @@ impl<'run> Host<'run> {
         scope: &'a Scope<'a>,
     ) -> Vec<NodeId> {
         let parent = self.ambient.active_payload().map(|p| p.chain.clone());
+        let mut duplicates = duplicate_declarations(&statements);
+        // The one act that builds a claim store: the block's fan-out sizes the scope's statement
+        // run, so every claim a statement below stamps lands at an index the run already reaches.
+        scope.begin_block(statements.len(), &mut WriteGate::for_run_loop());
         statements
             .into_iter()
             .enumerate()
-            .map(|(i, expr)| self.block_statement(sched, parent.clone(), scope_id, i, expr, scope))
+            .map(|(i, expr)| {
+                let chain = block_statement_chain(parent.clone(), scope_id, i);
+                let rejected = duplicates.remove(&i);
+                self.block_statement(sched, chain, expr, scope, rejected)
+            })
             .collect()
     }
 
@@ -946,24 +1006,32 @@ impl<'run> Host<'run> {
         scope: &'a Scope<'a>,
     ) -> NodeId {
         let parent = self.ambient.active_payload().map(|p| p.chain.clone());
-        self.block_statement(sched, parent, scope_id, 0, statement, scope)
+        scope.begin_block(1, &mut WriteGate::for_run_loop());
+        // One statement collides with nothing, so the fan-out's duplicate rule has nothing to say.
+        let chain = block_statement_chain(parent, scope_id, 0);
+        self.block_statement(sched, chain, statement, scope, None)
     }
 
-    /// Submit one block statement at zero-based position `index` under `parent`'s chain — the
-    /// per-statement half both block doors run through, so the index rule is written once. The
-    /// pushed frame index is `index + 1`: visibility is strict less-than and builtins sit at idx 0,
-    /// so a statement at index 1 sees them via `0 < 1`.
+    /// Submit one block statement on its resolved `chain` — the per-statement half both block
+    /// doors run through.
+    ///
+    /// `rejected` is the fan-out's verdict on this statement: a statement the block ruled out
+    /// before it ran ([`duplicate_declarations`]) submits pre-errored, so it claims nothing and its
+    /// slot is terminal from birth.
     fn block_statement<'a>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
-        parent: Option<Rc<LexicalFrame>>,
-        scope_id: ScopeId,
-        index: usize,
+        chain: Rc<LexicalFrame>,
         statement: WorkingExpression<'a>,
         scope: &'a Scope<'a>,
+        rejected: Option<KError>,
     ) -> NodeId {
-        let chain = LexicalFrame::push(parent, scope_id, index + 1);
-        self.dispatch_in_scope_with_chain(sched, statement, scope, Some(chain))
+        let Some(error) = rejected else {
+            return self.dispatch_in_scope_with_chain(sched, statement, scope, Some(chain));
+        };
+        self.ensure_run_frame(scope);
+        let node_scope = self.resolve_node_scope(scope);
+        self.submit_pre_errored(sched, &statement, node_scope, chain, error)
     }
 
     /// Submit `expr` against a run-lived `scope`: establish the run frame, decide the slot's

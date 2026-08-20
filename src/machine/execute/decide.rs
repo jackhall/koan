@@ -45,7 +45,7 @@ pub(in crate::machine) mod resolve_dispatch;
 pub(in crate::machine) mod resolve_type_identifier;
 pub(in crate::machine::execute) mod single_poll;
 mod submit;
-pub(in crate::machine::execute) use submit::SubmitContext;
+pub(in crate::machine::execute) use submit::{SubmitContext, statement_binder_plan};
 
 #[cfg(test)]
 mod tests;

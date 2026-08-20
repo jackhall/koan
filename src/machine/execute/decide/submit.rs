@@ -11,7 +11,7 @@
 //! [`SubmitContext::SubDispatch`] binder is rejected with [`KErrorKind::NestedBinder`].
 
 use crate::machine::ProducerId;
-use crate::machine::model::BinderKey;
+use crate::machine::model::StoredBinderKey;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, KError, KErrorKind, LexicalFrame, NodeId, Scope, WriteGate};
 use crate::scheduler::EdgeId;
@@ -52,7 +52,7 @@ impl<'run> Host<'run> {
         // form is exempt — an eager sub-dispatch cannot install into the enclosing scope soundly,
         // and a definition whose registration silently vanished would be worse than an error. A
         // value position takes the anonymous `FN :{…} -> <Return> = (…)`, which installs nothing.
-        let installs = statement_binder_plan(&expr);
+        let installs = statement_binder_plan(&expr).map(StoredBinderKey::to_owned_key);
         if let (SubmitContext::SubDispatch, Some(key)) = (ctx, &installs) {
             let carrier = expr.summarize();
             // A rejected declaration that registers overloads (an `FN` / `OP` in a `LET`'s value
@@ -61,9 +61,7 @@ impl<'run> Host<'run> {
                 expr: carrier.clone(),
                 suggest_flat: !key.buckets.is_empty(),
             });
-            let (cart, framed) = self.ambient.submission_cart();
-            let anchor = SlotFrame::new(cart, node_scope, chain, WorkLabel::of(&expr));
-            return sched.alloc_node(super::decide_error(error), &[], anchor, framed);
+            return self.submit_pre_errored(sched, &expr, node_scope, chain, error);
         }
 
         // Only a statement installs; the plan read above also gates the sub-dispatch rejection.
@@ -124,20 +122,43 @@ impl<'run> Host<'run> {
         }
         id
     }
+
+    /// Allocate a slot that is **terminal-errored before it runs** — the shape a statement rejected
+    /// at submission takes. Slot-terminal and TRY-catchable, it propagates through the dep like any
+    /// other failed dep, and it claims nothing: a rejected declaration introduces no name.
+    pub(in crate::machine::execute) fn submit_pre_errored(
+        &mut self,
+        sched: &mut Scheduler<KoanWorkload>,
+        expr: &WorkingExpression<'_>,
+        node_scope: NodeScope,
+        chain: std::rc::Rc<LexicalFrame>,
+        error: KError,
+    ) -> NodeId {
+        let (cart, framed) = self.ambient.submission_cart();
+        let anchor = SlotFrame::new(cart, node_scope, chain, WorkLabel::of(expr));
+        sched.alloc_node(super::decide_error(error), &[], anchor, framed)
+    }
 }
 
 /// What a statement installs, read back off the working node the parsed statement crossed over as.
 /// The node's *own* plan key, never anything its slots contain — the namespace a block introduces is
-/// legible from its statement spines alone. A scheduler-synthesized node carries no plan and
+/// legible from its statement spines alone, which is what lets the block fan-out rule on duplicate
+/// declarations before any statement runs. A scheduler-synthesized node carries no plan and
 /// installs nothing: a binder is always a parsed statement.
-fn statement_binder_plan(expr: &WorkingExpression<'_>) -> Option<BinderKey> {
+///
+/// The stored (borrowed) form: every key it names is a borrow into the declaring node's own region,
+/// so reading a block's whole namespace allocates nothing. The submission path materializes the
+/// owned twin only for the statement it is actually stamping.
+pub(in crate::machine::execute) fn statement_binder_plan<'a>(
+    expr: &WorkingExpression<'a>,
+) -> Option<StoredBinderKey<'a>> {
     // A redundant single-`Expression` paren wrapper (`((…))`) is the same statement, so it reads
     // its child's plan straight through. A binder is always keyword-led, so this never co-occurs
     // with the plan branch below.
     if let [only] = expr.parts
         && let WorkingPart::Ast(ExpressionPart::Expression(child)) = only.value
     {
-        return child.binder_plan().map(|key| key.to_owned_key());
+        return child.binder_plan();
     }
-    expr.binder_plan().map(|key| key.to_owned_key())
+    expr.binder_plan()
 }

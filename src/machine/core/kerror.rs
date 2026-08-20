@@ -65,6 +65,15 @@ pub enum KErrorKind {
     Rebind {
         name: String,
     },
+    /// Two statements of one block declare the same name. Distinct from `Rebind` because it is
+    /// ruled on where the block's claim store is built — with both declaring statements in hand,
+    /// before either runs — so it names both positions rather than landing on whichever body
+    /// happened to commit second. Positions are lexical statement numbers, counting from 1.
+    DuplicateDeclaration {
+        name: String,
+        first: usize,
+        second: usize,
+    },
     /// Distinct from `Rebind` — collision is per-signature within the same name's bucket.
     DuplicateOverload {
         name: String,
@@ -403,11 +412,13 @@ impl KErrorKind {
                 )],
             ),
             KErrorKind::Rebind { .. }
+            | KErrorKind::DuplicateDeclaration { .. }
             | KErrorKind::DuplicateOverload { .. }
             | KErrorKind::TypeClassBindingExpectsType { .. }
             | KErrorKind::SchedulerDeadlock { .. } => {
                 let name = match self {
                     KErrorKind::Rebind { .. } => "Rebind",
+                    KErrorKind::DuplicateDeclaration { .. } => "DuplicateDeclaration",
                     KErrorKind::DuplicateOverload { .. } => "DuplicateOverload",
                     KErrorKind::TypeClassBindingExpectsType { .. } => "TypeClassBindingExpectsType",
                     KErrorKind::SchedulerDeadlock { .. } => "SchedulerDeadlock",
@@ -508,6 +519,15 @@ impl fmt::Display for KErrorKind {
             KErrorKind::Rebind { name } => {
                 write!(f, "name '{name}' is already bound in this scope")
             }
+            KErrorKind::DuplicateDeclaration {
+                name,
+                first,
+                second,
+            } => write!(
+                f,
+                "name '{name}' is declared twice in this block, by statement {first} and \
+                 statement {second}; a binding is bind-once",
+            ),
             KErrorKind::DuplicateOverload { name, signature } => write!(
                 f,
                 "function '{name}' already has an overload with signature {signature}",

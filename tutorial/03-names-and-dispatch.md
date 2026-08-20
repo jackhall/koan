@@ -70,7 +70,7 @@ LET total = 2
 ```
 
 ```text
-error: name 'total' is already bound in this scope
+error: name 'total' is declared twice in this block, by statement 1 and statement 2; a binding is bind-once
 ```
 
 A nested scope — a function body, for instance — may *shadow* an outer name
