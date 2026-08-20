@@ -99,16 +99,16 @@ non-admitting same-key overload, so every dispatch strict- and hard-rejects at a
 scopes before picking at the root. Between them the three axes cover where the execute path's
 allocation traffic scales.
 
-The step term is exactly linear — 138.0 flat at 10, 50, 100 and 200 steps. The dispatch term
-is not: marginal cost rises 36.9 → 37.5 → 38.4 → 39.3 across the 16→32, 32→64, 64→128 and
+The step term is exactly linear — 118.0 flat at 10, 50, 100 and 200 steps. The dispatch term
+is not: marginal cost rises 28.9 → 29.5 → 30.4 → 31.3 across the 16→32, 32→64, 64→128 and
 128→256 operand doublings, so a chain pays slightly more per operator the longer it gets.
-Below 16 operands the term sits flat near 36.3 and the fixed cost swamps it, so the rise is
-only readable over the larger sizes. Whatever drives it is unmeasured; the shapes are sized
+Below 16 operands the fixed cost swamps the term, so the rise is only readable over the
+larger sizes. Whatever drives it is unmeasured; the shapes are sized
 to the linear-enough middle rather than to the tail.
 
 The walk term is **flat in depth**. Differencing the two call counts at one depth cancels
-parse and setup and leaves 32 dispatches' marginal cost: 1 885 allocations at depth 2 against
-1 882 at depth 10 — 58.9 and 58.8 per dispatch, the two depths indistinguishable. The walk's
+parse and setup and leaves 32 dispatches' marginal cost: 1 886 allocations at depth 2 against
+1 883 at depth 10 — 58.9 and 58.8 per dispatch, the two depths indistinguishable. The walk's
 per-scope buffers are hosted on the drain's step scratch arena
 ([dag-scheduler.md § The drain protocol](../workgraph/design/dag-scheduler.md#the-drain-protocol)),
 so a deeper walk bumps more scratch bytes and takes no heap allocation for them. The grid's
@@ -119,7 +119,7 @@ dispatch inside a single statement's fold.
 ## The regression test
 
 `tests/allocation_baseline.rs` asserts the two absolute shapes' bracketed counts against a
-stated bound — 16 932 for the loop, 7 703 for the chain, each carrying 41 allocations of
+stated bound — 14 917 for the loop, 6 689 for the chain, each carrying 41 allocations of
 headroom. The bounds are tight by design: the margin is smaller than the 100 (loop) or 127
 (chain) a single new allocation on the scaling path would add, so one added allocation fails
 a test. Rebaselining is meant to be a deliberate edit, and the failure message says so.

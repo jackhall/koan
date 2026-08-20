@@ -4,11 +4,15 @@
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 2026-08-20 ab28b88e+ 91.26 94.03
 =======
 =======
 =======
 =======
+=======
+2026-08-20 93b488b3+ 91.25 94.03
+>>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
 2026-08-20 64c0b849+ 91.25 94.03
 >>>>>>> 93b488b3 (Build the eager-subs park in the walk that stages it)
 2026-08-20 da2c54f9+ 91.24 94.02
@@ -16,5 +20,8 @@
 2026-08-20 9cb05bdb+ 91.24 94.02
 >>>>>>> da2c54f9 (Thread the step scratch handle through the koan wiring path)
 2026-08-20 ab28b88e+ 91.25 94.03
+<<<<<<< HEAD
 >>>>>>> b2712fbc (Give Deps an allocator seam and recycle the slot rows)
 2026-08-20 58c70ea0+ 91.25 94.03
+=======
+>>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)

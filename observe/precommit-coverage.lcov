@@ -33,6 +33,7 @@ FNDA:2,_RNvNtNtCscL7XHaGYeX3_4koan5tests14counting_alloc18thread_allocations
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 FNDA:2957215,_RNvNtNtCscL7XHaGYeX3_4koan5tests14counting_alloc5tally
 >>>>>>> b2712fbc (Give Deps an allocator seam and recycle the slot rows)
 =======
@@ -58,6 +59,14 @@ FNDA:6368,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtC
 FNDA:2476118,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc5allocB6_
 FNDA:2481987,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc7deallocB6_
 FNDA:464850,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc7reallocB6_
+=======
+FNDA:2947251,_RNvNtNtCscL7XHaGYeX3_4koan5tests14counting_alloc5tally
+FNDA:2947251,_RNCNvNtNtCscL7XHaGYeX3_4koan5tests14counting_alloc5tally0B7_
+FNDA:6370,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc12alloc_zeroedB6_
+FNDA:2476056,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc5allocB6_
+FNDA:2481963,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc7deallocB6_
+FNDA:464825,_RNvXNtNtCscL7XHaGYeX3_4koan5tests14counting_allocINtB2_8CountingNtNtCs75vJTIYSa2J_3std5alloc6SystemENtNtNtCs27Vx93FoQ6z_4core5alloc6global11GlobalAlloc7reallocB6_
+>>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
 FNDA:0,_RNvNtNtCscL7XHaGYeX3_4koan5tests14counting_alloc11allocations
 >>>>>>> 93b488b3 (Build the eager-subs park in the walk that stages it)
 FNF:8
@@ -68,6 +77,7 @@ DA:37,0
 DA:40,2
 DA:41,2
 DA:42,2
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
@@ -174,6 +184,27 @@ DA:76,464850
 DA:77,464850
 DA:78,464850
 >>>>>>> 93b488b3 (Build the eager-subs park in the walk that stages it)
+=======
+DA:52,2947251
+DA:53,2947251
+DA:54,2947251
+DA:55,2947251
+DA:61,2476056
+DA:62,2476056
+DA:63,2476056
+DA:64,2476056
+DA:66,2481963
+DA:67,2481963
+DA:68,2481963
+DA:70,6370
+DA:71,6370
+DA:72,6370
+DA:73,6370
+DA:75,464825
+DA:76,464825
+DA:77,464825
+DA:78,464825
+>>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
 BRF:0
 BRH:0
 LF:26
@@ -28383,7 +28414,7 @@ FNDA:900,_RNvMNtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB2_10BucketKeys3on
 FNDA:439,_RNvMNtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB2_10BucketKeys4iter
 FNDA:39990,_RNvMs0_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_18UntypedElementSpec14matches_stored
 FNDA:178,_RNvMs0_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_18UntypedElementSpec7matches
-FNDA:535,_RNvMs1_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_10BinderSpec11matches_key
+FNDA:557,_RNvMs1_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_10BinderSpec11matches_key
 FNDA:20,_RNvMs1_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_10BinderSpec16installs_nothing
 FNDA:242968,_RNvMs1_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB5_10BinderSpec18matches_stored_key
 FNDA:2030,_RNvMs_NtNtNtCscL7XHaGYeX3_4koan7machine5model6binderNtB4_15StoredBinderKey12to_owned_key
@@ -28609,6 +28640,7 @@ DA:392,20
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 DA:396,510
 DA:397,510
 DA:398,61
@@ -28650,13 +28682,21 @@ DA:403,621
 =======
 DA:396,535
 DA:397,535
+=======
+DA:396,557
+DA:397,557
+>>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
 DA:398,62
 DA:399,62
 DA:400,62
 DA:401,62
 DA:402,178
+<<<<<<< HEAD
 DA:403,535
 >>>>>>> 93b488b3 (Build the eager-subs park in the walk that stages it)
+=======
+DA:403,557
+>>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
 DA:406,280115
 DA:407,280115
 DA:408,26488
@@ -29790,7 +29830,7 @@ FNDA:0,_RNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types5ktype19render_param_r
 FNDA:0,_RNvXs_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types5ktypeNtB4_5KTypeNtNtCs27Vx93FoQ6z_4core3fmt5Debug3fmt
 FNDA:113492,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType11from_digest
 FNDA:674,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType4name
-FNDA:352569,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType6digest
+FNDA:352571,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType6digest
 FNDA:48,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType6render
 FNDA:956,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType7kind_of
 FNDA:50588,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types5ktypeNtB2_5KType7of_kind
@@ -29817,9 +29857,9 @@ DA:76,55425
 DA:81,123503
 DA:82,123503
 DA:83,123503
-DA:86,398558
-DA:87,398558
-DA:88,398558
+DA:86,398560
+DA:87,398560
+DA:88,398560
 DA:93,701
 DA:94,701
 DA:95,285
@@ -30221,7 +30261,7 @@ FNDA:4149,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicates
 FNDA:21027,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType12accepts_part
 FNDA:84,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType12matches_held
 FNDA:2,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType12matches_type
-FNDA:509,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType12satisfied_by
+FNDA:510,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType12satisfied_by
 FNDA:1517,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType13matches_value
 FNDA:6330,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType15accepts_carried
 FNDA:827,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types16ktype_predicatesNtNtB4_5ktype5KType18more_specific_walk
@@ -30360,9 +30400,9 @@ DA:178,1
 DA:179,1
 DA:180,460
 DA:182,892
-DA:187,525
-DA:188,525
-DA:189,525
+DA:187,526
+DA:188,526
+DA:189,526
 DA:196,93
 DA:197,93
 DA:198,93
@@ -32701,13 +32741,14 @@ FNDA:1175,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12
 FNDA:1223,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry4dict
 FNDA:258,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry4join
 FNDA:2414,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry4list
-FNDA:45827,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry4node
+FNDA:45829,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry4node
 FNDA:111306,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry6intern
 FNDA:6641,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry6record
 FNDA:2543,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry7verdict
 FNDA:124,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry8union_of
 FNDA:12,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry9hit_count
 FNDA:1736,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB4_12TypeRegistry9signature
+<<<<<<< HEAD
 FNDA:235889,_RNvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB2_14IdentityHasherNtNtCs27Vx93FoQ6z_4core4hash6Hasher10write_u128
 FNDA:235889,_RNvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB2_14IdentityHasherNtNtCs27Vx93FoQ6z_4core4hash6Hasher6finish
 <<<<<<< HEAD
@@ -32759,16 +32800,20 @@ FNDA:235893,_RNvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB2_14
 >>>>>>> 64c0b849 (Host a park's dep list on the step's scratch arena)
 =======
 >>>>>>> 93b488b3 (Build the eager-subs park in the walk that stages it)
+=======
+FNDA:235891,_RNvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB2_14IdentityHasherNtNtCs27Vx93FoQ6z_4core4hash6Hasher10write_u128
+FNDA:235891,_RNvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types8registryNtB2_14IdentityHasherNtNtCs27Vx93FoQ6z_4core4hash6Hasher6finish
+>>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
 FNF:29
 FNH:25
-DA:45,269698
-DA:46,269698
-DA:47,269698
+DA:45,269700
+DA:46,269700
+DA:47,269700
 DA:49,0
 DA:50,0
-DA:53,269698
-DA:54,269698
-DA:55,269698
+DA:53,269700
+DA:54,269700
+DA:55,269700
 DA:97,1260
 DA:98,1260
 DA:99,1260
@@ -32817,12 +32862,12 @@ DA:153,87054
 DA:154,87054
 DA:155,121127
 DA:156,121127
-DA:163,62758
-DA:164,62758
-DA:165,62758
-DA:166,62758
+DA:163,62760
+DA:164,62760
+DA:165,62760
+DA:166,62760
 DA:167,1
-DA:169,62758
+DA:169,62760
 DA:174,5
 DA:175,5
 DA:176,5
@@ -33721,10 +33766,10 @@ FNDA:10,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schemaNtB4_1
 FNDA:139,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema11sig_subtype
 FNDA:10,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema15name_sets_equal
 FNDA:2,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema16slot_types_equal
-FNDA:89,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema17slot_satisfied_by
+FNDA:90,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema17slot_satisfied_by
 FNDA:319,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema19canonicalize_binder
-FNDA:101,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema20substitution_binding
-FNDA:77,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema21references_sig_member
+FNDA:102,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema20substitution_binding
+FNDA:78,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema21references_sig_member
 FNDA:104,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema22is_abstract_sig_member
 FNDA:194,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema22substitute_sig_members
 FNDA:1664,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types10sig_schema23constructor_param_names
@@ -33998,10 +34043,11 @@ DA:502,107
 DA:503,3
 DA:504,3
 DA:505,107
-DA:506,104
+DA:506,105
 DA:507,22
 DA:508,22
 DA:509,22
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
 DA:511,82
@@ -34025,21 +34071,27 @@ DA:512,77
 DA:514,5
 DA:516,82
 >>>>>>> 64c0b849 (Host a park's dep list on the step's scratch arena)
+=======
+DA:511,83
+DA:512,78
+DA:514,5
+DA:516,83
+>>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
 DA:517,4
 DA:518,4
 DA:519,4
 DA:520,4
 DA:521,4
-DA:522,78
+DA:522,79
 DA:524,81
 DA:525,140
-DA:531,77
-DA:532,77
-DA:533,77
-DA:534,77
-DA:535,77
-DA:536,77
-DA:537,77
+DA:531,78
+DA:532,78
+DA:533,78
+DA:534,78
+DA:535,78
+DA:536,78
+DA:537,78
 DA:539,12
 DA:540,12
 DA:543,12
@@ -34064,32 +34116,32 @@ DA:565,4
 DA:566,0
 DA:567,0
 DA:568,0
-DA:570,51
-DA:572,77
-DA:576,101
-DA:577,101
-DA:578,101
-DA:579,101
-DA:580,101
-DA:581,101
-DA:582,101
+DA:570,52
+DA:572,78
+DA:576,102
+DA:577,102
+DA:578,102
+DA:579,102
+DA:580,102
+DA:581,102
+DA:582,102
 DA:584,40
 DA:585,40
 DA:588,40
-DA:589,61
-DA:591,101
-DA:599,89
-DA:600,89
-DA:601,89
-DA:602,89
-DA:603,89
-DA:604,89
-DA:605,89
-DA:606,89
+DA:589,62
+DA:591,102
+DA:599,90
+DA:600,90
+DA:601,90
+DA:602,90
+DA:603,90
+DA:604,90
+DA:605,90
+DA:606,90
 DA:607,30
-DA:608,59
-DA:609,59
-DA:610,47
+DA:608,60
+DA:609,60
+DA:610,48
 DA:611,12
 DA:612,12
 DA:613,2
@@ -34132,7 +34184,7 @@ DA:673,0
 DA:674,0
 DA:675,0
 DA:677,0
-DA:679,89
+DA:679,90
 DA:685,10
 DA:686,10
 DA:687,10
@@ -34653,8 +34705,8 @@ FNDA:20482,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature17stor
 FNDA:61360,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature18normalized_keyword0Bb_
 FNDA:0,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature18restore_stored_key0Bb_
 FNDA:0,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature19most_specific_ktype0Bb_
-FNDA:23457,_RNCNvXs1_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB7_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB7_13StoredElementE10equivalent0Bf_
-FNDA:64792,_RNCNvXs_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB6_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB6_13StoredElementE10equivalent0Be_
+FNDA:23452,_RNCNvXs1_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB7_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB7_13StoredElementE10equivalent0Bf_
+FNDA:64787,_RNCNvXs_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB6_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB6_13StoredElementE10equivalent0Be_
 FNDA:307,_RNvMs2_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_13StoredElement16to_owned_element
 FNDA:5529,_RNvMs3_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_13DispatchToken14matches_stored
 FNDA:7543,_RNvMs3_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_13DispatchToken8store_in
@@ -34681,10 +34733,10 @@ FNDA:4626,_RNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature17store_u
 FNDA:22167,_RNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature18normalized_keyword
 FNDA:0,_RNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature18restore_stored_key
 FNDA:0,_RNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signature19most_specific_ktype
-FNDA:7888,_RNvXs1_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB5_13StoredElementE10equivalent
+FNDA:7872,_RNvXs1_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB5_13StoredElementE10equivalent
 FNDA:0,_RNvXs6_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_10ReturnTypeNtNtCs27Vx93FoQ6z_4core3fmt5Debug3fmt
 FNDA:0,_RNvXs7_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB5_14DeferredReturnNtNtCs27Vx93FoQ6z_4core3fmt5Debug3fmt
-FNDA:11361,_RNvXs_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB4_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB4_13StoredElementE10equivalent
+FNDA:11433,_RNvXs_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types9signatureNtB4_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB4_13StoredElementE10equivalent
 FNDA:1158,_RNvMs2_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_13StoredElement16to_owned_element
 FNDA:57709,_RNvMs3_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_13DispatchToken14matches_stored
 FNDA:77645,_RNvMs3_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_13DispatchToken8store_in
@@ -34710,14 +34762,14 @@ FNDA:46090,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature17store_
 FNDA:230250,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature18normalized_keyword
 FNDA:5,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature18restore_stored_key
 FNDA:8,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature19most_specific_ktype
-FNDA:11277,_RNvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB5_13StoredElementE10equivalent
+FNDA:11366,_RNvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB5_13StoredElementE10equivalent
 FNDA:2,_RNvXs6_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_10ReturnTypeNtNtCs27Vx93FoQ6z_4core3fmt5Debug3fmt
 FNDA:3,_RNvXs7_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_14DeferredReturnNtNtCs27Vx93FoQ6z_4core3fmt5Debug3fmt
-FNDA:115543,_RNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB4_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB4_13StoredElementE10equivalent
+FNDA:115780,_RNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB4_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB4_13StoredElementE10equivalent
 FNDA:155005,_RINvXNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB3_15UntypedKeyProbeNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtCscZwnrSQhSgs_9hashbrown6hasher13DefaultHasherEBb_
 FNDA:12674,_RINvXs0_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_14StoredKeyProbeNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtCscZwnrSQhSgs_9hashbrown6hasher13DefaultHasherEBe_
 FNDA:872242,_RINvXsn_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_14UntypedElementNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtCscZwnrSQhSgs_9hashbrown6hasher13DefaultHasherEBe_
-FNDA:475,_RINvXsn_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_14UntypedElementNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtNtCs75vJTIYSa2J_3std4hash6random13DefaultHasherEBe_
+FNDA:459,_RINvXsn_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_14UntypedElementNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtNtCs75vJTIYSa2J_3std4hash6random13DefaultHasherEBe_
 FNDA:429324,_RINvXso_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_13StoredElementNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtCscZwnrSQhSgs_9hashbrown6hasher13DefaultHasherEBe_
 FNDA:5949,_RNCNCNvMs9_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB9_19ExpressionSignature13most_specific00Bh_
 FNDA:14,_RNCNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature19most_specific_ktype00Bd_
@@ -34738,46 +34790,52 @@ FNDA:209231,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature17sto
 FNDA:632057,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature18normalized_keyword0Bb_
 FNDA:10,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature18restore_stored_key0Bb_
 FNDA:10,_RNCNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signature19most_specific_ktype0Bb_
-FNDA:38094,_RNCNvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB7_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB7_13StoredElementE10equivalent0Bf_
-FNDA:669641,_RNCNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB6_13StoredElementE10equivalent0Be_
+FNDA:38095,_RNCNvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB7_14StoredKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB7_13StoredElementE10equivalent0Bf_
+FNDA:669531,_RNCNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB6_15UntypedKeyProbeINtCsaJNbLtGHoDk_10equivalent10EquivalentRSNtB6_13StoredElementE10equivalent0Be_
 FNDA:0,_RNvMsa_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model5types9signatureNtB5_8Argument20matches_working_part
 FNF:54
 FNH:53
-DA:45,1449010
-DA:46,1449010
-DA:47,742716
-DA:48,742716
-DA:49,742716
-DA:50,742716
-DA:51,706294
-DA:53,1449010
+DA:45,1448994
+DA:46,1448994
+DA:47,742706
+DA:48,742706
+DA:49,742706
+DA:50,742706
+DA:51,706288
+DA:53,1448994
 DA:79,170270
 DA:80,170270
 DA:81,170270
-DA:85,126904
-DA:86,126904
-DA:87,122622
-DA:88,122622
-DA:89,122622
-DA:90,122622
-DA:91,734433
-DA:92,388724
-DA:93,345452
-DA:94,257
-DA:95,734433
-DA:96,126904
+DA:85,127213
+DA:86,127213
+DA:87,122588
+DA:88,122588
+DA:89,122588
+DA:90,122588
+DA:91,734318
+DA:92,388684
+DA:93,345389
+DA:94,245
+DA:95,734318
+DA:96,127213
 DA:109,21241
 DA:110,21241
 DA:111,21241
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 DA:115,19608
 DA:116,19608
+=======
+DA:115,19238
+DA:116,19238
+>>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
 DA:117,19026
 DA:118,19026
 DA:119,19026
 DA:120,19026
+<<<<<<< HEAD
 DA:121,61554
 DA:122,29313
 DA:123,32235
@@ -34827,6 +34885,14 @@ DA:124,2
 DA:125,61551
 DA:126,19165
 >>>>>>> 93b488b3 (Build the eager-subs park in the walk that stages it)
+=======
+DA:121,61547
+DA:122,29312
+DA:123,32228
+DA:124,7
+DA:125,61547
+DA:126,19238
+>>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
 DA:131,1465
 DA:132,1465
 DA:133,734
@@ -35354,7 +35420,7 @@ FNDA:43,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types11type_digest12unio
 FNDA:170,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types11type_digest16component_digest0Bb_
 FNDA:85,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types11type_digest16component_digests_0Bb_
 FNDA:44,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types11type_digest16feed_named_types0Bb_
-FNDA:3,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types11type_digest16feed_named_typess_0Bb_
+FNDA:4,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types11type_digest16feed_named_typess_0Bb_
 FNDA:4,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types11type_digest21canonical_type_digest0Bb_
 FNDA:5,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types11type_digest21feed_record_canonical0Bb_
 FNDA:1,_RNCNvNtNtNtNtCscy2pHVGjLyF_4koan7machine5model5types11type_digest21feed_record_canonicals_0Bb_
@@ -36862,15 +36928,15 @@ FNDA:80,_RNvMs0_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_subs
 FNDA:60,_RNvMs0_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB5_18ContainerSubstrateNtB5_12RecordLayoutE5field
 FNDA:3828,_RNvMs0_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB5_18ContainerSubstrateNtB5_12RecordLayoutE6fields
 FNDA:550,_RNvMs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB5_18ContainerSubstrateNtB5_10ListLayoutE8elements
-FNDA:26,_RNvMs2_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB5_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB7_4kkey4KKeyjNtNtB1I_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE5entry
+FNDA:28,_RNvMs2_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB5_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB7_4kkey4KKeyjNtNtB1I_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE5entry
 FNDA:43,_RNvMs2_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB5_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB7_4kkey4KKeyjNtNtB1I_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE7entries
 FNDA:3837,_RNvMs3_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB5_18ContainerSubstrateNtB5_13PayloadLayoutE7payload
 FNDA:13209,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrate14held_copy_cost
 FNDA:9763,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrate14held_flat_size
 FNDA:13122,_RNvNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrate16object_copy_cost
 FNDA:57,_RNCNvMs0_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB7_18ContainerSubstrateNtB7_12RecordLayoutE5field0Bf_
-FNDA:24,_RNCNvMs2_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB7_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB9_4kkey4KKeyjNtNtB1K_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE5entry0Bf_
-FNDA:69,_RNCNvMs2_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB7_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB9_4kkey4KKeyjNtNtB1K_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE7entries0Bf_
+FNDA:26,_RNCNvMs2_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB7_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB9_4kkey4KKeyjNtNtB1K_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE5entry0Bf_
+FNDA:71,_RNCNvMs2_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB7_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB9_4kkey4KKeyjNtNtB1K_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE7entries0Bf_
 FNDA:202,_RNCNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB6_18ContainerSubstrateNtB6_10ListLayoutE8homed_in0Be_
 FNDA:142,_RNCNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB6_18ContainerSubstrateNtB6_12RecordLayoutE8homed_in0Be_
 FNDA:419,_RNCNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB6_18ContainerSubstrateNtB6_13PayloadLayoutE8homed_in0Be_
@@ -36905,9 +36971,9 @@ FNDA:3523,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_sub
 FNDA:18,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB4_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB6_4kkey4KKeyjNtNtB1H_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE12borrows_homeBc_
 FNDA:17,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB4_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB6_4kkey4KKeyjNtNtB1H_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE3lenBc_
 FNDA:66,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB4_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB6_4kkey4KKeyjNtNtB1H_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE3newBc_
-FNDA:24,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB4_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB6_4kkey4KKeyjNtNtB1H_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE4cellBc_
+FNDA:26,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB4_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB6_4kkey4KKeyjNtNtB1H_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE4cellBc_
 FNDA:43,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB4_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB6_4kkey4KKeyjNtNtB1H_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE5cellsBc_
-FNDA:69,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB4_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB6_4kkey4KKeyjNtNtB1H_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE5indexBc_
+FNDA:71,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB4_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB6_4kkey4KKeyjNtNtB1H_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE5indexBc_
 FNDA:39,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB4_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB6_4kkey4KKeyjNtNtB1H_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE5reachBc_
 FNDA:20,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB4_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB6_4kkey4KKeyjNtNtB1H_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE8homed_inBc_
 FNDA:9,_RNvMs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values19container_substrateINtB4_18ContainerSubstrateRINtNtCscZwnrSQhSgs_9hashbrown3map7HashMapNtNtB6_4kkey4KKeyjNtNtB1H_6hasher18DefaultHashBuilderNtNtNtCsaIODfHv5xl1_9workgraph9witnessed4bump13BumpAllocatorEE8is_emptyBc_
@@ -36940,15 +37006,15 @@ DA:98,12214
 DA:99,12214
 DA:100,12214
 DA:101,12214
-DA:104,4026
-DA:105,4026
-DA:106,4026
+DA:104,4028
+DA:105,4028
+DA:106,4028
 DA:111,4504
 DA:112,4504
 DA:113,4504
-DA:116,3968
-DA:117,3968
-DA:118,3968
+DA:116,3970
+DA:117,3970
+DA:118,3970
 DA:121,36
 DA:122,36
 DA:123,36
@@ -36990,12 +37056,12 @@ DA:215,3854
 DA:224,565
 DA:225,565
 DA:226,565
-DA:244,26
-DA:245,26
-DA:246,26
+DA:244,28
+DA:245,28
+DA:246,28
 DA:249,62
 DA:250,62
-DA:251,92
+DA:251,94
 DA:252,62
 DA:264,3884
 DA:265,3884
@@ -37081,12 +37147,13 @@ FNDA:21,_RNvMNtNtNtNtCscy2pHVGjLyF_4koan7machine5model6values4kkeyNtB2_4KKey7reh
 FNDA:5,_RNvMs3_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model6values4kkeyNtB5_4KKey9summarize
 FNDA:7,_RNvXs2_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model6values4kkeyNtB5_4KKeyNtNtNtB9_5types7ktraits9Parseable5ktype
 FNDA:0,_RNvXs_NtNtNtNtCscy2pHVGjLyF_4koan7machine5model6values4kkeyNtB4_4KKeyNtNtCs27Vx93FoQ6z_4core3cmp9PartialEq2eq
-FNDA:129,_RINvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB6_4KKeyNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtCscZwnrSQhSgs_9hashbrown6hasher13DefaultHasherEBe_
+FNDA:131,_RINvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB6_4KKeyNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtCscZwnrSQhSgs_9hashbrown6hasher13DefaultHasherEBe_
 FNDA:129,_RINvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB6_4KKeyNtNtCs27Vx93FoQ6z_4core4hash4Hash4hashNtNtNtCs75vJTIYSa2J_3std4hash6random13DefaultHasherEBe_
 FNDA:35,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB2_4KKey16try_from_kobject
 FNDA:103,_RNvMNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB2_4KKey7rehomed
 FNDA:3,_RNvMs3_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB5_4KKey9summarize
 FNDA:48,_RNvXs2_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB5_4KKeyNtNtNtB9_5types7ktraits9Parseable5ktype
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
@@ -37105,6 +37172,9 @@ FNDA:129,_RINvXs1_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB6_4KKe
 =======
 FNDA:28,_RNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB4_4KKeyNtNtCs27Vx93FoQ6z_4core3cmp9PartialEq2eq
 >>>>>>> 93b488b3 (Build the eager-subs park in the walk that stages it)
+=======
+FNDA:31,_RNvXs_NtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values4kkeyNtB4_4KKeyNtNtCs27Vx93FoQ6z_4core3cmp9PartialEq2eq
+>>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
 FNF:6
 FNH:6
 DA:35,40
@@ -37127,19 +37197,19 @@ DA:56,112
 DA:57,6
 DA:58,6
 DA:60,124
-DA:64,28
-DA:65,28
-DA:66,21
+DA:64,31
+DA:65,31
+DA:66,24
 DA:67,2
 DA:70,3
 DA:71,2
-DA:73,28
-DA:79,300
-DA:80,300
-DA:81,267
-DA:82,267
-DA:83,267
-DA:84,267
+DA:73,31
+DA:79,302
+DA:80,302
+DA:81,269
+DA:82,269
+DA:83,269
+DA:84,269
 DA:85,18
 DA:86,18
 DA:87,18
@@ -37148,7 +37218,7 @@ DA:89,15
 DA:90,15
 DA:91,15
 DA:92,15
-DA:94,300
+DA:94,302
 DA:98,55
 DA:99,55
 DA:100,49
@@ -38153,30 +38223,34 @@ FNDA:0,_RNvNtNtNtNtNtCscy2pHVGjLyF_4koan7machine5model6values7kobject8equality10
 FNDA:0,_RNvNtNtNtNtNtCscy2pHVGjLyF_4koan7machine5model6values7kobject8equality13literal_equal
 FNDA:0,_RNvNtNtNtNtNtCscy2pHVGjLyF_4koan7machine5model6values7kobject8equality13types_related
 FNDA:0,_RNvNtNtNtNtNtCscy2pHVGjLyF_4koan7machine5model6values7kobject8equality16expression_equal
-FNDA:25,_RNvNtNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values7kobject8equality10held_equal
+FNDA:27,_RNvNtNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values7kobject8equality10held_equal
 FNDA:11,_RNvNtNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values7kobject8equality10part_equal
 FNDA:2,_RNvNtNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values7kobject8equality13literal_equal
 FNDA:26,_RNvNtNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values7kobject8equality13types_related
 FNDA:8,_RNvNtNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values7kobject8equality16expression_equal
 <<<<<<< HEAD
+<<<<<<< HEAD
 >>>>>>> b2712fbc (Give Deps an allocator seam and recycle the slot rows)
 =======
 FNDA:103,_RNvMNtNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values7kobject8equalityNtB4_7KObject11value_equal
 >>>>>>> 93b488b3 (Build the eager-subs park in the walk that stages it)
+=======
+FNDA:105,_RNvMNtNtNtNtNtCscL7XHaGYeX3_4koan7machine5model6values7kobject8equalityNtB4_7KObject11value_equal
+>>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
 FNF:6
 FNH:6
 DA:42,26
 DA:43,26
 DA:44,26
-DA:56,103
-DA:57,103
-DA:58,103
-DA:59,103
-DA:60,103
-DA:61,103
+DA:56,105
+DA:57,105
+DA:58,105
+DA:59,105
+DA:60,105
+DA:61,105
 DA:64,4
 DA:66,3
-DA:68,35
+DA:68,37
 DA:69,4
 DA:70,4
 DA:71,1
@@ -38194,9 +38268,9 @@ DA:86,6
 DA:87,6
 DA:89,1
 DA:90,5
-DA:91,7
-DA:92,7
-DA:93,6
+DA:91,9
+DA:92,9
+DA:93,8
 DA:94,3
 DA:97,2
 DA:100,6
@@ -38226,17 +38300,17 @@ DA:150,4
 DA:151,4
 DA:154,8
 DA:157,7
-DA:159,103
-DA:164,25
-DA:165,25
-DA:166,25
-DA:167,25
-DA:168,25
-DA:169,25
-DA:170,23
+DA:159,105
+DA:164,27
+DA:165,27
+DA:166,27
+DA:167,27
+DA:168,27
+DA:169,27
+DA:170,25
 DA:171,2
 DA:172,0
-DA:174,25
+DA:174,27
 DA:179,8
 DA:180,8
 DA:181,8
