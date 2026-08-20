@@ -166,8 +166,10 @@ tree is a barrier: every later expression in the same block parks on it.**
   ([expressions-and-parsing.md](expressions-and-parsing.md#quote-and-eval-sigils)),
   so submission can mark barriers without evaluating anything.
 - The mechanism is ordinary dependency edges installed at submission time —
-  each later sibling gains a dep on the barrier expression. No placeholder
-  registry entries, no wildcard park keys: the park target is a known node.
+  each later sibling gains a dep on the barrier expression. No claim-store
+  entries and no wildcard park keys: the park target is a known producer, wired
+  from the barrier's own slot, so a later sibling waits on an edge rather than
+  on a name.
 - An `EVAL` nested inside a sub-expression hoists its barrier to the containing
   block-level expression — the whole containing expression is the barrier.
 - An `FN` body is its own block; a barrier inside it sequences the remainder of

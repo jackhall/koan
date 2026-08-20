@@ -250,13 +250,11 @@ fn let_aliases_struct_preserves_type_identity() {
     let types = scope.bindings().types();
     let pt: KType = types
         .get("Pt")
-        .and_then(|slot| slot.bound())
-        .map(|(kt, _)| kt)
+        .map(|(kt, _)| *kt)
         .expect("Pt should be bound in bindings.types after alias");
     let point: KType = types
         .get("Point")
-        .and_then(|slot| slot.bound())
-        .map(|(kt, _)| kt)
+        .map(|(kt, _)| *kt)
         .expect("Point should be bound in bindings.types");
     assert_eq!(pt, point, "alias must preserve type identity field-wise");
 }

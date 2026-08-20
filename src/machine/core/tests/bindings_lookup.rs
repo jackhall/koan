@@ -289,12 +289,11 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
     assert!(lookup.pending.is_none());
 }
 
-/// The producer-failure sweep reaches dispatch buckets. One bucket-keyed binder claims a slot in
-/// every inner-call bucket it declares, so the purge keys on the producer each pending slot
-/// carries and spans all of them; a sibling producer's claim and a finalized overload both
-/// survive, and a bucket the purge empties loses its key.
+/// Retirement reaches every bucket the statement claimed. One bucket-keyed binder claims each
+/// inner-call bucket it declares at its own `BindingIndex`, so retiring that index drops all of
+/// them in one array read; a sibling statement's claim and a finalized overload both survive.
 #[test]
-fn clear_placeholders_purges_every_bucket_the_binder_claimed() {
+fn retirement_drops_every_bucket_the_statement_claimed() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -314,7 +313,7 @@ fn clear_placeholders_purges_every_bucket_the_binder_claimed() {
     }
     .untyped_key();
 
-    // Edge 7 is one binder declaring two inner-call buckets; edge 8 is a sibling sharing one.
+    // Statement 2 declares two inner-call buckets; statement 3 is a sibling sharing one.
     for (key, claim, idx) in [
         (&sealed_key, ProducerId::for_test(7), 2),
         (&other_key, ProducerId::for_test(7), 2),
@@ -330,13 +329,13 @@ fn clear_placeholders_purges_every_bucket_the_binder_claimed() {
             .unwrap();
     }
 
-    scope.clear_placeholders_for_producers(
-        |p| p == ProducerId::for_test(7),
+    scope.retire_claims(
+        BindingIndex::value(2),
         &mut crate::machine::WriteGate::for_test(),
     );
 
     let bindings = scope.bindings();
-    // The failed binder's claims are gone from both buckets it reached.
+    // The failed binder's claims are gone from both keys it reached.
     assert!(bindings.pending_overload_entries(&sealed_key).is_empty());
     assert_eq!(
         bindings
@@ -346,17 +345,19 @@ fn clear_placeholders_purges_every_bucket_the_binder_claimed() {
             .collect::<Vec<_>>(),
         vec![ProducerId::for_test(8)],
     );
-    // The finalized overload sharing a bucket with a purged claim survives.
+    // The finalized overload sharing a key with a retired claim survives.
     assert_eq!(
         bindings.lookup_function(&sealed_key, None).overloads.len(),
         1
     );
 
-    // Purging the last claim in a bucket that holds nothing else drops the key.
-    bindings.clear_placeholders_for_producers(
-        |p| p == ProducerId::for_test(8),
+    // A key only ever claimed publishes no dispatch surface at all — the claim never sat in
+    // `functions`, so there is no bucket to empty.
+    bindings.retire_claims(
+        BindingIndex::value(3),
         &mut crate::machine::WriteGate::for_test(),
     );
+    assert!(bindings.pending_overload_entries(&other_key).is_empty());
     assert!(
         !bindings
             .functions()

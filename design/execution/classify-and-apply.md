@@ -219,7 +219,7 @@ The rails the dispatch driver feeds:
   Forward references resolve through the fast lane and the eager
   name-resolve rail (below), both of which route name lookups through
   `Scope::resolve_with_chain` against the consumer's `LexicalFrame` and so
-  consult the visibility-gated pending arm of the `data` slot. A *keyword-headed*
+  consult the visibility-gated claim behind a `data` miss. A *keyword-headed*
   call — `ID 7`, where `ID` is the head Keyword — dispatches through the
   `functions` bucket, which applies the same per-overload visibility filter
   (see [ktype/dispatch.md § Overload bucket visibility filter](../typing/ktype/dispatch.md#overload-bucket-visibility-filter)).
@@ -227,16 +227,15 @@ The rails the dispatch driver feeds:
   hidden, and dispatch falls through to outer scopes; finding nothing
   surfaces as `DispatchFailed`. Calls into a still-finalizing *earlier*
   sibling FN work
-  through the bucket-keyed pending-slot channel: each sibling FN
-  install appends a distinct pending slot to the `functions[bucket]` vec, and a parking
+  through the bucket-keyed claim channel: each sibling FN install adds a distinct
+  claim on that bucket key, and a parking
   consumer wakes on the earliest-index visible producer, re-parking on
   the next-earliest if its pick doesn't admit. Forward calls from a
   function *body* are unaffected because bodies re-dispatch per call
   against the body's lexical chain, by which point every sibling binder
   has registered.
 - **Binder classification** (Step 2.5). The pick installs nothing: a binder's
-  claim — a pending arm of
-  `data[name]` / `types[name]`, or a pending slot in `functions[bucket]` — was
+  claim — one entry in the scope's claim store per channel its plan names — was
   already stamped at statement submission
   from the enclosing statement's parse-static aggregate (see [Submission-time
   binder install and the position
@@ -347,16 +346,15 @@ reclamation cannot transit a park edge into a sibling producer's subtree. Same-s
 rebind of a value name surfaces as `KErrorKind::Rebind`; an `FN` overload
 indistinguishable from an existing one surfaces as
 `KErrorKind::DuplicateOverload`. Type bindings share this placeholder
-mechanism: a type-binding site claims a pending arm of its `types` slot exactly
-like a value binding claims one of its `data` slot, external lookups park the
-same way, and
+mechanism: a type-binding site claims its name in the store exactly like a value
+binding claims one, external lookups park the same way, and
 self-references during a binding's own elaboration short-circuit through
 the elaborator's threaded-set recognition (see
 [typing/elaboration.md](../typing/elaboration.md)) so recursive type
 definitions don't deadlock on their own placeholder. FN-signature
 elaboration plugs into the same mechanism: when
 [`elaborate_type_expr`](../../src/machine/model/types/resolver.rs) hits a
-bare type-name leaf whose binder still holds the `types` slot's pending arm but
+bare type-name leaf whose binder still holds a live claim on that name but
 has not finalized, it returns `TypeResolution::Park(producers)` and FN-def's body
 schedules a dep-finish over those producers that re-runs the signature
 elaboration against the now-final scope at finish time. (See
@@ -411,12 +409,12 @@ exactly as for an in-step error.
 That drain is the only path by which a *decided* binding reaches a published scope's
 table — not the only write the run loop performs. The same
 [`WriteGate::for_run_loop`](../../src/machine/core/bindings/gate.rs) capability gates
-two claim-bookkeeping writes on either side of it: the submission-time placeholder
-and pending-overload stamp
+two claim-bookkeeping writes on either side of it: the submission-time name and
+bucket claim stamp
 ([`submit_expression`](../../src/machine/execute/decide/submit.rs), see [Submission-time
 binder install and the position
 rule](name-placeholders.md#submission-time-binder-install-and-the-position-rule)) and
-the retirement-time clear of the placeholders a slot's own edges name
+the retirement-time drop of whatever claims the slot's commit did not retire
 (`KoanWorkload::retiring`). Writes into a scope no other node can reach take a
 separate construction gate instead. The `WriteOp` variants, the gate, and those
 unpublished-scope doors are

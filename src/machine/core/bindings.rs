@@ -1,8 +1,8 @@
-//! Lexical binding façade: one `RefCell<Tables>` — `types`, `data`, `functions`, `operators` —
-//! behind validated write paths. A still-finalizing binder occupies a *slot of its destination
-//! table* ([`ValueSlot::Pending`], [`TypeSlot::Pending`], [`OverloadSlot::Pending`]), so a lookup
-//! answers "bound or parked" from one probe and finalization overwrites that slot in place rather
-//! than moving the entry between containers. `data` and `functions` are
+//! Lexical binding façade: one `RefCell<Tables>` — `types`, `data`, `functions`, `operators`, and
+//! the [`ClaimStore`] beside them — behind validated write paths. The four maps hold **committed
+//! bindings only**; a still-finalizing binder's claim lives in the store ([`claims`]), so a lookup
+//! answers "bound" from its own table's probe and "parked" from the store's, and each table states
+//! its own exclusivity rule with no in-flight arm to admit. `data` and `functions` are
 //! separate surfaces: a `data` entry is a value binding, callable by **name** alone (the
 //! `FunctionValueCall` lane), while a `functions` bucket holds the keyworded overloads a `FN` /
 //! `OP` registration installs — binding a function *value* publishes no keyworded expression.
@@ -73,9 +73,12 @@ use crate::witnessed::{BumpAllocator, Sealed};
 
 use super::kerror::{KError, KErrorKind};
 
+mod claims;
 mod gate;
 mod ops;
 
+pub use claims::Claim;
+pub(crate) use claims::ClaimStore;
 pub use gate::WriteGate;
 pub(crate) use ops::{TypeWritePolicy, WriteOp, powerset_probes};
 
@@ -96,8 +99,10 @@ pub use crate::machine::model::BindKind;
 /// up on the resolution path ([`crate::machine::model::TypeResolution`] /
 /// the execute-side `Resolution`).
 ///
-/// Invariant: within one scope a value name is bound xor pending, never both — the two are arms of
-/// one [`ValueSlot`], so the exclusivity is a type-level fact rather than cross-map discipline.
+/// A `Bound` reads the name's own table; a `Parked` reads the [`ClaimStore`] beside it. The two
+/// live in different structures, each answering its own question, which is why the value side needs
+/// no exclusivity rule spanning them: a value name's claim is removed by the very commit that binds
+/// it.
 #[derive(Copy, Clone, Debug)]
 pub enum NameLookup<T> {
     Bound(T),
@@ -120,103 +125,6 @@ impl<T> NameLookup<T> {
         match self {
             NameLookup::Bound(payload) => NameLookup::Bound(f(payload)),
             NameLookup::Parked(edge) => NameLookup::Parked(edge),
-        }
-    }
-}
-
-/// A still-finalizing binder occupying its destination slot: the [`ProducerId`] naming the binder's
-/// own submission, tagged with the binder's lexical [`BindingIndex`] so the
-/// same visibility predicate gates a pending arm and the binding it becomes. A consumer parks by
-/// wiring its **own** edge off this one, inheriting the destination — which is what makes a
-/// placeholder park deliver into the scope the name was claimed in. Installed at statement
-/// submission ([`Bindings::install_placeholder`] / [`Bindings::install_pending_overload`]) and
-/// overwritten in place by the producer's write path; the edge itself is released by the installing
-/// slot when it terminalizes.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct PendingBinding {
-    pub producer: ProducerId,
-    pub index: BindingIndex,
-}
-
-/// One `data` slot: bound, or claimed by a still-finalizing binder. The two are exclusive by
-/// construction — a value name is never pending and bound at once, and the enum is what says so.
-pub(crate) enum ValueSlot<'a> {
-    Bound(DataEntry<'a>),
-    Pending(PendingBinding),
-}
-
-impl<'a> ValueSlot<'a> {
-    /// The committed entry, or `None` for a still-finalizing binder.
-    pub(crate) fn bound(&self) -> Option<&DataEntry<'a>> {
-        match self {
-            ValueSlot::Bound(entry) => Some(entry),
-            ValueSlot::Pending(_) => None,
-        }
-    }
-
-    /// The in-flight claim, or `None` once the slot is committed.
-    pub(crate) fn pending(&self) -> Option<PendingBinding> {
-        match self {
-            ValueSlot::Bound(_) => None,
-            ValueSlot::Pending(p) => Some(*p),
-        }
-    }
-}
-
-/// One `types` slot. Unlike [`ValueSlot`], bound and pending are **not** exclusive: a parallel
-/// nominal finalize pre-installs the name's external identity while its producer is still in
-/// flight, and the finalize gate parks on that binder's edge
-/// ([`Bindings::type_placeholder_producer`]). The third arm makes that coexistence — and the
-/// impossibility of an empty slot — type-level facts, so a reader cannot mistake the slot for an
-/// exclusive one. Reads go through [`Self::bound`] / [`Self::pending`].
-pub(crate) enum TypeSlot {
-    Bound(KType, DeclarationSite),
-    Pending(PendingBinding),
-    BoundWithPending(KType, DeclarationSite, PendingBinding),
-}
-
-impl TypeSlot {
-    /// The bound identity, if any — the `Bound` and `BoundWithPending` arms.
-    pub(crate) fn bound(&self) -> Option<(KType, DeclarationSite)> {
-        match self {
-            TypeSlot::Bound(kt, site) | TypeSlot::BoundWithPending(kt, site, _) => {
-                Some((*kt, *site))
-            }
-            TypeSlot::Pending(_) => None,
-        }
-    }
-
-    /// The in-flight claim, if any — the `Pending` and `BoundWithPending` arms.
-    pub(crate) fn pending(&self) -> Option<PendingBinding> {
-        match self {
-            TypeSlot::Pending(p) | TypeSlot::BoundWithPending(_, _, p) => Some(*p),
-            TypeSlot::Bound(..) => None,
-        }
-    }
-}
-
-/// One slot of a dispatch bucket: a finalized overload, or a sibling FN binder still finalizing
-/// that consumers park on. Both live in the same `Vec` because both answer the same lookup — a
-/// bucket legitimately holds sealed overloads and pending siblings at once.
-pub(crate) enum OverloadSlot<'a> {
-    Sealed(FunctionBucketEntry<'a>),
-    Pending(PendingBinding),
-}
-
-impl<'a> OverloadSlot<'a> {
-    /// The finalized overload, or `None` for a still-finalizing sibling.
-    pub(crate) fn sealed(&self) -> Option<&FunctionBucketEntry<'a>> {
-        match self {
-            OverloadSlot::Sealed(entry) => Some(entry),
-            OverloadSlot::Pending(_) => None,
-        }
-    }
-
-    /// The in-flight claim, or `None` for a finalized overload.
-    pub(crate) fn pending(&self) -> Option<PendingBinding> {
-        match self {
-            OverloadSlot::Sealed(_) => None,
-            OverloadSlot::Pending(p) => Some(*p),
         }
     }
 }
@@ -417,11 +325,12 @@ impl DeclarationSite {
     };
 }
 
-/// Every lexical binding of one scope, in one cell. A still-finalizing binder lives in the table
-/// it will resolve into — as a pending arm of the very slot it claims — so a name is looked up in
-/// one probe and finalization overwrites the slot rather than moving between containers. `data`
-/// and `types` park by name (value/type forward references); `functions` parks by full dispatch
-/// bucket key, which keeps `(MAKESET _)` and `(MAKESET _ USING _)` from colliding.
+/// Every lexical binding of one scope, in one cell, beside the [`ClaimStore`] holding the block's
+/// in-flight binders. The maps carry committed bindings only; a claim is a store entry, so a name's
+/// two questions — "is it bound?" and "is a binder for it in flight?" — are one probe each of the
+/// structure that answers it. `data` and `types` are claimed by name (value/type forward
+/// references); `functions` by full dispatch bucket key, which keeps `(MAKESET _)` and
+/// `(MAKESET _ USING _)` from colliding.
 ///
 /// Every table is a `hashbrown` map over the scope's own region bump ([`BumpBackedMap`]) with
 /// bumped `&'a str` / `&'a [StoredElement]` keys, so a table's death frees nothing and walks no
@@ -430,11 +339,12 @@ impl DeclarationSite {
 struct Tables<'a> {
     /// Each bound type slot stores its type and its [`DeclarationSite`] — the installing
     /// [`Installer`] (declaration identity) plus its lexical [`BindingIndex`] (visibility). A
-    /// `KType` is a `Copy` handle into the run frame's registry, so a slot carries no reach: a
+    /// `KType` is a `Copy` handle into the run frame's registry, so an entry carries no reach: a
     /// read copies the handle under the home-frame pin alone, and the same handle names the same
-    /// type in every region. A [`TypeSlot`] may carry an in-flight producer beside the bound
-    /// identity — see its doc for why the two coexist here and not in `data`.
-    types: BumpBackedMap<'a, &'a str, TypeSlot>,
+    /// type in every region. A bound identity and a live claim on one name coexist without a
+    /// representation for it — a nominal's seal pre-installs the external identity here while its
+    /// binder is still in flight, which is this map bound *and* the store claimed.
+    types: BumpBackedMap<'a, &'a str, (KType, DeclarationSite)>,
     /// Each bound value slot stores its value fused to its exact reach in one dormant
     /// [`SealedValue`], plus its lexical [`BindingIndex`]. Reads hand out a bit-copy of the seal
     /// ([`Bindings::lookup_value`]) and re-anchor the value only under a pin, so a read replays the
@@ -442,15 +352,14 @@ struct Tables<'a> {
     /// `Weak`, and the owning pins live in the region's union bundle rather than here — either a
     /// strong member or a per-entry `Rc` on the scope's own frame would close a
     /// `frame → region → scope → bindings → frame` cycle and leak the region.
-    data: BumpBackedMap<'a, &'a str, ValueSlot<'a>>,
+    data: BumpBackedMap<'a, &'a str, DataEntry<'a>>,
     /// Each sealed bucket slot stores its callable fused to its reach claim in one dormant
     /// [`SealedFunction`], beside the precomputed data the write path dedupes on
     /// ([`FunctionBucketEntry`]). An `FN` registration binds no value, and a value bind writes no
     /// bucket. Like `data`, the entry owns nothing: the reached regions are held by the region's
-    /// union bundle, and a read hands out a bit-copy the caller re-anchors under a pin. Sibling
-    /// binders that have dispatched but not finalized sit in the same bucket as
-    /// [`OverloadSlot::Pending`]; consumers park on the earliest-index visible one, and a finalize
-    /// overwrites only its own slot, leaving the other siblings as wake sources.
+    /// union bundle, and a read hands out a bit-copy the caller re-anchors under a pin. A bucket
+    /// holds sealed overloads and nothing else — the sibling binders still finalizing under the same
+    /// key are claims in the store, read through the same key.
     /// Keyed on the **stored** run rather than an owned [`UntypedKey`] so a node dispatching
     /// through its own bumped key probes without materializing one; an owned key probes the same
     /// bucket through [`UntypedKeyProbe`].
@@ -464,24 +373,29 @@ struct Tables<'a> {
     /// the whole install allocates nothing past its probe keys. Walked through the scope chain:
     /// innermost visible wins.
     operators: BumpBackedMap<'a, &'a str, OperatorEntry<'a>>,
+    /// The in-flight binders of the one block that binds into this scope — see [`claims`]. Inside
+    /// `Tables` rather than beside `Bindings` so it rides the one cell and the one `ManuallyDrop`
+    /// with the maps it answers beside.
+    claims: ClaimStore<'a>,
 }
 
-/// One dispatch bucket: the overload slots sharing a key, in a vec whose buffer is bump-backed like
-/// every other table allocation here.
+/// One dispatch bucket: the sealed overloads sharing a key, in a vec whose buffer is bump-backed
+/// like every other table allocation here.
 ///
 /// `ManuallyDrop` because the vec has a destructor and running it would be pure waste: its elements
 /// carry no glue (the assert below), and its buffer is bump memory the region releases whole.
 /// Suppressing it is also what makes `needs_drop::<Bucket>()` false, so the map holding buckets
 /// passes [`bump_table`]'s assert and its own teardown never walks them. No `unsafe` — the
 /// suppressed destructor had nothing to do.
-type Bucket<'a> = ManuallyDrop<allocator_api2::vec::Vec<OverloadSlot<'a>, BumpAllocator<'a>>>;
+type Bucket<'a> =
+    ManuallyDrop<allocator_api2::vec::Vec<FunctionBucketEntry<'a>, BumpAllocator<'a>>>;
 
 /// The element proof the `ManuallyDrop` above would otherwise swallow. `needs_drop` is false for
 /// *any* `ManuallyDrop<U>`, so the wrapper that makes a bucket storable in a bump-backed table also
 /// makes [`bump_table`]'s entry assert say nothing about what the bucket holds. Stated here instead,
-/// against the element type directly, so an `OverloadSlot` arm that later brings a destructor back
-/// fails the build rather than leaking silently.
-const _: () = assert!(!std::mem::needs_drop::<OverloadSlot<'static>>());
+/// against the element type directly, so a [`FunctionBucketEntry`] field that later brings a
+/// destructor back fails the build rather than leaking silently.
+const _: () = assert!(!std::mem::needs_drop::<FunctionBucketEntry<'static>>());
 
 /// Build one of a scope's tables over its region bump, **proving at compile time** that its entries
 /// carry no drop glue. The bump runs no destructor, so a `Drop`-bearing key or value would silently
@@ -545,14 +459,15 @@ impl<'a> Bindings<'a> {
                 data: bump_table(brand),
                 functions: bump_table(brand),
                 operators: bump_table(brand),
+                claims: ClaimStore::new(brand),
             })),
         }
     }
 
-    /// Per-scope value-side lookup. One probe of `data[name]`: a visible bound slot answers
-    /// `Bound`, a visible pending slot answers `Parked` on its claim's edge. `cutoff = None` means the
-    /// scope is off-chain (or unfiltered) — everything is visible. `None` return
-    /// means no visible entry at this scope; the caller keeps walking
+    /// Per-scope value-side lookup. One probe of `data[name]`, and on a miss one probe of the claim
+    /// store: a visible binding answers `Bound`, a visible claim answers `Parked` on its edge.
+    /// `cutoff = None` means the scope is off-chain (or unfiltered) — everything is visible. `None`
+    /// return means no visible entry at this scope; the caller keeps walking
     /// ancestors, and chain exhaustion stays `None` (the terminal unbound
     /// disposition is materialized on the resolution path, not here).
     pub fn lookup_value(
@@ -560,30 +475,36 @@ impl<'a> Bindings<'a> {
         name: &str,
         cutoff: Option<usize>,
     ) -> Option<NameLookup<SealedValue<'a>>> {
-        match self.tables.borrow().data.get(name)? {
-            ValueSlot::Bound(entry) => Self::visible(entry.index, cutoff)
-                .then(|| NameLookup::Bound(entry.sealed.duplicate())),
-            ValueSlot::Pending(p) => {
-                Self::visible(p.index, cutoff).then_some(NameLookup::Parked(p.producer))
-            }
+        let tables = self.tables.borrow();
+        if let Some(entry) = tables.data.get(name) {
+            return Self::visible(entry.index, cutoff)
+                .then(|| NameLookup::Bound(entry.sealed.duplicate()));
         }
+        tables
+            .claims
+            .name_claim(name)
+            .filter(|claim| Self::visible(claim.index, cutoff))
+            .map(|claim| NameLookup::Parked(claim.producer))
     }
 
     /// Per-scope type-side lookup. The type-language mirror of [`Self::lookup_value`]: one probe of
-    /// `types[name]`, preferring the slot's bound arm over its pending one, returning the first
-    /// visible hit as a [`NameLookup`], or `None` so the caller keeps walking. Bound-preferred is
-    /// load-bearing: on a slot carrying both, a consumer that can read the identity must not park.
+    /// `types[name]`, then one of the claim store, returning the first visible hit as a
+    /// [`NameLookup`], or `None` so the caller keeps walking. Bound-first is load-bearing: where a
+    /// bound identity and a live claim both stand — a nominal's seal pre-installing the external
+    /// identity while its binder is still in flight — a consumer that can read the identity must
+    /// not park.
     pub fn lookup_type(&self, name: &str, cutoff: Option<usize>) -> Option<NameLookup<KType>> {
         let tables = self.tables.borrow();
-        let slot = tables.types.get(name)?;
-        if let Some((kt, site)) = slot.bound()
+        if let Some((kt, site)) = tables.types.get(name)
             && Self::visible(site.index, cutoff)
         {
-            return Some(NameLookup::Bound(kt));
+            return Some(NameLookup::Bound(*kt));
         }
-        slot.pending()
-            .filter(|p| Self::visible(p.index, cutoff))
-            .map(|p| NameLookup::Parked(p.producer))
+        tables
+            .claims
+            .name_claim(name)
+            .filter(|claim| Self::visible(claim.index, cutoff))
+            .map(|claim| NameLookup::Parked(claim.producer))
     }
 
     /// Classified per-scope member lookup for ATTR module / signature access: the value-or-type
@@ -591,36 +512,35 @@ impl<'a> Bindings<'a> {
     /// module member is module-own — the lookup deliberately does **not** consult the builtin
     /// root or walk lexical ancestors, so `m.Type` (a builtin type name) or `m.SomeOuterType`
     /// is "no member", not a fall-through. The cross-kind exclusion keeps the two arms from both
-    /// matching, so the result is unambiguous. Bound arms only — a read module is finalized, so a
-    /// pending arm never surfaces here.
+    /// matching, so the result is unambiguous. The binding maps hold committed bindings only, so a
+    /// claim cannot surface here — and a read module is finalized either way.
     pub fn lookup_member(&self, name: &str, cutoff: Option<usize>) -> Option<MemberResolution<'a>> {
         let tables = self.tables.borrow();
-        if let Some(entry) = tables.data.get(name).and_then(ValueSlot::bound)
+        if let Some(entry) = tables.data.get(name)
             && Self::visible(entry.index, cutoff)
         {
             return Some(MemberResolution::Value(entry.sealed.duplicate()));
         }
-        if let Some((kt, site)) = tables.types.get(name).and_then(TypeSlot::bound)
+        if let Some((kt, site)) = tables.types.get(name)
             && Self::visible(site.index, cutoff)
         {
-            return Some(MemberResolution::Type { kt });
+            return Some(MemberResolution::Type { kt: *kt });
         }
         None
     }
 
-    /// The [`ProducerId`] of a still-finalizing **type** binder named `name`, read straight from
-    /// the slot's pending arm — *not* through [`Self::lookup_type`], which prefers the (possibly
-    /// seal-pre-installed, still-unsealed) bound arm. The finalize gate uses this to park the
+    /// The [`ProducerId`] of a still-finalizing **type** binder named `name`, read straight from the
+    /// claim store — *not* through [`Self::lookup_type`], which prefers the (possibly
+    /// seal-pre-installed, still-unsealed) bound identity. The finalize gate uses this to park the
     /// type-identifier memo on an in-flight binder even when the seal has already pre-installed
-    /// the name's external identity into `types` — the [`TypeSlot::BoundWithPending`] case.
-    /// Visibility-unfiltered: this is dependency tracking, not consumer-visibility enforcement.
+    /// the name's external identity into `types`. Visibility-unfiltered: this is dependency
+    /// tracking, not consumer-visibility enforcement.
     pub fn type_placeholder_producer(&self, name: &str) -> Option<ProducerId> {
         self.tables
             .borrow()
-            .types
-            .get(name)
-            .and_then(TypeSlot::pending)
-            .map(|p| p.producer)
+            .claims
+            .name_claim(name)
+            .map(|claim| claim.producer)
     }
 
     /// Per-scope dispatch-bucket lookup. One pass over `functions[key]` surfaces the visible sealed
@@ -646,26 +566,28 @@ impl<'a> Bindings<'a> {
         self.lookup_function_probe(&StoredKeyProbe(key), cutoff, alloc)
     }
 
-    /// [`Self::lookup_function_stored`]'s **pending-only** peer: the earliest-index visible claim in
-    /// `functions[key]`, and nothing else. For a caller that only ever reads
-    /// [`FunctionLookup::pending`], the full lookup would otherwise build the bucket's visible
-    /// finalized overloads and drop them unread, once per question.
-    ///
-    /// Copies nothing out, so the `tables` borrow is over before the answer is: a `ProducerId` is a
-    /// plain edge name, unlike the sealed carriers `overloads` has to duplicate to let a candidate
-    /// walk run outside the borrow.
-    pub fn pending_function_stored(
+    /// The bucket channel's **claim** read: the earliest-index visible in-flight binder declaring
+    /// `key`, and nothing else. One hash probe of the store, copying nothing out, so the `tables`
+    /// borrow is over before the answer is — a `ProducerId` is a plain edge name, unlike the sealed
+    /// carriers [`FunctionLookup::overloads`] has to duplicate to let a candidate walk run outside
+    /// the borrow. [`Self::lookup_function_probe`] fills its `pending` field from here, and the
+    /// operator chain's pending-source sweep — which never reads a sealed overload — asks it
+    /// directly.
+    pub fn claimed_bucket_producer(
         &self,
         key: &[StoredElement<'_>],
         cutoff: Option<usize>,
     ) -> Option<ProducerId> {
-        let tables = self.tables.borrow();
-        Self::earliest_pending(tables.functions.get(&StoredKeyProbe(key))?, cutoff)
+        self.tables
+            .borrow()
+            .claims
+            .bucket_claim(&StoredKeyProbe(key), cutoff)
     }
 
     /// The one bucket read, over whichever key form the caller holds: hashbrown resolves both
     /// through `Equivalent`, and the two forms hash identically by construction (see
-    /// [`UntypedKeyProbe`]).
+    /// [`UntypedKeyProbe`]). The same key reaches the sealed overloads and the claims on the shape,
+    /// which is what lets the scope walk decide the pair's precedence at the scope that raised it.
     ///
     /// The buffer is sized to `bucket.len()` — an upper bound on the visible finalized overloads —
     /// and filled by a push loop rather than collected, so it never reallocates. Over a bump
@@ -681,35 +603,21 @@ impl<'a> Bindings<'a> {
         Q: std::hash::Hash + hashbrown::Equivalent<&'a [StoredElement<'a>]> + ?Sized,
     {
         let tables = self.tables.borrow();
+        let pending = tables.claims.bucket_claim(key, cutoff);
         let Some(bucket) = tables.functions.get(key) else {
             return FunctionLookup {
                 overloads: allocator_api2::vec::Vec::new_in(alloc),
-                pending: None,
+                pending,
             };
         };
         let mut overloads = allocator_api2::vec::Vec::with_capacity_in(bucket.len(), alloc);
         for entry in bucket
             .iter()
-            .filter_map(OverloadSlot::sealed)
             .filter(|entry| Self::visible(entry.index, cutoff))
         {
             overloads.push(entry.sealed.duplicate());
         }
-        FunctionLookup {
-            overloads,
-            pending: Self::earliest_pending(bucket, cutoff),
-        }
-    }
-
-    /// The bucket's earliest-index visible claim — most likely to finalize first, and so the one a
-    /// consumer parks on.
-    fn earliest_pending(bucket: &Bucket<'a>, cutoff: Option<usize>) -> Option<ProducerId> {
-        bucket
-            .iter()
-            .filter_map(OverloadSlot::pending)
-            .filter(|p| Self::visible(p.index, cutoff))
-            .min_by_key(|p| p.index.idx)
-            .map(|p| p.producer)
+        FunctionLookup { overloads, pending }
     }
 
     /// Per-scope operator-group lookup. Mirrors [`Self::lookup_value`] for the
@@ -771,34 +679,33 @@ impl<'a> Bindings<'a> {
         Ok(())
     }
 
-    /// Snapshot every bound `(name, dormant carrier)` pair in `data`, ignoring visibility. Each
-    /// seal is a bit-copy; the caller re-anchors what it needs under its own pin. Pending slots are
-    /// invisible to bulk reads — there is no carrier to hand out. For chain-gated single-name
-    /// reads use [`Self::lookup_value`].
+    /// Snapshot every `(name, dormant carrier)` pair in `data`, ignoring visibility. Each
+    /// seal is a bit-copy; the caller re-anchors what it needs under its own pin. Claims are
+    /// structurally absent — the map holds committed bindings only — so nothing is filtered. For
+    /// chain-gated single-name reads use [`Self::lookup_value`].
     pub fn iter_data(&self) -> Vec<(String, SealedValue<'a>)> {
         self.tables
             .borrow()
             .data
             .iter()
-            .filter_map(|(name, slot)| Some((name.to_string(), slot.bound()?.sealed.duplicate())))
+            .map(|(name, entry)| (name.to_string(), entry.sealed.duplicate()))
             .collect()
     }
 
-    /// Snapshot every bound `(name, KType)` pair in `types`, ignoring visibility.
+    /// Snapshot every `(name, KType)` pair in `types`, ignoring visibility.
     pub fn iter_types(&self) -> Vec<(String, KType)> {
         self.tables
             .borrow()
             .types
             .iter()
-            .filter_map(|(name, slot)| Some((name.to_string(), slot.bound()?.0)))
+            .map(|(name, (kt, _site))| (name.to_string(), *kt))
             .collect()
     }
 
     /// Snapshot every `(UntypedKey, Vec<SealedFunction>)` pair in `functions`, ignoring per-overload
     /// visibility. Each seal is a bit-copy; the caller re-anchors what it needs under its own pin.
-    /// Sealed slots only, and a bucket holding none is skipped — a key claimed by pending siblings
-    /// alone publishes no dispatch surface to snapshot. For chain-gated picks use
-    /// [`Self::lookup_function`].
+    /// An empty bucket is skipped — a shape whose overloads all retired publishes no dispatch
+    /// surface to snapshot. For chain-gated picks use [`Self::lookup_function`].
     pub fn iter_functions(&self) -> Vec<(UntypedKey, Vec<SealedFunction<'a>>)> {
         self.tables
             .borrow()
@@ -807,7 +714,6 @@ impl<'a> Bindings<'a> {
             .filter_map(|(key, bucket)| {
                 let sealed: Vec<SealedFunction> = bucket
                     .iter()
-                    .filter_map(OverloadSlot::sealed)
                     .map(|entry| entry.sealed.duplicate())
                     .collect();
                 (!sealed.is_empty()).then(|| (owned_untyped_key(key), sealed))
@@ -823,7 +729,6 @@ impl<'a> Bindings<'a> {
             .borrow()
             .types
             .get(name)
-            .and_then(TypeSlot::bound)
             .is_some_and(|(_, site)| site.index == BindingIndex::BUILTIN)
     }
 
@@ -844,11 +749,11 @@ impl<'a> Bindings<'a> {
     where
         Q: std::hash::Hash + hashbrown::Equivalent<&'a [StoredElement<'a>]> + ?Sized,
     {
-        self.tables.borrow().functions.get(key).is_some_and(|b| {
-            b.iter()
-                .filter_map(OverloadSlot::sealed)
-                .any(|e| e.index == BindingIndex::BUILTIN)
-        })
+        self.tables
+            .borrow()
+            .functions
+            .get(key)
+            .is_some_and(|b| b.iter().any(|e| e.index == BindingIndex::BUILTIN))
     }
 
     /// Visibility predicate. `cutoff = None` (the reader is off this scope's chain, so the scope
@@ -861,7 +766,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) fn data(&self) -> Ref<'_, BumpBackedMap<'a, &'a str, ValueSlot<'a>>> {
+    pub(crate) fn data(&self) -> Ref<'_, BumpBackedMap<'a, &'a str, DataEntry<'a>>> {
         Ref::map(self.tables.borrow(), |t| &t.data)
     }
 
@@ -873,45 +778,43 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) fn types(&self) -> Ref<'_, BumpBackedMap<'a, &'a str, TypeSlot>> {
+    pub(crate) fn types(&self) -> Ref<'_, BumpBackedMap<'a, &'a str, (KType, DeclarationSite)>> {
         Ref::map(self.tables.borrow(), |t| &t.types)
     }
 
-    /// The pending arm of `data[name]`, if any — the value-side forward-reference probe.
+    /// The claim standing on `name` in the value channel, if any — the value-side
+    /// forward-reference probe.
     #[cfg(test)]
-    pub fn pending_value(&self, name: &str) -> Option<PendingBinding> {
-        self.tables
-            .borrow()
-            .data
-            .get(name)
-            .and_then(ValueSlot::pending)
+    pub fn pending_value(&self, name: &str) -> Option<Claim> {
+        self.tables.borrow().claims.name_claim(name)
     }
 
-    /// Every pending name-keyed arm across `data` and `types`, tagged with the language it resolves
-    /// in — the hygiene probe for "this declaration left no in-flight producer behind".
+    /// Every standing name-channel claim, tagged with the language it resolves in — the hygiene
+    /// probe for "this declaration left no in-flight producer behind". The store keys both channels
+    /// in one map, and the tag is read back off the name's token class, which is what made that one
+    /// map sound in the first place ([`Self::partition_guard`]).
     #[cfg(test)]
     pub fn pending_names(&self) -> Vec<(String, BindKind, ProducerId)> {
-        let tables = self.tables.borrow();
-        let values = tables
-            .data
-            .iter()
-            .filter_map(|(n, s)| Some((n.to_string(), BindKind::Value, s.pending()?.producer)));
-        let types = tables
-            .types
-            .iter()
-            .filter_map(|(n, s)| Some((n.to_string(), BindKind::Type, s.pending()?.producer)));
-        values.chain(types).collect()
-    }
-
-    /// Every pending sibling in one dispatch bucket, in slot order.
-    #[cfg(test)]
-    pub fn pending_overload_entries(&self, bucket: &UntypedKey) -> Vec<PendingBinding> {
         self.tables
             .borrow()
-            .functions
-            .get(&UntypedKeyProbe(bucket))
-            .map(|b| b.iter().filter_map(OverloadSlot::pending).collect())
-            .unwrap_or_default()
+            .claims
+            .name_claims()
+            .into_iter()
+            .map(|(name, claim)| {
+                let kind = if crate::parse::is_type_name(&name) {
+                    BindKind::Type
+                } else {
+                    BindKind::Value
+                };
+                (name, kind, claim.producer)
+            })
+            .collect()
+    }
+
+    /// Every standing claim on one dispatch bucket, in install order.
+    #[cfg(test)]
+    pub fn pending_overload_entries(&self, bucket: &UntypedKey) -> Vec<Claim> {
+        self.tables.borrow().claims.bucket_claims(bucket)
     }
 
     #[cfg(test)]
@@ -920,8 +823,7 @@ impl<'a> Bindings<'a> {
             .borrow()
             .types
             .get(name)
-            .and_then(TypeSlot::bound)
-            .map(|(kt, _site)| kt)
+            .map(|(kt, _site)| *kt)
             .unwrap_or_else(|| panic!("expected bindings.types[{name:?}] to be bound"))
     }
 
@@ -934,8 +836,9 @@ impl<'a> Bindings<'a> {
     /// no part in the same-declaration decision.
     ///
     /// A committed value at `data[name]` is a `Rebind` under either policy — the value/type
-    /// partition is mutually exclusive. On success the slot is overwritten in place with a plain
-    /// `Bound` arm, so finalizing drops any pending arm the slot carried.
+    /// partition is mutually exclusive. On success the write **retires its own claim**: it already
+    /// carries the name and the [`BindingIndex`] it is writing at, through `site`, so removing the
+    /// claim is one hash removal and one bit with nothing searched for.
     pub(crate) fn write_type(
         &self,
         name: &str,
@@ -946,20 +849,15 @@ impl<'a> Bindings<'a> {
     ) -> Result<(), KError> {
         self.partition_guard(name, BindKind::Type)?;
         let mut tables = self.tables.borrow_mut();
-        // Cross-kind exclusion: a type name may not collide with a committed value. A pending value
-        // slot does not block — only a bound one is a committed binding.
-        if tables.data.get(name).is_some_and(|s| s.bound().is_some()) {
+        // Cross-kind exclusion: a type name may not collide with a committed value.
+        if tables.data.contains_key(name) {
             return Err(KError::new(KErrorKind::Rebind {
                 name: name.to_string(),
             }));
         }
         match (
             policy,
-            tables
-                .types
-                .get(name)
-                .and_then(TypeSlot::bound)
-                .map(|(_, s)| s),
+            tables.types.get(name).map(|(_, existing)| *existing),
         ) {
             (TypeWritePolicy::Insert, Some(_)) => {
                 return Err(KError::new(KErrorKind::Rebind {
@@ -977,33 +875,42 @@ impl<'a> Bindings<'a> {
             _ => {}
         }
         match tables.types.get_mut(name) {
-            // Whatever the slot held — a pending arm, a bound identity, or both — the finalized
-            // identity replaces it where it sits, so the key is never re-keyed.
-            Some(slot) => *slot = TypeSlot::Bound(kt, site),
+            // A same-declaration re-entry overwrites where it sits, so the key is never re-keyed.
+            Some(entry) => *entry = (kt, site),
             None => {
                 tables
                     .types
-                    .insert(self.brand.allocator().text(name), TypeSlot::Bound(kt, site));
+                    .insert(self.brand.allocator().text(name), (kt, site));
             }
         }
+        tables.claims.retire_name(name, site.index);
         Ok(())
     }
 
-    /// Claim `name`'s slot in its destination table for the binder edge `edge` — the dispatch-time
-    /// forward-reference stamp. `edge` is the slot's own installed edge, destined at this scope's
-    /// region, so a consumer parking on the claim inherits that destination.
+    /// Size this scope's claim run for a block of `statements` statements fanning out into it — the
+    /// one act that builds a claim store. The statement-at-a-time door builds none: a driver using
+    /// it runs each statement to completion, so every visible binder has already committed and no
+    /// claim is ever consulted.
+    pub fn begin_block(&self, statements: usize, _gate: &mut WriteGate) {
+        self.tables.borrow_mut().claims.begin_block(statements);
+    }
+
+    /// Claim `name` for the binder edge `producer` — the dispatch-time forward-reference stamp.
+    /// `producer` names the slot's own installed edge, destined at this scope's region, so a
+    /// consumer parking on the claim inherits that destination.
     ///
     /// Errors `Rebind` if the claim collides: a committed `data[name]` (bindings are bind-once), or
-    /// an existing pending arm naming a different edge. Idempotent on same-edge re-entry.
-    /// A `types` slot already carrying a bound identity keeps it and gains the pending arm
-    /// ([`TypeSlot::BoundWithPending`]): a parallel nominal finalize pre-installs the external
-    /// identity while its binder is still in flight.
+    /// a standing claim naming a different edge. Idempotent on same-edge re-entry. A `types` entry
+    /// already carrying a bound identity does **not** block: a parallel nominal finalize
+    /// pre-installs the external identity while its binder is still in flight, and that coexistence
+    /// is a bound entry plus a live claim rather than anything either structure represents.
     ///
     /// The eventual [`Self::write_value`] / [`Self::write_type`] call must carry the
     /// same `index` so the consumer's visibility test stays consistent across
-    /// the pending → finalized transition. `kind` picks the destination table, so a value bind
-    /// never satisfies a type claim (or the reverse) — see [`Bindings::lookup_value`] /
-    /// [`Bindings::lookup_type`], each of which probes only its own table.
+    /// the claimed → committed transition, and so the commit retires this very claim. `kind` picks
+    /// the destination table, so a value bind never satisfies a type claim (or the reverse) — see
+    /// [`Bindings::lookup_value`] / [`Bindings::lookup_type`], each of which probes only its own
+    /// table before the store.
     pub fn install_placeholder(
         &self,
         name: &str,
@@ -1013,60 +920,36 @@ impl<'a> Bindings<'a> {
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();
-        let claim = PendingBinding { producer, index };
         let rebind = || {
             KError::new(KErrorKind::Rebind {
                 name: name.to_string(),
             })
         };
-        match kind {
-            BindKind::Value => match tables.data.get_mut(name) {
-                Some(ValueSlot::Bound(_)) => Err(rebind()),
-                Some(ValueSlot::Pending(existing)) if existing.producer == producer => Ok(()),
-                Some(ValueSlot::Pending(_)) => Err(rebind()),
-                None => {
-                    tables
-                        .data
-                        .insert(self.brand.allocator().text(name), ValueSlot::Pending(claim));
-                    Ok(())
-                }
-            },
-            BindKind::Type => match tables.types.get_mut(name) {
-                Some(slot) => match slot.pending() {
-                    Some(existing) if existing.producer == producer => Ok(()),
-                    Some(_) => Err(rebind()),
-                    None => {
-                        let (kt, site) = slot
-                            .bound()
-                            .expect("a TypeSlot with no pending arm is Bound");
-                        *slot = TypeSlot::BoundWithPending(kt, site, claim);
-                        Ok(())
-                    }
-                },
-                None => {
-                    tables
-                        .types
-                        .insert(self.brand.allocator().text(name), TypeSlot::Pending(claim));
-                    Ok(())
-                }
-            },
+        if kind == BindKind::Value && tables.data.contains_key(name) {
+            return Err(rebind());
+        }
+        let brand = self.brand;
+        match tables
+            .claims
+            .claim_name(brand, name, Claim { producer, index })
+        {
+            Ok(()) => Ok(()),
+            // A same-producer re-entry is the same stamp arriving twice, not a second declaration.
+            Err(standing) if standing.producer == producer => Ok(()),
+            Err(_) => Err(rebind()),
         }
     }
 
-    /// Install a dispatch-time pending-overload entry: `bucket → producer`.
+    /// Install a dispatch-time bucket claim: `bucket → producer`.
     /// The bucket key MUST equal what `KExpression::untyped_key` would compute
-    /// for a *call* to the eventual overload (not the binder call itself).
+    /// for a *call* to the eventual overload (not the binder call itself), which is what lets one
+    /// key reach both the claim and the overload it becomes.
     ///
     /// **Append, never deduplicate**: sibling FN binders sharing one
     /// inner-call bucket key — `FN (PICK xs :A) -> ...` then
-    /// `FN (PICK xs :B) -> ...` — each claim their own slot at their own
-    /// [`BindingIndex`]. The slot is overwritten in place by
-    /// [`Bindings::write_overload`] when the producing binder seals; other siblings stay
-    /// pending as wake sources.
-    ///
-    /// Appended even when the bucket already holds sealed overloads: a pending
-    /// sibling sits *alongside* a finalized one so the scope walk can park
-    /// the bucket until the sibling finalizes.
+    /// `FN (PICK xs :B) -> ...` — each claim at their own
+    /// [`BindingIndex`]. [`Bindings::write_overload`] retires only the sealing binder's own claim;
+    /// the other siblings stay as wake sources.
     pub fn install_pending_overload(
         &self,
         bucket: UntypedKey,
@@ -1074,29 +957,22 @@ impl<'a> Bindings<'a> {
         index: BindingIndex,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        let mut tables = self.tables.borrow_mut();
-        let claim = OverloadSlot::Pending(PendingBinding { producer, index });
-        // Probe-then-insert rather than an `entry` call: the key a miss inserts has to be re-homed
-        // through the brand, which the entry API has no way to defer. The second hash is paid only
-        // on the first claim of a shape.
-        match tables.functions.get_mut(&UntypedKeyProbe(&bucket)) {
-            Some(slots) => slots.push(claim),
-            None => {
-                let key = store_untyped_key(self.brand, &bucket);
-                let mut slots = bump_bucket(self.brand);
-                slots.push(claim);
-                tables.functions.insert(key, slots);
-            }
-        }
+        let brand = self.brand;
+        self.tables
+            .borrow_mut()
+            .claims
+            .claim_bucket(brand, &bucket, Claim { producer, index });
         Ok(())
     }
 
-    /// Replay another `Bindings`'s bound `data` entries through [`Self::write_value`] on self, and
-    /// its sealed `functions` slots by direct entry duplication — a view of a module preserves the
+    /// Replay another `Bindings`'s `data` entries through [`Self::write_value`] on self, and
+    /// its `functions` entries by direct duplication — a view of a module preserves the
     /// module's keyworded dispatch surface as-is (keyword → keyword), it does not re-derive it from
-    /// the value bindings. Pending arms are not replayed: a claim names a producer in the source's
-    /// own scheduler run, so copying one would hand the target a park on a node that will never
-    /// wake it. The `types` table is not replayed: a view's type interface is its own, seeded by
+    /// the value bindings. There is nothing to filter: the source's maps hold committed bindings
+    /// only, and its claims live in a store this never reads. That is the point — a claim names an
+    /// edge of the source's own scheduler run, so a copied one would hand the target a park on a
+    /// node that will never wake it, and keeping claims out of the maps makes that unrepresentable
+    /// rather than filtered. The `types` table is not replayed: a view's type interface is its own, seeded by
     /// [`Scope::alloc_module_view`](crate::machine::core::Scope) from the ascribed signature rather
     /// than inherited from the source. Snapshots the source maps and releases the source `Ref`
     /// before the replay so re-entrant ascription cannot deadlock.
@@ -1116,17 +992,14 @@ impl<'a> Bindings<'a> {
             let data: Vec<(&str, DataEntry)> = tables
                 .data
                 .iter()
-                .filter_map(|(k, slot)| Some((*k, slot.bound()?.duplicate())))
+                .map(|(k, entry)| (*k, entry.duplicate()))
                 .collect();
-            let functions: Vec<(&[StoredElement<'_>], Vec<OverloadSlot<'a>>)> = tables
+            let functions: Vec<(&[StoredElement<'_>], Vec<FunctionBucketEntry<'a>>)> = tables
                 .functions
                 .iter()
                 .filter_map(|(key, bucket)| {
-                    let sealed: Vec<OverloadSlot<'a>> = bucket
-                        .iter()
-                        .filter_map(OverloadSlot::sealed)
-                        .map(|e| OverloadSlot::Sealed(e.duplicate()))
-                        .collect();
+                    let sealed: Vec<FunctionBucketEntry<'a>> =
+                        bucket.iter().map(FunctionBucketEntry::duplicate).collect();
                     (!sealed.is_empty()).then_some((*key, sealed))
                 })
                 .collect();
@@ -1188,9 +1061,9 @@ impl<'a> Bindings<'a> {
     }
 
     /// The `data` write path: commit `name` → `sealed` as a bind-once value binding. Runs the
-    /// token-class partition guard and the cross-kind probe, then writes the slot — overwriting
-    /// this name's pending arm in place if it had one, so the key is stored once and finalizing
-    /// abandons nothing. All under one borrow.
+    /// token-class partition guard and the cross-kind probe, writes the entry, and **retires its
+    /// own claim** — it carries the name and the [`BindingIndex`] it is writing at, so the removal
+    /// is one hash removal and one bit with nothing searched for. All under one borrow.
     pub(crate) fn write_value(
         &self,
         name: &str,
@@ -1206,36 +1079,29 @@ impl<'a> Bindings<'a> {
         };
         let mut tables = self.tables.borrow_mut();
         // Cross-kind exclusion: a value name may not collide with a committed type — the
-        // `data`/`types` partition is structural, not convention. A type slot that is only pending
-        // holds no committed identity, so it does not block.
-        if tables.types.get(name).is_some_and(|s| s.bound().is_some()) {
+        // `data`/`types` partition is structural, not convention.
+        if tables.types.contains_key(name) {
             return Err(rebind());
         }
-        match tables.data.get_mut(name) {
-            Some(ValueSlot::Bound(_)) => return Err(rebind()),
-            // The pending arm this write finalizes: overwritten in place, keyed by name alone —
-            // a write whose producer differs from the one that claimed the slot still finalizes it.
-            Some(slot @ ValueSlot::Pending(_)) => {
-                *slot = ValueSlot::Bound(DataEntry { index, sealed });
-            }
-            None => {
-                tables.data.insert(
-                    self.brand.allocator().text(name),
-                    ValueSlot::Bound(DataEntry { index, sealed }),
-                );
-            }
+        if tables.data.contains_key(name) {
+            return Err(rebind());
         }
+        tables.data.insert(
+            self.brand.allocator().text(name),
+            DataEntry { index, sealed },
+        );
+        tables.claims.retire_name(name, index);
         Ok(())
     }
 
     /// The `functions` write path: add `seal`'s callable to its dispatch bucket. The bucket key,
     /// dedupe token and diagnostic summary were all computed at seal time, where the callable was
     /// open — the write is pure table mutation, no carrier is opened and no bare reference crosses
-    /// the door. Token equality against a sealed bucket sibling raises `DuplicateOverload`; pending
-    /// siblings don't participate in the dedupe. The seal lands **in this binder's own pending
-    /// slot** when it has one — same index, overwritten in place — so the key is stored once and
-    /// other siblings stay as wake sources. Bucket order is not observable: the picker returns a
-    /// unique winner or a tie that surfaces as deferred/ambiguous either way.
+    /// the door. Token equality against a bucket sibling raises `DuplicateOverload`; claims are in
+    /// the store and don't participate in the dedupe. The write then **retires its own claim** on
+    /// the same key at the same index — the sibling binders' claims stand as wake sources. Bucket
+    /// order is not observable: the picker returns a unique winner or a tie that surfaces as
+    /// deferred/ambiguous either way.
     pub(crate) fn write_overload(
         &self,
         name: &str,
@@ -1244,9 +1110,8 @@ impl<'a> Bindings<'a> {
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();
-        // A builtin seed, a direct registration and a bulk install all reach a shape no binder
-        // claimed, so the miss arm re-homes the key and seeds an empty bucket; an FN binder's own
-        // claim already created it.
+        // Probe-then-insert rather than an `entry` call: the key a miss inserts has to be re-homed
+        // through the brand, which the entry API has no way to defer.
         if !tables.functions.contains_key(&UntypedKeyProbe(&seal.key)) {
             let key = store_untyped_key(self.brand, &seal.key);
             tables.functions.insert(key, bump_bucket(self.brand));
@@ -1259,7 +1124,6 @@ impl<'a> Bindings<'a> {
         // incoming token is re-homed only once it has passed.
         if let Some(existing) = bucket
             .iter()
-            .filter_map(OverloadSlot::sealed)
             .find(|existing| seal.token.matches_stored(existing.token))
         {
             return Err(KError::new(KErrorKind::DuplicateOverload {
@@ -1267,63 +1131,35 @@ impl<'a> Bindings<'a> {
                 signature: existing.summary.to_string(),
             }));
         }
-        let entry = FunctionBucketEntry {
+        bucket.push(FunctionBucketEntry {
             index,
             token: seal.token.store_in(self.brand),
             summary: self.brand.allocator().text(&seal.summary),
             sealed: seal.sealed,
-        };
-        // The claim this write finalizes, if the binder made one; a builtin seed, a direct
-        // registration or a bulk install has none and simply appends.
-        match bucket
-            .iter()
-            .position(|slot| slot.pending().is_some_and(|p| p.index == index))
-        {
-            Some(at) => bucket[at] = OverloadSlot::Sealed(entry),
-            None => bucket.push(OverloadSlot::Sealed(entry)),
-        }
+        });
+        // A builtin seed, a direct registration or a bulk install claimed nothing, so this is a
+        // no-op for them.
+        tables
+            .claims
+            .retire_bucket(&UntypedKeyProbe(&seal.key), index);
         Ok(())
     }
 
-    /// Drop every pending arm naming one of the given producers, in all three claim-bearing tables — the
-    /// retirement companion to the installs, run when the claiming slot terminalizes. The success
-    /// write paths finalize a binder's own claim in place, so this normally finds only what a
-    /// failed body left behind; running it on every terminal is what guarantees no arm survives
-    /// naming a [`ProducerId`] whose edge its owner is about to release. A `types` slot that also
-    /// holds a bound identity keeps it — only the pending arm is dropped. One bucket-keyed binder
-    /// claims a slot in every inner-call bucket it declares, so the `functions` walk purges across
-    /// all of them and drops a bucket the purge empties.
+    /// Retire every claim the statement at `index` still holds — the retirement companion to the
+    /// installs, run when the claiming slot terminalizes. The write paths retire a binder's own
+    /// claim as they commit, so this normally reads a zero live mask and returns; running it on
+    /// every terminal is what guarantees no claim survives naming a [`ProducerId`] whose edge its
+    /// owner is about to release.
     ///
-    /// The purge keys on the [`PendingBinding::producer`] each slot already carries; no table's
-    /// key participates. `retiring` answers the one question a slot poses — is this slot's producer
-    /// going away? — so the caller supplies the membership test and nothing is materialized here to
-    /// hold the answer.
+    /// Keyed on the one address the retiring slot knows about itself. It is an array index and a
+    /// zero test on the success path, and at most three direct removals otherwise — nothing is
+    /// searched in either direction, not the binding tables by producer and not the store by name.
     ///
-    /// Strands bump bytes: a removed key's text and an emptied bucket's buffer are abandoned rather
-    /// than freed. Bounded by the number of binders that fail — a success path overwrites its claim
-    /// where it sits — so a table's peak occupancy stays its final binding count plus that error
+    /// Strands bump bytes: a removed key's text is abandoned rather than freed. Bounded by the
+    /// binders that fail, so a scope's peak occupancy stays its final binding count plus that error
     /// tail.
-    pub fn clear_placeholders_for_producers(
-        &self,
-        retiring: impl Fn(ProducerId) -> bool,
-        _gate: &mut WriteGate,
-    ) {
-        let mut tables = self.tables.borrow_mut();
-        let named = |p: &PendingBinding| retiring(p.producer);
-        let claims = |slot: Option<PendingBinding>| slot.as_ref().is_some_and(named);
-        tables.data.retain(|_, slot| !claims(slot.pending()));
-        tables.types.retain(|_, slot| match slot {
-            TypeSlot::Pending(p) => !named(p),
-            TypeSlot::BoundWithPending(kt, site, p) if named(p) => {
-                *slot = TypeSlot::Bound(*kt, *site);
-                true
-            }
-            _ => true,
-        });
-        tables.functions.retain(|_, bucket| {
-            bucket.retain(|slot| !claims(slot.pending()));
-            !bucket.is_empty()
-        });
+    pub fn retire_claims(&self, index: BindingIndex, _gate: &mut WriteGate) {
+        self.tables.borrow_mut().claims.retire_statement(index);
     }
 }
 

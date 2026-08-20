@@ -213,26 +213,27 @@ impl<'a> Scope<'a> {
             .install_placeholder(&name, producer, index, kind, gate)
     }
 
-    /// Retirement companion to both [`Self::install_placeholder`] and
-    /// [`Self::install_pending_overload`]: drop any pending arm whose producer `retiring` names.
-    /// Routes to the same target the installs used, and runs as the claiming slot terminalizes, so
-    /// no arm survives naming an edge its owner is about to release — into a later run on a
-    /// persistent scope least of all. See [`Bindings::clear_placeholders_for_producers`].
-    pub fn clear_placeholders_for_producers(
-        &self,
-        retiring: impl Fn(ProducerId) -> bool,
-        gate: &mut WriteGate,
-    ) {
+    /// Size this scope's claim run for a block of `statements` statements fanning out into it. See
+    /// [`Bindings::begin_block`].
+    pub fn begin_block(&self, statements: usize, gate: &mut WriteGate) {
         self.assert_owns_bindings();
-        self.bindings()
-            .clear_placeholders_for_producers(retiring, gate);
+        self.bindings().begin_block(statements, gate);
     }
 
-    /// Bucket-keyed companion to [`Self::install_placeholder`]: appends a pending slot to
-    /// `functions[bucket]` so dispatch's no-bucket fallback parks
-    /// bare-arg calls on the producing FN binder. Sibling installs sharing the
-    /// bucket each append a distinct slot; a slot is sealed in place on finalize by
-    /// matching the producing binder's `BindingIndex`. See
+    /// Retirement companion to both [`Self::install_placeholder`] and
+    /// [`Self::install_pending_overload`]: drop every claim the statement at `index` still holds.
+    /// Routes to the same target the installs used, and runs as the claiming slot terminalizes, so
+    /// no claim survives naming an edge its owner is about to release — into a later run on a
+    /// persistent scope least of all. See [`Bindings::retire_claims`].
+    pub fn retire_claims(&self, index: BindingIndex, gate: &mut WriteGate) {
+        self.assert_owns_bindings();
+        self.bindings().retire_claims(index, gate);
+    }
+
+    /// Bucket-keyed companion to [`Self::install_placeholder`]: claims `bucket` in the scope's
+    /// claim store so dispatch's no-bucket fallback parks bare-arg calls on the producing FN
+    /// binder. Sibling installs sharing the bucket each add a distinct claim at their own
+    /// `BindingIndex`, and the sealing binder retires only its own. See
     /// [`Bindings::install_pending_overload`].
     pub fn install_pending_overload(
         &self,

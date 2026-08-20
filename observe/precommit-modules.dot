@@ -45,6 +45,7 @@ digraph {
     "koan::machine::core::arena::frame" [label="koan::machine::core::arena::frame"];
     "koan::machine::core::arena::step_allocator" [label="koan::machine::core::arena::step_allocator"];
     "koan::machine::core::bindings" [label="koan::machine::core::bindings"];
+    "koan::machine::core::bindings::claims" [label="koan::machine::core::bindings::claims"];
     "koan::machine::core::bindings::gate" [label="koan::machine::core::bindings::gate"];
     "koan::machine::core::bindings::ops" [label="koan::machine::core::bindings::ops"];
     "koan::machine::core::carrier_witness" [label="koan::machine::core::carrier_witness"];
@@ -192,6 +193,7 @@ digraph {
     "koan::machine::core" -> "koan::machine::core::statement_id" [label="owns", style="solid"];
     "koan::machine::core::arena" -> "koan::machine::core::arena::frame" [label="owns", style="solid"];
     "koan::machine::core::arena" -> "koan::machine::core::arena::step_allocator" [label="owns", style="solid"];
+    "koan::machine::core::bindings" -> "koan::machine::core::bindings::claims" [label="owns", style="solid"];
     "koan::machine::core::bindings" -> "koan::machine::core::bindings::gate" [label="owns", style="solid"];
     "koan::machine::core::bindings" -> "koan::machine::core::bindings::ops" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::action" [label="owns", style="solid"];
@@ -487,6 +489,11 @@ digraph {
     "koan::machine::core::bindings" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::core::bindings::claims" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::core::bindings::claims" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::core::bindings::claims" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::core::bindings::claims" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
+    "koan::machine::core::bindings::claims" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::bindings::ops" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::bindings::ops" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
     "koan::machine::core::bindings::ops" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];

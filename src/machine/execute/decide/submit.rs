@@ -118,9 +118,9 @@ impl<'run> Host<'run> {
                     &mut gate,
                 );
             }
-            // The slot owns every name it stamped: it releases them when it terminalizes, and hands
-            // them on to a fresh anchor if a tail replace mints one.
-            anchor.own_edges(edges);
+            // The slot owns every claim it stamped: it releases the edges when it terminalizes, and
+            // the same act records that this slot's statement index addresses claims in the store.
+            anchor.own_claim_edges(edges);
         }
         id
     }

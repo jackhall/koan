@@ -437,8 +437,8 @@ fn park_on_pending_operators<'step, 'b>(
 /// Every still-finalizing `OP` declaration visible from `s` that would register one of this
 /// chain's operators, named by its claim edge and deduped in walk order.
 ///
-/// A pending `OP` lives in the **function buckets** (its claim is a pending overload slot, see
-/// `builtins::op_def`), so the probe reads those, not the operator registry. Both keys an operator
+/// An in-flight `OP` is claimed in the **bucket channel** (see `builtins::op_def`), so the probe
+/// reads the scope's claim store, not the operator registry. Both keys an operator
 /// can be declared under are probed — binary `[Slot, Keyword(sym), Slot]` and unary
 /// `[Keyword(sym), Slot]` — since the chain cannot know the declaration's arity until it lands.
 fn pending_operator_sources<'b>(
@@ -465,7 +465,7 @@ fn pending_operator_sources<'b>(
         ] {
             for scope in s.ancestors() {
                 let cutoff = scope.binding_cutoff(chain);
-                if let Some(source) = scope.bindings().pending_function_stored(key, cutoff)
+                if let Some(source) = scope.bindings().claimed_bucket_producer(key, cutoff)
                     && !sources.contains(&source)
                 {
                     sources.push(source);

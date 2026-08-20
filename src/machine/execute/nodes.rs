@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::machine::core::ReturnContract;
@@ -76,6 +76,13 @@ pub(super) struct SlotFrame {
     /// after allocation, so the list fills in rather than arriving with the anchor, and a tail
     /// replace carries it over: ownership tracks the slot, not the anchor. Empty for most slots.
     owned_edges: RefCell<Vec<EdgeId>>,
+    /// Whether this slot's submission **stamped claims** into its scope's claim store. A slot's
+    /// lexical chain index is its statement's, which its eagerly-dispatched sub-slots share, so the
+    /// index alone does not say whose claims those are; this flag does, and it is what the
+    /// retirement hook gates on before indexing the store by that index. Set exactly where the
+    /// stamp happens, and never inherited — a claim-owning slot never tail-replaces (see
+    /// [`replacing`](Self::replacing)).
+    claimed: Cell<bool>,
     /// The identity a binding this slot installs is stamped with
     /// ([`Installer::Statement`](crate::machine::Installer)). Inherited by a tail replace through
     /// [`replacing`](Self::replacing), so one statement keeps one id however many times it steps
@@ -112,6 +119,7 @@ impl SlotFrame {
             cart,
             payload: NodePayload { scope, chain },
             owned_edges: RefCell::new(Vec::new()),
+            claimed: Cell::new(false),
             statement: StatementId::next(),
             opened_scope: false,
             label,
@@ -131,10 +139,17 @@ impl SlotFrame {
         retiring: &SlotFrame,
         label: WorkLabel,
     ) -> Rc<SlotFrame> {
+        debug_assert!(
+            !retiring.claimed.get(),
+            "a claim-owning slot never tail-replaces: block_tail's callers (MATCH / TRY arms, \
+             EVAL, USING) are no binder form, so the scope a statement's claims were installed \
+             into is the scope it retires against",
+        );
         Rc::new(SlotFrame {
             cart,
             payload: NodePayload { scope, chain },
             owned_edges: RefCell::new(retiring.take_owned_edges()),
+            claimed: Cell::new(false),
             statement: retiring.statement,
             opened_scope: retiring.opened_scope,
             label,
@@ -152,10 +167,17 @@ impl SlotFrame {
         retiring: &SlotFrame,
         label: WorkLabel,
     ) -> Rc<SlotFrame> {
+        debug_assert!(
+            !retiring.claimed.get(),
+            "a claim-owning slot never tail-replaces: block_tail's callers (MATCH / TRY arms, \
+             EVAL, USING) are no binder form, so the scope a statement's claims were installed \
+             into is the scope it retires against",
+        );
         Rc::new(SlotFrame {
             cart,
             payload: NodePayload { scope, chain },
             owned_edges: RefCell::new(retiring.take_owned_edges()),
+            claimed: Cell::new(false),
             statement: retiring.statement,
             opened_scope: true,
             label,
@@ -179,6 +201,20 @@ impl SlotFrame {
 
     pub(super) fn own_edges(&self, edges: impl IntoIterator<Item = EdgeId>) {
         self.owned_edges.borrow_mut().extend(edges);
+    }
+
+    /// [`own_edges`](Self::own_edges) for the edges a binder's submission **claimed** with, which
+    /// also records that this slot's statement index addresses claims in the store.
+    pub(super) fn own_claim_edges(&self, edges: impl IntoIterator<Item = EdgeId>) {
+        self.claimed.set(true);
+        self.own_edges(edges);
+    }
+
+    /// Whether this slot stamped claims — the retirement hook's gate. A slot that stamped none
+    /// shares its statement's index with the slot that did, so asking the store on its behalf would
+    /// retire another slot's live claims.
+    pub(super) fn installed_claims(&self) -> bool {
+        self.claimed.get()
     }
 
     pub(super) fn statement(&self) -> StatementId {

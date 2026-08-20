@@ -218,8 +218,8 @@ What is Koan's is *which* edges each dispatch shape installs:
   the consumer's own edge off it, *inheriting the source's destination*. So a
   placeholder park names the **original destination scope's region**, and
   delivery dedups per distinct destination: the eventual binding write and the
-  placeholder share one adopt. The layers that *carry* such a name — the scope
-  tables' pending arms, the type resolver's `Park` answer, a decide's dep list
+  placeholder share one adopt. The layers that *carry* such a name — the scope's
+  claim store, the type resolver's `Park` answer, a decide's dep list
   — hold it as an opaque
   [`ProducerId`](../../src/machine/execute/producer_id.rs) and reach the
   scheduler only through `deps_on`; the `EdgeId` behind it is spelled in the

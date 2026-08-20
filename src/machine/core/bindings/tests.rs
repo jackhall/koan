@@ -139,7 +139,6 @@ fn write_type_inserts_into_types_map() {
     let stored = bindings
         .types()
         .get("Foo")
-        .and_then(|slot| slot.bound())
         .expect("Foo should be bound in the types map")
         .0;
     assert_eq!(stored, kt);
@@ -175,7 +174,6 @@ fn write_type_rejects_collision_with_rebind() {
     let stored = bindings
         .types()
         .get("Foo")
-        .and_then(|slot| slot.bound())
         .expect("Foo should still be bound")
         .0;
     assert_eq!(stored, kt1);
@@ -297,7 +295,6 @@ fn distinct_statement_redeclare_rebinds() {
         bindings
             .types()
             .get("Maybe")
-            .and_then(|slot| slot.bound())
             .expect("Maybe should still be bound")
             .0,
         KType::NUMBER,
@@ -410,11 +407,11 @@ fn value_write_finalizes_the_pending_arm_in_place() {
 
 /// A `types` slot holds a bound identity and a pending producer at once: a parallel nominal
 /// finalize pre-installs the name's external identity while its producer is still in flight.
-/// `lookup_type` answers the bound identity (it prefers the bound arm), `type_placeholder_producer`
-/// still surfaces the producer for the finalize gate to park on, and the producer-failure sweep
-/// drops only the pending arm — the bound identity survives.
+/// `lookup_type` answers the bound identity (it probes `types` first), `type_placeholder_producer`
+/// still surfaces the producer for the finalize gate to park on, and retiring the statement drops
+/// only the claim — the bound identity survives, since the two live in different structures.
 #[test]
-fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
+fn a_bound_identity_and_a_live_claim_stand_on_one_name_at_once() {
     let storage = run_root_storage();
     let bindings = Bindings::new(storage.brand());
     bindings
@@ -434,7 +431,7 @@ fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
             BindKind::Type,
             &mut crate::machine::WriteGate::for_test(),
         )
-        .expect("the in-flight binder claims the same slot");
+        .expect("the in-flight binder claims the same name");
 
     assert!(matches!(
         bindings.lookup_type("Wrapper", None),
@@ -445,8 +442,8 @@ fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
         Some(ProducerId::for_test(9)),
     );
 
-    bindings.clear_placeholders_for_producers(
-        |p| p == ProducerId::for_test(9),
+    bindings.retire_claims(
+        BindingIndex::BUILTIN,
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(bindings.pending_names().is_empty());
@@ -500,8 +497,8 @@ fn bump_backed_tables_full_churn() {
         }
         assert!(scope.bindings().lookup_type("Ty63", None).is_some());
 
-        // A dispatch bucket claimed by two sibling binders, one of which finalizes into its own
-        // pending slot — the in-place overwrite that keeps peak occupancy at the binding count.
+        // A dispatch bucket claimed by two sibling binders, one of which finalizes and retires its
+        // own claim while the sibling's stands.
         let f =
             KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
         let sealed_key = f.open(|f| f.signature.untyped_key());
@@ -517,10 +514,10 @@ fn bump_backed_tables_full_churn() {
         }
         scope
             .register_function_direct("FOO".to_string(), &f, BindingIndex::value(1), &mut gate)
-            .expect("the seal lands in the claim it finalizes");
+            .expect("the seal appends and retires this binder's own claim");
 
-        // A second producer's claim on its own bucket, purged so the bucket empties and its key is
-        // removed — a bucket purge strands bump bytes, exercised so the leak check sees it.
+        // A second producer's claim on its own bucket, retired without a commit — the failed-binder
+        // path, which strands the claim's bump bytes, exercised so the leak check sees it.
         let purged_key: UntypedKey = SignatureDraft {
             return_type: ReturnType::Resolved(KType::ANY),
             elements: vec![SignatureElement::Keyword("BAR")],
@@ -536,7 +533,7 @@ fn bump_backed_tables_full_churn() {
             .expect("the purged binder claims its bucket");
         scope
             .bindings()
-            .clear_placeholders_for_producers(|p| p == ProducerId::for_test(9), &mut gate);
+            .retire_claims(BindingIndex::value(2), &mut gate);
         assert!(
             scope
                 .bindings()
@@ -551,7 +548,7 @@ fn bump_backed_tables_full_churn() {
                 .overloads
                 .len(),
             1,
-            "the finalized overload survives the sibling purge",
+            "the finalized overload survives the sibling's retirement",
         );
 
         // A per-group powerset install: every subset key's text bumped, all pointing at one record.

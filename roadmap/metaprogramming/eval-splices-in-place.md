@@ -49,8 +49,10 @@ replacement semantics: splice in place, sequenced by a block barrier.
 
 - *Barrier mechanism — decided.* Plain dependency edges from each later sibling
   to the barrier expression, installed at submission time off the parse-static
-  `(EVAL …)` head shape. No placeholder registry entries and no wildcard park
-  keys: the park target is a known node.
+  `(EVAL …)` head shape. No claim-store entries and no wildcard park keys: the
+  park target is a known producer, so a later sibling waits on an edge rather
+  than on a name — which is also why a spliced binder needs no claim of its
+  own.
 - *Frame handling for the splice — open.* (a) Evaluate the spliced AST directly
   in the enclosing frame, retiring the `MATCH`-mirroring fresh frame; (b) keep
   a child frame and forward its registrations to the enclosing scope through

@@ -1,14 +1,14 @@
 # Name placeholders and submission
 
-Forward-reference name placeholders that let a consumer park on a not-yet-bound
-producer, the Miri lifetime contract for the splice/replay, and submission-time
-binder install. The submit side of the dispatch pipeline; the execute side is
+Name claims that let a consumer park on an earlier binder that has dispatched
+but not yet bound, the Miri lifetime contract for the splice/replay, and
+submission-time binder install. The submit side of the dispatch pipeline; the execute side is
 [Classify and apply](classify-and-apply.md). Part of the
 [execution model](README.md).
 
 ## Dispatch-time name placeholders
 
-Forward references between sibling top-level expressions, members of a
+References between sibling top-level expressions, members of a
 `MODULE` body, and (eventually) names imported across files all require the
 same property: a value- or type-position lookup whose target binder has
 dispatched but not yet executed parks on the producer instead of failing with
@@ -48,23 +48,41 @@ static
 signature shape and pinned against the live builtin table by a spec⟺registration
 consistency test.
 
-### A placeholder is a pending arm of the slot it resolves into
+### A claim lives in the scope's claim store
 
-A placeholder has no table of its own. The
-[`Bindings`](../../src/machine/core/bindings.rs) façade on `Scope` holds four
-maps — `data`, `types`, `functions`, `operators` — and a still-finalizing binder
-occupies **a slot of the very table it will resolve into**, as a
-[`PendingBinding { producer, index }`](../../src/machine/core/bindings.rs) arm of
-that slot. Three properties follow, and they are the reason for the shape: a name
-lookup is answered by one probe; finalization overwrites the claimed slot in
-place, so the key is stored once and the claim's bytes are never abandoned; and
-the exclusivity rule each table obeys is a fact of its slot enum.
+A claim is not a table entry. The
+[`Bindings`](../../src/machine/core/bindings.rs) façade on `Scope` holds the four
+binding maps — `data`, `types`, `functions`, `operators` — beside a **claim
+store** that holds nothing else: the in-flight binders of the one block that
+binds into this scope. The binding maps therefore carry committed bindings only,
+and each slot type states its own table's exclusivity rule with no in-flight arm
+to admit.
+
+The store has three parts, each answering one question:
+
+- `by_name` — name → (`ProducerId`, `BindingIndex`). The name channel's read
+  path. One map covers value and type claims alike:
+  [`partition_guard`](../../src/machine/core/bindings.rs) decides Value from Type
+  by token class alone, so the two are disjoint by construction.
+- `by_bucket` — bucket key → (`ProducerId`, `BindingIndex`). The bucket
+  channel's read path.
+- `by_statement` — a fixed run, sized at the block fan-out and indexed by
+  `BindingIndex`, each entry naming the at-most-three keys its statement claimed
+  plus a live mask over them. The retirement path, and the only part keyed by
+  something other than what a reader looks up.
+
+Both read paths are one hash probe, which is what the resolution walk needs:
+a claim is consulted on the miss that would otherwise raise `UnboundName`, once
+per ancestor scope. The store lives inside `Bindings` rather than beside it on
+`Scope` because a consumer may park on an in-flight binder in an *outer* scope —
+the walk probes each ancestor's `bindings` gated by that scope's cutoff, so a
+claim store anywhere else would be invisible to the ancestor probe.
 
 A claim's currency is an opaque
 [`ProducerId`](../../src/machine/execute/producer_id.rs) over the claim edge,
 not a node identity: the binder's submission wires an edge from its own slot
 toward **the region of the scope the name is being introduced into**, and stamps
-that edge's producer token into the slot it claims. A consumer that finds the
+that edge's producer token into the claim store. A consumer that finds the
 claim parks by
 wiring its *own* edge off it (spending the token through the drive loop's
 single verb), inheriting the destination — which is what makes a
@@ -80,35 +98,25 @@ matching spec's name extractor pulls structurally out of the expression's parts.
 The
 claim stamps the binder slot's own `ProducerId` paired with its
 [`BindingIndex { idx }`](../../src/machine/core/bindings.rs) — the lexical
-statement index — into `data[name]` or `types[name]` per the binder's
-`BindKind`, gated by the strict `idx < cutoff` rule like every other binder. The
-same visibility predicate therefore gates a pending arm and the binding it
-becomes.
+statement index — into `by_name`, gated by the strict `idx < cutoff` rule like
+every other binder. The same visibility predicate therefore gates a claim and the
+binding it becomes.
 
-The two name-side tables carry different slot enums because they enforce
-different rules:
-
-- `data[name]` is a [`ValueSlot`](../../src/machine/core/bindings.rs) — `Bound`
-  xor `Pending`. A value name is never bound and pending at once: the claim
-  errors `Rebind` against a committed value, and the value write finalizes the
-  claim.
-- `types[name]` is a [`TypeSlot`](../../src/machine/core/bindings.rs) —
-  `Bound`, `Pending`, or `BoundWithPending`. Bound and pending coexist here by
-  design: a parallel nominal finalize pre-installs the name's external identity
-  while its producer is still in flight, and the finalize gate must still park
-  the type-identifier memo on that producer. The third arm makes the coexistence
-  — and the impossibility of an empty slot — type-level facts. Reads go through
-  the slot's `bound()` / `pending()` accessors; only the three transition sites
-  (the type write, the claim, the claim-retirement sweep) match the arms
-  directly.
+The two name-side channels differ only in which table a commit lands in, and the
+store does not distinguish them. Bound-and-claimed coexistence needs no
+representation: on the type side a nominal's seal pre-installs the name's
+external identity into `types` while its producer is still in flight, and the
+finalize gate must still park the type-identifier memo on that producer. That is
+simply `types[name]` bound *and* a live `by_name` entry — two structures, each
+answering its own question, so a consumer that can read the identity reads it
+while the memo still finds the producer.
 
 *Bucket-keyed binders* (`FN`, `OP`) fill the **bucket channel** — every
 inner-call bucket key a call to the to-be-registered overloads would compute. A
-pending
-overload already keys on the same full `UntypedKey` as the overload it becomes,
-so it lands in the bucket it resolves into: `functions[key]` is a `Vec` of
-[`OverloadSlot`](../../src/machine/core/bindings.rs), each either `Sealed` or
-`Pending`, and a bucket legitimately holds both at once. Keying by the full
+claim keys on the same full `UntypedKey` as the overload it becomes, so
+`by_bucket[key]` and `functions[key]` are reached by one key: the claim answers
+"a binder for this bucket is in flight" and the bucket answers "these overloads
+are registered", and a dispatch walk consults both at a scope. Keying by the full
 bucket key is what keeps `(MAKESET _)` and `(MAKESET _ USING _)` from colliding.
 A bare named `FN` / `OP` uses the bucket channel and not the name channel,
 because sibling overloads under one head keyword (e.g. two `FN (PICK xs :A) ...`
@@ -136,26 +144,27 @@ stamped. So the bound name and the registered overload are the same function by
 construction, not two builds of the same source — a closure captured under the
 name observes exactly what a keyworded call to it observes.
 
-The bucket vec is what admits multiple sibling FN binders
-sharing one bucket key: each install appends a distinct pending slot at its
-own `BindingIndex`. A consumer looking up the bucket via
+One bucket key admits multiple sibling FN binders: each install adds a distinct
+claim at its own `BindingIndex`. A consumer looking up the bucket via
 [`Bindings::lookup_function`](../../src/machine/core/bindings.rs) gets the
-*earliest-index visible* pending slot in the returned `FunctionLookup`'s
+*earliest-index visible* claim in the returned `FunctionLookup`'s
 `pending` field — the most-likely-first-finalizer. On that producer's finalize,
-the seal lands in that binder's own pending slot, matched by `BindingIndex`
-(others stay pending); the consumer wakes, re-dispatches, and either picks
+the seal appends to `functions[bucket]` and that binder's claim retires (the
+siblings' claims stand); the consumer wakes, re-dispatches, and either picks
 from the now-live `functions[bucket]` or re-parks on the next-earliest
-pending sibling. Each re-dispatch is cheap, and the expected case
+claiming sibling. Each re-dispatch is cheap, and the expected case
 (consumer's match lands in the first 1–2 siblings) avoids the cost
 entirely. Slot order within a bucket is not observable: the picker returns the
 signature that strictly dominates every other survivor, or a tie that surfaces
 as deferred/ambiguous either way.
 
-Bulk reads see bound state only. [`iter_data`](../../src/machine/core/bindings.rs)
-/ `iter_types` / `iter_functions` and the module-view `bulk_install_from` skip
-pending arms and skip a bucket holding no sealed slot: a claim names an edge of
-its own scheduler run, so a copy of one would hand the target a park on an edge
-that will never wake it — and that its owner has already released.
+Bulk reads see bound state only, and get it for free:
+[`iter_data`](../../src/machine/core/bindings.rs) / `iter_types` /
+`iter_functions` and the module-view `bulk_install_from` read the binding tables,
+which hold nothing else. A claim names an edge of its own scheduler run, so a
+copy of one would hand the target a park on an edge that will never wake it — and
+that its owner has already released; keeping claims out of the tables is what
+makes that unrepresentable rather than filtered.
 
 Binder builtins declare themselves through the `binder: bool` flag they pass to
 [`register_builtin_full`](../../src/builtins.rs) (`LET`, `TYPE`, `MODULE`,
@@ -192,27 +201,30 @@ predicates accept or reject the candidate. The placeholder mechanism
 extends the value- and function-side lookups so a still-running visible
 producer surfaces as `NameLookup::Parked(ProducerId)` /
 `FunctionLookup { pending: Some(ProducerId), .. }` rather than a miss —
-[`Bindings::lookup_value`](../../src/machine/core/bindings.rs) reads the arm of
-the one `data[name]` slot it probes, and
+[`Bindings::lookup_value`](../../src/machine/core/bindings.rs) probes
+`data[name]`, then the store; and
 [`Bindings::lookup_function`](../../src/machine/core/bindings.rs) surfaces
 the visibility-filtered sealed overloads of `functions[key]` and the
-earliest-index visible pending sibling in that same bucket *together* in one
+earliest-index visible claim on that same key *together* in one
 `FunctionLookup`. The dispatcher decides each scope's contribution from
-that pair as it walks (a visible pending parks the scope; see
+that pair as it walks (a visible claim parks the scope; see
 [scheduler.md § In-walk dispatch precedence](../typing/scheduler.md#in-walk-dispatch-precedence)),
-so the sealed / pending pair surfaces from one traversal rather
-than two. `lookup_type` prefers its slot's bound arm over its pending one, which
-is load-bearing: on a slot carrying both, a consumer that can read the identity
-must not park. The
-raw map accessors (`data` / `types` / `functions`) and the pending probes
-(`pending_value` / `pending_names` / `pending_overload_entries`) are gated
-`#[cfg(test)]`; production sites that
-genuinely sweep all members (`MODULE` member mirroring, signature
-shape-check, REPL reflection) consume the value-yielding `iter_data` /
+so the pair surfaces from one traversal rather than two. `lookup_type` prefers a
+bound identity over a live claim on the same name, which is load-bearing: where
+both stand, a consumer that can read the identity must not park. The
+raw map accessors (`data` / `types` / `functions`) are gated `#[cfg(test)]`;
+production sites that genuinely sweep all members (`MODULE` member mirroring,
+signature shape-check, REPL reflection) consume the value-yielding `iter_data` /
 `iter_types` / `iter_functions`, which release the underlying borrow at
-the iterator boundary. `bind_value` and `register_function` finalize their own
-claim by overwriting the slot that holds it, so no name is ever both bound and
-claimed on the value side, and a bucket's sealed entry sits where its claim was.
+the iterator boundary.
+
+**A commit retires its own claim.** `write_value`, `write_overload` and
+`write_type` each already carry the name (or bucket key) they are writing and the
+`BindingIndex` they are writing it at — `write_type` through its
+`DeclarationSite`. So a commit removes its own claim from the store's read map
+and clears that channel's bit in `by_statement`: one hash removal and one bit,
+with nothing searched for. On the success path there is no leftover claim, and
+the write path needs no cleanup pass of its own.
 
 **Claim retirement rides the slot's death, not just the error path.** A slot
 owns every claim edge its submission stamped, and the
@@ -220,29 +232,57 @@ owns every claim edge its submission stamped, and the
 that list at the one point the slot stops being able to release it — invoked
 by the scheduler exactly once per slot, covering every terminal (value,
 error, and the bare-name forward's relocation alike) and the alias splice that
-retires the slot without a terminal. Retirement is
-`clear_placeholders_for_producers` — drop every pending arm naming one of the
-slot's edges — followed by the release of the edges themselves, so no table ever
-holds a name whose edge is gone. The list is taken, not read, so a slot's claims
-retire exactly once even when a tail replace has moved them onto a fresh anchor.
-The door itself takes a *membership predicate* over
-[`ProducerId`](../../src/machine/execute/producer_id.rs), not a collection: the sweep asks
-one question per pending slot — is this producer retiring? — and the run loop's closure
-answers it against the edge list the slot already owns, so nothing is materialized to hold
-the answer and scheduler currency stays outside `machine/core`.
+retires the slot without a terminal. Retirement drops whatever claims the commit
+did not, then releases the edges themselves, so no store ever holds a name whose
+edge is gone. The edge list is taken, not read, so a slot's edges release exactly
+once.
 
-The sweep keys on the `producer` every `PendingBinding` already carries, so it spans
-all three claim-bearing tables alike: no table's key participates, a `types` slot
-that also holds a bound identity keeps the identity and loses only its pending
-arm, and a bucket-keyed binder's claim dies in every inner-call bucket it
-declared, the emptied bucket losing its key. On the success path the write has
-already overwritten the claim where it sat, so the sweep finds nothing — the
-write path needs no leftover-claim cleanup of its own. What the sweep really
-catches is the binder body that failed before its write path: its name was never
-introduced, so a sibling that had parked on the claim re-decides on wake against
-a scope where the name is absent and surfaces `UnboundName` rather than the
-binder's own failure. That is the cost of not leaving a claim behind for a
-*later* sibling to park on and never be woken by.
+Retirement is keyed by the one thing the retiring slot knows about itself — its
+`BindingIndex`. It indexes `by_statement`, reads the live mask, and is done: a
+zero mask is the whole of the success path, since the commit already removed each
+claim as it wrote. A non-zero mask names the at-most-three keys still standing,
+and each is removed from its read map directly. Nothing is searched in either
+direction — not the binding tables by producer, and not the store by name.
+
+Two properties make that indexing sound, and both are worth asserting rather than
+assuming. **A claim-owning slot never tail-replaces**, so the scope its claims
+were installed into is the scope it retires against:
+[`block_tail`](../../src/machine/core/kfunction/block_tail.rs) is the only
+`Action::Tail` constructor and its callers are `MATCH` / `TRY` arms, `EVAL`, and
+`USING`, none of which is a binder form in
+[`BINDER_SPECS`](../../src/machine/model/binder.rs) — an FN body's tail belongs
+to the call's slot, not the declaration's. And **a scope is fanned out into
+exactly once**, which is what lets `by_statement` be a fixed run sized at the
+fan-out.
+
+What retirement really catches is the binder body that failed before its write
+path: its name was never introduced, so a sibling that had parked on the claim
+re-decides on wake against a scope where the name is absent and surfaces
+`UnboundName` rather than the binder's own failure. That is the cost of not
+leaving a claim behind for a *later* sibling to park on and never be woken by.
+
+### Claims are for backward references, not forward ones
+
+A claim never lets a reference reach a *later* statement. Visibility is the
+strict `idx < cutoff` gate and it filters claims exactly as it filters bindings,
+so a later-positioned binder is invisible whether or not it is in flight. What a
+claim buys is the *backward* reference to an earlier sibling that has not
+finished: a block's statements evaluate concurrently, so statement 3 may name
+`x` from statement 1 while statement 1 is still running, and without a claim that
+lookup would race between `UnboundName` and the bound value.
+
+The one cross-order type-name resolution that survives the lexical gate is not a
+claim at all: a module body's top-level type declarations are announced before
+any of them runs, as an
+[`AnnouncedWindow`](../../src/machine/model/types/declaration_window.rs) carried on the
+child [`Scope`](../../src/machine/core/scope.rs) rather than in `Bindings`
+(see [typing/elaboration.md](../typing/elaboration.md)). Mutual recursion is that
+window's business, and it never reaches the claim store.
+
+A driver that submits one statement at a time and runs each to completion
+therefore consults no claim at all, because every visible binder has already
+committed — which is why the statement-at-a-time door builds no claim store, and
+why a scope carrying one was fanned out into exactly once.
 
 ### Miri forward-splice and dispatch-park lifetime contract
 
@@ -268,8 +308,8 @@ into the enclosing scope, read at construction from the
 that is not a binder. The dispatch-layer submission chokepoint
 [`KoanRuntime::submit_expression`](../../src/machine/execute/decide/submit.rs)
 reads that plan **once**, for a statement submission, and stamps its claims — a
-pending arm of `data[name]` / `types[name]` for the name channel, and a pending
-slot appended to `functions[bucket]` for each bucket key — on the dispatching
+`by_name` entry for the name channel, and a `by_bucket` entry per bucket key,
+recorded together in that statement's `by_statement` slot — on the dispatching
 scope, at `BindingIndex::value(chain.index)` and before the slot is ever popped
 from the work queues. Each channel gets its **own** edge, wired from the freshly
 allocated slot toward the dispatching scope's region: the submission holds that
@@ -336,3 +376,8 @@ claims are hidden from its whole subtree at any depth, and a forward
 reference to a lexically later top-level statement is a resolution error,
 not a park.
 
+
+## Open work
+
+- [Give in-flight binder claims their own store](../../roadmap/refactor/claim-store.md)
+  — the claim store this doc describes, and the retirement path keyed on it.

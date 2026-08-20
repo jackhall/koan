@@ -26,8 +26,8 @@ use crate::machine::model::{
     ExpressionPart, KExpression, Part, PartClass, WorkingExpression, WorkingPart,
 };
 use crate::machine::{
-    CallFrame, DeliveredCarried, FrameCoverage, Installer, KError, KErrorKind, LexicalFrame,
-    NodeId, Scope,
+    BindingIndex, CallFrame, DeliveredCarried, FrameCoverage, Installer, KError, KErrorKind,
+    LexicalFrame, NodeId, Scope,
 };
 use crate::scheduler::{
     Anchor, Dep, Deps, DrainDeadlock, EdgeId, InstalledEdge, Scheduler, Step, StepVerdict, Workload,
@@ -69,24 +69,22 @@ impl Workload for KoanWorkload {
     }
 
     /// The slot-retirement hook: the edges this slot still owns, released by the drain at the one
-    /// point the slot stops being able to release them. The clear first drops any pending binding
-    /// arm still naming one, which keeps a table from ever holding a [`ProducerId`] whose edge is
-    /// gone. `take` empties the anchor, so the release is exactly-once by construction.
+    /// point the slot stops being able to release them. The retire first drops any claim still
+    /// naming one, which keeps the store from ever holding a [`ProducerId`] whose edge is gone.
+    /// `take` empties the anchor, so the release is exactly-once by construction.
+    ///
+    /// Keyed on the slot's own [`BindingIndex`] — the one address it knows about itself — so a
+    /// commit that already retired its claim costs an array index and a zero test, and no path
+    /// scans a binding table. A slot that claimed nothing (a bare-name forward owning only its
+    /// classification edge, every non-binder statement) reads an empty record and returns.
     fn retiring(anchor: &SlotFrame) -> Vec<EdgeId> {
-        let edges = anchor.take_owned_edges();
-        if edges.is_empty() {
-            return edges;
+        if anchor.installed_claims() {
+            let index = BindingIndex::value(anchor.payload.chain.index);
+            with_node_scope(&anchor.payload.scope, Some(&anchor.cart), |scope| {
+                scope.retire_claims(index, &mut WriteGate::for_run_loop());
+            });
         }
-        // The edge list this slot already owns *is* the membership test, compared in edge space:
-        // the predicate the door takes asks one question per pending slot, so nothing is
-        // materialized to answer it.
-        with_node_scope(&anchor.payload.scope, Some(&anchor.cart), |scope| {
-            scope.clear_placeholders_for_producers(
-                |producer| edges.contains(&producer.scheduler_edge()),
-                &mut WriteGate::for_run_loop(),
-            );
-        });
-        edges
+        anchor.take_owned_edges()
     }
 }
 

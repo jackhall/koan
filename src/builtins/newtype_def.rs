@@ -407,9 +407,8 @@ mod tests {
             let bindings = scope.bindings().types();
             let (kt, _) = bindings
                 .get("Distance")
-                .and_then(|slot| slot.bound())
                 .expect("Distance should be bound in bindings.types");
-            kt
+            *kt
         };
         match test_run.types().node(handle) {
             TypeNode::SetMember {
@@ -950,9 +949,8 @@ mod tests {
             let bindings = scope.bindings().types();
             let (kt, _) = bindings
                 .get("Wrapper")
-                .and_then(|slot| slot.bound())
                 .expect("Wrapper should be bound in bindings.types");
-            kt
+            *kt
         };
         match test_run.types().node(handle) {
             TypeNode::SetMember {
