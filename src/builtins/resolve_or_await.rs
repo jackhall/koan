@@ -91,12 +91,12 @@ pub(crate) fn resolve_or_await<'a>(
 /// resolved `KType` is a `Copy` handle that escapes that borrow, so a caller that seals it into a
 /// result carries it by value.
 pub(crate) fn expect_type_terminal(
-    results: &[&DepTerminal<'_>],
+    results: &[DepTerminal<'_>],
     dep_index: usize,
     slot: &str,
     types: &TypeRegistry,
 ) -> Result<KType, KError> {
-    let terminal: &DepTerminal = results[dep_index];
+    let terminal: &DepTerminal = &results[dep_index];
     let opened = terminal.cell.open_at();
     match opened.value() {
         Carried::Type(kt) => Ok(kt),

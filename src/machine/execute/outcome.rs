@@ -25,6 +25,7 @@ use crate::machine::{KError, NodeId, TraceFrame};
 use crate::scheduler::Deps;
 use crate::scheduler::EdgeId;
 use crate::witnessed::reattachable;
+use crate::witnessed::{BumpAllocator, BumpVec};
 
 use super::StepCarried;
 use super::decide::{DecideCtx, DepRequest, ResumeFn, propagate_dep_error};
@@ -310,14 +311,18 @@ pub(in crate::machine::execute) struct ContinuationFamily;
 
 reattachable!(droppable ContinuationFamily => NodeContinuation<'r>);
 
-fn all_or_first_error<'r, 'd>(
-    results: &'r [Result<DepTerminal<'d>, KError>],
+/// Collect the step's resolved dep terminals, or short-circuit on the first errored one. The
+/// terminals land on the step's scratch arena at their exactly-known length: `DepTerminal` is
+/// `Copy` data, so the finish reads a contiguous slice of values with no per-dep indirection.
+fn all_or_first_error<'s, 'd>(
+    scratch: BumpAllocator<'s>,
+    results: &[Result<DepTerminal<'d>, KError>],
     dep_error_frame: Option<DeferredTraceFrame<'_>>,
-) -> Result<Vec<&'r DepTerminal<'d>>, KError> {
-    let mut terminals = Vec::with_capacity(results.len());
+) -> Result<BumpVec<'s, DepTerminal<'d>>, KError> {
+    let mut terminals = BumpVec::with_capacity_in(results.len(), scratch);
     for r in results {
         match r {
-            Ok(t) => terminals.push(t),
+            Ok(t) => terminals.push(*t),
             Err(e) => return Err(propagate_dep_error(e, dep_error_frame)),
         }
     }
@@ -328,7 +333,7 @@ fn all_or_first_error<'r, 'd>(
 /// shape directly; a [`WitnessedDepFinish`] projects onto it through [`seal_witnessed`] — so
 /// [`short_circuit`] is the single loop that runs either.
 pub(in crate::machine::execute) type TerminalDepFinish<'a> = Box<
-    dyn for<'view, 'd> FnOnce(&DecideCtx<'_, 'a, 'view>, &[&DepTerminal<'d>]) -> Outcome<'a> + 'a,
+    dyn for<'view, 'd> FnOnce(&DecideCtx<'_, 'a, 'view>, &[DepTerminal<'d>]) -> Outcome<'a> + 'a,
 >;
 
 /// Dep-finish continuation: short-circuit on the first errored dep (labelled with
@@ -339,7 +344,7 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
     finish: TerminalDepFinish<'a>,
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _id| {
-        let terminals = match all_or_first_error(results, dep_error_frame) {
+        let terminals = match all_or_first_error(view.scratch(), results, dep_error_frame) {
             Ok(terminals) => terminals,
             Err(e) => return Outcome::Done(Err(e)),
         };
@@ -354,7 +359,7 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
 pub(in crate::machine::execute) type WitnessedDepFinish<'a> = Box<
     dyn for<'view, 'd> FnOnce(
             &DecideCtx<'_, 'a, 'view>,
-            &[&DepTerminal<'d>],
+            &[DepTerminal<'d>],
         ) -> Result<StepCarried<'a>, KError>
         + 'a,
 >;

@@ -381,6 +381,7 @@ impl<'a, 'r> FinishCtx<'a, 'r> {
 /// `'b` is the step's read borrow, not the value's home: the cell is `Copy` data whose pointee lives
 /// one level down, in the destination region. Defined here in core (not the execute layer that
 /// resolves it) so the builtin-`Action` currency — [`AwaitContinue`] — can name it.
+#[derive(Clone, Copy)]
 pub struct DepTerminal<'b> {
     pub cell: SplicedCell<'b>,
 }
@@ -393,7 +394,7 @@ pub struct DepTerminal<'b> {
 /// Higher-ranked in the dep brand `'d` as well as the ctx borrow: the residents are branded against
 /// the step's coverage at step start, and a stored finish must accept whatever borrow that is.
 pub type AwaitContinue<'a> =
-    Box<dyn for<'r, 'd> FnOnce(&FinishCtx<'a, 'r>, &[&DepTerminal<'d>]) -> Action<'a> + 'a>;
+    Box<dyn for<'r, 'd> FnOnce(&FinishCtx<'a, 'r>, &[DepTerminal<'d>]) -> Action<'a> + 'a>;
 
 /// A `Catch` finish: re-entered with the watched slot's delivery envelope (value, reach, and
 /// retained producer pin as one unit, adopted or opened at the finish's own step brand) or the

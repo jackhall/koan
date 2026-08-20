@@ -1295,8 +1295,9 @@ impl<'a> Bindings<'a> {
     /// all of them and drops a bucket the purge empties.
     ///
     /// The purge keys on the [`PendingBinding::producer`] each slot already carries; no table's
-    /// key participates. The argument is a slot's own claim list, so it is short and a linear scan
-    /// of it per slot is the whole cost.
+    /// key participates. `retiring` answers the one question a slot poses — is this slot's producer
+    /// going away? — so the caller supplies the membership test and nothing is materialized here to
+    /// hold the answer.
     ///
     /// Strands bump bytes: a removed key's text and an emptied bucket's buffer are abandoned rather
     /// than freed. Bounded by the number of binders that fail — a success path overwrites its claim
@@ -1304,11 +1305,11 @@ impl<'a> Bindings<'a> {
     /// tail.
     pub fn clear_placeholders_for_producers(
         &self,
-        producers: &[ProducerId],
+        retiring: impl Fn(ProducerId) -> bool,
         _gate: &mut WriteGate,
     ) {
         let mut tables = self.tables.borrow_mut();
-        let named = |p: &PendingBinding| producers.contains(&p.producer);
+        let named = |p: &PendingBinding| retiring(p.producer);
         let claims = |slot: Option<PendingBinding>| slot.as_ref().is_some_and(named);
         tables.data.retain(|_, slot| !claims(slot.pending()));
         tables.types.retain(|_, slot| match slot {

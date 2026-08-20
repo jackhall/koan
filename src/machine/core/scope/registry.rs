@@ -214,14 +214,18 @@ impl<'a> Scope<'a> {
     }
 
     /// Retirement companion to both [`Self::install_placeholder`] and
-    /// [`Self::install_pending_overload`]: drop any pending arm naming one of `edges`. Routes to
-    /// the same target the installs used, and runs as the claiming slot terminalizes, so no arm
-    /// survives naming an edge its owner is about to release — into a later run on a persistent
-    /// scope least of all. See [`Bindings::clear_placeholders_for_producers`].
-    pub fn clear_placeholders_for_producers(&self, edges: &[ProducerId], gate: &mut WriteGate) {
+    /// [`Self::install_pending_overload`]: drop any pending arm whose producer `retiring` names.
+    /// Routes to the same target the installs used, and runs as the claiming slot terminalizes, so
+    /// no arm survives naming an edge its owner is about to release — into a later run on a
+    /// persistent scope least of all. See [`Bindings::clear_placeholders_for_producers`].
+    pub fn clear_placeholders_for_producers(
+        &self,
+        retiring: impl Fn(ProducerId) -> bool,
+        gate: &mut WriteGate,
+    ) {
         self.assert_owns_bindings();
         self.bindings()
-            .clear_placeholders_for_producers(edges, gate);
+            .clear_placeholders_for_producers(retiring, gate);
     }
 
     /// Bucket-keyed companion to [`Self::install_placeholder`]: appends a pending slot to

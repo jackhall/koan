@@ -331,7 +331,7 @@ fn clear_placeholders_purges_every_bucket_the_binder_claimed() {
     }
 
     scope.clear_placeholders_for_producers(
-        &[ProducerId::for_test(7)],
+        |p| p == ProducerId::for_test(7),
         &mut crate::machine::WriteGate::for_test(),
     );
 
@@ -354,7 +354,7 @@ fn clear_placeholders_purges_every_bucket_the_binder_claimed() {
 
     // Purging the last claim in a bucket that holds nothing else drops the key.
     bindings.clear_placeholders_for_producers(
-        &[ProducerId::for_test(8)],
+        |p| p == ProducerId::for_test(8),
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(

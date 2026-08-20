@@ -19,7 +19,7 @@ use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingPart};
 use crate::machine::{CallFrame, Installer, LexicalFrame, Scope};
 use crate::source::Spanned;
-use crate::witnessed::BumpAllocator;
+use crate::witnessed::{BumpAllocator, BumpVec};
 
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
@@ -219,22 +219,21 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
     pub(super) fn build_bare_outcomes(
         &self,
         parts: &[Spanned<WorkingPart<'step>>],
-    ) -> Vec<Option<Resolution>> {
+    ) -> BumpVec<'step, Option<Resolution>> {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
-        parts
-            .iter()
-            .map(|p| match p.value.as_ast() {
-                Some(ast @ (ExpressionPart::Identifier(_) | ExpressionPart::Type(_))) => {
-                    Some(resolve_name(
-                        self.current_scope(),
-                        &ast,
-                        active_chain,
-                        self.types(),
-                        TypeLeafChannels::ValueChannelFirst,
-                    ))
-                }
-                _ => None,
-            })
-            .collect()
+        let mut outcomes = BumpVec::with_capacity_in(parts.len(), self.scratch());
+        outcomes.extend(parts.iter().map(|p| match p.value.as_ast() {
+            Some(ast @ (ExpressionPart::Identifier(_) | ExpressionPart::Type(_))) => {
+                Some(resolve_name(
+                    self.current_scope(),
+                    &ast,
+                    active_chain,
+                    self.types(),
+                    TypeLeafChannels::ValueChannelFirst,
+                ))
+            }
+            _ => None,
+        }));
+        outcomes
     }
 }

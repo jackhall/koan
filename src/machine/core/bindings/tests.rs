@@ -446,7 +446,7 @@ fn type_slot_carries_a_bound_identity_and_a_pending_producer_at_once() {
     );
 
     bindings.clear_placeholders_for_producers(
-        &[ProducerId::for_test(9)],
+        |p| p == ProducerId::for_test(9),
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(bindings.pending_names().is_empty());
@@ -536,7 +536,7 @@ fn bump_backed_tables_full_churn() {
             .expect("the purged binder claims its bucket");
         scope
             .bindings()
-            .clear_placeholders_for_producers(&[ProducerId::for_test(9)], &mut gate);
+            .clear_placeholders_for_producers(|p| p == ProducerId::for_test(9), &mut gate);
         assert!(
             scope
                 .bindings()

@@ -21,6 +21,7 @@ use crate::machine::core::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
 use crate::machine::model::{Record, SignatureElement};
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
+use crate::witnessed::BumpVec;
 
 /// Fold a resolved call into a [`Outcome::Continue`] — the dispatcher's one invoke entry, routing on
 /// the picked body:
@@ -235,15 +236,13 @@ fn body_continue<'step>(
 fn carriers_from_expr<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     working_expr: &WorkingExpression<'step>,
-) -> Vec<Option<DeliveredCarried>> {
-    working_expr
-        .parts
-        .iter()
-        .map(|part| match &part.value {
-            WorkingPart::Spliced { cell } => Some(view.current_scope().lift_spliced(cell)),
-            _ => None,
-        })
-        .collect()
+) -> BumpVec<'step, Option<DeliveredCarried>> {
+    let mut carriers = BumpVec::with_capacity_in(working_expr.parts.len(), view.scratch());
+    carriers.extend(working_expr.parts.iter().map(|part| match &part.value {
+        WorkingPart::Spliced { cell } => Some(view.current_scope().lift_spliced(cell)),
+        _ => None,
+    }));
+    carriers
 }
 
 /// Re-key the slot-indexed arg carriers onto their parameter names. A committed call's parts line up

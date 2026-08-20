@@ -58,17 +58,17 @@ impl Slot {
 /// in the same order (a dict row's key before its value), so popping in that order *is* the
 /// alignment — no cell stores an index.
 struct ResultFeed<'t, 'd> {
-    terminals: &'t [&'t DepTerminal<'d>],
+    terminals: &'t [DepTerminal<'d>],
     next: usize,
 }
 
 impl<'t, 'd> ResultFeed<'t, 'd> {
-    fn new(terminals: &'t [&'t DepTerminal<'d>]) -> Self {
+    fn new(terminals: &'t [DepTerminal<'d>]) -> Self {
         ResultFeed { terminals, next: 0 }
     }
 
     fn pop(&mut self) -> &'t DepTerminal<'d> {
-        let terminal = self.terminals[self.next];
+        let terminal = &self.terminals[self.next];
         self.next += 1;
         terminal
     }

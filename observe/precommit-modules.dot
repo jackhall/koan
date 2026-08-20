@@ -616,6 +616,7 @@ digraph {
     "koan::machine::execute::decide::ctx" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::decide::ctx" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::decide::ctx" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::exec" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::exec" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::exec" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::decide::exec" -> "koan::machine::execute" [label="uses", style="dashed"];

@@ -380,7 +380,7 @@ pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: KType) -> S
 fn finish_witnessed<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     kind: &CtorKind,
-    terminals: &[&DepTerminal<'_>],
+    terminals: &[DepTerminal<'_>],
 ) -> Result<DeliveredCarried, KError> {
     match kind {
         CtorKind::NewType { identity } => {

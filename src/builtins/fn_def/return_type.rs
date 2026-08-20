@@ -128,7 +128,7 @@ pub(super) fn make_capture<'a>(te: TypeIdentifier<'_>) -> ReturnTypeCapture<'a> 
 pub(super) fn resolve_capture_at_finish<'a>(
     capture: ReturnTypeCapture<'a>,
     scope: &Scope<'a>,
-    results: &[&DepTerminal<'_>],
+    results: &[DepTerminal<'_>],
     return_type_dep: Option<usize>,
     types: &TypeRegistry,
 ) -> Result<ReturnType<'a>, KError> {

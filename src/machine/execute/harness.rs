@@ -16,7 +16,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::machine::ProducerId;
 use crate::machine::core::KoanStorageProfile;
 use crate::machine::core::bindings::{WriteGate, WriteOp};
 use crate::machine::core::scope_frame;
@@ -34,7 +33,7 @@ use crate::scheduler::{
     Anchor, Dep, Deps, DrainDeadlock, EdgeId, InstalledEdge, Scheduler, Step, StepVerdict, Workload,
 };
 use crate::scheduler::{DeliveryDestination, SealedTerminal};
-use crate::witnessed::{SealedExtern, Within, erase_to_static};
+use crate::witnessed::{BumpVec, SealedExtern, Within, erase_to_static};
 
 use super::ambient::AmbientContext;
 use super::decide::{BodyPlacement, DecideCtx, DepRequest, SubmitContext, with_node_scope};
@@ -78,13 +77,14 @@ impl Workload for KoanWorkload {
         if edges.is_empty() {
             return edges;
         }
-        let producers: Vec<ProducerId> = edges
-            .iter()
-            .copied()
-            .map(ProducerId::from_scheduler_edge)
-            .collect();
+        // The edge list this slot already owns *is* the membership test, compared in edge space:
+        // the predicate the door takes asks one question per pending slot, so nothing is
+        // materialized to answer it.
         with_node_scope(&anchor.payload.scope, Some(&anchor.cart), |scope| {
-            scope.clear_placeholders_for_producers(&producers, &mut WriteGate::for_run_loop());
+            scope.clear_placeholders_for_producers(
+                |producer| edges.contains(&producer.scheduler_edge()),
+                &mut WriteGate::for_run_loop(),
+            );
         });
         edges
     }
@@ -350,17 +350,16 @@ impl<'run> Host<'run> {
         // [the step's coverage](../../../design/per-node-memory.md#the-steps-coverage).
         let combined: FrameCoverage = FrameCoverage::of(Rc::clone(anchor.owner()));
         // Re-brand each delivered resident **once**, here, so every later read opens pin-free.
-        let dep_sources: Vec<Result<DepTerminal<'_>, KError>> = dep_results
-            .iter()
-            .map(
-                |resident: &Result<SealedTerminal<KoanWorkload>, KError>| match resident {
-                    Ok(cell) => Ok(DepTerminal {
-                        cell: cell.brand_with(&combined),
-                    }),
-                    Err(error) => Err(error.clone()),
-                },
-            )
-            .collect();
+        let mut dep_sources: BumpVec<'_, Result<DepTerminal<'_>, KError>> =
+            BumpVec::with_capacity_in(dep_results.len(), scratch);
+        dep_sources.extend(dep_results.iter().map(
+            |resident: &Result<SealedTerminal<KoanWorkload>, KError>| match resident {
+                Ok(cell) => Ok(DepTerminal {
+                    cell: cell.brand_with(&combined),
+                }),
+                Err(error) => Err(error.clone()),
+            },
+        ));
         // The active scope as a carrier; `combined` pins it either way.
         let scope_carrier = match node_scope {
             NodeScope::Yoked => cart.scope_sealed(),

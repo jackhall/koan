@@ -168,7 +168,7 @@ fn done_type(capture: TypeCapture<'_>, label: &str, types: &TypeRegistry) -> Res
 fn resolve_capture<'a>(
     capture: TypeCapture<'a>,
     fctx: &FinishCtx<'a, '_>,
-    results: &[&DepTerminal<'_>],
+    results: &[DepTerminal<'_>],
     label: &str,
 ) -> Result<KType, KError> {
     let kt = match capture {
