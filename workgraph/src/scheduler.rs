@@ -50,7 +50,7 @@ pub use deps::{Dep, Deps};
 // The realized dep list is scheduler currency: the install doors write it onto the slot's dep row
 // and `drain` consumes it there, so no embedder ever holds one.
 pub(crate) use deps::ResolvedDeps;
-pub use drain::{DrainDeadlock, Step, StepVerdict};
+pub use drain::{DrainDeadlock, Step, StepVerdict, drive_scratch};
 pub use edge_slab::{EdgeId, InstalledEdge};
 pub use node_id::NodeId;
 pub use workload::{

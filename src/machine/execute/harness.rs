@@ -321,12 +321,20 @@ impl<'run> Host<'run> {
     /// binding writes, and maps the outcome onto the returned [`StepVerdict`] through
     /// [`Self::apply`]. The closure's result cannot name `'b`, so a `Replace` verdict's
     /// continuation exits through [`erase_to_static`].
-    fn step(
+    ///
+    /// `'scratch` is the drain's per-pop scratch borrow. `'run: 'scratch` holds at the call site —
+    /// the borrow lives inside the `drain` call, which the run outlives — and is what lets the open
+    /// below take its `Within` token against `'scratch` rather than `'run`.
+    fn step<'scratch>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
-        step: Step<KoanWorkload>,
-    ) -> StepVerdict<'static, KoanWorkload> {
+        step: Step<'scratch, KoanWorkload>,
+    ) -> StepVerdict<'static, KoanWorkload>
+    where
+        'run: 'scratch,
+    {
         let Step {
+            scratch,
             id,
             anchor,
             continuation: sealed_continuation,
@@ -358,14 +366,17 @@ impl<'run> Host<'run> {
             NodeScope::Yoked => cart.scope_sealed(),
             NodeScope::YokedChild(carrier) => carrier,
         };
-        // The `Within` token's declared `'run: 'b` is what lets `self.program` — a live
-        // borrow-checked `ProgramBrand<'run>`, not a sealed carrier — be stored in the view at its
-        // own `'program = 'run`, discharging the `DecideCtx`'s `'program: 'step` bound without
-        // shortening the brand.
+        // The `Within` token's declared `'scratch: 'b` is what lets two live borrow-checked
+        // capabilities — `self.program` (a `ProgramBrand<'run>`, not a sealed carrier) and the
+        // drain's `scratch` handle — be stored in the view without shortening either brand by hand:
+        // both are covariant, so each shortens to `'b` by ordinary subtyping once the token supplies
+        // the outlives fact the quantifier would otherwise erase. `'run: 'b` still follows, through
+        // the method's `'run: 'scratch` bound, so the `DecideCtx`'s `'program: 'step` obligation
+        // stays discharged at `'program = 'run`.
         sealed_continuation.open(
             scope_carrier,
             &combined,
-            |_within: Within<'_, 'run>,
+            |_within: Within<'_, 'scratch>,
              continuation: super::outcome::NodeContinuation<'_>,
              scope| {
                 // The step's binding-write sink. Declared inside the step brand because a
@@ -390,6 +401,7 @@ impl<'run> Host<'run> {
                                 Installer::Statement(anchor.statement()),
                                 &step_effects,
                                 host.program,
+                                scratch,
                             ),
                             &dep_sources,
                             id,

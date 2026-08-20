@@ -49,6 +49,7 @@
 //! `chain_cutoff` computed via [`crate::machine::core::LexicalFrame::index_for`].
 //! Raw map accessors are `#[cfg(test)]`.
 
+use allocator_api2::alloc::{Allocator, Global};
 #[cfg(test)]
 use std::cell::Ref;
 use std::cell::RefCell;
@@ -328,12 +329,16 @@ pub enum MemberResolution<'a> {
 /// consumer parks on the earliest-index visible claim's edge; on wake it
 /// re-dispatches and either picks from the now-live bucket or re-parks on the
 /// next-earliest pending sibling.
-pub struct FunctionLookup<'a> {
+///
+/// Generic in the allocator its `overloads` buffer is built over, defaulting to the global heap.
+/// The dispatch hot path passes the step's scratch handle so the buffer costs no heap traffic and
+/// dies with the pop; the untyped-key door leaves the default in place.
+pub struct FunctionLookup<'a, A: Allocator = Global> {
     /// The visible finalized overloads, each a bit-copy of the bucket's dormant carrier — value and
     /// proven reach as one unit, re-anchored only by an [`open`](crate::witnessed::Sealed::open_at)
     /// under a named pin. Copied out so no caller holds the `functions` borrow across a candidate
     /// walk.
-    pub overloads: Vec<SealedFunction<'a>>,
+    pub overloads: allocator_api2::vec::Vec<SealedFunction<'a>, A>,
     pub pending: Option<ProducerId>,
 }
 
@@ -621,18 +626,24 @@ impl<'a> Bindings<'a> {
     /// Per-scope dispatch-bucket lookup. One pass over `functions[key]` surfaces the visible sealed
     /// overloads AND the earliest-index visible pending sibling together, so the scope walk decides
     /// pending-vs-finalized precedence with both in hand.
+    ///
+    /// The untyped-key door, off the dispatch path: its buffer goes to the global heap, since a
+    /// caller holding an owned key has no step scratch in reach.
     pub fn lookup_function(&self, key: &UntypedKey, cutoff: Option<usize>) -> FunctionLookup<'a> {
-        self.lookup_function_probe(&UntypedKeyProbe(key), cutoff)
+        self.lookup_function_probe(&UntypedKeyProbe(key), cutoff, Global)
     }
 
     /// [`Self::lookup_function`] from a node's **own** bumped key — the dispatch hot path, which
     /// reads the run the node already carries instead of materializing an owned key per call.
-    pub fn lookup_function_stored(
+    /// `alloc` hosts the overload buffer: both call sites are inside the scope walk, which passes
+    /// the step's scratch arena.
+    pub fn lookup_function_stored<A: Allocator>(
         &self,
         key: &[StoredElement<'_>],
         cutoff: Option<usize>,
-    ) -> FunctionLookup<'a> {
-        self.lookup_function_probe(&StoredKeyProbe(key), cutoff)
+        alloc: A,
+    ) -> FunctionLookup<'a, A> {
+        self.lookup_function_probe(&StoredKeyProbe(key), cutoff, alloc)
     }
 
     /// [`Self::lookup_function_stored`]'s **pending-only** peer: the earliest-index visible claim in
@@ -655,23 +666,35 @@ impl<'a> Bindings<'a> {
     /// The one bucket read, over whichever key form the caller holds: hashbrown resolves both
     /// through `Equivalent`, and the two forms hash identically by construction (see
     /// [`UntypedKeyProbe`]).
-    fn lookup_function_probe<Q>(&self, key: &Q, cutoff: Option<usize>) -> FunctionLookup<'a>
+    ///
+    /// The buffer is sized to `bucket.len()` — an upper bound on the visible finalized overloads —
+    /// and filled by a push loop rather than collected, so it never reallocates. Over a bump
+    /// allocator that matters twice over: a grown buffer would abandon its old bytes as dead
+    /// scratch until the next reset.
+    fn lookup_function_probe<Q, A: Allocator>(
+        &self,
+        key: &Q,
+        cutoff: Option<usize>,
+        alloc: A,
+    ) -> FunctionLookup<'a, A>
     where
         Q: std::hash::Hash + hashbrown::Equivalent<&'a [StoredElement<'a>]> + ?Sized,
     {
         let tables = self.tables.borrow();
         let Some(bucket) = tables.functions.get(key) else {
             return FunctionLookup {
-                overloads: Vec::new(),
+                overloads: allocator_api2::vec::Vec::new_in(alloc),
                 pending: None,
             };
         };
-        let overloads: Vec<SealedFunction> = bucket
+        let mut overloads = allocator_api2::vec::Vec::with_capacity_in(bucket.len(), alloc);
+        for entry in bucket
             .iter()
             .filter_map(OverloadSlot::sealed)
             .filter(|entry| Self::visible(entry.index, cutoff))
-            .map(|entry| entry.sealed.duplicate())
-            .collect();
+        {
+            overloads.push(entry.sealed.duplicate());
+        }
         FunctionLookup {
             overloads,
             pending: Self::earliest_pending(bucket, cutoff),

@@ -1,8 +1,8 @@
 //! The decide-phase context.
 //!
 //! [`DecideCtx`] is the surface every dispatch *decide* runs against: the ambient step context —
-//! scope, destination frame, installer identity, effects sink, obligations, types, writer, and the
-//! program brand — and nothing else. A decide holds no scheduler borrow at all: every graph
+//! scope, destination frame, installer identity, effects sink, obligations, types, writer, the
+//! program brand, and the step's scratch arena — and nothing else. A decide holds no scheduler borrow at all: every graph
 //! question is either the install's answer (the park verdicts the harness reads off
 //! [`InstalledEdge`](crate::scheduler::InstalledEdge)) or foreclosed by the language's lexical
 //! well-foundedness rule (a park can never wait forward, so no decide probes for cycles). A shape
@@ -19,6 +19,7 @@ use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingPart};
 use crate::machine::{CallFrame, Installer, LexicalFrame, Scope};
 use crate::source::Spanned;
+use crate::witnessed::BumpAllocator;
 
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
@@ -97,6 +98,16 @@ pub(in crate::machine::execute) struct DecideCtx<'program: 'step, 'step, 'view> 
     /// `'program: 'step` bound — so a mint door reached through it
     /// pins its parts at program storage, not at the step.
     program: ProgramBrand<'program>,
+    /// The step's **scratch arena**: the drain's per-pop bump, handed down at `'step`. A staging
+    /// buffer that is built, read and dropped inside the decide belongs here rather than on the
+    /// global heap — the drain resets the bump at the next pop, so the bytes cost nothing to
+    /// reclaim.
+    ///
+    /// Carried at `'step` and not one lifetime longer, which is the whole confinement: a
+    /// [`BumpVec`](crate::witnessed::BumpVec) built through this handle names `'step` in its type,
+    /// so a buffer that reached an `Outcome`, a park's deps, or a stored continuation would be a
+    /// borrow-check error rather than a convention someone has to keep.
+    scratch: BumpAllocator<'step>,
 }
 
 impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
@@ -107,6 +118,7 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
         installer: Installer,
         effects: &'view RefCell<Vec<WriteOp<'step>>>,
         program: ProgramBrand<'program>,
+        scratch: BumpAllocator<'step>,
     ) -> Self {
         Self {
             ambient,
@@ -115,7 +127,14 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
             installer,
             effects,
             program,
+            scratch,
         }
+    }
+
+    /// The step's scratch allocator, `Copy` like the handle it wraps. See the field docs for why
+    /// the `'step` it comes back at is the confinement.
+    pub(in crate::machine::execute) fn scratch(&self) -> BumpAllocator<'step> {
+        self.scratch
     }
 
     pub(in crate::machine::execute) fn program(&self) -> ProgramBrand<'program> {

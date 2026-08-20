@@ -52,21 +52,36 @@ use super::{
 /// the bump itself returns: a bumped value is region state a holder names, not one it owns.
 ///
 /// `Copy`, with a private field and a `pub(crate)` wrapping constructor, so a value of this type
-/// exists only where a region hands one out and `'b` stays the region's own brand: nothing built
-/// through one can outlive the region whose bytes it holds. Where `'b` is a rank-2 fold brand, that
-/// same lifetime is the confinement — which is why the allocator needs no mint privacy of its own
-/// to serve as a fold's write surface.
+/// exists only where the library hands one out, and `'b` is whatever brand that hand-out chose:
+/// nothing built through one can outlive the bump whose bytes it holds. Where `'b` is a rank-2 fold
+/// brand, that same lifetime is the confinement — which is why the allocator needs no mint privacy
+/// of its own to serve as a fold's write surface.
 ///
 /// **The two tiers, and why the guard cannot cover both.** What licenses handing the raw allocator
-/// out at all is that a `Bump` releases its chunks whole and [`Region::bump_capacity`] prices every
-/// byte taken through it, counted verb or not — so an off-verb allocation is still an
-/// honestly-reported one. Deallocation is a **no-op**: a collection that shrinks or rehashes
+/// out at all is that a `Bump` releases its chunks whole, and — at the region tier —
+/// [`Region::bump_capacity`] prices every byte taken through it, counted verb or not, so an
+/// off-verb allocation is still an honestly-reported one. Deallocation is a **no-op**: a collection
+/// that shrinks or rehashes
 /// abandons its old allocation as dead bump bytes, which is why that seam suits a table whose churn
 /// is bounded (geometric growth, in-place slot reuse) and not one that frees in a loop. The
 /// [`Allocator`] trait says nothing about destructors, so the `T: Copy` guard the verbs carry cannot
 /// ride there — an element stored through a collection over this allocator is never dropped, and it
 /// is the **embedder's own declaration site** that has to hold the line (a
 /// `const { assert!(!needs_drop::<T>()) }` where the collection's element type is named).
+///
+/// **The scratch tier.** The second home for this handle is the drain's step scratch bump
+/// ([`Scheduler::drain`](crate::scheduler::Scheduler::drain)), whose bytes are unpriced and
+/// reclaimed wholesale by a `reset` at every pop rather than named byte-by-byte. Confinement is
+/// still the handed-out `'b` — a per-pop borrow the drain's higher-ranked step callback cannot
+/// widen — so a collection built over a scratch handle cannot outlive the step that got it. Two
+/// consequences follow from the bump's own mechanics rather than from the tier:
+///
+/// - a *stack-held* collection over this allocator still drops its elements normally when it falls;
+///   only the backing bytes are bump-hosted, which is why a scratch `Vec` of `Drop`-bearing
+///   elements is sound where a bump-*stored* value would not be;
+/// - `grow` extends in place only for the newest allocation, so a collection that grows abandons
+///   its old buffer as dead bump bytes until the next reset — build with the capacity the final
+///   length is known to be.
 pub struct BumpAllocator<'b>(&'b Bump);
 
 // `Copy` grants nothing new: the handle names no more than the `&'b Bump` it wraps.
@@ -128,8 +143,9 @@ unsafe impl Allocator for BumpAllocator<'_> {
 }
 
 impl<'b> BumpAllocator<'b> {
-    /// Wrap `bump` — `pub(crate)`, so no embedder can pair a `BumpAllocator` with a bump that is
-    /// not a region's.
+    /// Wrap `bump` — `pub(crate)`, so a handle exists only over a bump the library itself hands out
+    /// one for: a [`Region`]'s arena, or the drain's step scratch. An embedder can pair neither this
+    /// type with a bump of its own nor a wider `'b` with either of those.
     pub(crate) fn over(bump: &'b Bump) -> Self {
         BumpAllocator(bump)
     }
@@ -309,6 +325,15 @@ impl<'b> BumpAllocator<'b> {
 /// table built over the raw [`Allocator`] seam and kept writable — the latter owing its own
 /// no-drop-glue assert at the declaration that names its entry types.
 pub type BumpBackedMap<'b, K, V> = HashMap<K, V, DefaultHashBuilder, BumpAllocator<'b>>;
+
+/// A vector whose backing buffer lives in a bump — the shape a step-scratch staging buffer takes.
+/// `allocator_api2`'s `Vec` rather than `std`'s for the custom-allocator seam, and it derefs to
+/// `[T]`, so a slice-taking callee is reached unchanged.
+///
+/// `T` needs no `Copy` guard here: the vector is a stack local, so its elements drop when it falls
+/// — see the scratch-tier notes on [`BumpAllocator`] for the two mechanics that *do* bite (no
+/// element drop for a bump-*stored* value; grow abandons its old buffer).
+pub type BumpVec<'b, T> = allocator_api2::vec::Vec<T, BumpAllocator<'b>>;
 
 /// The bump door itself, hung on the fold engines' placement capability — see the module docs for the
 /// confinement and no-erasure arguments it rests on.

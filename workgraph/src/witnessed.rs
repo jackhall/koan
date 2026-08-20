@@ -58,7 +58,7 @@ mod carrier;
 pub use carrier::{Carrier, HasRegionHandle};
 
 mod bump;
-pub use bump::{BumpAllocator, BumpBackedMap};
+pub use bump::{BumpAllocator, BumpBackedMap, BumpVec};
 
 mod sectioned;
 pub use sectioned::{CellInput, CellReach, CellRef, Sectioned};

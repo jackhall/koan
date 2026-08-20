@@ -454,3 +454,44 @@ fn a_cycling_park_is_loud_at_the_install_door() {
     let source = sched.install_edge(slot, anchor.owner());
     let _ = sched.install_deps(slot, &[source]);
 }
+
+/// **The step scratch arena is usable inside a step and reset at every pop.** Each step stages a
+/// `BumpVec` through `step.scratch`, reads it back (the allocator forwarding works over the
+/// scratch bump as it does over a region's), and records where the buffer landed. Every step's
+/// first allocation lands at the same address — the observable for "reset once per pop", since a
+/// bump that kept its cursor would hand out a fresh address each time.
+#[test]
+fn scratch_is_usable_within_a_step_and_resets_at_every_pop() {
+    let mut sched: Scheduler<TestWorkload> = Scheduler::new();
+    let mut anchors = Vec::new();
+    for _ in 0..3 {
+        let (_, anchor, _) = alloc_slot(&mut sched);
+        anchors.push(anchor);
+    }
+
+    let first_allocations: RefCell<Vec<usize>> = RefCell::new(Vec::new());
+    sched
+        .drain(|_sched, step| {
+            let mut staged: crate::witnessed::BumpVec<'_, u32> =
+                crate::witnessed::BumpVec::with_capacity_in(4, step.scratch);
+            first_allocations
+                .borrow_mut()
+                .push(staged.as_ptr() as usize);
+            staged.extend([1u32, 2, 3, 4]);
+            let sum: u32 = staged.iter().sum();
+            assert_eq!(
+                sum, 10,
+                "a scratch-hosted buffer reads back within the step"
+            );
+            StepVerdict::Done(Ok(terminal::<TestWorkload>(&step.anchor, sum)))
+        })
+        .expect("an acyclic run drains clean");
+
+    let addresses = first_allocations.borrow();
+    assert_eq!(addresses.len(), 3, "every slot stepped");
+    assert!(
+        addresses.iter().all(|a| *a == addresses[0]),
+        "the reset at the top of each pop rewinds the cursor, so every step's first \
+         allocation lands at the same address: {addresses:?}",
+    );
+}

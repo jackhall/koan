@@ -17,10 +17,12 @@
 
 use std::rc::Rc;
 
+use bumpalo::Bump;
+
 use super::nodes::NodeWork;
 use super::workload::{DeliveredTerminal, SealedTerminal};
 use super::{EdgeId, NodeId, Scheduler, Workload};
-use crate::witnessed::SealedPinned;
+use crate::witnessed::{BumpAllocator, SealedPinned};
 
 /// The closed protocol between the embedder's step callback and the scheduler's apply. Every arm
 /// maps onto exactly one internal transition, so returning a verdict *is* applying it.
@@ -44,7 +46,17 @@ pub enum StepVerdict<'work, W: Workload> {
 
 /// One popped slot's step, as the drain hands it to the embedder's callback: the deps are already
 /// read (and their edges released), and the continuation arrives still sealed.
-pub struct Step<W: Workload> {
+pub struct Step<'scratch, W: Workload> {
+    /// **The step's scratch arena**, over a `Bump` the drain owns and resets at every pop. A
+    /// staging buffer that is built, read and dropped inside one step belongs here rather than on
+    /// the global heap or in a frame region — a frame region is reclaimed when the *frame* dies, so
+    /// step-transient staging put there accumulates across a tail-replacing slot's steps.
+    ///
+    /// `'scratch` is the drain's per-pop borrow, and the step callback's bound quantifies over it,
+    /// so a buffer allocated through this handle cannot reach a `StepVerdict` — a `Replace`
+    /// continuation is built at `'work`, fixed before the bump exists. That is a borrow-check fact,
+    /// not a convention.
+    pub scratch: BumpAllocator<'scratch>,
     /// The name a mid-step install wires deps onto.
     pub id: NodeId,
     /// A clone of the slot's memory anchor (the row keeps its own).
@@ -86,13 +98,24 @@ impl<W: Workload> Scheduler<W> {
     /// for the whole drain, independent of the per-call `&mut Self` borrow, since the work is
     /// sealed against its anchor the moment the verdict is applied.
     ///
+    /// The loop also owns the **step scratch arena** it hands out on [`Step::scratch`]. Its
+    /// lifetime in the `FnMut` bound is elided, hence higher-ranked: `'work` is fixed before the
+    /// bump exists, so no verdict can carry a scratch-hosted value out of the step that built it.
+    ///
     /// Errs with the deadlock report when slots are still parked after the drain — the backstop
     /// for the acyclicity invariant [`install_deps`](Self::install_deps) asserts.
     pub fn drain<'work>(
         &mut self,
-        mut step: impl FnMut(&mut Self, Step<W>) -> StepVerdict<'work, W>,
+        mut step: impl FnMut(&mut Self, Step<'_, W>) -> StepVerdict<'work, W>,
     ) -> Result<(), DrainDeadlock<W>> {
+        let mut scratch = Bump::new();
         while let Some(id) = self.pop_next() {
+            // Once per pop, structurally: the drain loop is the only place a step is invoked, and
+            // neither `apply`'s self-recursion nor a mid-step submission re-enters it. The previous
+            // iteration's `&scratch` borrow died with its `step(...)` call, which is both what lets
+            // this `&mut` reset borrow-check and why nothing scratch-hosted survives a pop.
+            // `reset` retains the largest chunk, so steady state takes no allocator syscall.
+            scratch.reset();
             let (work, anchor) = self.take_for_run(id);
             // Step start is a read, not a graph walk: every dep was delivered into its edge's
             // destination when its producer finalized. The slot is done with its dep edges once
@@ -109,6 +132,7 @@ impl<W: Workload> Scheduler<W> {
             let verdict = step(
                 self,
                 Step {
+                    scratch: BumpAllocator::over(&scratch),
                     id,
                     anchor: Rc::clone(&anchor),
                     continuation: work.continuation,
@@ -156,4 +180,43 @@ impl<W: Workload> Scheduler<W> {
             self.release_edge(edge);
         }
     }
+}
+
+/// Run `guard` with a step-scratch allocator over a fresh bump, at a brand the caller cannot name —
+/// the drain's per-pop hand-out, minus the drain. The test fixture for scratch-hosted code that has
+/// no scheduler to run under.
+///
+/// The `for<'s>` is the escape pin, and the reason this is a fixture rather than a `Bump` a test
+/// makes itself: a buffer built over the handed-out allocator cannot be stashed anywhere whose
+/// lifetime the caller chose.
+///
+/// ```
+/// use workgraph::scheduler::drive_scratch;
+/// use workgraph::witnessed::BumpVec;
+///
+/// let sum: u8 = drive_scratch(|scratch| {
+///     let mut staged: BumpVec<'_, u8> = BumpVec::with_capacity_in(4, scratch);
+///     staged.extend([1u8, 2, 3]);
+///     staged.iter().sum()
+/// });
+/// assert_eq!(sum, 6);
+/// ```
+///
+/// The same buffer may not leave:
+///
+/// ```compile_fail
+/// use workgraph::scheduler::drive_scratch;
+/// use workgraph::witnessed::BumpVec;
+///
+/// let mut escaped: Option<BumpVec<'_, u8>> = None;
+/// drive_scratch(|scratch| {
+///     let mut staged = BumpVec::with_capacity_in(4, scratch);
+///     staged.push(1u8);
+///     escaped = Some(staged);
+/// });
+/// ```
+#[doc(hidden)]
+pub fn drive_scratch<R>(guard: impl for<'s> FnOnce(BumpAllocator<'s>) -> R) -> R {
+    let scratch = Bump::new();
+    guard(BumpAllocator::over(&scratch))
 }

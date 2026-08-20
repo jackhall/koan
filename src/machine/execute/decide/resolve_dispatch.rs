@@ -19,6 +19,7 @@ use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
+use crate::witnessed::{BumpAllocator, BumpVec};
 
 use super::is_eager_working_part;
 
@@ -73,12 +74,18 @@ impl<'step> Scope<'step> {
     /// tagging matters because overloads in a bucket may sit at different lexical positions.
     /// `chain = None` (no active payload names a frame) leaves every scope complete to the reader,
     /// and an empty `bare_outcomes` reverts admission to shape-only `arg.matches`.
+    ///
+    /// `scratch` hosts every buffer the walk builds — the per-scope overload copy-out, the opened
+    /// candidates, and the two pick buffers. None of them escapes the call, so the walk's cost is
+    /// independent of how many scopes it visits: the bytes are the drain's, reclaimed wholesale at
+    /// the next pop. Its lifetime is the buffers' own; nothing here needs `'step`.
     pub(crate) fn resolve_dispatch<'e>(
         &self,
         expr: &WorkingExpression<'e>,
         chain: Option<&LexicalFrame>,
         bare_outcomes: &[Option<Resolution>],
         types: &TypeRegistry,
+        scratch: BumpAllocator<'_>,
     ) -> DispatchOutcome<'step> {
         #[cfg(test)]
         RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(c.get() + 1));
@@ -95,21 +102,22 @@ impl<'step> Scope<'step> {
         // non-terminal root falls through to the full walk, preserving precedence.
         let root = self.root_scope();
         if root.bindings().has_builtin_function_stored(key) {
-            let lookup = root
-                .bindings()
-                .lookup_function_stored(key, root.binding_cutoff(chain));
+            let lookup =
+                root.bindings()
+                    .lookup_function_stored(key, root.binding_cutoff(chain), scratch);
             if let ScopeDecision::Terminal(outcome) =
-                decide_scope(root, &lookup, expr, bare_outcomes, types)
+                decide_scope(root, &lookup, expr, bare_outcomes, types, scratch)
             {
                 return outcome;
             }
         }
         let mut dead_lean: Option<String> = None;
         for scope in self.ancestors() {
-            let lookup = scope
-                .bindings()
-                .lookup_function_stored(key, scope.binding_cutoff(chain));
-            match decide_scope(scope, &lookup, expr, bare_outcomes, types) {
+            let lookup =
+                scope
+                    .bindings()
+                    .lookup_function_stored(key, scope.binding_cutoff(chain), scratch);
+            match decide_scope(scope, &lookup, expr, bare_outcomes, types, scratch) {
                 ScopeDecision::Terminal(outcome) => return outcome,
                 ScopeDecision::DeadLean(name) => {
                     if dead_lean.is_none() {
@@ -179,16 +187,19 @@ enum ScopeDecision<'step> {
 /// lifetime; `scope` is the very scope the bucket was read from, whose arena hosts the descriptions.
 fn decide_scope<'step, 'e>(
     scope: &Scope<'step>,
-    lookup: &FunctionLookup,
+    lookup: &FunctionLookup<'_, BumpAllocator<'_>>,
     expr: &WorkingExpression<'e>,
     bare_outcomes: &[Option<Resolution>],
     types: &TypeRegistry,
+    scratch: BumpAllocator<'_>,
 ) -> ScopeDecision<'step> {
-    let candidates: Vec<OpenedFunction<'_>> = lookup
-        .overloads
-        .iter()
-        .map(|sealed| sealed.open_at())
-        .collect();
+    // Exact capacity, filled by a push loop: a grown bump buffer abandons its old bytes as dead
+    // scratch, so every scratch-hosted buffer here is built at the length it will reach.
+    let mut candidates: BumpVec<'_, OpenedFunction<'_>> =
+        BumpVec::with_capacity_in(lookup.overloads.len(), scratch);
+    for sealed in lookup.overloads.iter() {
+        candidates.push(sealed.open_at());
+    }
     let bucket = OverloadBucket {
         candidates: &candidates,
     };
@@ -205,7 +216,7 @@ fn decide_scope<'step, 'e>(
         }
         return ScopeDecision::Terminal(DispatchOutcome::ParkOnProducers(producers));
     }
-    match bucket.pick_strict(expr, bare_outcomes, types) {
+    match bucket.pick_strict(expr, bare_outcomes, types, scratch) {
         PickPass::Picked(index) => ScopeDecision::Terminal(DispatchOutcome::Resolved(
             build_resolved(scope.open_function(&lookup.overloads[index]), expr, types),
         )),
@@ -280,20 +291,23 @@ impl OverloadBucket<'_, '_> {
         expr: &WorkingExpression<'e>,
         bare_outcomes: &[Option<Resolution>],
         types: &TypeRegistry,
+        scratch: BumpAllocator<'_>,
     ) -> PickPass {
-        let survivors: Vec<usize> = self
-            .candidates
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| {
-                signature_admits_strict(&f.value().signature, expr, bare_outcomes, types)
-            })
-            .map(|(i, _)| i)
-            .collect();
-        let sigs: Vec<&ExpressionSignature> = survivors
-            .iter()
-            .map(|i| &self.candidates[*i].value().signature)
-            .collect();
+        // `candidates.len()` bounds the survivors and the survivor count is exactly the signature
+        // count, so neither buffer reallocates — see `decide_scope` on why that matters in a bump.
+        let mut survivors: BumpVec<'_, usize> =
+            BumpVec::with_capacity_in(self.candidates.len(), scratch);
+        for (i, f) in self.candidates.iter().enumerate() {
+            if signature_admits_strict(&f.value().signature, expr, bare_outcomes, types) {
+                survivors.push(i);
+            }
+        }
+        let mut sigs: BumpVec<'_, &ExpressionSignature> =
+            BumpVec::with_capacity_in(survivors.len(), scratch);
+        for i in survivors.iter() {
+            sigs.push(&self.candidates[*i].value().signature);
+        }
+        // `most_specific` keeps its contiguous-slice signature: a `BumpVec` derefs to `[T]`.
         match ExpressionSignature::most_specific(&sigs, types) {
             Some(i) => PickPass::Picked(survivors[i]),
             None if !survivors.is_empty() => PickPass::Tie(survivors.len()),
