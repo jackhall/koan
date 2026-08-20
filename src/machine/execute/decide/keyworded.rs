@@ -5,7 +5,6 @@ use crate::machine::ProducerId;
 use crate::machine::core::OpenedFunction;
 use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{DispatchOutcome, KError, KErrorKind};
-use crate::scheduler::Deps;
 use crate::source::Spanned;
 use crate::witnessed::BumpAllocator;
 
@@ -15,7 +14,7 @@ use super::super::outcome::continue_inline;
 use super::super::{TerminalDepFinish, ignore_results};
 use super::ctx::DecideCtx;
 use super::{
-    Await, DepRequest, Outcome, PartWalk, Resolution, Resolved, park_resume_labelled,
+    Await, Outcome, PartWalk, Resolution, Resolved, StagedSubs, park_resume_labelled,
     stage_eager_part, staged_slot_placeholder, working_frame,
 };
 
@@ -75,13 +74,13 @@ fn walk_and_invoke<'step>(
         PartWalk::Unchanged => super::exec::invoke_continue(ctx, resolved.function, expr),
         PartWalk::Respliced {
             expr: new_expr,
-            staged_subs,
+            staged,
         } => {
-            if staged_subs.is_empty() {
+            if staged.is_empty() {
                 return super::exec::invoke_continue(ctx, resolved.function, new_expr);
             }
             let _ = resolved; // discard the speculative pick.
-            install_eager_subs(ctx, new_expr, staged_subs, None)
+            install_eager_subs(ctx, new_expr, staged, None)
         }
     }
 }
@@ -171,18 +170,18 @@ fn install_eager_only<'step>(
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
-    let (new_expr, staged_subs) = match super::stage_all_eager_parts(brand, &expr, &[]) {
-        PartWalk::Respliced { expr, staged_subs } => (expr, staged_subs),
+    let (new_expr, staged) = match super::stage_all_eager_parts(brand, &expr, &[], ctx.scratch()) {
+        PartWalk::Respliced { expr, staged } => (expr, staged),
         PartWalk::Unchanged => {
             debug_assert!(
                 false,
                 "install_eager_only invoked from Deferred arm; \
                  resolve_dispatch contract requires at least one eager part",
             );
-            (expr, Vec::new())
+            (expr, StagedSubs::new_in(ctx.scratch()))
         }
     };
-    install_eager_subs(ctx, new_expr, staged_subs, None)
+    install_eager_subs(ctx, new_expr, staged, None)
 }
 
 /// Park each staged eager dep, then rebuild `working_expr` with the resolved carriers in its
@@ -196,14 +195,13 @@ fn install_eager_only<'step>(
 pub(super) fn install_eager_subs<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     working_expr: WorkingExpression<'step>,
-    staged_subs: Vec<(usize, DepRequest<'step>)>,
+    staged: StagedSubs<'step>,
     picked: Option<OpenedFunction<'step>>,
 ) -> Outcome<'step> {
-    let (part_indices, deps): (Vec<usize>, Vec<DepRequest<'step>>) =
-        staged_subs.into_iter().unzip();
-    if deps.is_empty() {
+    if staged.is_empty() {
         return finish_eager_subs(ctx, working_expr, picked);
     }
+    let StagedSubs { part_indices, deps } = staged;
     let dep_error_frame = working_frame("<bind>", &working_expr);
     let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
         // A parts run is frozen once its door bumps it, so the whole batch must land in one
@@ -231,7 +229,7 @@ pub(super) fn install_eager_subs<'step>(
         );
         finish_eager_subs(ctx, spliced, picked)
     });
-    Await::on(Deps::from_requests_in(deps, ctx.scratch()))
+    Await::on(deps)
         .error_frame(dep_error_frame)
         .finish_terminal(finish)
 }
@@ -268,7 +266,7 @@ fn part_walk<'step>(
     let parts = expr.parts;
     let wrap_set = &slots.wrap_indices;
     let eager_filter = slots.eager_indices.as_deref();
-    let mut staged_subs: Vec<(usize, DepRequest<'step>)> = Vec::new();
+    let mut staged = StagedSubs::new_in(ctx.scratch());
     for (i, part) in parts.iter().enumerate() {
         // A wrap slot splices inline below rather than staging, so it is never offered to the
         // stager.
@@ -282,39 +280,41 @@ fn part_walk<'step>(
             .filter(|_| in_eager_filter)
             .map(|a| stage_eager_part(brand, a))
         {
-            staged_subs.push((i, dep));
+            staged.push(i, dep);
         }
     }
-    if wrap_set.is_empty() && staged_subs.is_empty() {
+    if wrap_set.is_empty() && staged.is_empty() {
         return PartWalk::Unchanged;
     }
     // Staging ran in slot order, so a single ascending cursor over the staged indices places every
     // hole in one pass.
-    let mut holes = staged_subs.iter().map(|(slot, _)| *slot).peekable();
-    let expr = expr.respliced(
-        brand,
-        parts.iter().enumerate().map(|(i, part)| {
-            if wrap_set.contains(&i) {
-                // A name bound in this region rests for free (the self rule strips this region from
-                // what is retained); one bound further out lodges its binding scope's coverage,
-                // which is what keeps the read live.
-                let Some(Resolution::Resolved(cell)) =
-                    bare_outcomes.get(i).and_then(|o| o.as_ref())
-                else {
-                    unreachable!("a picked wrap slot's bare name has a Resolved cache entry");
-                };
-                return Spanned {
-                    value: WorkingPart::Spliced {
-                        cell: ctx.current_scope().rest_delivered(cell),
-                    },
-                    span: part.span,
-                };
-            }
-            if holes.next_if_eq(&i).is_some() {
-                return staged_slot_placeholder();
-            }
-            *part
-        }),
-    );
-    PartWalk::Respliced { expr, staged_subs }
+    let expr = {
+        let mut holes = staged.slots().peekable();
+        expr.respliced(
+            brand,
+            parts.iter().enumerate().map(|(i, part)| {
+                if wrap_set.contains(&i) {
+                    // A name bound in this region rests for free (the self rule strips this region from
+                    // what is retained); one bound further out lodges its binding scope's coverage,
+                    // which is what keeps the read live.
+                    let Some(Resolution::Resolved(cell)) =
+                        bare_outcomes.get(i).and_then(|o| o.as_ref())
+                    else {
+                        unreachable!("a picked wrap slot's bare name has a Resolved cache entry");
+                    };
+                    return Spanned {
+                        value: WorkingPart::Spliced {
+                            cell: ctx.current_scope().rest_delivered(cell),
+                        },
+                        span: part.span,
+                    };
+                }
+                if holes.next_if_eq(&i).is_some() {
+                    return staged_slot_placeholder();
+                }
+                *part
+            }),
+        )
+    };
+    PartWalk::Respliced { expr, staged }
 }

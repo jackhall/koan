@@ -273,12 +273,48 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
 pub(in crate::machine::execute) enum PartWalk<'step> {
     /// Nothing spliced and nothing staged — the node the walk was given already holds this run.
     Unchanged,
-    /// The walk rebuilt the run: `expr` is the re-frozen node, `staged_subs` the deps whose
-    /// resolved carriers fill its staging holes, in slot order.
+    /// The walk rebuilt the run: `expr` is the re-frozen node, `staged` the deps whose resolved
+    /// carriers fill its staging holes, in slot order.
     Respliced {
         expr: WorkingExpression<'step>,
-        staged_subs: Vec<(usize, DepRequest<'step>)>,
+        staged: StagedSubs<'step>,
     },
+}
+
+/// A part walk's staged subs, as the two lists their consumers actually want: the park's dep list,
+/// and the slot each dep's result splices back into. The walk appends to both in one pass, so the
+/// park currency is built where the requests are produced rather than transposed afterwards.
+///
+/// The two are hosted differently on purpose. `deps` is a [`StepDeps`], dead at the end of the pop
+/// that wired it; `part_indices` is heap-hosted, because the dep-finish closure carries it **across
+/// the park** — past the scratch reset — to place the resolved cells on wake.
+pub(in crate::machine::execute) struct StagedSubs<'step> {
+    pub(in crate::machine::execute) part_indices: Vec<usize>,
+    pub(in crate::machine::execute) deps: StepDeps<'step>,
+}
+
+impl<'step> StagedSubs<'step> {
+    pub(in crate::machine::execute) fn new_in(scratch: BumpAllocator<'step>) -> Self {
+        StagedSubs {
+            part_indices: Vec::new(),
+            deps: Deps::new_in(scratch),
+        }
+    }
+
+    /// Stage one dep against the part slot its result fills.
+    pub(in crate::machine::execute) fn push(&mut self, slot: usize, dep: DepRequest<'step>) {
+        self.part_indices.push(slot);
+        self.deps.request(dep);
+    }
+
+    pub(in crate::machine::execute) fn is_empty(&self) -> bool {
+        self.deps.is_empty()
+    }
+
+    /// The staged slots in ascending order — the cursor a rebuild walks its parts against.
+    pub(in crate::machine::execute) fn slots(&self) -> impl Iterator<Item = usize> + '_ {
+        self.part_indices.iter().copied()
+    }
 }
 
 /// Walk raw parts emitting a [`StagedSlot`](WorkingPart::StagedSlot) marker at every eager slot
@@ -296,26 +332,27 @@ pub(super) fn stage_all_eager_parts<'step>(
     brand: RegionBrand<'step>,
     origin: &WorkingExpression<'step>,
     wrap_indices: &[usize],
+    scratch: BumpAllocator<'step>,
 ) -> PartWalk<'step> {
     let parts = origin.parts;
-    let mut staged: Vec<(usize, DepRequest<'step>)> = Vec::new();
+    let mut staged = StagedSubs::new_in(scratch);
     for (i, part) in parts.iter().enumerate() {
         if wrap_indices.contains(&i) {
             // Resolve the name through a single-part sub-Dispatch so the resolved `Spliced`
             // carrier reaches `accepts_part` at bind. Not one of the eager shapes, hence a
             // pre-check before the stager.
             let wrapped = WorkingExpression::synthesized(brand, std::slice::from_ref(part), origin);
-            staged.push((
+            staged.push(
                 i,
                 DepRequest::Dispatch {
                     expr: wrapped,
                     placement: DepPlacement::OwnScope,
                 },
-            ));
+            );
             continue;
         }
         if let Ok(dep) = stage_eager_working_part(brand, part.value) {
-            staged.push((i, dep));
+            staged.push(i, dep);
         }
     }
     if staged.is_empty() {
@@ -323,21 +360,20 @@ pub(super) fn stage_all_eager_parts<'step>(
     }
     // Staging ran in slot order, so one ascending cursor over the staged indices places every hole
     // in a single pass that fills the region's bytes directly, with no owned copy in between.
-    let mut holes = staged.iter().map(|(slot, _)| *slot).peekable();
-    let expr = origin.respliced(
-        brand,
-        parts.iter().enumerate().map(|(i, part)| {
-            if holes.next_if_eq(&i).is_some() {
-                staged_slot_placeholder()
-            } else {
-                *part
-            }
-        }),
-    );
-    PartWalk::Respliced {
-        expr,
-        staged_subs: staged,
-    }
+    let expr = {
+        let mut holes = staged.slots().peekable();
+        origin.respliced(
+            brand,
+            parts.iter().enumerate().map(|(i, part)| {
+                if holes.next_if_eq(&i).is_some() {
+                    staged_slot_placeholder()
+                } else {
+                    *part
+                }
+            }),
+        )
+    };
+    PartWalk::Respliced { expr, staged }
 }
 
 // ---------- Resume closure ----------

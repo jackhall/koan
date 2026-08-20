@@ -22,7 +22,7 @@ use super::super::TerminalDepFinish;
 use super::super::outcome::dep_error_frame;
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
-use super::{PartWalk, constructors, stage_all_eager_parts};
+use super::{PartWalk, StagedSubs, constructors, stage_all_eager_parts};
 
 #[cfg(test)]
 mod tests;
@@ -473,9 +473,10 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
         .wrap_indices;
     // A call whose slots are all filled stages nothing, so the node handed to the walk is the one
     // the committed call folds over — no rebuild.
-    let (working_expr, staged_subs) = match stage_all_eager_parts(brand, &expr, &wrap_indices) {
-        PartWalk::Unchanged => (expr, Vec::new()),
-        PartWalk::Respliced { expr, staged_subs } => (expr, staged_subs),
-    };
-    super::keyworded::install_eager_subs(ctx, working_expr, staged_subs, Some(picked))
+    let (working_expr, staged) =
+        match stage_all_eager_parts(brand, &expr, &wrap_indices, ctx.scratch()) {
+            PartWalk::Unchanged => (expr, StagedSubs::new_in(ctx.scratch())),
+            PartWalk::Respliced { expr, staged } => (expr, staged),
+        };
+    super::keyworded::install_eager_subs(ctx, working_expr, staged, Some(picked))
 }
