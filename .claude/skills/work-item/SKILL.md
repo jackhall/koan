@@ -24,6 +24,8 @@ Read `<roadmap-path>`. If a `<plan-path>` was given, read it too and sanity-chec
 
 ### 1. Plan — only if no plan file was given
 
+Load the `/roadmap-plan` skill.
+
 Substeps:
 
 1. If a `<plan-path>` was provided, skip to preflight.

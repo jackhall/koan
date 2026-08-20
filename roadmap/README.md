@@ -48,7 +48,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Deferred signature summaries](reduce_allocs/deferred-signature-summaries.md)
 - [Park-wiring buffer recycling](reduce_allocs/park-wiring-buffer-recycling.md)
-- [Step-local staging on the scratch arena](reduce_allocs/scratch-hosted-step-staging.md)
 - [Run-scoped label interning](reduce_allocs/string-interning.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)

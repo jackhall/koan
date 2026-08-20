@@ -225,6 +225,11 @@ retires the slot without a terminal. Retirement is
 slot's edges — followed by the release of the edges themselves, so no table ever
 holds a name whose edge is gone. The list is taken, not read, so a slot's claims
 retire exactly once even when a tail replace has moved them onto a fresh anchor.
+The door itself takes a *membership predicate* over
+[`ProducerId`](../../src/machine/execute/producer_id.rs), not a collection: the sweep asks
+one question per pending slot — is this producer retiring? — and the run loop's closure
+answers it against the edge list the slot already owns, so nothing is materialized to hold
+the answer and scheduler currency stays outside `machine/core`.
 
 The sweep keys on the `producer` every `PendingBinding` already carries, so it spans
 all three claim-bearing tables alike: no table's key participates, a `types` slot
