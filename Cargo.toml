@@ -39,7 +39,6 @@ region-audit = ["workgraph/test-hooks"]
 alloc-count = []
 
 [dependencies]
-regex = "1.12.3"
 indexmap = "2"
 mimalloc = { version = "0.1", default-features = false }
 stable_deref_trait = "1.2.1"

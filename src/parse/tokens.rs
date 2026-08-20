@@ -15,9 +15,6 @@
 
 use std::iter::Peekable;
 use std::str::CharIndices;
-use std::sync::LazyLock;
-
-use regex::Regex;
 
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
@@ -25,9 +22,6 @@ use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeIdentifier};
 use crate::machine::model::is_keyword_token;
 use crate::parse::operators::{SuffixOp, find_suffix, is_atom_terminator};
 use crate::source::{Span, Spanned};
-
-static FLOAT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$").unwrap());
 
 /// Whole-token literal match runs first so e.g. `3.14` stays a number rather than
 /// being desugared as `(attr 3 14)`. `start` is the token's original-source byte
@@ -66,12 +60,53 @@ fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
         "false" => return Some(ExpressionPart::Literal(KLiteral::Boolean(false))),
         _ => {}
     }
-    if FLOAT.is_match(tok)
+    if is_number_shape(tok)
         && let Ok(n) = tok.parse::<f64>()
     {
         return Some(ExpressionPart::Literal(KLiteral::Number(n)));
     }
     None
+}
+
+/// Whether `tok` has koan's decimal-number shape: an optional sign, digits with an
+/// optional decimal point carrying at least one digit on some side, and an optional
+/// exponent. Guards `parse::<f64>`, whose own grammar additionally accepts `inf`,
+/// `infinity`, and `NaN` — spellings koan classifies as identifiers instead. Digits are
+/// ASCII only, so a token written with non-ASCII digits falls through to `classify_atom`.
+fn is_number_shape(tok: &str) -> bool {
+    let bytes = tok.as_bytes();
+    let mut at = 0;
+    if matches!(bytes.first(), Some(b'+' | b'-')) {
+        at = 1;
+    }
+    let integral = take_digits(bytes, &mut at);
+    let mut fractional = 0;
+    if bytes.get(at) == Some(&b'.') {
+        at += 1;
+        fractional = take_digits(bytes, &mut at);
+    }
+    if integral == 0 && fractional == 0 {
+        return false;
+    }
+    if matches!(bytes.get(at), Some(b'e' | b'E')) {
+        at += 1;
+        if matches!(bytes.get(at), Some(b'+' | b'-')) {
+            at += 1;
+        }
+        if take_digits(bytes, &mut at) == 0 {
+            return false;
+        }
+    }
+    at == bytes.len()
+}
+
+/// Advance `at` past a run of ASCII digits, reporting how many it consumed.
+fn take_digits(bytes: &[u8], at: &mut usize) -> usize {
+    let start = *at;
+    while bytes.get(*at).is_some_and(u8::is_ascii_digit) {
+        *at += 1;
+    }
+    *at - start
 }
 
 /// Classify a sub-token per the token-class rules in

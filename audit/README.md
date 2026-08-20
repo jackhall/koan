@@ -77,13 +77,13 @@ moved it.
 
 | shape | what it exercises | allocations | scaling term |
 |---|---|---|---|
-| `shapes/tail_loop.koan` | 100 tail-recursive steps | 18 893 | 140.0 per step, linear |
-| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 9 463 | ≈38 per dispatch, mildly superlinear |
-| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 5 606 | — |
-| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 7 523 | 59.9 per dispatch |
-| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 7 203 | — |
-| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 9 117 | 59.8 per dispatch |
-| *(empty program)* | interpreter startup and builtin seeding | 2 874 | — |
+| `shapes/tail_loop.koan` | 100 tail-recursive steps | 16 941 | 138.0 per step, linear |
+| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 7 712 | ≈38 per dispatch, mildly superlinear |
+| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 845 | — |
+| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 5 730 | 58.9 per dispatch |
+| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 5 434 | — |
+| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 7 316 | 58.8 per dispatch |
+| *(empty program)* | interpreter startup and builtin seeding | 2 873 | — |
 
 No shape can use comments: koan has none, and `#` is reserved for quoting. The prose
 that would have headed each file is here instead.
@@ -99,7 +99,7 @@ non-admitting same-key overload, so every dispatch strict- and hard-rejects at a
 scopes before picking at the root. Between them the three axes cover where the execute path's
 allocation traffic scales.
 
-The step term is exactly linear — 140.0 flat at 10, 50, 100 and 200 steps. The dispatch term
+The step term is exactly linear — 138.0 flat at 10, 50, 100 and 200 steps. The dispatch term
 is not: marginal cost rises 36.9 → 37.5 → 38.4 → 39.3 across the 16→32, 32→64, 64→128 and
 128→256 operand doublings, so a chain pays slightly more per operator the longer it gets.
 Below 16 operands the term sits flat near 36.3 and the fixed cost swamps it, so the rise is
@@ -107,8 +107,8 @@ only readable over the larger sizes. Whatever drives it is unmeasured; the shape
 to the linear-enough middle rather than to the tail.
 
 The walk term is **flat in depth**. Differencing the two call counts at one depth cancels
-parse and setup and leaves 32 dispatches' marginal cost: 1 917 allocations at depth 2 against
-1 914 at depth 10 — 59.9 and 59.8 per dispatch, the two depths indistinguishable. The walk's
+parse and setup and leaves 32 dispatches' marginal cost: 1 885 allocations at depth 2 against
+1 882 at depth 10 — 58.9 and 58.8 per dispatch, the two depths indistinguishable. The walk's
 per-scope buffers are hosted on the drain's step scratch arena
 ([dag-scheduler.md § The drain protocol](../workgraph/design/dag-scheduler.md#the-drain-protocol)),
 so a deeper walk bumps more scratch bytes and takes no heap allocation for them. The grid's
@@ -119,18 +119,20 @@ dispatch inside a single statement's fold.
 ## The regression test
 
 `tests/allocation_baseline.rs` asserts the two absolute shapes' bracketed counts against a
-stated bound — 17 134 for the loop, 7 704 for the chain, each carrying 41 allocations of
+stated bound — 16 932 for the loop, 7 703 for the chain, each carrying 41 allocations of
 headroom. The bounds are tight by design: the margin is smaller than the 100 (loop) or 127
 (chain) a single new allocation on the scaling path would add, so one added allocation fails
 a test. Rebaselining is meant to be a deliberate edit, and the failure message says so.
 
-Those figures sit 1 759 under the whole-program table above — the same gap for both shapes.
-Process startup is ≈8 of it, and the lexer's `LazyLock<Regex>` (`src/parse/tokens.rs:29`) is
-≈1 713, paid once per process; the remaining ≈38 is further one-time state the same warm-up
-absorbs. A tight bound cannot straddle a cost that large, and it lands on whichever test
-reaches the parser first — so `allocations_for` runs each shape once *outside* its bracket.
-Warming with the shape's own source rather than a stand-in is what makes that total: an empty
-program never reaches the number path, so it leaves the regex cold.
+Those figures sit 9 under the whole-program table above — the same gap for both shapes, and
+essentially all of it process startup. The interpreter holds almost no lazy one-time state, so
+there is little for a first-run bracket to absorb.
+
+`allocations_for` still runs each shape once *outside* its bracket. The bounds are tight
+enough that one lazy static added later would break them by test order alone — whichever test
+reached it first would carry its whole initialisation cost. Warming with the shape's own
+source rather than a stand-in is what keeps that coverage total: whatever the shape
+initialises is warm by construction, including statics added later.
 
 The scope-walk grid is held to a *shape* rather than a count. Its test differences the two
 depths' per-dispatch costs and bounds the growth at one allocation per extra dispatch — far

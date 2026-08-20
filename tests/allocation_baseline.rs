@@ -43,12 +43,13 @@ static COUNTING_ALLOCATOR: counting_alloc::Counting<std::alloc::System> =
 /// on different call paths.
 fn allocations_for(source: &str, path: &str) -> u64 {
     // Run the shape once outside the bracket, to warm every process-wide lazy static it
-    // touches. The lexer's `LazyLock<Regex>` (`src/parse/tokens.rs:29`) alone costs ≈1 713
-    // allocations, paid once per process by whichever test reaches it first; inside the
-    // bracket that lands on whichever test won the race, and a bound tight enough to see one
-    // added allocation would be measuring test order instead. Warming with the shape's own
-    // source rather than a stand-in is what makes this total: whatever the shape initialises
-    // is warm by construction, including statics added later.
+    // touches. One-time state paid by whichever test reaches it first would otherwise land
+    // inside that test's bracket, and a bound tight enough to see one added allocation would
+    // be measuring test order instead. The interpreter currently holds almost none — the
+    // warm-up absorbs ≈1 allocation — but the bounds below are tight enough that a single
+    // lazy static added later would break them by order alone. Warming with the shape's own
+    // source rather than a stand-in is what keeps that coverage total: whatever the shape
+    // initialises is warm by construction, including statics added later.
     let _ = interpret_with_writer_path(source, Some(path), Box::new(io::sink()));
 
     let before = counting_alloc::thread_allocations();
@@ -58,13 +59,13 @@ fn allocations_for(source: &str, path: &str) -> u64 {
     delta
 }
 
-/// 100 tail-recursive steps, 140.0 allocations each — exactly linear, measured flat at
-/// 10/50/100/200. Measured 2026-08-20 at 17 134; the bound is that plus 41, less than the 100
+/// 100 tail-recursive steps, 138.0 allocations each — exactly linear, measured flat at
+/// 10/50/100/200. Measured 2026-08-20 at 16 932; the bound is that plus 41, less than the 100
 /// a single new per-step allocation would add. Tight on purpose: a looser bound cannot see
 /// one allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
-    const BOUND: u64 = 17_175;
+    const BOUND: u64 = 16_973;
     let delta = allocations_for(
         include_str!("../audit/shapes/tail_loop.koan"),
         "audit/shapes/tail_loop.koan",
@@ -79,11 +80,11 @@ fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
 
 /// A 128-operand `+` chain, so 127 dispatches at ≈38 allocations each — mildly superlinear,
 /// with marginal cost rising 36.9 → 39.3 across the 16→32 … 128→256 operand doublings.
-/// Measured 2026-08-20 at 7 704; the bound is that plus 41, under the 127 a single new
+/// Measured 2026-08-20 at 7 703; the bound is that plus 41, under the 127 a single new
 /// per-dispatch allocation would add. Same headroom rule as the loop.
 #[test]
 fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
-    const BOUND: u64 = 7_745;
+    const BOUND: u64 = 7_744;
     let delta = allocations_for(
         include_str!("../audit/shapes/operator_chain.koan"),
         "audit/shapes/operator_chain.koan",
@@ -106,7 +107,7 @@ fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
 /// dispatches' marginal cost; differencing *those* leaves what 8 extra scopes cost per
 /// dispatch. Before the walk's buffers moved onto the step scratch arena that difference
 /// measured 509 — ≈2 heap allocations per extra scope walked, per dispatch. Measured
-/// 2026-08-20 it is **−3**: 1 914 allocations for 32 dispatches at depth 10 against 1 917 at
+/// 2026-08-20 it is **−3**: 1 882 allocations for 32 dispatches at depth 10 against 1 885 at
 /// depth 2, the two depths indistinguishable and the deeper walk marginally the cheaper.
 ///
 /// The bound is one allocation per extra dispatch, far under the ≥256 that a single
