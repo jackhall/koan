@@ -77,12 +77,12 @@ moved it.
 
 | shape | what it exercises | allocations | scaling term |
 |---|---|---|---|
-| `shapes/tail_loop.koan` | 100 tail-recursive steps | 20 310 | 154.0 per step, linear |
-| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 10 100 | ≈43 per dispatch, mildly superlinear |
-| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 5 665 | — |
-| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 7 709 | 63.9 per dispatch |
-| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 7 342 | — |
-| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 9 383 | 63.8 per dispatch |
+| `shapes/tail_loop.koan` | 100 tail-recursive steps | 18 893 | 140.0 per step, linear |
+| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 9 463 | ≈38 per dispatch, mildly superlinear |
+| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 5 606 | — |
+| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 7 523 | 59.9 per dispatch |
+| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 7 203 | — |
+| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 9 117 | 59.8 per dispatch |
 | *(empty program)* | interpreter startup and builtin seeding | 2 874 | — |
 
 No shape can use comments: koan has none, and `#` is reserved for quoting. The prose
@@ -99,16 +99,16 @@ non-admitting same-key overload, so every dispatch strict- and hard-rejects at a
 scopes before picking at the root. Between them the three axes cover where the execute path's
 allocation traffic scales.
 
-The step term is exactly linear — 154.0 flat at 10, 50, 100 and 200 steps. The dispatch term
-is not: marginal cost rises 41.9 → 42.5 → 43.4 → 44.3 across the 16→32, 32→64, 64→128 and
+The step term is exactly linear — 140.0 flat at 10, 50, 100 and 200 steps. The dispatch term
+is not: marginal cost rises 36.9 → 37.5 → 38.4 → 39.3 across the 16→32, 32→64, 64→128 and
 128→256 operand doublings, so a chain pays slightly more per operator the longer it gets.
-Below 16 operands the term sits flat near 41.3 and the fixed cost swamps it, so the rise is
+Below 16 operands the term sits flat near 36.3 and the fixed cost swamps it, so the rise is
 only readable over the larger sizes. Whatever drives it is unmeasured; the shapes are sized
 to the linear-enough middle rather than to the tail.
 
 The walk term is **flat in depth**. Differencing the two call counts at one depth cancels
-parse and setup and leaves 32 dispatches' marginal cost: 2 044 allocations at depth 2 against
-2 041 at depth 10 — 63.9 and 63.8 per dispatch, the two depths indistinguishable. The walk's
+parse and setup and leaves 32 dispatches' marginal cost: 1 917 allocations at depth 2 against
+1 914 at depth 10 — 59.9 and 59.8 per dispatch, the two depths indistinguishable. The walk's
 per-scope buffers are hosted on the drain's step scratch arena
 ([dag-scheduler.md § The drain protocol](../workgraph/design/dag-scheduler.md#the-drain-protocol)),
 so a deeper walk bumps more scratch bytes and takes no heap allocation for them. The grid's
@@ -119,7 +119,7 @@ dispatch inside a single statement's fold.
 ## The regression test
 
 `tests/allocation_baseline.rs` asserts the two absolute shapes' bracketed counts against a
-stated bound — 18 551 for the loop, 8 341 for the chain, each carrying 41 allocations of
+stated bound — 17 134 for the loop, 7 704 for the chain, each carrying 41 allocations of
 headroom. The bounds are tight by design: the margin is smaller than the 100 (loop) or 127
 (chain) a single new allocation on the scaling path would add, so one added allocation fails
 a test. Rebaselining is meant to be a deliberate edit, and the failure message says so.
