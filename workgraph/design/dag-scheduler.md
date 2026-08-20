@@ -179,8 +179,9 @@ loop — the embedder supplies only the step callback. Per popped slot the drain
 takes the stored work, reads every dep edge's delivered resident (releasing
 the edge as it reads), and hands the callback one
 [`Step`](../src/scheduler/drain.rs) bundle: the slot's id, a clone of its
-memory anchor, the still-sealed continuation, and the dep results in dep
-order. The callback opens the continuation at its own step brand, runs the
+memory anchor, the still-sealed continuation, the dep results in dep
+order, and a handle on the step's **scratch arena**. The callback opens the
+continuation at its own step brand, runs the
 step, and returns a [`StepVerdict`](../src/scheduler/drain.rs); returning the
 verdict *is* applying it, each arm mapping onto exactly one internal
 transition — `Done` (finalize and deliver), `Forward` (finalize through an
@@ -189,6 +190,26 @@ with a fresh anchor the embedder populated before returning), or `Alias`
 (splice onto the producer behind a parked source edge). The "slot sits empty
 until a verdict lands" contract and the "dep edges released exactly once" rule
 are both structural: the embedder never touches a dep edge.
+
+**The scratch arena is the drain's, one bump for the whole loop.** A staging buffer built,
+read and dropped inside one step belongs there rather than on the global heap or in the
+slot's memory region — a region is reclaimed when its *frame* dies, so step-transient
+staging put there accumulates across a tail-replacing slot's steps, while the drain
+`reset`s the scratch bump at the top of every pop and hands out a fresh
+[`BumpAllocator`](../src/witnessed/bump.rs) over it. `reset` retains the largest chunk, so
+a steady-state loop takes no allocator syscall for scratch after warm-up. Once per pop is
+structural, not a discipline: the loop is the only place a step is invoked, and neither
+`apply`'s self-recursion nor a mid-step submission re-enters it.
+
+Confinement is the handle's own lifetime. The step callback's bound names it elided, hence
+higher-ranked, while a verdict's `'work` is fixed before the bump exists — so a
+scratch-hosted buffer cannot reach a `StepVerdict`, a park's `Deps`, or a `Replace`
+continuation. That is a borrow-check fact rather than a rule the embedder keeps, and
+[`drive_scratch`](../src/scheduler/drain.rs) pins it with a `compile_fail` doctest for
+scratch-hosted code with no scheduler to run under. Bump deallocation is a no-op and
+`grow` extends in place only for the newest allocation, so a scratch collection that grows
+abandons its old buffer as dead bytes until the next reset: a buffer whose final length is
+known is built with that capacity.
 
 Slot retirement is a workload hook, not a call-site protocol:
 [`Workload::retiring`](../src/scheduler/workload.rs) is invoked exactly once

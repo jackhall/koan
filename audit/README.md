@@ -77,33 +77,52 @@ moved it.
 
 | shape | what it exercises | allocations | scaling term |
 |---|---|---|---|
-| `shapes/tail_loop.koan` | 100 tail-recursive steps | 22 537 | 176.0 per step, linear |
-| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 10 867 | ≈49 per dispatch, mildly superlinear |
+| `shapes/tail_loop.koan` | 100 tail-recursive steps | 20 310 | 154.0 per step, linear |
+| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 10 100 | ≈43 per dispatch, mildly superlinear |
+| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 5 665 | — |
+| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 7 709 | 63.9 per dispatch |
+| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 7 342 | — |
+| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 9 383 | 63.8 per dispatch |
 | *(empty program)* | interpreter startup and builtin seeding | 2 874 | — |
 
-Neither shape can use comments: koan has none, and `#` is reserved for quoting. The prose
+No shape can use comments: koan has none, and `#` is reserved for quoting. The prose
 that would have headed each file is here instead.
 
 `tail_loop.koan` is a tail-recursive countdown, so TCO holds the node table and the regions
 flat and its total is a per-*step* cost rather than a per-frame one. `operator_chain.koan`
 is one flat left fold, so every `+` is a dispatch — a bucket walk, a pick, and a
-working-expression rebuild — and its total is a per-*dispatch* cost. Between them they cover
-the two places the execute path's allocation traffic scales.
+working-expression rebuild — and its total is a per-*dispatch* cost. The four
+`scope_walk_*.koan` shapes are a depth × call-count grid over the third axis, how far a
+dispatch's **scope walk** reaches: at each depth, an innermost body of *m* `PROBE y`
+statements sits under *n* nested scopes that each shadow the `PROBE` bucket with a
+non-admitting same-key overload, so every dispatch strict- and hard-rejects at all *n* shadow
+scopes before picking at the root. Between them the three axes cover where the execute path's
+allocation traffic scales.
 
-The step term is exactly linear — 176.0 flat at 10, 50, 100 and 200 steps. The dispatch term
-is not: marginal cost rises 47.9 → 48.5 → 49.4 → 50.3 across the 16→32, 32→64, 64→128 and
+The step term is exactly linear — 154.0 flat at 10, 50, 100 and 200 steps. The dispatch term
+is not: marginal cost rises 41.9 → 42.5 → 43.4 → 44.3 across the 16→32, 32→64, 64→128 and
 128→256 operand doublings, so a chain pays slightly more per operator the longer it gets.
-Below 16 operands the term sits flat near 47.4 and the fixed cost swamps it, so the rise is
+Below 16 operands the term sits flat near 41.3 and the fixed cost swamps it, so the rise is
 only readable over the larger sizes. Whatever drives it is unmeasured; the shapes are sized
 to the linear-enough middle rather than to the tail.
 
+The walk term is **flat in depth**. Differencing the two call counts at one depth cancels
+parse and setup and leaves 32 dispatches' marginal cost: 2 044 allocations at depth 2 against
+2 041 at depth 10 — 63.9 and 63.8 per dispatch, the two depths indistinguishable. The walk's
+per-scope buffers are hosted on the drain's step scratch arena
+([dag-scheduler.md § The drain protocol](../workgraph/design/dag-scheduler.md#the-drain-protocol)),
+so a deeper walk bumps more scratch bytes and takes no heap allocation for them. The grid's
+absolute per-dispatch figure is higher than the operator chain's because each `PROBE y` is a
+whole statement — its own node, frame and working expression — where a chain operand is one
+dispatch inside a single statement's fold.
+
 ## The regression test
 
-`tests/allocation_baseline.rs` asserts each shape's bracketed count against a stated bound —
-20 778 for the loop, 9 108 for the chain, each carrying 41 allocations of headroom. The
-bounds are tight by design: the margin is smaller than the 100 (loop) or 127 (chain) a single
-new allocation on the scaling path would add, so one added allocation fails a test.
-Rebaselining is meant to be a deliberate edit, and the failure message says so.
+`tests/allocation_baseline.rs` asserts the two absolute shapes' bracketed counts against a
+stated bound — 18 551 for the loop, 8 341 for the chain, each carrying 41 allocations of
+headroom. The bounds are tight by design: the margin is smaller than the 100 (loop) or 127
+(chain) a single new allocation on the scaling path would add, so one added allocation fails
+a test. Rebaselining is meant to be a deliberate edit, and the failure message says so.
 
 Those figures sit 1 759 under the whole-program table above — the same gap for both shapes.
 Process startup is ≈8 of it, and the lexer's `LazyLock<Regex>` (`src/parse/tokens.rs:29`) is
@@ -112,3 +131,9 @@ absorbs. A tight bound cannot straddle a cost that large, and it lands on whiche
 reaches the parser first — so `allocations_for` runs each shape once *outside* its bracket.
 Warming with the shape's own source rather than a stand-in is what makes that total: an empty
 program never reaches the number path, so it leaves the regex cold.
+
+The scope-walk grid is held to a *shape* rather than a count. Its test differences the two
+depths' per-dispatch costs and bounds the growth at one allocation per extra dispatch — far
+under the ≥256 a single reintroduced per-scope allocation would add over 8 extra scopes ×
+32 dispatches. A shape bound needs no rebaselining when an unrelated term moves, which is
+what suits it to a claim about depth-independence rather than about a total.

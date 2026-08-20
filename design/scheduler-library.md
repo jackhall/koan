@@ -222,8 +222,10 @@ Working names throughout; shapes are the commitment, identifiers are not.
 [`Scheduler::drain`](../workgraph/src/scheduler/drain.rs) owns the
 pop/take/step/apply loop. Per popped slot it hands the embedder's step
 callback one `Step` bundle — the slot's id, its memory anchor, the sealed
-continuation, and every dep's delivered resident **pre-read in dep order with
-its edge already released** — and applies the
+continuation, every dep's delivered resident **pre-read in dep order with
+its edge already released**, and a handle on the **step scratch arena** (a bump
+the drain owns and resets at every pop, whose per-pop lifetime is what keeps a
+scratch-hosted buffer out of any verdict) — and applies the
 [`StepVerdict`](../workgraph/src/scheduler/drain.rs) the callback returns:
 `Done` (finalize and deliver), `Forward` (finalize through an already-filled
 edge), `Replace` (tail-reinstall, optionally with a fresh anchor), or `Alias`

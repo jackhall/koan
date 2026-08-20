@@ -80,8 +80,13 @@ data, and a single harness method applies them. The three pieces:
   [`DecideCtx`](../../src/machine/execute/decide/ctx.rs) carries the ambient
   step values a shape handler reads while deciding: the active slot's scope
   (`current_scope`), the chain (`chain_deref`), the installing statement's
-  identity, the step's binding-write sink, the type registry, and the run's
-  program storage capability. It holds **no scheduler borrow at all** — every
+  identity, the step's binding-write sink, the type registry, the run's
+  program storage capability, and the step's **scratch arena** (`scratch`) —
+  the drain's per-pop bump, carried at `'step` and not one lifetime longer, so a
+  staging buffer built through it that reached an `Outcome`, a park's deps or a
+  stored continuation would be a borrow-check error rather than a convention
+  ([dag-scheduler.md § The drain protocol](../../workgraph/design/dag-scheduler.md#the-drain-protocol)).
+  It holds **no scheduler borrow at all** — every
   graph question a decide could ask is either the install door's answer when
   the harness wires the park (filled-or-parked) or foreclosed by the lexical
   well-foundedness rule (no cycles can form, so nothing probes reachability).

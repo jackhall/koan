@@ -125,14 +125,23 @@ than a relaxation of the `Copy` bound that would admit both and everything else 
 
 **The verbs are defined once, on the allocator handle.**
 [`BumpAllocator<'b>`](../src/witnessed/bump.rs) is a `Copy`, brand-carrying
-wrapper over the region's `Bump`, and it is where `value` / `slice` /
+wrapper over a `Bump`, and it is where `value` / `slice` /
 `slice_from_iter` / `text` live. Every surface that can reach a region's bytes — `RegionHandle::allocator`,
 `FoldedPlacement::allocator`, an embedder's own brand veneer — hands back that
 one type rather than restating a verb set of its own, so the `Copy` guard and its
-rationale are written once. Because the handle's `'b` is the region's brand,
-nothing built through one outlives the region whose bytes it holds; where `'b` is
-a rank-2 fold brand, that same lifetime is the confinement, which is why the
-allocator needs no mint privacy of its own to serve as a fold's write surface.
+rationale are written once. The wrapping constructor is `pub(crate)`, so a handle
+exists only over a bump the library hands one out for, and `'b` is whatever brand
+that hand-out chose: nothing built through one outlives the bump whose bytes it
+holds. At this tier `'b` is the region's own brand, and where it is a rank-2 fold
+brand that same lifetime is the confinement — which is why the allocator needs no
+mint privacy of its own to serve as a fold's write surface.
+
+The handle's other home is the scheduler's **step scratch** bump
+([dag-scheduler.md § The drain protocol](dag-scheduler.md#the-drain-protocol)), whose
+bytes are unpriced and reclaimed wholesale by a per-pop `reset` rather than named
+byte-by-byte. Nothing else on this page applies there: the placement verbs and their
+`Copy` guard are about values a *region* stores, while a scratch collection is a stack
+local whose elements drop normally when it falls.
 
 **A fill may allocate from the bump it is filling.** `slice_from_iter` reserves
 its destination run before it computes the first element, so the iterator's own

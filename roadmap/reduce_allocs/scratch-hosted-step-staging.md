@@ -20,9 +20,6 @@ dropped inside one step, and each takes a heap allocation:
   `Vec<ProducerId>` built from the edge list purely to satisfy
   `clear_placeholders_for_producers(&[ProducerId])`, where `ProducerId::from_scheduler_edge`
   is a conversion.
-- `split_working_body`, `enter_block` and `dispatch_body`
-  ([src/machine/execute/harness.rs](../../src/machine/execute/harness.rs)) — a
-  `Vec<WorkingExpression>` and a `Vec<NodeId>` per block entry.
 
 Every one of them has an exactly-known length at construction, none escapes the step, and
 none has a fix that does not either distort a door's signature or relocate the buffer.
@@ -41,21 +38,19 @@ none has a fix that does not either distort a door's signature or relocate the b
 
 **Directions.**
 
-- *Buffers reachable only before the step brand opens — open.* `dep_sources` is built in
-  `Host::step` before `sealed_continuation.open`, where `&mut self` is held, so the
-  scratch handle is not reachable through `DecideCtx` there. Options: take the scratch
-  borrow out of `self` before the `&mut` methods run, move the re-branding inside the
-  open, or leave `dep_sources` on the heap. Recommended: move it inside the open, where
-  the step's coverage is already in scope.
-- *Block fan-out buffers — open.* `split_working_body` / `enter_block` / `dispatch_body`
-  produce runs whose consumers sit on the harness side, past the decide's brand. Either
-  they move with the fan-out or they stay heap-backed; decide once the arena's reach on
-  the harness side is settled.
+- *Buffers reachable only before the step brand opens — decided.* The scratch handle
+  arrives in `Host::step` as a `Step` field, disjoint from the `&mut self` borrows held
+  before `sealed_continuation.open`, so `dep_sources` is arena-hosted where it is built
+  today; nothing needs to move inside the open.
 
 ## Dependencies
 
-**Requires:**
-
-- [Step-scoped scratch arena](step-scratch-arena.md) — this item is the fan-out over that arena's remaining consumers.
+**Requires:** none — the step scratch arena this item fans out over is shipped: the drain
+owns the bump, hands its handle out on `Step::scratch`
+([workgraph/src/scheduler/drain.rs](../../workgraph/src/scheduler/drain.rs)), and it reaches
+decide code at `'step` through
+[`DecideCtx::scratch`](../../src/machine/execute/decide/ctx.rs). The dispatch bucket walk
+([src/machine/execute/decide/resolve_dispatch.rs](../../src/machine/execute/decide/resolve_dispatch.rs))
+is its first consumer and the pattern the buffers below follow.
 
 **Unblocks:** none.
