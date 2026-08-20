@@ -9,6 +9,7 @@
 //! - [`drain`] — the run protocol: verdict arms, step-start dep reads, the retirement hook's
 //!   exactly-once contract and ordering, and the deadlock report.
 //! - [`edges`] — the edge slab's alloc/release recycling, the install door's branches, and splice.
+//! - [`recycling`] — the steady-state allocation claim: park/wake/re-park on a fixed shape.
 //! - [`reinstall`] — the replace boundary's timelines, under Miri (tree borrows).
 
 use std::rc::Rc;
@@ -24,6 +25,7 @@ mod continuation;
 mod delivery;
 mod drain;
 mod edges;
+mod recycling;
 mod reinstall;
 
 /// The inter-node value family: a **borrow into a region**, which is what makes a delivery verdict

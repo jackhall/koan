@@ -43,4 +43,6 @@
 //! still reach it, while a production build has no such surface to accrete against.
 
 pub mod scheduler;
+#[cfg(test)]
+mod tests;
 pub mod witnessed;
