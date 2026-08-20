@@ -27,7 +27,7 @@ where
     W: Workload<Error = ()>,
 {
     let _ = sched.take_for_run(id);
-    sched.finalize(id, output);
+    crate::scheduler::drive_scratch(|scratch| sched.finalize(id, output, scratch));
 }
 
 /// Read the `u32` resting on `edge`, copied out from inside the read.
@@ -134,7 +134,8 @@ fn a_dead_consumers_edges_are_skipped_and_recycled() {
 
     let output = terminal::<TestWorkload>(&producer_anchor, 7);
     drop(producer_anchor);
-    sched.finalize(producer, Ok(output)); // no `take_for_run`: the slot is still parked-shaped here
+    // No `take_for_run`: the slot is still parked-shaped here.
+    crate::scheduler::drive_scratch(|scratch| sched.finalize(producer, Ok(output), scratch));
 
     assert_eq!(
         sched.edge_free_list_len(),

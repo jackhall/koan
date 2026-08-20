@@ -39,7 +39,7 @@ fn finalize_with_error(sched: &mut Scheduler<TestWorkload>, id: NodeId) {
 /// dep-free slots needs, where pop order is not the thing under test.
 fn finalize_in_place(sched: &mut Scheduler<TestWorkload>, id: NodeId) {
     let (_work, _anchor) = sched.take_for_run(id);
-    sched.finalize(id, Err(()));
+    crate::scheduler::drive_scratch(|scratch| sched.finalize(id, Err(()), scratch));
 }
 
 /// A destination owner: an anchor the caller pins for the whole test, standing in for the frame a

@@ -191,13 +191,30 @@ impl<W: Workload> Scheduler<W> {
     /// delivers into the region that placeholder named, a dep on spawned sub-work into the region
     /// that sub-work's source named.
     ///
-    /// The returned `Vec<InstalledEdge>` is index-aligned with `sources`. A *filled* verdict is the
+    /// The returned verdict list is index-aligned with `sources`. A *filled* verdict is the
     /// caller's to act on — its producer has already delivered, so an errored one propagates at once
     /// rather than waiting for a wake that will not come. A *parked* one is asserted acyclic in
     /// debug builds: the embedder's lexical dispatch rule means a park can never wait forward, so a
     /// cycling edge here is an upstream bug, not a runtime condition.
-    pub fn install_deps(&mut self, consumer: NodeId, sources: &[EdgeId]) -> Vec<InstalledEdge> {
-        let mut installed = Vec::with_capacity(sources.len());
+    pub fn install_deps(
+        &mut self,
+        consumer: NodeId,
+        sources: &[EdgeId],
+    ) -> allocator_api2::vec::Vec<InstalledEdge> {
+        self.install_deps_in(consumer, sources, allocator_api2::alloc::Global)
+    }
+
+    /// [`install_deps`](Self::install_deps), hosting its verdict list on `alloc`. A step wires its
+    /// deps through this one with the drain's scratch handle
+    /// ([`Step::scratch`](drain::Step::scratch)): the verdicts are read and dropped inside the same
+    /// pop, so the list belongs on the arena that pop resets.
+    pub fn install_deps_in<A: allocator_api2::alloc::Allocator>(
+        &mut self,
+        consumer: NodeId,
+        sources: &[EdgeId],
+        alloc: A,
+    ) -> allocator_api2::vec::Vec<InstalledEdge, A> {
+        let mut installed = allocator_api2::vec::Vec::with_capacity_in(sources.len(), alloc);
         for &source in sources {
             let verdict = self.install_edge_from(source);
             self.edges.bind_consumer(verdict.edge_id(), consumer);

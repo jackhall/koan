@@ -22,7 +22,7 @@ use bumpalo::Bump;
 use super::nodes::NodeWork;
 use super::workload::{DeliveredTerminal, SealedTerminal};
 use super::{EdgeId, NodeId, Scheduler, Workload};
-use crate::witnessed::{BumpAllocator, SealedPinned};
+use crate::witnessed::{BumpAllocator, BumpVec, SealedPinned};
 
 /// The closed protocol between the embedder's step callback and the scheduler's apply. Every arm
 /// maps onto exactly one internal transition, so returning a verdict *is* applying it.
@@ -66,8 +66,9 @@ pub struct Step<'scratch, W: Workload> {
     pub continuation: SealedPinned<W::Continuation, Rc<W::Frame>>,
     /// Each dep edge's delivered resident, in dep order, an errored dep in its slot. The edges
     /// themselves are already released — the values live in their destination regions, not in the
-    /// edges.
-    pub dep_results: Vec<Result<SealedTerminal<W>, W::Error>>,
+    /// edges. Hosted on [`scratch`](Self::scratch): the list is read inside the step it belongs to
+    /// and dies with the pop.
+    pub dep_results: BumpVec<'scratch, Result<SealedTerminal<W>, W::Error>>,
 }
 
 /// Slots still parked after the queues drained, each waiting on a dependency that can no longer
@@ -122,13 +123,16 @@ impl<W: Workload> Scheduler<W> {
             // their residents are in hand, so they release before the step runs; a `Replace`
             // installs fresh edges onto the row this take just emptied, so nothing releases twice.
             let dep_edges = self.deps.take_deps(id);
-            let dep_results: Vec<Result<SealedTerminal<W>, W::Error>> = dep_edges
-                .all_ids()
-                .map(|edge| self.edge_resident(edge))
-                .collect();
+            let mut dep_results =
+                BumpVec::with_capacity_in(dep_edges.len(), BumpAllocator::over(&scratch));
+            dep_results.extend(dep_edges.all_ids().map(|edge| self.edge_resident(edge)));
             for edge in dep_edges.all_ids() {
                 self.release_edge(edge);
             }
+            // The row takes its buffer back before the step runs, not after: a mid-step `Replace`
+            // installs the next incarnation's dep list onto this row, and it must land in the
+            // recycled allocation.
+            self.deps.restore_deps(id, dep_edges);
             let verdict = step(
                 self,
                 Step {
@@ -144,12 +148,12 @@ impl<W: Workload> Scheduler<W> {
                     // Retire before the walk: a released owned edge on this slot's own notify list
                     // is skipped and recycled rather than delivered into.
                     self.release_retiring(&anchor);
-                    self.finalize(id, output);
+                    self.finalize(id, output, BumpAllocator::over(&scratch));
                 }
                 StepVerdict::Forward(edge) => {
                     // Retire after the read: the edge the verdict names is on the slot's owned
                     // list, and the read goes through it.
-                    self.finalize_forward(id, edge);
+                    self.finalize_forward(id, edge, BumpAllocator::over(&scratch));
                     self.release_retiring(&anchor);
                 }
                 StepVerdict::Replace {

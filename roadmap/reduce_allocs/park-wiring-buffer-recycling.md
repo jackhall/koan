@@ -19,10 +19,12 @@ On the workgraph side, `install_for_slot` assigns a fresh `ResolvedDeps` and
 ([workgraph/src/scheduler/dep_graph.rs](../../workgraph/src/scheduler/dep_graph.rs)), so a
 slot recycled off the free list drops the buffer its predecessor grew and starts from
 zero. The drain allocates a fresh `dep_results` vector per wake
-([workgraph/src/scheduler/drain.rs](../../workgraph/src/scheduler/drain.rs)), the delivery
-walk a `woken` vector per finalize
-([workgraph/src/scheduler/lifecycle.rs](../../workgraph/src/scheduler/lifecycle.rs)), and
-`Workload::retiring` returns a fresh `Vec<EdgeId>` per verdict.
+([workgraph/src/scheduler/drain.rs](../../workgraph/src/scheduler/drain.rs)) and the
+delivery walk a `woken` vector per finalize
+([workgraph/src/scheduler/lifecycle.rs](../../workgraph/src/scheduler/lifecycle.rs)).
+(`Workload::retiring` is not on this list: koan's impl is a `mem::take` of the anchor's
+owned-edge record and the default returns `Vec::new()` — zero allocations per verdict —
+so it stays as it is.)
 
 Every buffer above except the slot rows is born and consumed within one drain pop. The
 rows alone are park data — alive from install to wake — so they are the only class the
@@ -43,7 +45,10 @@ step scratch arena cannot host.
   `dep_results`, and finalize's `woken` — are hosted on the step scratch arena rather
   than freshly heap-allocated.
 - The recorded allocation count for a program that parks and wakes the same slot shape
-  repeatedly is constant after the first park.
+  repeatedly is constant after the first park — measured scheduler-side, by a workgraph
+  counting-allocator test over a fixed park/wake shape; the koan-level
+  `tests/allocation_baseline.rs` bounds are re-measured and lowered deliberately
+  alongside it.
 
 **Directions.**
 
@@ -53,14 +58,16 @@ step scratch arena cannot host.
   koan-side sites included, since `wire_deps` runs inside `apply`, inside the step — so
   the arena's confinement covers them. The slot rows are recycled in place instead: they
   are cross-pop park data, outside any arena's reach.
-- *Row-recycling shape — open.* Whether the drain swaps the row's vectors with
-  drain-owned scratch buffers (capacity circulates through a rotating buffer) or the
-  take verbs hand the buffer back to the row cleared once the walk is done. Recommended:
-  decide in the plan against the borrow structure of `drain`, `finalize`, and
-  `splice_forward`.
-- *`Workload::retiring`'s vector — open.* Whether the trait method keeps returning a
-  heap `Vec<EdgeId>`, takes a caller buffer, or returns an arena-hosted vec.
-  Recommended: settle alongside the `Step`/drain API changes this item already makes.
+- *Row-recycling shape — decided: take-and-restore.* The take verbs get restore
+  counterparts that hand the buffer back to its own row, cleared — capacity stays owned
+  by the row that grew it, and the drain keeps no buffer state. All three consumers
+  (`drain`'s dep read, `finalize`'s walk, `splice_forward`) must move the vector out to
+  call `&mut self` methods anyway; the dep buffer is restored *before* the step callback
+  runs, so a mid-step `Replace` installs into the recycled buffer.
+- *`Workload::retiring` — decided: unchanged.* Zero allocations per verdict already (see
+  the Problem note), so there is nothing to recycle.
+
+The implementation plan is `scratch/park-wiring-buffer-recycling-plan.md` (untracked).
 
 ## Dependencies
 

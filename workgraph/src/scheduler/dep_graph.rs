@@ -66,7 +66,9 @@ impl<W: Workload> DepGraph<W> {
                 "a recycled row's notify list was drained by the walk that reclaimed the slot",
             );
             row.pending = 0;
-            row.deps = ResolvedDeps::new();
+            // Cleared, not replaced: the row keeps the buffer a previous incarnation grew, so a
+            // steady-state graph shape stops allocating dep lists after warm-up.
+            row.deps.clear();
             row.anchor = None;
         } else {
             self.rows.push(DepRow::default());
@@ -104,9 +106,25 @@ impl<W: Workload> DepGraph<W> {
     }
 
     /// Take the producer's whole notify list. The row keeps none of it: the finalize walk fills or
-    /// recycles every entry, and the slot reclaims behind it.
+    /// recycles every entry, and the slot reclaims behind it. Every taker hands the buffer back
+    /// through [`restore_notify`](Self::restore_notify) once it is done reading.
     pub(super) fn take_notify(&mut self, producer: NodeId) -> Vec<EdgeId> {
         std::mem::take(&mut self.row_mut(producer).notify)
+    }
+
+    /// Hand a taken notify buffer back to the row it came off, emptied. Capacity stays owned by the
+    /// row that grew it, so the next incarnation of a recycled slot wires into the same allocation.
+    pub(in crate::scheduler) fn restore_notify(
+        &mut self,
+        producer: NodeId,
+        mut notify: Vec<EdgeId>,
+    ) {
+        notify.clear();
+        debug_assert!(
+            self.row(producer).notify.is_empty(),
+            "a restore lands on the row the take emptied; slot {producer:?} was re-listed meanwhile",
+        );
+        self.row_mut(producer).notify = notify;
     }
 
     pub(in crate::scheduler) fn record_dep(&mut self, consumer: NodeId, edge: EdgeId) {
@@ -115,6 +133,18 @@ impl<W: Workload> DepGraph<W> {
 
     pub(in crate::scheduler) fn take_deps(&mut self, id: NodeId) -> ResolvedDeps {
         std::mem::take(&mut self.row_mut(id).deps)
+    }
+
+    /// Hand a taken dep list back to the row it came off, emptied — the drain's half of the same
+    /// take-and-restore pair. It runs *before* the step callback, so a mid-step install writes the
+    /// next incarnation's list into the recycled buffer rather than a fresh one.
+    pub(in crate::scheduler) fn restore_deps(&mut self, id: NodeId, mut deps: ResolvedDeps) {
+        deps.clear();
+        debug_assert!(
+            self.row(id).deps.is_empty(),
+            "a restore lands on the row the take emptied; slot {id:?} was re-installed meanwhile",
+        );
+        self.row_mut(id).deps = deps;
     }
 
     pub(in crate::scheduler) fn notify_of(&self, producer: NodeId) -> &[EdgeId] {
@@ -131,8 +161,9 @@ impl<W: Workload> DepGraph<W> {
 
     /// Append re-pointed entries to `producer`'s notify list. Precondition: each moved edge's
     /// producer field already names `producer`, so the entry and the list it sits on agree.
-    pub(in crate::scheduler) fn extend_notify(&mut self, producer: NodeId, moved: Vec<EdgeId>) {
-        self.row_mut(producer).notify.extend(moved);
+    /// Takes a slice rather than the vector, so the spliced slot keeps its own buffer to restore.
+    pub(in crate::scheduler) fn extend_notify(&mut self, producer: NodeId, moved: &[EdgeId]) {
+        self.row_mut(producer).notify.extend_from_slice(moved);
     }
 
     /// Install the slot's anchor at alloc time — there is no previous anchor to displace.

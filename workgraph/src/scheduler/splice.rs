@@ -31,7 +31,10 @@ impl<W: Workload> Scheduler<W> {
                 true
             }
         });
-        self.deps.extend_notify(producer, moved);
+        self.deps.extend_notify(producer, &moved);
+        // The entries are copied onto the producer's list, so the buffer itself goes back to the
+        // spliced slot's row for its next incarnation.
+        self.deps.restore_notify(slot, moved);
         self.deps.clear_anchor(slot);
         self.store.free_one(slot);
     }

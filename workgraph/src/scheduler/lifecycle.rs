@@ -2,7 +2,7 @@
 //! destination waiting on it, and the slot reclaim that follows it unconditionally. See
 //! [design/dag-scheduler.md § Delivery at finalize](../../design/dag-scheduler.md#delivery-at-finalize).
 
-use crate::witnessed::{Delivered, Retained};
+use crate::witnessed::{BumpAllocator, BumpVec, Delivered, Retained};
 
 use super::workload::{DeliveredTerminal, SealedTerminal};
 use super::{EdgeId, NodeId, Scheduler, Workload};
@@ -26,10 +26,14 @@ impl<W: Workload> Scheduler<W> {
     /// The envelope is held across the whole walk, so its transit pins cover every adopt. The slot
     /// then reclaims unconditionally, with no retention condition of any kind, because delivery has
     /// already moved everything this producer made into regions that outlive it.
+    ///
+    /// `scratch` is the popped step's arena: the wake list is walk-transient, so it is hosted there
+    /// rather than heap-allocated per finalize.
     pub(in crate::scheduler) fn finalize(
         &mut self,
         id: NodeId,
         output: Result<DeliveredTerminal<W>, W::Error>,
+        scratch: BumpAllocator<'_>,
     ) {
         let mut notify = self.deps.take_notify(id);
         // Scrubbed up front so the walk below runs over live entries alone and the look-back scan
@@ -43,7 +47,9 @@ impl<W: Workload> Scheduler<W> {
                 true
             }
         });
-        let mut woken: Vec<NodeId> = Vec::new();
+        // At most one wake per live entry — sized up front, since a bump-hosted vector that grows
+        // abandons the buffer it outgrew.
+        let mut woken: BumpVec<'_, NodeId> = BumpVec::with_capacity_in(notify.len(), scratch);
         for i in 0..notify.len() {
             let edge = notify[i];
             let resident = match self.shared_resident(&notify[..i], edge) {
@@ -63,6 +69,9 @@ impl<W: Workload> Scheduler<W> {
         for consumer in woken {
             self.queues.push_woken(consumer);
         }
+        // The `retain` scrub above compacted in place, so the buffer the row gets back carries the
+        // capacity this walk read through.
+        self.deps.restore_notify(id, notify);
         self.deps.clear_anchor(id);
         self.store.free_one(id);
     }
@@ -72,12 +81,17 @@ impl<W: Workload> Scheduler<W> {
     /// resident back into an envelope under its own destination's owner and re-entering the
     /// ordinary walk costs one relocation per distinct onward destination and keeps `finalize` free
     /// of a special case.
-    pub(in crate::scheduler) fn finalize_forward(&mut self, slot: NodeId, edge: EdgeId) {
+    pub(in crate::scheduler) fn finalize_forward(
+        &mut self,
+        slot: NodeId,
+        edge: EdgeId,
+        scratch: BumpAllocator<'_>,
+    ) {
         let output = match self.edges.resident_duplicate(edge) {
             Ok(cell) => Ok(Delivered::lift(cell, self.edges.destination_host(edge))),
             Err(error) => Err(error),
         };
-        self.finalize(slot, output);
+        self.finalize(slot, output, scratch);
     }
 
     /// The look-back half of per-destination dedup. `None` when this destination is new to the walk

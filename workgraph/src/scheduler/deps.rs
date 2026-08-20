@@ -16,6 +16,9 @@
 //! See [design/dag-scheduler.md § The dep row and its
 //! invariants](../../design/dag-scheduler.md#the-dep-row-and-its-invariants).
 
+use allocator_api2::alloc::{Allocator, Global};
+use allocator_api2::vec::Vec as AllocVec;
+
 use super::EdgeId;
 
 /// One dep, in the phase the caller can name it in: [`Producer`](Dep::Producer) carries the
@@ -28,19 +31,47 @@ pub enum Dep<R> {
 }
 
 /// A dep-list builder: one vector, in append order, which is the order results come back in.
-/// Generic in the embedder's request type `R` — past realization every dep is one [`EdgeId`].
+/// Generic in the embedder's request type `R` — past realization every dep is one [`EdgeId`] — and
+/// in the allocator `A` its entries are hosted on.
 ///
 /// A dep is named by the **source edge** it is wired off, never by a producer: the install door
 /// ([`Scheduler::install_deps`](super::Scheduler::install_deps)) mints the consumer's own edge off
 /// each source, so the producer currency never leaves the scheduler.
-pub struct Deps<R> {
-    entries: Vec<Dep<R>>,
+///
+/// `A` defaults to [`Global`], which is what a submission door outside any step builds on. A park
+/// wired *inside* a step passes the drain's scratch handle instead
+/// ([`Step::scratch`](super::Step::scratch)), so the list dies with the pop that built it. Each
+/// constructor comes in a pair: the bare name fixes `Global`, the `_in` suffix takes the allocator.
+/// Prefer [`with_capacity_in`](Self::with_capacity_in) on a bump — a bump-hosted vector that grows
+/// abandons its old buffer.
+pub struct Deps<R, A: Allocator = Global> {
+    entries: AllocVec<Dep<R>, A>,
 }
 
 impl<R> Deps<R> {
     pub fn new() -> Self {
+        Deps::new_in(Global)
+    }
+
+    pub fn from_producers(ids: impl IntoIterator<Item = EdgeId>) -> Self {
+        Deps::from_producers_in(ids, Global)
+    }
+
+    pub fn from_requests(entries: impl IntoIterator<Item = R>) -> Self {
+        Deps::from_requests_in(entries, Global)
+    }
+}
+
+impl<R, A: Allocator> Deps<R, A> {
+    pub fn new_in(alloc: A) -> Self {
         Deps {
-            entries: Vec::new(),
+            entries: AllocVec::new_in(alloc),
+        }
+    }
+
+    pub fn with_capacity_in(capacity: usize, alloc: A) -> Self {
+        Deps {
+            entries: AllocVec::with_capacity_in(capacity, alloc),
         }
     }
 
@@ -60,16 +91,18 @@ impl<R> Deps<R> {
         pos
     }
 
-    pub fn from_producers(ids: impl IntoIterator<Item = EdgeId>) -> Self {
-        let mut deps = Deps::new();
+    pub fn from_producers_in(ids: impl IntoIterator<Item = EdgeId>, alloc: A) -> Self {
+        let ids = ids.into_iter();
+        let mut deps = Deps::with_capacity_in(ids.size_hint().0, alloc);
         for id in ids {
             deps.on(id);
         }
         deps
     }
 
-    pub fn from_requests(entries: impl IntoIterator<Item = R>) -> Self {
-        let mut deps = Deps::new();
+    pub fn from_requests_in(entries: impl IntoIterator<Item = R>, alloc: A) -> Self {
+        let entries = entries.into_iter();
+        let mut deps = Deps::with_capacity_in(entries.size_hint().0, alloc);
         for entry in entries {
             deps.request(entry);
         }
@@ -88,7 +121,7 @@ impl<R> Deps<R> {
         self.entries.is_empty()
     }
 
-    pub fn into_entries(self) -> Vec<Dep<R>> {
+    pub fn into_entries(self) -> AllocVec<Dep<R>, A> {
         self.entries
     }
 }
@@ -119,6 +152,20 @@ impl ResolvedDeps {
     /// The edges in dep order, so a finish's result slice lines up with the list the builder wrote.
     pub fn all_ids(&self) -> impl Iterator<Item = EdgeId> + '_ {
         self.ids.iter().copied()
+    }
+
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    /// Empty the list while keeping the buffer, so a row handed its list back keeps the capacity it
+    /// grew. The recycling half of the take-and-restore pair the drain and the delivery walk run.
+    pub(crate) fn clear(&mut self) {
+        self.ids.clear();
     }
 }
 

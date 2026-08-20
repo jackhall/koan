@@ -697,7 +697,7 @@ impl<'run> Host<'run> {
         consumer: NodeId,
         brand: RegionBrand<'a>,
         deps: ParkDeps<'a>,
-    ) -> Vec<InstalledEdge> {
+    ) -> allocator_api2::vec::Vec<InstalledEdge> {
         let (sources, minted) = match deps {
             ParkDeps::List(list) => {
                 self.named_sources(sched, anchor, list, |host, sched, request| {
