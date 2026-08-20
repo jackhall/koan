@@ -1,0 +1,49 @@
+FN (PROBE x :Number) -> Number = (x + 1)
+FN (LEVELI y :Number) -> Number = (
+  FN (PROBE x :Str) -> Str = (x)
+  FN (LEVELII y :Number) -> Number = (
+    FN (PROBE x :Str) -> Str = (x)
+    FN (LEVELIII y :Number) -> Number = (
+      FN (PROBE x :Str) -> Str = (x)
+      FN (LEVELIIII y :Number) -> Number = (
+        FN (PROBE x :Str) -> Str = (x)
+        FN (LEVELIIIII y :Number) -> Number = (
+          FN (PROBE x :Str) -> Str = (x)
+          FN (LEVELIIIIII y :Number) -> Number = (
+            FN (PROBE x :Str) -> Str = (x)
+            FN (LEVELIIIIIII y :Number) -> Number = (
+              FN (PROBE x :Str) -> Str = (x)
+              FN (LEVELIIIIIIII y :Number) -> Number = (
+                FN (PROBE x :Str) -> Str = (x)
+                FN (LEVELIIIIIIIII y :Number) -> Number = (
+                  FN (PROBE x :Str) -> Str = (x)
+                  FN (LEVELIIIIIIIIII y :Number) -> Number = (
+                    FN (PROBE x :Str) -> Str = (x)
+                    PROBE y
+                    PROBE y
+                    PROBE y
+                    PROBE y
+                    PROBE y
+                    PROBE y
+                    PROBE y
+                    PROBE y
+                  )
+                  LEVELIIIIIIIIII y
+                )
+                LEVELIIIIIIIII y
+              )
+              LEVELIIIIIIII y
+            )
+            LEVELIIIIIII y
+          )
+          LEVELIIIIII y
+        )
+        LEVELIIIII y
+      )
+      LEVELIIII y
+    )
+    LEVELIII y
+  )
+  LEVELII y
+)
+PRINT (LEVELI 1)

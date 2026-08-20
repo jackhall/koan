@@ -20,12 +20,12 @@ cd "$(git rev-parse --show-toplevel)"
 
 cargo build --quiet --features alloc-count
 
-printf '%-24s %s\n' shape allocations
-printf '%-24s %s\n' ------------------------ -----------
+printf '%-26s %s\n' shape allocations
+printf '%-26s %s\n' -------------------------- -----------
 for shape in audit/shapes/*.koan; do
     # The count rides stderr beside any region-audit output; the shape's own PRINT goes to
     # stdout and is dropped. `|| true` keeps a shape that errors from aborting the sweep —
     # its missing row is the report.
     count="$(./target/debug/koan "$shape" 2>&1 >/dev/null | sed -n 's/^allocations: //p' || true)"
-    printf '%-24s %s\n' "$(basename "$shape" .koan)" "${count:-FAILED}"
+    printf '%-26s %s\n' "$(basename "$shape" .koan)" "${count:-FAILED}"
 done
