@@ -28,7 +28,7 @@
 //! ownership already flows; the door composes *within* the brand.
 
 use std::alloc::Layout;
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash};
 use std::ptr;
 use std::ptr::NonNull;
 
@@ -295,6 +295,21 @@ impl<'b> BumpAllocator<'b> {
     where
         K: Eq + Hash,
     {
+        self.frozen_table_with_hasher::<K, V, DefaultHashBuilder>(entries)
+    }
+
+    /// [`frozen_table`](Self::frozen_table) over a caller-chosen `BuildHasher` — the shape a table
+    /// keyed by a fixed-width digest takes, where the default's byte-wise hash would re-mix bits
+    /// that are already uniformly distributed. Same placement, same freeze, same no-drop-glue
+    /// argument; only the hash function differs.
+    pub fn frozen_table_with_hasher<K, V, S>(
+        self,
+        entries: impl IntoIterator<Item = (K, V)>,
+    ) -> &'b BumpBackedMap<'b, K, V, S>
+    where
+        K: Eq + Hash,
+        S: BuildHasher + Default,
+    {
         const {
             assert!(
                 !std::mem::needs_drop::<K>() && !std::mem::needs_drop::<V>(),
@@ -302,11 +317,8 @@ impl<'b> BumpAllocator<'b> {
             )
         };
         let entries = entries.into_iter();
-        let mut table = BumpBackedMap::with_capacity_and_hasher_in(
-            entries.size_hint().0,
-            DefaultHashBuilder::default(),
-            self,
-        );
+        let mut table =
+            BumpBackedMap::with_capacity_and_hasher_in(entries.size_hint().0, S::default(), self);
         table.extend(entries);
         // `ManuallyDrop` suppresses the table's own destructor, which the two arguments above make
         // lossless. Bound rather than returned inline, so the deref coercion that strips the wrapper
@@ -324,7 +336,7 @@ impl<'b> BumpAllocator<'b> {
 /// Covers both bump-backed shapes: the frozen indexes [`BumpAllocator::frozen_table`] builds, and a
 /// table built over the raw [`Allocator`] seam and kept writable — the latter owing its own
 /// no-drop-glue assert at the declaration that names its entry types.
-pub type BumpBackedMap<'b, K, V> = HashMap<K, V, DefaultHashBuilder, BumpAllocator<'b>>;
+pub type BumpBackedMap<'b, K, V, S = DefaultHashBuilder> = HashMap<K, V, S, BumpAllocator<'b>>;
 
 /// A vector whose backing buffer lives in a bump — the shape a step-scratch staging buffer takes.
 /// `allocator_api2`'s `Vec` rather than `std`'s for the custom-allocator seam, and it derefs to

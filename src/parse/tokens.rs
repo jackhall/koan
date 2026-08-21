@@ -19,7 +19,7 @@ use std::str::CharIndices;
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeIdentifier};
-use crate::machine::model::is_keyword_token;
+use crate::machine::model::{is_keyword_token, is_type_name};
 use crate::parse::operators::{SuffixOp, find_suffix, is_atom_terminator};
 use crate::source::{Span, Spanned};
 
@@ -168,22 +168,6 @@ fn classify_atom<'a>(
     Ok(ExpressionPart::Identifier(
         brand.region().allocator().text(tok),
     ))
-}
-
-/// The lexical Type-token classifier: first char ASCII-uppercase plus at least one
-/// ASCII-lowercase elsewhere (`IntOrd`, `Ordered`, `Carrier`). The single canonical
-/// predicate for "this name classifies as a Type token" — the parser uses it to tag a
-/// `Type` part, and the type-language partition (abstract-type members vs value slots in a
-/// SIG type table) reuses it. See [design/typing/tokens.md](../../design/typing/tokens.md).
-pub(crate) fn is_type_name(tok: &str) -> bool {
-    let mut chars = tok.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_uppercase() {
-        return false;
-    }
-    chars.any(|c| c.is_ascii_lowercase())
 }
 
 /// Recursive-descent parser for compound tokens. Each matched operator's builder owns

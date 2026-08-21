@@ -6,7 +6,9 @@ pub(crate) mod registries;
 pub(crate) mod types;
 pub(crate) mod values;
 
-pub use labels::{LabelInterner, Symbol};
+pub use labels::{
+    BinderSymbol, KeywordSymbol, LabelInterner, Symbol, TypeSymbol, ValueSymbol, is_type_name,
+};
 pub use operators::{
     FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode, binary_key, probe_key,
     unary_key,

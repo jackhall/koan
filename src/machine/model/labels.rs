@@ -81,5 +81,150 @@ impl LabelInterner {
     }
 }
 
+/// The lexical Type-token classifier: first char ASCII-uppercase plus at least one
+/// ASCII-lowercase elsewhere (`IntOrd`, `Ordered`, `Carrier`). The single canonical
+/// predicate for "this name classifies as a Type token" — the parser uses it to tag a
+/// `Type` part, the type-language partition (abstract-type members vs value slots in a SIG
+/// type table) reuses it, and [`TypeSymbol`] mints against it. See
+/// [design/typing/tokens.md](../../../design/typing/tokens.md).
+pub fn is_type_name(tok: &str) -> bool {
+    let mut chars = tok.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_uppercase() {
+        return false;
+    }
+    chars.any(|c| c.is_ascii_lowercase())
+}
+
+/// Every classified label newtype below wraps exactly one [`Symbol`] behind a private field and is
+/// minted only through [`of`](ValueSymbol::of) / [`declared`](ValueSymbol::declared), which run the
+/// class predicate on the text. There is no raw-`Symbol` constructor: a `Symbol` alone carries no
+/// evidence of what its text looked like, so admitting one would let a caller assert a class the
+/// digest cannot witness. A seam holding a bare `Symbol` that needs a class either classifies where
+/// the text still existed, or resolves the text through the run's [`LabelInterner`] and classifies
+/// that.
+///
+/// The classes partition by construction: [`is_keyword_token`] and [`is_type_name`] are disjoint
+/// (a Type token has a lowercase letter, a keyword-class alphabetic token has none), and
+/// [`ValueSymbol`] is the complement of both. So a [`ValueSymbol`] and a [`TypeSymbol`] can never
+/// wrap the same text — which is what makes a value/type binding collision unrepresentable rather
+/// than something a write door has to probe for.
+///
+/// [`is_keyword_token`]: crate::machine::model::is_keyword_token
+macro_rules! classified_symbol {
+    ($(#[$meta:meta])* $name:ident, $classifies:expr, $class:literal) => {
+        $(#[$meta])*
+        ///
+        /// `Copy` and hashed as the single `u128` its symbol is — every table keyed by it runs the
+        /// identity hasher rather than re-mixing digest bits.
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+        pub struct $name(Symbol);
+
+        impl $name {
+            #[doc = concat!("The symbol for `text` if it classifies as ", $class, ", else `None`.")]
+            ///
+            /// Pure classification — no interning. This is the **probe** constructor: a lookup that
+            /// arrives as source text converts once here and compares symbol bits below, and a
+            /// wrong-class name misses the table by returning `None` at the seam.
+            pub fn of(text: &str) -> Option<Self> {
+                let classifies: fn(&str) -> bool = $classifies;
+                classifies(text).then(|| $name(Symbol::of(text)))
+            }
+
+            #[doc = concat!("Classify `text` as ", $class, " **and** record it for rendering.")]
+            ///
+            /// The **declaration** constructor: a name that enters a binding table is interned so a
+            /// later diagnostic naming it can resolve the text back.
+            pub fn declared(text: &str, labels: &LabelInterner) -> Option<Self> {
+                let classified = $name::of(text)?;
+                labels.intern(text);
+                Some(classified)
+            }
+
+            /// The raw digest — for digest feeds, schema scans and
+            /// [`render_label`](crate::machine::model::render_label).
+            pub fn symbol(self) -> Symbol {
+                self.0
+            }
+        }
+    };
+}
+
+classified_symbol!(
+    /// A **value** binding name: a token that is neither keyword-class nor Type-class (`xs`,
+    /// `int_ord`, `it`). The key type of every value-side binding table.
+    ValueSymbol,
+    |text| !crate::machine::model::is_keyword_token(text) && !is_type_name(text),
+    "a value token"
+);
+
+classified_symbol!(
+    /// A **type** binding name: a Type token per [`is_type_name`] (`IntOrd`, `Carrier`). The key
+    /// type of every type-side binding table.
+    TypeSymbol,
+    is_type_name,
+    "a Type token"
+);
+
+classified_symbol!(
+    /// A **keyword-class** token: fixed syntax, per
+    /// [`is_keyword_token`](crate::machine::model::is_keyword_token) — `FN`, `+`, `<=`, and the
+    /// space-joined operator probe keys built out of them (`"+ *"`), which stay keyword-class
+    /// because they gain no lowercase letter. Nothing *binds* to one; the class exists because the
+    /// operator table and the dispatch lane key by fixed tokens.
+    KeywordSymbol,
+    crate::machine::model::is_keyword_token,
+    "a keyword-class token"
+);
+
+/// A **bindable** name: the two classes a declaration can actually install under. Keywords are
+/// fixed syntax and bind to nothing, so they are not a variant — `BinderSymbol::of` of keyword text
+/// is `None`.
+///
+/// This is the currency of a seam that accepts either class and routes on the answer: an FN
+/// parameter name, a placeholder install, a member probe. The variant *is* the
+/// [`BindKind`](crate::machine::model::BindKind), so a site carrying one no longer threads a
+/// separate kind tag beside the name.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub enum BinderSymbol {
+    Value(ValueSymbol),
+    Type(TypeSymbol),
+}
+
+impl BinderSymbol {
+    /// The bindable symbol for `text`, or `None` if it is keyword-class. Pure — no interning.
+    pub fn of(text: &str) -> Option<Self> {
+        if let Some(name) = TypeSymbol::of(text) {
+            return Some(BinderSymbol::Type(name));
+        }
+        ValueSymbol::of(text).map(BinderSymbol::Value)
+    }
+
+    /// Classify `text` as bindable **and** record it for rendering — the declaration constructor.
+    pub fn declared(text: &str, labels: &LabelInterner) -> Option<Self> {
+        let classified = BinderSymbol::of(text)?;
+        labels.intern(text);
+        Some(classified)
+    }
+
+    /// The raw digest.
+    pub fn symbol(self) -> Symbol {
+        match self {
+            BinderSymbol::Value(name) => name.symbol(),
+            BinderSymbol::Type(name) => name.symbol(),
+        }
+    }
+
+    /// Which side of the value/type partition this name binds on.
+    pub fn bind_kind(self) -> super::BindKind {
+        match self {
+            BinderSymbol::Value(_) => super::BindKind::Value,
+            BinderSymbol::Type(_) => super::BindKind::Type,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;
