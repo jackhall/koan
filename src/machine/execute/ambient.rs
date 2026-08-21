@@ -14,7 +14,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::model::RunRegistries;
-use crate::machine::model::types::TypeRegistry;
 use crate::machine::{CallFrame, RunWriter};
 
 use super::harness::Host;
@@ -71,11 +70,6 @@ impl AmbientContext {
     /// and after the run ends.
     pub(in crate::machine::execute) fn registries_opt(&self) -> Option<&RunRegistries> {
         self.run_frame.as_ref().and_then(|frame| frame.registries())
-    }
-
-    /// The run's type registry alone — the currency for pure type-structure questions.
-    pub(in crate::machine::execute) fn types(&self) -> &TypeRegistry {
-        &self.registries().types
     }
 
     /// The run's output sink, owned by the run frame exactly as the type registry is, and reached

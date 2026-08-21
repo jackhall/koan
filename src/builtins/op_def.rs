@@ -182,7 +182,7 @@ fn resolve_capture<'a>(
     let kt = match capture {
         TypeCapture::Done(kt) => kt,
         TypeCapture::AtWake(te) => resolve_at_wake(fctx.scope, label, |s| {
-            s.resolve_type_identifier(&te, None, fctx.types())
+            s.resolve_type_identifier(&te, None, fctx.registries)
         })?,
         TypeCapture::Sub { dep_index } => {
             expect_type_terminal(results, dep_index, label, fctx.registries)?
@@ -211,7 +211,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
         ctx.scope,
         ctx.chain.clone(),
         OPERAND_SLOT,
-        ctx.types(),
+        ctx.registries,
     ));
     let result_state = if has_result {
         let raw = crate::try_action!(extract_type_slot_raw(ctx.args, "return_type", RESULT_SLOT));
@@ -221,7 +221,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
             ctx.scope,
             ctx.chain.clone(),
             RESULT_SLOT,
-            ctx.types(),
+            ctx.registries,
         )))
     } else {
         None

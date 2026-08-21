@@ -56,7 +56,7 @@ pub(crate) fn build_fn_like<'a>(
         ctx.scope,
         ctx.chain.clone(),
         "FN return-type slot",
-        ctx.types(),
+        ctx.registries,
     ));
     let params = match signature::parse_fn_param_list(
         &signature_expr,
@@ -246,7 +246,7 @@ pub fn body_record_schema<'a>(
         ctx.scope,
         ctx.chain.clone(),
         "FN return-type slot",
-        ctx.types(),
+        ctx.registries,
     ));
     let bind_index = ctx.bind_index();
     match classify(return_type_state, ParamListResult::Done(Vec::new())) {

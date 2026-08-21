@@ -10,15 +10,13 @@
 //!
 //! See [design/typing/type-registry.md](../../../../design/typing/type-registry.md).
 
-use std::collections::HashMap;
-
 use crate::machine::core::ScopeId;
 use crate::machine::model::labels::TypeSymbol;
 
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::record::Record;
-use super::sig_schema::SigSchema;
+use super::sig_schema::{SigSchema, TypeMemberMap};
 use super::signature::DeferredReturnSurface;
 use super::type_digest::TypeDigest;
 
@@ -123,8 +121,12 @@ pub enum TypeNode {
     /// never reaches the predicates, and never rides a value.
     Sibling(usize),
     /// One sealed member of a recursive group. Identity is its strongly-connected component's
-    /// digest plus its index in that component's canonical (name) order, so two independently
-    /// built components with the same content intern to the same nodes.
+    /// digest plus its index in that component's canonical order — the numeric order of the
+    /// members' name symbols — so two independently built components with the same content intern
+    /// to the same nodes.
+    ///
+    /// `name` is a Type-class label interned at the declaration that minted the member; a
+    /// diagnostic naming one resolves the text through the run's label interner.
     ///
     /// `scc_size`, `name`, `kind`, and `schema` are excluded from the digest because they are
     /// exactly the inputs `scc_digest` was computed over — a handle determines them. The member
@@ -133,7 +135,7 @@ pub enum TypeNode {
         scc_digest: TypeDigest,
         index: usize,
         scc_size: usize,
-        name: String,
+        name: TypeSymbol,
         kind: KKind,
         schema: NodeSchema,
     },
@@ -146,10 +148,11 @@ pub enum TypeNode {
 pub enum NodeSchema {
     /// Fresh nominal over a transparent representation.
     NewType(KType),
-    /// Higher-kinded constructor: erased-parameter variant schema plus parameter names. The
-    /// parameter names are Type-class labels, interned at the declaration that mints the family.
+    /// Higher-kinded constructor: erased-parameter variant schema plus parameter names. Both the
+    /// schema's keys and the parameter names are Type-class labels, interned at the declaration
+    /// that mints the family, so the schema compares and clones without touching text.
     TypeConstructor {
-        schema: HashMap<String, KType>,
+        schema: TypeMemberMap,
         param_names: Vec<TypeSymbol>,
     },
 }

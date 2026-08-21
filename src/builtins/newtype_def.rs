@@ -18,7 +18,6 @@
 use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
-use std::collections::HashMap;
 
 use crate::machine::FinishCtx;
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
@@ -26,7 +25,8 @@ use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::{
     DeclWindow, FieldListContext, FieldNameKind, Record, RecursiveGroupWindow, RelativeSchema,
-    SealOutcome, declarator_window, finalize_nominal_member,
+    SealOutcome, TypeMemberMap, TypeSymbol, declarator_window, finalize_nominal_member,
+    type_binder,
 };
 use crate::machine::model::{ExpressionPart, KExpression, ProgramExpression};
 use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
@@ -60,10 +60,11 @@ fn finalize_newtype<'a>(
         return Err(KError::new(KErrorKind::ShapeError(message)));
     }
     let scope = fctx.scope;
-    let window = declarator_window(scope, &name);
+    let binder = type_binder(&name, fctx.registries)?;
+    let window = declarator_window(scope, binder);
     let outcome = finalize_nominal_member(
         &window,
-        &name,
+        binder,
         |_window| repr,
         site,
         scope.brand(),
@@ -92,7 +93,7 @@ fn finalize_record_newtype<'a>(
     }
     let outcome = finalize_nominal_member(
         window,
-        &name,
+        type_binder(&name, fctx.registries)?,
         |_window| fctx.types().record(Record::from_pairs(fields)),
         site,
         fctx.scope.brand(),
@@ -159,7 +160,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     } else if let Some(repr_kt) = ctx.args.ktype("repr") {
         Action::done_writing(finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site))
     } else if let Some(KObject::KExpression(inner)) = ctx.args.object("repr") {
-        defer_resolved_sigil(ctx.scope, name, *inner, site, ctx.types())
+        let binder = crate::try_action!(type_binder(&name, ctx.registries));
+        defer_resolved_sigil(ctx.scope, name, binder, *inner, site, ctx.types())
     } else {
         Action::done(Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
@@ -172,6 +174,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 fn defer_resolved_sigil<'a>(
     scope: &'a Scope<'a>,
     name: String,
+    binder: TypeSymbol,
     inner: ProgramExpression<'a>,
     site: DeclarationSite,
     types: &TypeRegistry,
@@ -189,8 +192,8 @@ fn defer_resolved_sigil<'a>(
     // The sigil body sub-dispatches through the standalone dispatcher, which carries no window, so
     // every co-declared name it spells is pre-resolved against the window here — the same act the
     // field-list walker performs for a sigil field type.
-    let window = declarator_window(scope, &name);
-    let threaded: Vec<String> = std::iter::once(name.clone())
+    let window = declarator_window(scope, binder);
+    let threaded: Vec<TypeSymbol> = std::iter::once(binder)
         .chain(window.view().threadable_names())
         .collect();
     let wrapped = rewrite_window_refs(&wrapped, &threaded, scope, window.view(), types);
@@ -225,7 +228,10 @@ pub fn body_record_repr<'a>(
     let error_frame = TraceFrame::bare("<newtype>", format!("NEWTYPE {name}"));
     // The window a self- or sibling reference resolves against: the enclosing module body's when
     // it announced this name, else a fresh one-member window this declaration seals.
-    let window = declarator_window(ctx.scope, &name);
+    let window = declarator_window(
+        ctx.scope,
+        crate::try_action!(type_binder(&name, ctx.registries)),
+    );
     nominal_schema_action(
         ctx,
         name,
@@ -242,14 +248,14 @@ pub fn body_record_repr<'a>(
 /// [`KKind::TypeConstructor`] member, filled with an empty variant schema (identity ignores it)
 /// and the declared `param_names`. The member's singleton component is its interned identity.
 pub(crate) fn mint_type_constructor(
-    member_name: String,
-    param_names: Vec<crate::machine::model::TypeSymbol>,
+    member_name: TypeSymbol,
+    param_names: Vec<TypeSymbol>,
     types: &TypeRegistry,
 ) -> KType {
     RecursiveGroupWindow::seal_singleton(
         member_name,
         RelativeSchema::TypeConstructor {
-            schema: HashMap::new(),
+            schema: TypeMemberMap::default(),
             param_names,
         },
         None,
@@ -290,7 +296,7 @@ pub fn body_constructor_family<'a>(
         Ok(names) => names,
         Err(e) => return Action::done(Err(e)),
     };
-    let kt = mint_type_constructor(member_name, param_names, ctx.types());
+    let kt = mint_type_constructor(member, param_names, ctx.types());
     // The handle names the same interned type in every region, so the terminal seals from it
     // directly and the `types` write rides the outcome, mirroring `type_decl::bind_abstract_member`.
     let carrier = ctx.scope.resident(Carried::Type(kt));
@@ -408,10 +414,18 @@ mod tests {
         }
     }
 
-    /// `(name, kind)` of the `SetMember` `handle` names. Panics if `handle` is any other node.
-    fn member_of(types: &TypeRegistry, handle: KType) -> (String, KKind) {
-        match types.node(handle) {
-            TypeNode::SetMember { name, kind, .. } => (name, kind),
+    /// `(rendered name, kind)` of the `SetMember` `handle` names. The member name is a symbol on
+    /// the node, so the text comes back through the run's label interner. Panics if `handle` is
+    /// any other node.
+    fn member_of(
+        registries: &crate::machine::model::RunRegistries,
+        handle: KType,
+    ) -> (String, KKind) {
+        match registries.types.node(handle) {
+            TypeNode::SetMember { name, kind, .. } => (
+                crate::machine::model::render_label(name.symbol(), registries),
+                kind,
+            ),
             _ => panic!("expected a SetMember identity, got {handle:?}"),
         }
     }
@@ -436,7 +450,7 @@ mod tests {
             TypeNode::SetMember {
                 name, kind, schema, ..
             } => {
-                assert_eq!(name, "Distance");
+                assert_eq!(name, type_name("Distance", test_run.registries()));
                 assert_eq!(kind, KKind::NewType);
                 match schema {
                     NodeSchema::NewType(repr) => assert_eq!(repr, KType::NUMBER),
@@ -464,7 +478,7 @@ mod tests {
         let result = test_run.run_one(parse_one(&program, "Distance (3.0)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
-                let (name, kind) = member_of(test_run.types(), *type_id);
+                let (name, kind) = member_of(test_run.registries(), *type_id);
                 assert_eq!(name, "Distance");
                 assert_eq!(kind, KKind::NewType);
                 assert!(matches!(inner.payload(), KObject::Number(n) if *n == 3.0));
@@ -829,7 +843,7 @@ mod tests {
         let result = test_run.run_one(parse_one(&program, "(Nums [1.0, 2.0])"));
         match result {
             KObject::Wrapped { inner, type_id } => {
-                assert_eq!(member_of(test_run.types(), *type_id).0, "Nums");
+                assert_eq!(member_of(test_run.registries(), *type_id).0, "Nums");
                 assert!(
                     matches!(inner.payload(), KObject::List(..)),
                     "inner is the bare list, got {:?}",
@@ -851,7 +865,7 @@ mod tests {
         let result = test_run.run_one(parse_one(&program, "Bar (Foo (3.0))"));
         match result {
             KObject::Wrapped { inner, type_id } => {
-                assert_eq!(member_of(test_run.types(), *type_id).0, "Bar");
+                assert_eq!(member_of(test_run.registries(), *type_id).0, "Bar");
                 // Critical: `inner` must be the bare Number, NOT another Wrapped.
                 assert!(
                     matches!(inner.payload(), KObject::Number(n) if *n == 3.0),
@@ -943,7 +957,7 @@ mod tests {
         let result = test_run.run_one(parse_one(&program, "Distance (x)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
-                assert_eq!(member_of(test_run.types(), *type_id).0, "Distance");
+                assert_eq!(member_of(test_run.registries(), *type_id).0, "Distance");
                 assert!(matches!(inner.payload(), KObject::Number(n) if *n == 3.0));
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
@@ -985,7 +999,7 @@ mod tests {
         let result = test_run.run_one(parse_one(&program, "Distance (MAKE_NUM 3.0)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
-                assert_eq!(member_of(test_run.types(), *type_id).0, "Distance");
+                assert_eq!(member_of(test_run.registries(), *type_id).0, "Distance");
                 assert!(matches!(inner.payload(), KObject::Number(n) if *n == 3.0));
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
@@ -1013,7 +1027,7 @@ mod tests {
             TypeNode::SetMember {
                 name, kind, schema, ..
             } => {
-                assert_eq!(name, "Wrapper");
+                assert_eq!(name, type_name("Wrapper", test_run.registries()));
                 assert_eq!(kind, KKind::TypeConstructor);
                 match schema {
                     NodeSchema::TypeConstructor {
@@ -1053,7 +1067,10 @@ mod tests {
                 constructor,
                 arguments,
             } => {
-                assert_eq!(member_of(types, constructor).1, KKind::TypeConstructor);
+                assert_eq!(
+                    member_of(test_run.registries(), constructor).1,
+                    KKind::TypeConstructor
+                );
                 assert_eq!(
                     arguments,
                     Record::from_pairs([(
@@ -1153,7 +1170,7 @@ mod tests {
                         constructor,
                         arguments,
                     } => {
-                        let (name, kind) = member_of(types, constructor);
+                        let (name, kind) = member_of(test_run.registries(), constructor);
                         assert_eq!(name, "Wrapper");
                         assert_eq!(kind, KKind::TypeConstructor);
                         assert_eq!(
@@ -1199,7 +1216,7 @@ mod tests {
                             .copied()
                         {
                             Some(arg) => {
-                                let (name, kind) = member_of(test_run.types(), arg);
+                                let (name, kind) = member_of(test_run.registries(), arg);
                                 assert_eq!(name, "Distance");
                                 assert_eq!(kind, KKind::NewType);
                             }

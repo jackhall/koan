@@ -5,7 +5,6 @@ use crate::builtins::resolve_or_await::{expect_type_terminal, resolve_at_wake, u
 use crate::machine::DepTerminal;
 use crate::machine::LexicalFrame;
 use crate::machine::ProducerId;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{DeferredReturn, ReturnType};
 use crate::machine::model::{KExpression, TypeIdentifier};
@@ -91,7 +90,7 @@ pub(crate) fn classify_return_type<'a>(
     scope: &Scope<'a>,
     chain: Option<Rc<LexicalFrame>>,
     label: &str,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<ReturnTypeState<'a>, KError> {
     match raw {
         ReturnTypeRaw::Resolved(kt) => Ok(ReturnTypeState::Done(kt)),
@@ -101,7 +100,7 @@ pub(crate) fn classify_return_type<'a>(
             }
             // Gated to the FN's lexical position — a return type naming a later type is a
             // position error, like any other forward reference.
-            match scope.resolve_type_identifier(&te, chain, types) {
+            match scope.resolve_type_identifier(&te, chain, registries) {
                 TypeResolution::Done(kt) => Ok(ReturnTypeState::Done(kt)),
                 TypeResolution::Park(producers) => Ok(ReturnTypeState::Pending { te, producers }),
                 // `resolve_type_identifier` already tries the builtin fallback internally, so an
@@ -133,13 +132,12 @@ pub(super) fn resolve_capture_at_finish<'a>(
     return_type_dep: Option<usize>,
     registries: &RunRegistries,
 ) -> Result<ReturnType<'a>, KError> {
-    let types = &registries.types;
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
         ReturnTypeCapture::Unresolved(name) => {
             let te = TypeIdentifier::leaf(scope.brand().allocator().text(&name));
             resolve_at_wake(scope, "FN return-type slot", |s| {
-                s.resolve_type_identifier(&te, None, types)
+                s.resolve_type_identifier(&te, None, registries)
             })
             .map(ReturnType::Resolved)
         }

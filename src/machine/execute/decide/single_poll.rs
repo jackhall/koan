@@ -47,7 +47,7 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     s: &'b Scope<'b>,
     t: TypeIdentifier<'step>,
 ) -> Outcome<'step> {
-    match type_channel(s, &t, ctx.active_chain(), ctx.types()) {
+    match type_channel(s, &t, ctx.active_chain(), ctx.registries()) {
         // A `KType` is a `Copy` registry handle, so the leaf carries in place under the scope it
         // resolved against — no reach to name and no re-home.
         TypeChannel::Done(kt) => {

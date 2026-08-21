@@ -89,7 +89,6 @@ pub fn run_user_fn<'ast>(
     in_contract_chain: bool,
     registries: &RunRegistries,
 ) -> ExecOutcome<'ast> {
-    let types = &registries.types;
     // Bind each parameter into the frame's own scope through the value/type doors, off the one
     // envelope the argument arrived in. An object is deep-copied into the frame region under the
     // reach its own delivered carrier mints (`bind_delivered`) — every value argument arrives with
@@ -203,7 +202,7 @@ pub fn run_user_fn<'ast>(
                 DeferredReturn::Type(type_expr) => {
                     let resolved = ctx.region.with_scope(|child| {
                         let resolved: Result<KType, KError> =
-                            match child.resolve_type_identifier(&type_expr, None, types) {
+                            match child.resolve_type_identifier(&type_expr, None, registries) {
                                 TypeResolution::Done(kt) => Ok(kt),
                                 // A park at this point cannot be honored — the body is about to
                                 // run — so fall back to Any and let the body's own dispatch surface

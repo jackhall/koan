@@ -26,7 +26,7 @@
 use crate::machine::ProducerId;
 use crate::machine::core::{LexicalFrame, Scope, ScopeId};
 use crate::machine::model::TypeIdentifier;
-use crate::machine::model::{KType, TypeNode, TypeRegistry, TypeResolution};
+use crate::machine::model::{KType, RunRegistries, TypeNode, TypeRegistry, TypeResolution};
 
 impl<'step> Scope<'step> {
     /// Elaborates against `self` and admits the result only when `FinalizeGate` passes it. The
@@ -36,11 +36,12 @@ impl<'step> Scope<'step> {
         &self,
         te: &TypeIdentifier,
         chain: Option<std::rc::Rc<LexicalFrame>>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> TypeResolution<KType> {
         use crate::machine::model::{Elaborator, elaborate_type_identifier};
+        let types = &registries.types;
         let mut elaborator = Elaborator::new(self).with_chain(chain);
-        elaborate_type_identifier(&mut elaborator, te, types).and_then_done(|kt| {
+        elaborate_type_identifier(&mut elaborator, te, registries).and_then_done(|kt| {
             let pending = FinalizeGate { scope: self, types }.pending_sources(kt);
             if pending.is_empty() {
                 TypeResolution::Done(kt)

@@ -2,8 +2,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::builtins::test_support::type_name;
+use crate::builtins::test_support::type_token;
 use crate::machine::core::program_storage;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::TypeMemberMap;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{KKind, KType, Record, RecursiveGroupWindow, RelativeSchema};
@@ -19,7 +21,12 @@ fn part<'a>(p: ExpressionPart<'a>) -> Spanned<ExpressionPart<'a>> {
 }
 
 fn newtype_singleton(name: &str, repr: KType, types: &TypeRegistry) -> KType {
-    RecursiveGroupWindow::seal_singleton(name.into(), RelativeSchema::NewType(repr), None, types)
+    RecursiveGroupWindow::seal_singleton(
+        type_token(name),
+        RelativeSchema::NewType(repr),
+        None,
+        types,
+    )
 }
 
 /// Mint the zero-dep fold door a container test needs, over a fresh root region, as two `let`
@@ -260,8 +267,8 @@ fn record_field_value_differs() {
 /// identity check. Returns the `None`-over-`Null` and `Some`-over-`Number` member handles.
 fn two_member(types: &TypeRegistry) -> Vec<KType> {
     let window = RecursiveGroupWindow::new(vec![
-        ("None".into(), KKind::NewType),
-        ("Some".into(), KKind::NewType),
+        (type_token("None"), KKind::NewType),
+        (type_token("Some"), KKind::NewType),
     ]);
     window.fill_member(0, RelativeSchema::NewType(KType::NULL), types);
     window
@@ -292,9 +299,9 @@ fn tagged_erased_and_stamped_are_distinct_identities() {
     let types = &registries.types;
     container_door!(_storage, door);
     let ctor = RecursiveGroupWindow::seal_singleton(
-        "Box".into(),
+        type_token("Box"),
         RelativeSchema::TypeConstructor {
-            schema: HashMap::new(),
+            schema: TypeMemberMap::default(),
             param_names: vec![type_name("Type", &registries)],
         },
         None,

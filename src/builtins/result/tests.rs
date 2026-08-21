@@ -1,14 +1,20 @@
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::{TestRun, parse_one, type_name};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KKind, NodeSchema, TypeNode};
-use crate::machine::model::{KObject, KType, TypeRegistry};
+use crate::machine::model::{KObject, KType};
 use crate::machine::program_storage;
 use crate::machine::run_root_storage;
 
 /// Assert `identity` names a `SetMember` whose name is `expected`.
-fn assert_member_named(types: &TypeRegistry, identity: KType, expected: &str) {
-    match types.node(identity) {
-        TypeNode::SetMember { name, .. } => assert_eq!(name, expected),
+fn assert_member_named(
+    registries: &crate::machine::model::RunRegistries,
+    identity: KType,
+    expected: &str,
+) {
+    match registries.types.node(identity) {
+        TypeNode::SetMember { name, .. } => {
+            assert_eq!(name, type_name(expected, registries))
+        }
         _ => panic!("expected a SetMember identity named `{expected}`, got {identity:?}"),
     }
 }
@@ -32,15 +38,23 @@ fn result_registers_type_constructor_with_schema() {
             schema,
             ..
         } => {
-            assert_eq!(name, "Result");
+            assert_eq!(name, type_name("Result", test_run.registries()));
             match schema {
                 NodeSchema::TypeConstructor {
                     param_names,
                     schema,
                 } => {
                     assert_eq!(param_names.len(), 2);
-                    assert_eq!(schema.get("Ok").copied(), Some(KType::ANY));
-                    assert_eq!(schema.get("Error").copied(), Some(KType::ANY));
+                    assert_eq!(
+                        schema.get(&type_name("Ok", test_run.registries())).copied(),
+                        Some(KType::ANY)
+                    );
+                    assert_eq!(
+                        schema
+                            .get(&type_name("Error", test_run.registries()))
+                            .copied(),
+                        Some(KType::ANY)
+                    );
                 }
                 _ => panic!("expected a TypeConstructor schema"),
             }
@@ -66,7 +80,7 @@ fn result_constructs_ok_variant() {
             identity,
         } => {
             assert_eq!(*tag, "Ok");
-            assert_member_named(test_run.types(), *identity, "Result");
+            assert_member_named(test_run.registries(), *identity, "Result");
             assert!(matches!(value.payload(), KObject::Number(n) if *n == 1.0));
         }
         other => panic!("expected Tagged, got {:?}", other.ktype()),
@@ -86,7 +100,7 @@ fn result_constructs_error_variant() {
             identity,
         } => {
             assert_eq!(*tag, "Error");
-            assert_member_named(test_run.types(), *identity, "Result");
+            assert_member_named(test_run.registries(), *identity, "Result");
             assert!(matches!(value.payload(), KObject::KString(s) if *s == "x"));
         }
         other => panic!("expected Tagged, got {:?}", other.ktype()),

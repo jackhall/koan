@@ -14,6 +14,7 @@ use crate::machine::model::Symbol;
 use crate::machine::model::ast::{
     ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart,
 };
+use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::values::Carried;
 pub use crate::parse::FieldNameKind;
 use crate::parse::parse_pair_list;
@@ -181,7 +182,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
             None => Ok(kt),
         };
         match part.field_slot() {
-            FieldSlot::Type(t) => match elaborate_type_identifier(elaborator, &t, types) {
+            FieldSlot::Type(t) => match elaborate_type_identifier(elaborator, &t, registries) {
                 TypeResolution::Done(kt) => checked(kt),
                 TypeResolution::Park(producers) => {
                     awaited.extend(producers);
@@ -261,14 +262,15 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                 if let [first, second] = boxed.parts
                     && let (ExpressionPart::Type(head), ExpressionPart::Type(tag)) =
                         (&first.value, &second.value)
-                    && let Some(view) = elaborator.window().filter(|v| v.binds(head.as_str()))
+                    && let Some(binder) = TypeSymbol::of(head.as_str())
+                    && let Some(view) = elaborator.window().filter(|v| v.binds(binder))
                 {
+                    let rendered_tag = tag.render();
                     let index = view
-                        .variant_index(head.as_str(), &tag.render())
+                        .variant_index(binder, Symbol::of(&rendered_tag))
                         .ok_or_else(|| {
                             format!(
-                                "{context_list}: `{}` is not a variant of `{}`",
-                                tag.render(),
+                                "{context_list}: `{rendered_tag}` is not a variant of `{}`",
                                 head.as_str(),
                             )
                         })?;
@@ -361,9 +363,11 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
 /// True iff any `Type` leaf in `inner`'s subtree names a co-declared sibling — the gate deciding
 /// whether a body needs rewriting at all. A body with none crosses to the working form as one slice
 /// copy that keeps its cached shape.
-fn names_threaded_self_ref(inner: &KExpression<'_>, threaded: &HashSet<String>) -> bool {
+fn names_threaded_self_ref(inner: &KExpression<'_>, threaded: &HashSet<TypeSymbol>) -> bool {
     inner.parts.iter().any(|part| match &part.value {
-        ExpressionPart::Type(t) => threaded.contains(t.as_str()),
+        ExpressionPart::Type(t) => {
+            TypeSymbol::of(t.as_str()).is_some_and(|name| threaded.contains(&name))
+        }
         ExpressionPart::Expression(body)
         | ExpressionPart::SigiledTypeExpr(body)
         | ExpressionPart::RecordType(body)
@@ -384,7 +388,7 @@ fn names_threaded_self_ref(inner: &KExpression<'_>, threaded: &HashSet<String>) 
 /// same window-less way.
 fn rewrite_threaded_self_refs<'a>(
     inner: &KExpression<'a>,
-    threaded: &HashSet<String>,
+    threaded: &HashSet<TypeSymbol>,
     scope: &Scope<'a>,
     window: Option<WindowView<'_, '_>>,
     types: &TypeRegistry,
@@ -397,12 +401,17 @@ fn rewrite_threaded_self_refs<'a>(
         inner.parts.iter().map(|p| {
             let value =
                 match &p.value {
-                    ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
+                    ExpressionPart::Type(t)
+                        if TypeSymbol::of(t.as_str())
+                            .is_some_and(|name| threaded.contains(&name)) =>
+                    {
                         // The member's handle is minted against the window here, where the window is in
                         // hand — the sub-dispatch it crosses into cannot reach one. The cell is a
                         // resident seal in this scope's own region: a type carrier reaching nothing
                         // foreign, so it rests with no coverage to lodge anywhere.
-                        match resolve_threaded(window, &t.render(), types) {
+                        match TypeSymbol::of(t.as_str())
+                            .and_then(|name| resolve_threaded(window, name, types))
+                        {
                             Some(handle) => WorkingPart::Spliced {
                                 cell: scope.seal_resident::<crate::machine::model::CarriedFamily>(
                                     Carried::Type(handle),
@@ -445,19 +454,23 @@ fn rewrite_threaded_self_refs<'a>(
 /// field type.
 pub fn rewrite_window_refs<'a>(
     inner: &KExpression<'a>,
-    threaded: &[String],
+    threaded: &[TypeSymbol],
     scope: &Scope<'a>,
     window: WindowView<'_, '_>,
     types: &TypeRegistry,
 ) -> WorkingExpression<'a> {
-    let threaded: HashSet<String> = threaded.iter().cloned().collect();
+    let threaded: HashSet<TypeSymbol> = threaded.iter().copied().collect();
     rewrite_threaded_self_refs(inner, &threaded, scope, Some(window), types)
 }
 
 /// The handle a threaded name denotes against `window`: the member's absolute handle once the
 /// window sealed, its relative sibling back-edge while it is open (announced if the window
 /// discovers its members as it walks), and the binder's union for a binder name.
-fn resolve_threaded(window: WindowView<'_, '_>, name: &str, types: &TypeRegistry) -> Option<KType> {
+fn resolve_threaded(
+    window: WindowView<'_, '_>,
+    name: TypeSymbol,
+    types: &TypeRegistry,
+) -> Option<KType> {
     if window.binds(name) {
         return window
             .sealed_binder(name)

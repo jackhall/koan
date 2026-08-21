@@ -2,8 +2,6 @@
 //! substitution. Schemas are built both directly (owned `KType` handles) and by projecting parsed
 //! SIG declarations, pinned via [`SigSchema::fold_pins`].
 
-use std::collections::HashMap;
-
 use super::*;
 use crate::builtins::test_support::{type_name, value_name};
 use crate::machine::core::ScopeId;
@@ -22,9 +20,9 @@ fn params(arity: usize, registries: &RunRegistries) -> Vec<TypeSymbol> {
 /// A declared constructor family: a `TypeConstructor`-kind sealed member of the given arity.
 fn ctor(name: &str, arity: usize, registries: &RunRegistries) -> KType {
     RecursiveGroupWindow::seal_singleton(
-        name.into(),
+        type_token(name),
         RelativeSchema::TypeConstructor {
-            schema: HashMap::new(),
+            schema: TypeMemberMap::default(),
             param_names: params(arity, registries),
         },
         None,
@@ -91,7 +89,9 @@ const SUP_ID: ScopeId = ScopeId::from_raw(0, 0xDEAD);
 const REAL_ID: ScopeId = ScopeId::from_raw(0, 0xC0DE);
 
 use super::sig_subtype as relation;
+use crate::builtins::test_support::type_token;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::TypeMemberMap;
 
 /// Run the relation against a caller-supplied registry and unbox the failure so `matches!` can
 /// name the variant directly. The schemas' interned members and the relation walk must share one
@@ -744,9 +744,9 @@ fn abstract_hk_refused_by_differently_named_parameter() {
         &registries,
     );
     let other_names = RecursiveGroupWindow::seal_singleton(
-        "MyWrap".into(),
+        type_token("MyWrap"),
         RelativeSchema::TypeConstructor {
-            schema: HashMap::new(),
+            schema: TypeMemberMap::default(),
             param_names: vec![type_name("Item", &registries)],
         },
         None,

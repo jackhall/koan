@@ -30,7 +30,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         result_ctor,
         Record::from_pairs([
             (registries.labels.intern("Ok"), KType::ANY),
-            (registries.labels.intern("Error"), kerror_ktype(types)),
+            (registries.labels.intern("Error"), kerror_ktype(registries)),
         ]),
     );
     let signature = sig(

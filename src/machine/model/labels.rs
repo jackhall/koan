@@ -14,6 +14,7 @@
 //!
 //! See [design/label-interning.md](../../../design/label-interning.md).
 
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -178,6 +179,25 @@ classified_symbol!(
     crate::machine::model::is_keyword_token,
     "a keyword-class token"
 );
+
+/// The **recovery door**: a table keyed by [`TypeSymbol`] admits a probe by bare symbol bits, and a
+/// hit hands back the *stored* key — a classified symbol minted where its text existed. Symbol
+/// equality is text equality on the shared collision footing, so the probe's originating text is
+/// the key's text and the recovered class is witnessed rather than asserted. Nothing is minted on
+/// this path and insertion still requires a classified key, so a wrong-class probe misses against a
+/// table that could never have held it.
+///
+/// The `Borrow` contract holds because the derived `Hash` impl hashes the single [`Symbol`] the
+/// newtype wraps, byte for byte as `Symbol`'s own does, and equality is that symbol's equality.
+///
+/// Only `TypeSymbol` carries this: `WITH`'s pin walk and the union-variant probes are the sites
+/// where a bare record-field symbol meets a Type-class member table, and nothing probes the other
+/// classes by bits. See [design/label-interning.md](../../../design/label-interning.md).
+impl Borrow<Symbol> for TypeSymbol {
+    fn borrow(&self) -> &Symbol {
+        &self.0
+    }
+}
 
 /// A **bindable** name: the two classes a declaration can actually install under. Keywords are
 /// fixed syntax and bind to nothing, so they are not a variant — `BinderSymbol::of` of keyword text

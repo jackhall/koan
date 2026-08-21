@@ -231,3 +231,34 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
          so it should reach neither the interner nor the heap"
     );
 }
+
+/// **Per-construction cost of a tagged-union value, and the type-registry reads behind it.**
+/// The two `audit/shapes/tagged_construct_calls*.koan` shapes are 8 and 40 repetitions of one
+/// `MATCH (Maybe (Some 1)) -> :Number WITH (…)` statement over a two-variant `UNION`.
+/// Differencing them cancels interpreter startup and the declaration itself, leaving 32
+/// construct-and-match cycles' marginal cost — the parse of the 32 extra statements included,
+/// since that is how the shapes differ.
+///
+/// This is the nominal-member axis. Each cycle reads the union's `SetMember` node out of the
+/// registry (a clone per read), selects a variant out of the constructor's schema, builds the
+/// tagged value, and matches on its tag.
+///
+/// Measured 2026-08-21 at **3 158** for the 32 cycles (98.7 each). The bound is that plus 32,
+/// so one re-introduced per-construction allocation fails it.
+#[test]
+fn the_tagged_construct_shape_stays_within_its_per_construction_bound() {
+    const BOUND: u64 = 3_190;
+    let marginal = allocations_for(
+        include_str!("../audit/shapes/tagged_construct_calls40.koan"),
+        "audit/shapes/tagged_construct_calls40.koan",
+    ) - allocations_for(
+        include_str!("../audit/shapes/tagged_construct_calls8.koan"),
+        "audit/shapes/tagged_construct_calls8.koan",
+    );
+    assert!(
+        marginal <= BOUND,
+        "32 tagged constructions allocated {marginal} times, over the {BOUND} bound — an \
+         allocation was added to the tagged-construction path; re-measure with \
+         `audit/measure.sh` and rebaseline deliberately if the cost is intended"
+    );
+}

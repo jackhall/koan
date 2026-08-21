@@ -2,7 +2,7 @@
 //! non-short-circuiting in a binding position, nesting, and frame-chain preservation in
 //! TCO position.
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::{TestRun, parse_one, type_name};
 use crate::machine::model::{KObject, TypeNode};
 use crate::machine::program_storage;
 use crate::machine::run_root_storage;
@@ -95,7 +95,9 @@ fn catch_result_shares_identity_with_constructed_result() {
     match (caught, constructed) {
         (KObject::Tagged { identity: id1, .. }, KObject::Tagged { identity: id2, .. }) => {
             match test_run.types().node(*id1) {
-                TypeNode::SetMember { name, .. } => assert_eq!(name, "Result"),
+                TypeNode::SetMember { name, .. } => {
+                    assert_eq!(name, type_name("Result", test_run.registries()))
+                }
                 _ => panic!("expected a SetMember identity, got {id1:?}"),
             }
             assert_eq!(

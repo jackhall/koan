@@ -15,7 +15,7 @@
 //!
 //! At the last fill the window seals. Identity is **not** the declared group: it is each member's
 //! strongly-connected component under the sibling-reference relation, presented canonically in
-//! bare-name order (with the owning binder as a tiebreak the digest never sees). [`seal_group`]
+//! name-symbol order (with the owning binder as a tiebreak the digest never sees). [`seal_group`]
 //! extracts the reference edges, runs Tarjan, and digests the condensation in topological order —
 //! every component after the components it references, so a cross-component reference folds the
 //! referent's already-finished handle as ordinary external content while an intra-component one
@@ -27,7 +27,7 @@
 //!   the whole-declaration recipe — so no existing single-type digest moves.
 //! - Adding an unreferenced member to a group perturbs nobody else's identity.
 //! - A non-recursive member declared inside a group unifies with its standalone twin.
-//! - Declaration order is immaterial; only name order and reference structure are.
+//! - Declaration order is immaterial; only name-symbol order and reference structure are.
 //! - Two groups alike but for an external reference stay distinct, because that reference's
 //!   handle is in the fold.
 //!
@@ -43,12 +43,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::machine::core::ScopeId;
-use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::labels::{Symbol, TypeSymbol};
 
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::node::{NodeSchema, TypeNode};
 use super::registry::TypeRegistry;
+use super::sig_schema::TypeMemberMap;
 use super::type_digest::{ComponentMember, TypeDigest, component_digest, member_ref_digest};
 
 /// A member's schema while its window is open: the same shape as [`NodeSchema`], but its handles
@@ -60,7 +61,7 @@ pub enum RelativeSchema {
     /// Higher-kinded constructor: erased-parameter variant schema plus parameter names, the
     /// Type-class labels the declaration interned.
     TypeConstructor {
-        schema: HashMap<String, KType>,
+        schema: TypeMemberMap,
         param_names: Vec<TypeSymbol>,
     },
 }
@@ -86,7 +87,7 @@ impl RelativeSchema {
             } => RelativeSchema::TypeConstructor {
                 schema: schema
                     .iter()
-                    .map(|(k, v)| (k.clone(), rewrite_siblings(types, *v, resolve)))
+                    .map(|(k, v)| (*k, rewrite_siblings(types, *v, resolve)))
                     .collect(),
                 param_names: param_names.clone(),
             },
@@ -125,17 +126,17 @@ impl RelativeSchema {
 pub struct PendingMember {
     /// The declared name — the bare tag for a variant. Unique among the members one binder owns,
     /// which with `owner` is what makes the canonical component presentation deterministic.
-    pub name: String,
+    pub name: TypeSymbol,
     /// The binder that owns this member: a `UNION`'s name, whose variants are reachable only
     /// through it. `None` for a member that is a standalone type in its own right.
-    pub owner: Option<String>,
+    pub owner: Option<TypeSymbol>,
     /// The nominal family this member declares.
     pub kind: KKind,
     fill: RefCell<Option<RelativeSchema>>,
 }
 
 impl PendingMember {
-    fn new(name: String, owner: Option<String>, kind: KKind) -> Self {
+    fn new(name: TypeSymbol, owner: Option<TypeSymbol>, kind: KKind) -> Self {
         Self {
             name,
             owner,
@@ -159,7 +160,7 @@ pub struct RecursiveGroupWindow {
     members: RefCell<Vec<PendingMember>>,
     /// Each declaring binder and the indices of the members it owns — a `UNION`'s name over its
     /// variants. The binder is not itself a member: it denotes the union of the members it owns.
-    binders: RefCell<Vec<(String, Vec<usize>)>>,
+    binders: RefCell<Vec<(TypeSymbol, Vec<usize>)>>,
     /// Set when opaque ascription mints this window, so its per-application nonce folds into the
     /// minted member's component digest and two applications never unify. A generative window
     /// always has exactly one member, so the nonce belongs unambiguously to its one component.
@@ -173,15 +174,15 @@ pub struct RecursiveGroupWindow {
 #[derive(Clone)]
 pub struct SealedGroup {
     pub members: Vec<KType>,
-    pub binder_types: Vec<(String, KType)>,
+    pub binder_types: Vec<(TypeSymbol, KType)>,
 }
 
 impl SealedGroup {
     /// The union handle binder `name` denotes, if this seal declared one.
-    pub fn binder_type(&self, name: &str) -> Option<KType> {
+    pub fn binder_type(&self, name: TypeSymbol) -> Option<KType> {
         self.binder_types
             .iter()
-            .find(|(binder, _)| binder == name)
+            .find(|(binder, _)| *binder == name)
             .map(|(_, kt)| *kt)
     }
 }
@@ -189,7 +190,7 @@ impl SealedGroup {
 impl RecursiveGroupWindow {
     /// A window over `members` in announcement order, every one of them a standalone type owned by
     /// no binder — a `NEWTYPE`'s singleton, a type constructor's mint.
-    pub fn new(members: Vec<(String, KKind)>) -> Self {
+    pub fn new(members: Vec<(TypeSymbol, KKind)>) -> Self {
         Self {
             members: RefCell::new(
                 members
@@ -206,12 +207,12 @@ impl RecursiveGroupWindow {
     /// A standalone `UNION`'s window: `binder` owns every one of `tags`, so no tag is
     /// bare-name-resolvable and the binder itself denotes their union. The one-binder special case
     /// of the same machinery a module-announced group runs.
-    pub fn for_binder(binder: String, tags: Vec<String>) -> Self {
+    pub fn for_binder(binder: TypeSymbol, tags: Vec<TypeSymbol>) -> Self {
         let owned: Vec<usize> = (0..tags.len()).collect();
         Self {
             members: RefCell::new(
                 tags.into_iter()
-                    .map(|tag| PendingMember::new(tag, Some(binder.clone()), KKind::NewType))
+                    .map(|tag| PendingMember::new(tag, Some(binder), KKind::NewType))
                     .collect(),
             ),
             binders: RefCell::new(vec![(binder, owned)]),
@@ -223,7 +224,7 @@ impl RecursiveGroupWindow {
     /// A generative window: opaque ascription's per-application mint, always one member. `nonce`
     /// (the minted module's `scope_id`) folds into that member's component digest, so two `:|`
     /// applications of one signature member over one representation stay distinct types.
-    pub fn generative(name: String, kind: KKind, nonce: ScopeId) -> Self {
+    pub fn generative(name: TypeSymbol, kind: KKind, nonce: ScopeId) -> Self {
         Self {
             members: RefCell::new(vec![PendingMember::new(name, None, kind)]),
             binders: RefCell::new(Vec::new()),
@@ -239,7 +240,7 @@ impl RecursiveGroupWindow {
 
     /// Index of the standalone member named `name`. Owned members — a `UNION`'s variants — never
     /// answer here: they are reached through their binder or the qualified sigil.
-    pub fn member_index(&self, name: &str) -> Option<usize> {
+    pub fn member_index(&self, name: TypeSymbol) -> Option<usize> {
         self.members
             .borrow()
             .iter()
@@ -248,26 +249,33 @@ impl RecursiveGroupWindow {
 
     /// Index of the member `binder` owns under the bare tag `tag` — the qualified-sigil lookup,
     /// scoped by the binder's own member list so the same tag under two binders never collides.
-    pub fn variant_index(&self, binder: &str, tag: &str) -> Option<usize> {
+    ///
+    /// `tag` probes by bare symbol bits: a variant tag arriving from a record-literal field name
+    /// carries no class, and the member list it is matched against is keyed by the `TypeSymbol` the
+    /// declaration minted. Symbol equality is text equality, so a hit witnesses the class rather
+    /// than asserting it ([design/label-interning.md](../../../../design/label-interning.md)).
+    pub fn variant_index(&self, binder: TypeSymbol, tag: Symbol) -> Option<usize> {
         let owned = self.binder_members(binder)?;
         let members = self.members.borrow();
-        owned.into_iter().find(|index| members[*index].name == tag)
+        owned
+            .into_iter()
+            .find(|index| members[*index].name.symbol() == tag)
     }
 
     /// Whether `name` is a declaring binder of this window.
-    pub fn binds(&self, name: &str) -> bool {
+    pub fn binds(&self, name: TypeSymbol) -> bool {
         self.binders
             .borrow()
             .iter()
-            .any(|(binder, _)| binder == name)
+            .any(|(binder, _)| *binder == name)
     }
 
     /// The member indices `binder` owns, in announcement order.
-    fn binder_members(&self, binder: &str) -> Option<Vec<usize>> {
+    fn binder_members(&self, binder: TypeSymbol) -> Option<Vec<usize>> {
         self.binders
             .borrow()
             .iter()
-            .find(|(name, _)| name == binder)
+            .find(|(name, _)| *name == binder)
             .map(|(_, owned)| owned.clone())
     }
 
@@ -292,53 +300,49 @@ impl RecursiveGroupWindow {
     }
 
     /// The announced member names in announcement order.
-    pub fn member_names(&self) -> Vec<String> {
-        self.members
-            .borrow()
-            .iter()
-            .map(|m| m.name.clone())
-            .collect()
+    pub fn member_names(&self) -> Vec<TypeSymbol> {
+        self.members.borrow().iter().map(|m| m.name).collect()
     }
 
     /// The names of every member whose finalize has not run — empty once the window can seal. A
     /// name here after the declarator finished is a reference to a type the group never declared.
-    pub fn unfilled_member_names(&self) -> Vec<String> {
+    pub fn unfilled_member_names(&self) -> Vec<TypeSymbol> {
         self.members
             .borrow()
             .iter()
             .filter(|m| !m.is_filled())
-            .map(|m| m.name.clone())
+            .map(|m| m.name)
             .collect()
     }
 
     /// The names a reference may reach bare: the standalone members and the declaring binders.
     /// An owned member — a `UNION`'s variant — is absent, because it is reached only through its
     /// binder or the qualified sigil.
-    pub fn bare_reachable_names(&self) -> Vec<String> {
+    pub fn bare_reachable_names(&self) -> Vec<TypeSymbol> {
         self.members
             .borrow()
             .iter()
             .filter(|m| m.owner.is_none())
-            .map(|m| m.name.clone())
-            .chain(self.binders.borrow().iter().map(|(name, _)| name.clone()))
+            .map(|m| m.name)
+            .chain(self.binders.borrow().iter().map(|(name, _)| *name))
             .collect()
     }
 
     /// Every still-unfilled member as `(name, owner)` — the owner is who carries the member's
     /// declaration placeholder, since a variant stamps none of its own.
-    pub fn unfilled_members(&self) -> Vec<(String, Option<String>)> {
+    pub fn unfilled_members(&self) -> Vec<(TypeSymbol, Option<TypeSymbol>)> {
         self.members
             .borrow()
             .iter()
             .filter(|m| !m.is_filled())
-            .map(|m| (m.name.clone(), m.owner.clone()))
+            .map(|m| (m.name, m.owner))
             .collect()
     }
 
     /// Every `(name, handle)` this window's seal installs: the standalone members and the binders.
     /// Empty while the window is open. Variants are absent — a variant is reached through its
     /// binder's union node, never by name.
-    pub fn installable(&self) -> Vec<(String, KType)> {
+    pub fn installable(&self) -> Vec<(TypeSymbol, KType)> {
         let Some(sealed) = self.sealed() else {
             return Vec::new();
         };
@@ -347,8 +351,8 @@ impl RecursiveGroupWindow {
             .iter()
             .enumerate()
             .filter(|(_, member)| member.owner.is_none())
-            .map(|(index, member)| (member.name.clone(), sealed.members[index]))
-            .chain(sealed.binder_types.iter().cloned())
+            .map(|(index, member)| (member.name, sealed.members[index]))
+            .chain(sealed.binder_types.iter().copied())
             .collect()
     }
 
@@ -365,13 +369,13 @@ impl RecursiveGroupWindow {
     /// window has not seen the name — the forward-reference case inside a declarator whose own
     /// member list is discovered as its schema is walked. `kind` is the family to announce it
     /// with, ignored when the name is already announced.
-    pub fn sibling(&self, name: &str, kind: KKind, types: &TypeRegistry) -> KType {
+    pub fn sibling(&self, name: TypeSymbol, kind: KKind, types: &TypeRegistry) -> KType {
         let index = match self.member_index(name) {
             Some(index) => index,
             None => {
                 let mut members = self.members.borrow_mut();
                 let index = members.len();
-                members.push(PendingMember::new(name.to_string(), None, kind));
+                members.push(PendingMember::new(name, None, kind));
                 index
             }
         };
@@ -381,7 +385,7 @@ impl RecursiveGroupWindow {
     /// The relative type binder `name` denotes: the union of the members it owns, each as its
     /// relative sibling handle. A `UNION`'s variant payload naming the union itself resolves
     /// through here.
-    pub fn binder_union(&self, name: &str, types: &TypeRegistry) -> Option<KType> {
+    pub fn binder_union(&self, name: TypeSymbol, types: &TypeRegistry) -> Option<KType> {
         let owned = self.binder_members(name)?;
         Some(
             types.union_of(
@@ -415,11 +419,11 @@ impl RecursiveGroupWindow {
         }
         let members = self.members.borrow();
         let binders = self.binders.borrow();
-        let inputs: Vec<SealMemberInput<'_>> = members
+        let inputs: Vec<SealMemberInput> = members
             .iter()
             .map(|m| SealMemberInput {
-                name: m.name.as_str(),
-                owner: m.owner.as_deref(),
+                name: m.name,
+                owner: m.owner,
                 kind: m.kind,
                 schema: m
                     .fill
@@ -431,7 +435,7 @@ impl RecursiveGroupWindow {
         let binder_inputs: Vec<SealBinderInput<'_>> = binders
             .iter()
             .map(|(name, owned)| SealBinderInput {
-                name: name.as_str(),
+                name: *name,
                 members: owned.as_slice(),
             })
             .collect();
@@ -448,7 +452,7 @@ impl RecursiveGroupWindow {
     /// fill and seal all happen at one site. `nonce` makes it a generative mint. The member's own
     /// self-reference is `Sibling(0)`, so a self-recursive standalone type needs no other setup.
     pub fn seal_singleton(
-        name: String,
+        name: TypeSymbol,
         schema: RelativeSchema,
         nonce: Option<ScopeId>,
         types: &TypeRegistry,
@@ -466,20 +470,20 @@ impl RecursiveGroupWindow {
 }
 
 /// One filled member handed to [`seal_group`] — the pure boundary into the identity computation.
-pub struct SealMemberInput<'m> {
+pub struct SealMemberInput {
     /// The declared name: the bare tag for a variant. Digested, and the primary canonical sort key.
-    pub name: &'m str,
+    pub name: TypeSymbol,
     /// The binder that owns this member, if any. A **sort tiebreak only** — never folded into
     /// [`component_digest`], so a module-hosted variant digests identically to its standalone twin
     /// and two same-tag variants under different binders take distinct fold positions.
-    pub owner: Option<&'m str>,
+    pub owner: Option<TypeSymbol>,
     pub kind: KKind,
     pub schema: RelativeSchema,
 }
 
 /// One declaring binder handed to [`seal_group`]: its name and the indices of the members it owns.
 pub struct SealBinderInput<'m> {
-    pub name: &'m str,
+    pub name: TypeSymbol,
     pub members: &'m [usize],
 }
 
@@ -487,7 +491,7 @@ pub struct SealBinderInput<'m> {
 /// order, plus each binder's union over the members it owns. Implements the per-component identity
 /// described in this module's header.
 pub fn seal_group(
-    members: &[SealMemberInput<'_>],
+    members: &[SealMemberInput],
     binders: &[SealBinderInput<'_>],
     generative_nonce: Option<ScopeId>,
     types: &TypeRegistry,
@@ -511,9 +515,10 @@ pub fn seal_group(
     let mut placement: Vec<Option<(TypeDigest, usize, usize)>> = vec![None; count];
 
     for component in tarjan_components(&edges) {
-        // Canonical presentation order is bare-name order, with the owning binder as tiebreak so
-        // two same-tag variants of different binders take stable distinct positions. The owner
-        // orders but does not digest.
+        // Canonical presentation order is the numeric order of the members' name symbols, with the
+        // owning binder as tiebreak so two same-tag variants of different binders take stable
+        // distinct positions. It is the order the digest feed folds in, so index and feed agree.
+        // The owner orders but does not digest.
         let mut order = component.clone();
         order.sort_by(|a, b| {
             (members[*a].name, members[*a].owner).cmp(&(members[*b].name, members[*b].owner))
@@ -581,7 +586,7 @@ pub fn seal_group(
             scc_digest,
             index: position,
             scc_size,
-            name: members[index].name.to_string(),
+            name: members[index].name,
             kind: members[index].kind,
             schema,
         });
@@ -596,7 +601,7 @@ pub fn seal_group(
         .iter()
         .map(|binder| {
             let owned: Vec<KType> = binder.members.iter().map(|index| sealed[*index]).collect();
-            (binder.name.to_string(), types.union_of(owned))
+            (binder.name, types.union_of(owned))
         })
         .collect();
     SealedGroup {

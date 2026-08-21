@@ -12,8 +12,8 @@ use crate::machine::{StepCarried, seal_type_identity};
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::Symbol;
 use crate::machine::model::render_label;
+use crate::machine::model::{Symbol, TypeSymbol, type_binder};
 
 /// Fill the elaborated variant payloads into the declaration window's owned members and bind the
 /// union name to the anonymous union of the sealed variants. Every variant is one member of the
@@ -40,14 +40,16 @@ fn finalize_union<'a>(
     let scope = fctx.scope;
     let brand = scope.brand();
 
+    let binder = type_binder(&name, fctx.registries)?;
     let mut sealed = false;
     for (tag, payload) in fields {
-        // A variant tag is a declaration-window name, not a record field label: the window keys by
-        // text, so the symbol resolves back through the interner that recorded it.
-        let tag = render_label(tag, fctx.registries);
-        let index = match window.view().variant_index(&name, &tag) {
+        // A variant tag arrives as the record literal's bare field symbol. It probes the window's
+        // member list by those bits and the stored `TypeSymbol` the declaration minted is the hit —
+        // no class predicate, and text only where the miss is reported.
+        let index = match window.view().variant_index(binder, tag) {
             Some(index) => index,
             None => {
+                let tag = render_label(tag, fctx.registries);
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "UNION `{name}`: variant `{tag}` is not one of the declared variants",
                 ))));
@@ -67,7 +69,7 @@ fn finalize_union<'a>(
             Vec::new(),
         ));
     }
-    let union_ty = match view.sealed_binder(&name) {
+    let union_ty = match view.sealed_binder(binder) {
         Some(kt) => kt,
         None => {
             return Err(KError::new(KErrorKind::ShapeError(format!(
@@ -78,10 +80,7 @@ fn finalize_union<'a>(
     // The union type is a `Copy` handle: cross it as a declared operand and fold the variant
     // carriers' reach onto the placement's witness, rather than capturing it into a fold closure.
     // The `types` writes installing every name the seal settles ride the outcome.
-    Ok((
-        seal_type_identity(scope, union_ty),
-        seal_writes(view, site, fctx.registries),
-    ))
+    Ok((seal_type_identity(scope, union_ty), seal_writes(view, site)))
 }
 
 /// Elaborate the variant schema, folding synchronously via [`finalize_union`] or deferring through
@@ -113,14 +112,22 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         Ok(tags) => tags,
         Err(message) => return Action::done(Err(KError::new(KErrorKind::ShapeError(message)))),
     };
+    // The tags classify and intern here, at the declaration that mints them, so the window, the
+    // sealed member nodes and every later diagnostic share one classified currency.
+    let binder = crate::try_action!(type_binder(&name, ctx.registries));
+    let tags: Vec<TypeSymbol> = crate::try_action!(
+        tags.iter()
+            .map(|tag| type_binder(tag, ctx.registries))
+            .collect::<Result<Vec<_>, _>>()
+    );
     // The window this union's variants fill: the enclosing module body's, when it announced this
     // binder, else one this declaration owns — the one-binder special case of the same machinery.
     let window = match ctx.scope.own_declaration_window() {
-        Some(ambient) if ambient.binds(&name) => {
+        Some(ambient) if ambient.binds(binder) => {
             // The scan read the same statement, so a disagreement is a scan/dispatch wiring bug.
             if tags
                 .iter()
-                .any(|tag| ambient.variant_index(&name, tag).is_none())
+                .any(|tag| ambient.variant_index(binder, tag.symbol()).is_none())
             {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "UNION `{name}`: its announced variants differ from its declared ones",
@@ -128,7 +135,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             }
             DeclWindow::Ambient(ambient)
         }
-        _ => DeclWindow::Owned(RecursiveGroupWindow::for_binder(name.clone(), tags)),
+        _ => DeclWindow::Owned(RecursiveGroupWindow::for_binder(binder, tags)),
     };
     let error_frame = TraceFrame::bare("<union>", format!("UNION {name} schema"));
     nominal_schema_action(
@@ -181,7 +188,7 @@ mod tests {
                 schema,
                 ..
             } = types.node(member)
-                && member_name == variant
+                && member_name.symbol() == crate::machine::model::Symbol::of(variant)
             {
                 return match schema {
                     NodeSchema::NewType(repr) => repr,
@@ -340,8 +347,11 @@ mod tests {
         // the members), exactly as the `nominal_schema_action` entry point does.
         let make_window = || {
             crate::machine::model::DeclWindow::Owned(RecursiveGroupWindow::for_binder(
-                "Maybe".to_string(),
-                vec!["Some".to_string(), "None".to_string()],
+                type_name("Maybe", types.registries()),
+                vec![
+                    type_name("Some", types.registries()),
+                    type_name("None", types.registries()),
+                ],
             ))
         };
         // One declaration's identity: both finalize calls simulate a parallel finalize of the

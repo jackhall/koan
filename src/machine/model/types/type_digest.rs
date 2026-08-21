@@ -530,7 +530,7 @@ fn feed_record(h: &mut DigestHasher, record: &Record<KType>) {
 /// [`TypeNode::Sibling`] into the component's own canonical order, cross-component references as
 /// the referent's finished member handle.
 pub(crate) struct ComponentMember<'m> {
-    pub name: &'m str,
+    pub name: TypeSymbol,
     pub kind: KKind,
     pub schema: &'m NodeSchema,
 }
@@ -538,8 +538,10 @@ pub(crate) struct ComponentMember<'m> {
 /// The content digest of one strongly-connected component of a recursive-group window — the
 /// identity half of every member handle it contains (see [`member_ref_digest`]).
 ///
-/// `members` arrive in the component's canonical **name** order, so two independently declared
-/// components with the same content present identically whatever order they were written in.
+/// `members` arrive in the component's canonical order — the numeric order of their name symbols,
+/// the same composition [`abstract_type_digest`] and [`schema_content_digest`] use — so two
+/// independently declared components with the same content present identically whatever order they
+/// were written in.
 /// A generative component (opaque ascription's per-application mint) folds its nonce first, so two
 /// applications never unify; every other component is content-only. Intra-component sibling
 /// references digest as bare relative indices, so computing a component's digest never recurses
@@ -563,7 +565,7 @@ pub(crate) fn component_digest(
     }
     h.count(members.len());
     for member in members {
-        h.string(member.name).byte(kkind_tag(member.kind));
+        h.symbol(member.name.symbol()).byte(kkind_tag(member.kind));
         match member.schema {
             NodeSchema::NewType(repr) => {
                 h.byte(0).digest(repr.digest());
@@ -572,15 +574,13 @@ pub(crate) fn component_digest(
                 schema,
                 param_names,
             } => {
-                // HashMap iteration order is nondeterministic — sort by key.
-                let mut entries: Vec<(&str, TypeDigest)> = schema
-                    .iter()
-                    .map(|(k, v)| (k.as_str(), v.digest()))
-                    .collect();
-                entries.sort_by(|a, b| a.0.cmp(b.0));
+                // HashMap iteration order is nondeterministic — sort by the keys' symbol bits.
+                let mut entries: Vec<(TypeSymbol, TypeDigest)> =
+                    schema.iter().map(|(k, v)| (*k, v.digest())).collect();
+                entries.sort_unstable_by_key(|(name, _)| *name);
                 h.byte(1).count(entries.len());
                 for (name, d) in entries {
-                    h.string(name).digest(d);
+                    h.symbol(name.symbol()).digest(d);
                 }
                 h.count(param_names.len());
                 for p in param_names {

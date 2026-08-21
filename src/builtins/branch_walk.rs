@@ -8,8 +8,8 @@
 //! (ruling F1). [`resolve_arm_contract`] builds the `-> :T` return contract both arms
 //! enforce on their result.
 
+use crate::machine::model::ValueSymbol;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
-use crate::machine::model::{TypeRegistry, ValueSymbol};
 use crate::machine::model::{TypeResolution, most_specific_ktype};
 
 use crate::machine::DeliveredCarried;
@@ -30,7 +30,7 @@ pub(crate) fn resolve_arm_contract<'a>(
     let ret_kt = if let Some(te) = ctx.args.unresolved_type("return_type") {
         match ctx
             .scope
-            .resolve_type_identifier(te, ctx.chain.clone(), ctx.types())
+            .resolve_type_identifier(te, ctx.chain.clone(), ctx.registries)
         {
             TypeResolution::Done(kt) => kt,
             // The builtin fallback is already tried inside `resolve_type_identifier`; a
@@ -232,9 +232,9 @@ fn resolve_head_type<'a>(
     scope: &Scope<'a>,
     token: &TypeIdentifier<'a>,
     chain: Option<Rc<LexicalFrame>>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<KType, String> {
-    match scope.resolve_type_identifier(token, chain, types) {
+    match scope.resolve_type_identifier(token, chain, registries) {
         TypeResolution::Done(kt) => Ok(kt),
         _ => Err(format!(
             "match arm type `{}` is not a known type",
@@ -264,7 +264,6 @@ pub(crate) fn find_branch_body_by_type<'a>(
     chain: Option<Rc<LexicalFrame>>,
     registries: &RunRegistries,
 ) -> Result<Option<SelectedArm<'a>>, String> {
-    let types = &registries.types;
     let parts = &branches.parts;
     if !parts.len().is_multiple_of(3) {
         return Err(format!(
@@ -356,7 +355,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
                         }
                     }
                     HeadMode::Scope => {
-                        let kt = resolve_head_type(scope, &token, chain.clone(), types)?;
+                        let kt = resolve_head_type(scope, &token, chain.clone(), registries)?;
                         typed_arms.push(TypedArm {
                             head_label: label,
                             ktype: kt,

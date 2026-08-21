@@ -236,7 +236,7 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
                     self.current_scope(),
                     &ast,
                     active_chain,
-                    self.types(),
+                    self.registries(),
                     TypeLeafChannels::ValueChannelFirst,
                 ))
             }

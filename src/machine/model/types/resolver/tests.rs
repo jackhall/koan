@@ -1,5 +1,5 @@
 use super::*;
-use crate::builtins::test_support::{TestRun, mock_declaration_site, type_name};
+use crate::builtins::test_support::{TestRun, mock_declaration_site, type_name, type_token};
 use crate::machine::DeclarationSite;
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::Record;
@@ -19,7 +19,7 @@ fn announced_module<'a>(
 ) -> &'a crate::machine::Scope<'a> {
     let mut announced = AnnouncedData::default();
     for member in members {
-        announced.announce(member.to_string());
+        announced.announce(type_token(member));
     }
     parent.alloc_child_under_module("m", Some(announced))
 }
@@ -36,7 +36,7 @@ fn type_token_cannot_bind_value_side() {
     let scope = test_run.scope;
     let types = test_run.registry_handle();
     let mut el = Elaborator::new(scope);
-    match elaborate_type_identifier(&mut el, &leaf("Gee"), &types) {
+    match elaborate_type_identifier(&mut el, &leaf("Gee"), types.registries()) {
         TypeResolution::Unbound(msg) => assert!(
             msg.contains("Gee"),
             "expected an unknown-name miss naming `Gee`, got: {msg}",
@@ -53,7 +53,7 @@ fn unbound_leaf_names_unknown_type() {
     let scope = test_run.scope;
     let types = test_run.registry_handle();
     let mut el = Elaborator::new(scope);
-    match elaborate_type_identifier(&mut el, &leaf("NopeType"), &types) {
+    match elaborate_type_identifier(&mut el, &leaf("NopeType"), types.registries()) {
         TypeResolution::Unbound(msg) => assert!(
             msg.contains("unknown type name") && msg.contains("NopeType"),
             "expected an unknown-type-name message naming `NopeType`, got: {msg}",
@@ -71,18 +71,18 @@ fn announced_member_lowers_to_sibling_for_a_declarator() {
     let region = run_root_storage();
     let parent_test_run = TestRun::silent(&program, &region);
     let parent = parent_test_run.scope;
-    let child = announced_module(parent, &["A", "B"]);
+    let child = announced_module(parent, &["Alpha", "Beta"]);
     let window = child.own_declaration_window().expect("the body announced");
     let types = parent_test_run.registry_handle();
     let mut el = Elaborator::new(child).with_window(WindowView::Announced(window));
-    match elaborate_type_identifier(&mut el, &leaf("B"), &types) {
+    match elaborate_type_identifier(&mut el, &leaf("Beta"), types.registries()) {
         TypeResolution::Done(kt) => assert_eq!(kt, types.intern(TypeNode::Sibling(1))),
         other => panic!("expected a sibling back-edge for a window member, got {other:?}"),
     }
     let mut el2 = Elaborator::new(child).with_window(WindowView::Announced(window));
     assert!(
         matches!(
-            elaborate_type_identifier(&mut el2, &leaf("Nope"), &types),
+            elaborate_type_identifier(&mut el2, &leaf("Nope"), types.registries()),
             TypeResolution::Unbound(_)
         ),
         "a non-member must fall through to ordinary resolution",
@@ -96,10 +96,10 @@ fn announced_member_never_lowers_to_sibling_for_a_consumer() {
     let program = program_storage();
     let region = run_root_storage();
     let parent_test_run = TestRun::silent(&program, &region);
-    let child = announced_module(parent_test_run.scope, &["A", "B"]);
+    let child = announced_module(parent_test_run.scope, &["Alpha", "Beta"]);
     let types = parent_test_run.registry_handle();
     let mut el = Elaborator::new(child);
-    match elaborate_type_identifier(&mut el, &leaf("B"), &types) {
+    match elaborate_type_identifier(&mut el, &leaf("Beta"), types.registries()) {
         TypeResolution::Unbound(msg) => assert!(
             msg.contains("co-declared"),
             "expected the dead-declaration miss, got {msg}",
@@ -116,12 +116,14 @@ fn window_binder_resolves_to_the_union_of_its_members() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let types = test_run.registry_handle();
-    let window =
-        RecursiveGroupWindow::for_binder("Tree".into(), vec!["Leaf".into(), "Node".into()]);
+    let window = RecursiveGroupWindow::for_binder(
+        type_token("Tree"),
+        vec![type_token("Leaf"), type_token("Node")],
+    );
     let mut el = Elaborator::new(test_run.scope).with_window(WindowView::Local(&window));
-    match elaborate_type_identifier(&mut el, &leaf("Tree"), &types) {
+    match elaborate_type_identifier(&mut el, &leaf("Tree"), types.registries()) {
         TypeResolution::Done(kt) => {
-            assert_eq!(Some(kt), window.binder_union("Tree", &types))
+            assert_eq!(Some(kt), window.binder_union(type_token("Tree"), &types))
         }
         other => panic!("expected the binder union, got {other:?}"),
     }
@@ -141,7 +143,7 @@ fn announced_member_defers_until_the_window_seals() {
     let fill = |name: &str, repr: KType, site: DeclarationSite| {
         finalize_nominal_member(
             &window,
-            name,
+            type_token(name),
             |_| repr,
             site,
             scope.brand(),
@@ -194,12 +196,12 @@ fn announced_member_defers_until_the_window_seals() {
     // A different statement declaring `Leaf` over different content is a redeclaration: its op
     // collides with the identity this window installed, so the apply — not the seal — errors.
     let other_window = DeclWindow::Owned(RecursiveGroupWindow::new(vec![(
-        "Leaf".into(),
+        type_token("Leaf"),
         KKind::NewType,
     )]));
     let redeclare = match finalize_nominal_member(
         &other_window,
-        "Leaf",
+        type_token("Leaf"),
         |_| KType::BOOL,
         mock_declaration_site(4),
         scope.brand(),
@@ -234,9 +236,9 @@ fn constructor_apply_name_renders_surface_form() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let ctor = RecursiveGroupWindow::seal_singleton(
-        "Wrap".into(),
+        type_name("Wrap", &registries),
         RelativeSchema::TypeConstructor {
-            schema: std::collections::HashMap::new(),
+            schema: crate::machine::model::TypeMemberMap::default(),
             param_names: vec![type_name("Type", &registries)],
         },
         None,

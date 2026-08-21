@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 use crate::machine::ProducerId;
 use crate::machine::model::TypeResolution;
-use crate::machine::model::{ExpressionPart, KType, TypeIdentifier, TypeRegistry};
+use crate::machine::model::{ExpressionPart, KType, RunRegistries, TypeIdentifier};
 use crate::machine::{DeliveredCarried, LexicalFrame, NameLookup, Scope};
 
 use crate::machine::model::Carried;
@@ -38,9 +38,9 @@ pub(in crate::machine::execute) fn type_channel(
     scope: &Scope<'_>,
     t: &TypeIdentifier,
     chain: Option<Rc<LexicalFrame>>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> TypeChannel {
-    match scope.resolve_type_identifier(t, chain, types) {
+    match scope.resolve_type_identifier(t, chain, registries) {
         TypeResolution::Done(kt) => TypeChannel::Done(kt),
         TypeResolution::Unbound(n) => TypeChannel::Unbound(n),
         TypeResolution::Park(sources) => match sources.first() {
@@ -78,7 +78,7 @@ pub(in crate::machine::execute) fn resolve_name(
     scope: &Scope<'_>,
     part: &ExpressionPart<'_>,
     chain: Option<&Rc<LexicalFrame>>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
     type_leaf: TypeLeafChannels,
 ) -> Resolution {
     match part {
@@ -96,7 +96,7 @@ pub(in crate::machine::execute) fn resolve_name(
             {
                 return Resolution::Parked(source);
             }
-            match type_channel(scope, t, chain.cloned(), types) {
+            match type_channel(scope, t, chain.cloned(), registries) {
                 // A `KType` is a `Copy` registry handle with no foreign reach, so it delivers
                 // resident with no coverage to assemble.
                 TypeChannel::Done(kt) => {

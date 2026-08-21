@@ -23,13 +23,13 @@ use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::core::{DeclarationSite, LexicalFrame, NameLookup, Scope};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::TypeIdentifier;
+use crate::machine::model::labels::TypeSymbol;
 
 use super::declaration_window::{DeclWindow, WindowView};
 use super::kkind::KKind;
-use super::ktype::KType;
+use super::ktype::{KType, render_label};
 use super::node::TypeNode;
 use super::recursive_group_window::RecursiveGroupWindow;
-use super::registry::TypeRegistry;
 
 #[cfg(test)]
 mod tests;
@@ -87,7 +87,7 @@ pub enum TypeResolutionMode {
 /// - `chain`: the lexical position the bare-leaf resolution is gated against.
 pub struct Elaborator<'b, 'a> {
     pub scope: &'b Scope<'a>,
-    pub threaded: HashSet<String>,
+    pub threaded: HashSet<TypeSymbol>,
     window: Option<WindowView<'b, 'a>>,
     mode: TypeResolutionMode,
     /// Lexical chain the bare-leaf resolution is gated against, so a type declared
@@ -107,7 +107,7 @@ impl<'b, 'a> Elaborator<'b, 'a> {
         }
     }
 
-    pub fn with_threaded<I: IntoIterator<Item = String>>(mut self, names: I) -> Self {
+    pub fn with_threaded<I: IntoIterator<Item = TypeSymbol>>(mut self, names: I) -> Self {
         self.threaded.extend(names);
         self
     }
@@ -148,7 +148,11 @@ impl<'b, 'a> Elaborator<'b, 'a> {
 /// A variant carries no placeholder of its own: the `UNION` statement's binder stamps it, so a
 /// variant parks on its owner. An unfilled member whose producer is gone is a declaration that
 /// died; that is a typed miss, never a park that would never wake.
-fn park_until_seal(el: &Elaborator<'_, '_>, view: WindowView<'_, '_>) -> TypeResolution<KType> {
+fn park_until_seal(
+    el: &Elaborator<'_, '_>,
+    view: WindowView<'_, '_>,
+    registries: &RunRegistries,
+) -> TypeResolution<KType> {
     let Some((owner, _)) = el.scope.nearest_declaration_window() else {
         return TypeResolution::Unbound(
             "a co-declared type name resolved outside the body that announced it".to_string(),
@@ -157,15 +161,14 @@ fn park_until_seal(el: &Elaborator<'_, '_>, view: WindowView<'_, '_>) -> TypeRes
     let mut producers: Vec<ProducerId> = Vec::new();
     for (name, member_owner) in view.unfilled_members() {
         let declarer = member_owner.unwrap_or(name);
-        let claim = crate::machine::model::TypeSymbol::of(&declarer)
-            .and_then(|declarer| owner.bindings().type_placeholder_producer(declarer));
-        match claim {
+        match owner.bindings().type_placeholder_producer(declarer) {
             Some(node_id) => {
                 if !producers.contains(&node_id) {
                     producers.push(node_id);
                 }
             }
             None => {
+                let declarer = render_label(declarer.symbol(), registries);
                 return TypeResolution::Unbound(format!(
                     "type `{declarer}` is co-declared in this module body but its declaration \
                      failed",
@@ -191,33 +194,38 @@ fn park_until_seal(el: &Elaborator<'_, '_>, view: WindowView<'_, '_>) -> TypeRes
 pub fn elaborate_type_identifier(
     el: &mut Elaborator<'_, '_>,
     t: &TypeIdentifier,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> TypeResolution<KType> {
+    let types = &registries.types;
     let name = t.as_str();
-    if let Some(view) = el.window() {
+    // A window's members and binders are Type-class labels, so a name that does not classify names
+    // no member of one; the window is skipped rather than probed.
+    if let (Some(view), Some(classified)) = (el.window(), TypeSymbol::of(name)) {
         // A bare leaf naming a standalone member of the window is a co-declared sibling (or a
         // self-reference). A `UNION`'s variants are *not* standalone types: a bare `Node :Leaf` is
         // an unknown-type error, and a sibling variant is reached only through its binder
         // (`:Tree`) or the qualified sigil `:(Tree Leaf)` (handled in `typed_field_list`).
-        if let Some(index) = view.member_index(name) {
+        if let Some(index) = view.member_index(classified) {
             return match (view.sealed_member(index), el.mode) {
                 (Some(kt), _) => TypeResolution::Done(kt),
                 (None, TypeResolutionMode::Declarator) => {
                     TypeResolution::Done(types.intern(TypeNode::Sibling(index)))
                 }
-                (None, TypeResolutionMode::Consumer) => park_until_seal(el, view),
+                (None, TypeResolutionMode::Consumer) => park_until_seal(el, view, registries),
             };
         }
         // A binder names no single member — a `UNION`'s name denotes the union of every variant it
         // declares (`Node :Tree` inside `UNION Tree = (…)`).
-        if view.binds(name) {
-            return match (view.sealed_binder(name), el.mode) {
+        if view.binds(classified) {
+            return match (view.sealed_binder(classified), el.mode) {
                 (Some(kt), _) => TypeResolution::Done(kt),
-                (None, TypeResolutionMode::Declarator) => match view.binder_union(name, types) {
-                    Some(kt) => TypeResolution::Done(kt),
-                    None => TypeResolution::Unbound(format!("unknown type name `{name}`")),
-                },
-                (None, TypeResolutionMode::Consumer) => park_until_seal(el, view),
+                (None, TypeResolutionMode::Declarator) => {
+                    match view.binder_union(classified, types) {
+                        Some(kt) => TypeResolution::Done(kt),
+                        None => TypeResolution::Unbound(format!("unknown type name `{name}`")),
+                    }
+                }
+                (None, TypeResolutionMode::Consumer) => park_until_seal(el, view, registries),
             };
         }
         // A threaded name the window has not announced yet: a forward reference inside a declarator
@@ -225,8 +233,8 @@ pub fn elaborate_type_identifier(
         // relative index stable, and the declarator's finalize reports any member left unfilled as
         // a reference to a type the declaration never made.
         if !view.is_sealed()
-            && el.threaded.contains(name)
-            && let Some(kt) = view.sibling(name, KKind::NewType, types)
+            && el.threaded.contains(&classified)
+            && let Some(kt) = view.sibling(classified, KKind::NewType, types)
         {
             return TypeResolution::Done(kt);
         }
@@ -275,16 +283,11 @@ pub enum SealOutcome<'a> {
 /// idempotent: it recognizes the re-entry by its installing
 /// [`Installer`](crate::machine::core::Installer) matching the stored entry's, while a genuine
 /// redeclaration installs under a different statement and surfaces as `Rebind`.
-pub fn seal_writes<'a>(
-    view: WindowView<'_, 'a>,
-    site: DeclarationSite,
-    registries: &RunRegistries,
-) -> Vec<WriteOp<'a>> {
+pub fn seal_writes<'a>(view: WindowView<'_, 'a>, site: DeclarationSite) -> Vec<WriteOp<'a>> {
     view.installable()
         .into_iter()
         .map(|(name, kt)| WriteOp::Type {
-            name: crate::machine::model::TypeSymbol::declared(&name, &registries.labels)
-                .expect("an announced type member is declared under a Type token"),
+            name,
             kt,
             site,
             policy: TypeWritePolicy::UpsertEqual,
@@ -307,7 +310,7 @@ pub fn seal_writes<'a>(
 ///    hands back the same handles and the upsert is idempotent.
 pub fn finalize_nominal_member<'a>(
     window: &DeclWindow<'a>,
-    name: &str,
+    name: TypeSymbol,
     build_repr: impl FnOnce(WindowView<'_, 'a>) -> KType,
     site: DeclarationSite,
     brand: crate::machine::core::RegionBrand<'a>,
@@ -318,7 +321,7 @@ pub fn finalize_nominal_member<'a>(
         Some(index) => index,
         // The declarator handed a window that does not announce its own binder — a wiring bug, not
         // a user error, but reported as a dangling reference rather than a panic.
-        None => return SealOutcome::DanglingRef(name.to_string()),
+        None => return SealOutcome::DanglingRef(render_label(name.symbol(), registries)),
     };
     let repr = build_repr(window.view());
     if !window.fill(index, repr, brand, types) {
@@ -327,11 +330,11 @@ pub fn finalize_nominal_member<'a>(
     let view = window.view();
     let kt = match view.sealed_member(index) {
         Some(kt) => kt,
-        None => return SealOutcome::DanglingRef(name.to_string()),
+        None => return SealOutcome::DanglingRef(render_label(name.symbol(), registries)),
     };
     SealOutcome::Sealed {
         kt,
-        writes: seal_writes(view, site, registries),
+        writes: seal_writes(view, site),
     }
 }
 
@@ -341,12 +344,9 @@ pub fn finalize_nominal_member<'a>(
 ///
 /// Self-only, not a chain walk: a same-named declaration nested deeper in the body opens its own
 /// singleton rather than hijacking the announced slot.
-pub fn declarator_window<'a>(scope: &'a Scope<'a>, name: &str) -> DeclWindow<'a> {
+pub fn declarator_window<'a>(scope: &'a Scope<'a>, name: TypeSymbol) -> DeclWindow<'a> {
     match scope.own_declaration_window() {
         Some(window) if window.member_index(name).is_some() => DeclWindow::Ambient(window),
-        _ => DeclWindow::Owned(RecursiveGroupWindow::new(vec![(
-            name.to_string(),
-            KKind::NewType,
-        )])),
+        _ => DeclWindow::Owned(RecursiveGroupWindow::new(vec![(name, KKind::NewType)])),
     }
 }

@@ -14,11 +14,10 @@
 //! to the one identity.
 
 use crate::machine::WriteGate;
-use std::collections::HashMap;
 
 use crate::machine::Scope;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{KType, RecursiveGroupWindow, RelativeSchema};
+use crate::machine::model::{KType, RecursiveGroupWindow, RelativeSchema, TypeMemberMap};
 
 /// Classify and intern one of the family's parameter names. The two literals below are
 /// Type-class by inspection, so a miss is a programming error in this registration.
@@ -29,19 +28,18 @@ fn declared_param(text: &str, registries: &RunRegistries) -> crate::machine::mod
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let types = &registries.types;
-    let mut schema: HashMap<String, KType> = HashMap::with_capacity(2);
-    schema.insert("Ok".into(), KType::ANY);
-    schema.insert("Error".into(), KType::ANY);
+    let ok = declared_param("Ok", registries);
+    let error = declared_param("Error", registries);
+    let mut schema = TypeMemberMap::default();
+    schema.insert(ok, KType::ANY);
+    schema.insert(error, KType::ANY);
     // A one-member window sealed in miniature: the sole `TypeConstructor` member's component is a
     // singleton, so its interned handle is `Result`'s identity.
     let identity = RecursiveGroupWindow::seal_singleton(
-        "Result".into(),
+        declared_param("Result", registries),
         RelativeSchema::TypeConstructor {
             schema,
-            param_names: vec![
-                declared_param("Ok", registries),
-                declared_param("Error", registries),
-            ],
+            param_names: vec![ok, error],
         },
         None,
         types,

@@ -30,6 +30,7 @@
 use std::cell::Cell;
 
 use crate::machine::core::RegionBrand;
+use crate::machine::model::labels::{Symbol, TypeSymbol};
 
 use super::kkind::KKind;
 use super::ktype::KType;
@@ -39,20 +40,20 @@ use super::recursive_group_window::{
 };
 use super::registry::TypeRegistry;
 
-/// One announced member: its declared name and the binder that owns it. `Copy` and pointer-only,
-/// so the run bumps into the declaring scope's region.
+/// One announced member: its declared name and the binder that owns it. Both are Type-class labels
+/// interned at the declaration that announced them, so the record is `Copy` and region-pure.
 #[derive(Clone, Copy)]
-pub struct AnnouncedMember<'a> {
+pub struct AnnouncedMember {
     /// The declared name — the bare tag for a variant.
-    pub name: &'a str,
+    pub name: TypeSymbol,
     /// The binder owning this member, or `None` for a standalone type.
-    pub owner: Option<&'a str>,
+    pub owner: Option<TypeSymbol>,
 }
 
 /// One declaring binder and the indices of the members it owns.
 #[derive(Clone, Copy)]
 pub struct AnnouncedBinder<'a> {
-    pub name: &'a str,
+    pub name: TypeSymbol,
     pub members: &'a [usize],
 }
 
@@ -61,7 +62,7 @@ pub struct AnnouncedBinder<'a> {
 #[derive(Clone, Copy)]
 pub struct SealedAnnounced<'a> {
     members: &'a [KType],
-    binder_types: &'a [(&'a str, KType)],
+    binder_types: &'a [(TypeSymbol, KType)],
 }
 
 impl<'a> SealedAnnounced<'a> {
@@ -71,7 +72,7 @@ impl<'a> SealedAnnounced<'a> {
     }
 
     /// The union handle binder `name` denotes.
-    pub fn binder_type(&self, name: &str) -> Option<KType> {
+    pub fn binder_type(&self, name: TypeSymbol) -> Option<KType> {
         self.binder_types
             .iter()
             .find(|(binder, _)| *binder == name)
@@ -80,7 +81,7 @@ impl<'a> SealedAnnounced<'a> {
 
     /// Every `(name, handle)` a seal installs into `bindings.types`: the standalone members and the
     /// binders. Variants are absent — they are reached through their binder, not by name.
-    pub fn installable(&self, members: &[AnnouncedMember<'a>]) -> Vec<(&'a str, KType)> {
+    pub fn installable(&self, members: &[AnnouncedMember]) -> Vec<(TypeSymbol, KType)> {
         members
             .iter()
             .enumerate()
@@ -96,9 +97,9 @@ impl<'a> SealedAnnounced<'a> {
 #[derive(Default)]
 pub struct AnnouncedData {
     /// `(name, owner)` per member, in announcement order.
-    pub members: Vec<(String, Option<String>)>,
+    pub members: Vec<(TypeSymbol, Option<TypeSymbol>)>,
     /// `(binder, owned member indices)`.
-    pub binders: Vec<(String, Vec<usize>)>,
+    pub binders: Vec<(TypeSymbol, Vec<usize>)>,
 }
 
 impl AnnouncedData {
@@ -108,17 +109,17 @@ impl AnnouncedData {
     }
 
     /// Announce a standalone member, yielding its index.
-    pub fn announce(&mut self, name: String) -> usize {
+    pub fn announce(&mut self, name: TypeSymbol) -> usize {
         self.members.push((name, None));
         self.members.len() - 1
     }
 
     /// Announce `binder`'s variants — one owned member per tag — and register the binder.
-    pub fn announce_binder(&mut self, binder: String, tags: Vec<String>) {
+    pub fn announce_binder(&mut self, binder: TypeSymbol, tags: Vec<TypeSymbol>) {
         let owned = tags
             .into_iter()
             .map(|tag| {
-                self.members.push((tag, Some(binder.clone())));
+                self.members.push((tag, Some(binder)));
                 self.members.len() - 1
             })
             .collect();
@@ -126,15 +127,15 @@ impl AnnouncedData {
     }
 
     /// Whether a standalone member of this name is already announced.
-    pub fn declares(&self, name: &str) -> bool {
+    pub fn declares(&self, name: TypeSymbol) -> bool {
         self.members
             .iter()
-            .any(|(member, owner)| owner.is_none() && member == name)
+            .any(|(member, owner)| owner.is_none() && *member == name)
     }
 
     /// Whether `name` is already a declaring binder.
-    pub fn binds(&self, name: &str) -> bool {
-        self.binders.iter().any(|(binder, _)| binder == name)
+    pub fn binds(&self, name: TypeSymbol) -> bool {
+        self.binders.iter().any(|(binder, _)| *binder == name)
     }
 }
 
@@ -142,7 +143,7 @@ impl AnnouncedData {
 /// two bumped `Copy` runs and two `Cell`s of bumped references, so the scope carrying it costs
 /// region teardown nothing.
 pub struct AnnouncedWindow<'a> {
-    members: &'a [AnnouncedMember<'a>],
+    members: &'a [AnnouncedMember],
     binders: &'a [AnnouncedBinder<'a>],
     /// Every member's fill, replaced whole on each fill. One bumped run per fill keeps the whole
     /// window `Copy`-storable — a per-member `Cell` could not be bumped at all — and the member
@@ -160,13 +161,13 @@ impl<'a> AnnouncedWindow<'a> {
             members: brand
                 .allocator()
                 .slice_from_iter(data.members.iter().map(|(name, owner)| AnnouncedMember {
-                    name: brand.allocator().text(name),
-                    owner: owner.as_deref().map(|o| brand.allocator().text(o)),
+                    name: *name,
+                    owner: *owner,
                 })),
             binders: brand
                 .allocator()
                 .slice_from_iter(data.binders.iter().map(|(name, owned)| AnnouncedBinder {
-                    name: brand.allocator().text(name),
+                    name: *name,
                     members: brand.allocator().slice(owned),
                 })),
             // Reserved and filled straight from the repeat, so an unfilled window costs the region
@@ -181,35 +182,36 @@ impl<'a> AnnouncedWindow<'a> {
     }
 
     /// The announced members, in announcement order.
-    pub fn members(&self) -> &'a [AnnouncedMember<'a>] {
+    pub fn members(&self) -> &'a [AnnouncedMember] {
         self.members
     }
 
     /// Index of the standalone member named `name`. An owned member never answers here.
-    pub fn member_index(&self, name: &str) -> Option<usize> {
+    pub fn member_index(&self, name: TypeSymbol) -> Option<usize> {
         self.members
             .iter()
             .position(|m| m.owner.is_none() && m.name == name)
     }
 
-    /// Index of the member `binder` owns under the bare tag `tag`.
-    pub fn variant_index(&self, binder: &str, tag: &str) -> Option<usize> {
+    /// Index of the member `binder` owns under the bare tag `tag`, probed by bare symbol bits —
+    /// the recovery door [`RecursiveGroupWindow::variant_index`] documents.
+    pub fn variant_index(&self, binder: TypeSymbol, tag: Symbol) -> Option<usize> {
         let owned = self.binders.iter().find(|b| b.name == binder)?;
         owned
             .members
             .iter()
             .copied()
-            .find(|index| self.members[*index].name == tag)
+            .find(|index| self.members[*index].name.symbol() == tag)
     }
 
     /// Whether `name` is a declaring binder of this window.
-    pub fn binds(&self, name: &str) -> bool {
+    pub fn binds(&self, name: TypeSymbol) -> bool {
         self.binders.iter().any(|b| b.name == name)
     }
 
     /// The relative type binder `name` denotes while the window is open: the union of the members
     /// it owns, each as its sibling handle.
-    pub fn binder_union(&self, name: &str, types: &TypeRegistry) -> Option<KType> {
+    pub fn binder_union(&self, name: TypeSymbol, types: &TypeRegistry) -> Option<KType> {
         let binder = self.binders.iter().find(|b| b.name == name)?;
         Some(
             types.union_of(
@@ -229,7 +231,7 @@ impl<'a> AnnouncedWindow<'a> {
 
     /// Every still-unfilled member, as `(name, owner)`. A consumer parks on exactly this set's
     /// producers; a variant's producer is its owning binder's, since a variant stamps none itself.
-    pub fn unfilled_members(&self) -> Vec<(&'a str, Option<&'a str>)> {
+    pub fn unfilled_members(&self) -> Vec<(TypeSymbol, Option<TypeSymbol>)> {
         let fills = self.fills.get();
         self.members
             .iter()
@@ -278,7 +280,7 @@ impl<'a> AnnouncedWindow<'a> {
         if fills.iter().any(Option::is_none) {
             return None;
         }
-        let inputs: Vec<SealMemberInput<'_>> = self
+        let inputs: Vec<SealMemberInput> = self
             .members
             .iter()
             .zip(fills.iter())
@@ -371,15 +373,15 @@ impl<'v, 'a> WindowView<'v, 'a> {
     }
 
     /// Index of the standalone member named `name`.
-    pub fn member_index(self, name: &str) -> Option<usize> {
+    pub fn member_index(self, name: TypeSymbol) -> Option<usize> {
         match self {
             WindowView::Announced(w) => w.member_index(name),
             WindowView::Local(w) => w.member_index(name),
         }
     }
 
-    /// Index of the member `binder` owns under the bare tag `tag`.
-    pub fn variant_index(self, binder: &str, tag: &str) -> Option<usize> {
+    /// Index of the member `binder` owns under the bare tag `tag`, probed by bare symbol bits.
+    pub fn variant_index(self, binder: TypeSymbol, tag: Symbol) -> Option<usize> {
         match self {
             WindowView::Announced(w) => w.variant_index(binder, tag),
             WindowView::Local(w) => w.variant_index(binder, tag),
@@ -387,7 +389,7 @@ impl<'v, 'a> WindowView<'v, 'a> {
     }
 
     /// Whether `name` is a declaring binder of this window.
-    pub fn binds(self, name: &str) -> bool {
+    pub fn binds(self, name: TypeSymbol) -> bool {
         match self {
             WindowView::Announced(w) => w.binds(name),
             WindowView::Local(w) => w.binds(name),
@@ -395,7 +397,7 @@ impl<'v, 'a> WindowView<'v, 'a> {
     }
 
     /// The relative union binder `name` denotes while the window is open.
-    pub fn binder_union(self, name: &str, types: &TypeRegistry) -> Option<KType> {
+    pub fn binder_union(self, name: TypeSymbol, types: &TypeRegistry) -> Option<KType> {
         match self {
             WindowView::Announced(w) => w.binder_union(name, types),
             WindowView::Local(w) => w.binder_union(name, types),
@@ -419,7 +421,7 @@ impl<'v, 'a> WindowView<'v, 'a> {
     }
 
     /// The absolute union handle binder `name` denotes, once sealed.
-    pub fn sealed_binder(self, name: &str) -> Option<KType> {
+    pub fn sealed_binder(self, name: TypeSymbol) -> Option<KType> {
         match self {
             WindowView::Announced(w) => w.sealed().and_then(|s| s.binder_type(name)),
             WindowView::Local(w) => w.sealed().and_then(|s| s.binder_type(name)),
@@ -428,27 +430,19 @@ impl<'v, 'a> WindowView<'v, 'a> {
 
     /// Every still-unfilled member as `(name, owner)`. A consumer parks on exactly this set's
     /// producers; the owner is who carries the placeholder, since a variant stamps none itself.
-    pub fn unfilled_members(self) -> Vec<(String, Option<String>)> {
+    pub fn unfilled_members(self) -> Vec<(TypeSymbol, Option<TypeSymbol>)> {
         match self {
-            WindowView::Announced(w) => w
-                .unfilled_members()
-                .into_iter()
-                .map(|(name, owner)| (name.to_string(), owner.map(str::to_string)))
-                .collect(),
+            WindowView::Announced(w) => w.unfilled_members(),
             WindowView::Local(w) => w.unfilled_members(),
         }
     }
 
     /// Every `(name, handle)` this window's seal installs into `bindings.types`: the standalone
     /// members and the binders. Empty while the window is open.
-    pub fn installable(self) -> Vec<(String, KType)> {
+    pub fn installable(self) -> Vec<(TypeSymbol, KType)> {
         match self {
             WindowView::Announced(w) => match w.sealed() {
-                Some(sealed) => sealed
-                    .installable(w.members())
-                    .into_iter()
-                    .map(|(name, kt)| (name.to_string(), kt))
-                    .collect(),
+                Some(sealed) => sealed.installable(w.members()),
                 None => Vec::new(),
             },
             WindowView::Local(w) => w.installable(),
@@ -459,14 +453,14 @@ impl<'v, 'a> WindowView<'v, 'a> {
     /// co-declared references against this window before it leaves for the standalone dispatcher.
     /// Owned members are excluded: a variant is reached only through the qualified sigil, which the
     /// field walker lowers in place.
-    pub fn threadable_names(self) -> Vec<String> {
+    pub fn threadable_names(self) -> Vec<TypeSymbol> {
         match self {
             WindowView::Announced(w) => w
                 .members()
                 .iter()
                 .filter(|m| m.owner.is_none())
-                .map(|m| m.name.to_string())
-                .chain(w.binders.iter().map(|b| b.name.to_string()))
+                .map(|m| m.name)
+                .chain(w.binders.iter().map(|b| b.name))
                 .collect(),
             WindowView::Local(w) => w.bare_reachable_names(),
         }
@@ -474,7 +468,7 @@ impl<'v, 'a> WindowView<'v, 'a> {
 
     /// Announce-if-missing: the relative handle naming `name`, minting the member when this window
     /// discovers its own members as it walks. Only a declarator-local window grows.
-    pub fn sibling(self, name: &str, kind: KKind, types: &TypeRegistry) -> Option<KType> {
+    pub fn sibling(self, name: TypeSymbol, kind: KKind, types: &TypeRegistry) -> Option<KType> {
         match self {
             WindowView::Announced(_) => None,
             WindowView::Local(w) => Some(w.sibling(name, kind, types)),

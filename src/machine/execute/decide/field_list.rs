@@ -40,7 +40,7 @@ use super::super::outcome::{Await, Outcome, StepDeps, dep_error_frame};
 use super::SubDispatch;
 use super::ctx::DecideCtx;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::Symbol;
+use crate::machine::model::{Symbol, TypeSymbol};
 
 /// Composes the final `KType` from the elaborated pairs, plus whatever owned type content the
 /// caller closed over (e.g. the FN return type). The composed value is allocated into the
@@ -69,7 +69,7 @@ struct FieldListRewalk<'step> {
     parts: FieldParts<'step>,
     context: FieldListContext,
     name_kind: FieldNameKind,
-    threaded: Vec<String>,
+    threaded: Vec<TypeSymbol>,
     window: Option<DeclWindow<'step>>,
     chain: Option<Rc<LexicalFrame>>,
     error_frame: Option<TraceFrame>,
@@ -89,7 +89,7 @@ impl<'step> FieldListRewalk<'step> {
     ) -> Result<Vec<(Symbol, KType)>, KError> {
         let mut result_feed = ResultFeed::new(feed);
         let mut elaborator = Elaborator::new(scope)
-            .with_threaded(self.threaded.iter().cloned())
+            .with_threaded(self.threaded.iter().copied())
             .with_chain(self.chain.clone());
         if let Some(window) = self.window.as_ref() {
             elaborator = elaborator.with_window(window.view());
@@ -141,7 +141,7 @@ pub(crate) struct FieldListDeferral<'a> {
     sub_dispatches: Vec<WorkingExpression<'a>>,
     context: FieldListContext,
     name_kind: FieldNameKind,
-    threaded: Vec<String>,
+    threaded: Vec<TypeSymbol>,
     window: Option<DeclWindow<'a>>,
     chain: Option<Rc<LexicalFrame>>,
     error_frame: Option<TraceFrame>,
@@ -171,7 +171,7 @@ impl<'a> FieldListDeferral<'a> {
 
     /// Seed the re-walk's threaded self-reference set (a declaration threads its own binder name so a
     /// self-recursive reference resolves through the window rather than parking).
-    pub(crate) fn with_threaded(mut self, names: impl IntoIterator<Item = String>) -> Self {
+    pub(crate) fn with_threaded(mut self, names: impl IntoIterator<Item = TypeSymbol>) -> Self {
         self.threaded = names.into_iter().collect();
         self
     }

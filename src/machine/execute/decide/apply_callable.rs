@@ -7,11 +7,10 @@
 //! does the resolution; this tail does the body-shape branching and launches
 //! construction or a function call.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::{DepPlacement, OpenedFunction};
-use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::labels::{Symbol, TypeSymbol};
 use crate::machine::model::render_label;
 use crate::machine::model::{Carried, Record, TypeMemberMap, constructor_param_names};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
@@ -211,7 +210,7 @@ fn apply_constructor<'step>(
             Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`{}` takes {} type parameters; constructing values of a multi-parameter \
                  family is not yet supported",
-                name,
+                render_label(name.symbol(), ctx.registries()),
                 param_names.len(),
             )))))
         }
@@ -373,9 +372,13 @@ fn apply_union_construct<'step>(
     ] = &expr.parts[1..]
     {
         let name = t.render();
-        return match union_member(&members, &name, ctx.types()) {
+        return match union_member(&members, Symbol::of(&name), ctx.types()) {
             Some(member) => Outcome::Done(Ok(ctx.step_ctx().type_carried(member))),
-            None => Outcome::Done(Err(unknown_variant_error(&members, &name, ctx.types()))),
+            None => Outcome::Done(Err(unknown_variant_error(
+                &members,
+                &name,
+                ctx.registries(),
+            ))),
         };
     }
     // The tag names which member; the built value's `identity` is that member's own sealed handle.
@@ -385,7 +388,7 @@ fn apply_union_construct<'step>(
                 Ok(v) => v,
                 Err(e) => return Outcome::Done(Err(e)),
             };
-            match union_member(&members, &tag, ctx.types()) {
+            match union_member(&members, Symbol::of(&tag), ctx.types()) {
                 Some(member) => constructors::construct_tagged(
                     ctx.current_scope().brand(),
                     member,
@@ -394,7 +397,7 @@ fn apply_union_construct<'step>(
                     value_part,
                     ctx.scratch(),
                 ),
-                None => Outcome::Done(Err(unknown_variant_error(&members, &tag, ctx.types()))),
+                None => Outcome::Done(Err(unknown_variant_error(&members, &tag, ctx.registries()))),
             }
         }
         Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
@@ -405,7 +408,7 @@ fn apply_union_construct<'step>(
 /// The variant schema of an anonymous union of sealed newtype members: each member's tag mapped
 /// to its declared payload type (its `NewType` repr). This is the per-value type-check table the
 /// `Tagged` finish reads (`schema[tag]`).
-fn union_variant_schema(members: &[KType], types: &TypeRegistry) -> HashMap<String, KType> {
+fn union_variant_schema(members: &[KType], types: &TypeRegistry) -> TypeMemberMap {
     members
         .iter()
         .filter_map(|m| match types.node(*m) {
@@ -419,30 +422,35 @@ fn union_variant_schema(members: &[KType], types: &TypeRegistry) -> HashMap<Stri
         .collect()
 }
 
-/// The union member whose sealed newtype is named `name`, if any.
-fn union_member(members: &[KType], name: &str, types: &TypeRegistry) -> Option<KType> {
+/// The union member whose sealed newtype is named `name`, if any. `name` probes by bare symbol
+/// bits: the tag arrives from a construction site with no class attached, and the member nodes it
+/// is matched against carry the `TypeSymbol` their declaration minted.
+fn union_member(members: &[KType], name: Symbol, types: &TypeRegistry) -> Option<KType> {
     members.iter().copied().find(|m| match types.node(*m) {
         TypeNode::SetMember {
             name: member_name, ..
-        } => member_name == name,
+        } => member_name.symbol() == name,
         _ => false,
     })
 }
 
-/// A schema error for a name that is not one of the union's variants, listing the members.
-fn unknown_variant_error(members: &[KType], name: &str, types: &TypeRegistry) -> KError {
+/// A schema error for a name that is not one of the union's variants, listing the members. `name`
+/// is the probed tag's **source text**, so the message names what the expression spelled even when
+/// nothing interned it.
+fn unknown_variant_error(members: &[KType], name: &str, registries: &RunRegistries) -> KError {
     KError::new(KErrorKind::ShapeError(format!(
         "`{name}` is not a variant of the union (variants: {})",
-        union_member_names(members, types),
+        union_member_names(members, registries),
     )))
 }
 
-/// Sorted, comma-joined member names of an anonymous union of sealed newtype members.
-fn union_member_names(members: &[KType], types: &TypeRegistry) -> String {
+/// Sorted, comma-joined member names of an anonymous union of sealed newtype members. Each name
+/// resolves through the run's label interner, which recorded it at its declaration.
+fn union_member_names(members: &[KType], registries: &RunRegistries) -> String {
     let mut names: Vec<String> = members
         .iter()
-        .filter_map(|m| match types.node(*m) {
-            TypeNode::SetMember { name, .. } => Some(name),
+        .filter_map(|m| match registries.types.node(*m) {
+            TypeNode::SetMember { name, .. } => Some(render_label(name.symbol(), registries)),
             _ => None,
         })
         .collect();

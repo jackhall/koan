@@ -2,7 +2,9 @@
 //! mutually-recursive group declared in a plain `MODULE` seals and every member's name is visible
 //! body-wide regardless of order.
 
-use crate::builtins::test_support::{TestRun, lookup_module, parse_one, value_name};
+use crate::builtins::test_support::{
+    TestRun, lookup_module, parse_one, type_name, type_token, value_name,
+};
 use crate::machine::model::render_label;
 use crate::machine::model::{AnnouncedData, NodeSchema, TypeDigest, TypeNode, TypeRegistry};
 use crate::machine::model::{KExpression, KObject, KType};
@@ -168,6 +170,8 @@ fn co_declared_types_unify_with_their_standalone_twins() {
 #[test]
 fn only_top_level_statements_announce() {
     let program = program_storage();
+    let region = run_root_storage();
+    let test_run = TestRun::silent(&program, &region);
     let top_level = parse_one(
         &program,
         "MODULE t = (\n  NEWTYPE Boxed = Number\n  LET n = 1\n)",
@@ -178,12 +182,13 @@ fn only_top_level_statements_announce() {
             other => panic!("expected a body slot, got {other:?}"),
         }
     }
-    let announced = super::super::announce_type_members(&body(&top_level), "t")
-        .expect("the scan succeeds")
-        .expect("a top-level declaration announces");
+    let announced =
+        super::super::announce_type_members(&body(&top_level), "t", test_run.registries())
+            .expect("the scan succeeds")
+            .expect("a top-level declaration announces");
     assert_eq!(
         announced.members,
-        vec![("Boxed".to_string(), None)],
+        vec![(type_token("Boxed"), None)],
         "the top-level NEWTYPE announces; the LET does not",
     );
 
@@ -194,7 +199,7 @@ fn only_top_level_statements_announce() {
         "MODULE t = (\n  LET n = (NEWTYPE Boxed = Number)\n)",
     );
     assert!(
-        super::super::announce_type_members(&body(&nested), "t")
+        super::super::announce_type_members(&body(&nested), "t", test_run.registries())
             .expect("the scan succeeds")
             .is_none(),
         "a declaration nested in a statement's slot announces nothing",
@@ -281,13 +286,14 @@ fn unfilled_announced_member_is_a_typed_error() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let mut announced = AnnouncedData::default();
-    announced.announce("Ghost".to_string());
+    announced.announce(type_name("Ghost", test_run.registries()));
     let child = scope.alloc_child_under_module("ghosted", Some(announced));
     assert!(
-        super::super::unsealed_announcement_error(scope, "ghosted").is_none(),
+        super::super::unsealed_announcement_error(scope, "ghosted", test_run.registries())
+            .is_none(),
         "a window-less scope owes nothing",
     );
-    let error = super::super::unsealed_announcement_error(child, "ghosted")
+    let error = super::super::unsealed_announcement_error(child, "ghosted", test_run.registries())
         .expect("an unfilled announced member must error");
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg)

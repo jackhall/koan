@@ -155,7 +155,7 @@ impl KType {
             // A sealed nominal member renders by its own member name — a bare newtype
             // (`:Wrapper`) or a per-variant member reached through its union (`:(Maybe Some)`
             // yields the `Some` member, printed as `Some`).
-            TypeNode::SetMember { name, .. } => name,
+            TypeNode::SetMember { name, .. } => render_label(name.symbol(), registries),
             // A signature names itself by its content: the empty interface is the lattice top
             // `Module`, and any other interface renders its members structurally. There is no
             // declaration label to print — two textually identical `SIG` declarations are one

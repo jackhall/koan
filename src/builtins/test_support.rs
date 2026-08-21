@@ -74,6 +74,15 @@ pub(crate) fn type_name(
         .unwrap_or_else(|| panic!("test fixture name `{text}` is not a Type token"))
 }
 
+/// [`type_name`] without the interner: pure classification, for a fixture that holds no
+/// [`RunRegistries`](crate::machine::model::RunRegistries) and asserts on identity rather than on
+/// rendered text.
+#[cfg(test)]
+pub(crate) fn type_token(text: &str) -> crate::machine::model::TypeSymbol {
+    crate::machine::model::TypeSymbol::of(text)
+        .unwrap_or_else(|| panic!("test fixture name `{text}` is not a Type token"))
+}
+
 /// [`value_name`] for the operator registry's keyword-class probe keys.
 #[cfg(test)]
 pub(crate) fn keyword_name(

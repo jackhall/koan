@@ -56,7 +56,7 @@ fn newtype(repr: KType) -> RelativeSchema {
 /// Seal a one-member window and hand back its member handle — the declarator shape every
 /// standalone `NEWTYPE` / `UNION` / opaque mint takes.
 fn singleton(name: &str, schema: RelativeSchema, types: &TypeRegistry) -> KType {
-    RecursiveGroupWindow::seal_singleton(name.into(), schema, None, types)
+    RecursiveGroupWindow::seal_singleton(type_symbol(name), schema, None, types)
 }
 
 /// The component digest a member handle was derived from.
@@ -101,9 +101,9 @@ fn recursive_union(types: &TypeRegistry) -> KType {
 
 /// A type constructor carrying parameter names.
 fn constructor(types: &TypeRegistry) -> KType {
-    let schema: HashMap<String, KType> = [
-        ("Empty".to_string(), KType::NULL),
-        ("Full".to_string(), KType::ANY),
+    let schema: TypeMemberMap = [
+        (type_symbol("Empty"), KType::NULL),
+        (type_symbol("Full"), KType::ANY),
     ]
     .into_iter()
     .collect();
@@ -120,28 +120,28 @@ fn constructor(types: &TypeRegistry) -> KType {
 /// A generative set at a fixed nonce — opaque ascription's per-application mint.
 fn generative(types: &TypeRegistry) -> KType {
     RecursiveGroupWindow::seal_singleton(
-        "Opaque".into(),
+        type_symbol("Opaque"),
         newtype(KType::NUMBER),
         Some(ScopeId::from_raw(0, 0x0BAB)),
         types,
     )
 }
 
-/// A genuinely mutually-recursive pair, declared **out of name order** (`Odd` at declared index 0,
-/// `Even` at 1) so the pins below record that declaration order is not identity.
+/// A genuinely mutually-recursive pair, declared **out of canonical order** (`Odd` at declared
+/// index 0, `Even` at 1) so the pins below record that declaration order is not identity.
 ///
-/// These values are what ruling 10 deliberately re-pins. Member identity is the computed
-/// strongly-connected component, and a mutually recursive pair is one two-member component whose
-/// canonical order is *name* order — so `Even` presents at position 0 and `Odd` at 1, and the
-/// intra-component references re-encode against that order rather than the declared one. Every
-/// other pin in this file is a singleton, whose component presentation is byte-identical to the
-/// whole-declaration recipe, and is permanent.
+/// Member identity is the computed strongly-connected component, and a mutually recursive pair is
+/// one two-member component whose canonical order is the numeric order of the members' name
+/// symbols — under which `Even` presents at position 0 and `Odd` at 1, and the intra-component
+/// references re-encode against that order rather than the declared one. Every other pin in this
+/// file is a singleton, whose component presentation is byte-identical to the whole-declaration
+/// recipe.
 ///
 /// Returns the member handles in declaration order: `[Odd, Even]`.
 fn recursive_pair(types: &TypeRegistry) -> Vec<KType> {
     let window = RecursiveGroupWindow::new(vec![
-        ("Odd".into(), KKind::NewType),
-        ("Even".into(), KKind::NewType),
+        (type_symbol("Odd"), KKind::NewType),
+        (type_symbol("Even"), KKind::NewType),
     ]);
     window.fill_member(
         0,
@@ -316,12 +316,12 @@ fn non_recursive_newtype_digests_are_pinned() {
     assert_pinned(
         "Meters component",
         component_of(member, types),
-        0xa5bab723_08985b67_fdc176d5_b9e836b1,
+        0x83213530_d0afb37d_b014e6b6_79d93030,
     );
     assert_handle_pinned(
         "Meters member reference",
         member,
-        0xaa9dc344_ea08a395_63635ec0_be611e20,
+        0x7e972522_67b987b4_99ab69ff_e1cbed47,
     );
 }
 
@@ -333,12 +333,12 @@ fn self_recursive_newtype_digests_are_pinned() {
     assert_pinned(
         "Chain component",
         component_of(member, types),
-        0x171388ab_8bf2866c_b8141bc5_7892d3dd,
+        0x3f0f31b1_6e34b5a7_85f073d7_1b930cd8,
     );
     assert_handle_pinned(
         "Chain member reference",
         member,
-        0xa0bb430c_45a2ca6d_65d52d6b_54e7dfd0,
+        0xdaf5788a_e4690a2b_c841781d_131fada4,
     );
 }
 
@@ -350,12 +350,12 @@ fn self_referencing_union_digests_are_pinned() {
     assert_pinned(
         "Tree component",
         component_of(member, types),
-        0xd0d777d4_90760cd1_778b02fd_6ecdf5ca,
+        0x1f308e1f_4c36139e_ea0ced12_0a8a762c,
     );
     assert_handle_pinned(
         "Tree member reference",
         member,
-        0xeee5c699_feb5a1c8_4b913ea2_313272cd,
+        0xa473d50b_0f3635a5_2c9af860_10e12ba9,
     );
 }
 
@@ -367,12 +367,12 @@ fn type_constructor_digests_are_pinned() {
     assert_pinned(
         "Maybe component",
         component_of(member, types),
-        0x5b88ad72_92f349ae_d359021c_0e07a008,
+        0x0d692950_d63184af_895aa39c_407cf9fd,
     );
     assert_handle_pinned(
         "Maybe member reference",
         member,
-        0x239f12a8_b45df47c_ae112f5a_e9f2d40f,
+        0x249c1453_407da9af_bdd40194_e3dc04a1,
     );
 }
 
@@ -384,19 +384,18 @@ fn generative_set_digests_are_pinned() {
     assert_pinned(
         "Opaque component",
         component_of(member, types),
-        0xedf73e8f_68d1d2a2_5ceee390_0def9a25,
+        0x746c9f5e_77020e8c_eff6fdab_72a3d539,
     );
     assert_handle_pinned(
         "Opaque member reference",
         member,
-        0x339743c3_12b34d96_42134765_aef171a0,
+        0xb63930e4_bfafd6aa_47bed6ff_8d85f845,
     );
 }
 
-/// The multi-member pins. See [`recursive_pair`]: these three values are the ones ruling 10
-/// re-pins, because the pair is one two-member component presented in name order while this
-/// fixture declares it out of name order. Every other pin in this file is a singleton and is
-/// permanent.
+/// The multi-member pins. See [`recursive_pair`]: the pair is one two-member component presented
+/// in name-symbol order while this fixture declares it out of that order. Every other pin in this
+/// file is a singleton and is permanent.
 #[test]
 fn recursive_pair_digests_are_pinned() {
     let registries = RunRegistries::new();
@@ -405,17 +404,17 @@ fn recursive_pair_digests_are_pinned() {
     assert_pinned(
         "Odd/Even component",
         component_of(members[0], types),
-        0xac675a86_5269d212_0b8015f8_addbd5c5,
+        0xdca7f03c_fb26b0ae_bd30ebeb_06cfbecb,
     );
     assert_handle_pinned(
         "Odd member reference (component position 1)",
         members[0],
-        0x9552941d_5f1442e6_9a01ad49_5af8080b,
+        0x0aded42d_a7d17f50_333f7582_bb26e664,
     );
     assert_handle_pinned(
         "Even member reference (component position 0)",
         members[1],
-        0x82ca9acb_57b135a0_84255967_84c7d217,
+        0xa878d115_f2884c95_14c03ca5_396df755,
     );
 }
 

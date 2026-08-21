@@ -1,5 +1,5 @@
 use super::*;
-use crate::builtins::test_support::{spliced_part, type_name, value_name};
+use crate::builtins::test_support::{spliced_part, type_name, type_token, value_name};
 use crate::machine::core::SubstrateDoor;
 use crate::machine::model::Carried;
 use crate::machine::model::ModuleDraft;
@@ -31,12 +31,22 @@ macro_rules! container_door {
 /// index)` + `kind`, never a schema descent).
 fn record_newtype_member(name: &str, types: &TypeRegistry) -> KType {
     let repr = types.record(Record::new());
-    RecursiveGroupWindow::seal_singleton(name.into(), RelativeSchema::NewType(repr), None, types)
+    RecursiveGroupWindow::seal_singleton(
+        type_token(name),
+        RelativeSchema::NewType(repr),
+        None,
+        types,
+    )
 }
 
 /// A singleton newtype member handle named `name` over `repr`.
 fn newtype_member(name: &str, repr: KType, types: &TypeRegistry) -> KType {
-    RecursiveGroupWindow::seal_singleton(name.into(), RelativeSchema::NewType(repr), None, types)
+    RecursiveGroupWindow::seal_singleton(
+        type_token(name),
+        RelativeSchema::NewType(repr),
+        None,
+        types,
+    )
 }
 
 #[test]
@@ -447,9 +457,9 @@ fn of_kind_nominal_is_type_channel_only() {
 
     // A `TypeConstructor` type value is the wrong family — declined.
     let ctor_tv = RecursiveGroupWindow::seal_singleton(
-        "Result".into(),
+        type_token("Result"),
         RelativeSchema::TypeConstructor {
-            schema: std::collections::HashMap::new(),
+            schema: TypeMemberMap::default(),
             param_names: Vec::new(),
         },
         None,
@@ -584,9 +594,9 @@ fn is_more_specific_for_pinned_signature_bound() {
 fn result_member(registries: &RunRegistries) -> KType {
     let types = &registries.types;
     RecursiveGroupWindow::seal_singleton(
-        "Result".into(),
+        type_token("Result"),
         RelativeSchema::TypeConstructor {
-            schema: std::collections::HashMap::new(),
+            schema: TypeMemberMap::default(),
             param_names: vec![type_name("Ok", registries), type_name("Error", registries)],
         },
         None,
@@ -622,9 +632,9 @@ fn error_carrier<'a>(door: SubstrateDoor<'a, '_>, member: KType) -> KObject<'a> 
 /// A singleton `TypeConstructor`-kind member named `name`, for an error-type identity.
 fn error_type_member(name: &str, types: &TypeRegistry) -> KType {
     RecursiveGroupWindow::seal_singleton(
-        name.into(),
+        type_token(name),
         RelativeSchema::TypeConstructor {
-            schema: std::collections::HashMap::new(),
+            schema: TypeMemberMap::default(),
             param_names: Vec::new(),
         },
         None,

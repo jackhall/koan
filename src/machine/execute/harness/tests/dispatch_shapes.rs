@@ -8,7 +8,7 @@
 //! thread-local so tests run independently under `cargo test`'s default thread
 //! pool.
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::{TestRun, parse_one, type_name};
 use crate::machine::ProducerId;
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::core::{program_storage, run_root_storage};
@@ -404,7 +404,7 @@ fn fast_lane_on_tagged_union_constructs() {
             assert!(matches!(value.payload(), KObject::Number(n) if *n == 42.0));
             match test_run.types().node(*identity) {
                 TypeNode::SetMember { name, .. } => {
-                    assert_eq!(name, "Some");
+                    assert_eq!(name, type_name("Some", test_run.registries()));
                 }
                 _ => panic!("expected a member SetMember identity, got {identity:?}"),
             }

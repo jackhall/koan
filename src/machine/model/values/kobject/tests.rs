@@ -1,14 +1,20 @@
 use super::*;
 use crate::builtins::test_support::type_name;
+use crate::builtins::test_support::type_token;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::TypeRegistry;
+use crate::machine::model::TypeMemberMap;
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::values::KKey;
 use std::collections::HashMap;
 
 /// A singleton newtype member handle named `name` over `repr`.
-fn newtype_singleton(name: &str, repr: KType, types: &TypeRegistry) -> KType {
-    RecursiveGroupWindow::seal_singleton(name.into(), RelativeSchema::NewType(repr), None, types)
+fn newtype_singleton(name: &str, repr: KType, registries: &RunRegistries) -> KType {
+    RecursiveGroupWindow::seal_singleton(
+        type_name(name, registries),
+        RelativeSchema::NewType(repr),
+        None,
+        &registries.types,
+    )
 }
 
 /// Mint the zero-dep fold door a container test needs, over a fresh root region, as two `let`
@@ -163,9 +169,9 @@ fn type_constructor_ktype_erased_vs_applied() {
     let types = &registries.types;
     container_door!(_storage, door);
     let ctor = RecursiveGroupWindow::seal_singleton(
-        "Result".into(),
+        type_token("Result"),
         RelativeSchema::TypeConstructor {
-            schema: HashMap::new(),
+            schema: TypeMemberMap::default(),
             param_names: vec![
                 type_name("Ok", &registries),
                 type_name("Error", &registries),
@@ -177,7 +183,7 @@ fn type_constructor_ktype_erased_vs_applied() {
     let erased = KObject::tagged(door, "Ok", &KObject::Number(1.0), ctor);
     let erased_handle = erased.ktype();
     match types.node(erased_handle) {
-        TypeNode::SetMember { name, .. } => assert_eq!(name, "Result"),
+        TypeNode::SetMember { name, .. } => assert_eq!(name, type_token("Result")),
         _ => panic!("expected SetMember, got {erased_handle:?}"),
     }
     let arguments = Record::from_pairs([
@@ -240,11 +246,11 @@ fn wrapped_ktype_reports_clone_of_type_id() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
-    let type_id = newtype_singleton("Distance", KType::NUMBER, types);
+    let type_id = newtype_singleton("Distance", KType::NUMBER, &registries);
     let w = KObject::wrapped_peel(door, &KObject::Number(3.0), type_id);
     let handle = w.ktype();
     match types.node(handle) {
-        TypeNode::SetMember { name, .. } => assert_eq!(name, "Distance"),
+        TypeNode::SetMember { name, .. } => assert_eq!(name, type_token("Distance")),
         _ => panic!("expected NewType SetMember identity, got {handle:?}"),
     }
 }
@@ -252,9 +258,8 @@ fn wrapped_ktype_reports_clone_of_type_id() {
 #[test]
 fn wrapped_summarize_renders_surface_form() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     container_door!(_storage, door);
-    let type_id = newtype_singleton("Distance", KType::NUMBER, types);
+    let type_id = newtype_singleton("Distance", KType::NUMBER, &registries);
     let w = KObject::wrapped_peel(door, &KObject::Number(3.0), type_id);
     assert_eq!(w.summarize(&registries), "Distance(3)");
 }
@@ -265,9 +270,8 @@ fn wrapped_summarize_renders_surface_form() {
 #[test]
 fn wrapped_deep_clone_shares_inner_substrate_and_type_id() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     container_door!(_storage, door);
-    let type_id = newtype_singleton("Distance", KType::NUMBER, types);
+    let type_id = newtype_singleton("Distance", KType::NUMBER, &registries);
     let original = KObject::wrapped_peel(door, &KObject::Number(3.0), type_id);
     // The source's payload rides its own region-resident substrate; `deep_clone` must share *that*
     // substrate borrow, never allocate a fresh one.

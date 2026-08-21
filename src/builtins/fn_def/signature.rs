@@ -73,7 +73,6 @@ pub(crate) fn parse_fn_param_list<'a>(
     registries: &RunRegistries,
     resolved: Option<&[(usize, KType)]>,
 ) -> ParamListOutcome<'a> {
-    let types = &registries.types;
     let parts = signature.parts;
     // A parameter name is syntactic, so it classifies and interns to a `BinderSymbol` here —
     // including the one synthesized name (a bare-leaf `Type` part in parameter-name position).
@@ -118,7 +117,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                 });
                 match (ty, feed) {
                     (Some(ExpressionPart::Type(t)), _) => {
-                        match elaborate_type_identifier(elaborator, &t, types) {
+                        match elaborate_type_identifier(elaborator, &t, registries) {
                             TypeResolution::Done(kt) => {
                                 elements.push(SignatureElement::Argument(Argument {
                                     name: symbol,

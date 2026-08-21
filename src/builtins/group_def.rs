@@ -78,7 +78,11 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
     let mode = crate::try_action!(reduction_mode(ctx, group_mode));
     let members = crate::try_action!(scan_members(&body_expr, &name));
     // A group *is* a module, so its body announces its top-level type declarations the same way.
-    let announced = crate::try_action!(super::module_def::announce_type_members(&body_expr, &name));
+    let announced = crate::try_action!(super::module_def::announce_type_members(
+        &body_expr,
+        &name,
+        ctx.registries
+    ));
 
     let member_refs: Vec<&str> = members.iter().map(|s| s.as_str()).collect();
     // The record, the child scope and its member powerset all land in one door, so the registry is

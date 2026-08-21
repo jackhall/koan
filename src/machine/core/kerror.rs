@@ -2,7 +2,9 @@ use std::fmt;
 
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, CarriedFamily, KObject, Symbol};
-use crate::machine::model::{KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry};
+use crate::machine::model::{
+    KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeMemberMap, TypeRegistry, TypeSymbol,
+};
 use crate::source::{self, FileId, SourceLoc, Span};
 use crate::witnessed::RegionHandleFamily;
 
@@ -212,16 +214,23 @@ impl KError {
             .map(|(name, value)| (registries.labels.intern(&name), value))
             .collect();
         let record = KObject::record(door, &interned, types);
+        // The variant name and `KError` are fixed literals of the error shape, Type tokens by
+        // construction; they intern here so a rendered member name resolves.
+        let variant = error_label(&name, registries);
         let payload = KObject::wrapped_peel(
             door,
             &record,
-            synthetic_singleton(name.clone(), KKind::NewType, types),
+            synthetic_singleton(variant, KKind::NewType, types),
         );
         KObject::tagged(
             door,
             &name,
             &payload,
-            synthetic_singleton("KError".to_string(), KKind::TypeConstructor, types),
+            synthetic_singleton(
+                error_label("KError", registries),
+                KKind::TypeConstructor,
+                types,
+            ),
         )
     }
 
@@ -256,15 +265,22 @@ impl KError {
     }
 }
 
+/// A fixed literal of the error shape as the Type token it is, interned so a rendered member name
+/// resolves back. Every caller passes a `KErrorKind` variant name or `"KError"`, all Type tokens by
+/// construction.
+fn error_label(text: &str, registries: &RunRegistries) -> TypeSymbol {
+    TypeSymbol::declared(text, &registries.labels).expect("a KError variant name is a Type token")
+}
+
 /// A synthetic singleton member for an unregistered carrier (the `KError` to-tagged payload's
 /// `type_id` and the wrapping `Tagged`'s `identity`). Its one member carries an empty schema —
 /// these carriers are read directly by the TRY branch walker, never dispatched on, so the schema
 /// is never consulted.
-fn synthetic_singleton(name: String, kind: KKind, types: &TypeRegistry) -> KType {
+fn synthetic_singleton(name: TypeSymbol, kind: KKind, types: &TypeRegistry) -> KType {
     let schema = match kind {
         KKind::NewType => RelativeSchema::NewType(KType::ANY),
         _ => RelativeSchema::TypeConstructor {
-            schema: std::collections::HashMap::new(),
+            schema: TypeMemberMap::default(),
             param_names: Vec::new(),
         },
     };
@@ -276,8 +292,12 @@ fn synthetic_singleton(name: String, kind: KKind, types: &TypeRegistry) -> KType
 /// `:(Result {Ok = Any, Error = KError})` return (a documentary contract — `KError` is not a
 /// registered prelude type, and the synthetic member is identity-throwaway, but `CATCH`'s return
 /// is never validated against the runtime value).
-pub(crate) fn kerror_ktype(types: &TypeRegistry) -> KType {
-    synthetic_singleton("KError".to_string(), KKind::TypeConstructor, types)
+pub(crate) fn kerror_ktype(registries: &RunRegistries) -> KType {
+    synthetic_singleton(
+        error_label("KError", registries),
+        KKind::TypeConstructor,
+        &registries.types,
+    )
 }
 
 impl KErrorKind {

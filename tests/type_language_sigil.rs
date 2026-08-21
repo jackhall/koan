@@ -280,7 +280,7 @@ fn union_field_accepts_keyworded_map_sigil() {
                     name,
                     schema: NodeSchema::NewType(repr),
                     ..
-                } if name == "Some" => Some(repr),
+                } if name.symbol() == koan::machine::model::Symbol::of("Some") => Some(repr),
                 _ => None,
             })
             .expect("Some variant must project a NewType repr"),

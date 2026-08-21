@@ -13,7 +13,7 @@ use crate::machine::body_statement_refs;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
-use crate::machine::model::{AnnouncedData, FieldNameKind, pair_list_names};
+use crate::machine::model::{AnnouncedData, FieldNameKind, pair_list_names, type_binder};
 use crate::machine::model::{KKind, SigSchema};
 use crate::machine::model::{Module, ModuleDraft};
 use crate::machine::model::{TypeDeclarationSurface, announced_type_declaration};
@@ -23,6 +23,7 @@ use crate::machine::{NameLookup, Scope};
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
+use crate::machine::model::render_label;
 
 /// The MODULE body: pre-announces the body's top-level type declarations, mints the child scope
 /// carrying that window, and hands it to [`await_module_body`], which dispatches the body block
@@ -37,7 +38,7 @@ pub fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         ctx.registries
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
-    let announced = crate::try_action!(announce_type_members(&body_expr, &name));
+    let announced = crate::try_action!(announce_type_members(&body_expr, &name, ctx.registries));
     let child_scope = ctx.scope.alloc_child_under_module(&name, announced);
     await_module_body(child_scope, name, body_expr, ctx.bind_index())
 }
@@ -57,6 +58,7 @@ pub fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 pub(super) fn announce_type_members(
     body: &KExpression<'_>,
     module: &str,
+    registries: &RunRegistries,
 ) -> Result<Option<AnnouncedData>, KError> {
     let mut announced = AnnouncedData::default();
     for statement in body_statement_refs(body) {
@@ -66,14 +68,17 @@ pub(super) fn announce_type_members(
         let Some(name) = statement.binder_name_from_type_part() else {
             continue;
         };
-        if announced.declares(name) || announced.binds(name) {
+        // The announcement is a declaration seam: each name classifies and interns here, so the
+        // window, the members it seals and every diagnostic naming one share one currency.
+        let binder = type_binder(name, registries)?;
+        if announced.declares(binder) || announced.binds(binder) {
             return Err(KError::new(KErrorKind::ShapeError(format!(
                 "module `{module}` declares type `{name}` twice",
             ))));
         }
         match surface {
             TypeDeclarationSurface::NewType => {
-                announced.announce(name.to_string());
+                announced.announce(binder);
             }
             TypeDeclarationSurface::Union => {
                 // The variant tags are the union's announced members. A schema this scan cannot
@@ -82,7 +87,13 @@ pub(super) fn announce_type_members(
                     continue;
                 };
                 match pair_list_names(&schema, "UNION schema", FieldNameKind::Type) {
-                    Ok(tags) => announced.announce_binder(name.to_string(), tags),
+                    Ok(tags) => {
+                        let tags: Result<Vec<_>, _> = tags
+                            .iter()
+                            .map(|tag| type_binder(tag, registries))
+                            .collect();
+                        announced.announce_binder(binder, tags?);
+                    }
                     Err(_) => continue,
                 }
             }
@@ -133,7 +144,9 @@ pub(super) fn await_module_body<'a>(
                 fctx.scope.lift_resident(sealed),
             )));
         }
-        if let Some(error) = unsealed_announcement_error(child_scope, &name_for_finish) {
+        if let Some(error) =
+            unsealed_announcement_error(child_scope, &name_for_finish, fctx.registries)
+        {
             return Action::done(Err(error));
         }
         // Mirror the module's type members into the draft. The classified key types keep `data`
@@ -174,16 +187,20 @@ pub(super) fn await_module_body<'a>(
 /// errored already errored the module before this, so a `Some` here means the scan and dispatch
 /// disagreed about what a statement declares, which is a wiring bug surfaced as a typed error
 /// rather than a module that binds half a group.
-pub(super) fn unsealed_announcement_error(child_scope: &Scope<'_>, name: &str) -> Option<KError> {
+pub(super) fn unsealed_announcement_error(
+    child_scope: &Scope<'_>,
+    name: &str,
+    registries: &RunRegistries,
+) -> Option<KError> {
     let window = child_scope.own_declaration_window()?;
     if window.is_sealed() {
         return None;
     }
     // A variant carries no declaration of its own: its binder's statement is what never filled it.
-    let unfilled: Vec<&str> = window
+    let unfilled: Vec<String> = window
         .unfilled_members()
         .into_iter()
-        .map(|(member, owner)| owner.unwrap_or(member))
+        .map(|(member, owner)| render_label(owner.unwrap_or(member).symbol(), registries))
         .collect();
     Some(
         KError::new(KErrorKind::ShapeError(format!(

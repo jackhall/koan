@@ -275,7 +275,9 @@ fn assert_type_constructor(
         .unwrap_or_else(|| panic!("expected a type constructor, got {kt:?}"));
     assert_eq!(param_names, want);
     match types.node(kt) {
-        TypeNode::SetMember { name, .. } => name,
+        TypeNode::SetMember { name, .. } => {
+            crate::machine::model::render_label(name.symbol(), registries)
+        }
         TypeNode::AbstractType { name, .. } => {
             crate::machine::model::render_label(name.symbol(), registries)
         }
@@ -285,12 +287,15 @@ fn assert_type_constructor(
 
 /// A root-scope-bound `Wrap` TypeConstructor member, sealed through the real declaration window.
 fn wrap_type_constructor(registries: &crate::machine::model::RunRegistries) -> KType {
-    let window = RecursiveGroupWindow::new(vec![("Wrap".to_string(), KKind::TypeConstructor)]);
+    let window = RecursiveGroupWindow::new(vec![(
+        type_name("Wrap", registries),
+        KKind::TypeConstructor,
+    )]);
     window
         .fill_member(
             0,
             RelativeSchema::TypeConstructor {
-                schema: std::collections::HashMap::new(),
+                schema: crate::machine::model::TypeMemberMap::default(),
                 param_names: vec![type_name("Type", registries)],
             },
             &registries.types,

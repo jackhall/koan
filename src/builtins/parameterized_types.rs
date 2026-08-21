@@ -274,12 +274,15 @@ mod tests {
         let scope = test_run.scope;
         // Seal a singleton `Wrap` constructor member through the real declaration window, then
         // bind its absolute handle as a builtin type.
-        let window = RecursiveGroupWindow::new(vec![("Wrap".to_string(), KKind::TypeConstructor)]);
+        let window = RecursiveGroupWindow::new(vec![(
+            type_name("Wrap", test_run.registries()),
+            KKind::TypeConstructor,
+        )]);
         let sealed = window
             .fill_member(
                 0,
                 RelativeSchema::TypeConstructor {
-                    schema: std::collections::HashMap::new(),
+                    schema: crate::machine::model::TypeMemberMap::default(),
                     param_names: vec![type_name("Type", test_run.registries())],
                 },
                 test_run.types(),

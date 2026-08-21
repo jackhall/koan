@@ -3,8 +3,13 @@
 
 use super::super::record::Record;
 use super::*;
-use crate::builtins::test_support::type_name;
 use crate::machine::model::RunRegistries;
+
+/// A fixture member, binder or parameter name as the Type token the window keys by. Pure
+/// classification — these tests compare identities and never render one.
+fn name(text: &str) -> TypeSymbol {
+    TypeSymbol::of(text).expect("a fixture member name is a Type token")
+}
 
 /// A record type over `pairs`.
 fn record(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
@@ -29,7 +34,7 @@ fn seal(types: &TypeRegistry, members: Vec<(&str, RelativeSchema)>) -> Vec<KType
     let window = RecursiveGroupWindow::new(
         members
             .iter()
-            .map(|(name, schema)| (name.to_string(), schema.kind()))
+            .map(|(text, schema)| (name(text), schema.kind()))
             .collect(),
     );
     let count = members.len();
@@ -81,7 +86,7 @@ fn non_recursive_group_member_equals_its_standalone_twin() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let standalone =
-        RecursiveGroupWindow::seal_singleton("Leaf".into(), newtype(KType::NUMBER), None, types);
+        RecursiveGroupWindow::seal_singleton(name("Leaf"), newtype(KType::NUMBER), None, types);
     // `Leaf` sits in a group beside a self-recursive `Trunk` that does not name it.
     let grouped = seal(
         types,
@@ -197,7 +202,7 @@ fn cross_component_reference_folds_the_finished_handle() {
     // The same `Tree` declared alone is the same type — `Forest` is downstream, so it is not in
     // Tree's fold.
     let alone = RecursiveGroupWindow::seal_singleton(
-        "Tree".into(),
+        name("Tree"),
         newtype(record(types, vec![("child", sibling(types, 0))])),
         None,
         types,
@@ -215,7 +220,7 @@ fn sealed_schema_is_absolute_and_cyclic() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let chain = RecursiveGroupWindow::seal_singleton(
-        "Chain".into(),
+        name("Chain"),
         newtype(record(
             types,
             vec![("head", KType::NUMBER), ("tail", sibling(types, 0))],
@@ -252,7 +257,7 @@ fn generative_nonce_separates_two_mints() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let mint = |nonce: Option<ScopeId>| {
-        RecursiveGroupWindow::seal_singleton("Opaque".into(), newtype(KType::NUMBER), nonce, types)
+        RecursiveGroupWindow::seal_singleton(name("Opaque"), newtype(KType::NUMBER), nonce, types)
     };
     let first = mint(Some(ScopeId::from_raw(0, 1)));
     let second = mint(Some(ScopeId::from_raw(0, 2)));
@@ -271,17 +276,17 @@ fn generative_nonce_separates_two_mints() {
 fn type_constructor_schema_binds_siblings() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let schema: HashMap<String, KType> = [
-        ("Empty".to_string(), KType::NULL),
-        ("Full".to_string(), sibling(types, 0)),
+    let schema: TypeMemberMap = [
+        (name("Empty"), KType::NULL),
+        (name("Full"), sibling(types, 0)),
     ]
     .into_iter()
     .collect();
     let handle = RecursiveGroupWindow::seal_singleton(
-        "Maybe".into(),
+        name("Maybe"),
         RelativeSchema::TypeConstructor {
             schema,
-            param_names: vec![type_name("Elem", &registries)],
+            param_names: vec![name("Elem")],
         },
         None,
         types,
@@ -293,7 +298,7 @@ fn type_constructor_schema_binds_siblings() {
             ..
         } => {
             assert_eq!(kind, KKind::TypeConstructor);
-            assert_eq!(schema.get("Full").copied(), Some(handle));
+            assert_eq!(schema.get(&name("Full")).copied(), Some(handle));
         }
         _ => panic!("expected a TypeConstructor SetMember"),
     }
@@ -305,19 +310,22 @@ fn type_constructor_schema_binds_siblings() {
 fn sibling_announces_an_unseen_name() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let window = RecursiveGroupWindow::new(vec![("Leaf".into(), KKind::NewType)]);
+    let window = RecursiveGroupWindow::new(vec![(name("Leaf"), KKind::NewType)]);
     assert_eq!(
-        window.sibling("Leaf", KKind::NewType, types),
+        window.sibling(name("Leaf"), KKind::NewType, types),
         sibling(types, 0)
     );
     assert_eq!(
-        window.sibling("Node", KKind::NewType, types),
+        window.sibling(name("Node"), KKind::NewType, types),
         sibling(types, 1)
     );
     assert_eq!(window.len(), 2);
-    assert_eq!(window.unfilled_member_names(), vec!["Leaf", "Node"]);
-    assert!(window.member_index("Node").is_some());
-    assert!(window.member_index("Absent").is_none());
+    assert_eq!(
+        window.unfilled_member_names(),
+        vec![name("Leaf"), name("Node")]
+    );
+    assert!(window.member_index(name("Node")).is_some());
+    assert!(window.member_index(name("Absent")).is_none());
 }
 
 /// The binder name of a `UNION` denotes the union of exactly the variants it owns, not any one of
@@ -327,16 +335,18 @@ fn sibling_announces_an_unseen_name() {
 fn binder_union_covers_every_owned_member() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let window =
-        RecursiveGroupWindow::for_binder("Maybe".into(), vec!["Some".into(), "None".into()]);
-    assert!(window.binds("Maybe"));
+    let window = RecursiveGroupWindow::for_binder(name("Maybe"), vec![name("Some"), name("None")]);
+    assert!(window.binds(name("Maybe")));
     assert_eq!(
-        window.binder_union("Maybe", types),
+        window.binder_union(name("Maybe"), types),
         Some(types.union_of(vec![sibling(types, 0), sibling(types, 1)])),
     );
-    assert_eq!(window.variant_index("Maybe", "None"), Some(1));
     assert_eq!(
-        window.member_index("Some"),
+        window.variant_index(name("Maybe"), name("None").symbol()),
+        Some(1)
+    );
+    assert_eq!(
+        window.member_index(name("Some")),
         None,
         "a variant is owned by its binder, so it answers no bare-name lookup",
     );
@@ -353,25 +363,25 @@ fn same_tag_under_two_binders_seals_to_distinct_members() {
     let types = &registries.types;
     let members = vec![
         SealMemberInput {
-            name: "Node",
-            owner: Some("Graph"),
+            name: name("Node"),
+            owner: Some(name("Graph")),
             kind: KKind::NewType,
             schema: newtype(KType::NUMBER),
         },
         SealMemberInput {
-            name: "Node",
-            owner: Some("Tree"),
+            name: name("Node"),
+            owner: Some(name("Tree")),
             kind: KKind::NewType,
             schema: newtype(KType::STR),
         },
     ];
     let binders = vec![
         SealBinderInput {
-            name: "Graph",
+            name: name("Graph"),
             members: &[0],
         },
         SealBinderInput {
-            name: "Tree",
+            name: name("Tree"),
             members: &[1],
         },
     ];
@@ -382,13 +392,13 @@ fn same_tag_under_two_binders_seals_to_distinct_members() {
     );
     assert_eq!(sealed.binder_types.len(), 2);
     assert_eq!(
-        sealed.binder_type("Graph"),
+        sealed.binder_type(name("Graph")),
         Some(types.union_of(vec![sealed.members[0]])),
     );
     // The owner orders but does not digest: `Graph Node` over Number is byte-identical to a
     // standalone `Node` over Number.
     let standalone = super::RecursiveGroupWindow::seal_singleton(
-        "Node".into(),
+        name("Node"),
         newtype(KType::NUMBER),
         None,
         types,

@@ -34,7 +34,7 @@ fn elaborator_lowers_ktype_value_binding() {
     test_run.run("LET MyList = :(LIST OF Number)");
     let types = test_run.registry_handle();
     let mut el = Elaborator::new(scope);
-    match elaborate_type_identifier(&mut el, &TypeIdentifier::leaf("MyList"), &types) {
+    match elaborate_type_identifier(&mut el, &TypeIdentifier::leaf("MyList"), types.registries()) {
         TypeResolution::Done(kt) => assert_eq!(kt, types.list(KType::NUMBER)),
         other => panic!("expected Done(:(List Number)), got {:?}", other),
     }

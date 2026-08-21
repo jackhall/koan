@@ -2,7 +2,6 @@
 //! cell; once every cell is bound, [`finish_witnessed`] type-checks them and emits the
 //! `KObject::Wrapped` / `KObject::Tagged` directly — no bucket lookup, no re-dispatch.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use smallvec::SmallVec;
@@ -15,7 +14,7 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::types::record_field;
 use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
-use crate::machine::model::{KType, NodeSchema, TypeNode};
+use crate::machine::model::{KType, NodeSchema, TypeMemberMap, TypeNode, render_label};
 use crate::machine::{
     CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, RegionTypeFamily,
 };
@@ -45,7 +44,7 @@ pub(in crate::machine::execute) enum CtorKind {
         field_names: Vec<Symbol>,
     },
     Tagged {
-        schema: Rc<HashMap<String, KType>>,
+        schema: Rc<TypeMemberMap>,
         member: KType,
         tag: String,
     },
@@ -313,7 +312,7 @@ pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
 pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
     brand: RegionBrand<'step>,
     member: KType,
-    schema: Rc<HashMap<String, KType>>,
+    schema: Rc<TypeMemberMap>,
     args_parts: &[Spanned<ExpressionPart<'step>>],
     scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
@@ -329,7 +328,7 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
 pub(in crate::machine::execute) fn construct_tagged<'step>(
     brand: RegionBrand<'step>,
     member: KType,
-    schema: Rc<HashMap<String, KType>>,
+    schema: Rc<TypeMemberMap>,
     tag: String,
     value_part: ExpressionPart<'step>,
     scratch: BumpAllocator<'step>,
@@ -530,11 +529,18 @@ fn finish_witnessed<'step>(
             tag,
         } => {
             debug_assert_eq!(terminals.len(), 1);
-            let expected = schema.get(tag).ok_or_else(|| {
+            // The tag probes the member table by bare symbol bits — the recovery door. `tag` is
+            // the source text the construction site spelled, so the miss names what was written
+            // even when nothing interned it; the known keys were interned at their declaration.
+            let expected = schema.get(&Symbol::of(tag)).ok_or_else(|| {
+                let known: Vec<String> = schema
+                    .keys()
+                    .map(|key| render_label(key.symbol(), view.registries()))
+                    .collect();
                 KError::new(KErrorKind::ShapeError(format!(
                     "tag `{}` not in union (known: {})",
                     tag,
-                    schema.keys().cloned().collect::<Vec<_>>().join(", ")
+                    known.join(", ")
                 )))
             })?;
             // The schema check reads the payload at the term's resident brand — a pin-free read;

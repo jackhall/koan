@@ -30,7 +30,7 @@ fn resolve_name_identifier_resolved() {
         scope,
         &part,
         None,
-        test_run.types(),
+        test_run.registries(),
         TypeLeafChannels::ValueChannelFirst,
     ) {
         Resolution::Resolved(delivered) => assert!(
@@ -52,7 +52,7 @@ fn resolve_name_type_resolved() {
         scope,
         &part,
         None,
-        test_run.types(),
+        test_run.registries(),
         TypeLeafChannels::ValueChannelFirst,
     ) {
         Resolution::Resolved(ref delivered)
@@ -99,7 +99,7 @@ fn resolve_name_parked() {
         scope,
         &part,
         None,
-        test_run.types(),
+        test_run.registries(),
         TypeLeafChannels::ValueChannelFirst,
     ) {
         Resolution::Parked(p) => assert_eq!(p, claim),
@@ -118,7 +118,7 @@ fn resolve_name_unbound() {
         scope,
         &part,
         None,
-        test_run.types(),
+        test_run.registries(),
         TypeLeafChannels::ValueChannelFirst,
     ) {
         Resolution::Unbound(name) => assert_eq!(name, "missing"),

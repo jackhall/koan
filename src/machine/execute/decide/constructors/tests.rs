@@ -1,4 +1,4 @@
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::{TestRun, parse_one, type_name};
 use crate::machine::core::{KErrorKind, program_storage, run_root_storage};
 use crate::machine::model::KObject;
 
@@ -56,7 +56,9 @@ fn ctor_fast_lane_with_sub_expression_value() {
             assert_eq!(*tag, "Some");
             assert!(matches!(value.payload(), KObject::Number(n) if *n == 7.0));
             match test_run.types().node(*identity) {
-                TypeNode::SetMember { name, .. } => assert_eq!(name, "Some"),
+                TypeNode::SetMember { name, .. } => {
+                    assert_eq!(name, type_name("Some", test_run.registries()))
+                }
                 _ => panic!("expected a member SetMember identity, got {identity:?}"),
             }
         }

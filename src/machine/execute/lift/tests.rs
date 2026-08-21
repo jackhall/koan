@@ -19,6 +19,7 @@ use crate::witnessed::RegionHandleFamily;
 /// Koan's destination-operand family, fixed to the storage profile — the `Delivered::destination`
 /// operand's handle family, named for the merge turbofish.
 type DestHandleFamily = RegionHandleFamily<KoanStorageProfile>;
+use crate::builtins::test_support::type_token;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::Held;
 use crate::machine::model::KType;
@@ -402,7 +403,7 @@ fn type_recursive_member_relocates_and_navigates() {
     // `NEWTYPE Tree = :{children :(LIST OF Tree)}` seals into. The self-edge starts as `Sibling(0)`
     // and seals to the member's own absolute handle.
     let tree = RecursiveGroupWindow::seal_singleton(
-        "Tree".into(),
+        type_token("Tree"),
         RelativeSchema::NewType(types.record(Record::from_pairs([(
             crate::machine::model::Symbol::of("children"),
             types.list(types.intern(TypeNode::Sibling(0))),

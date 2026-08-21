@@ -1,0 +1,10 @@
+UNION Maybe = (Some :Number None :Null)
+MATCH (Maybe (Some 1)) -> :Number WITH (Some -> (it) None -> (0))
+MATCH (Maybe (Some 1)) -> :Number WITH (Some -> (it) None -> (0))
+MATCH (Maybe (Some 1)) -> :Number WITH (Some -> (it) None -> (0))
+MATCH (Maybe (Some 1)) -> :Number WITH (Some -> (it) None -> (0))
+MATCH (Maybe (Some 1)) -> :Number WITH (Some -> (it) None -> (0))
+MATCH (Maybe (Some 1)) -> :Number WITH (Some -> (it) None -> (0))
+MATCH (Maybe (Some 1)) -> :Number WITH (Some -> (it) None -> (0))
+MATCH (Maybe (Some 1)) -> :Number WITH (Some -> (it) None -> (0))
+PRINT 1

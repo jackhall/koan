@@ -440,7 +440,7 @@ impl<'step> Host<'step> {
                 s,
                 part,
                 active_chain,
-                self.ambient.types(),
+                self.ambient.registries(),
                 TypeLeafChannels::TypeChannel,
             )
         });

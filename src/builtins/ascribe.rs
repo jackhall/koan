@@ -11,15 +11,13 @@ use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::render_label;
 use crate::machine::model::{
     KKind, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeNode, sig_subtype,
     substitute_sig_members,
 };
 use crate::machine::model::{KObject, Module, ModuleDraft};
-use crate::machine::model::{TypeSymbol, ValueSymbol};
+use crate::machine::model::{TypeMemberMap, TypeSymbol, ValueSymbol};
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
-use std::collections::HashMap;
 
 use super::{arg, kw, sig};
 use crate::machine::BoundArgs;
@@ -161,13 +159,12 @@ fn view_type_members(
     for (name, kt) in &signature.abstract_members {
         let minted_kt = match types.node(*kt) {
             TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => {
-                // `seal_singleton` takes the member's display name — `SetMember.name` is the
-                // rendered payload, digest-excluded — so this one name resolves through the
-                // interner.
+                // The mint carries the SIG member's own classified name straight across: the
+                // member it re-declares is the same Type-class label the SIG declaration interned.
                 RecursiveGroupWindow::seal_singleton(
-                    render_label(name.symbol(), registries),
+                    *name,
                     RelativeSchema::TypeConstructor {
-                        schema: HashMap::new(),
+                        schema: TypeMemberMap::default(),
                         param_names,
                     },
                     Some(nonce),

@@ -10,11 +10,11 @@
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::DeclWindow;
 use crate::machine::model::KType;
-use crate::machine::model::Symbol;
 use crate::machine::model::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts,
     parse_typed_field_list_via_elaborator,
 };
+use crate::machine::model::{Symbol, TypeSymbol};
 use crate::machine::{Action, BodyCtx, FinishCtx};
 use crate::machine::{DeclarationSite, KError, KErrorKind, TraceFrame};
 use crate::machine::{FieldListDeferral, StepCarried};
@@ -54,9 +54,10 @@ pub(crate) fn nominal_schema_action<'a>(
     // a reference to any of them resolves through the window rather than parking on a placeholder
     // — and, for a sigil field whose body sub-dispatches into the window-less standalone
     // dispatcher, is pre-resolved to a sibling cell before it leaves.
+    let binder = crate::try_action!(crate::machine::model::type_binder(&name, ctx.registries));
     let outcome = {
         let mut elaborator = Elaborator::new(ctx.scope)
-            .with_threaded(std::iter::once(name.clone()).chain(window.view().threadable_names()))
+            .with_threaded(std::iter::once(binder).chain(window.view().threadable_names()))
             .with_window(window.view())
             .with_chain(chain.clone());
         parse_typed_field_list_via_elaborator(
@@ -78,7 +79,7 @@ pub(crate) fn nominal_schema_action<'a>(
             sub_dispatches,
         } => {
             let finish_name = name.clone();
-            let threaded: Vec<String> = std::iter::once(name)
+            let threaded: Vec<TypeSymbol> = std::iter::once(binder)
                 .chain(window.view().threadable_names())
                 .collect();
             FieldListDeferral::new(

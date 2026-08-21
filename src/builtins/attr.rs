@@ -109,7 +109,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
     use crate::machine::Action;
     if let Some(te) = ctx.args.unresolved_type("s") {
         let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
-        return match ctx.scope.resolve_type_identifier(te, None, ctx.types()) {
+        return match ctx.scope.resolve_type_identifier(te, None, ctx.registries) {
             TypeResolution::Done(kt) => route(access_type_member(
                 ctx.scope,
                 kt,
