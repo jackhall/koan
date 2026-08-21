@@ -152,7 +152,10 @@ The asymmetry between the two edge kinds is a design invariant:
 ## Ownership and reclamation
 
 The run frame owns the registry; the registry owns the nodes; handles own nothing.
-Within a run the registry is insert-only — interning adds nodes, nothing removes them
+Concretely it owns a `RunRegistries` bundle — the type registry beside the run's label
+interner ([label-interning.md](../label-interning.md)) — as a plain field, not an `Rc`
+and not region-bumped: both halves own growing heap maps that need `Drop`, and regions
+are Drop-free. Within a run the registry is insert-only — interning adds nodes, nothing removes them
 — and the whole graph drops with the run frame. There is no eviction of content, no
 garbage collection, no refcounting, and no growth that outlives the run. Dedup keeps
 the node population at the number of *distinct* types the run builds, which is what
@@ -173,6 +176,11 @@ invoked immediately at a site holding the scheduler view, so the registry need
 only outlive the finish call, and continuations are higher-ranked over that
 lifetime. Nothing stores the reference beyond the call that received it, which
 is what keeps ownership sitting on the run frame alone.
+
+`&TypeRegistry` stays the currency for these readers — every pure type-structure
+question answers without label text. A consumer takes the wider `&RunRegistries`
+only when it renders text or constructs a record, which keeps the label interner off
+the type-system surface entirely.
 
 ## Concurrency
 

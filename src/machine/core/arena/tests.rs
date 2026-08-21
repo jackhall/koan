@@ -567,7 +567,8 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
             Held::Object(KObject::Number(2.0)),
         ),
     ]);
-    let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
+    let obj: &KObject<'_> =
+        door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), &types));
     // `RecordSubstrate` is invariant in its lifetime, so the comparison casts through `usize`
     // rather than keeping a lifetime-parameterized raw pointer type alive across the fold below.
     let expected_addr = match obj {
@@ -650,7 +651,8 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
         crate::machine::model::Symbol::of("a"),
         Held::Object(KObject::Number(3.0)),
     )]);
-    let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
+    let obj: &KObject<'_> =
+        door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), &types));
     let expected_addr = match obj {
         KObject::Record(substrate, _) => *substrate as *const RecordSubstrate<'_> as usize,
         other => panic!(
@@ -973,7 +975,11 @@ fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
             crate::machine::model::Symbol::of("x"),
             Held::Object(KObject::Number(1.0)),
         )]);
-        Carried::Object(door.alloc_object_folded(KObject::record_of_held(door, fields, types)))
+        Carried::Object(door.alloc_object_folded(KObject::record_of_held(
+            door,
+            fields.as_slice(),
+            types,
+        )))
     });
     let homed = stored.open_ref(|c| match c.object() {
         KObject::Record(substrate, _) => substrate.homed_in(frame.region()),
@@ -1112,7 +1118,7 @@ fn region_death_frees_every_drop_free_family() {
                 crate::machine::model::Symbol::of("field"),
                 Held::Object(KObject::KString(door.allocator().text("payload"))),
             )]);
-            KObject::record_of_held(door, fields, &types)
+            KObject::record_of_held(door, fields.as_slice(), &types)
         }),
         scope.fold_resident_object(|brand| {
             let door = brand.with_holder(&owned_cells);
@@ -1227,4 +1233,52 @@ fn region_death_frees_every_drop_free_family() {
     drop(callables);
     drop(modules);
     drop(frame);
+}
+
+/// The mirror of the region-death claim above. Every koan value family is `Drop`-free so region
+/// death can be chunk deallocation, but the run's registries are the one thing in the engine that
+/// deliberately is not: [`RunRegistries`] owns the type registry's nodes and the label interner's
+/// digest→text map, both heap maps with real destructors. That is why they sit on the run
+/// [`CallFrame`] as a plain owned field rather than in any region's bump — a bump frees its chunks
+/// without visiting them, so hosting them there would strand both maps at run end. This test drives
+/// a program that populates the interner from every syntactic label site — a record type's field
+/// names, a two-keyword function's parameter names, and a record literal's own labels — then drops
+/// the run frame with nothing outside it holding a reference. Miri's process-exit leak count is the
+/// assertion: the frame is the sole owner, so if the `Rc` ever entered a cycle, or the registries
+/// migrated into region storage, both maps leak here.
+#[test]
+fn run_registries_free_with_the_run_frame() {
+    use crate::machine::model::Symbol;
+    let program = program_storage();
+    let root = run_root_storage();
+
+    let mut test_run = TestRun::silent(&program, &root);
+    let seeded = test_run.registries().labels.len();
+    test_run.run(
+        "NEWTYPE Point = :{x :Number, y :Number}\n\
+         FN (SHIFT amount :Number BY step :Number) -> Number = (amount + step)\n\
+         LET origin = (Point {x = 1, y = 2})\n\
+         PRINT (SHIFT 1 BY 3)\n\
+         PRINT origin",
+    );
+
+    // The labels the program itself introduced are in the map — without this the drop below would
+    // be freeing an empty map and the leak check would pass vacuously.
+    let labels = &test_run.registries().labels;
+    assert!(
+        labels.len() > seeded,
+        "the program's own labels interned: {} entries against {seeded} seeded by the builtins",
+        labels.len()
+    );
+    for label in ["x", "y", "amount", "step"] {
+        assert_eq!(
+            labels.resolve(Symbol::of(label)).as_deref(),
+            Some(label),
+            "`{label}` resolves back through the interner that recorded it"
+        );
+    }
+
+    // Nothing outside holds the frame, so this is the whole of run teardown: the registries drop
+    // with it, and both their maps free.
+    drop(test_run);
 }

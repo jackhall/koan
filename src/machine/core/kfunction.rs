@@ -201,11 +201,11 @@ impl<'a> KFunction<'a> {
 
     /// Validate a positional call's `parts` against this signature: arity, keyword spellings, and
     /// each argument's type ([`slot_admits`]). Shared by [`Self::bind_args_into`] and the `exec`
-    /// executor — the latter re-keys the call's delivery envelopes onto parameter names by slot
-    /// (`map_arg_carriers`, a pure rename that trusts the picker), so for a uniquely-picked call
-    /// (admitted shape-only by dispatch) this is where a non-satisfying typed argument becomes a
-    /// hard `TypeMismatch` rather than slipping through. It is also what makes that re-key a
-    /// 1:1 slot walk: parts and signature elements have equal length and matching shapes.
+    /// executor — the latter selects the call's delivery envelopes by `part_slots`, trusting the
+    /// picker, so for a uniquely-picked call (admitted shape-only by dispatch) this is where a
+    /// non-satisfying typed argument becomes a hard `TypeMismatch` rather than slipping through.
+    /// It is also what makes that selection a 1:1 slot walk: parts and signature elements have
+    /// equal length and matching shapes.
     pub(crate) fn validate_call_args(
         &'a self,
         parts: &[Spanned<WorkingPart<'a>>],

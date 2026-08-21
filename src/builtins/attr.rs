@@ -161,10 +161,10 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mac
     // The lhs `s` is a computed `Wrapped` value delivered to this call (e.g. `seg.finish.x`), so its
     // carrier names regions the read-site frame may not pin; cross the lhs carrier as the field
     // read's operand so the projected field outlives every region the lhs reaches. A carrier-less
-    // `s` is region-pure by the `arg_carriers` contract, so it is placed into the read-site region
-    // through the shape-split pure door and enveloped there — coverage-equivalent to an empty-reach
-    // seal. No region-pure shape is a `Wrapped`, so that arm's diagnostic is what a construction
-    // bug would surface here.
+    // `s` is region-pure by the argument view's carrier contract, so it is placed into the
+    // read-site region through the shape-split pure door and enveloped there —
+    // coverage-equivalent to an empty-reach seal. No region-pure shape is a `Wrapped`, so that
+    // arm's diagnostic is what a construction bug would surface here.
     match ctx.args.carrier("s") {
         Some(lhs) => route(access_field(&ctx.ctx, &field_name, lhs, ctx.registries)),
         None => {

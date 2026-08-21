@@ -60,7 +60,9 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
 - `Dict(&'a DictSubstrate<'a>, KType)` — a hash table frozen at construction, its
   buckets in the region's own bump.
 - `Record(&'a RecordSubstrate<'a>, KType)` — the field cells in the region, stored
-  sorted by field name.
+  sorted by field [symbol](label-interning.md). The door verbs take the field pairs
+  as a `&[(Symbol, Held<'a>)]` slice and bump their working buffers in the
+  destination region, so a record value carries no heap container of its own.
 - `Tagged { value: &'a PayloadSubstrate<'a>, .. }` — the single-cell payload
   substrate in the arena.
 - `Wrapped { inner: &'a PayloadSubstrate<'a>, .. }` — the same one-cell payload
@@ -86,12 +88,15 @@ carrier. The per-container names
 above are aliases of that one wrapper, differing only in `C`, and every `C` is
 `Copy` with no allocation of its own:
 
-- **`RecordLayout<'a>`** — a bump-hosted `&'a [&'a str]` of the field names, sorted,
-  one per cell and positionally aligned with them. The slice *is* the whole index: a
-  lookup binary-searches it and the hit's position is the cell index, so a record pays
-  one allocation rather than a table's two. Field order is therefore a property of the
-  names, never of how the literal was written — a record walks and renders name-sorted.
-  Equality was already order-blind, so nothing semantic turns on it.
+- **`RecordLayout<'a>`** — a bump-hosted `&'a [Symbol]` of the field
+  [symbols](label-interning.md), sorted in numeric symbol order, one per cell and
+  positionally aligned with them. The slice *is* the whole index: a lookup
+  binary-searches it and the hit's position is the cell index, so a record pays one
+  allocation rather than a table's two, and a `Symbol` being fixed-width `Copy` means
+  the index holds no text at all. Field order is therefore a property of the names'
+  identity, never of how the literal was written — a record *walks* symbol-sorted, and
+  `summarize` re-sorts by resolved text so it *renders* name-sorted. Equality was
+  already order-blind, so nothing semantic turns on either order.
 - **`&'a BumpBackedMap<'a, KKey<'a>, usize>`** — a dict's key→index table, frozen at
   construction by [`BumpAllocator::frozen_table`](../workgraph/src/witnessed/bump.rs). Key counts are
   unbounded, so a dict does pay for a hash table; it is a `hashbrown` table whose buckets
@@ -266,13 +271,15 @@ which is what keeps the relocation's release-exact answer exact. Pinning paths
 (a retaining adoption, a projection's `deep_clone`) share the pointer, covered
 by the reach that already names the producer region.
 
-A substrate's **index** is bump-hosted string bytes too — a record's name slice and
-the names in it, a dict's frozen table over re-bumped keys — so the rule reaches it
-identically, and the stakes are higher there than for a cell. An index is read
-*before* any cell is: a field lookup binary-searches the names, a key lookup hashes
-and byte-compares. And it is metadata, not a cell, so no run describes it and the
-reach fold cannot rescue it. A relocation that re-homed only cells would leave a
-use-after-free on the way in.
+A substrate's **index** is bump-hosted too, and where it holds string bytes — a
+dict's frozen table over re-bumped keys — the rule reaches it identically, with
+higher stakes than for a cell. An index is read *before* any cell is: a key lookup
+hashes and byte-compares. And it is metadata, not a cell, so no run describes it and
+the reach fold cannot rescue it. A relocation that re-homed only cells would leave a
+use-after-free on the way in. A record's index sidesteps the question outright: it is
+a `&[Symbol]` slice of fixed-width digests ([label-interning.md](label-interning.md)),
+so re-bumping it copies `Copy` bytes that borrow nothing, and a field lookup
+binary-searches symbols without touching text.
 
 The gate is a signature, not a check. A string is **not** a
 [`Scalar`](../src/machine/model/values/kobject.rs) — that type has no lifetime, and a

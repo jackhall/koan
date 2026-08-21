@@ -462,7 +462,7 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
         crate::machine::model::Symbol::of("a"),
         Held::Object(KObject::Number(1.0)),
     )]);
-    let record = door.alloc_object_folded(KObject::record_of_held(door, fields, types));
+    let record = door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), types));
     let sealed =
         module_scope.seal_reaching(Carried::Object(record), module_scope.mint_born_here(false));
     module_scope

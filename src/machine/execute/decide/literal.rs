@@ -6,14 +6,14 @@ use crate::machine::core::{
     FoldingBrand, KoanRegionExt, KoanStorageProfile, RegionBrand, SubstrateDoor,
 };
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::{Carried, Held, KKey, KObject, Record, TypeRegistry};
+use crate::machine::model::{Carried, Held, KKey, KObject, TypeRegistry};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{
     CarrierWitness, DeliveredCarried, FrameStorage, KError, KErrorKind, KoanRegion, NodeId,
     TraceFrame,
 };
 use crate::source::Spanned;
-use crate::witnessed::{Delivered, RegionHandle, reattachable};
+use crate::witnessed::{BumpVec, Delivered, RegionHandle, reattachable};
 
 use super::super::harness::{Host, KoanWorkload};
 use super::super::lift::{HeldFamily, copy_held_from_carried, relocated_cell_still_borrows};
@@ -365,9 +365,13 @@ impl<'step> Host<'step> {
             deps,
             rows,
             Box::new(move |door, _keys, value_helds, types| {
-                let record: Record<Held<'_>> =
-                    names.into_iter().zip(value_helds.iter().copied()).collect();
-                KObject::record_of_held(door, record, types)
+                // The field pairs are assembled in the destination region's own construction
+                // storage: the schedule-time name slice zipped against the delivered cells, with
+                // no owned record in between.
+                let mut pairs: BumpVec<'_, (Symbol, Held<'_>)> =
+                    BumpVec::with_capacity_in(names.len(), door.allocator());
+                pairs.extend(names.iter().copied().zip(value_helds.iter().copied()));
+                KObject::record_of_held(door, &pairs, types)
             }),
         )
     }

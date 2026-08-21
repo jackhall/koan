@@ -1,10 +1,8 @@
 use std::fmt;
 
 use crate::machine::model::WorkingExpression;
-use crate::machine::model::{Carried, CarriedFamily, KObject};
-use crate::machine::model::{
-    KKind, KType, Record, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
-};
+use crate::machine::model::{Carried, CarriedFamily, KObject, Symbol};
+use crate::machine::model::{KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeRegistry};
 use crate::source::{self, FileId, SourceLoc, Span};
 use crate::witnessed::RegionHandleFamily;
 
@@ -209,15 +207,11 @@ impl KError {
         // source-written field name is, so each interns and renders back through the interner.
         let mut pairs: Vec<(String, KObject<'a>)> = fields;
         pairs.push(("frames".to_string(), frames_list));
-        let record = KObject::record(
-            door,
-            Record::from_pairs(
-                pairs
-                    .into_iter()
-                    .map(|(name, value)| (registries.labels.intern(&name), value)),
-            ),
-            types,
-        );
+        let interned: Vec<(Symbol, KObject<'a>)> = pairs
+            .into_iter()
+            .map(|(name, value)| (registries.labels.intern(&name), value))
+            .collect();
+        let record = KObject::record(door, &interned, types);
         let payload = KObject::wrapped_peel(
             door,
             &record,

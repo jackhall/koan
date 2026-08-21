@@ -105,8 +105,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         })));
 
     // Cross the record as the projection's lhs operand. A carrier-less lhs is region-pure by the
-    // `arg_carriers` contract, so it is placed into the read-site region through the shape-split
-    // pure door and enveloped there — coverage-equivalent to an empty-reach seal. No region-pure
+    // argument view's carrier contract, so it is placed into the read-site region through the
+    // shape-split pure door and enveloped there — coverage-equivalent to an empty-reach seal. No region-pure
     // shape is a `Record`, so that arm's diagnostic is what a construction bug would surface here.
     let resident;
     let lhs: &crate::machine::DeliveredCarried = match ctx.args.carrier("record") {

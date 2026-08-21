@@ -63,7 +63,7 @@ fn alloc_home_borrowing_record<'run>(
             Held::Object(KObject::KFunction(closure)),
         ),
     ]);
-    door.alloc_object_folded(KObject::record_of_held(door, fields, types))
+    door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), types))
 }
 
 /// The substrate address of a `&KObject::Record`, as a lifetime-free integer for identity checks.
@@ -178,7 +178,7 @@ fn alloc_split_reach_record<'run>(
             Held::Object(KObject::KFunction(there)),
         ),
     ]);
-    door.alloc_object_folded(KObject::record_of_held(door, fields, types))
+    door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), types))
 }
 
 /// Parting a cell hands it out under **its own run's** stored reach, not the container's union: the

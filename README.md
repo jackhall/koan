@@ -97,6 +97,8 @@ file per builtin), and [machine/](src/machine) (the execution engine that
 consumes a `KExpression`). `machine` further
 splits into [model/](src/machine/model) (the value/type vocabulary —
 [ast.rs](src/machine/model/ast.rs) for the parsed-expression types,
+[labels.rs](src/machine/model/labels.rs) for `Symbol`, the content-digest handle
+every syntactic label travels as,
 [types/](src/machine/model/types) for `KType`/`KKind`/signatures/traits, and
 [values/](src/machine/model/values) for `KObject`/`Carried`/`KKey`/`Module`),
 [core/](src/machine/core) (allocation, `Scope`, `KError`, plus the
@@ -132,6 +134,9 @@ content-hash every `KType` compares by),
 schema a signature node carries, and the canonical signature-subtyping relation),
 [registry.rs](src/machine/model/types/registry.rs) (`TypeRegistry`, the
 run-frame-owned store that memoizes subtype verdicts by digest pair),
+[registries.rs](src/machine/model/registries.rs) (`RunRegistries`, the run frame's
+owned bundle of that registry beside the label interner — see
+[design/label-interning.md](design/label-interning.md)),
 [builtins.rs](src/builtins.rs) (registry),
 [constructors.rs](src/machine/execute/decide/constructors.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).
@@ -195,13 +200,15 @@ src/
     │   │   ├── shape.rs           Part / PartClass / FieldSlot + the structural readers both part families share (classify_dispatch_shape, the bucket key, the operator probe)
     │   │   └── working.rs         WorkingExpression / WorkingPart — the scheduler's own node, the only one that can hold a spliced sub-result
     │   ├── operators.rs           OperatorGroup registry record — chainable-operator precedence/associativity
+    │   ├── labels.rs              Symbol — a label's 128-bit content digest, and LabelInterner, the run's digest→text side table read only when rendering
+    │   ├── registries.rs          RunRegistries — the run frame's owned bundle of run-lifetime lookup state (the TypeRegistry beside the LabelInterner)
     │   ├── types.rs
     │   ├── types/
     │   │   ├── ktype.rs           KType — the Copy content-digest handle for slots, return types, and runtime values
     │   │   ├── kkind.rs           KKind — the shallow dispatch *kind* of a type (the OfKind expectation)
     │   │   ├── node.rs            TypeNode — one interned type's content, the thing a KType handle names
     │   │   ├── registry.rs        TypeRegistry — the run-frame-owned interning graph and verdict cache
-    │   │   ├── record.rs          Record<V> — ordered identifier-keyed map backing record-type schemas and FN parameter identity
+    │   │   ├── record.rs          Record<V> — ordered Symbol-keyed map over a Vec<(Symbol, V)>, backing record-type schemas and FN parameter identity
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
     │   │   ├── ktype_resolution.rs   surface-name and TypeName elaboration (from_name, from_type_expr, join)
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking (no cache tier; interning already makes a re-elaborated form yield the same handle)
@@ -213,7 +220,7 @@ src/
     │   ├── values.rs
     │   └── values/
     │       ├── kobject.rs         runtime value type
-    │       ├── container_substrate.rs  ContainerSubstrate<'a, C> — the index-generic region-resident substrate (sectioned cells + run union + copy cost), Copy and bump-hosted in every arm; C is RecordLayout (a sorted name slice), a dict's frozen &BumpBackedMap, or a list/payload marker
+    │       ├── container_substrate.rs  ContainerSubstrate<'a, C> — the index-generic region-resident substrate (sectioned cells + run union + copy cost), Copy and bump-hosted in every arm; C is RecordLayout (a symbol-sorted &[Symbol] slice), a dict's frozen &BumpBackedMap, or a list/payload marker
     │       ├── carried.rs         Carried — the scheduler's value currency (Object | Type)
     │       ├── kkey.rs            KKey — hashable scalar wrapper for dict keys
     │       ├── named_pairs.rs     shared (name, value) ordered-list helper

@@ -117,7 +117,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-22 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
+23 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
 below are the exact test identifiers; pass them after `--` in the Miri command. A further 54 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
@@ -256,6 +256,17 @@ too — the map is the shape most likely to smuggle an owning spine back in. It 
 with nothing outside borrowing in. Miri's process-exit leak count is the assertion.
 
 - `region_death_frees_every_drop_free_family`
+
+Its mirror is the run's **registries**, the one deliberately `Drop`-bearing thing the engine hosts:
+`RunRegistries` owns the type registry's nodes and the label interner's digest→text map, so it sits
+on the run `CallFrame` as a plain owned field rather than in any region's bump — bumping it is
+exactly the stranding the claim above describes. The test drives a program that populates the
+interner from every syntactic label site (a record type's fields, a two-keyword function's
+parameters, a record literal's labels), asserts the map is non-empty so the drop is not vacuous,
+and drops the frame as the sole owner. An `Rc` cycle through the frame, or a migration of the
+registries into region storage, leaks both maps at process exit.
+
+- `run_registries_free_with_the_run_frame`
 
 **Dep envelopes held across a step's own open** ([src/machine/execute/harness.rs](../src/machine/execute/harness.rs))
 — `Host::step`'s consumer-step coverage is a plain `FrameCoverage` that absorbs each dep envelope's
@@ -555,9 +566,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-21: 1022s — 23 tests, 0 leaks, 0 UB
+- 2026-08-21: 1041s — 23 tests, 0 leaks, 0 UB
 - 2026-08-20: 722s — 22 tests, 0 leaks, 0 UB
 - 2026-08-20: 877s — 22 tests, 0 leaks, 0 UB
 - 2026-08-18: 733s — 22 tests, 0 leaks, 0 UB
-- 2026-08-18: 869s — 22 tests, 0 leaks, 0 UB
-- 2026-08-18: 703s — 22 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

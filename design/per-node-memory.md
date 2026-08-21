@@ -108,7 +108,7 @@ The value-embedding sites that take a *bare arg* —
 go through the step context's
 [`alloc_carried_with`](../src/machine/core/arena.rs), which re-projects the value
 at the fold brand from the lhs operand's own view (crossed via
-[`BodyCtx::arg_carrier`](../src/machine/core/kfunction/action.rs)), so its reach
+[`BoundArgs::carrier`](../src/machine/core/kfunction/action.rs)), so its reach
 folds in by construction; the Resolved arm goes through the binding scope's own
 [`Scope::seal_resident`](../src/machine/core/scope/reach.rs).
 

@@ -6,13 +6,16 @@
 //! places the execute path's allocation traffic scales, and each is held to an absolute
 //! bound. The four `audit/shapes/scope_walk_*.koan` shapes cover a third axis — how far
 //! the dispatch scope walk reaches — and are held to a *shape* instead: differenced against
-//! each other, so the test pins depth-independence rather than a count. A re-introduced
-//! allocation on any of the three fails a test here rather than going unnoticed.
+//! each other, so the test pins depth-independence rather than a count. The two
+//! `audit/shapes/builtin_call_calls*.koan` shapes cover a fourth — per-call cost at an arity
+//! above the binary operator — and are differenced the same way, for an absolute per-call
+//! figure. A re-introduced allocation on any of the four fails a test here rather than going
+//! unnoticed.
 //!
 //! This test binary installs the same counter the binary's `alloc-count` feature does
 //! (`audit/counting_alloc.rs`), so it needs no feature flag and stays in the default
 //! verify slate. It reads the counter's **thread-local** tally rather than its
-//! process-wide one: the two tests below run concurrently in this one binary, so a shared
+//! process-wide one: the tests below run concurrently in this one binary, so a shared
 //! counter would tally each into the other's bracket. The whole-program figure — the same
 //! run plus interpreter startup, read off the process tally — is what `audit/measure.sh`
 //! reports and what `audit/README.md` records.
@@ -139,5 +142,36 @@ fn per_dispatch_cost_does_not_grow_with_scope_walk_depth() {
          {per_dispatch_at_depth2} at depth 2 — {growth} more, over the {BOUND} bound. A \
          per-scope allocation is back on the dispatch walk; find the buffer that left the \
          step scratch arena."
+    );
+}
+
+/// **Per-call cost of a builtin call, at an arity the operator chain does not reach.** The two
+/// `audit/shapes/builtin_call_calls*.koan` shapes are 8 and 40 repetitions of one
+/// three-parameter builtin call (`MATCH … -> … WITH …`, bound as `expr` / `return_type` /
+/// `branches`). Differencing them cancels interpreter startup and leaves 32 calls' marginal
+/// cost — the parse of the 32 extra statements included, since that is how the shapes differ.
+///
+/// Measured 2026-08-21 at **2 103** for the 32 calls (65.7 each), down from 2 359 (73.7 each)
+/// when a call re-keyed its arguments onto parameter names. The 256-allocation drop is exactly
+/// 8 per call: the 2n = 6 parameter-name copies a three-parameter bind used to make, plus the
+/// two per-call containers — the argument map and the carrier map — that the schema-keyed
+/// argument view replaces with a slice on the step scratch arena.
+///
+/// The bound is the measurement plus 32, so one re-introduced per-call allocation fails it.
+#[test]
+fn the_builtin_call_shape_stays_within_its_per_call_bound() {
+    const BOUND: u64 = 2_135;
+    let marginal = allocations_for(
+        include_str!("../audit/shapes/builtin_call_calls40.koan"),
+        "audit/shapes/builtin_call_calls40.koan",
+    ) - allocations_for(
+        include_str!("../audit/shapes/builtin_call_calls8.koan"),
+        "audit/shapes/builtin_call_calls8.koan",
+    );
+    assert!(
+        marginal <= BOUND,
+        "32 three-parameter builtin calls allocated {marginal} times, over the {BOUND} bound \
+         — a per-call or per-parameter allocation is back on the builtin bind path; re-measure \
+         with `audit/measure.sh` and rebaseline deliberately if the cost is intended"
     );
 }

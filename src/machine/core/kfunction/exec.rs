@@ -71,10 +71,10 @@ pub enum PerCallReturn {
 /// `invoke` for a user-defined function: bind `args` into `ctx`'s scope, then describe the body as an
 /// [`ExecOutcome`] — `Tail` of the non-tail statements + the last, or `DeferredExprTail` for a
 /// first-call deferred-`Expression` return. `ctx` is borrowed so the caller retains it. `args` is the
-/// call's arguments as **delivery envelopes** keyed by parameter name, the dispatcher's single re-key
-/// of the carriers it lifted off the call expression (`map_arg_carriers`). One record, not a value
-/// record beside an envelope record: the envelope already carries the [`Carried`] it delivers, so an
-/// argument with no envelope is not a state the bind can be handed.
+/// call's arguments as **delivery envelopes** in the signature's declaration order, selected out of
+/// the carriers the dispatcher lifted off the call expression by `part_slots` — nothing is keyed.
+/// Envelopes only, not a value slice beside an envelope slice: the envelope already carries the
+/// [`Carried`] it delivers, so an argument with no envelope is not a state the bind can be handed.
 ///
 /// Pure wrt the scheduler: it mutates only `ctx`'s own scope (param binds) and, for a deferred `Type`
 /// return, elaborates the return type inline against that scope. `in_contract_chain` true means this
@@ -105,8 +105,8 @@ pub fn run_user_fn<'ast>(
             let symbol = *symbol;
             // The scope tables key by text, so a parameter's symbol resolves back through the
             // interner that recorded it at definition. See
-            // [roadmap/reduce_allocs/symbol-keyed-scope-tables.md] — once the tables key by
-            // `Symbol`, this resolve and the `String` it builds both go away.
+            // [symbol-keyed-scope-tables.md](../../../../roadmap/reduce_allocs/symbol-keyed-scope-tables.md)
+            // — once the tables key by `Symbol`, this resolve and the `String` it builds both go away.
             let name = render_label(symbol, registries);
             match arg_channel(delivered) {
                 // The projection is identity — the whole delivered value binds. The copy is a deep

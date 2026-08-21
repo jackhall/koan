@@ -72,8 +72,8 @@ through the same channel as builtin errors:
 [`Scope::resolve_dispatch`](../src/machine/execute/decide/resolve_dispatch.rs) returns a
 `DispatchOutcome` whose `Ambiguous` and `Unmatched` arms the scheduler driver
 converts to `Err(KError)` with `KErrorKind::AmbiguousDispatch` /
-`DispatchFailed`, and `KFunction::bind_args` returns `Result<Record<Held>, KError>` on
-arity mismatch.
+`DispatchFailed`, and `KFunction::bind_args_into` returns `Err(KError)` on arity
+mismatch rather than filling the call's argument slots.
 [`KoanRuntime::execute`](../src/machine/execute/harness.rs) and
 [`interpret`](../src/machine/execute/interpret.rs) return `Result<(), KError>` to
 complete the surfacing.

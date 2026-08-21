@@ -41,20 +41,29 @@ composition the registry already uses for child type digests.
 
 ## Residency: owned records only at the intern boundary
 
-`Record<V>` — the ordered, identifier-keyed map behind struct schemas, function
-parameter lists, and record values — keys by `Symbol` and is backed by a plain
-`Vec<(Symbol, V)>` in insertion order. Lookup is a linear symbol compare (cheaper
-than hashing at record sizes), equality is order-blind, and hashing is the
-order-blind commutative fold. One heap allocation per record, no index table.
+`Record<V>` — the ordered, identifier-keyed map behind struct schemas and function
+parameter lists — keys by `Symbol` and is backed by a plain `Vec<(Symbol, V)>` in
+insertion order. Lookup is a linear symbol compare (cheaper than hashing at record
+sizes), equality is order-blind, and hashing is the order-blind commutative fold.
+One heap allocation per record, no index table.
 
 Owned `Record`s exist **only where content outlives every region**: the type
 registry's nodes. Everywhere transient, the currency is a borrowed slice
 `&[(Symbol, V)]` bumped in whichever region naturally hosts it — a signature's
 parameter schema in the definition's region, a call's argument slots on the step
-scratch arena, a record literal's field pairs in step construction storage.
-Minting a type node copies the slice into an owned `Record` once, at
-insert-if-absent time — the single place paying an allocation is amortized,
-because equal content interns to one node per run.
+scratch arena, a record literal's field pairs in the destination region's own
+construction storage. Minting a type node copies the slice into an owned `Record`
+once, at insert-if-absent time — the single place paying an allocation is
+amortized, because equal content interns to one node per run.
+
+A record *value* never holds a `Record` at all. The construction doors
+(`KObject::record`, `record_of_held`, `record_rehomed`) take the slice currency
+directly, and `alloc_record` bumps its two working buffers — the sort buffer and
+the cell buffer — in the destination region through the same allocator that hosts
+the finished substrate, so building a record of any width takes no heap container.
+The one owned `Record` the door mints is the per-field *type* record it hands to
+`TypeRegistry::record` to memoize the value's `ktype()` — the intern boundary
+again, not a per-value cost.
 
 The registry's nodes stay lifetime-free: region-bumped slices inside `TypeNode`
 would thread a run-region lifetime through `TypeRegistry`, `CallFrame`, and the
@@ -75,24 +84,34 @@ registries with no text access.
   lookup binary-searches the symbols. No strings live in the substrate.
 
 Insertion (declaration) order is preserved by `Record` itself and remains the
-rendering and positional-construction order.
+positional-construction order for a type node's field list.
+
+Symbol order carries no meaning to a reader, so a record *value* is rendered
+name-sorted: `KObject::summarize` resolves each field's text and sorts on it before
+formatting. That is a render-path sort only — the substrate's cell layout stays
+symbol-keyed, and the sort is the one place this design adds cost rather than
+removing it. It is paid where the alternative is a printed field order that varies
+with the hash.
 
 ## Argument binding: the schema owns the keys
 
 A call never builds a name-keyed container. The signature builds its parameter
-schema **once, at definition**: a region-bumped `&[(Symbol, KType)]` in
-declaration order, plus each parameter's slot index into the signature's element
-list. This schema is the same record the function's *type* carries — roles shared,
-not translated.
+schema **once, at definition**: `params`, a region-bumped `&[(Symbol, KType)]` in
+declaration order, beside `part_slots`, each parameter's index into the
+signature's element list. This schema is the same record the function's *type*
+carries — roles shared, not translated.
 
-Per call, the argument currency is a values-only slice on the step scratch arena,
-aligned with the schema: one slot per parameter holding the bound value and its
-optional delivery envelope. A named read resolves against the schema
-(symbol compare, linear over call arity) and indexes the slot; iteration zips
-schema with slots. Dispatch's slot correspondence (`validate_call_args`) is what
-makes the positional fill sound. Nothing is re-keyed per call, on either the
-builtin or the user-defined lane, and the per-call heap cost of argument passing
-is zero.
+Per call, the argument currency is `BoundArgs`: the definition-time schema paired
+with a values-only slice on the step scratch arena, aligned slot-for-slot. Each
+slot holds the bound cell and its optional delivery envelope. A named read
+computes `Symbol::of(name)`, scans the schema (symbol compare, linear over call
+arity) and indexes the slot; iteration zips schema with slots. Dispatch's slot
+correspondence (`validate_call_args`) is what makes the positional fill sound.
+Nothing is re-keyed per call, on either the builtin or the user-defined lane, and
+the per-call heap cost of argument passing is zero.
+
+The scope tables a user-defined call binds its parameters *into* are the one seam
+where a symbol still meets text — see [Open work](#open-work).
 
 ## Probes never intern
 
@@ -112,5 +131,6 @@ paths stay total.
 
 ## Open work
 
-- [roadmap/reduce_allocs/string-interning.md](../roadmap/reduce_allocs/string-interning.md)
-  — the implementation item shipping this design.
+- [roadmap/reduce_allocs/symbol-keyed-scope-tables.md](../roadmap/reduce_allocs/symbol-keyed-scope-tables.md)
+  — flipping a scope's binding tables from text keys to `Symbol`, which is what
+  removes the frame bind's per-parameter resolve back through the interner.

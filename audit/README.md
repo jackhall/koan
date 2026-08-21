@@ -83,6 +83,8 @@ moved it.
 | `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 5 421 | 49.9 per dispatch |
 | `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 5 284 | — |
 | `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 879 | 49.8 per dispatch |
+| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 553 | — |
+| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 656 | 65.7 per call |
 | *(empty program)* | interpreter startup and builtin seeding | 2 972 | — |
 
 No shape can use comments: koan has none, and `#` is reserved for quoting. The prose
@@ -96,15 +98,17 @@ working-expression rebuild — and its total is a per-*dispatch* cost. The four
 dispatch's **scope walk** reaches: at each depth, an innermost body of *m* `PROBE y`
 statements sits under *n* nested scopes that each shadow the `PROBE` bucket with a
 non-admitting same-key overload, so every dispatch strict- and hard-rejects at all *n* shadow
-scopes before picking at the root. Between them the three axes cover where the execute path's
-allocation traffic scales.
+scopes before picking at the root. The two `builtin_call_calls*.koan` shapes are the same
+differencing trick over a fourth axis, **call arity**: 8 and 40 repetitions of one
+three-parameter builtin call (`MATCH … -> … WITH …`, bound as `expr` / `return_type` /
+`branches`), an arity the binary operator chain does not reach. Between them the four axes
+cover where the execute path's allocation traffic scales.
 
-The step term is exactly linear — 118.0 flat at 10, 50, 100 and 200 steps. The dispatch term
-is not: marginal cost rises 28.9 → 29.5 → 30.4 → 31.3 across the 16→32, 32→64, 64→128 and
-128→256 operand doublings, so a chain pays slightly more per operator the longer it gets.
-Below 16 operands the fixed cost swamps the term, so the rise is only readable over the
-larger sizes. Whatever drives it is unmeasured; the shapes are sized to the linear-enough
-middle rather than to the tail.
+The step term is exactly linear — 98.9 flat at 10, 50, 100 and 200 steps. The dispatch term
+is not: marginal cost rises across the 16→32, 32→64, 64→128 and 128→256 operand doublings,
+so a chain pays slightly more per operator the longer it gets. Below 16 operands the fixed
+cost swamps the term, so the rise is only readable over the larger sizes. Whatever drives it
+is unmeasured; the shapes are sized to the linear-enough middle rather than to the tail.
 
 The walk term is **flat in depth**. Differencing the two call counts at one depth cancels
 parse and setup and leaves 32 dispatches' marginal cost: 1 598 allocations at depth 2 against
@@ -116,13 +120,21 @@ absolute per-dispatch figure is higher than the operator chain's because each `P
 whole statement — its own node, frame and working expression — where a chain operand is one
 dispatch inside a single statement's fold.
 
+The arity term is **65.7 per call**, from 2 103 allocations for the 32 calls the two
+`builtin_call` shapes differ by. It was 73.7 while a call re-keyed its arguments onto
+parameter names; the 8-allocation-per-call drop is exactly what the schema-keyed argument
+view removes at this arity — the 2n = 6 parameter-name copies, plus the argument map and the
+carrier map, both replaced by a values-only slice on the step scratch arena
+([label-interning.md](../design/label-interning.md)).
+
 ## The regression test
 
 `tests/allocation_baseline.rs` asserts the two absolute shapes' bracketed counts against a
 stated bound — 12 489 for the loop, 5 893 for the chain, each carrying 41 allocations of
-headroom. The bounds are tight by design: the margin is smaller than the 100 (loop) or 127
-(chain) a single new allocation on the scaling path would add, so one added allocation fails
-a test. Rebaselining is meant to be a deliberate edit, and the failure message says so.
+headroom — and the builtin-call pair's differenced count against 2 135, its 2 103 plus 32.
+The bounds are tight by design: the margin is smaller than the 100 (loop), 127 (chain) or 32
+(builtin call) a single new allocation on the scaling path would add, so one added allocation
+fails a test. Rebaselining is meant to be a deliberate edit, and the failure message says so.
 
 Those figures sit 9 under the whole-program table above — the same gap for both shapes, and
 essentially all of it process startup. The interpreter holds almost no lazy one-time state, so

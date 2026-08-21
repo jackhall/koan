@@ -10,7 +10,7 @@ use crate::machine::model::labels::Symbol;
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::types::render_label;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
-use crate::witnessed::{CellInput, CellReach, Sectioned};
+use crate::witnessed::{BumpVec, CellInput, CellReach, Sectioned};
 
 use super::container_substrate::{
     HeldCells, ListLayout, PayloadLayout, RecordLayout, held_copy_cost,
@@ -301,14 +301,17 @@ impl<'a> KObject<'a> {
     /// [`Self::record_of_held`].
     pub fn record(
         door: SubstrateDoor<'a, '_>,
-        fields: Record<KObject<'a>>,
+        fields: &[(Symbol, KObject<'a>)],
         types: &TypeRegistry,
     ) -> KObject<'a> {
-        KObject::record_of_held(
-            door,
-            Record::from_pairs(fields.into_pairs().map(|(k, v)| (k, Held::Object(v)))),
-            types,
-        )
+        let mut held: BumpVec<'a, (Symbol, Held<'a>)> =
+            BumpVec::with_capacity_in(fields.len(), door.allocator());
+        held.extend(
+            fields
+                .iter()
+                .map(|(name, value)| (*name, Held::Object(*value))),
+        );
+        KObject::record_of_held(door, &held, types)
     }
 
     /// Fresh `Record` carrier over [`Held`] field cells — the type-aware path (a field
@@ -317,10 +320,11 @@ impl<'a> KObject<'a> {
     /// name-sorted, aligned with the bump-hosted name slice that is the substrate's whole layout.
     pub fn record_of_held(
         door: SubstrateDoor<'a, '_>,
-        fields: Record<Held<'a>>,
+        fields: &[(Symbol, Held<'a>)],
         types: &TypeRegistry,
     ) -> KObject<'a> {
-        let field_types = fields.map(|v| v.ktype(types));
+        let field_types =
+            Record::from_pairs(fields.iter().map(|(name, cell)| (*name, cell.ktype(types))));
         KObject::Record(alloc_record(door, fields), types.record(field_types))
     }
 
@@ -340,7 +344,7 @@ impl<'a> KObject<'a> {
     /// names it no longer once the cell rebuilt owned.
     pub fn record_rehomed(
         door: SubstrateDoor<'a, '_>,
-        fields: Record<Held<'a>>,
+        fields: &[(Symbol, Held<'a>)],
         record_type: KType,
     ) -> KObject<'a> {
         KObject::Record(alloc_record(door, fields), record_type)
@@ -750,14 +754,20 @@ fn alloc_list<'a>(door: SubstrateDoor<'a, '_>, items: &[Held<'a>]) -> &'a ListSu
 /// binary search resolves a field exactly.
 fn alloc_record<'a>(
     door: SubstrateDoor<'a, '_>,
-    fields: Record<Held<'a>>,
+    fields: &[(Symbol, Held<'a>)],
 ) -> &'a RecordSubstrate<'a> {
-    let mut pairs: Vec<(Symbol, Held<'a>)> = fields.into_pairs().collect();
+    // Both working buffers are bumped in the destination region itself — the construction storage
+    // the door already writes the name slice and the cells into — so building a record takes no
+    // heap container at any size.
+    let mut pairs: BumpVec<'a, (Symbol, Held<'a>)> =
+        BumpVec::with_capacity_in(fields.len(), door.allocator());
+    pairs.extend_from_slice(fields);
     pairs.sort_unstable_by_key(|pair| pair.0);
     let names = door
         .allocator()
         .slice_from_iter(pairs.iter().map(|(symbol, _)| *symbol));
-    let cells: Vec<Held<'a>> = pairs.into_iter().map(|(_, cell)| cell).collect();
+    let mut cells: BumpVec<'a, Held<'a>> = BumpVec::with_capacity_in(pairs.len(), door.allocator());
+    cells.extend(pairs.iter().map(|(_, cell)| *cell));
     let (cells, reach) = section_cells(door, &cells);
     door.alloc_substrate_folded(ContainerSubstrate::new(
         RecordLayout::new(names),
@@ -824,13 +834,14 @@ pub(crate) fn copy_object_into<'b>(
         KObject::KFunction(f) => KObject::KFunction(f),
         KObject::Module(m) => KObject::Module(m),
         KObject::Record(substrate, record_type) => {
-            let fields: Record<Held<'b>> = Record::from_pairs(
+            let mut fields: BumpVec<'b, (Symbol, Held<'b>)> =
+                BumpVec::with_capacity_in(substrate.len(), dest.allocator());
+            fields.extend(
                 substrate
                     .fields()
-                    .map(|(symbol, cell)| (symbol, copy_held_into(cell, dest)))
-                    .collect::<Vec<_>>(),
+                    .map(|(symbol, cell)| (symbol, copy_held_into(cell, dest))),
             );
-            KObject::record_rehomed(dest, fields, *record_type)
+            KObject::record_rehomed(dest, &fields, *record_type)
         }
         KObject::List(substrate, list_type) => {
             let rebuilt: Vec<Held<'b>> = substrate

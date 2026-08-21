@@ -94,8 +94,8 @@ impl<'a> Carried<'a> {
 }
 
 /// Owned by-value cell — the owned dual of the borrowed [`Carried`], holding each arm inline (no `Rc`).
-/// The cell type of a `List` / `Dict` / `Record` and the currency a builtin's bound argument record
-/// (`Record<Held>`) holds.
+/// The cell type of a `List` / `Dict` / `Record` substrate, and the value half of a builtin's bound
+/// argument slot (`BoundArg`).
 ///
 /// `Copy` for the same reason [`KObject`] is: every arm is a scalar handle or a region borrow, so a
 /// cell owns no allocation and runs no `Drop` at region death. The bound is what lets a `Held` cell

@@ -404,7 +404,8 @@ it wrapped as a [`StepCarried`](../src/machine/execute/step_carried.rs) branded 
 lifetime, so the borrow checker rejects any attempt to stash it past its construction step and the
 sole exit to node storage is finalize's fold.
 
-A carrier-less argument — one the `arg_carriers` contract calls region-pure — is placed through
+A carrier-less argument — one whose [`BoundArgs`](../src/machine/core/kfunction/action.rs) slot
+carries no delivery envelope, which is the contract's way of calling it region-pure — is placed through
 [`Scope::place_pure_value`](../src/machine/core/scope/reach.rs), which routes exactly those shapes to
 exactly those doors. Every other shape borrows a region the door cannot name, reaches its destination
 as a delivery envelope instead, and arriving here is a construction bug the door reports as a

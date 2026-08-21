@@ -29,14 +29,18 @@ record join for both arms.
 
 The shape has two defining properties:
 
+- **Keys are [`Symbol`s](../../label-interning.md), not text.** The backing is a plain
+  `Vec<(Symbol, V)>` — one allocation, no index table — so a lookup is a linear `u128`
+  compare over a handful of fields and no field name is ever copied into a record.
+  Rendering resolves the text back through the run's label interner.
 - **Insertion order is preserved** for rendering and positional construction
   (`Record::iter` walks declaration order), but **equality ignores it**:
-  `(x :Number, y :Str)` and `(y :Str, x :Number)` are the same record. The
-  order-blind `PartialEq` is `IndexMap`'s, forwarded directly. Names are unique
-  within a record — a structural property `IndexMap` keys carry for free, and one
-  `parse_pair_list` already enforces by rejecting a duplicate field name.
+  `(x :Number, y :Str)` and `(y :Str, x :Number)` are the same record. `PartialEq`
+  matches every field of one against the other at equal length, which is set equality
+  because names are unique — a `parse_pair_list` rejects a duplicate field name
+  upstream, and `Record::insert` is last-wins if one ever arrived anyway.
 - **Hashing agrees with that order-blind equality**: a commutative fold
-  (`wrapping_add`) over a per-field `mix(hash(name), hash(value))`. The `mix` binds
+  (`wrapping_add`) over a per-field `mix(hash(symbol), hash(value))`. The `mix` binds
   name to value before the fold, so `{x: Number}` and `{y: Number}` hash apart; the
   symmetric accumulator makes the result independent of field order. Wrapping-add
   rather than XOR, which would cancel on a duplicate.
@@ -60,14 +64,17 @@ value's `ktype()` returns it free-standing, and it admits nothing on its own
 (`accepts_part` is `false`).
 
 The same `Record<V>` substrate also backs the first-class structural record type
-node `TypeNode::Record { fields: Record<KType> }` and its value `KObject::Record(Record<KObject>, …)`
-(surface `{x = 1, y = "a"}`). The dict carrier (`KType::Dict`, `KObject::Dict`) stays
+node `TypeNode::Record { fields: Record<KType> }`, whose values are
+`KObject::Record(&RecordSubstrate, KType)` (surface `{x = 1, y = "a"}`) — the value
+side lays its cells out symbol-sorted behind a region-hosted index rather than
+carrying a `Record` of its own ([value-substrates.md](../../value-substrates.md)).
+The dict carrier (`KType::Dict`, `KObject::Dict`) stays
 a sibling: records restrict keys to identifiers and admit heterogeneous per-field
 types, while dicts admit arbitrary value keys and one homogeneous value type. The two
 never share a key representation, and the value surfaces disambiguate at parse time —
 a brace literal with `=` pairs (`{x = 1}`) is a record, with `:` pairs (`{k: v}`) a
-dict. Record field names are unique by *parse* rule, not only by the `IndexMap` key
-invariant: a repeated name in a record literal is a parse error, while a dict may repeat
+dict. Record field names are unique by *parse* rule, not only by `Record`'s last-wins
+insert: a repeated name in a record literal is a parse error, while a dict may repeat
 a key (last wins), since dict keys are runtime-evaluated value expressions rather than a
 static shape (see [type-language-via-dispatch.md § Record-type sigil](../type-language-via-dispatch.md#record-type-sigil)).
 

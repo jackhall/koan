@@ -214,15 +214,11 @@ fn record<'a>(
     pairs: Vec<(&str, KObject<'a>)>,
     types: &TypeRegistry,
 ) -> KObject<'a> {
-    KObject::record(
-        door,
-        Record::from_pairs(
-            pairs
-                .into_iter()
-                .map(|(k, v)| (crate::machine::model::Symbol::of(k), v)),
-        ),
-        types,
-    )
+    let fields: Vec<_> = pairs
+        .into_iter()
+        .map(|(k, v)| (crate::machine::model::Symbol::of(k), v))
+        .collect();
+    KObject::record(door, &fields, types)
 }
 
 #[test]

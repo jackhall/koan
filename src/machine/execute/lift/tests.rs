@@ -529,9 +529,11 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
                     crate::machine::model::Symbol::of("a"),
                     Held::Object(KObject::Number(1.0)),
                 )]);
-                Carried::Object(
-                    door.alloc_object_folded(KObject::record_of_held(door, fields, types)),
-                )
+                Carried::Object(door.alloc_object_folded(KObject::record_of_held(
+                    door,
+                    fields.as_slice(),
+                    types,
+                )))
             },
         );
 
@@ -562,7 +564,7 @@ fn alloc_home_closure_record<'run>(
         crate::machine::model::Symbol::of("f"),
         Held::Object(KObject::KFunction(kf)),
     )]);
-    door.alloc_object_folded(KObject::record_of_held(door, fields, types))
+    door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), types))
 }
 
 /// Escape with **copy**: `fold_cells`'s exact aggregate loop (`cell_still_borrows` +
@@ -829,7 +831,8 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
             )))
             .collect::<Vec<_>>(),
     );
-    let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, types));
+    let obj: &KObject<'_> =
+        door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), types));
     let sealed = producer.seal_born_here(Carried::Object(obj), true);
     let dep: DeliveredCarried = Delivered::lift(
         crate::witnessed::Retained::from_sealed(Sealed::seal(sealed, producer.brand().handle())),
@@ -929,7 +932,7 @@ fn record_memos<'run>(
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
-    match door.alloc_object_folded(KObject::record_of_held(door, fields, types)) {
+    match door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), types)) {
         KObject::Record(substrate, _) => (substrate.copy_cost(), substrate.borrows_home()),
         other => panic!("expected a Record, got {}", other.ktype().name(registries)),
     }
@@ -1071,7 +1074,11 @@ fn substrate_memo_nested_record_composes_by_memo() {
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
-    let inner = door.alloc_object_folded(KObject::record_of_held(door, inner_fields, types));
+    let inner = door.alloc_object_folded(KObject::record_of_held(
+        door,
+        inner_fields.as_slice(),
+        types,
+    ));
     let (inner_cost, inner_home) = match inner {
         KObject::Record(substrate, _) => (substrate.copy_cost(), substrate.borrows_home()),
         other => panic!("expected a Record, got {}", other.ktype().name(&registries)),
@@ -1150,7 +1157,7 @@ mod seam_verb_table {
         let door =
             FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
                 .with_holder(&owned_cells);
-        door.alloc_object_folded(KObject::record_of_held(door, fields, types))
+        door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), types))
     }
 
     /// The chooser's substrate borrow, extracted from a `&KObject::Record`.
@@ -1480,7 +1487,7 @@ fn plain_record_cell_run<'run>(
             Held::Object(KObject::Number(index as f64)),
         )]);
         let object: &KObject<'_> =
-            door.alloc_object_folded(KObject::record_of_held(door, fields, types));
+            door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), types));
         let sealed = producer.seal_born_here(Carried::Object(object), true);
         cells.push(Delivered::lift(
             crate::witnessed::Retained::from_sealed(Sealed::seal(

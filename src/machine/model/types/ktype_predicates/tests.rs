@@ -285,13 +285,13 @@ fn record_value_admission_and_matches() {
         .with_holder(&owned_cells);
     let value: &KObject<'_> = door.alloc_object_folded(KObject::record(
         door,
-        Record::from_pairs(vec![
+        &[
             (crate::machine::model::Symbol::of("x"), KObject::Number(1.0)),
             (
                 crate::machine::model::Symbol::of("y"),
                 KObject::KString("a"),
             ),
-        ]),
+        ],
         types,
     ));
 

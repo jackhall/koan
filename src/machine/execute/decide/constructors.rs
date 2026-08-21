@@ -12,6 +12,7 @@ use crate::machine::core::{
     FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, RegionBrand, Scope,
 };
 use crate::machine::model::CarriedFamily;
+use crate::machine::model::types::record_field;
 use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
@@ -19,7 +20,9 @@ use crate::machine::{
     CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, RegionTypeFamily,
 };
 use crate::source::Spanned;
-use crate::witnessed::{BumpAllocator, Delivered, RegionHandle, RegionHandleFamily, reattachable};
+use crate::witnessed::{
+    BumpAllocator, BumpVec, Delivered, RegionHandle, RegionHandleFamily, reattachable,
+};
 
 use super::super::outcome::DepTerminal;
 use super::super::{StepCarried, WitnessedDepFinish};
@@ -248,7 +251,7 @@ fn check_newtype_repr<'a>(
 /// collapse question never arises (a bare field record is never itself a `Wrapped`).
 fn check_record_newtype_repr(
     identity: KType,
-    fields: &Record<KObject<'_>>,
+    fields: &[(Symbol, KObject<'_>)],
     registries: &RunRegistries,
 ) -> Result<(), KError> {
     let types = &registries.types;
@@ -263,8 +266,7 @@ fn check_record_newtype_repr(
         TypeNode::Record {
             fields: repr_fields,
         } => repr_fields.iter().all(|(name, field_type)| {
-            fields
-                .get(name)
+            record_field(fields, name)
                 .map(|v| field_type.matches_value(v, registries))
                 .unwrap_or(false)
         }),
@@ -274,7 +276,11 @@ fn check_record_newtype_repr(
         return Err(KError::new(KErrorKind::TypeMismatch {
             arg: "value".to_string(),
             expected: repr.name(registries),
-            got: types.record(fields.map(|v| v.ktype())).name(registries),
+            got: types
+                .record(Record::from_pairs(
+                    fields.iter().map(|(name, value)| (*name, value.ktype())),
+                ))
+                .name(registries),
         }));
     }
     Ok(())
@@ -444,12 +450,11 @@ fn finish_witnessed<'step>(
             // Each field value is read at its own resident brand — a pin-free read; the guards stay
             // bound across the probe build, and the deep clone is owned data that outlives them.
             let opened: Vec<_> = terminals.iter().map(|t| t.cell.open_at()).collect();
-            let probe = Record::from_pairs(
-                field_names
-                    .iter()
-                    .cloned()
-                    .zip(opened.iter().map(|o| o.value().object().deep_clone())),
-            );
+            let probe: Vec<(Symbol, KObject<'_>)> = field_names
+                .iter()
+                .copied()
+                .zip(opened.iter().map(|o| o.value().object().deep_clone()))
+                .collect();
             check_record_newtype_repr(*identity, &probe, view.registries())?;
             drop(opened);
             // The whole field run relocates in one act against a bare destination handle over the
@@ -502,11 +507,10 @@ fn finish_witnessed<'step>(
                     let door = region.with_holder(&holder);
                     // The names never rode the carrier — they pair back with the relocated
                     // values here, in the staging order the terminals were visited in.
-                    let record = KObject::record(
-                        door,
-                        Record::from_pairs(field_names.iter().cloned().zip(fields.iter().copied())),
-                        types,
-                    );
+                    let mut pairs: BumpVec<'_, (Symbol, KObject<'_>)> =
+                        BumpVec::with_capacity_in(field_names.len(), door.allocator());
+                    pairs.extend(field_names.iter().copied().zip(fields.iter().copied()));
+                    let record = KObject::record(door, &pairs, types);
                     Carried::Object(region.alloc_object_folded(KObject::wrapped_hold(
                         door,
                         &record,

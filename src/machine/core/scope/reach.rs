@@ -334,10 +334,10 @@ impl<'a> Scope<'a> {
     }
 
     /// Place a **carrier-less** argument's value in this scope's own region. The shape is the
-    /// enforcement: a value that arrives with no reach carrier is one the `arg_carriers` contract
-    /// (`BodyCtx::arg_carriers`) calls region-pure, and the arms here are exactly the shapes a
-    /// region-pure value can take — each placed through a door whose signature proves the product
-    /// borrows only this region.
+    /// enforcement: a value that arrives with no reach carrier is one the argument view's carrier
+    /// contract (`BoundArgs::carrier` returning `None`) calls region-pure, and the arms here are
+    /// exactly the shapes a region-pure value can take — each placed through a door whose signature
+    /// proves the product borrows only this region.
     ///
     /// - A **scalar** (`Number` / `Bool` / `Null`) is owned data; the zero-dep fold rebuilds it here.
     /// - A **`KString`**'s bytes are re-bumped into this region by the same fold, never shared with

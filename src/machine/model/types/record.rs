@@ -1,6 +1,8 @@
 //! `Record<V>` — an ordered, [`Symbol`]-keyed map: the shape behind a struct schema's
-//! `(name, type)` fields, the FN parameter list, and the runtime binding carriers. Generic over the
-//! value, so the type level stores `Record<KType>` and the value level stores `Record<KObject>`.
+//! `(name, type)` fields and the FN parameter list. Generic over the value, though the registry's
+//! nodes are the only residents, so `Record<KType>` is what it is instantiated at; a record
+//! *value* lays its cells out in a region-hosted substrate instead
+//! ([`ContainerSubstrate`](crate::machine::model::ContainerSubstrate)).
 //!
 //! Keys are [`Symbol`]s, never text: a field name is a fixed-width content digest, so a lookup is a
 //! `u128` compare and no field name is ever copied. Rendering resolves the text back through the

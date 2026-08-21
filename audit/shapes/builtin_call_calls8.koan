@@ -1,0 +1,9 @@
+MATCH (true) -> :Number WITH (true -> (1) false -> (0))
+MATCH (true) -> :Number WITH (true -> (1) false -> (0))
+MATCH (true) -> :Number WITH (true -> (1) false -> (0))
+MATCH (true) -> :Number WITH (true -> (1) false -> (0))
+MATCH (true) -> :Number WITH (true -> (1) false -> (0))
+MATCH (true) -> :Number WITH (true -> (1) false -> (0))
+MATCH (true) -> :Number WITH (true -> (1) false -> (0))
+MATCH (true) -> :Number WITH (true -> (1) false -> (0))
+PRINT 1
