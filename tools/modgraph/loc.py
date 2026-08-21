@@ -15,18 +15,11 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from modules import module_to_file
+from modules import is_test_file, module_to_file, strip_cfg_test_blocks
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MD_GLOBS = ("*.md", "design/**/*.md", "roadmap/**/*.md")
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
-
-
-def _is_test_file(path: Path) -> bool:
-    name = path.name
-    if name == "test_support.rs" or name.endswith("_tests.rs") or name == "tests.rs":
-        return True
-    return any(part == "tests" for part in path.parts)
 
 
 def _strip_comments(text: str) -> list[str]:
@@ -59,43 +52,18 @@ def _strip_comments(text: str) -> list[str]:
 
 
 def file_loc(path: Path) -> int:
-    """Count non-blank, non-comment lines, skipping test files entirely and
-    `#[cfg(test)] mod` blocks inline. Edges from those modules still count —
-    we just don't weight LOC by them."""
+    """Count non-blank, non-comment lines of production code, skipping test files
+    entirely and `#[cfg(test)] mod` blocks inline."""
     try:
-        if _is_test_file(path):
+        if is_test_file(path):
             return 0
         text = path.read_text()
     except OSError:
         return 0
 
-    lines = _strip_comments(text)
-    count = 0
-    i = 0
-    while i < len(lines):
-        stripped = lines[i].strip()
-        if stripped.startswith("#[cfg(test)]"):
-            # Look ahead for `mod ... {` (could be on the same or next non-blank line).
-            j = i + 1
-            while j < len(lines) and not lines[j].strip():
-                j += 1
-            if j < len(lines) and lines[j].lstrip().startswith("mod "):
-                # Find the opening brace, then skip to matching close.
-                k = j
-                while k < len(lines) and "{" not in lines[k]:
-                    k += 1
-                if k < len(lines):
-                    depth = lines[k].count("{") - lines[k].count("}")
-                    k += 1
-                    while k < len(lines) and depth > 0:
-                        depth += lines[k].count("{") - lines[k].count("}")
-                        k += 1
-                    i = k
-                    continue
-        if stripped:
-            count += 1
-        i += 1
-    return count
+    return sum(
+        1 for line in strip_cfg_test_blocks(_strip_comments(text)) if line.strip()
+    )
 
 
 def own_file_loc(module: str, src_root: Path) -> int:
@@ -203,7 +171,7 @@ def _doc_to_src_files(doc: Path, redirect: dict[Path, Path] | None = None) -> se
             rel = resolved.relative_to(canonical_src)
         except ValueError:
             continue
-        if resolved.suffix == ".rs" and "/tests" not in str(rel) and not _is_test_file(resolved):
+        if resolved.suffix == ".rs" and "/tests" not in str(rel) and not is_test_file(resolved):
             if redirect and rel in redirect:
                 rel = redirect[rel]
             out.add(rel)
@@ -253,7 +221,7 @@ def build_prose_attribution(
                 prose[f] += attribution
     src_root_abs = src_root.resolve()
     for rs in src_root_abs.rglob("*.rs"):
-        if _is_test_file(rs):
+        if is_test_file(rs):
             continue
         h = _src_hop_count(rs)
         if h:

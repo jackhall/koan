@@ -15,6 +15,12 @@ reshuffle: genuine deep imports (the author named a child path) survive as deep
 edges; facade imports collapse onto the facade module the author entered through.
 This is core graph construction, applied by `regen` — not an optional pass.
 
+Test code is excluded, matching the module node set: `cargo modules` runs
+without `--cfg-test`, so a test module is never a node, and an import written
+only to build a fixture constrains no production reshuffle. Test files are
+skipped whole and a production file's own `#[cfg(test)] mod` block is stripped
+before its `use` statements are read.
+
 Limitation: attribution is parsed from `use` statements. Inline fully-qualified
 path references (no `use`) are not captured; the `use`-based signal dominates.
 """
@@ -23,7 +29,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from modules import relpath_to_module
+from modules import is_test_file, relpath_to_module, strip_cfg_test_blocks
 
 
 def strip_comments(text: str) -> str:
@@ -152,20 +158,22 @@ def iter_use_edges(known: set[str], src_root: Path, package: str = "koan"):
 
     The single source of truth for re-export attribution: each source module's
     `use` statements are resolved and attributed to the deepest known module they
-    name (`written_module`), retaining the leaf's trailing item segment. Self-edges
-    and external/unresolvable paths are dropped. `correct()` folds this to the edge
+    name (`written_module`), retaining the leaf's trailing item segment. Self-edges,
+    test-only imports, and external/unresolvable paths are dropped. `correct()` folds this to the edge
     set the scorer wants; `attributions()` keeps the per-item detail the item
     rewriter needs.
 
     `known` is the module node set (from the cargo-modules graph).
     """
     for rs in sorted(src_root.rglob("*.rs")):
+        if is_test_file(rs):
+            continue
         rel = "src/" + str(rs.relative_to(src_root)).replace("\\", "/")
         mod = relpath_to_module(rel, package)
         if mod is None:
             continue
         if mod not in known and mod != package:
-            # a file whose module isn't a graph node (e.g. a tests submodule):
+            # a module carrying no edge in either direction is not a graph node:
             # attribute its edges to the nearest known ancestor
             parts = mod.split("::")
             while parts and "::".join(parts) not in known:
@@ -174,6 +182,7 @@ def iter_use_edges(known: set[str], src_root: Path, package: str = "koan"):
                 continue
             mod = "::".join(parts)
         text = rs.read_text(errors="ignore")
+        text = "\n".join(strip_cfg_test_blocks(strip_comments(text).splitlines()))
         for body in iter_use_statements(text):
             leaves: list[list[str]] = []
             parse_use_tree(body, [], leaves)

@@ -385,3 +385,54 @@ class ProposeNaming(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCodeExcludedFromEdges(unittest.TestCase):
+    """Test-only imports draw no edge. `cargo modules` runs without `--cfg-test`,
+    so a test module is never a graph node; the edge set must filter to match, or
+    a fixture's convenience import reads as production coupling."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.src_root = Path(self._tmp.name) / "src"
+        (self.src_root / "machine").mkdir(parents=True)
+        (self.src_root / "machine" / "core").mkdir()
+        (self.src_root / "builtins").mkdir()
+        (self.src_root / "builtins" / "test_support.rs").write_text("pub fn helper() {}\n")
+        (self.src_root / "machine" / "core" / "scope.rs").write_text("pub struct Scope;\n")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _edges(self) -> set[tuple[str, str]]:
+        known = {"koan::machine::model", "koan::machine::core::scope", "koan::builtins::test_support"}
+        return reexport.correct(known, self.src_root, "koan")
+
+    def test_inline_cfg_test_module_draws_no_edge(self):
+        (self.src_root / "machine" / "model.rs").write_text(
+            "use crate::machine::core::scope::Scope;\n"
+            "pub struct KType;\n"
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            "    use crate::builtins::test_support::helper;\n"
+            "    fn t() { helper(); }\n"
+            "}\n"
+        )
+        edges = self._edges()
+        self.assertIn(("koan::machine::model", "koan::machine::core::scope"), edges)
+        self.assertNotIn(("koan::machine::model", "koan::builtins::test_support"), edges)
+
+    def test_separate_tests_file_draws_no_edge(self):
+        (self.src_root / "machine" / "model.rs").write_text(
+            "use crate::machine::core::scope::Scope;\n"
+            "pub struct KType;\n"
+            "#[cfg(test)]\n"
+            "mod tests;\n"
+        )
+        (self.src_root / "machine" / "model").mkdir()
+        (self.src_root / "machine" / "model" / "tests.rs").write_text(
+            "use crate::builtins::test_support::helper;\n"
+        )
+        edges = self._edges()
+        self.assertIn(("koan::machine::model", "koan::machine::core::scope"), edges)
+        self.assertNotIn(("koan::machine::model", "koan::builtins::test_support"), edges)

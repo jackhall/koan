@@ -55,3 +55,54 @@ def relpath_to_module(relpath: str, package: str = "koan") -> str | None:
     if parts and parts[-1] in ("mod", "lib", "main"):
         parts = parts[:-1]
     return "::".join([package] + parts)
+
+
+def is_test_file(path: Path) -> bool:
+    """True for a source file that holds only test code — a `tests.rs` module, a
+    file under a `tests/` directory, or the shared `test_support.rs` fixtures.
+
+    Test code is invisible to the score: `cargo modules` is run without
+    `--cfg-test`, so the module node set never holds a test module, and the LOC
+    and coupling measures filter to match. A test-only import is a fixture's
+    convenience, not a constraint on how production modules may be reshuffled.
+    """
+    name = path.name
+    if name == "test_support.rs" or name.endswith("_tests.rs") or name == "tests.rs":
+        return True
+    return any(part == "tests" for part in path.parts)
+
+
+def strip_cfg_test_blocks(lines: list[str]) -> list[str]:
+    """Drop each `#[cfg(test)] mod … { … }` block from `lines`, brace-matched.
+
+    The inline companion to [`is_test_file`]: a production file's own test module
+    is test code sitting in a production path, so its lines and its `use`
+    statements are filtered out the same way a separate `tests.rs` is.
+
+    Expects comment-stripped lines — a brace inside a comment or string literal
+    would otherwise throw the depth count off. That is the same naivety the LOC
+    proxy accepts.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].strip().startswith("#[cfg(test)]"):
+            # The `mod … {` may sit on the same line, or after blank lines.
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and lines[j].lstrip().startswith("mod "):
+                k = j
+                while k < len(lines) and "{" not in lines[k]:
+                    k += 1
+                if k < len(lines):
+                    depth = lines[k].count("{") - lines[k].count("}")
+                    k += 1
+                    while k < len(lines) and depth > 0:
+                        depth += lines[k].count("{") - lines[k].count("}")
+                        k += 1
+                    i = k
+                    continue
+        out.append(lines[i])
+        i += 1
+    return out
