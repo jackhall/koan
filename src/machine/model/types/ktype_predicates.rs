@@ -692,7 +692,7 @@ pub(super) fn function_compat<'v>(
     }
     for el in sig.elements() {
         if let SignatureElement::Argument(a) = el {
-            match params.get(a.name) {
+            match params.get(a.name.symbol()) {
                 None => return false,
                 Some(slot_pt) => {
                     if !(*slot_pt == a.ktype || slot_pt.is_more_specific_than(a.ktype, registries))

@@ -11,7 +11,6 @@ use crate::machine::model::{
 };
 
 use super::body_no_op;
-use crate::machine::model::Symbol;
 
 /// The untyped bucket key for a signature shape, built the way the registration door derives it —
 /// keyword spellings and slots, types irrelevant.
@@ -25,7 +24,8 @@ fn key(elements: Vec<SignatureElement<'_>>) -> UntypedKey {
 
 fn slot(name: &str) -> SignatureElement<'_> {
     SignatureElement::Argument(Argument {
-        name: Symbol::of(name),
+        name: crate::machine::model::BinderSymbol::of(name)
+            .expect("a test fixture parameter is a value token"),
         ktype: KType::NUMBER,
     })
 }

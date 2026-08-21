@@ -68,7 +68,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
             SignatureElement::Argument(Argument { name, ktype }),
         ] => {
             assert_eq!(*kw, "USE_ORD");
-            assert_eq!(*name, crate::machine::model::Symbol::of("er"));
+            assert_eq!(name.symbol(), crate::machine::model::Symbol::of("er"));
             match test_run.types().node(*ktype) {
                 TypeNode::Signature { schema, .. } => {
                     assert_eq!(

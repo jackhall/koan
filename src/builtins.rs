@@ -1,6 +1,8 @@
 use crate::machine::model::KKind;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
+use crate::machine::model::{
+    Argument, BinderSymbol, KType, ReturnType, SignatureDraft, SignatureElement,
+};
 use crate::machine::{BindingIndex, Scope, WriteGate};
 use crate::machine::{Body, KFunction};
 
@@ -46,16 +48,18 @@ pub(crate) fn kw(s: &str) -> SignatureElement<'_> {
     SignatureElement::Keyword(s)
 }
 
-/// Signature-element constructor for an argument slot. The name is syntactic, so it interns here:
-/// the symbol it becomes is the whole argument, and diagnostics resolve the text back through the
-/// same interner.
+/// Signature-element constructor for an argument slot. The name is syntactic, so it classifies and
+/// interns here: the classified symbol it becomes is the whole argument, and diagnostics resolve
+/// the text back through the same interner. A builtin's parameter spelling is programmer-controlled
+/// literal text, so a keyword-class name is a build-time mistake, not a runtime disposition.
 pub(crate) fn arg<'a>(
     registries: &RunRegistries,
     name: &str,
     ktype: KType,
 ) -> SignatureElement<'a> {
     SignatureElement::Argument(Argument {
-        name: registries.labels.intern(name),
+        name: BinderSymbol::declared(name, &registries.labels)
+            .expect("a builtin parameter name is a value or Type token"),
         ktype,
     })
 }

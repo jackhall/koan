@@ -14,7 +14,6 @@ use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, Signatu
 use super::{body_no_op, unit_signature};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
-use crate::machine::model::Symbol;
 
 #[test]
 fn lookup_value_chain_cutoff_none_admits_every_index() {
@@ -165,7 +164,8 @@ fn lookup_function_filters_per_overload_visibility() {
         elements: vec![
             SignatureElement::Keyword("BAR"),
             SignatureElement::Argument(Argument {
-                name: Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -175,7 +175,8 @@ fn lookup_function_filters_per_overload_visibility() {
         elements: vec![
             SignatureElement::Keyword("BAR"),
             SignatureElement::Argument(Argument {
-                name: Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::STR,
             }),
         ],

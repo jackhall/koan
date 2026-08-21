@@ -7,14 +7,13 @@ use crate::machine::WriteGate;
 use crate::machine::model::Elaborator;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeNode;
-use crate::machine::model::{Argument, KType, SignatureElement};
+use crate::machine::model::{Argument, BinderSymbol, KType, SignatureElement};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 
 use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::render_label;
 use finalize::{FnKind, FnPlan, ParamListResult, classify, finalize_fn_with_kind, fn_action};
 use return_type::classify_return_type;
 use signature::ParamListOutcome;
@@ -216,23 +215,29 @@ pub fn body_record_schema<'a>(
             ))));
         }
     };
-    // The schema's field labels are symbols already — the record type they came from interned
-    // them — so an argument slot takes one verbatim and borrows nothing.
-    let elements: Vec<SignatureElement<'a>> = schema
-        .iter()
-        .map(|(name, ktype)| {
-            SignatureElement::Argument(Argument {
-                name,
-                ktype: *ktype,
-            })
-        })
-        .collect();
-    // The return-type classifier matches parameter names against the return surface's tokens, so
-    // it wants text; the schema's labels interned where the record type was built.
-    let param_names: Vec<String> = schema
-        .keys()
-        .map(|symbol| render_label(symbol, ctx.registries))
-        .collect();
+    // The schema's field labels are bare symbols, so each parameter's binding class comes from
+    // resolving its text through the run's interner and classifying that — the one seam where a
+    // signature's names arrive without their text alongside. The return-type classifier wants the
+    // same text to match against the return surface's tokens, so both fall out of one pass.
+    let mut elements: Vec<SignatureElement<'a>> = Vec::with_capacity(schema.len());
+    let mut param_names: Vec<String> = Vec::with_capacity(schema.len());
+    for (field, ktype) in schema.iter() {
+        let Some(text) = ctx.registries.labels.resolve(field) else {
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(
+                "anonymous FN signature field has no recorded name".to_string(),
+            ))));
+        };
+        let Some(name) = BinderSymbol::of(&text) else {
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "anonymous FN parameter `{text}` is a keyword token, which nothing binds to",
+            )))));
+        };
+        elements.push(SignatureElement::Argument(Argument {
+            name,
+            ktype: *ktype,
+        }));
+        param_names.push(text);
+    }
     let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "FN", "body"));
     let return_type_state = crate::try_action!(classify_return_type(

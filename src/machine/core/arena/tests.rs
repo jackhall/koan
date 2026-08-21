@@ -1080,7 +1080,6 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
 #[test]
 fn region_death_frees_every_drop_free_family() {
     use crate::machine::model::KKey;
-    use crate::machine::model::Symbol;
     use std::collections::HashMap;
     let program = program_storage();
     let root = run_root_storage();
@@ -1149,7 +1148,8 @@ fn region_death_frees_every_drop_free_family() {
                 elements: vec![
                     SignatureElement::Keyword(brand.allocator().text(&format!("TAKE_{i}"))),
                     SignatureElement::Argument(Argument {
-                        name: Symbol::of(&format!("operand_{i}")),
+                        name: crate::machine::model::BinderSymbol::of(&format!("operand_{i}"))
+                            .expect("a test fixture parameter is a value token"),
                         ktype: KType::NUMBER,
                     }),
                 ],

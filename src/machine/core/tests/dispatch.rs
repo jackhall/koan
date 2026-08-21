@@ -36,12 +36,14 @@ fn two_slot_sig<'a>(a: KType, b: KType) -> SignatureDraft<'a> {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::Symbol::of("a"),
+                name: crate::machine::model::BinderSymbol::of("a")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: a,
             }),
             SignatureElement::Keyword("OP"),
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::Symbol::of("b"),
+                name: crate::machine::model::BinderSymbol::of("b")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: b,
             }),
         ],
@@ -334,7 +336,8 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
         elements: vec![
             SignatureElement::Keyword("MARK"),
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -512,7 +515,8 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         elements: vec![
             SignatureElement::Keyword("PICK"),
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -570,7 +574,8 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         elements: vec![
             SignatureElement::Keyword("PICK"),
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::STR,
             }),
         ],

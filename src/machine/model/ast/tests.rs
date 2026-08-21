@@ -427,7 +427,6 @@ fn key_and_shape_invariant_across_eager_slot_variants() {
 
 #[test]
 fn cached_key_agrees_with_expression_signature_untyped_key() {
-    use crate::machine::model::Symbol;
     use crate::machine::model::types::{Argument, ReturnType, SignatureDraft, SignatureElement};
     let program = program_storage();
     let brand = program.brand();
@@ -441,17 +440,20 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
-                name: Symbol::of("x"),
+                name: crate::machine::model::BinderSymbol::of("x")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::ANY,
             }),
             SignatureElement::Keyword("+"),
             SignatureElement::Argument(Argument {
-                name: Symbol::of("y"),
+                name: crate::machine::model::BinderSymbol::of("y")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::ANY,
             }),
             SignatureElement::Keyword("+"),
             SignatureElement::Argument(Argument {
-                name: Symbol::of("z"),
+                name: crate::machine::model::BinderSymbol::of("z")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::ANY,
             }),
         ],

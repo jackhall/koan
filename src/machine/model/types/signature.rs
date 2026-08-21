@@ -15,7 +15,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier, Wo
 use super::ktype::KType;
 use super::registry::TypeRegistry;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::Symbol;
+use crate::machine::model::labels::BinderSymbol;
 
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum UntypedElement {
@@ -329,7 +329,7 @@ pub struct ExpressionSignature<'a> {
     /// [`Self::mint`]. This is the argument currency's key half — a call carries only a values
     /// slice aligned to it, so no name-keyed container is built per call. Shared with the function
     /// type's parameter record, which is built from this same slice.
-    params: &'a [(Symbol, KType)],
+    params: &'a [(BinderSymbol, KType)],
     /// For each parameter, its index into [`Self::elements`] — and therefore into a committed
     /// call's `parts`, which `validate_call_args` pins 1:1 with the elements. What lets a call fill
     /// the values slice positionally.
@@ -507,7 +507,7 @@ impl<'a> ExpressionSignature<'a> {
 
     /// The parameter schema — `(symbol, declared type)` in declaration order. The key half of the
     /// argument currency; a call pairs it with a values slice on the step scratch.
-    pub fn params(&self) -> &'a [(Symbol, KType)] {
+    pub fn params(&self) -> &'a [(BinderSymbol, KType)] {
         self.params
     }
 
@@ -650,11 +650,13 @@ pub enum SignatureElement<'a> {
 }
 
 /// `name` keys the slot in the signature's parameter schema; `ktype` gates what `ExpressionPart`s
-/// it accepts. Lifetime-free: a [`Symbol`] is a fixed-width content digest, so an argument borrows
-/// nothing and a signature's parameter names need no region of their own.
+/// it accepts. The name is classified at signature build — where the parameter's source text is
+/// still in hand — so a frame bind reads the binding class straight off the schema instead of
+/// re-deriving it from text. Lifetime-free: a [`BinderSymbol`] is a fixed-width content digest, so
+/// an argument borrows nothing and a signature's parameter names need no region of their own.
 #[derive(Clone, Copy, Debug)]
 pub struct Argument {
-    pub name: Symbol,
+    pub name: BinderSymbol,
     pub ktype: KType,
 }
 

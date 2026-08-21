@@ -83,7 +83,8 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![SignatureElement::Argument(Argument {
-            name: crate::machine::model::Symbol::of("n"),
+            name: crate::machine::model::BinderSymbol::of("n")
+                .expect("a test fixture parameter is a value token"),
             ktype: KType::NUMBER,
         })],
     };

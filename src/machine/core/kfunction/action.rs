@@ -15,6 +15,7 @@ use crate::machine::core::{
     StepAllocator,
 };
 use crate::machine::execute::StepCarried;
+use crate::machine::model::BinderSymbol;
 #[cfg(test)]
 use crate::machine::model::Carried;
 use crate::machine::model::Held;
@@ -81,14 +82,14 @@ pub struct BoundArg<'a, 'c> {
 /// See [design/label-interning.md](../../../../design/label-interning.md).
 #[derive(Clone, Copy)]
 pub struct BoundArgs<'a, 'c> {
-    schema: &'c [(Symbol, KType)],
+    schema: &'c [(BinderSymbol, KType)],
     slots: &'c [BoundArg<'a, 'c>],
 }
 
 impl<'a, 'c> BoundArgs<'a, 'c> {
     /// Pair a signature's schema with the call's filled slots. The two must be the same length —
     /// the binder fills one slot per parameter, in `part_slots` order.
-    pub fn new(schema: &'c [(Symbol, KType)], slots: &'c [BoundArg<'a, 'c>]) -> Self {
+    pub fn new(schema: &'c [(BinderSymbol, KType)], slots: &'c [BoundArg<'a, 'c>]) -> Self {
         debug_assert_eq!(
             schema.len(),
             slots.len(),
@@ -109,7 +110,7 @@ impl<'a, 'c> BoundArgs<'a, 'c> {
         let symbol = Symbol::of(name);
         self.schema
             .iter()
-            .position(|(candidate, _)| *candidate == symbol)
+            .position(|(candidate, _)| candidate.symbol() == symbol)
             .and_then(|at| self.slots.get(at))
     }
 
@@ -150,7 +151,7 @@ impl<'a, 'c> BoundArgs<'a, 'c> {
         self.schema
             .iter()
             .zip(self.slots)
-            .map(|((symbol, _), slot)| (*symbol, &slot.value))
+            .map(|((name, _), slot)| (name.symbol(), &slot.value))
     }
 
     pub fn len(&self) -> usize {

@@ -192,7 +192,7 @@ impl<'a> KFunction<'a> {
             .map(|el| match el {
                 SignatureElement::Keyword(s) => (*s).to_string(),
                 SignatureElement::Argument(arg) => {
-                    format!("<{}>", render_label(arg.name, registries))
+                    format!("<{}>", render_label(arg.name.symbol(), registries))
                 }
             })
             .collect();
@@ -237,7 +237,7 @@ impl<'a> KFunction<'a> {
                 SignatureElement::Argument(arg) => {
                     if !slot_admits(arg, &part.value, registries) {
                         return Err(KError::new(KErrorKind::TypeMismatch {
-                            arg: render_label(arg.name, registries),
+                            arg: render_label(arg.name.symbol(), registries),
                             expected: arg.ktype.name(registries),
                             got: part.value.summarize(),
                         }));
@@ -315,11 +315,12 @@ impl<'a> KFunction<'a> {
         // signature declaring one twice is refused at its definition
         // (`fn_def::finalize::check_distinct_parameter_names`).
         if let Some(missing) = self.signature.elements().iter().find_map(|el| match el {
-            SignatureElement::Argument(a) if !pairs.contains(a.name) => Some(a.name),
+            SignatureElement::Argument(a) if !pairs.contains(a.name.symbol()) => Some(a.name),
             _ => None,
         }) {
             return Err(KError::new(KErrorKind::MissingArg(render_label(
-                missing, registries,
+                missing.symbol(),
+                registries,
             ))));
         }
         Ok(WorkingExpression::new_from_iter(
@@ -330,7 +331,7 @@ impl<'a> KFunction<'a> {
                         ExpressionPart::Keyword(brand.allocator().text(s))
                     }
                     SignatureElement::Argument(a) => pairs
-                        .take(a.name)
+                        .take(a.name.symbol())
                         .expect("every named slot checked satisfiable above"),
                 }))
             }),
@@ -360,7 +361,12 @@ fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>]) -> String {
 fn function_value_ktype(signature: &ExpressionSignature<'_>, types: &TypeRegistry) -> KType {
     // The signature already owns its parameter schema; the function type shares it rather than
     // re-deriving one — one intern-boundary copy per definition, never per call.
-    let params = Record::from_slice(signature.params());
+    let params = Record::from_pairs(
+        signature
+            .params()
+            .iter()
+            .map(|(name, ktype)| (name.symbol(), *ktype)),
+    );
     let ret = match signature.return_type() {
         ReturnType::Resolved(kt) => kt,
         ReturnType::Deferred(d) => types.intern(TypeNode::DeferredReturn(

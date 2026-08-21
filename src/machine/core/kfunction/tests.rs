@@ -62,7 +62,8 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         elements: vec![
             SignatureElement::Keyword("OP"),
             SignatureElement::Argument(Argument {
-                name: Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -101,11 +102,13 @@ fn classify_excludes_literal_name_slots_from_wrap() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
-                name: Symbol::of("verb"),
+                name: crate::machine::model::BinderSymbol::of("verb")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::IDENTIFIER,
             }),
             SignatureElement::Argument(Argument {
-                name: Symbol::of("args"),
+                name: crate::machine::model::BinderSymbol::of("args")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::KEXPRESSION,
             }),
         ],
@@ -188,7 +191,8 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
         elements: vec![
             SignatureElement::Keyword("OP"),
             SignatureElement::Argument(Argument {
-                name: Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::of_kind(KKind::ProperType),
             }),
         ],
@@ -228,7 +232,8 @@ fn function_value_ktype_projects_kfunction() {
         elements: vec![
             SignatureElement::Keyword("CALL"),
             SignatureElement::Argument(crate::machine::model::Argument {
-                name: Symbol::of("x"),
+                name: crate::machine::model::BinderSymbol::of("x")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -259,7 +264,8 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
         elements: vec![
             SignatureElement::Keyword("OP"),
             SignatureElement::Argument(Argument {
-                name: Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::ANY,
             }),
         ],

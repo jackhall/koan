@@ -59,7 +59,8 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         elements: vec![
             SignatureElement::Keyword("MARK"),
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -82,7 +83,8 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         elements: vec![
             SignatureElement::Keyword("MARK"),
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::ANY,
             }),
         ],
@@ -185,7 +187,8 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
         elements: vec![
             SignatureElement::Keyword("foo"),
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v")
+                    .expect("a test fixture parameter is a value token"),
                 ktype: KType::NUMBER,
             }),
         ],

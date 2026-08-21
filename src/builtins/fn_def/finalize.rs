@@ -207,7 +207,7 @@ fn check_value_type_kinds(
                 argument.ktype,
                 &format!(
                     "the type of FN parameter `{}`",
-                    render_label(argument.name, registries)
+                    render_label(argument.name.symbol(), registries)
                 ),
                 registries,
             )
@@ -249,7 +249,7 @@ fn check_distinct_parameter_names(
             return Err(KError::new(KErrorKind::ShapeError(format!(
                 "FN parameter `{}` is declared more than once; each parameter of a \
                  signature must have its own name",
-                render_label(name, registries),
+                render_label(name.symbol(), registries),
             ))));
         }
     }

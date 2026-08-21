@@ -571,7 +571,8 @@ pub(crate) fn one_slot_sig<'a>(name: &'a str, kt: KType) -> SignatureDraft<'a> {
     SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![SignatureElement::Argument(Argument {
-            name: crate::machine::model::Symbol::of(name),
+            name: crate::machine::model::BinderSymbol::of(name)
+                .expect("a test fixture parameter is a value token"),
             ktype: kt,
         })],
     }

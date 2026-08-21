@@ -3,9 +3,9 @@
 use crate::machine::ProducerId;
 use crate::machine::model::KType;
 use crate::machine::model::{Argument, SignatureElement};
+use crate::machine::model::{BinderSymbol, RunRegistries};
 use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{RunRegistries, Symbol};
 use crate::source::Spanned;
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface
@@ -75,9 +75,10 @@ pub(crate) fn parse_fn_param_list<'a>(
 ) -> ParamListOutcome<'a> {
     let types = &registries.types;
     let parts = signature.parts;
-    // A parameter name is syntactic, so it interns to a `Symbol` here — including the one
-    // synthesized name (a bare-leaf `Type` part in parameter-name position). Keyword tokens keep
-    // riding as `&'a str`; the mint door re-homes those at the function's own region.
+    // A parameter name is syntactic, so it classifies and interns to a `BinderSymbol` here —
+    // including the one synthesized name (a bare-leaf `Type` part in parameter-name position).
+    // Keyword tokens keep riding as `&'a str`; the mint door re-homes those at the function's own
+    // region.
     let mut elements: Vec<SignatureElement<'a>> = Vec::with_capacity(parts.len());
     let mut awaited: Vec<ProducerId> = Vec::new();
     let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
@@ -86,13 +87,19 @@ pub(crate) fn parse_fn_param_list<'a>(
     while i < parts.len() {
         // A bare-leaf `Type` part (e.g. `er` in `FN (LIFT er: Ordered) -> ...`) in
         // parameter-name position denotes a binder, not a type reference.
-        let param_name: Option<(String, Symbol)> = match parts[i].value {
-            ExpressionPart::Identifier(name) => {
-                Some((name.to_string(), registries.labels.intern(name)))
-            }
+        // Each part's class *is* the binder's class: the lexer tags an `Identifier` only for a
+        // token that classifies as neither keyword nor Type, and a `Type` part only for one that
+        // classifies as a Type token — so the classification cannot fail here.
+        let param_name: Option<(String, BinderSymbol)> = match parts[i].value {
+            ExpressionPart::Identifier(name) => Some((
+                name.to_string(),
+                BinderSymbol::declared(name, &registries.labels)
+                    .expect("an Identifier part is lexed as a value token"),
+            )),
             ExpressionPart::Type(t) => {
                 let rendered = t.render();
-                let symbol = registries.labels.intern(&rendered);
+                let symbol = BinderSymbol::declared(&rendered, &registries.labels)
+                    .expect("a Type part is lexed as a Type token");
                 Some((rendered, symbol))
             }
             _ => None,

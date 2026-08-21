@@ -107,7 +107,7 @@ pub fn run_user_fn<'ast>(
             // interner that recorded it at definition. See
             // [symbol-keyed-scope-tables.md](../../../../roadmap/reduce_allocs/symbol-keyed-scope-tables.md)
             // — once the tables key by `Symbol`, this resolve and the `String` it builds both go away.
-            let name = render_label(symbol, registries);
+            let name = render_label(symbol.symbol(), registries);
             match arg_channel(delivered) {
                 // The projection is identity — the whole delivered value binds. The copy is a deep
                 // clone into the frame region, so the carrier's residence-only host is not part of

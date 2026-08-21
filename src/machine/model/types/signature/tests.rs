@@ -16,7 +16,7 @@ fn one_slot(brand: RegionBrand<'_>, kt: KType) -> ExpressionSignature<'_> {
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::ANY),
             elements: vec![SignatureElement::Argument(Argument {
-                name: Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v").expect("value token"),
                 ktype: kt,
             })],
         },
@@ -160,7 +160,7 @@ fn sig_with<'a>(
         SignatureDraft {
             return_type: ret,
             elements: vec![SignatureElement::Argument(Argument {
-                name: Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v").expect("value token"),
                 ktype: slot,
             })],
         },
@@ -251,7 +251,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
         let mut elements = vec![SignatureElement::Keyword(keyword)];
         elements.extend(slots.iter().map(|kt| {
             SignatureElement::Argument(Argument {
-                name: Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v").expect("value token"),
                 ktype: *kt,
             })
         }));
@@ -276,7 +276,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
             SignatureDraft {
                 return_type: ReturnType::Resolved(KType::BOOL),
                 elements: vec![SignatureElement::Argument(Argument {
-                    name: Symbol::of("other"),
+                    name: crate::machine::model::BinderSymbol::of("other").expect("value token"),
                     ktype: KType::NUMBER,
                 })],
             },
@@ -383,7 +383,7 @@ fn a_stored_dispatch_token_matches_what_its_owned_form_does() {
         let mut elements = vec![SignatureElement::Keyword(keyword)];
         elements.extend(slots.iter().map(|kt| {
             SignatureElement::Argument(Argument {
-                name: Symbol::of("v"),
+                name: crate::machine::model::BinderSymbol::of("v").expect("value token"),
                 ktype: *kt,
             })
         }));
