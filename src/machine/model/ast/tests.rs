@@ -81,7 +81,7 @@ fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
         Held::UnresolvedType(te) => assert_eq!(te.render(), "MyType"),
         other => panic!(
             "expected the unlowered-name carrier, got {}",
-            other.summarize(types)
+            other.summarize(&registries)
         ),
     }
 }
@@ -164,7 +164,6 @@ fn structural_equal_and_ktype_for_kexpression() {
     let program = program_storage();
     let brand = program.brand();
     let registries = RunRegistries::new();
-    let types = &registries.types;
     use crate::machine::model::values::KObject;
     let a =
         KObject::KExpression(brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("x")])));
@@ -172,8 +171,8 @@ fn structural_equal_and_ktype_for_kexpression() {
         KObject::KExpression(brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("x")])));
     let c =
         KObject::KExpression(brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("y")])));
-    assert_eq!(a.value_equal(&b, types), Ok(true));
-    assert_eq!(a.value_equal(&c, types), Ok(false));
+    assert_eq!(a.value_equal(&b, &registries), Ok(true));
+    assert_eq!(a.value_equal(&c, &registries), Ok(false));
     assert_eq!(a.ktype(), KType::KEXPRESSION);
 }
 
@@ -428,6 +427,7 @@ fn key_and_shape_invariant_across_eager_slot_variants() {
 
 #[test]
 fn cached_key_agrees_with_expression_signature_untyped_key() {
+    use crate::machine::model::Symbol;
     use crate::machine::model::types::{Argument, ReturnType, SignatureDraft, SignatureElement};
     let program = program_storage();
     let brand = program.brand();
@@ -441,17 +441,17 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
-                name: "x",
+                name: Symbol::of("x"),
                 ktype: KType::ANY,
             }),
             SignatureElement::Keyword("+"),
             SignatureElement::Argument(Argument {
-                name: "y",
+                name: Symbol::of("y"),
                 ktype: KType::ANY,
             }),
             SignatureElement::Keyword("+"),
             SignatureElement::Argument(Argument {
-                name: "z",
+                name: Symbol::of("z"),
                 ktype: KType::ANY,
             }),
         ],

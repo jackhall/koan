@@ -17,7 +17,9 @@ use super::signature::{ExpressionSignature, SignatureElement};
 use super::type_digest::{TypeDigest, empty_schema_digest};
 use crate::machine::SplicedCell;
 use crate::machine::core::read_resting;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, WorkingPart};
+use crate::machine::model::labels::Symbol;
 use crate::machine::model::values::{Carried, Held, KObject};
 
 /// Whether a value reporting a `ConstructorApply` `ktype()` satisfies a `ConstructorApply`
@@ -56,17 +58,19 @@ impl KType {
     ///
     /// Every handle's digest is content-derived, so the `(subject, candidate)` pair is always a
     /// sound verdict key and the walk is memoized unconditionally.
-    pub fn is_more_specific_than(self, other: KType, types: &TypeRegistry) -> bool {
+    pub fn is_more_specific_than(self, other: KType, registries: &RunRegistries) -> bool {
+        let types = &registries.types;
         let (subject, candidate) = (self.digest(), other.digest());
         if let Some(verdict) = types.verdict(subject, candidate, Relation::MoreSpecific) {
             return verdict;
         }
-        let verdict = self.more_specific_walk(other, types);
+        let verdict = self.more_specific_walk(other, registries);
         types.record_verdict(subject, candidate, Relation::MoreSpecific, verdict);
         verdict
     }
 
-    fn more_specific_walk(self, other: KType, types: &TypeRegistry) -> bool {
+    fn more_specific_walk(self, other: KType, registries: &RunRegistries) -> bool {
+        let types = &registries.types;
         if other == KType::ANY && self != KType::ANY {
             return true;
         }
@@ -76,17 +80,17 @@ impl KType {
         let other_node = types.node(other);
         match (types.node(self), other_node) {
             (TypeNode::List { element: a }, TypeNode::List { element: b }) => {
-                a.is_more_specific_than(b, types)
+                a.is_more_specific_than(b, registries)
             }
             (TypeNode::Dict { key: ka, value: va }, TypeNode::Dict { key: kb, value: vb }) => {
-                let key_more = ka.is_more_specific_than(kb, types);
-                let value_more = va.is_more_specific_than(vb, types);
+                let key_more = ka.is_more_specific_than(kb, registries);
+                let value_more = va.is_more_specific_than(vb, registries);
                 (key_more && (value_more || va == vb)) || (ka == kb && value_more)
             }
             // Record-value subtyping: width-superset + covariant depth (the dual of the
             // contravariant width-drop `param_record_more_specific` for function params).
             (TypeNode::Record { fields: a }, TypeNode::Record { fields: b }) => {
-                record_value_more_specific(&a, &b, types)
+                record_value_more_specific(&a, &b, registries)
             }
             // Function subtyping: contravariant params (width-subset), covariant return —
             // see `param_record_more_specific`.
@@ -99,7 +103,7 @@ impl KType {
                     params: pb,
                     ret: rb,
                 },
-            ) => param_record_more_specific(&pa, ra, &pb, rb, types),
+            ) => param_record_more_specific(&pa, ra, &pb, rb, registries),
             // Value role: a concrete signature type is more specific than the
             // `:Signature` wildcard.
             (TypeNode::Signature { .. }, TypeNode::OfKind(KKind::Signature)) => true,
@@ -131,7 +135,13 @@ impl KType {
                 // Two different interfaces — SIG-declared, `WITH`-specialized, or self-sig, any
                 // combination — compare by strict structural subtyping: `a ≺ b` iff `a`'s schema
                 // strictly `sig_subtype`s `b`'s.
-                sig_schema_more_specific(&schema_a, self.digest(), &schema_b, other.digest(), types)
+                sig_schema_more_specific(
+                    &schema_a,
+                    self.digest(),
+                    &schema_b,
+                    other.digest(),
+                    registries,
+                )
             }
             // A nominal-family kind out-specifies `OfKind(ProperType)` — `OfKind(NewType) ≺
             // OfKind(ProperType)`. (Against `Identifier` / `OfKind(ProperType)` the generic rule
@@ -156,9 +166,9 @@ impl KType {
                 // Same constructor, same parameter names: compare each argument against its
                 // same-named counterpart.
                 let pairs = || aa.iter().map(|(name, x)| (*x, *ab.get(name).unwrap()));
-                let any_more = pairs().any(|(x, y)| x.is_more_specific_than(y, types));
+                let any_more = pairs().any(|(x, y)| x.is_more_specific_than(y, registries));
                 let all_equal_or_more =
-                    pairs().all(|(x, y)| x == y || x.is_more_specific_than(y, types));
+                    pairs().all(|(x, y)| x == y || x.is_more_specific_than(y, registries));
                 any_more && all_equal_or_more
             }
             // Union subset: `a` refines `b` iff they are not the same set and every member of
@@ -169,14 +179,14 @@ impl KType {
                 !same_set
                     && a.iter().all(|x| {
                         b.iter()
-                            .any(|y| x == y || x.is_more_specific_than(*y, types))
+                            .any(|y| x == y || x.is_more_specific_than(*y, registries))
                     })
             }
             // Each member of a union is a subtype of it: a non-union `x` is more specific than
             // `Union(ms)` iff it equals or refines one of the members.
             (_, TypeNode::Union { members }) => members
                 .iter()
-                .any(|m| self == *m || self.is_more_specific_than(*m, types)),
+                .any(|m| self == *m || self.is_more_specific_than(*m, registries)),
             _ => false,
         }
     }
@@ -184,8 +194,8 @@ impl KType {
     /// True iff `carried` satisfies a slot declared as `self` — exact match or covariant
     /// refinement. A `List<Any>` value (the join an empty or heterogeneous literal
     /// memoizes) does not satisfy `:(LIST OF Number)`.
-    pub fn satisfied_by(self, carried: KType, types: &TypeRegistry) -> bool {
-        self == carried || carried.is_more_specific_than(self, types)
+    pub fn satisfied_by(self, carried: KType, registries: &RunRegistries) -> bool {
+        self == carried || carried.is_more_specific_than(self, registries)
     }
 
     /// True iff a runtime `KObject` value satisfies this declared type.
@@ -193,9 +203,10 @@ impl KType {
     /// cell (a first-class type stored in a list/dict/record) satisfies a type-accepting
     /// slot — `Any`, an `OfKind` kind that subsumes the type's `kind_of`, or an exact type
     /// identity.
-    pub fn matches_held(self, cell: &Held<'_>, types: &TypeRegistry) -> bool {
+    pub fn matches_held(self, cell: &Held<'_>, registries: &RunRegistries) -> bool {
+        let types = &registries.types;
         match cell {
-            Held::Object(o) => self.matches_value(o, types),
+            Held::Object(o) => self.matches_value(o, registries),
             Held::Type(t) => match types.node(self) {
                 TypeNode::Any => true,
                 TypeNode::OfKind(k) => k.admits(t.kind_of(types)),
@@ -207,19 +218,21 @@ impl KType {
         }
     }
 
-    pub fn matches_value(self, obj: &KObject<'_>, types: &TypeRegistry) -> bool {
+    pub fn matches_value(self, obj: &KObject<'_>, registries: &RunRegistries) -> bool {
+        let types = &registries.types;
         match types.node(self) {
             TypeNode::Any => true,
             TypeNode::List { element } => match obj {
                 KObject::List(substrate, _) => substrate
                     .elements()
                     .iter()
-                    .all(|x| element.matches_held(x, types)),
+                    .all(|x| element.matches_held(x, registries)),
                 _ => false,
             },
             TypeNode::Dict { key, value } => match obj {
                 KObject::Dict(substrate, _) => substrate.entries().all(|(map_key, held)| {
-                    (key == KType::ANY || key == map_key.ktype()) && value.matches_held(held, types)
+                    (key == KType::ANY || key == map_key.ktype())
+                        && value.matches_held(held, registries)
                 }),
                 _ => false,
             },
@@ -229,13 +242,13 @@ impl KType {
                 KObject::Record(substrate, _) => fields.iter().all(|(name, field_type)| {
                     substrate
                         .field(name)
-                        .map(|v| field_type.matches_held(v, types))
+                        .map(|v| field_type.matches_held(v, registries))
                         .unwrap_or(false)
                 }),
                 _ => false,
             },
             TypeNode::KFunction { params, ret } => match obj {
-                KObject::KFunction(f) => function_compat(&f.signature, &params, ret, types),
+                KObject::KFunction(f) => function_compat(&f.signature, &params, ret, registries),
                 _ => false,
             },
             // Constraint role: a signature slot is satisfied by a module value on the Object
@@ -246,7 +259,7 @@ impl KType {
                 schema,
                 schema_digest,
             } => match obj {
-                KObject::Module(m) => m.satisfies_sig_schema(&schema, schema_digest, types),
+                KObject::Module(m) => m.satisfies_sig_schema(&schema, schema_digest, registries),
                 _ => false,
             },
             // A type-accepting slot is **type-channel-only**: no runtime `KObject` is a type
@@ -283,8 +296,10 @@ impl KType {
                             if identity != constructor {
                                 return false;
                             }
-                            match arguments.get(tag) {
-                                Some(argument) => argument.matches_value(value.payload(), types),
+                            match arguments.get(Symbol::of(tag)) {
+                                Some(argument) => {
+                                    argument.matches_value(value.payload(), registries)
+                                }
                                 None => true,
                             }
                         }
@@ -308,7 +323,7 @@ impl KType {
                 _ => false,
             },
             // A union slot admits a value any of its members admits.
-            TypeNode::Union { members } => members.iter().any(|m| m.matches_value(obj, types)),
+            TypeNode::Union { members } => members.iter().any(|m| m.matches_value(obj, registries)),
             // A sealed nominal slot admits a value whose `ktype()` reports the same member
             // handle — a per-variant newtype `Wrapped` value or a `TypeConstructor` value.
             _ => self == obj.ktype(),
@@ -347,7 +362,8 @@ impl KType {
     /// verdict-only structural check, none of which needs the value's own lifetime.
     /// "Dispatch trusts the carried element type": a container's memoized carried `KType` is read
     /// via `satisfied_by`, never by walking its contents.
-    pub fn accepts_carried<'v>(self, c: Carried<'v>, types: &TypeRegistry) -> bool {
+    pub fn accepts_carried<'v>(self, c: Carried<'v>, registries: &RunRegistries) -> bool {
+        let types = &registries.types;
         match types.node(self) {
             TypeNode::Any => true,
             TypeNode::Number => matches!(c, Carried::Object(KObject::Number(_))),
@@ -358,20 +374,26 @@ impl KType {
             // handle, so the check is one `satisfied_by` between two handles — no element walk,
             // and nothing to rebuild or re-digest.
             TypeNode::List { .. } => match c {
-                Carried::Object(KObject::List(_, carried)) => self.satisfied_by(*carried, types),
+                Carried::Object(KObject::List(_, carried)) => {
+                    self.satisfied_by(*carried, registries)
+                }
                 _ => false,
             },
             TypeNode::Dict { .. } => match c {
-                Carried::Object(KObject::Dict(_, carried)) => self.satisfied_by(*carried, types),
+                Carried::Object(KObject::Dict(_, carried)) => {
+                    self.satisfied_by(*carried, registries)
+                }
                 _ => false,
             },
             TypeNode::Record { .. } => match c {
-                Carried::Object(KObject::Record(_, carried)) => self.satisfied_by(*carried, types),
+                Carried::Object(KObject::Record(_, carried)) => {
+                    self.satisfied_by(*carried, registries)
+                }
                 _ => false,
             },
             TypeNode::KFunction { params, ret } => match c {
                 Carried::Object(KObject::KFunction(f)) => {
-                    function_compat(&f.signature, &params, ret, types)
+                    function_compat(&f.signature, &params, ret, registries)
                 }
                 _ => false,
             },
@@ -397,7 +419,7 @@ impl KType {
             TypeNode::SetMember { .. } => c.ktype(types) == self,
             // A union slot admits an argument any of its members admits. `Carried` is `Copy`,
             // so each member reads the same carried value.
-            TypeNode::Union { members } => members.iter().any(|m| m.accepts_carried(c, types)),
+            TypeNode::Union { members } => members.iter().any(|m| m.accepts_carried(c, registries)),
             TypeNode::AbstractType { .. } => c.ktype(types) == self,
             // Constraint role: a `:S` slot admits a *module* whose self-sig satisfies the
             // signature — no ascription required. A `WITH` pin is a manifest member of the
@@ -410,7 +432,7 @@ impl KType {
                 schema_digest,
             } => match c {
                 Carried::Object(KObject::Module(m)) => {
-                    m.satisfies_sig_schema(&schema, schema_digest, types)
+                    m.satisfies_sig_schema(&schema, schema_digest, registries)
                 }
                 _ => false,
             },
@@ -451,19 +473,20 @@ impl KType {
     /// so it carries no brand of its own for the opened value's brand to relate to — a
     /// verdict-only walk needs no re-anchoring. The picker may reject the candidate, so this
     /// deliberately does not adopt.
-    pub(crate) fn accepts_cell(self, cell: &SplicedCell, types: &TypeRegistry) -> bool {
-        read_resting(cell, |c| self.accepts_carried(c, types))
+    pub(crate) fn accepts_cell(self, cell: &SplicedCell, registries: &RunRegistries) -> bool {
+        read_resting(cell, |c| self.accepts_carried(c, registries))
     }
 
     /// Per-[`WorkingPart`] admissibility for argument slots — the dispatch-path peer of
     /// [`accepts_part`](Self::accepts_part), which classifies raw AST shapes. Only the scheduler's
     /// own arms are answered here; a part pointing at the AST delegates.
-    pub fn accepts_working_part(self, part: &WorkingPart<'_>, types: &TypeRegistry) -> bool {
+    pub fn accepts_working_part(self, part: &WorkingPart<'_>, registries: &RunRegistries) -> bool {
+        let types = &registries.types;
         match part {
             WorkingPart::Ast(part) => self.accepts_part(part, types),
             // A resolved sub-result opens at its own brand through `accepts_cell`, which routes the
             // opened value through `accepts_carried` — no cast.
-            WorkingPart::Spliced { cell } => self.accepts_cell(cell, types),
+            WorkingPart::Spliced { cell } => self.accepts_cell(cell, registries),
             // A slot the scheduler has yet to fill — a node it synthesized and will dispatch, or a
             // staging hole awaiting its sibling's carrier. Neither denotes a value yet, and both
             // become a `Spliced` cell before anything binds, so only an `Any` slot admits one.
@@ -537,20 +560,21 @@ fn sig_schema_more_specific(
     digest_a: TypeDigest,
     b: &SigSchema,
     digest_b: TypeDigest,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> bool {
+    let types = &registries.types;
     let forward_hit = types.verdict(digest_a, digest_b, Relation::SigSatisfies);
     let reverse_hit = types.verdict(digest_b, digest_a, Relation::SigSatisfies);
     if let (Some(forward), Some(reverse)) = (forward_hit, reverse_hit) {
         return forward && !reverse;
     }
     let forward = forward_hit.unwrap_or_else(|| {
-        let verdict = sig_subtype(a, b, types).is_ok();
+        let verdict = sig_subtype(a, b, registries).is_ok();
         types.record_verdict(digest_a, digest_b, Relation::SigSatisfies, verdict);
         verdict
     });
     let reverse = reverse_hit.unwrap_or_else(|| {
-        let verdict = sig_subtype(b, a, types).is_ok();
+        let verdict = sig_subtype(b, a, registries).is_ok();
         types.record_verdict(digest_b, digest_a, Relation::SigSatisfies, verdict);
         verdict
     });
@@ -575,21 +599,21 @@ fn param_record_more_specific(
     ra: KType,
     pb: &Record<KType>,
     rb: KType,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> bool {
     if !pa.keys().all(|k| pb.get(k).is_some()) {
         return false;
     }
     let params_ok = pa.iter().all(|(name, s)| {
         let o = *pb.get(name).unwrap();
-        o == *s || o.is_more_specific_than(*s, types)
+        o == *s || o.is_more_specific_than(*s, registries)
     });
     let params_more = pa.keys().any(|k| {
         pb.get(k)
             .unwrap()
-            .is_more_specific_than(*pa.get(k).unwrap(), types)
+            .is_more_specific_than(*pa.get(k).unwrap(), registries)
     });
-    let ret_more = ra.is_more_specific_than(rb, types);
+    let ret_more = ra.is_more_specific_than(rb, registries);
     let ret_ok = ra == rb || ret_more;
     let width_strict = pa.len() < pb.len();
     params_ok && ret_ok && (width_strict || params_more || ret_more)
@@ -608,18 +632,22 @@ fn param_record_more_specific(
 /// Contrast `param_record_more_specific`, which is *contravariant* with width-*drop* for
 /// call-by-name function parameters. Records and function params share the `Record`
 /// substrate but order opposite ways — do **not** unify the two helpers.
-fn record_value_more_specific(a: &Record<KType>, b: &Record<KType>, types: &TypeRegistry) -> bool {
+fn record_value_more_specific(
+    a: &Record<KType>,
+    b: &Record<KType>,
+    registries: &RunRegistries,
+) -> bool {
     if !b.keys().all(|k| a.get(k).is_some()) {
         return false;
     }
     let depth_ok = b.iter().all(|(name, bt)| {
         let at = *a.get(name).unwrap();
-        at == *bt || at.is_more_specific_than(*bt, types)
+        at == *bt || at.is_more_specific_than(*bt, registries)
     });
     let depth_more = b.keys().any(|k| {
         a.get(k)
             .unwrap()
-            .is_more_specific_than(*b.get(k).unwrap(), types)
+            .is_more_specific_than(*b.get(k).unwrap(), registries)
     });
     let width_strict = a.len() > b.len();
     depth_ok && (width_strict || depth_more)
@@ -647,11 +675,12 @@ pub(super) fn function_compat<'v>(
     sig: &ExpressionSignature<'v>,
     params: &Record<KType>,
     ret: KType,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> bool {
+    let types = &registries.types;
     use crate::machine::model::types::{DeferredReturnSurface, ReturnType};
     let ret_ok = match &sig.return_type() {
-        ReturnType::Resolved(kt) => *kt == ret || kt.is_more_specific_than(ret, types),
+        ReturnType::Resolved(kt) => *kt == ret || kt.is_more_specific_than(ret, registries),
         ReturnType::Deferred(d) => match types.node(ret) {
             TypeNode::Any => true,
             TypeNode::DeferredReturn(slot) => DeferredReturnSurface::from_deferred(d) == slot,
@@ -666,7 +695,8 @@ pub(super) fn function_compat<'v>(
             match params.get(a.name) {
                 None => return false,
                 Some(slot_pt) => {
-                    if !(*slot_pt == a.ktype || slot_pt.is_more_specific_than(a.ktype, types)) {
+                    if !(*slot_pt == a.ktype || slot_pt.is_more_specific_than(a.ktype, registries))
+                    {
                         return false;
                     }
                 }

@@ -43,7 +43,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             match result {
                 Ok(carrier) => ("Ok".to_string(), carrier, None),
                 Err(e) => {
-                    let envelope = e.to_tagged_delivered(fctx.scope, fctx.types);
+                    let envelope = e.to_tagged_delivered(fctx.scope, fctx.registries);
                     let tag = envelope.open(|carried| match carried {
                         Carried::Object(KObject::Tagged { tag, .. }) => tag.to_string(),
                         _ => unreachable!("KError::to_tagged always returns Tagged"),
@@ -65,7 +65,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             }
             Err(msg) => return Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         };
-        arm_tail(fctx.scope, it_carrier, body_expr, contract, fctx.types)
+        arm_tail(fctx.scope, it_carrier, body_expr, contract, fctx.types())
     });
     Action::catch(
         DepRequest::Dispatch {
@@ -84,11 +84,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::ANY,
         vec![
             kw("TRY"),
-            arg("expr", KType::KEXPRESSION),
+            arg(registries, "expr", KType::KEXPRESSION),
             kw("->"),
-            arg("return_type", KType::of_kind(KKind::ProperType)),
+            arg(registries, "return_type", KType::of_kind(KKind::ProperType)),
             kw("WITH"),
-            arg("branches", KType::KEXPRESSION),
+            arg(registries, "branches", KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "TRY", signature, body, registries, gate);

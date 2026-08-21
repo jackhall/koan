@@ -10,6 +10,7 @@ use crate::machine::model::{
 use super::arena::{FrameStorage, KoanRegion};
 use super::kfunction::KFunctionFamily;
 use super::scope::Scope;
+use crate::machine::model::RunRegistries;
 
 /// Koan's value-carrier witness: the library [`Carrier`](crate::witnessed::Carrier) over koan's
 /// frame owner — a reference to the value's hosted reach description and nothing else. The
@@ -138,12 +139,16 @@ impl<'a> OverloadSeal<'a> {
     /// coverage is lodged there ([`Delivered::rest_in`](crate::witnessed::Delivered::rest_in)),
     /// which the library's self rule makes free for a value already resident in it. Everything the
     /// bucket write keys on is read inside the envelope's own open and travels as plain data.
-    pub(crate) fn of_delivered(scope: &'a Scope<'a>, cell: &DeliveredFunction) -> Self {
+    pub(crate) fn of_delivered(
+        scope: &'a Scope<'a>,
+        cell: &DeliveredFunction,
+        registries: &RunRegistries,
+    ) -> Self {
         let (key, token, summary) = cell.open(|f| {
             (
                 f.signature.untyped_key(),
                 f.signature.dispatch_token(),
-                f.summarize(),
+                f.summarize(registries),
             )
         });
         OverloadSeal {

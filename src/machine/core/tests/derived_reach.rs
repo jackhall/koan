@@ -11,6 +11,7 @@ use crate::machine::model::{
 };
 
 use super::body_no_op;
+use crate::machine::model::Symbol;
 
 /// The untyped bucket key for a signature shape, built the way the registration door derives it —
 /// keyword spellings and slots, types irrelevant.
@@ -24,7 +25,7 @@ fn key(elements: Vec<SignatureElement<'_>>) -> UntypedKey {
 
 fn slot(name: &str) -> SignatureElement<'_> {
     SignatureElement::Argument(Argument {
-        name,
+        name: Symbol::of(name),
         ktype: KType::NUMBER,
     })
 }
@@ -35,20 +36,22 @@ fn slot(name: &str) -> SignatureElement<'_> {
 /// delivered at the captured scope.
 #[test]
 fn builtin_seed_registers_a_callable_reaching_exactly_its_home_region() {
-    let types = crate::machine::model::TypeRegistry::new();
+    let registries = crate::machine::model::RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let cell = KFunction::alloc_captured(
         scope,
         super::unit_signature(),
         Body::Builtin(body_no_op),
-        &types,
+        types,
     );
     scope
         .register_function_direct(
             "FOO".to_string(),
             &cell,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();

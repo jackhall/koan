@@ -337,7 +337,7 @@ impl TypeRegistry {
         }
         Some(
             a.iter()
-                .map(|(name, x)| (name.clone(), self.join(*x, *b.get(name).unwrap())))
+                .map(|(name, x)| (name, self.join(*x, *b.get(name).unwrap())))
                 .collect(),
         )
     }

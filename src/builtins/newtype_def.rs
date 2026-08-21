@@ -36,6 +36,7 @@ use crate::source::Spanned;
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::Symbol;
 
 /// Seal a resolved `repr` into the NEWTYPE's identity and register it. Fills the declaration
 /// window's member with `repr`; the window is a fresh singleton for a standalone declaration, or
@@ -54,7 +55,7 @@ fn finalize_newtype<'a>(
     if let Some(message) = crate::machine::model::unsaturated_constructor_message(
         repr,
         &format!("the representation type of NEWTYPE `{name}`"),
-        fctx.types,
+        fctx.registries,
     ) {
         return Err(KError::new(KErrorKind::ShapeError(message)));
     }
@@ -66,7 +67,7 @@ fn finalize_newtype<'a>(
         |_window| repr,
         site,
         scope.brand(),
-        fctx.types,
+        fctx.types(),
     );
     seal_outcome_into_carrier(fctx, &name, outcome)
 }
@@ -81,7 +82,7 @@ fn finalize_record_newtype<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: String,
     window: &DeclWindow<'a>,
-    fields: Vec<(String, KType)>,
+    fields: Vec<(Symbol, KType)>,
     site: DeclarationSite,
 ) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError> {
     if fields.is_empty() {
@@ -92,10 +93,10 @@ fn finalize_record_newtype<'a>(
     let outcome = finalize_nominal_member(
         window,
         &name,
-        |_window| fctx.types.record(Record::from_pairs(fields)),
+        |_window| fctx.types().record(Record::from_pairs(fields)),
         site,
         fctx.scope.brand(),
-        fctx.types,
+        fctx.types(),
     );
     seal_outcome_into_carrier(fctx, &name, outcome)
 }
@@ -136,7 +137,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         ctx.args,
         "name",
         "NEWTYPE",
-        ctx.types()
+        ctx.registries
     ));
     let chain = ctx.chain.clone();
     let site = ctx.declaration_site();
@@ -153,7 +154,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             },
             // A bare-leaf name resolved against scope bindings, not a dep terminal.
             move |fctx, kt| Action::done_writing(finalize_newtype(fctx, name, kt, site)),
-            ctx.types(),
+            ctx.registries,
         )
     } else if let Some(repr_kt) = arg_type(ctx.args, "repr") {
         Action::done_writing(finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site))
@@ -211,7 +212,7 @@ pub fn body_record_repr<'a>(
         ctx.args,
         "name",
         "NEWTYPE",
-        ctx.types()
+        ctx.registries
     ));
     let fields = match arg_object(ctx.args, "repr") {
         Some(KObject::KExpression(e)) => e.node(),
@@ -296,9 +297,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::of_kind(KKind::ProperType)),
+                arg(registries, "name", KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg("repr", KType::of_kind(KKind::ProperType)),
+                arg(registries, "repr", KType::of_kind(KKind::ProperType)),
             ],
         )
     };
@@ -307,9 +308,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::of_kind(KKind::ProperType)),
+                arg(registries, "name", KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg("repr", KType::SIGILED_TYPE_EXPR),
+                arg(registries, "repr", KType::SIGILED_TYPE_EXPR),
             ],
         )
     };
@@ -318,9 +319,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::of_kind(KKind::ProperType)),
+                arg(registries, "name", KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg("repr", KType::RECORD_TYPE),
+                arg(registries, "repr", KType::RECORD_TYPE),
             ],
         )
     };
@@ -343,7 +344,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // is not sub-dispatched (same as TYPE's higher-kinded overload).
     let constructor_family_sig = sig(
         KType::of_kind(KKind::AnyType),
-        vec![kw("NEWTYPE"), arg("decl", KType::KEXPRESSION)],
+        vec![kw("NEWTYPE"), arg(registries, "decl", KType::KEXPRESSION)],
     );
     register_builtin(
         scope,
@@ -372,7 +373,7 @@ mod tests {
         scope: &Scope<'_>,
         types: &TypeRegistry,
         name: &str,
-    ) -> (usize, KType, Vec<(String, KType)>) {
+    ) -> (usize, KType, Vec<(crate::machine::model::Symbol, KType)>) {
         let handle = scope
             .resolve_type(name)
             .unwrap_or_else(|| panic!("expected {name} to be a type in scope"));
@@ -382,7 +383,7 @@ mod tests {
             } => match schema {
                 NodeSchema::NewType(repr) => match types.node(repr) {
                     TypeNode::Record { fields } => {
-                        let fields = fields.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                        let fields = fields.iter().map(|(k, v)| (k, *v)).collect();
                         (scc_size, handle, fields)
                     }
                     _ => panic!("expected {name} to carry a record repr, got {repr:?}"),
@@ -629,12 +630,18 @@ mod tests {
             "a self-recursive type seals into a singleton component"
         );
         assert_eq!(
-            fields.iter().find(|(f, _)| f == "value").map(|(_, t)| *t),
+            fields
+                .iter()
+                .find(|(f, _)| *f == crate::machine::model::Symbol::of("value"))
+                .map(|(_, t)| *t),
             Some(KType::NUMBER),
             "value stays a builtin leaf",
         );
         assert_eq!(
-            fields.iter().find(|(f, _)| f == "next").map(|(_, t)| *t),
+            fields
+                .iter()
+                .find(|(f, _)| *f == crate::machine::model::Symbol::of("next"))
+                .map(|(_, t)| *t),
             Some(node_handle),
             "next seals to the member's own handle (a self-reference)",
         );
@@ -661,7 +668,7 @@ mod tests {
         assert_eq!(
             fields
                 .iter()
-                .find(|(f, _)| f == "children")
+                .find(|(f, _)| *f == crate::machine::model::Symbol::of("children"))
                 .map(|(_, t)| *t),
             Some(types.list(tree_handle)),
             "children seals its self-reference to List of the member's own handle",
@@ -685,12 +692,12 @@ mod tests {
         let (_, outer_handle, fields) = record_fields(scope, types, "Outer");
         let inner_ty = fields
             .iter()
-            .find(|(f, _)| f == "inner")
+            .find(|(f, _)| *f == crate::machine::model::Symbol::of("inner"))
             .map(|(_, t)| *t)
             .expect("inner field present");
         match types.node(inner_ty) {
             TypeNode::Record { fields: rec } => assert_eq!(
-                rec.get("owner").copied(),
+                rec.get(crate::machine::model::Symbol::of("owner")).copied(),
                 Some(outer_handle),
                 "the nested record's `owner` threads to the outer member's own handle",
             ),
@@ -725,7 +732,7 @@ mod tests {
         );
         let kids_ty = fields
             .iter()
-            .find(|(f, _)| f == "kids")
+            .find(|(f, _)| *f == crate::machine::model::Symbol::of("kids"))
             .map(|(_, t)| *t)
             .expect("kids field present");
         let element = match types.node(kids_ty) {
@@ -734,7 +741,7 @@ mod tests {
         };
         match types.node(element) {
             TypeNode::Record { fields: rec } => assert_eq!(
-                rec.get("next").copied(),
+                rec.get(crate::machine::model::Symbol::of("next")).copied(),
                 Some(tree_handle),
                 "the sigil-nested record's `next` threads to the outer member's own handle",
             ),
@@ -1013,7 +1020,10 @@ mod tests {
                 assert_eq!(member_of(types, constructor).1, KKind::TypeConstructor);
                 assert_eq!(
                     arguments,
-                    Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
+                    Record::from_pairs([(
+                        crate::machine::model::Symbol::of("Type"),
+                        KType::NUMBER
+                    )]),
                 );
             }
             _ => panic!("expected ConstructorApply, got {result:?}"),
@@ -1109,7 +1119,10 @@ mod tests {
                         assert_eq!(kind, KKind::TypeConstructor);
                         assert_eq!(
                             arguments,
-                            Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
+                            Record::from_pairs([(
+                                crate::machine::model::Symbol::of("Type"),
+                                KType::NUMBER
+                            )]),
                         );
                     }
                     _ => panic!("expected a ConstructorApply type_id, got {type_id:?}"),
@@ -1142,7 +1155,10 @@ mod tests {
                     TypeNode::ConstructorApply { arguments, .. } => {
                         assert_eq!(arguments.len(), 1);
                         // The stamped arg keeps the Distance identity (a NewType SetMember).
-                        match arguments.get("Type").copied() {
+                        match arguments
+                            .get(crate::machine::model::Symbol::of("Type"))
+                            .copied()
+                        {
                             Some(arg) => {
                                 let (name, kind) = member_of(test_run.types(), arg);
                                 assert_eq!(name, "Distance");

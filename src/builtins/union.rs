@@ -12,6 +12,8 @@ use crate::machine::{StepCarried, seal_type_identity};
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
+use crate::machine::model::Symbol;
+use crate::machine::model::render_label;
 
 /// Fill the elaborated variant payloads into the declaration window's owned members and bind the
 /// union name to the anonymous union of the sealed variants. Every variant is one member of the
@@ -27,7 +29,7 @@ fn finalize_union<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: String,
     window: &DeclWindow<'a>,
-    fields: Vec<(String, KType)>,
+    fields: Vec<(Symbol, KType)>,
     site: DeclarationSite,
 ) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError> {
     if fields.is_empty() {
@@ -40,6 +42,9 @@ fn finalize_union<'a>(
 
     let mut sealed = false;
     for (tag, payload) in fields {
+        // A variant tag is a declaration-window name, not a record field label: the window keys by
+        // text, so the symbol resolves back through the interner that recorded it.
+        let tag = render_label(tag, fctx.registries);
         let index = match window.view().variant_index(&name, &tag) {
             Some(index) => index,
             None => {
@@ -48,7 +53,7 @@ fn finalize_union<'a>(
                 ))));
             }
         };
-        sealed = window.fill(index, payload, brand, fctx.types);
+        sealed = window.fill(index, payload, brand, fctx.types());
     }
     let view = window.view();
     if !sealed {
@@ -88,7 +93,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         ctx.args,
         "name",
         "UNION",
-        ctx.types()
+        ctx.registries
     ));
     let schema_expr = match arg_object(ctx.args, "schema") {
         Some(KObject::KExpression(e)) => e.node(),
@@ -140,9 +145,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::of_kind(KKind::AnyType),
         vec![
             kw("UNION"),
-            arg("name", KType::of_kind(KKind::ProperType)),
+            arg(registries, "name", KType::of_kind(KKind::ProperType)),
             kw("="),
-            arg("schema", KType::KEXPRESSION),
+            arg(registries, "schema", KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "UNION", signature, body, registries, gate);
@@ -319,11 +324,11 @@ mod tests {
         let test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         let types = test_run.registry_handle();
-        let fctx = crate::machine::FinishCtx::for_scope(scope, &types);
+        let fctx = crate::machine::FinishCtx::for_scope(scope, types.registries());
         let fields = || {
             vec![
-                ("Some".to_string(), KType::NUMBER),
-                ("None".to_string(), KType::NULL),
+                (types.registries().labels.intern("Some"), KType::NUMBER),
+                (types.registries().labels.intern("None"), KType::NULL),
             ]
         };
         // Each declarator dispatch mints its own window (the union name is the binder, its variants

@@ -14,10 +14,13 @@ use crate::machine::model::KType;
 /// A trivial declared-return obligation the bracket tests deposit: any deposited obligation makes
 /// `current_obligation_duplicate()` answer `Some` inside the step.
 fn sample_obligation() -> ReturnObligation {
-    ReturnObligation::seal(ReturnContract::Arm {
-        ret: KType::NUMBER,
-        kind: "return type",
-    })
+    ReturnObligation::seal(
+        ReturnContract::Arm {
+            ret: KType::NUMBER,
+            kind: "return type",
+        },
+        &crate::machine::model::RunRegistries::new(),
+    )
 }
 
 #[test]

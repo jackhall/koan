@@ -191,7 +191,7 @@ fn a_snapshot_does_not_observe_later_interning() {
     let registry = TypeRegistry::new();
     let before = registry.nodes_snapshot();
     let fresh = registry.record(Record::from_pairs(vec![(
-        "x".to_string(),
+        crate::machine::model::Symbol::of("x"),
         registry.intern(TypeNode::Number),
     )]));
     assert!(!before.contains_key(&fresh.digest()));

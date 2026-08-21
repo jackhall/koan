@@ -117,7 +117,9 @@ fn binary_union_with_reaching_member_correlates() {
         TypeNode::Union { members } => {
             assert_eq!(members.len(), 2, "expected a flat two-member union");
             assert!(
-                members.iter().any(|m| m.name(types) == "Wrapped"),
+                members
+                    .iter()
+                    .any(|m| m.name(test_run.registries()) == "Wrapped"),
                 "the reaching member must survive the carrier-view crossing, got {members:?}",
             );
             assert!(
@@ -144,7 +146,9 @@ fn nary_union_with_reaching_member_correlates() {
         TypeNode::Union { members } => {
             assert_eq!(members.len(), 3, "expected a flat three-member union");
             assert!(
-                members.iter().any(|m| m.name(types) == "Wrapped"),
+                members
+                    .iter()
+                    .any(|m| m.name(test_run.registries()) == "Wrapped"),
                 "the reaching member must survive the carrier-view crossing, got {members:?}",
             );
             assert!(members.contains(&KType::NUMBER), "got {members:?}");
@@ -173,7 +177,7 @@ fn union_with_signature_member_admits_module_and_number() {
             KObject::KString(s) => assert_eq!(*s, "admitted", "for `{call}`"),
             other => panic!(
                 "`{call}` should dispatch, got {}",
-                other.ktype().name(test_run.types())
+                other.ktype().name(test_run.registries())
             ),
         }
     }

@@ -208,7 +208,10 @@ mod bare_leaf_resolution {
         let sealed = window
             .fill(
                 0,
-                types.record(Record::from_pairs([("x".to_string(), KType::NUMBER)])),
+                types.record(Record::from_pairs([(
+                    crate::machine::model::Symbol::of("x"),
+                    KType::NUMBER,
+                )])),
                 scope.brand(),
                 types,
             )

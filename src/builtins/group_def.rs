@@ -72,7 +72,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
         ctx.args,
         "name",
         "GROUP",
-        ctx.types()
+        ctx.registries
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "GROUP", "body"));
     let mode = crate::try_action!(reduction_mode(ctx, group_mode));
@@ -177,11 +177,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::EMPTY_SIGNATURE,
             vec![
                 kw("GROUP"),
-                arg("name", name_kt),
+                arg(registries, "name", name_kt),
                 kw("FOLD"),
                 kw(direction),
                 kw("="),
-                arg("body", KType::KEXPRESSION),
+                arg(registries, "body", KType::KEXPRESSION),
             ],
         )
     };
@@ -190,13 +190,13 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::EMPTY_SIGNATURE,
             vec![
                 kw("GROUP"),
-                arg("name", name_kt),
+                arg(registries, "name", name_kt),
                 kw("PAIRWISE"),
                 kw("FOLD"),
-                arg("combiner", KType::KEXPRESSION),
+                arg(registries, "combiner", KType::KEXPRESSION),
                 kw(direction),
                 kw("="),
-                arg("body", KType::KEXPRESSION),
+                arg(registries, "body", KType::KEXPRESSION),
             ],
         )
     };

@@ -21,6 +21,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
+use crate::machine::model::Symbol;
 use crate::machine::{BrandCompose, FieldListDeferral};
 
 /// Diagnostic nouns for the shared field-list parser when it walks an `:(FN …)` parameter list.
@@ -32,7 +33,7 @@ const FN_PARAM_NAME_KIND: FieldNameKind = FieldNameKind::IdentifierOrType;
 
 /// Fold the elaborated `(name, type)` pairs into the parameter record and intern the function
 /// type. Shared by the synchronous and dep-finish paths.
-fn finalize_carrier(fields: Vec<(String, KType)>, ret: KType, types: &TypeRegistry) -> KType {
+fn finalize_carrier(fields: Vec<(Symbol, KType)>, ret: KType, types: &TypeRegistry) -> KType {
     types.function_type(Record::from_pairs(fields), ret)
 }
 
@@ -43,9 +44,9 @@ fn finalize_carrier(fields: Vec<(String, KType)>, ret: KType, types: &TypeRegist
 fn require_proper_type(
     kt: KType,
     position: &str,
-    types: &crate::machine::model::TypeRegistry,
+    registries: &crate::machine::model::RunRegistries,
 ) -> Result<(), KError> {
-    match crate::machine::model::unsaturated_constructor_message(kt, position, types) {
+    match crate::machine::model::unsaturated_constructor_message(kt, position, registries) {
         Some(message) => Err(KError::new(KErrorKind::ShapeError(message))),
         None => Ok(()),
     }
@@ -66,50 +67,54 @@ mod action_bodies {
     /// owned `KType` and assemble the composite from those values, then allocate it into the
     /// step's own region through the single type door.
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-        let elem = crate::try_action!(require_ktype(ctx.args, "elem", ctx.types()));
+        let elem = crate::try_action!(require_ktype(ctx.args, "elem", ctx.registries));
         crate::try_action!(require_proper_type(
             elem,
             "the element type of `LIST OF`",
-            ctx.types()
+            ctx.registries
         ));
         let list = ctx.types().list(elem);
         Action::done(Ok(ctx.ctx.type_carried(list)))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-        let k = crate::try_action!(require_ktype(ctx.args, "k", ctx.types()));
-        let v = crate::try_action!(require_ktype(ctx.args, "v", ctx.types()));
-        crate::try_action!(require_proper_type(k, "the key type of `MAP`", ctx.types()));
+        let k = crate::try_action!(require_ktype(ctx.args, "k", ctx.registries));
+        let v = crate::try_action!(require_ktype(ctx.args, "v", ctx.registries));
+        crate::try_action!(require_proper_type(
+            k,
+            "the key type of `MAP`",
+            ctx.registries
+        ));
         crate::try_action!(require_proper_type(
             v,
             "the value type of `MAP`",
-            ctx.types()
+            ctx.registries
         ));
         let dict = ctx.types().dict(k, v);
         Action::done(Ok(ctx.ctx.type_carried(dict)))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-        let applied = crate::try_action!(require_ktype(ctx.args, "applied", ctx.types()));
-        let ctor = crate::try_action!(require_ktype(ctx.args, "ctor", ctx.types()));
+        let applied = crate::try_action!(require_ktype(ctx.args, "applied", ctx.registries));
+        let ctor = crate::try_action!(require_ktype(ctx.args, "ctor", ctx.registries));
         // A declared family and a SIG's abstract constructor slot both name their parameters.
         let Some(param_names) = constructor_param_names(ctor, ctx.types()) else {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "right-hand side of `AS` must be a type constructor, got `{}`",
-                ctor.name(ctx.types()),
+                ctor.name(ctx.registries),
             )))));
         };
         let [param_name] = &param_names[..] else {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`{}` takes {} type arguments; the `AS` form supplies one, so \
                  multi-parameter application is not yet supported",
-                ctor.name(ctx.types()),
+                ctor.name(ctx.registries),
                 param_names.len(),
             )))));
         };
         // `AS` is arity-1 sugar: the applied type fills the constructor's sole parameter, so
         // `:(Number AS Wrap)` elaborates exactly as `:(Wrap {Elem = Number})` does.
-        let args = Record::from_pairs([(param_name.clone(), applied)]);
+        let args = Record::from_pairs([(ctx.registries.labels.intern(param_name), applied)]);
         let apply = ctx.types().constructor_apply(ctor, args);
         Action::done(Ok(ctx.ctx.type_carried(apply)))
     }
@@ -123,7 +128,7 @@ mod action_bodies {
 /// is owned data, so it rides the closure directly and pairs with the re-walked parameter list to
 /// finish the `KFunction`.
 fn ret_compose<'a>(ret: KType) -> BrandCompose<'a> {
-    Box::new(move |fields, types| Ok(finalize_carrier(fields, ret, types)))
+    Box::new(move |fields, registries| Ok(finalize_carrier(fields, ret, &registries.types)))
 }
 
 /// Walk the parameter list through the shared field-list parser (the same one UNION / NEWTYPE use),
@@ -137,11 +142,11 @@ fn build_carrier<'a>(
 ) -> crate::machine::Action<'a> {
     use crate::machine::{Action, require_kexpression, require_ktype};
     let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
-    let ret = crate::try_action!(require_ktype(ctx.args, ret_slot, ctx.types()));
+    let ret = crate::try_action!(require_ktype(ctx.args, ret_slot, ctx.registries));
     crate::try_action!(require_proper_type(
         ret,
         "the return type of an `:(FN …)` type",
-        ctx.types()
+        ctx.registries
     ));
     let mut elaborator = Elaborator::new(ctx.scope);
     match parse_typed_field_list_via_elaborator(
@@ -150,7 +155,7 @@ fn build_carrier<'a>(
         FN_PARAM_NAME_KIND,
         &mut elaborator,
         None,
-        ctx.types(),
+        ctx.registries,
     ) {
         FieldListOutcome::Done(fields) => {
             let carrier = finalize_carrier(fields, ret, ctx.types());
@@ -181,7 +186,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             vec![
                 kw("LIST"),
                 kw("OF"),
-                arg("elem", KType::of_kind(KKind::AnyType)),
+                arg(registries, "elem", KType::of_kind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_list_of,
@@ -195,9 +200,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw("MAP"),
-                arg("k", KType::of_kind(KKind::AnyType)),
+                arg(registries, "k", KType::of_kind(KKind::AnyType)),
                 kw("->"),
-                arg("v", KType::of_kind(KKind::AnyType)),
+                arg(registries, "v", KType::of_kind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_map,
@@ -210,9 +215,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::of_kind(KKind::AnyType),
             vec![
-                arg("applied", KType::of_kind(KKind::AnyType)),
+                arg(registries, "applied", KType::of_kind(KKind::AnyType)),
                 kw("AS"),
-                arg("ctor", KType::of_kind(KKind::AnyType)),
+                arg(registries, "ctor", KType::of_kind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_apply_as,
@@ -226,11 +231,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw("FN"),
-                arg("sig", KType::KEXPRESSION),
+                arg(registries, "sig", KType::KEXPRESSION),
                 kw("->"),
                 // `OfKind(AnyType)` admits every type value — a `-> Ordered` signature return
                 // and `-> Module` (which lowers to the empty signature) included.
-                arg("ret", KType::of_kind(KKind::AnyType)),
+                arg(registries, "ret", KType::of_kind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_fn,
@@ -299,7 +304,10 @@ mod tests {
                 }
                 assert_eq!(
                     arguments,
-                    Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
+                    Record::from_pairs([(
+                        test_run.registries().labels.intern("Type"),
+                        KType::NUMBER
+                    )]),
                 );
             }
             _ => panic!("expected ConstructorApply, got {result:?}"),
@@ -327,7 +335,10 @@ mod tests {
         assert_eq!(
             result,
             types.function_type(
-                Record::from_pairs(vec![("x".into(), KType::NUMBER), ("y".into(), KType::STR)]),
+                Record::from_pairs(vec![
+                    (test_run.registries().labels.intern("x"), KType::NUMBER),
+                    (test_run.registries().labels.intern("y"), KType::STR)
+                ]),
                 KType::BOOL,
             )
         );
@@ -355,7 +366,10 @@ mod tests {
         assert_eq!(
             result,
             types.function_type(
-                Record::from_pairs(vec![("Ty".into(), KType::of_kind(KKind::Signature))]),
+                Record::from_pairs(vec![(
+                    test_run.registries().labels.intern("Ty"),
+                    KType::of_kind(KKind::Signature)
+                )]),
                 KType::EMPTY_SIGNATURE,
             )
         );
@@ -374,7 +388,10 @@ mod tests {
         assert_eq!(
             result,
             types.function_type(
-                Record::from_pairs(vec![("xs".into(), types.list(KType::NUMBER))]),
+                Record::from_pairs(vec![(
+                    test_run.registries().labels.intern("xs"),
+                    types.list(KType::NUMBER)
+                )]),
                 KType::BOOL,
             )
         );
@@ -394,12 +411,18 @@ mod tests {
         let result =
             test_run.run_one_type(parse_one(&program, ":{x :Wrapped, y :(LIST OF Number)}"));
         let types = test_run.types();
-        let inner = types.record(Record::from_pairs(vec![("a".into(), KType::NUMBER)]));
+        let inner = types.record(Record::from_pairs(vec![(
+            test_run.registries().labels.intern("a"),
+            KType::NUMBER,
+        )]));
         assert_eq!(
             result,
             types.record(Record::from_pairs(vec![
-                ("x".into(), inner),
-                ("y".into(), types.list(KType::NUMBER)),
+                (test_run.registries().labels.intern("x"), inner),
+                (
+                    test_run.registries().labels.intern("y"),
+                    types.list(KType::NUMBER)
+                ),
             ])),
         );
     }
@@ -424,12 +447,14 @@ mod tests {
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
                 assert_eq!(
-                    params.get("xs").copied(),
+                    params
+                        .get(test_run.registries().labels.intern("xs"))
+                        .copied(),
                     Some(types.list(KType::NUMBER)),
                     "the sigil param must lower to LIST OF Number",
                 );
                 assert_eq!(
-                    ret.name(types),
+                    ret.name(test_run.registries()),
                     "Wrapped",
                     "the reaching return type must survive the carrier-view crossing",
                 );
@@ -457,7 +482,7 @@ mod tests {
     /// a type carrier equal to `expected`. The expected value is built at each call site so
     /// it shares the scope's lifetime, keeping the comparison off `'static`.
     fn assert_round_trips(test_run: &mut TestRun<'_>, expected: KType) {
-        let rendered = expected.name(test_run.types());
+        let rendered = expected.name(test_run.registries());
         let program = test_run.program;
         let result = test_run.run_one_type(parse_one(program, &rendered));
         assert_eq!(
@@ -472,7 +497,10 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let expected = test_run.types().function_type(
-            Record::from_pairs(vec![("x".into(), KType::NUMBER), ("y".into(), KType::STR)]),
+            Record::from_pairs(vec![
+                (test_run.registries().labels.intern("x"), KType::NUMBER),
+                (test_run.registries().labels.intern("y"), KType::STR),
+            ]),
             KType::BOOL,
         );
         assert_round_trips(&mut test_run, expected);
@@ -494,7 +522,10 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         let types = test_run.types();
         let expected = types.function_type(
-            Record::from_pairs(vec![("xs".into(), types.list(KType::NUMBER))]),
+            Record::from_pairs(vec![(
+                test_run.registries().labels.intern("xs"),
+                types.list(KType::NUMBER),
+            )]),
             KType::BOOL,
         );
         assert_round_trips(&mut test_run, expected);
@@ -507,12 +538,15 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         let types = test_run.types();
         let expected = types.function_type(
-            Record::from_pairs(vec![("Ty".into(), KType::of_kind(KKind::Signature))]),
+            Record::from_pairs(vec![(
+                test_run.registries().labels.intern("Ty"),
+                KType::of_kind(KKind::Signature),
+            )]),
             KType::EMPTY_SIGNATURE,
         );
         // Param name `Ty` (capitalized, a `Type` token) must survive the round-trip.
         assert!(
-            matches!(types.node(expected), TypeNode::KFunction { params, .. } if params.get("Ty").is_some()),
+            matches!(types.node(expected), TypeNode::KFunction { params, .. } if params.get(test_run.registries().labels.intern("Ty")).is_some()),
         );
         assert_round_trips(&mut test_run, expected);
     }
@@ -532,7 +566,7 @@ mod tests {
             TypeNode::Dict { key, value } => {
                 assert_eq!(key, KType::STR, "scalar key must lower to Str");
                 assert_eq!(
-                    value.name(types),
+                    value.name(test_run.registries()),
                     "Wrapped",
                     "reaching value type must survive the carrier-view crossing",
                 );
@@ -554,7 +588,7 @@ mod tests {
         match types.node(result) {
             TypeNode::Dict { key, value } => {
                 assert_eq!(
-                    key.name(types),
+                    key.name(test_run.registries()),
                     "Wrapped",
                     "reaching key type must survive the carrier-view crossing",
                 );
@@ -577,9 +611,11 @@ mod tests {
         let types = test_run.types();
         match types.node(result) {
             TypeNode::Record { fields: record } => {
-                let field = record.get("x").expect("record must have field x");
+                let field = record
+                    .get(test_run.registries().labels.intern("x"))
+                    .expect("record must have field x");
                 assert_eq!(
-                    field.name(types),
+                    field.name(test_run.registries()),
                     "Wrapped",
                     "the reaching field must survive the sync brand re-fold",
                 );
@@ -602,7 +638,9 @@ mod tests {
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
                 assert_eq!(
-                    params.get("x").map(|kt| kt.name(types)),
+                    params
+                        .get(test_run.registries().labels.intern("x"))
+                        .map(|kt| kt.name(test_run.registries())),
                     Some("Wrapped".to_string()),
                     "the SetMember param must survive the sync compose",
                 );
@@ -626,12 +664,14 @@ mod tests {
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
                 assert_eq!(
-                    params.get("x").copied(),
+                    params
+                        .get(test_run.registries().labels.intern("x"))
+                        .copied(),
                     Some(KType::NUMBER),
                     "the region-free param must be Number",
                 );
                 assert_eq!(
-                    ret.name(types),
+                    ret.name(test_run.registries()),
                     "Wrapped",
                     "the SetMember return type must survive the carrier-view crossing",
                 );
@@ -653,7 +693,7 @@ mod tests {
         match types.node(result) {
             TypeNode::List { element } => {
                 assert_eq!(
-                    element.name(types),
+                    element.name(test_run.registries()),
                     "Wrapped",
                     "reaching elem type must survive the carrier-view crossing",
                 );

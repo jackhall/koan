@@ -17,6 +17,7 @@ use crate::machine::model::types::{KKind, KType, TypeRegistry};
 use crate::witnessed::reattachable;
 
 use super::KObject;
+use crate::machine::model::RunRegistries;
 
 /// Three-arm value currency. `Copy` — the object arms wrap `&'a` references and the `Type` arm a
 /// `Copy` [`KType`] handle, so it threads through node results and the lift path without clones.
@@ -72,10 +73,10 @@ impl<'a> Carried<'a> {
 
     /// Surface rendering of any arm — an object's `summarize`, a type's `name`, or the
     /// unlowered name's surface form.
-    pub fn summarize(&self, types: &TypeRegistry) -> String {
+    pub fn summarize(&self, registries: &RunRegistries) -> String {
         match self {
-            Carried::Object(o) => o.summarize(types),
-            Carried::Type(t) => t.name(types),
+            Carried::Object(o) => o.summarize(registries),
+            Carried::Type(t) => t.name(registries),
             Carried::UnresolvedType(ti) => ti.render(),
         }
     }
@@ -172,10 +173,10 @@ impl<'a> Held<'a> {
 
     /// Surface rendering of any arm — an object's `summarize`, a type's `name`, or the
     /// unlowered name's surface form.
-    pub fn summarize(&self, types: &TypeRegistry) -> String {
+    pub fn summarize(&self, registries: &RunRegistries) -> String {
         match self {
-            Held::Object(o) => o.summarize(types),
-            Held::Type(t) => t.name(types),
+            Held::Object(o) => o.summarize(registries),
+            Held::Type(t) => t.name(registries),
             Held::UnresolvedType(ti) => ti.render(),
         }
     }

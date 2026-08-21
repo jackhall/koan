@@ -83,7 +83,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![SignatureElement::Argument(Argument {
-            name: "n",
+            name: crate::machine::model::Symbol::of("n"),
             ktype: KType::NUMBER,
         })],
     };
@@ -122,7 +122,7 @@ fn bare_type_leaf_short_circuits() {
     assert!(
         matches!(result, Carried::Type(KType::NUMBER)),
         "(Number) must terminate to a Number type; got {}",
-        result.summarize(test_run.types()),
+        result.summarize(test_run.registries()),
     );
 }
 
@@ -149,7 +149,7 @@ fn function_value_call_named_args_short_circuits() {
     assert!(
         matches!(result, KObject::Number(n) if (*n - 7.0).abs() < 1e-9),
         "(f {{x = 7}}) must evaluate to 7.0 (DOUBLE returns x); got {}",
-        result.summarize(test_run.types()),
+        result.summarize(test_run.registries()),
     );
 }
 
@@ -174,7 +174,7 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
     assert!(
         matches!(result, KObject::Number(n) if (*n - 1.0).abs() < 1e-9),
         "(f {{b = 2, a = 1}}) returning `a` must yield 1.0; got {}",
-        result.summarize(test_run.types()),
+        result.summarize(test_run.registries()),
     );
 }
 
@@ -199,7 +199,7 @@ fn function_value_call_named_args_missing_short_circuits() {
         .expect("scheduler should not surface errors directly");
     let err = match test_run
         .runtime
-        .read_edge_result_with(id, |v| v.summarize(&types))
+        .read_edge_result_with(id, |v| v.summarize(types.registries()))
     {
         Err(e) => e.clone(),
         Ok(summary) => panic!("expected MissingArg error, got value {summary}"),
@@ -240,7 +240,7 @@ fn fn_definition_with_a_repeated_parameter_name_is_refused() {
         .expect("scheduler should not surface errors directly");
     let err = match test_run
         .runtime
-        .read_edge_result_with(id, |v| v.summarize(&types))
+        .read_edge_result_with(id, |v| v.summarize(types.registries()))
     {
         Err(e) => e.clone(),
         Ok(summary) => panic!("expected a repeated-parameter ShapeError, got value {summary}"),
@@ -431,14 +431,14 @@ fn fast_lane_on_newtype_record_type_constructs() {
     );
     match result {
         KObject::Wrapped { inner, type_id } => {
-            assert_eq!(type_id.name(test_run.types()), "Pt");
+            assert_eq!(type_id.name(test_run.registries()), "Pt");
             match inner.payload() {
                 KObject::Record(substrate, _) => {
                     assert!(
-                        matches!(substrate.field("x"), Some(Held::Object(KObject::Number(n))) if *n == 3.0)
+                        matches!(substrate.field(crate::machine::model::Symbol::of("x")), Some(Held::Object(KObject::Number(n))) if *n == 3.0)
                     );
                     assert!(
-                        matches!(substrate.field("y"), Some(Held::Object(KObject::Number(n))) if *n == 4.0)
+                        matches!(substrate.field(crate::machine::model::Symbol::of("y")), Some(Held::Object(KObject::Number(n))) if *n == 4.0)
                     );
                 }
                 other => panic!("expected record inner, got {:?}", other.ktype()),
@@ -535,7 +535,7 @@ fn fast_lane_list_of_closures_escapes_outer_call() {
         KObject::List(items, _) => items,
         other => panic!(
             "expected MAKE to return a List, got {}",
-            other.summarize(test_run.types())
+            other.summarize(test_run.registries())
         ),
     };
     assert_eq!(
@@ -783,7 +783,7 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
         Some(KObject::KString(s)) => assert_eq!(*s, "numbers"),
         Some(other) => panic!(
             "expected KString(\"numbers\"), got {}",
-            other.summarize(test_run.types())
+            other.summarize(test_run.registries())
         ),
         None => panic!("LET out = ... must bind `out` in scope"),
     }
@@ -844,7 +844,7 @@ fn operator_chain_undeclared_errors_cleanly() {
         .expect("scheduler drains without deadlock");
     let msg = match test_run
         .runtime
-        .read_edge_result_with(id, |v| v.summarize(&types))
+        .read_edge_result_with(id, |v| v.summarize(types.registries()))
     {
         Err(e) => e.to_string(),
         Ok(summary) => {
@@ -899,7 +899,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
         .expect("scheduler drains without deadlock");
     let inner_result = test_run
         .runtime
-        .read_edge_result_with(inner_id, |v| v.summarize(&types))
+        .read_edge_result_with(inner_id, |v| v.summarize(types.registries()))
         .unwrap_or_else(|e| panic!("a registered FoldRight group must evaluate; got error {e}"));
     assert_eq!(
         inner_result, "9",
@@ -914,7 +914,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
         .expect("scheduler drains without deadlock");
     let root_result = test_run
         .runtime
-        .read_edge_result_with(root_id, |v| v.summarize(&types))
+        .read_edge_result_with(root_id, |v| v.summarize(types.registries()))
         .unwrap_or_else(|e| panic!("the builtin additive group must evaluate; got error {e}"));
     assert_eq!(
         root_result, "5",
@@ -957,7 +957,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
         .expect("scheduler drains without deadlock");
     let infix = test_run
         .runtime
-        .read_edge_result_with(infix_id, |v| v.summarize(&types))
+        .read_edge_result_with(infix_id, |v| v.summarize(types.registries()))
         .unwrap_or_else(|e| panic!("a registered Unary group must evaluate; got error {e}"));
     assert_eq!(
         infix, "[1, 2, 3, 4]",
@@ -972,7 +972,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
         .expect("scheduler drains without deadlock");
     let prefix = test_run
         .runtime
-        .read_edge_result_with(prefix_id, |v| v.summarize(&types))
+        .read_edge_result_with(prefix_id, |v| v.summarize(types.registries()))
         .unwrap_or_else(|e| {
             panic!(
                 "the prefix form must dispatch to the same body as the infix chain; got error {e}"
@@ -998,10 +998,10 @@ fn type_call_constructs_struct() {
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
     let out = test_run.run_one(parse_one(&program, "Point {x = 1, y = 2}"));
     assert_eq!(
-        out.ktype().name(test_run.types()),
+        out.ktype().name(test_run.registries()),
         "Point",
         "got {}",
-        out.summarize(test_run.types())
+        out.summarize(test_run.registries())
     );
 }
 
@@ -1020,7 +1020,7 @@ fn head_deferred_calls_returned_function() {
     assert!(
         matches!(out, KObject::Number(n) if (*n - 7.0).abs() < 1e-9),
         "(GET_F) {{n = 7}} must call the returned FN and yield 7.0; got {}",
-        out.summarize(test_run.types()),
+        out.summarize(test_run.registries()),
     );
 }
 
@@ -1040,7 +1040,7 @@ fn head_deferred_applies_returned_functor_to_module() {
     assert!(
         matches!(out, KObject::Module(_)),
         "applying a functor value must yield a module; got {}",
-        out.summarize(test_run.types()),
+        out.summarize(test_run.registries()),
     );
 }
 
@@ -1057,10 +1057,10 @@ fn head_deferred_constructs_from_returned_type_value() {
     // type leaf to the type-carried `Point` identity, then the body constructs.
     let out = test_run.run_one(parse_one(&program, "(Point) {x = 1, y = 2}"));
     assert_eq!(
-        out.ktype().name(test_run.types()),
+        out.ktype().name(test_run.registries()),
         "Point",
         "got {}",
-        out.summarize(test_run.types())
+        out.summarize(test_run.registries())
     );
 }
 
@@ -1115,10 +1115,10 @@ fn type_head_deferred_constructs_from_sigil_type() {
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
     let out = test_run.run_one(parse_one(&program, ":(Point) {x = 1, y = 2}"));
     assert_eq!(
-        out.ktype().name(test_run.types()),
+        out.ktype().name(test_run.registries()),
         "Point",
         "got {}",
-        out.summarize(test_run.types())
+        out.summarize(test_run.registries())
     );
 }
 

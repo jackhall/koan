@@ -2,11 +2,12 @@ use std::rc::Rc;
 
 use crate::machine::core::{FoldingBrand, FrameStorage, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::{Carried, KType, TypeNode, TypeRegistry};
+use crate::machine::model::{Carried, KType, TypeNode};
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
 
 use super::harness::Host;
 use super::obligation::ReturnObligation;
+use crate::machine::model::RunRegistries;
 
 /// How a finished value disposes against its declared return, decided by a single read pass over the
 /// delivered carrier before anything is allocated.
@@ -63,13 +64,14 @@ impl NodeFinalize for Host<'_> {
         let Some((declared, per_call)) = obligation.declared() else {
             return Ok(envelope);
         };
-        let types = self.ambient.types();
+        let registries = self.ambient.registries();
+        let types = &registries.types;
         // Classifying under the envelope's own host pin keeps this a pure read: no relocation,
         // nothing allocated until the disposition is known.
         let disposition = envelope.open(|carried| match carried {
             Carried::Object(object) => {
-                if !declared.matches_value(object, types) {
-                    Disposition::Mismatch(object.ktype().name(types))
+                if !declared.matches_value(object, registries) {
+                    Disposition::Mismatch(object.ktype().name(registries))
                 } else if object.embeds_substrate()
                     && !matches!(types.node(declared), TypeNode::Union { .. })
                 {
@@ -84,7 +86,7 @@ impl NodeFinalize for Host<'_> {
                 if declared.matches_type(t, types) {
                     Disposition::PassThrough
                 } else {
-                    Disposition::Mismatch(t.name(types))
+                    Disposition::Mismatch(t.name(registries))
                 }
             }
             Carried::UnresolvedType(ti) => Disposition::Mismatch(ti.render()),
@@ -95,7 +97,7 @@ impl NodeFinalize for Host<'_> {
                 per_call,
                 obligation.label(),
                 got,
-                types,
+                registries,
             )),
             Disposition::PassThrough => Ok(envelope),
             // `home` is the region the value already resides in, so the re-mint leaves residence
@@ -140,14 +142,15 @@ pub(in crate::machine::execute) fn finalize_error(
 pub(in crate::machine::execute) fn check_spliced_return(
     obligation: &ReturnObligation,
     carried: Carried<'_>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<(), KError> {
+    let types = &registries.types;
     let Some((declared, per_call)) = obligation.declared() else {
         return Ok(());
     };
     let label = obligation.label();
     let matched = match carried {
-        Carried::Object(object) => declared.matches_value(object, types),
+        Carried::Object(object) => declared.matches_value(object, registries),
         Carried::Type(t) => declared.matches_type(t, types),
         // Every delivered result is resolved; an unlowered name satisfies no contract.
         Carried::UnresolvedType(_) => false,
@@ -156,11 +159,13 @@ pub(in crate::machine::execute) fn check_spliced_return(
         return Ok(());
     }
     let got = match carried {
-        Carried::Object(object) => object.ktype().name(types),
-        Carried::Type(t) => t.name(types),
+        Carried::Object(object) => object.ktype().name(registries),
+        Carried::Type(t) => t.name(registries),
         Carried::UnresolvedType(ti) => ti.render(),
     };
-    Err(return_type_mismatch(declared, per_call, label, got, types))
+    Err(return_type_mismatch(
+        declared, per_call, label, got, registries,
+    ))
 }
 
 #[cfg(test)]
@@ -172,12 +177,12 @@ fn return_type_mismatch(
     per_call: bool,
     label: &str,
     got: String,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> KError {
     let expected = if per_call {
-        format!("{} (per-call return type)", declared.name(types))
+        format!("{} (per-call return type)", declared.name(registries))
     } else {
-        declared.name(types)
+        declared.name(registries)
     };
     KError::new(KErrorKind::TypeMismatch {
         arg: "<return>".to_string(),

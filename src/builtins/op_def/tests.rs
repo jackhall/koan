@@ -5,22 +5,25 @@ use crate::builtins::test_support::{TestRun, binds_module, parse_one};
 use crate::machine::KErrorKind;
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
-use crate::machine::model::TypeRegistry;
+use crate::machine::model::RunRegistries;
 use crate::machine::program_storage;
 use crate::machine::run_root_storage;
 
 /// The numbers of a `KObject::List`, for the unary tests that collect a run into one list.
-fn list_numbers(object: &KObject<'_>, types: &TypeRegistry) -> Vec<f64> {
+fn list_numbers(object: &KObject<'_>, registries: &RunRegistries) -> Vec<f64> {
     match object {
         KObject::List(items, _) => items
             .elements()
             .iter()
             .map(|item| match item {
                 Held::Object(KObject::Number(n)) => *n,
-                other => panic!("expected a Number element, got {}", other.summarize(types)),
+                other => panic!(
+                    "expected a Number element, got {}",
+                    other.summarize(registries)
+                ),
             })
             .collect(),
-        other => panic!("expected a list, got {}", other.ktype().name(types)),
+        other => panic!("expected a list, got {}", other.ktype().name(registries)),
     }
 }
 
@@ -80,7 +83,7 @@ fn sigiled_operand_type_declares_over_lists() {
     assert_eq!(
         list_numbers(
             test_run.run_one(parse_one(&program, "lists.result")),
-            &types
+            types.registries()
         ),
         vec![3.0],
     );
@@ -110,14 +113,17 @@ fn declared_plus_over_lists_leaves_number_arithmetic_alone() {
         "`1 + 2` still hits the builtin — the root bucket type-gates on Number operands",
     );
     assert_eq!(
-        list_numbers(test_run.run_one(parse_one(&program, "lists.pair")), &types),
+        list_numbers(
+            test_run.run_one(parse_one(&program, "lists.pair")),
+            types.registries()
+        ),
         vec![2.0],
         "list operands miss the builtin's strict gate and fall through to the module body",
     );
     assert_eq!(
         list_numbers(
             test_run.run_one(parse_one(&program, "lists.chained")),
-            &types
+            types.registries()
         ),
         vec![3.0],
         "the three-operand run resolves the module's singleton `+` group and folds left",
@@ -160,7 +166,7 @@ fn unary_operator_collects_the_run_prefix_infix_and_pair() {
     assert_eq!(
         list_numbers(
             test_run.run_one(parse_one(&program, "gather.named")),
-            &types
+            types.registries()
         ),
         vec![1.0, 2.0, 3.0],
         "a named operand of a run resolves against scope, not as an interned symbol",
@@ -168,20 +174,23 @@ fn unary_operator_collects_the_run_prefix_infix_and_pair() {
     assert_eq!(
         list_numbers(
             test_run.run_one(parse_one(&program, "gather.chained")),
-            &types
+            types.registries()
         ),
         vec![1.0, 2.0, 3.0],
         "an infix run collects into `operands`",
     );
     assert_eq!(
-        list_numbers(test_run.run_one(parse_one(&program, "gather.pair")), &types),
+        list_numbers(
+            test_run.run_one(parse_one(&program, "gather.pair")),
+            types.registries()
+        ),
         vec![4.0, 5.0],
         "a two-operand call reaches the list body through the binary bridge",
     );
     assert_eq!(
         list_numbers(
             test_run.run_one(parse_one(&program, "gather.prefix")),
-            &types
+            types.registries()
         ),
         vec![6.0, 7.0, 8.0],
         "the prefix form is the same keyword-first shape a reduced run takes",
@@ -332,7 +341,7 @@ fn a_run_parks_on_a_still_finalizing_declaration() {
     assert_eq!(
         list_numbers(
             test_run.run_one(parse_one(&program, "deferred.result")),
-            &types
+            types.registries()
         ),
         vec![1.0],
     );
@@ -375,7 +384,7 @@ fn declaration_evaluates_to_the_operator_function() {
     assert!(
         matches!(value, KObject::KFunction(_)),
         "an OP statement evaluates to its synthesized function, got {}",
-        value.ktype().name(test_run.types()),
+        value.ktype().name(test_run.registries()),
     );
 }
 
@@ -402,7 +411,7 @@ fn combined_binary_form_installs_name_and_operator() {
     assert!(
         matches!(bound, KObject::KFunction(..)),
         "the bound name holds the operator's own function, got {}",
-        bound.summarize(test_run.types()),
+        bound.summarize(test_run.registries()),
     );
 }
 
@@ -423,13 +432,16 @@ fn combined_unary_form_installs_both_bucket_keys() {
     assert_eq!(
         list_numbers(
             test_run.run_one(parse_one(&program, "gather.chained")),
-            &types
+            types.registries()
         ),
         vec![1.0, 2.0, 3.0],
         "the list key registered: an infix run collects into `operands`",
     );
     assert_eq!(
-        list_numbers(test_run.run_one(parse_one(&program, "gather.pair")), &types),
+        list_numbers(
+            test_run.run_one(parse_one(&program, "gather.pair")),
+            types.registries()
+        ),
         vec![4.0, 5.0],
         "the binary bridge key registered: a two-operand run reaches the same body",
     );

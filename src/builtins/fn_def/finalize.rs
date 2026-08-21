@@ -19,7 +19,7 @@ use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
-use crate::machine::model::{Elaborator, ReturnType, TypeRegistry};
+use crate::machine::model::{Elaborator, ReturnType};
 use crate::machine::model::{SignatureDraft, SignatureElement};
 use crate::machine::{BindingIndex, Body, CarrierWitness, KError, KErrorKind, Scope};
 use crate::witnessed::Witnessed;
@@ -29,6 +29,8 @@ use super::return_type::{
 };
 use super::signature::{ParamListOutcome, parse_fn_param_list};
 use crate::machine::OverloadSeal;
+use crate::machine::model::RunRegistries;
+use crate::machine::model::render_label;
 
 /// How a finalized FN-def is wired into the scope:
 ///
@@ -196,22 +198,26 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
 fn check_value_type_kinds(
     elements: &[SignatureElement<'_>],
     return_type: &ReturnType<'_>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<(), KError> {
     use crate::machine::model::unsaturated_constructor_message;
     for element in elements {
         if let SignatureElement::Argument(argument) = element
             && let Some(message) = unsaturated_constructor_message(
                 argument.ktype,
-                &format!("the type of FN parameter `{}`", argument.name),
-                types,
+                &format!(
+                    "the type of FN parameter `{}`",
+                    render_label(argument.name, registries)
+                ),
+                registries,
             )
         {
             return Err(KError::new(KErrorKind::ShapeError(message)));
         }
     }
     if let ReturnType::Resolved(kt) = return_type
-        && let Some(message) = unsaturated_constructor_message(*kt, "the FN return type", types)
+        && let Some(message) =
+            unsaturated_constructor_message(*kt, "the FN return type", registries)
     {
         return Err(KError::new(KErrorKind::ShapeError(message)));
     }
@@ -228,7 +234,10 @@ fn check_value_type_kinds(
 ///
 /// Quadratic in the parameter names, which a signature has a handful of, and this runs once per
 /// definition.
-fn check_distinct_parameter_names(elements: &[SignatureElement<'_>]) -> Result<(), KError> {
+fn check_distinct_parameter_names(
+    elements: &[SignatureElement<'_>],
+    registries: &RunRegistries,
+) -> Result<(), KError> {
     let names = || {
         elements.iter().filter_map(|element| match element {
             SignatureElement::Argument(argument) => Some(argument.name),
@@ -238,8 +247,9 @@ fn check_distinct_parameter_names(elements: &[SignatureElement<'_>]) -> Result<(
     for (slot, name) in names().enumerate() {
         if names().take(slot).any(|earlier| earlier == name) {
             return Err(KError::new(KErrorKind::ShapeError(format!(
-                "FN parameter `{name}` is declared more than once; each parameter of a \
-                 signature must have its own name"
+                "FN parameter `{}` is declared more than once; each parameter of a \
+                 signature must have its own name",
+                render_label(name, registries),
             ))));
         }
     }
@@ -257,10 +267,11 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     body_expr: KExpression<'a>,
     kind: FnKind<'a>,
     bind_index: BindingIndex,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp<'a>>), KError> {
-    check_distinct_parameter_names(&elements)?;
-    check_value_type_kinds(&elements, &return_type, types)?;
+    let types = &registries.types;
+    check_distinct_parameter_names(&elements, registries)?;
+    check_value_type_kinds(&elements, &return_type, registries)?;
 
     // First Keyword keys the data table. Dispatch is by full signature via
     // `Bindings::functions`; `Bindings::data` is for discoverability /
@@ -300,7 +311,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
             writes.push(WriteOp::Overload {
                 name,
                 index: bind_index,
-                seal: OverloadSeal::of_delivered(scope, &birth),
+                seal: OverloadSeal::of_delivered(scope, &birth, registries),
                 builtin_shadow_guard: true,
             });
             bound_name
@@ -397,7 +408,7 @@ pub(crate) fn defer<'a>(
                     return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                         "FN signature slot at part-index {slot_idx} expected a type expression, \
                          got a {} value",
-                        other.ktype(fctx.types).name(fctx.types),
+                        other.ktype(fctx.types()).name(fctx.registries),
                     )))));
                 }
             }
@@ -407,7 +418,7 @@ pub(crate) fn defer<'a>(
             fctx.scope,
             results,
             return_type_dep,
-            fctx.types
+            fctx.registries
         ));
         let elements = match prebuilt_elements {
             Some(es) => es,
@@ -416,7 +427,7 @@ pub(crate) fn defer<'a>(
                 match parse_fn_param_list(
                     &signature_expr,
                     &mut elaborator,
-                    fctx.types,
+                    fctx.registries,
                     Some(&resolved),
                 ) {
                     ParamListOutcome::Done(es) => es,
@@ -439,7 +450,7 @@ pub(crate) fn defer<'a>(
             body_expr,
             kind,
             bind_index,
-            fctx.types,
+            fctx.registries,
         ))
     });
     crate::machine::Action::await_deps(deps, finish)

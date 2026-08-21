@@ -45,10 +45,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
             })),
         )
     };
-    assert!(slot.accepts_working_part(&module_part("num_pinned"), &types));
-    assert!(!slot.accepts_working_part(&module_part("str_pinned"), &types));
-    assert!(!slot.accepts_working_part(&module_part("no_elem_pin"), &types));
-    assert!(slot.accepts_working_part(&module_part("num_bare"), &types));
+    assert!(slot.accepts_working_part(&module_part("num_pinned"), types.registries()));
+    assert!(!slot.accepts_working_part(&module_part("str_pinned"), types.registries()));
+    assert!(!slot.accepts_working_part(&module_part("no_elem_pin"), types.registries()));
+    assert!(slot.accepts_working_part(&module_part("num_bare"), types.registries()));
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at
@@ -252,11 +252,17 @@ fn transparent_view_pin_agreement_reads_source_types() {
     let num_view = scope.lookup("num_view").expect("num_view bound");
     let str_view = scope.lookup("str_view").expect("str_view bound");
     assert!(
-        slot.accepts_working_part(&spliced_part(&region, Carried::Object(num_view)), &types),
+        slot.accepts_working_part(
+            &spliced_part(&region, Carried::Object(num_view)),
+            types.registries()
+        ),
         "transparent view over `Elem = Number` must agree with the `{{Elem = Number}}` pin",
     );
     assert!(
-        !slot.accepts_working_part(&spliced_part(&region, Carried::Object(str_view)), &types),
+        !slot.accepts_working_part(
+            &spliced_part(&region, Carried::Object(str_view)),
+            types.registries()
+        ),
         "transparent view over `Elem = Str` must not agree with the `{{Elem = Number}}` pin",
     );
 }
@@ -284,7 +290,7 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("Ordered must bind a Signature KType, got {ordered:?}"),
     };
-    let view = lookup_module(scope, "view", &types);
+    let view = lookup_module(scope, "view", types.registries());
     let carrier_abstract = view
         .type_members
         .get(&"Carrier")
@@ -295,7 +301,10 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let view_obj = scope.lookup("view").expect("view bound");
     assert!(
-        slot.accepts_working_part(&spliced_part(&region, Carried::Object(view_obj)), &types),
+        slot.accepts_working_part(
+            &spliced_part(&region, Carried::Object(view_obj)),
+            types.registries()
+        ),
         "opaque view must agree with a pin naming its own per-call abstract `Carrier`",
     );
 }

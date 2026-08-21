@@ -115,7 +115,7 @@ fn functor_e2e_makeset_produces_module() {
     // structurally (`SIG (tag: Number)`), not by the module name — the type a `:Signature` slot
     // matches it against.
     assert_eq!(
-        KObject::Module(m).ktype().name(test_run.types()),
+        KObject::Module(m).ktype().name(test_run.registries()),
         "SIG (tag: Number)",
         "a module value is typed by its self-sig",
     );

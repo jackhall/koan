@@ -30,7 +30,13 @@ pub(super) fn initial<'step>(
     // Resolving against the cart scope puts the pick at the cart `'step` lifetime, so it reaches
     // `invoke_continue` with no re-anchor.
     let scope = ctx.current_scope();
-    let outcome = scope.resolve_dispatch(&expr, chain, &bare_outcomes, ctx.types(), ctx.scratch());
+    let outcome = scope.resolve_dispatch(
+        &expr,
+        chain,
+        &bare_outcomes,
+        ctx.registries(),
+        ctx.scratch(),
+    );
     let resolved = match outcome {
         DispatchOutcome::Resolved(r) => r,
         DispatchOutcome::Ambiguous(n) => {
@@ -104,7 +110,7 @@ fn finish<'step>(
         &working_expr,
         ctx.chain_deref(),
         &bare_outcomes,
-        ctx.types(),
+        ctx.registries(),
         ctx.scratch(),
     ) {
         DispatchOutcome::Resolved(r) => walk_and_invoke(ctx, r, working_expr, &bare_outcomes),

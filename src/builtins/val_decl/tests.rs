@@ -1,4 +1,5 @@
 use crate::builtins::test_support::{TestRun, binds_module, parse_one};
+use crate::machine::model::Symbol;
 use crate::machine::model::{KType, SigSchema, TypeNode, TypeRegistry};
 use crate::machine::{KErrorKind, ScopeId};
 use crate::machine::{program_storage, run_root_storage};
@@ -136,8 +137,8 @@ fn val_function_typed_slot() {
     match test_run.types().node(compare) {
         TypeNode::KFunction { params, ret } => {
             assert_eq!(params.len(), 2);
-            assert_eq!(params.get("x").copied(), Some(KType::NUMBER));
-            assert_eq!(params.get("y").copied(), Some(KType::NUMBER));
+            assert_eq!(params.get(Symbol::of("x")).copied(), Some(KType::NUMBER));
+            assert_eq!(params.get(Symbol::of("y")).copied(), Some(KType::NUMBER));
             assert_eq!(ret, KType::NUMBER);
         }
         _ => panic!("expected KFunction-typed slot, got {compare:?}"),

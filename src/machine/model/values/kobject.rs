@@ -6,6 +6,9 @@ use crate::machine::core::{
     FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
 };
 use crate::machine::model::ast::{KExpression, ProgramExpression};
+use crate::machine::model::labels::Symbol;
+use crate::machine::model::registries::RunRegistries;
+use crate::machine::model::types::render_label;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
 use crate::witnessed::{CellInput, CellReach, Sectioned};
 
@@ -739,8 +742,8 @@ fn alloc_list<'a>(door: SubstrateDoor<'a, '_>, items: &[Held<'a>]) -> &'a ListSu
     door.alloc_substrate_folded(ContainerSubstrate::new(ListLayout, cells, reach))
 }
 
-/// Sort a record's fields by name, section the cells in that order, and store the
-/// [`RecordSubstrate`] under the region-hosted name slice that order makes an index. Sorting
+/// Sort a record's fields into canonical symbol order, section the cells in that order, and store
+/// the [`RecordSubstrate`] under the region-hosted symbol slice that order makes an index. Sorting
 /// happens **before** sectioning: the run partition is computed over the cell order handed to
 /// [`section_cells`], so a later sort would mispair runs with cells. Names cannot repeat — the
 /// incoming [`Record`] deduplicates last-wins upstream — so the sort is a total order over them and
@@ -749,11 +752,11 @@ fn alloc_record<'a>(
     door: SubstrateDoor<'a, '_>,
     fields: Record<Held<'a>>,
 ) -> &'a RecordSubstrate<'a> {
-    let mut pairs: Vec<(String, Held<'a>)> = fields.into_pairs().collect();
-    pairs.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut pairs: Vec<(Symbol, Held<'a>)> = fields.into_pairs().collect();
+    pairs.sort_unstable_by_key(|pair| pair.0);
     let names = door
         .allocator()
-        .slice_from_iter(pairs.iter().map(|(name, _)| door.allocator().text(name)));
+        .slice_from_iter(pairs.iter().map(|(symbol, _)| *symbol));
     let cells: Vec<Held<'a>> = pairs.into_iter().map(|(_, cell)| cell).collect();
     let (cells, reach) = section_cells(door, &cells);
     door.alloc_substrate_folded(ContainerSubstrate::new(
@@ -824,7 +827,7 @@ pub(crate) fn copy_object_into<'b>(
             let fields: Record<Held<'b>> = Record::from_pairs(
                 substrate
                     .fields()
-                    .map(|(name, cell)| (name.to_string(), copy_held_into(cell, dest)))
+                    .map(|(symbol, cell)| (symbol, copy_held_into(cell, dest)))
                     .collect::<Vec<_>>(),
             );
             KObject::record_rehomed(dest, fields, *record_type)
@@ -1011,8 +1014,9 @@ impl<'a> Parseable for KObject<'a> {
 }
 
 impl<'a> KObject<'a> {
-    /// Canonical surface rendering of a value. Carried types render through the registry.
-    pub fn summarize(&self, types: &TypeRegistry) -> String {
+    /// Canonical surface rendering of a value. Carried types render through the registry, and
+    /// record field labels resolve through the interner beside it.
+    pub fn summarize(&self, registries: &RunRegistries) -> String {
         match self {
             KObject::Number(n) => n.to_string(),
             KObject::KString(s) => (*s).to_string(),
@@ -1021,26 +1025,36 @@ impl<'a> KObject<'a> {
                 let parts: Vec<String> = substrate
                     .elements()
                     .iter()
-                    .map(|i| i.summarize(types))
+                    .map(|i| i.summarize(registries))
                     .collect();
                 format!("[{}]", parts.join(", "))
             }
             KObject::Dict(substrate, _) => {
                 let parts: Vec<String> = substrate
                     .entries()
-                    .map(|(k, v)| format!("{}: {}", k.summarize(), v.summarize(types)))
+                    .map(|(k, v)| format!("{}: {}", k.summarize(), v.summarize(registries)))
                     .collect();
                 format!("{{{}}}", parts.join(", "))
             }
             KObject::KExpression(e) => e.summarize(),
-            KObject::KFunction(f) => f.summarize(),
+            KObject::KFunction(f) => f.summarize(registries),
             KObject::Tagged { tag, value, .. } => {
-                format!("{}({})", tag, value.payload().summarize(types))
+                format!("{}({})", tag, value.payload().summarize(registries))
             }
             KObject::Record(substrate, _) => {
-                let parts: Vec<String> = substrate
+                // The substrate lays cells out in symbol order, which carries no meaning to a
+                // reader; rendering re-sorts by the resolved text so a printed record reads in
+                // field-name order. A render-path sort only — the layout itself stays symbol-keyed.
+                let mut fields: Vec<(String, String)> = substrate
                     .fields()
-                    .map(|(field, value)| format!("{} = {}", field, value.summarize(types)))
+                    .map(|(field, value)| {
+                        (render_label(field, registries), value.summarize(registries))
+                    })
+                    .collect();
+                fields.sort_by(|left, right| left.0.cmp(&right.0));
+                let parts: Vec<String> = fields
+                    .into_iter()
+                    .map(|(name, value)| format!("{name} = {value}"))
                     .collect();
                 format!("{{{}}}", parts.join(", "))
             }
@@ -1048,8 +1062,8 @@ impl<'a> KObject<'a> {
             KObject::Wrapped { inner, type_id } => {
                 format!(
                     "{}({})",
-                    type_id.name(types),
-                    inner.payload().summarize(types)
+                    type_id.name(registries),
+                    inner.payload().summarize(registries)
                 )
             }
             KObject::Module(m) => m.path.to_string(),

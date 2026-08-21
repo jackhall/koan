@@ -9,6 +9,8 @@ use super::resolver::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::ProducerId;
 use crate::machine::Scope;
 use crate::machine::model::Record;
+use crate::machine::model::RunRegistries;
+use crate::machine::model::Symbol;
 use crate::machine::model::ast::{
     ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart,
 };
@@ -58,7 +60,7 @@ impl FieldListContext {
 }
 
 pub enum FieldListOutcome<'a> {
-    Done(Vec<(String, KType)>),
+    Done(Vec<(Symbol, KType)>),
     /// `sub_dispatches` carries each sigil field's body as the scheduler's own node, in DFS walk
     /// order — the currency a [`SubDispatch`](crate::machine::core::SubDispatch) takes. The
     /// caller schedules them in that order and, on the dep-finish re-walk, feeds the resolved
@@ -137,14 +139,14 @@ pub fn parse_typed_field_list_via_elaborator<'a, 'f>(
     name_kind: FieldNameKind,
     elaborator: &mut Elaborator<'_, 'a>,
     results: Option<&mut ResultFeed<'_, 'f>>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> FieldListOutcome<'a> {
     match parts {
         FieldParts::Ast(parts) => {
-            walk_field_list(parts, context, name_kind, elaborator, results, types)
+            walk_field_list(parts, context, name_kind, elaborator, results, registries)
         }
         FieldParts::Threaded(parts) => {
-            walk_field_list(parts, context, name_kind, elaborator, results, types)
+            walk_field_list(parts, context, name_kind, elaborator, results, registries)
         }
     }
 }
@@ -155,8 +157,9 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
     name_kind: FieldNameKind,
     elaborator: &mut Elaborator<'_, 'a>,
     mut results: Option<&mut ResultFeed<'_, 'f>>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> FieldListOutcome<'a> {
+    let types = &registries.types;
     let mut awaited: Vec<ProducerId> = Vec::new();
     let mut sub_dispatches: Vec<WorkingExpression<'a>> = Vec::new();
     let FieldListContext {
@@ -172,7 +175,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
         let checked = |kt: KType| match super::sig_schema::unsaturated_constructor_message(
             kt,
             &format!("the type of {context_member} `{name}`"),
-            types,
+            registries,
         ) {
             Some(message) => Err(message),
             None => Ok(kt),
@@ -203,7 +206,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                         other => Err(format!(
                             "{context_list} type for `{}` resolved to non-type value `{}`",
                             name,
-                            other.summarize(types),
+                            other.summarize(registries),
                         )),
                     })
             }
@@ -214,7 +217,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                 Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => Err(format!(
                     "{context_list} type for `{}` resolved to non-type value `{}`",
                     name,
-                    other.summarize(types),
+                    other.summarize(registries),
                 )),
                 None if results.is_some() => Err(format!(
                     "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
@@ -233,7 +236,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     FieldNameKind::Identifier,
                     elaborator,
                     results.as_deref_mut(),
-                    types,
+                    registries,
                 ) {
                     FieldListOutcome::Done(pairs) => Ok(types.record(Record::from_pairs(pairs))),
                     FieldListOutcome::Err(msg) => Err(msg),
@@ -282,7 +285,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                         Err(format!(
                             "{context_list} type for `{}` resolved to non-type value `{}`",
                             name,
-                            other.summarize(types),
+                            other.summarize(registries),
                         ))
                     }
                     None if results.is_some() => Err(format!(
@@ -312,7 +315,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     FieldNameKind::Identifier,
                     elaborator,
                     results.as_deref_mut(),
-                    types,
+                    registries,
                 ) {
                     FieldListOutcome::Done(pairs) => Ok(types.record(Record::from_pairs(pairs))),
                     FieldListOutcome::Err(msg) => Err(msg),
@@ -342,7 +345,14 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     sub_dispatches,
                 }
             } else {
-                FieldListOutcome::Done(fields)
+                // The one intern site for field labels: every name here is syntactic, and the
+                // interner records the text so rendering can resolve it back.
+                FieldListOutcome::Done(
+                    fields
+                        .into_iter()
+                        .map(|(name, kt)| (registries.labels.intern(&name), kt))
+                        .collect(),
+                )
             }
         }
     }

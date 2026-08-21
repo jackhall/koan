@@ -13,6 +13,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 
 use crate::machine::model::RunRegistries;
+use crate::machine::model::render_label;
 use finalize::{FnKind, FnPlan, ParamListResult, classify, finalize_fn_with_kind, fn_action};
 use return_type::classify_return_type;
 use signature::ParamListOutcome;
@@ -57,20 +58,24 @@ pub(crate) fn build_fn_like<'a>(
         "FN return-type slot",
         ctx.types(),
     ));
-    let params =
-        match signature::parse_fn_param_list(&signature_expr, &mut elaborator, ctx.types(), None) {
-            ParamListOutcome::Done(es) => ParamListResult::Done(es),
-            ParamListOutcome::Err(msg) => {
-                return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))));
-            }
-            ParamListOutcome::Pending {
-                awaited_producers,
-                sub_dispatches,
-            } => ParamListResult::Pending {
-                awaited_producers,
-                sub_dispatches,
-            },
-        };
+    let params = match signature::parse_fn_param_list(
+        &signature_expr,
+        &mut elaborator,
+        ctx.registries,
+        None,
+    ) {
+        ParamListOutcome::Done(es) => ParamListResult::Done(es),
+        ParamListOutcome::Err(msg) => {
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))));
+        }
+        ParamListOutcome::Pending {
+            awaited_producers,
+            sub_dispatches,
+        } => ParamListResult::Pending {
+            awaited_producers,
+            sub_dispatches,
+        },
+    };
     let bind_index = ctx.bind_index();
     match classify(return_type_state, params) {
         FnPlan::Synchronous {
@@ -83,7 +88,7 @@ pub(crate) fn build_fn_like<'a>(
             body_expr,
             kind,
             bind_index,
-            ctx.types(),
+            ctx.registries,
         )),
         FnPlan::Deferred(inputs) => defer(
             ctx.scope,
@@ -150,7 +155,7 @@ pub fn body_let_combined_type_named<'a>(
     let name = match arg_unresolved_type(ctx.args, "name") {
         Some(te) => te.render(),
         None => match arg_type(ctx.args, "name") {
-            Some(kt) => kt.name(ctx.types()),
+            Some(kt) => kt.name(ctx.registries),
             None => return Action::done(Err(KError::new(KErrorKind::MissingArg("name".into())))),
         },
     };
@@ -172,7 +177,7 @@ pub fn body_value_named_return<'a>(
         ctx.args,
         "return_type",
         "FN",
-        ctx.types()
+        ctx.registries
     ));
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "FN return-type slot names a type, but `{name}` is a value. For the type of a value — a \
@@ -202,7 +207,7 @@ pub fn body_record_schema<'a>(
             _ => {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",
-                    kt.name(ctx.types()),
+                    kt.name(ctx.registries),
                 )))));
             }
         },
@@ -212,19 +217,23 @@ pub fn body_record_schema<'a>(
             ))));
         }
     };
-    // The schema's field names are owned by the resolved record type, so each is bumped into the
-    // defining scope's region to ride the draft as a borrow; the mint door re-homes it from there.
-    let brand = ctx.scope.brand();
+    // The schema's field labels are symbols already — the record type they came from interned
+    // them — so an argument slot takes one verbatim and borrows nothing.
     let elements: Vec<SignatureElement<'a>> = schema
         .iter()
         .map(|(name, ktype)| {
             SignatureElement::Argument(Argument {
-                name: brand.allocator().text(name),
+                name,
                 ktype: *ktype,
             })
         })
         .collect();
-    let param_names: Vec<String> = schema.keys().cloned().collect();
+    // The return-type classifier matches parameter names against the return surface's tokens, so
+    // it wants text; the schema's labels interned where the record type was built.
+    let param_names: Vec<String> = schema
+        .keys()
+        .map(|symbol| render_label(symbol, ctx.registries))
+        .collect();
     let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "FN", "body"));
     let return_type_state = crate::try_action!(classify_return_type(
@@ -244,7 +253,7 @@ pub fn body_record_schema<'a>(
             body_expr,
             FnKind::Anonymous,
             bind_index,
-            ctx.types(),
+            ctx.registries,
         )),
         FnPlan::Deferred(mut inputs) => {
             inputs.prebuilt_elements = Some(elements);
@@ -290,11 +299,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("FN"),
-                arg("signature", KType::KEXPRESSION),
+                arg(registries, "signature", KType::KEXPRESSION),
                 kw("->"),
-                arg("return_type", KType::of_kind(KKind::ProperType)),
+                arg(registries, "return_type", KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg("body", KType::KEXPRESSION),
+                arg(registries, "body", KType::KEXPRESSION),
             ],
         )
     };
@@ -307,11 +316,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("FN"),
-                arg("signature", KType::KEXPRESSION),
+                arg(registries, "signature", KType::KEXPRESSION),
                 kw("->"),
-                arg("return_type", KType::SIGILED_TYPE_EXPR),
+                arg(registries, "return_type", KType::SIGILED_TYPE_EXPR),
                 kw("="),
-                arg("body", KType::KEXPRESSION),
+                arg(registries, "body", KType::KEXPRESSION),
             ],
         )
     };
@@ -325,11 +334,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("FN"),
-                arg("signature", KType::KEXPRESSION),
+                arg(registries, "signature", KType::KEXPRESSION),
                 kw("->"),
-                arg("return_type", KType::IDENTIFIER),
+                arg(registries, "return_type", KType::IDENTIFIER),
                 kw("="),
-                arg("body", KType::KEXPRESSION),
+                arg(registries, "body", KType::KEXPRESSION),
             ],
         )
     };
@@ -342,11 +351,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("FN"),
-                arg("signature", KType::of_kind(KKind::ProperType)),
+                arg(registries, "signature", KType::of_kind(KKind::ProperType)),
                 kw("->"),
-                arg("return_type", KType::of_kind(KKind::ProperType)),
+                arg(registries, "return_type", KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg("body", KType::KEXPRESSION),
+                arg(registries, "body", KType::KEXPRESSION),
             ],
         )
     };
@@ -360,14 +369,14 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("LET"),
-                arg("name", name),
+                arg(registries, "name", name),
                 kw("="),
                 kw("FN"),
-                arg("signature", signature),
+                arg(registries, "signature", signature),
                 kw("->"),
-                arg("return_type", return_type),
+                arg(registries, "return_type", return_type),
                 kw("="),
-                arg("body", KType::KEXPRESSION),
+                arg(registries, "body", KType::KEXPRESSION),
             ],
         )
     };

@@ -36,17 +36,16 @@ fn bool_and_number_zero_differ() {
 #[test]
 fn try_from_kobject_accepts_scalars() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     assert!(matches!(
-        KKey::try_from_kobject(&KObject::KString("a"), types),
+        KKey::try_from_kobject(&KObject::KString("a"), &registries),
         Ok(KKey::String(s)) if s == "a"
     ));
     assert!(matches!(
-        KKey::try_from_kobject(&KObject::Number(3.5), types),
+        KKey::try_from_kobject(&KObject::Number(3.5), &registries),
         Ok(KKey::Number(n)) if n == 3.5
     ));
     assert!(matches!(
-        KKey::try_from_kobject(&KObject::Bool(true), types),
+        KKey::try_from_kobject(&KObject::Bool(true), &registries),
         Ok(KKey::Bool(true))
     ));
 }
@@ -54,25 +53,22 @@ fn try_from_kobject_accepts_scalars() {
 #[test]
 fn try_from_kobject_rejects_null() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
-    let err = KKey::try_from_kobject(&KObject::Null, types).unwrap_err();
+    let err = KKey::try_from_kobject(&KObject::Null, &registries).unwrap_err();
     assert!(err.contains("dict key must be String, Number, or Bool"));
 }
 
 #[test]
 fn try_from_kobject_rejects_nan() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
-    let err = KKey::try_from_kobject(&KObject::Number(f64::NAN), types).unwrap_err();
+    let err = KKey::try_from_kobject(&KObject::Number(f64::NAN), &registries).unwrap_err();
     assert!(err.contains("NaN"));
 }
 
 #[test]
 fn negative_zero_normalizes_and_matches_positive_zero() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
-    let neg = KKey::try_from_kobject(&KObject::Number(-0.0), types).unwrap();
-    let pos = KKey::try_from_kobject(&KObject::Number(0.0), types).unwrap();
+    let neg = KKey::try_from_kobject(&KObject::Number(-0.0), &registries).unwrap();
+    let pos = KKey::try_from_kobject(&KObject::Number(0.0), &registries).unwrap();
     // Normalization erases the sign bit, so the two zeros are one key by equality and hash.
     assert_eq!(neg, pos);
     assert_eq!(hash_of(&neg), hash_of(&pos));

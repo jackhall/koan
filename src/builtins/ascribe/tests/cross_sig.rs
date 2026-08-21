@@ -26,7 +26,7 @@ fn strict_cross_sig_subtype_wins_dispatch() {
     test_run.run("LET arg = implementation");
     test_run.run("LET picked = (PICK arg)");
 
-    let m = lookup_module(scope, "picked", test_run.types());
+    let m = lookup_module(scope, "picked", test_run.registries());
     let tag = m.child_scope().lookup("tag");
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 1.0),
@@ -53,7 +53,7 @@ fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
     test_run.run("LET arg = implementation");
     test_run.run("LET picked = (PICK arg)");
 
-    let m = lookup_module(scope, "picked", test_run.types());
+    let m = lookup_module(scope, "picked", test_run.registries());
     let tag = m.child_scope().lookup("tag");
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 1.0),
@@ -127,7 +127,7 @@ fn cross_sig_specificity_with_pinned_abstract_member() {
     test_run.run("LET arg = implementation");
     test_run.run("LET picked = (PICKPIN arg)");
 
-    let m = lookup_module(scope, "picked", test_run.types());
+    let m = lookup_module(scope, "picked", test_run.registries());
     let tag = m.child_scope().lookup("tag");
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 1.0),

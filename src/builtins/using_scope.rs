@@ -83,9 +83,9 @@ fn non_module_argument(ctx: &crate::machine::BodyCtx<'_, '_, '_>) -> KError {
     use crate::machine::model::Held;
 
     let got = match arg_held(ctx.args, "m") {
-        Some(Held::Type(other)) => other.name(ctx.types()),
+        Some(Held::Type(other)) => other.name(ctx.registries),
         Some(Held::UnresolvedType(ti)) => ti.render(),
-        Some(Held::Object(other)) => other.ktype().name(ctx.types()).to_string(),
+        Some(Held::Object(other)) => other.ktype().name(ctx.registries).to_string(),
         None => return KError::new(KErrorKind::MissingArg("m".to_string())),
     };
     KError::new(KErrorKind::TypeMismatch {
@@ -100,9 +100,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::ANY,
         vec![
             kw("USING"),
-            arg("m", KType::EMPTY_SIGNATURE),
+            arg(registries, "m", KType::EMPTY_SIGNATURE),
             kw("SCOPE"),
-            arg("body", KType::KEXPRESSION),
+            arg(registries, "body", KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "USING", signature, body, registries, gate);

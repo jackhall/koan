@@ -10,6 +10,7 @@ use crate::machine::core::{KFunction, ReturnContract};
 use crate::machine::model::{KType, ReturnType};
 
 use super::outcome::NodeContinuation;
+use crate::machine::model::RunRegistries;
 
 /// A slot's declared-return obligation, riding the tail chain as a continuation capture. It carries
 /// no pin: it is a checker and a label, not a lifetime — the value it checks escapes only at the
@@ -22,7 +23,10 @@ pub(in crate::machine::execute) struct ReturnObligation {
 impl ReturnObligation {
     /// Seal a [`ReturnContract`] into its dormant, lifetime-free obligation form. A callable
     /// contract is opened here, under the seal's own `'home` brand, so no pin is named at all.
-    pub(in crate::machine::execute) fn seal(contract: ReturnContract<'_>) -> Self {
+    pub(in crate::machine::execute) fn seal(
+        contract: ReturnContract<'_>,
+        registries: &RunRegistries,
+    ) -> Self {
         match contract {
             ReturnContract::Arm { ret, kind } => ReturnObligation {
                 declared: Some((ret, false)),
@@ -35,12 +39,12 @@ impl ReturnObligation {
                     ReturnType::Resolved(d) => Some((d, false)),
                     _ => None,
                 },
-                label: f.summarize(),
+                label: f.summarize(registries),
             }),
             ReturnContract::PerCall { func, ret } => {
                 func.open(|f: &KFunction<'_>| ReturnObligation {
                     declared: Some((ret, true)),
-                    label: f.summarize(),
+                    label: f.summarize(registries),
                 })
             }
         }

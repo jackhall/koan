@@ -51,7 +51,11 @@ fn sig_abstract_ctor(id: ScopeId, name: &str, arity: usize, types: &TypeRegistry
 
 fn fn_type(params: Vec<(&str, KType)>, ret: KType, types: &TypeRegistry) -> KType {
     types.function_type(
-        Record::from_pairs(params.into_iter().map(|(n, t)| (n.to_string(), t))),
+        Record::from_pairs(
+            params
+                .into_iter()
+                .map(|(n, t)| (crate::machine::model::Symbol::of(n), t)),
+        ),
         ret,
     )
 }
@@ -89,8 +93,12 @@ use crate::machine::model::RunRegistries;
 /// name the variant directly. The schemas' interned members and the relation walk must share one
 /// registry, so every test that builds abstract or constructor members threads its own `types`.
 #[allow(clippy::result_large_err)] // test ergonomics: unbox so assertions name the variant
-fn check(sub: &SigSchema, sup: &SigSchema, types: &TypeRegistry) -> Result<(), SigSubtypeFailure> {
-    relation(sub, sup, types).map_err(|e| *e)
+fn check(
+    sub: &SigSchema,
+    sup: &SigSchema,
+    registries: &RunRegistries,
+) -> Result<(), SigSubtypeFailure> {
+    relation(sub, sup, registries).map_err(|e| *e)
 }
 
 // --- width ----------------------------------------------------------------------------
@@ -98,7 +106,6 @@ fn check(sub: &SigSchema, sup: &SigSchema, types: &TypeRegistry) -> Result<(), S
 #[test]
 fn width_extra_members_and_slots_still_subtype() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let sup = schema(
         None,
         vec![],
@@ -111,7 +118,7 @@ fn width_extra_members_and_slots_still_subtype() {
         vec![("Tag", KType::NUMBER), ("Extra", KType::BOOL)],
         vec![("v", KType::STR), ("w", KType::NUMBER)],
     );
-    assert!(check(&sub, &sup, types).is_ok());
+    assert!(check(&sub, &sup, &registries).is_ok());
 }
 
 // --- abstract members: first-order ----------------------------------------------------
@@ -128,7 +135,7 @@ fn abstract_fo_satisfied_by_manifest_and_by_abstract() {
     );
     // Sub supplies `Elt` as a manifest non-constructor.
     let sub_manifest = schema(None, vec![], vec![("Elt", KType::NUMBER)], vec![]);
-    assert!(check(&sub_manifest, &sup, types).is_ok());
+    assert!(check(&sub_manifest, &sup, &registries).is_ok());
     // Sub supplies `Elt` as its own first-order abstract member.
     let sub_abstract = schema(
         Some(REAL_ID),
@@ -136,7 +143,7 @@ fn abstract_fo_satisfied_by_manifest_and_by_abstract() {
         vec![],
         vec![],
     );
-    assert!(check(&sub_abstract, &sup, types).is_ok());
+    assert!(check(&sub_abstract, &sup, &registries).is_ok());
 }
 
 #[test]
@@ -151,7 +158,7 @@ fn abstract_fo_refused_by_constructor() {
     );
     let sub = schema(None, vec![], vec![("Elt", ctor("Elt", 1, types))], vec![]);
     assert!(matches!(
-        check(&sub, &sup, types),
+        check(&sub, &sup, &registries),
         Err(SigSubtypeFailure::KindMismatch {
             expected_params: None,
             ..
@@ -171,7 +178,7 @@ fn abstract_member_missing_fails() {
     );
     let sub = schema(None, vec![], vec![], vec![]);
     assert!(matches!(
-        check(&sub, &sup, types),
+        check(&sub, &sup, &registries),
         Err(SigSubtypeFailure::MissingTypeMember { .. })
     ));
 }
@@ -194,7 +201,7 @@ fn abstract_hk_arity_one_satisfied_by_matching_constructor() {
         vec![("Wrap", ctor("MyWrap", 1, types))],
         vec![],
     );
-    assert!(check(&sub, &sup, types).is_ok());
+    assert!(check(&sub, &sup, &registries).is_ok());
 }
 
 #[test]
@@ -210,7 +217,7 @@ fn abstract_hk_refused_by_proper_type_by_wrong_arity_and_by_abstract_fo() {
     // A proper type has no arity.
     let by_proper = schema(None, vec![], vec![("Wrap", KType::NUMBER)], vec![]);
     assert!(matches!(
-        check(&by_proper, &sup, types),
+        check(&by_proper, &sup, &registries),
         Err(SigSubtypeFailure::KindMismatch {
             expected_params: Some(_),
             ..
@@ -219,7 +226,7 @@ fn abstract_hk_refused_by_proper_type_by_wrong_arity_and_by_abstract_fo() {
     // An arity-2 constructor cannot fill an arity-1 slot.
     let by_arity2 = schema(None, vec![], vec![("Wrap", ctor("Pair", 2, types))], vec![]);
     assert!(matches!(
-        check(&by_arity2, &sup, types),
+        check(&by_arity2, &sup, &registries),
         Err(SigSubtypeFailure::KindMismatch {
             expected_params: Some(_),
             ..
@@ -233,7 +240,7 @@ fn abstract_hk_refused_by_proper_type_by_wrong_arity_and_by_abstract_fo() {
         vec![],
     );
     assert!(matches!(
-        check(&by_fo, &sup, types),
+        check(&by_fo, &sup, &registries),
         Err(SigSubtypeFailure::KindMismatch {
             expected_params: Some(_),
             ..
@@ -246,13 +253,12 @@ fn abstract_hk_refused_by_proper_type_by_wrong_arity_and_by_abstract_fo() {
 #[test]
 fn manifest_equal_passes_unequal_and_missing_fail() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let sup = schema(None, vec![], vec![("Tag", KType::NUMBER)], vec![]);
     assert!(
         check(
             &schema(None, vec![], vec![("Tag", KType::NUMBER)], vec![]),
             &sup,
-            types
+            &registries
         )
         .is_ok()
     );
@@ -260,12 +266,12 @@ fn manifest_equal_passes_unequal_and_missing_fail() {
         check(
             &schema(None, vec![], vec![("Tag", KType::STR)], vec![]),
             &sup,
-            types
+            &registries
         ),
         Err(SigSubtypeFailure::ManifestMismatch { .. })
     ));
     assert!(matches!(
-        check(&schema(None, vec![], vec![], vec![]), &sup, types),
+        check(&schema(None, vec![], vec![], vec![]), &sup, &registries),
         Err(SigSubtypeFailure::MissingTypeMember { .. })
     ));
 }
@@ -282,7 +288,7 @@ fn manifest_requirement_refuses_abstract_sub_member() {
         vec![],
     );
     assert!(matches!(
-        check(&sub, &sup, types),
+        check(&sub, &sup, &registries),
         Err(SigSubtypeFailure::ManifestMismatch { .. })
     ));
 }
@@ -306,7 +312,7 @@ fn value_slot_covariant_depth() {
         vec![],
         vec![("f", fn_type(vec![], KType::NUMBER, types))],
     );
-    assert!(check(&sub_number, &sup_any, types).is_ok());
+    assert!(check(&sub_number, &sup_any, &registries).is_ok());
 
     let sup_number = schema(
         None,
@@ -321,7 +327,7 @@ fn value_slot_covariant_depth() {
         vec![("f", fn_type(vec![], KType::ANY, types))],
     );
     assert!(matches!(
-        check(&sub_any, &sup_number, types),
+        check(&sub_any, &sup_number, &registries),
         Err(SigSubtypeFailure::ValueSlotMismatch { .. })
     ));
 }
@@ -329,18 +335,17 @@ fn value_slot_covariant_depth() {
 #[test]
 fn value_slot_equal_passes_missing_fails() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let sup = schema(None, vec![], vec![], vec![("v", KType::NUMBER)]);
     assert!(
         check(
             &schema(None, vec![], vec![], vec![("v", KType::NUMBER)]),
             &sup,
-            types
+            &registries
         )
         .is_ok()
     );
     assert!(matches!(
-        check(&schema(None, vec![], vec![], vec![]), &sup, types),
+        check(&schema(None, vec![], vec![], vec![]), &sup, &registries),
         Err(SigSubtypeFailure::MissingValueSlot { .. })
     ));
 }
@@ -382,7 +387,7 @@ fn value_slot_abstract_ref_substitutes_to_sub_manifest() {
             ),
         )],
     );
-    assert!(check(&sub, &sup, types).is_ok());
+    assert!(check(&sub, &sup, &registries).is_ok());
 }
 
 #[test]
@@ -404,7 +409,7 @@ fn value_slot_list_of_abstract_ref_substitutes_nested() {
         vec![("Type", KType::NUMBER)],
         vec![("items", types.list(KType::NUMBER))],
     );
-    assert!(check(&sub_ok, &sup, types).is_ok());
+    assert!(check(&sub_ok, &sup, &registries).is_ok());
     // `items :(LIST OF Str)` against `Type = Number` fails at the nested element compare.
     let sub_bad = schema(
         None,
@@ -413,7 +418,7 @@ fn value_slot_list_of_abstract_ref_substitutes_nested() {
         vec![("items", types.list(KType::STR))],
     );
     assert!(matches!(
-        check(&sub_bad, &sup, types),
+        check(&sub_bad, &sup, &registries),
         Err(SigSubtypeFailure::ValueSlotMismatch { .. })
     ));
 }
@@ -449,7 +454,7 @@ fn pin_converts_abstract_to_manifest_via_parsed_sig() {
         vec![("v", KType::NUMBER)],
     );
     assert!(matches!(
-        check(&elt_str, &pinned, test_run.types()),
+        check(&elt_str, &pinned, test_run.registries()),
         Err(SigSubtypeFailure::ManifestMismatch { .. })
     ));
     let elt_number = schema(
@@ -458,7 +463,7 @@ fn pin_converts_abstract_to_manifest_via_parsed_sig() {
         vec![("Elt", KType::NUMBER)],
         vec![("v", KType::NUMBER)],
     );
-    assert!(check(&elt_number, &pinned, test_run.types()).is_ok());
+    assert!(check(&elt_number, &pinned, test_run.registries()).is_ok());
 }
 
 #[test]
@@ -490,8 +495,8 @@ fn sig_to_sig_entailment_over_shared_abstract() {
     };
     // Two SIGs declaring the same abstract member and slot entail each other: the
     // substitution maps each super `Type` ref onto the sub's own abstract identity.
-    assert!(check(&a, &b, test_run.types()).is_ok());
-    assert!(check(&b, &a, test_run.types()).is_ok());
+    assert!(check(&a, &b, test_run.registries()).is_ok());
+    assert!(check(&b, &a, test_run.registries()).is_ok());
 }
 
 // --- substitute_sig_members units -----------------------------------------------------
@@ -552,12 +557,15 @@ fn substitute_top_level_and_nested() {
         types.list(KType::NUMBER)
     );
     let rec = types.record(Record::from_pairs([(
-        "f".to_string(),
+        crate::machine::model::Symbol::of("f"),
         sig_abstract(SUP_ID, "Type", types),
     )]));
     assert_eq!(
         substitute_sig_members(rec, SUP_ID, &map, types),
-        types.record(Record::from_pairs([("f".to_string(), KType::NUMBER)]))
+        types.record(Record::from_pairs([(
+            crate::machine::model::Symbol::of("f"),
+            KType::NUMBER
+        )]))
     );
     let union = types.union_of(vec![sig_abstract(SUP_ID, "Type", types), KType::STR]);
     assert_eq!(
@@ -575,13 +583,13 @@ fn substitute_constructor_apply_abstract_ctor_position() {
     map.insert("Wrap".into(), real);
     let applied = types.constructor_apply(
         sig_abstract_ctor(SUP_ID, "Wrap", 1, types),
-        Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
+        Record::from_pairs([(crate::machine::model::Symbol::of("Type"), KType::NUMBER)]),
     );
     assert_eq!(
         substitute_sig_members(applied, SUP_ID, &map, types),
         types.constructor_apply(
             real,
-            Record::from_pairs([("Type".to_string(), KType::NUMBER)])
+            Record::from_pairs([(crate::machine::model::Symbol::of("Type"), KType::NUMBER)])
         )
     );
 }
@@ -648,7 +656,8 @@ fn abstract_hk_refused_by_differently_named_parameter() {
         types,
     );
     let sub = schema(None, vec![], vec![("Wrap", other_names)], vec![]);
-    let failure = check(&sub, &sup, types).expect_err("a differently-named parameter must fail");
+    let failure =
+        check(&sub, &sup, &registries).expect_err("a differently-named parameter must fail");
     assert!(
         failure.render_fragment().contains("parameters {Param0}"),
         "expected the failure to name the declared parameter set, got {}",

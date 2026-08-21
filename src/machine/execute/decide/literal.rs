@@ -24,6 +24,8 @@ use super::ctx::{DecideCtx, current_dest_frame, with_current_node_scope};
 use super::resolve::{Resolution, TypeLeafChannels, resolve_name};
 use super::stage_eager_part;
 use crate::machine::Scope;
+use crate::machine::model::RunRegistries;
+use crate::machine::model::Symbol;
 use crate::scheduler::{Deps, Scheduler};
 use crate::witnessed::RegionHandleFamily;
 
@@ -142,19 +144,19 @@ fn fold_cells(
 fn scalar_key(
     slot: &Slot,
     terminals: &mut ResultFeed<'_, '_>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<PendingKey, String> {
     // Each arm answers the reach probe and the key read inside its own borrow.
     let (borrows, key) = match slot {
         Slot::Static(delivered) => (
             delivered.open_at().has_reach_members(),
-            delivered.open(|c| key_from_carried(c, types)),
+            delivered.open(|c| key_from_carried(c, registries)),
         ),
         Slot::Dep => {
             let cell = &terminals.pop().cell;
             (
                 cell.open_at().has_reach_members(),
-                cell.open(|c| key_from_carried(c, types)),
+                cell.open(|c| key_from_carried(c, registries)),
             )
         }
     };
@@ -164,9 +166,9 @@ fn scalar_key(
     key
 }
 
-fn key_from_carried(c: Carried<'_>, types: &TypeRegistry) -> Result<PendingKey, String> {
+fn key_from_carried(c: Carried<'_>, registries: &RunRegistries) -> Result<PendingKey, String> {
     match c {
-        Carried::Object(o) => KKey::try_from_kobject(o, types).map(PendingKey::staged),
+        Carried::Object(o) => KKey::try_from_kobject(o, registries).map(PendingKey::staged),
         Carried::Type(_) | Carried::UnresolvedType(_) => {
             Err("dict key must be a value, not a type".to_string())
         }
@@ -241,10 +243,11 @@ impl<'step> Host<'step> {
             let mut feed = ResultFeed::new(terminals);
             for row in rows {
                 if let Some(key_slot) = row.key {
-                    let kkey = scalar_key(&key_slot, &mut feed, view.types()).map_err(|msg| {
-                        KError::new(KErrorKind::ShapeError(msg))
-                            .with_frame(TraceFrame::bare("<dict>", "dict literal"))
-                    })?;
+                    let kkey =
+                        scalar_key(&key_slot, &mut feed, view.registries()).map_err(|msg| {
+                            KError::new(KErrorKind::ShapeError(msg))
+                                .with_frame(TraceFrame::bare("<dict>", "dict literal"))
+                        })?;
                     keys.push(kkey);
                 }
                 cells.push(cell_carrier(row.value, &mut feed, view.current_scope()));
@@ -349,12 +352,12 @@ impl<'step> Host<'step> {
         brand: RegionBrand<'a>,
         fields: &[(&'a str, ExpressionPart<'a>)],
     ) -> NodeId {
-        let mut names: Vec<String> = Vec::with_capacity(fields.len());
+        let mut names: Vec<Symbol> = Vec::with_capacity(fields.len());
         let mut deps = Deps::new();
         let mut rows = Vec::with_capacity(fields.len());
         for &(name, value) in fields {
             let value = self.classify_aggregate_part(sched, brand, value, &mut deps);
-            names.push(name.to_string());
+            names.push(self.ambient.registries().labels.intern(name));
             rows.push(AggRow { key: None, value });
         }
         self.schedule_aggregate(

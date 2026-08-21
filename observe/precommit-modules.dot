@@ -826,6 +826,8 @@ digraph {
     "koan::machine::model::types::ktraits" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::types::ktype" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::types::ktype" -> "koan::machine::model::registries" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::node" [label="uses", style="dashed"];
@@ -839,6 +841,7 @@ digraph {
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::ktraits" [label="uses", style="dashed"];
@@ -863,6 +866,7 @@ digraph {
     "koan::machine::model::types::node" -> "koan::machine::model::types::sig_schema" [label="uses", style="dashed"];
     "koan::machine::model::types::node" -> "koan::machine::model::types::signature" [label="uses", style="dashed"];
     "koan::machine::model::types::node" -> "koan::machine::model::types::type_digest" [label="uses", style="dashed"];
+    "koan::machine::model::types::record" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::types::record" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::recursive_group_window" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::recursive_group_window" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -905,6 +909,7 @@ digraph {
     "koan::machine::model::types::signature" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::model::types::signature" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
@@ -912,6 +917,7 @@ digraph {
     "koan::machine::model::types::signature" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::types::type_digest" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
@@ -936,6 +942,7 @@ digraph {
     "koan::machine::model::values::carried" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::values::container_substrate" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -946,6 +953,8 @@ digraph {
     "koan::machine::model::values::kobject" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject" -> "koan::machine::model::registries" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model::values::container_substrate" [label="uses", style="dashed"];
@@ -963,9 +972,11 @@ digraph {
     "koan::machine::model::values::module" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::values::module" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::model::values::module" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::values::module" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::values::module" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::module" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::named_pairs" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::model::values::named_pairs" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::values::named_pairs" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::rehomed" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::rehomed" -> "koan::machine::model::values::carried" [label="uses", style="dashed"];

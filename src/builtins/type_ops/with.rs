@@ -16,6 +16,7 @@
 
 use std::collections::HashSet;
 
+use crate::machine::model::render_label;
 use crate::machine::model::{Held, KObject, KType, TypeNode};
 use crate::machine::{KError, KErrorKind};
 
@@ -37,14 +38,14 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         Some(kt) => kt,
         None => match arg_held(ctx.args, "sig") {
             Some(Held::Object(object)) => {
-                return done_err(mismatch(object.ktype().name(ctx.types())));
+                return done_err(mismatch(object.ktype().name(ctx.registries)));
             }
             _ => return done_err(KError::new(KErrorKind::MissingArg("sig".to_string()))),
         },
     };
     let schema = match ctx.types().node(sig_handle) {
         TypeNode::Signature { schema, .. } => schema,
-        _ => return done_err(mismatch(sig_handle.name(ctx.types()))),
+        _ => return done_err(mismatch(sig_handle.name(ctx.registries))),
     };
     let bindings = match arg_object(ctx.args, "bindings") {
         Some(KObject::Record(substrate, _types)) => substrate,
@@ -69,13 +70,17 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // `S WITH {Tag = Number}` and `(S WITH {A = Number}) WITH {A = Number}` keep their source's
     // signature identity; an unequal re-pin is a type error.
     let mut dropped: HashSet<String> = HashSet::new();
-    for (name, value) in bindings.fields() {
+    for (symbol, value) in bindings.fields() {
+        // A WITH pin names a signature slot, and the schema's member tables key by text, so the
+        // pin's symbol resolves back through the interner that recorded it. Declaration-time only.
+        let name = render_label(symbol, ctx.registries);
+        let name = name.as_str();
         let is_abstract = abstract_slots.contains(name);
         let manifest = manifest_members.get(name);
         if !is_abstract && manifest.is_none() {
             return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "{} has no abstract type slot `{name}`",
-                sig_handle.name(ctx.types()),
+                sig_handle.name(ctx.registries),
             ))));
         }
         let pin_type = match value {
@@ -83,7 +88,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             Held::Object(other) => {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "WITH binding `{name}` value must be a type, got `{}`",
-                    other.ktype().name(ctx.types()),
+                    other.ktype().name(ctx.registries),
                 ))));
             }
             Held::UnresolvedType(ti) => {
@@ -97,9 +102,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}.{name}` is a manifest type member fixed to `{}`; \
                      WITH cannot re-pin it to `{}`",
-                    sig_handle.name(ctx.types()),
-                    fixed.render(ctx.types()),
-                    pin_type.render(ctx.types()),
+                    sig_handle.name(ctx.registries),
+                    fixed.render(ctx.registries),
+                    pin_type.render(ctx.registries),
                 ))));
             }
         }
@@ -107,9 +112,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 
     let pins: Vec<(String, KType)> = bindings
         .fields()
-        .filter(|(name, _)| !dropped.contains(*name))
+        .map(|(symbol, value)| (render_label(symbol, ctx.registries), value))
+        .filter(|(name, _)| !dropped.contains(name))
         .map(|(name, value)| match value {
-            Held::Type(kt) => (name.to_string(), *kt),
+            Held::Type(kt) => (name, *kt),
             Held::Object(_) | Held::UnresolvedType(_) => {
                 unreachable!("validated above: every pin value is a type")
             }

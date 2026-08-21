@@ -36,7 +36,9 @@ fn assert_handle_pinned(label: &str, actual: KType, expected: u128) {
 
 fn record(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
     types.record(Record::from_pairs(
-        pairs.into_iter().map(|(n, t)| (n.to_string(), t)),
+        pairs
+            .into_iter()
+            .map(|(n, t)| (crate::machine::model::Symbol::of(n), t)),
     ))
 }
 
@@ -191,7 +193,11 @@ fn constructor_apply(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
     });
     types.constructor_apply(
         both,
-        Record::from_pairs(pairs.into_iter().map(|(n, t)| (n.to_string(), t))),
+        Record::from_pairs(
+            pairs
+                .into_iter()
+                .map(|(n, t)| (crate::machine::model::Symbol::of(n), t)),
+        ),
     )
 }
 
@@ -320,12 +326,12 @@ fn self_recursive_newtype_digests_are_pinned() {
     assert_pinned(
         "Chain component",
         component_of(member, types),
-        0xaaab8251_b184aebe_af32f73c_592df0cf,
+        0x171388ab_8bf2866c_b8141bc5_7892d3dd,
     );
     assert_handle_pinned(
         "Chain member reference",
         member,
-        0xcdfbfaac_8fae50c8_850808f7_27df0fa2,
+        0xa0bb430c_45a2ca6d_65d52d6b_54e7dfd0,
     );
 }
 
@@ -392,17 +398,17 @@ fn recursive_pair_digests_are_pinned() {
     assert_pinned(
         "Odd/Even component",
         component_of(members[0], types),
-        0xd547f989_55b718b9_e72fdf74_0b0e0543,
+        0xac675a86_5269d212_0b8015f8_addbd5c5,
     );
     assert_handle_pinned(
         "Odd member reference (component position 1)",
         members[0],
-        0x4774dbbc_3769d00a_46eb440c_7a598c51,
+        0x9552941d_5f1442e6_9a01ad49_5af8080b,
     );
     assert_handle_pinned(
         "Even member reference (component position 0)",
         members[1],
-        0xf9e68404_41cf37d0_2b93447e_d808b399,
+        0x82ca9acb_57b135a0_84255967_84c7d217,
     );
 }
 
@@ -417,12 +423,12 @@ fn constructor_apply_digest_is_pinned_and_order_blind() {
     assert_handle_pinned(
         "Both(Ok = Number, Error = Str)",
         declared,
-        0xeadbdff7_6b59c1f3_70761787_1f06cd46,
+        0xde065410_a4c8b064_ef148ed9_1dd254f6,
     );
     assert_handle_pinned(
         "Both applied in reverse argument order",
         reversed,
-        0xeadbdff7_6b59c1f3_70761787_1f06cd46,
+        0xde065410_a4c8b064_ef148ed9_1dd254f6,
     );
 }
 

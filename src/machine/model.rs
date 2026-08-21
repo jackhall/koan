@@ -13,6 +13,7 @@ pub use operators::{
 };
 pub use registries::RunRegistries;
 pub use types::TypeRegistry;
+pub use types::render_label;
 pub use types::{
     AnnouncedData, AnnouncedMember, AnnouncedWindow, Argument, DeclWindow, DeferredReturn,
     DeferredReturnSurface, DispatchToken, DispatchTokenElement, ExpressionSignature, KKind, KType,

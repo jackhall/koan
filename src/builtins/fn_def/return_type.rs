@@ -14,6 +14,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 use std::rc::Rc;
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
+use crate::machine::model::RunRegistries;
 
 /// `ExprCarrier` is captured raw rather than sub-dispatched in the outer scope because a
 /// `:(…)` / dotted return's inner expression may reference a parameter unbound there.
@@ -130,8 +131,9 @@ pub(super) fn resolve_capture_at_finish<'a>(
     scope: &Scope<'a>,
     results: &[DepTerminal<'_>],
     return_type_dep: Option<usize>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<ReturnType<'a>, KError> {
+    let types = &registries.types;
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
         ReturnTypeCapture::Unresolved(name) => {
@@ -148,7 +150,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
             // `user_sig`).
             let dep_index = return_type_dep
                 .expect("a ReturnTypeExpr capture is built beside the request that carries it");
-            let kt = expect_type_terminal(results, dep_index, "FN return-type slot", types)?;
+            let kt = expect_type_terminal(results, dep_index, "FN return-type slot", registries)?;
             Ok(ReturnType::Resolved(kt))
         }
     }

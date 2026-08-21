@@ -37,7 +37,6 @@ use crate::machine::core::ProgramBrand;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::bindings::{WriteOp, powerset_probes};
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{Held, KType, Record};
 use crate::machine::model::{KKind, SignatureDraft, SignatureElement};
@@ -144,9 +143,12 @@ fn capture_type_slot<'a>(
 ///
 /// The kind diagnostic reads `label` as the subject of "must be a proper type", so the bare slot
 /// noun takes its definite article here.
-fn checked_value_type(kt: KType, label: &str, types: &TypeRegistry) -> Result<KType, KError> {
-    match crate::machine::model::unsaturated_constructor_message(kt, &format!("the {label}"), types)
-    {
+fn checked_value_type(kt: KType, label: &str, registries: &RunRegistries) -> Result<KType, KError> {
+    match crate::machine::model::unsaturated_constructor_message(
+        kt,
+        &format!("the {label}"),
+        registries,
+    ) {
         Some(message) => Err(KError::new(KErrorKind::ShapeError(message))),
         None => Ok(kt),
     }
@@ -154,9 +156,13 @@ fn checked_value_type(kt: KType, label: &str, types: &TypeRegistry) -> Result<KT
 
 /// The `Done` arm alone — the synchronous path, taken exactly when no slot parked or
 /// sub-dispatched.
-fn done_type(capture: TypeCapture<'_>, label: &str, types: &TypeRegistry) -> Result<KType, KError> {
+fn done_type(
+    capture: TypeCapture<'_>,
+    label: &str,
+    registries: &RunRegistries,
+) -> Result<KType, KError> {
     match capture {
-        TypeCapture::Done(kt) => checked_value_type(kt, label, types),
+        TypeCapture::Done(kt) => checked_value_type(kt, label, registries),
         _ => Err(KError::new(KErrorKind::ShapeError(format!(
             "{label} is unresolved with no dependency to wait on"
         )))),
@@ -175,13 +181,13 @@ fn resolve_capture<'a>(
     let kt = match capture {
         TypeCapture::Done(kt) => kt,
         TypeCapture::AtWake(te) => resolve_at_wake(fctx.scope, label, |s| {
-            s.resolve_type_identifier(&te, None, fctx.types)
+            s.resolve_type_identifier(&te, None, fctx.types())
         })?,
         TypeCapture::Sub { dep_index } => {
-            expect_type_terminal(results, dep_index, label, fctx.types)?
+            expect_type_terminal(results, dep_index, label, fctx.registries)?
         }
     };
-    checked_value_type(kt, label, fctx.types)
+    checked_value_type(kt, label, fctx.registries)
 }
 
 // ---------- body ----------
@@ -245,16 +251,16 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
         bound_name,
     };
     if deps.is_empty() {
-        let operand = crate::try_action!(done_type(operand_capture, OPERAND_SLOT, ctx.types()));
+        let operand = crate::try_action!(done_type(operand_capture, OPERAND_SLOT, ctx.registries));
         let result = match result_capture {
             Some(capture) => Some(crate::try_action!(done_type(
                 capture,
                 RESULT_SLOT,
-                ctx.types()
+                ctx.registries
             ))),
             None => None,
         };
-        return op_action(plan.finalize(ctx.scope, operand, result, ctx.types()));
+        return op_action(plan.finalize(ctx.scope, operand, result, ctx.registries));
     }
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let operand = crate::try_action!(resolve_capture(
@@ -272,7 +278,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
             ))),
             None => None,
         };
-        op_action(plan.finalize(fctx.scope, operand, result, fctx.types))
+        op_action(plan.finalize(fctx.scope, operand, result, fctx.registries))
     });
     Action::await_deps(deps, finish)
 }
@@ -339,8 +345,9 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
         scope: &'a Scope<'a>,
         operand: KType,
         result: Option<KType>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp<'a>>), KError> {
+        let types = &registries.types;
         let OpPlan {
             sym,
             kind,
@@ -356,7 +363,11 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
         // combined form, the value the bound name reads.
         let cell = match kind {
             OpKind::Binary => {
-                let elements = vec![arg(LEFT, operand), kw(sym), arg(RIGHT, operand)];
+                let elements = vec![
+                    arg(registries, LEFT, operand),
+                    kw(sym),
+                    arg(registries, RIGHT, operand),
+                ];
                 let result_type = result.unwrap_or(operand);
                 let (cell, overload) = register_body(
                     scope,
@@ -364,7 +375,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                     sig(result_type, elements),
                     Body::UserDefined(body_expr),
                     bind_index,
-                    types,
+                    registries,
                 )?;
                 writes.push(overload);
                 if !in_group {
@@ -385,7 +396,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                 })?;
                 let list_signature = sig(
                     result_type,
-                    vec![kw(sym), arg(OPERANDS, types.list(operand))],
+                    vec![kw(sym), arg(registries, OPERANDS, types.list(operand))],
                 );
                 // The binary bridge: `a ~ b` names one keyword, so it dispatches as a plain
                 // keyworded call, not an operator chain — without a two-operand body it would
@@ -393,7 +404,11 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                 // takes, so both surfaces land on the one list body the user wrote.
                 let bridge_signature = sig(
                     result_type,
-                    vec![arg(LEFT, operand), kw(sym), arg(RIGHT, operand)],
+                    vec![
+                        arg(registries, LEFT, operand),
+                        kw(sym),
+                        arg(registries, RIGHT, operand),
+                    ],
                 );
                 // `check_group_context` rejects `UNARY OP` inside a `GROUP` before the plan is
                 // built, so `in_group` cannot hold here; the door asserts that rather than take
@@ -411,7 +426,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                     },
                     in_group,
                     bind_index,
-                    types,
+                    registries,
                 )?;
                 writes.extend(unary_writes);
                 cell
@@ -460,7 +475,7 @@ pub(super) fn register_unary_operator<'a>(
     binary: OperatorForm<'a>,
     in_group: bool,
     bind_index: BindingIndex,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<(SealedValue<'a>, Vec<WriteOp<'a>>), KError> {
     let OperatorForm {
         signature: list_signature,
@@ -489,10 +504,22 @@ pub(super) fn register_unary_operator<'a>(
     );
     // The list body first: its function is the operator's primary value, the one an `OP`
     // declaration evaluates to.
-    let (cell, list_overload) =
-        register_body(scope, sym, list_signature, list_body, bind_index, types)?;
-    let (_, binary_overload) =
-        register_body(scope, sym, binary_signature, binary_body, bind_index, types)?;
+    let (cell, list_overload) = register_body(
+        scope,
+        sym,
+        list_signature,
+        list_body,
+        bind_index,
+        registries,
+    )?;
+    let (_, binary_overload) = register_body(
+        scope,
+        sym,
+        binary_signature,
+        binary_body,
+        bind_index,
+        registries,
+    )?;
     let record = scope.birth_operator_group(&[sym], ReductionMode::Unary);
     let mut writes = vec![list_overload, binary_overload];
     writes.push(WriteOp::Group {
@@ -520,13 +547,13 @@ fn register_body<'a>(
     signature: SignatureDraft<'a>,
     body: Body<'a>,
     bind_index: BindingIndex,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<(SealedValue<'a>, WriteOp<'a>), KError> {
-    let cell = KFunction::alloc_captured(scope, signature, body, types);
+    let cell = KFunction::alloc_captured(scope, signature, body, &registries.types);
     let write = WriteOp::Overload {
         name: sym.to_string(),
         index: bind_index,
-        seal: OverloadSeal::of_delivered(scope, &cell),
+        seal: OverloadSeal::of_delivered(scope, &cell, registries),
         builtin_shadow_guard: false,
     };
     Ok((scope.store_function_cell(&cell), write))
@@ -630,8 +657,15 @@ fn type_carriers() -> [KType; 2] {
 /// list. Every surface below is built once and registered under both spellings, so the two can
 /// never drift apart. Full-bucket-key matching keeps the combined keys disjoint from plain `LET`
 /// and bare `OP`.
-fn combined<'a>(mut elements: Vec<SignatureElement<'a>>) -> SignatureDraft<'a> {
-    let mut prefixed = vec![kw("LET"), arg("name", KType::IDENTIFIER), kw("=")];
+fn combined<'a>(
+    registries: &RunRegistries,
+    mut elements: Vec<SignatureElement<'a>>,
+) -> SignatureDraft<'a> {
+    let mut prefixed = vec![
+        kw("LET"),
+        arg(registries, "name", KType::IDENTIFIER),
+        kw("="),
+    ];
     prefixed.append(&mut elements);
     sig(KType::ANY, prefixed)
 }
@@ -644,47 +678,47 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let binary = |operand: KType| {
         vec![
             kw("OP"),
-            arg("symbol", KType::KEXPRESSION),
+            arg(registries, "symbol", KType::KEXPRESSION),
             kw("OVER"),
-            arg("operand", operand),
+            arg(registries, "operand", operand),
             kw("="),
-            arg("body", KType::KEXPRESSION),
+            arg(registries, "body", KType::KEXPRESSION),
         ]
     };
     let binary_with_result = |operand: KType, result: KType| {
         vec![
             kw("OP"),
-            arg("symbol", KType::KEXPRESSION),
+            arg(registries, "symbol", KType::KEXPRESSION),
             kw("OVER"),
-            arg("operand", operand),
+            arg(registries, "operand", operand),
             kw("->"),
-            arg("return_type", result),
+            arg(registries, "return_type", result),
             kw("="),
-            arg("body", KType::KEXPRESSION),
+            arg(registries, "body", KType::KEXPRESSION),
         ]
     };
     let unary = |operand: KType, result: KType| {
         vec![
             kw("UNARY"),
             kw("OP"),
-            arg("symbol", KType::KEXPRESSION),
+            arg(registries, "symbol", KType::KEXPRESSION),
             kw("OVER"),
-            arg("operand", operand),
+            arg(registries, "operand", operand),
             kw("->"),
-            arg("return_type", result),
+            arg(registries, "return_type", result),
             kw("="),
-            arg("body", KType::KEXPRESSION),
+            arg(registries, "body", KType::KEXPRESSION),
         ]
     };
     let unary_missing_result = |operand: KType| {
         vec![
             kw("UNARY"),
             kw("OP"),
-            arg("symbol", KType::KEXPRESSION),
+            arg(registries, "symbol", KType::KEXPRESSION),
             kw("OVER"),
-            arg("operand", operand),
+            arg(registries, "operand", operand),
             kw("="),
-            arg("body", KType::KEXPRESSION),
+            arg(registries, "body", KType::KEXPRESSION),
         ]
     };
 
@@ -700,7 +734,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         register_builtin(
             scope,
             "LET",
-            combined(binary(operand)),
+            combined(registries, binary(operand)),
             body_binary_combined,
             registries,
             gate,
@@ -716,7 +750,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         register_builtin(
             scope,
             "LET",
-            combined(unary_missing_result(operand)),
+            combined(registries, unary_missing_result(operand)),
             body_unary_missing_result_combined,
             registries,
             gate,
@@ -733,7 +767,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             register_builtin(
                 scope,
                 "LET",
-                combined(binary_with_result(operand, result)),
+                combined(registries, binary_with_result(operand, result)),
                 body_binary_combined,
                 registries,
                 gate,
@@ -749,7 +783,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             register_builtin(
                 scope,
                 "LET",
-                combined(unary(operand, result)),
+                combined(registries, unary(operand, result)),
                 body_unary_combined,
                 registries,
                 gate,

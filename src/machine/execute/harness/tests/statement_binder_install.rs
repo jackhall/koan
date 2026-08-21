@@ -41,7 +41,7 @@ fn number(test_run: &TestRun<'_>, name: &str) -> f64 {
         Some(KObject::Number(n)) => *n,
         other => panic!(
             "expected `{name}` to bind a Number, got {:?}",
-            other.map(|o| o.ktype().name(test_run.types())),
+            other.map(|o| o.ktype().name(test_run.registries())),
         ),
     }
 }
@@ -249,7 +249,7 @@ fn announced_group_install_lets_sibling_resolve() {
          )",
     );
     let module =
-        crate::builtins::test_support::lookup_module(test_run.scope, "pair", test_run.types());
+        crate::builtins::test_support::lookup_module(test_run.scope, "pair", test_run.registries());
     let members = module.child_scope();
     let aa = members.resolve_type("Aa");
     assert!(aa.is_some(), "the announced group must bind member `Aa`");
@@ -317,7 +317,7 @@ fn functor_chain_sibling_call_parks_then_resolves() {
         test_run
             .scope
             .lookup("the_set")
-            .map(|o| o.ktype().name(test_run.types())),
+            .map(|o| o.ktype().name(test_run.registries())),
     );
 }
 

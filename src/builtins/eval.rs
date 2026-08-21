@@ -25,7 +25,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "expr".to_string(),
                 expected: "KExpression".to_string(),
-                got: other.ktype().name(ctx.types()),
+                got: other.ktype().name(ctx.registries),
             })));
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
@@ -47,7 +47,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
-    let signature = sig(KType::ANY, vec![kw("EVAL"), arg("expr", KType::ANY)]);
+    let signature = sig(
+        KType::ANY,
+        vec![kw("EVAL"), arg(registries, "expr", KType::ANY)],
+    );
     crate::builtins::register_builtin(scope, "EVAL", signature, body, registries, gate);
 }
 

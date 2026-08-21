@@ -12,7 +12,6 @@ use crate::machine::core::{
     FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, RegionBrand, Scope,
 };
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KType, NodeSchema, TypeNode};
@@ -26,6 +25,8 @@ use super::super::outcome::DepTerminal;
 use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
+use crate::machine::model::RunRegistries;
+use crate::machine::model::Symbol;
 use crate::scheduler::Deps;
 
 /// Which construction shape the resolved value subs feed. The carried `KType` is the sealed
@@ -38,7 +39,7 @@ pub(in crate::machine::execute) enum CtorKind {
     /// 2}`), with one value cell per field.
     RecordNewType {
         identity: KType,
-        field_names: Vec<String>,
+        field_names: Vec<Symbol>,
     },
     Tagged {
         schema: Rc<HashMap<String, KType>>,
@@ -185,11 +186,13 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
     brand: RegionBrand<'step>,
     identity: KType,
     record_fields: &[(&'step str, ExpressionPart<'step>)],
+    registries: &RunRegistries,
     scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
-    let field_names: Vec<String> = record_fields
+    // The literal's field labels are syntactic, so they intern here — once per construction site.
+    let field_names: Vec<Symbol> = record_fields
         .iter()
-        .map(|(n, _)| (*n).to_string())
+        .map(|(name, _)| registries.labels.intern(name))
         .collect();
     let value_parts: Vec<ValueCell<'step>> = record_fields
         .iter()
@@ -215,8 +218,9 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
 fn check_newtype_repr<'a>(
     identity: KType,
     value: &KObject<'a>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<bool, KError> {
+    let types = &registries.types;
     // A sealed member's schema is already absolute — every sibling reference in it is the
     // sibling's own handle — so the repr is a direct node read.
     let repr = match types.node(identity) {
@@ -226,11 +230,11 @@ fn check_newtype_repr<'a>(
         } => repr,
         _ => unreachable!("newtype construct ran on a non-NewType member"),
     };
-    if !repr.matches_value(value, types) {
+    if !repr.matches_value(value, registries) {
         return Err(KError::new(KErrorKind::TypeMismatch {
             arg: "value".to_string(),
-            expected: repr.name(types),
-            got: value.ktype().name(types),
+            expected: repr.name(registries),
+            got: value.ktype().name(registries),
         }));
     }
     let collapse = matches!(value, KObject::Wrapped { .. }) && repr == value.ktype();
@@ -245,8 +249,9 @@ fn check_newtype_repr<'a>(
 fn check_record_newtype_repr(
     identity: KType,
     fields: &Record<KObject<'_>>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<(), KError> {
+    let types = &registries.types;
     let repr = match types.node(identity) {
         TypeNode::SetMember {
             schema: NodeSchema::NewType(repr),
@@ -260,7 +265,7 @@ fn check_record_newtype_repr(
         } => repr_fields.iter().all(|(name, field_type)| {
             fields
                 .get(name)
-                .map(|v| field_type.matches_value(v, types))
+                .map(|v| field_type.matches_value(v, registries))
                 .unwrap_or(false)
         }),
         _ => false,
@@ -268,8 +273,8 @@ fn check_record_newtype_repr(
     if !matches {
         return Err(KError::new(KErrorKind::TypeMismatch {
             arg: "value".to_string(),
-            expected: repr.name(types),
-            got: types.record(fields.map(|v| v.ktype())).name(types),
+            expected: repr.name(registries),
+            got: types.record(fields.map(|v| v.ktype())).name(registries),
         }));
     }
     Ok(())
@@ -403,7 +408,7 @@ fn finish_witnessed<'step>(
             // the brand is the proof; only the `collapse` verdict escapes the guard's borrow.
             let collapse = {
                 let opened = terminals[0].cell.open_at();
-                check_newtype_repr(*identity, opened.value().object(), view.types())?
+                check_newtype_repr(*identity, opened.value().object(), view.registries())?
             };
             let home = build_type_operand(view.dest_frame(), *identity);
             // The wrap keeps the value verbatim, so a payload substrate that stays foreign rides as
@@ -445,7 +450,7 @@ fn finish_witnessed<'step>(
                     .cloned()
                     .zip(opened.iter().map(|o| o.value().object().deep_clone())),
             );
-            check_record_newtype_repr(*identity, &probe, view.types())?;
+            check_record_newtype_repr(*identity, &probe, view.registries())?;
             drop(opened);
             // The whole field run relocates in one act against a bare destination handle over the
             // dest frame's region (mirroring `literal`'s `AggBuildFamily`), so every field's reach
@@ -533,15 +538,15 @@ fn finish_witnessed<'step>(
             // borrow.
             {
                 let opened = terminals[0].cell.open_at();
-                if !expected.matches_value(opened.value().object(), view.types()) {
+                if !expected.matches_value(opened.value().object(), view.registries()) {
                     return Err(KError::new(KErrorKind::TypeMismatch {
                         arg: "value".to_string(),
-                        expected: expected.name(view.types()).to_string(),
+                        expected: expected.name(view.registries()).to_string(),
                         got: opened
                             .value()
                             .object()
                             .ktype()
-                            .name(view.types())
+                            .name(view.registries())
                             .to_string(),
                     }));
                 }
@@ -583,6 +588,9 @@ fn finish_witnessed<'step>(
                     .expect("an identity-wrapper family declares one type parameter"),
                 _ => unreachable!("a ConstructorApply ctor is a TypeConstructor-kind member"),
             };
+            // The parameter name is syntactic — declared with the constructor — so it interns and
+            // the applied argument's label renders back through the interner.
+            let param_symbol = view.registries().labels.intern(&param_name);
             let home = build_type_operand(view.dest_frame(), identity);
             let types = view.types();
             // The wrap keeps the value verbatim — see the `NewType` arm's holder.
@@ -600,7 +608,7 @@ fn finish_witnessed<'step>(
                         let arg = value.object().ktype();
                         let type_id = types.constructor_apply(
                             identity_ty,
-                            Record::from_pairs([(param_name, arg)]),
+                            Record::from_pairs([(param_symbol, arg)]),
                         );
                         // `wrapped_peel` keeps the single-layer invariant (`Wrapped.inner` is never
                         // itself `Wrapped`); the peeled identity is not lost — it lives in `arg`.

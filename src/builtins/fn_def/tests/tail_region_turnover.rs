@@ -262,7 +262,7 @@ fn loop_carried_aggregate_survives_tail_hop_adoption() {
             }
             other => panic!(
                 "expected nested Lists bottoming out at Number(0), got {}",
-                other.ktype().name(test_run.types()),
+                other.ktype().name(test_run.registries()),
             ),
         }
     }

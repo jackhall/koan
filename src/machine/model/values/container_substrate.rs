@@ -16,6 +16,7 @@
 //! [design/value-substrates.md § Sectioned reach](../../../../design/value-substrates.md#sectioned-reach).
 
 use crate::machine::core::{FrameReach, FrameStorage};
+use crate::machine::model::labels::Symbol;
 use crate::witnessed::{BumpBackedMap, CellRef, Sectioned};
 
 use super::{Held, KKey, KObject};
@@ -30,22 +31,23 @@ pub type HeldCells<'a> = Sectioned<'a, Held<'static>, FrameStorage>;
 pub type PartedCell<'a> =
     crate::witnessed::Opened<'a, CellRef<Held<'static>>, crate::witnessed::Carrier<FrameStorage>>;
 
-/// The index layout of a [`RecordSubstrate`]: the field names, region-hosted and sorted, one per
-/// cell and positionally aligned with them. Name-sorted order is the whole index — a lookup binary
-/// searches the slice and the hit's position *is* the cell index, so a record needs no table.
+/// The index layout of a [`RecordSubstrate`]: the field symbols, region-hosted and sorted in
+/// numeric symbol order, one per cell and positionally aligned with them. That order is the whole
+/// index — a lookup binary searches the slice and the hit's position *is* the cell index, so a
+/// record needs no table, and no field text lives in the substrate at all.
 ///
-/// `Copy`, and every byte it names is bump-hosted: the slice itself, and each name's own bytes
-/// through [`RegionBrand::allocator`](crate::machine::core::RegionBrand::allocator). Nothing here
-/// owns an allocation, so a record's index runs no `Drop` at region death.
+/// `Copy`, and the slice it names is bump-hosted through
+/// [`RegionBrand::allocator`](crate::machine::core::RegionBrand::allocator). A [`Symbol`] is
+/// fixed-width and owns nothing, so a record's index runs no `Drop` at region death.
 #[derive(Clone, Copy)]
 pub struct RecordLayout<'a> {
-    names: &'a [&'a str],
+    names: &'a [Symbol],
 }
 
 impl<'a> RecordLayout<'a> {
-    /// Wrap the sorted name slice the record door bumped. The caller sorts before it sections, so
-    /// the slice and the cells share one order.
-    pub(crate) fn new(names: &'a [&'a str]) -> Self {
+    /// Wrap the symbol-sorted name slice the record door bumped. The caller sorts before it
+    /// sections, so the slice and the cells share one order.
+    pub(crate) fn new(names: &'a [Symbol]) -> Self {
         RecordLayout { names }
     }
 }
@@ -186,27 +188,27 @@ impl<'a, C> ContainerSubstrate<'a, C> {
     }
 }
 
-/// The field substrate a record value borrows — [`ContainerSubstrate`] indexed by field name. Cells
-/// are name-sorted, matching the [`RecordLayout`] slice they are aligned with, so field order is a
-/// property of the names and never of how the literal was written. Equality is order-blind
-/// regardless.
+/// The field substrate a record value borrows — [`ContainerSubstrate`] indexed by field symbol.
+/// Cells are symbol-sorted, matching the [`RecordLayout`] slice they are aligned with, so field
+/// order is a property of the names and never of how the literal was written. Equality is
+/// order-blind regardless.
 pub(crate) type RecordSubstrate<'a> = ContainerSubstrate<'a, RecordLayout<'a>>;
 
 impl<'a> RecordSubstrate<'a> {
     /// The cell named `field`, or `None` when the record has no such field.
-    pub fn field(&self, field: &str) -> Option<&'a Held<'a>> {
+    pub fn field(&self, field: Symbol) -> Option<&'a Held<'a>> {
         self.field_index(field).and_then(|at| self.cell(at))
     }
 
     /// The cell index of `field`, or `None` when the record has no such field — what a projection
     /// resolves a field name to before parting the cell ([`Self::project`]). A binary search over
-    /// the sorted names; the position found *is* the cell index.
-    pub fn field_index(&self, field: &str) -> Option<usize> {
+    /// the sorted symbols; the position found *is* the cell index.
+    pub fn field_index(&self, field: Symbol) -> Option<usize> {
         self.index().names.binary_search(&field).ok()
     }
 
-    /// The fields in name order, as `(name, cell)` pairs.
-    pub fn fields(&self) -> impl Iterator<Item = (&'a str, &'a Held<'a>)> + use<'a> {
+    /// The fields in symbol order, as `(symbol, cell)` pairs.
+    pub fn fields(&self) -> impl Iterator<Item = (Symbol, &'a Held<'a>)> + use<'a> {
         self.index()
             .names
             .iter()

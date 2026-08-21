@@ -44,44 +44,50 @@ macro_rules! container_door {
 #[test]
 fn number_ieee_semantics() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
-    assert_eq!(num(1.0).value_equal(&num(1.0), types), Ok(true));
-    assert_eq!(num(1.0).value_equal(&num(2.0), types), Ok(false));
+    assert_eq!(num(1.0).value_equal(&num(1.0), &registries), Ok(true));
+    assert_eq!(num(1.0).value_equal(&num(2.0), &registries), Ok(false));
     // NaN is equal to nothing, including itself.
-    assert_eq!(num(f64::NAN).value_equal(&num(f64::NAN), types), Ok(false));
+    assert_eq!(
+        num(f64::NAN).value_equal(&num(f64::NAN), &registries),
+        Ok(false)
+    );
     // Signed zeros compare equal.
-    assert_eq!(num(-0.0).value_equal(&num(0.0), types), Ok(true));
+    assert_eq!(num(-0.0).value_equal(&num(0.0), &registries), Ok(true));
 }
 
 #[test]
 fn string_bool_null_scalars() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let s = KObject::KString("a");
-    assert_eq!(s.value_equal(&KObject::KString("a"), types), Ok(true));
-    assert_eq!(s.value_equal(&KObject::KString("b"), types), Ok(false));
+    assert_eq!(s.value_equal(&KObject::KString("a"), &registries), Ok(true));
     assert_eq!(
-        KObject::Bool(true).value_equal(&KObject::Bool(true), types),
+        s.value_equal(&KObject::KString("b"), &registries),
+        Ok(false)
+    );
+    assert_eq!(
+        KObject::Bool(true).value_equal(&KObject::Bool(true), &registries),
         Ok(true)
     );
     assert_eq!(
-        KObject::Bool(true).value_equal(&KObject::Bool(false), types),
+        KObject::Bool(true).value_equal(&KObject::Bool(false), &registries),
         Ok(false)
     );
-    assert_eq!(KObject::Null.value_equal(&KObject::Null, types), Ok(true));
+    assert_eq!(
+        KObject::Null.value_equal(&KObject::Null, &registries),
+        Ok(true)
+    );
 }
 
 #[test]
 fn cross_variant_scalars_are_unequal() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     assert_eq!(
-        num(1.0).value_equal(&KObject::KString("a"), types),
+        num(1.0).value_equal(&KObject::KString("a"), &registries),
         Ok(false)
     );
-    assert_eq!(KObject::Null.value_equal(&num(0.0), types), Ok(false));
+    assert_eq!(KObject::Null.value_equal(&num(0.0), &registries), Ok(false));
     assert_eq!(
-        KObject::Bool(true).value_equal(&KObject::KString("true"), types),
+        KObject::Bool(true).value_equal(&KObject::KString("true"), &registries),
         Ok(false)
     );
 }
@@ -97,9 +103,9 @@ fn list_element_and_length() {
     let b = KObject::list(door, vec![num(1.0), num(2.0)], types);
     let c = KObject::list(door, vec![num(1.0), num(3.0)], types);
     let short = KObject::list(door, vec![num(1.0)], types);
-    assert_eq!(a.value_equal(&b, types), Ok(true));
-    assert_eq!(a.value_equal(&c, types), Ok(false));
-    assert_eq!(a.value_equal(&short, types), Ok(false));
+    assert_eq!(a.value_equal(&b, &registries), Ok(true));
+    assert_eq!(a.value_equal(&c, &registries), Ok(false));
+    assert_eq!(a.value_equal(&short, &registries), Ok(false));
 }
 
 #[test]
@@ -109,7 +115,7 @@ fn list_nan_self_compare_is_false() {
     container_door!(_storage, door);
     // No Rc-ptr fast path: a self-comparison of a NaN-holding list is element-wise false.
     let l = KObject::list(door, vec![num(f64::NAN)], types);
-    assert_eq!(l.value_equal(&l, types), Ok(false));
+    assert_eq!(l.value_equal(&l, &registries), Ok(false));
 }
 
 #[test]
@@ -122,10 +128,10 @@ fn list_comparability_gate_is_intransitive() {
         KObject::list(door, vec![], types).stamp_type(types.list(KType::NUMBER), types);
     let empty_any = KObject::list(door, vec![], types).stamp_type(types.list(KType::ANY), types);
     let empty_str = KObject::list(door, vec![], types).stamp_type(types.list(KType::STR), types);
-    assert_eq!(empty_number.value_equal(&empty_any, types), Ok(true));
-    assert_eq!(empty_any.value_equal(&empty_str, types), Ok(true));
+    assert_eq!(empty_number.value_equal(&empty_any, &registries), Ok(true));
+    assert_eq!(empty_any.value_equal(&empty_str, &registries), Ok(true));
     // Number and Str are unrelated → gate closes, no descent.
-    assert_eq!(empty_number.value_equal(&empty_str, types), Ok(false));
+    assert_eq!(empty_number.value_equal(&empty_str, &registries), Ok(false));
 }
 
 #[test]
@@ -136,9 +142,9 @@ fn list_of_types_compares_by_digest() {
     let a = KObject::list_of_held(door, &[Held::Type(KType::NUMBER)], types);
     let b = KObject::list_of_held(door, &[Held::Type(KType::NUMBER)], types);
     let c = KObject::list_of_held(door, &[Held::Type(KType::STR)], types);
-    assert_eq!(a.value_equal(&b, types), Ok(true));
+    assert_eq!(a.value_equal(&b, &registries), Ok(true));
     // Different element type parameters (a `Type OF Number` vs `Type OF Str` list) close the gate.
-    assert_eq!(a.value_equal(&c, types), Ok(false));
+    assert_eq!(a.value_equal(&c, &registries), Ok(false));
 }
 
 // --- dicts ------------------------------------------------------------------------
@@ -170,21 +176,21 @@ fn dict_key_and_value_equality() {
         vec![(KKey::String("y"), num(2.0)), (KKey::String("x"), num(1.0))],
         types,
     );
-    assert_eq!(a.value_equal(&b, types), Ok(true));
+    assert_eq!(a.value_equal(&b, &registries), Ok(true));
 
     let missing_key = dict(
         door,
         vec![(KKey::String("x"), num(1.0)), (KKey::String("z"), num(2.0))],
         types,
     );
-    assert_eq!(a.value_equal(&missing_key, types), Ok(false));
+    assert_eq!(a.value_equal(&missing_key, &registries), Ok(false));
 
     let diff_value = dict(
         door,
         vec![(KKey::String("x"), num(1.0)), (KKey::String("y"), num(9.0))],
         types,
     );
-    assert_eq!(a.value_equal(&diff_value, types), Ok(false));
+    assert_eq!(a.value_equal(&diff_value, &registries), Ok(false));
 }
 
 #[test]
@@ -198,7 +204,7 @@ fn dict_length_mismatch_is_false() {
         vec![(KKey::String("x"), num(1.0)), (KKey::String("y"), num(2.0))],
         types,
     );
-    assert_eq!(a.value_equal(&b, types), Ok(false));
+    assert_eq!(a.value_equal(&b, &registries), Ok(false));
 }
 
 // --- records ----------------------------------------------------------------------
@@ -210,7 +216,11 @@ fn record<'a>(
 ) -> KObject<'a> {
     KObject::record(
         door,
-        Record::from_pairs(pairs.into_iter().map(|(k, v)| (k.to_string(), v))),
+        Record::from_pairs(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (crate::machine::model::Symbol::of(k), v)),
+        ),
         types,
     )
 }
@@ -222,7 +232,7 @@ fn record_field_order_blind_equality() {
     container_door!(_storage, door);
     let a = record(door, vec![("x", num(1.0)), ("y", num(2.0))], types);
     let b = record(door, vec![("y", num(2.0)), ("x", num(1.0))], types);
-    assert_eq!(a.value_equal(&b, types), Ok(true));
+    assert_eq!(a.value_equal(&b, &registries), Ok(true));
 }
 
 #[test]
@@ -234,7 +244,7 @@ fn record_width_mismatch_comparable_but_unequal() {
     // but the field sets differ → unequal.
     let narrow = record(door, vec![("x", num(1.0))], types);
     let wide = record(door, vec![("x", num(1.0)), ("y", num(2.0))], types);
-    assert_eq!(narrow.value_equal(&wide, types), Ok(false));
+    assert_eq!(narrow.value_equal(&wide, &registries), Ok(false));
 }
 
 #[test]
@@ -244,7 +254,7 @@ fn record_field_value_differs() {
     container_door!(_storage, door);
     let a = record(door, vec![("x", num(1.0))], types);
     let b = record(door, vec![("x", num(2.0))], types);
-    assert_eq!(a.value_equal(&b, types), Ok(false));
+    assert_eq!(a.value_equal(&b, &registries), Ok(false));
 }
 
 // --- tagged -----------------------------------------------------------------------
@@ -272,8 +282,8 @@ fn tagged_same_nominal_compares_payload() {
     let a = KObject::tagged(door, "Distance", &num(3.0), identity);
     let b = KObject::tagged(door, "Distance", &num(3.0), identity);
     let c = KObject::tagged(door, "Distance", &num(4.0), identity);
-    assert_eq!(a.value_equal(&b, types), Ok(true));
-    assert_eq!(a.value_equal(&c, types), Ok(false));
+    assert_eq!(a.value_equal(&b, &registries), Ok(true));
+    assert_eq!(a.value_equal(&c, &registries), Ok(false));
 }
 
 /// Identity-based equality reads an erased carrier (the bare member handle) and a stamped one
@@ -300,10 +310,10 @@ fn tagged_erased_and_stamped_are_distinct_identities() {
         &num(1.0),
         types.constructor_apply(
             ctor,
-            Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
+            Record::from_pairs([(crate::machine::model::Symbol::of("Type"), KType::NUMBER)]),
         ),
     );
-    assert_eq!(erased.value_equal(&stamped, types), Ok(false));
+    assert_eq!(erased.value_equal(&stamped, &registries), Ok(false));
 }
 
 #[test]
@@ -314,7 +324,7 @@ fn tagged_distinct_index_is_unequal() {
     let members = two_member(types);
     let none = KObject::tagged(door, "None", &KObject::Null, members[0]);
     let some = KObject::tagged(door, "Some", &num(1.0), members[1]);
-    assert_eq!(none.value_equal(&some, types), Ok(false));
+    assert_eq!(none.value_equal(&some, &registries), Ok(false));
 }
 
 // --- wrapped ----------------------------------------------------------------------
@@ -328,10 +338,10 @@ fn wrapped_identity_and_payload() {
     let a = KObject::wrapped_hold(door, &num(3.0), type_id);
     let b = KObject::wrapped_hold(door, &num(3.0), type_id);
     let diff_payload = KObject::wrapped_hold(door, &num(4.0), type_id);
-    assert_eq!(a.value_equal(&b, types), Ok(true));
-    assert_eq!(a.value_equal(&diff_payload, types), Ok(false));
+    assert_eq!(a.value_equal(&b, &registries), Ok(true));
+    assert_eq!(a.value_equal(&diff_payload, &registries), Ok(false));
     // A wrapped value is never equal to its bare representation.
-    assert_eq!(a.value_equal(&num(3.0), types), Ok(false));
+    assert_eq!(a.value_equal(&num(3.0), &registries), Ok(false));
 }
 
 #[test]
@@ -343,7 +353,7 @@ fn wrapped_distinct_nominal_is_unequal() {
     let weight = newtype_singleton("Weight", KType::NUMBER, types);
     let a = KObject::wrapped_hold(door, &num(3.0), distance);
     let b = KObject::wrapped_hold(door, &num(3.0), weight);
-    assert_eq!(a.value_equal(&b, types), Ok(false));
+    assert_eq!(a.value_equal(&b, &registries), Ok(false));
 }
 
 // --- expressions ------------------------------------------------------------------
@@ -351,7 +361,6 @@ fn wrapped_distinct_nominal_is_unequal() {
 #[test]
 fn kexpression_structural_equality() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let program = program_storage();
     let brand = program.brand();
     let a = KObject::KExpression(brand.new_expression(&[
@@ -366,33 +375,31 @@ fn kexpression_structural_equality() {
         part(ExpressionPart::Keyword("LET")),
         part(ExpressionPart::Identifier("y")),
     ]));
-    assert_eq!(a.value_equal(&b, types), Ok(true));
-    assert_eq!(a.value_equal(&c, types), Ok(false));
+    assert_eq!(a.value_equal(&b, &registries), Ok(true));
+    assert_eq!(a.value_equal(&c, &registries), Ok(false));
 }
 
 #[test]
 fn kexpression_number_literal_is_ieee() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let program = program_storage();
     let brand = program.brand();
     let nan = KObject::KExpression(
         brand.new_expression(&[part(ExpressionPart::Literal(KLiteral::Number(f64::NAN)))]),
     );
-    assert_eq!(nan.value_equal(&nan, types), Ok(false));
+    assert_eq!(nan.value_equal(&nan, &registries), Ok(false));
     let one = KObject::KExpression(
         brand.new_expression(&[part(ExpressionPart::Literal(KLiteral::Number(1.0)))]),
     );
     let one2 = KObject::KExpression(
         brand.new_expression(&[part(ExpressionPart::Literal(KLiteral::Number(1.0)))]),
     );
-    assert_eq!(one.value_equal(&one2, types), Ok(true));
+    assert_eq!(one.value_equal(&one2, &registries), Ok(true));
 }
 
 #[test]
 fn kexpression_length_and_variant_mismatch() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let program = program_storage();
     let brand = program.brand();
     let a = KObject::KExpression(brand.new_expression(&[part(ExpressionPart::Keyword("LET"))]));
@@ -403,8 +410,8 @@ fn kexpression_length_and_variant_mismatch() {
     // Different part variants at the same position.
     let variant =
         KObject::KExpression(brand.new_expression(&[part(ExpressionPart::Identifier("LET"))]));
-    assert_eq!(a.value_equal(&longer, types), Ok(false));
-    assert_eq!(a.value_equal(&variant, types), Ok(false));
+    assert_eq!(a.value_equal(&longer, &registries), Ok(false));
+    assert_eq!(a.value_equal(&variant, &registries), Ok(false));
 }
 
 // --- banned operands --------------------------------------------------------------
@@ -442,11 +449,11 @@ fn function_operand_is_error_at_any_position() {
     let types = test_run.registry_handle();
     let f = a_function(&storage, test_run.scope, &types);
     assert_eq!(
-        f.value_equal(&num(1.0), &types),
+        f.value_equal(&num(1.0), types.registries()),
         Err(ValueEqualityError::Function)
     );
     assert_eq!(
-        num(1.0).value_equal(&f, &types),
+        num(1.0).value_equal(&f, types.registries()),
         Err(ValueEqualityError::Function)
     );
     // Nested: a function inside a list propagates the error.
@@ -475,7 +482,7 @@ fn function_operand_is_error_at_any_position() {
         &types,
     );
     assert_eq!(
-        list_f.value_equal(&list_g, &types),
+        list_f.value_equal(&list_g, types.registries()),
         Err(ValueEqualityError::Function)
     );
 }
@@ -505,7 +512,7 @@ fn length_mismatch_short_circuits_before_banned_cell() {
         &types,
     );
     let empty = KObject::list(door, vec![], &types);
-    assert_eq!(list_f.value_equal(&empty, &types), Ok(false));
+    assert_eq!(list_f.value_equal(&empty, types.registries()), Ok(false));
 }
 
 #[test]
@@ -523,11 +530,11 @@ fn module_operand_is_error() {
     let m = Module::alloc_at_child_scope("m", test_run.scope, draft, self_sig);
     let module = KObject::Module(m);
     assert_eq!(
-        module.value_equal(&num(1.0), &types),
+        module.value_equal(&num(1.0), types.registries()),
         Err(ValueEqualityError::Module)
     );
     assert_eq!(
-        num(1.0).value_equal(&module, &types),
+        num(1.0).value_equal(&module, types.registries()),
         Err(ValueEqualityError::Module)
     );
 }

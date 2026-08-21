@@ -19,7 +19,7 @@ use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::{KKind, KObject, KType, TypeNode, TypeRegistry};
+use crate::machine::model::{KKind, KObject, KType, TypeNode};
 use crate::machine::{KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
@@ -30,8 +30,9 @@ use crate::machine::model::RunRegistries;
 fn typeexpr_from_carrier<'a>(
     brand: RegionBrand<'a>,
     kt: KType,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> CarrierForm<'a> {
+    let types = &registries.types;
     // The builtin leaf type names re-resolve against decl_scope through the same name path so a
     // SIG-local shadow wins over the builtin table. `:Module` lowers to the empty signature —
     // its `name()` is "Module" — and joins that leaf path. A user-declared signature (a non-empty
@@ -50,7 +51,7 @@ fn typeexpr_from_carrier<'a>(
     );
     if is_leaf_builtin || kt == KType::EMPTY_SIGNATURE {
         CarrierForm::Leaf(TypeIdentifier::leaf(
-            brand.allocator().text(&kt.name(types)),
+            brand.allocator().text(&kt.name(registries)),
         ))
     } else {
         CarrierForm::Direct(kt)
@@ -90,7 +91,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             return done_err(KError::new(KErrorKind::TypeMismatch {
                 arg: "name".to_string(),
                 expected: "Identifier".to_string(),
-                got: other.ktype().name(ctx.types()),
+                got: other.ktype().name(ctx.registries),
             }));
         }
         None => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
@@ -108,13 +109,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let carrier = match arg_unresolved_type(ctx.args, "ty") {
         Some(te) => CarrierForm::Raw(*te),
         None => match arg_type(ctx.args, "ty") {
-            Some(kt) => typeexpr_from_carrier(ctx.scope.brand(), kt, ctx.types()),
+            Some(kt) => typeexpr_from_carrier(ctx.scope.brand(), kt, ctx.registries),
             None => {
                 return done_err(match arg_object(ctx.args, "ty") {
                     Some(other) => KError::new(KErrorKind::TypeMismatch {
                         arg: "ty".to_string(),
                         expected: "ProperType".to_string(),
-                        got: other.ktype().name(ctx.types()),
+                        got: other.ktype().name(ctx.registries),
                     }),
                     None => KError::new(KErrorKind::MissingArg("ty".to_string())),
                 });
@@ -159,7 +160,7 @@ fn finalize_val<'a>(
     if let Some(message) = crate::machine::model::unsaturated_constructor_message(
         declared_kt,
         &format!("the type of SIG value slot `{name}`"),
-        fctx.types,
+        fctx.registries,
     ) {
         return Action::done(Err(KError::new(KErrorKind::ShapeError(message))));
     }
@@ -178,8 +179,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::ANY,
         vec![
             kw("VAL"),
-            arg("name", KType::IDENTIFIER),
-            arg("ty", KType::of_kind(KKind::ProperType)),
+            arg(registries, "name", KType::IDENTIFIER),
+            arg(registries, "ty", KType::of_kind(KKind::ProperType)),
         ],
     );
     // VAL installs nothing: it records into the decl scope's slot collector, not into a binding map

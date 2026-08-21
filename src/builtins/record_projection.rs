@@ -21,6 +21,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
+use crate::machine::model::Symbol;
 
 /// `(x y) FROM <record:{}>` — re-tag the record's carried type to the named fields.
 ///
@@ -34,16 +35,18 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", "fields"));
 
     // A computed field list is out of scope: each part must be a bare identifier.
-    let mut names: Vec<String> = Vec::with_capacity(fields_expr.parts.len());
+    // Each name is syntactic, so it interns: the narrowed record type it lands in renders through
+    // the same interner. The text rides along for the diagnostics below.
+    let mut names: Vec<(&str, Symbol)> = Vec::with_capacity(fields_expr.parts.len());
     for part in fields_expr.parts {
         match part.value {
             ExpressionPart::Identifier(name) => {
-                if names.iter().any(|n| n == name) {
+                if names.iter().any(|(seen, _)| *seen == name) {
                     return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                         "FROM field list has duplicate field `{name}`",
                     )))));
                 }
-                names.push(name.to_string());
+                names.push((name, ctx.registries.labels.intern(name)));
             }
             other => {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
@@ -61,7 +64,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         Some(other) => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "FROM record operand must be a record, got `{}`",
-                other.ktype().name(ctx.types()),
+                other.ktype().name(ctx.registries),
             )))));
         }
         None => {
@@ -81,8 +84,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         },
         _ => unreachable!("record_obj is shape-gated to a Record above"),
     };
-    for name in &names {
-        if record_fields.get(name).is_none() {
+    for (name, symbol) in &names {
+        if record_fields.get(*symbol).is_none() {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "FROM: record has no field `{name}`",
             )))));
@@ -92,11 +95,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // into the at-brand rebuild below.
     let narrowed_type = ctx
         .types()
-        .record(Record::from_pairs(names.iter().map(|name| {
+        .record(Record::from_pairs(names.iter().map(|(_, symbol)| {
             (
-                name.clone(),
+                *symbol,
                 *record_fields
-                    .get(name)
+                    .get(*symbol)
                     .expect("probed ambient: field exists in the record"),
             )
         })));
@@ -145,9 +148,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let signature = sig(
         types.record(Record::new()),
         vec![
-            arg("fields", KType::KEXPRESSION),
+            arg(registries, "fields", KType::KEXPRESSION),
             kw("FROM"),
-            arg("record", types.record(Record::new())),
+            arg(registries, "record", types.record(Record::new())),
         ],
     );
     crate::builtins::register_builtin(scope, "FROM", signature, body, registries, gate);
@@ -169,15 +172,33 @@ mod tests {
         match result {
             KObject::Record(substrate, record_type) => {
                 assert_eq!(substrate.len(), 3);
-                assert!(substrate.field("z").is_some());
+                assert!(
+                    substrate
+                        .field(crate::machine::model::Symbol::of("z"))
+                        .is_some()
+                );
                 let field_types = match test_run.types().node(*record_type) {
                     TypeNode::Record { fields } => fields,
                     _ => panic!("record value's type must be a Record node, got {record_type:?}"),
                 };
                 assert_eq!(field_types.len(), 2);
-                assert_eq!(field_types.get("x").copied(), Some(KType::NUMBER));
-                assert_eq!(field_types.get("y").copied(), Some(KType::NUMBER));
-                assert!(field_types.get("z").is_none());
+                assert_eq!(
+                    field_types
+                        .get(crate::machine::model::Symbol::of("x"))
+                        .copied(),
+                    Some(KType::NUMBER)
+                );
+                assert_eq!(
+                    field_types
+                        .get(crate::machine::model::Symbol::of("y"))
+                        .copied(),
+                    Some(KType::NUMBER)
+                );
+                assert!(
+                    field_types
+                        .get(crate::machine::model::Symbol::of("z"))
+                        .is_none()
+                );
             }
             other => panic!("expected Record, got {:?}", other.ktype()),
         }
@@ -200,8 +221,17 @@ mod tests {
                     _ => panic!("record value's type must be a Record node, got {record_type:?}"),
                 };
                 assert_eq!(field_types.len(), 1);
-                assert_eq!(field_types.get("x").copied(), Some(KType::NUMBER));
-                assert!(field_types.get("y").is_none());
+                assert_eq!(
+                    field_types
+                        .get(crate::machine::model::Symbol::of("x"))
+                        .copied(),
+                    Some(KType::NUMBER)
+                );
+                assert!(
+                    field_types
+                        .get(crate::machine::model::Symbol::of("y"))
+                        .is_none()
+                );
             }
             other => panic!("expected Record, got {:?}", other.ktype()),
         }

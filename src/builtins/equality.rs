@@ -14,7 +14,6 @@
 //! unchanged (an error is never negated into a `false`).
 
 use crate::machine::WriteGate;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Held, KType, ValueEqualityError};
 use crate::machine::{Action, BodyCtx, arg_held};
 use crate::machine::{KError, KErrorKind, Scope};
@@ -43,10 +42,12 @@ fn cells_equal(
     left: &Held<'_>,
     right: &Held<'_>,
     op: &str,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<bool, KError> {
     match (left, right) {
-        (Held::Object(a), Held::Object(b)) => a.value_equal(b, types).map_err(|e| ban_error(op, e)),
+        (Held::Object(a), Held::Object(b)) => {
+            a.value_equal(b, registries).map_err(|e| ban_error(op, e))
+        }
         (Held::Type(a), Held::Type(b)) => Ok(a == b),
         _ => Ok(false),
     }
@@ -58,7 +59,7 @@ fn compare(ctx: &BodyCtx<'_, '_, '_>, op: &str) -> Result<bool, KError> {
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("left".to_string())))?;
     let right = arg_held(ctx.args, "right")
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("right".to_string())))?;
-    cells_equal(left, right, op, ctx.types())
+    cells_equal(left, right, op, ctx.registries)
 }
 
 pub fn body_eq<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
@@ -83,7 +84,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let eq_sig = |op: &'static str| {
         sig(
             KType::BOOL,
-            vec![arg("left", KType::ANY), kw(op), arg("right", KType::ANY)],
+            vec![
+                arg(registries, "left", KType::ANY),
+                kw(op),
+                arg(registries, "right", KType::ANY),
+            ],
         )
     };
     crate::builtins::register_builtin(scope, "==", eq_sig("=="), body_eq, registries, gate);

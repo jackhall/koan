@@ -35,6 +35,7 @@ use super::super::types::{
     KType, Relation, SigSchema, TypeDigest, TypeNode, TypeRegistry, empty_schema_digest,
     sig_subtype,
 };
+use crate::machine::model::RunRegistries;
 
 /// The owned members a module is assembled from — gathered by a construction site before the value
 /// exists, because a built module's maps are frozen. Both maps are keyed by member name and resolve
@@ -180,8 +181,9 @@ impl<'a> Module<'a> {
         &self,
         schema: &SigSchema,
         schema_digest: TypeDigest,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> bool {
+        let types = &registries.types;
         if schema_digest == empty_schema_digest() {
             return true;
         }
@@ -192,7 +194,7 @@ impl<'a> Module<'a> {
         if let Some(hit) = types.verdict(subject, schema_digest, Relation::SigSatisfies) {
             return hit;
         }
-        let ok = sig_subtype(&self.self_sig(types), schema, types).is_ok();
+        let ok = sig_subtype(&self.self_sig(types), schema, registries).is_ok();
         types.record_verdict(subject, schema_digest, Relation::SigSatisfies, ok);
         ok
     }

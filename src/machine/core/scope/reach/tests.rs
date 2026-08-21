@@ -10,6 +10,7 @@ use super::*;
 use crate::builtins::test_support::TestRun;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
+use crate::machine::model::Symbol;
 use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::{
     Held, Record, ReturnType, SignatureDraft, SignatureElement, TypeRegistry,
@@ -53,8 +54,14 @@ fn alloc_home_borrowing_record<'run>(
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
     let fields = Record::from_pairs(vec![
-        ("v".to_string(), Held::Object(KObject::Number(value))),
-        ("f".to_string(), Held::Object(KObject::KFunction(closure))),
+        (
+            crate::machine::model::Symbol::of("v"),
+            Held::Object(KObject::Number(value)),
+        ),
+        (
+            crate::machine::model::Symbol::of("f"),
+            Held::Object(KObject::KFunction(closure)),
+        ),
     ]);
     door.alloc_object_folded(KObject::record_of_held(door, fields, types))
 }
@@ -129,7 +136,7 @@ fn adopt_for_binding_pins_a_home_borrowing_record() {
     drop(producer);
     match bound {
         KObject::Record(bound_substrate, _) => {
-            match bound_substrate.field("v").map(|h| h.object()) {
+            match bound_substrate.field(Symbol::of("v")).map(|h| h.object()) {
                 Some(KObject::Number(n)) => {
                     assert_eq!(*n, 7.0, "field v reads back after producer drop")
                 }
@@ -158,9 +165,18 @@ fn alloc_split_reach_record<'run>(
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
     let fields = Record::from_pairs(vec![
-        ("v".to_string(), Held::Object(KObject::Number(1.0))),
-        ("here".to_string(), Held::Object(KObject::KFunction(here))),
-        ("there".to_string(), Held::Object(KObject::KFunction(there))),
+        (
+            crate::machine::model::Symbol::of("v"),
+            Held::Object(KObject::Number(1.0)),
+        ),
+        (
+            crate::machine::model::Symbol::of("here"),
+            Held::Object(KObject::KFunction(here)),
+        ),
+        (
+            crate::machine::model::Symbol::of("there"),
+            Held::Object(KObject::KFunction(there)),
+        ),
     ]);
     door.alloc_object_folded(KObject::record_of_held(door, fields, types))
 }
@@ -196,7 +212,7 @@ fn a_projected_cell_carries_its_own_run_not_the_containers_union() {
         substrate
             .project(
                 substrate
-                    .field_index(name)
+                    .field_index(Symbol::of(name))
                     .expect("the record declares this field"),
             )
             .expect("the index came from the substrate's own layout")

@@ -142,6 +142,7 @@ fn register_function_dedupes_exact_signature() {
             "FOO".to_string(),
             &f1,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -151,6 +152,7 @@ fn register_function_dedupes_exact_signature() {
             "FOO".to_string(),
             &f2,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap_err();
@@ -175,6 +177,7 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
             "FOO".to_string(),
             &f1,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -243,7 +246,7 @@ fn register_function_allows_overload_with_different_arg_types() {
         elements: vec![
             SignatureElement::Keyword("BAR"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: crate::machine::model::Symbol::of("v"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -253,7 +256,7 @@ fn register_function_allows_overload_with_different_arg_types() {
         elements: vec![
             SignatureElement::Keyword("BAR"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: crate::machine::model::Symbol::of("v"),
                 ktype: KType::STR,
             }),
         ],
@@ -265,6 +268,7 @@ fn register_function_allows_overload_with_different_arg_types() {
             "BAR".to_string(),
             &f1,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -273,6 +277,7 @@ fn register_function_allows_overload_with_different_arg_types() {
             "BAR".to_string(),
             &f2,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -301,6 +306,7 @@ fn register_function_coexists_with_same_name_value() {
             "FOO".to_string(),
             &f,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bare FN registration must not collide with a same-name value");
@@ -337,6 +343,7 @@ fn register_function_coexists_with_same_name_type() {
             "Foo".to_string(),
             &f,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bare FN registration must not collide with a same-name type");

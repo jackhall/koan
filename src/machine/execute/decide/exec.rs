@@ -82,7 +82,8 @@ fn invoke_builtin<'step>(
     // `for<'b>` brand, so an absent entry reads as "no foreign reach".
     let arg_carriers = carriers_from_expr(view, &working_expr);
     let arg_carriers = map_arg_carriers(function, &arg_carriers);
-    let args = match function.bind_args(working_expr.parts, view.current_scope(), view.types()) {
+    let args = match function.bind_args(working_expr.parts, view.current_scope(), view.registries())
+    {
         Ok(args) => args,
         Err(e) => return Outcome::Done(Err(e)),
     };
@@ -105,7 +106,7 @@ fn enter_user_fn<'step>(
     // A uniquely-picked call is admitted shape-only by dispatch, so validate each argument against
     // its declared parameter type before the type-trusting frame bind — a non-satisfying typed
     // argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
-    if let Err(e) = function.validate_call_args(working_expr.parts, view.types()) {
+    if let Err(e) = function.validate_call_args(working_expr.parts, view.registries()) {
         return Outcome::Done(Err(e));
     }
     let mut arg_carriers = carriers_from_expr(view, &working_expr);
@@ -133,7 +134,7 @@ fn enter_user_fn<'step>(
         &named_carriers,
         &exec_frame,
         in_chain,
-        view.types(),
+        view.registries(),
     ) {
         ExecOutcome::Tail { leading, tail, ret } => {
             // A deferred `Type` return's per-call type rides a `PerCall` contract, checked +
@@ -260,7 +261,7 @@ fn map_arg_carriers<'e, 'step>(
         if let (Some(carrier), Some(SignatureElement::Argument(arg))) =
             (carrier, picked.signature.elements().get(slot))
         {
-            record.insert(arg.name.to_string(), carrier);
+            record.insert(arg.name, carrier);
         }
     }
     record

@@ -98,7 +98,7 @@ fn bare_module_name_surfaces_as_object_value() {
         KObject::Module(module) => assert_eq!(module.path, "foo"),
         other => panic!(
             "bare module name must read back as an Object-arm module value, got {}",
-            other.ktype().name(test_run.types())
+            other.ktype().name(test_run.registries())
         ),
     }
     // PRINT returns the rendered string — a bare module renders as its path.
@@ -107,7 +107,7 @@ fn bare_module_name_surfaces_as_object_value() {
         KObject::KString(s) => assert_eq!(*s, "foo"),
         other => panic!(
             "PRINT foo returns the path string, got {}",
-            other.ktype().name(test_run.types())
+            other.ktype().name(test_run.registries())
         ),
     }
 }
@@ -127,7 +127,7 @@ fn bare_module_names_in_list_resolve_and_memoize_self_sig() {
         KObject::List(items, elem) => {
             // Ruling 12: a module's self-sig renders structurally, not by the module name.
             assert_eq!(
-                elem.name(test_run.types()),
+                elem.name(test_run.registries()),
                 ":(LIST OF SIG (compare: Number))",
                 "the memoized element type is the module self-sig"
             );
@@ -142,7 +142,7 @@ fn bare_module_names_in_list_resolve_and_memoize_self_sig() {
         }
         other => panic!(
             "expected a list, got {}",
-            other.ktype().name(test_run.types())
+            other.ktype().name(test_run.registries())
         ),
     }
 }
@@ -164,7 +164,7 @@ fn module_in_list_surfaces_as_object_element_memoized_to_self_sig() {
     match listed {
         KObject::List(items, elem) => {
             assert_eq!(
-                elem.name(test_run.types()),
+                elem.name(test_run.registries()),
                 ":(LIST OF SIG (compare: Number))",
                 "element memoizes to the module self-sig"
             );
@@ -176,7 +176,7 @@ fn module_in_list_surfaces_as_object_element_memoized_to_self_sig() {
         }
         other => panic!(
             "expected a list, got {}",
-            other.ktype().name(test_run.types())
+            other.ktype().name(test_run.registries())
         ),
     }
 }
@@ -214,7 +214,7 @@ fn module_member_function_via_let_fn() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("MODULE foo = (LET double = FN (DOUBLE x :Number) -> Number = (x))");
-    let foo = lookup_module(scope, "foo", test_run.types());
+    let foo = lookup_module(scope, "foo", test_run.registries());
     assert!(foo.child_scope().bindings().data().contains_key("double"));
 }
 
@@ -296,7 +296,7 @@ fn module_finalize_short_circuits_on_idempotent_state() {
         )
         .expect("pre-seed the module value binding");
     test_run.run("MODULE foo = (LET y = 2)");
-    let foo = lookup_module(scope, "foo", test_run.types());
+    let foo = lookup_module(scope, "foo", test_run.registries());
     assert!(std::ptr::eq(foo, module));
 }
 
@@ -309,7 +309,7 @@ fn module_body_dispatch_does_not_dangle() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("LET y = 7\nMODULE foo = ((LET x = y) (LET z = 11))");
-    let foo = lookup_module(scope, "foo", test_run.types());
+    let foo = lookup_module(scope, "foo", test_run.registries());
     let inner = foo.child_scope();
     assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 7.0));
     assert!(matches!(inner.lookup("z"), Some(KObject::Number(n)) if *n == 11.0));

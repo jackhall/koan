@@ -9,6 +9,7 @@ use crate::machine::model::Record;
 use crate::machine::{program_storage, run_root_storage};
 
 use super::capture_program_output;
+use crate::machine::model::Symbol;
 
 /// A `{x = 1, y = "a"}` value fills a `:{x :Number, y :Str}` parameter slot and the
 /// function runs.
@@ -77,8 +78,8 @@ fn record_value_reports_record_ktype() {
     assert_eq!(
         result.ktype(),
         test_run.types().record(Record::from_pairs(vec![
-            ("x".into(), KType::NUMBER),
-            ("y".into(), KType::STR),
+            (Symbol::of("x"), KType::NUMBER),
+            (Symbol::of("y"), KType::STR),
         ])),
     );
 }

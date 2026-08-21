@@ -17,12 +17,11 @@ use std::rc::Rc;
 use crate::machine::core::{BindingIndex, CallFrame, DeclarationSite, KError};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
-use crate::machine::model::{
-    DeferredReturn, KType, Record, ReturnType, TypeRegistry, TypeResolution,
-};
+use crate::machine::model::{DeferredReturn, KType, Record, ReturnType, TypeResolution};
 
 use super::KFunction;
 use super::body::{Body, body_statement_refs};
+use crate::machine::model::{RunRegistries, render_label};
 
 /// A body's execution context: the per-call `region` it runs in. Owned (an `Rc`), so it carries no
 /// lifetime; the body re-projects its scope from the region on demand.
@@ -86,8 +85,9 @@ pub fn run_user_fn<'ast>(
     args: &Record<&DeliveredCarried>,
     ctx: &ExecFrame,
     in_contract_chain: bool,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> ExecOutcome<'ast> {
+    let types = &registries.types;
     // Bind each parameter into the frame's own scope through the value/type doors, off the one
     // envelope the argument arrived in. An object is deep-copied into the frame region under the
     // reach its own delivered carrier mints (`bind_delivered`) — every value argument arrives with
@@ -99,14 +99,19 @@ pub fn run_user_fn<'ast>(
         // The frame's own scope: minted for this call and not yet published, so the parameter binds
         // take the construction door rather than riding a step outcome.
         let gate = &mut crate::machine::core::bindings::WriteGate::for_unpublished_scope();
-        for (name, delivered) in args.iter() {
+        for (symbol, delivered) in args.iter() {
+            // The scope tables key by text, so a parameter's symbol resolves back through the
+            // interner that recorded it at definition. See
+            // [roadmap/reduce_allocs/symbol-keyed-scope-tables.md] — once the tables key by
+            // `Symbol`, this resolve and the `String` it builds both go away.
+            let name = render_label(symbol, registries);
             match arg_channel(delivered) {
                 // The projection is identity — the whole delivered value binds. The copy is a deep
                 // clone into the frame region, so the carrier's residence-only host is not part of
                 // its reach (a tail call's retiring frame must not ride this binding).
                 ArgChannel::Value => {
                     child.bind_delivered_direct(
-                        name.clone(),
+                        name,
                         delivered,
                         BindingIndex::value(0),
                         |c| Ok(c.object()),
@@ -121,12 +126,7 @@ pub fn run_user_fn<'ast>(
                 // statement subject to same-declaration checks, so it takes the born-with-the-scope
                 // site.
                 ArgChannel::Type(kt) => {
-                    child.register_type_direct(
-                        name.clone(),
-                        kt,
-                        DeclarationSite::AT_CONSTRUCTION,
-                        gate,
-                    )?;
+                    child.register_type_direct(name, kt, DeclarationSite::AT_CONSTRUCTION, gate)?;
                 }
                 // Dispatch resolves every type-denoting argument before the call, so a name that
                 // is still unlowered here names nothing bindable.

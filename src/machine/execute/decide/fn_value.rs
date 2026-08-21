@@ -51,7 +51,7 @@ fn dispatch_callable_value<'step>(
     let callable = match ctx.current_scope().adopt_delivered_function(delivered) {
         Some(function) => ResolvedCallable::Function(function),
         None => {
-            let got = delivered.open(|live| live.summarize(ctx.types()));
+            let got = delivered.open(|live| live.summarize(ctx.registries()));
             return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "KFunction".to_string(),

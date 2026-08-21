@@ -26,6 +26,7 @@ use crate::machine::core::bindings::{
 };
 use crate::machine::core::carrier_witness::{DeliveredFunction, GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind};
+use crate::machine::model::RunRegistries;
 use crate::machine::model::{Carried, KObject, KType, ReductionMode};
 
 impl<'a> Scope<'a> {
@@ -125,12 +126,13 @@ impl<'a> Scope<'a> {
         name: String,
         cell: &DeliveredFunction,
         index: BindingIndex,
+        registries: &RunRegistries,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         WriteOp::Overload {
             name,
             index,
-            seal: OverloadSeal::of_delivered(self, cell),
+            seal: OverloadSeal::of_delivered(self, cell, registries),
             builtin_shadow_guard: true,
         }
         .apply(self, gate)

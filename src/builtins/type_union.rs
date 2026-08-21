@@ -29,8 +29,8 @@ const MEMBERS_SLOT: &str = "`|` members";
 /// union directly — mirroring `parameterized_types::body_map`. The composite allocates into this
 /// step's own region through the single type door.
 fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let left = crate::try_action!(require_ktype(ctx.args, "left", ctx.types()));
-    let right = crate::try_action!(require_ktype(ctx.args, "right", ctx.types()));
+    let left = crate::try_action!(require_ktype(ctx.args, "left", ctx.registries));
+    let right = crate::try_action!(require_ktype(ctx.args, "right", ctx.registries));
     Action::done(Ok(ctx
         .ctx
         .type_carried(ctx.types().union_of(vec![left, right]))))
@@ -63,7 +63,7 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
             other => {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "{MEMBERS_SLOT}: every member must be a type, got `{}`",
-                    other.summarize(ctx.types()),
+                    other.summarize(ctx.registries),
                 )))));
             }
         }
@@ -83,7 +83,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         OperatorForm {
             signature: sig(
                 KType::of_kind(KKind::AnyType),
-                vec![kw("|"), arg("members", types.list(KType::ANY))],
+                vec![kw("|"), arg(registries, "members", types.list(KType::ANY))],
             ),
             body: Body::Builtin(body_nary),
         },
@@ -91,9 +91,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             signature: sig(
                 KType::of_kind(KKind::AnyType),
                 vec![
-                    arg("left", KType::of_kind(KKind::AnyType)),
+                    arg(registries, "left", KType::of_kind(KKind::AnyType)),
                     kw("|"),
-                    arg("right", KType::of_kind(KKind::AnyType)),
+                    arg(registries, "right", KType::of_kind(KKind::AnyType)),
                 ],
             ),
             body: Body::Builtin(body_binary),
@@ -101,7 +101,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         // A natively seeded builtin has no group context at all.
         false,
         BindingIndex::BUILTIN,
-        types,
+        registries,
     )
     .expect("builtin `|` unary-operator seeding must not collide");
     // Root seeding: a construction-time door, so the writes apply here rather than riding a step.

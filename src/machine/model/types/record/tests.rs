@@ -7,14 +7,18 @@ fn hash_of<V: Hash>(r: &Record<V>) -> u64 {
 }
 
 fn rec(pairs: &[(&str, i32)]) -> Record<i32> {
-    Record::from_pairs(pairs.iter().map(|(k, v)| (k.to_string(), *v)))
+    Record::from_pairs(
+        pairs
+            .iter()
+            .map(|(k, v)| (crate::machine::model::Symbol::of(k), *v)),
+    )
 }
 
 #[test]
 fn iter_preserves_insertion_order() {
     let r = rec(&[("x", 1), ("y", 2), ("z", 3)]);
-    let names: Vec<&str> = r.keys().map(String::as_str).collect();
-    assert_eq!(names, ["x", "y", "z"]);
+    let names: Vec<Symbol> = r.keys().collect();
+    assert_eq!(names, ["x", "y", "z"].map(Symbol::of));
 }
 
 #[test]
@@ -69,8 +73,8 @@ fn empty_record_is_empty() {
 #[test]
 fn get_returns_value_by_name() {
     let r = rec(&[("x", 10), ("y", 20)]);
-    assert_eq!(r.get("y"), Some(&20));
-    assert_eq!(r.get("missing"), None);
+    assert_eq!(r.get(Symbol::of("y")), Some(&20));
+    assert_eq!(r.get(Symbol::of("missing")), None);
     assert_eq!(r.len(), 2);
 }
 
@@ -80,5 +84,5 @@ fn get_returns_value_by_name() {
 fn from_pairs_duplicate_name_is_last_wins() {
     let r = rec(&[("x", 1), ("x", 9)]);
     assert_eq!(r.len(), 1);
-    assert_eq!(r.get("x"), Some(&9));
+    assert_eq!(r.get(Symbol::of("x")), Some(&9));
 }

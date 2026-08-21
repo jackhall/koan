@@ -65,7 +65,7 @@ pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machin
     if !ctx.scope.is_in_sig_body() {
         return Action::done(Err(not_in_sig_body()));
     }
-    let name = match require_bare_type_name(ctx.args, "name", "TYPE", ctx.types()) {
+    let name = match require_bare_type_name(ctx.args, "name", "TYPE", ctx.registries) {
         Ok(name) => name,
         Err(e) => return Action::done(Err(e)),
     };
@@ -145,12 +145,15 @@ pub(crate) fn parse_hk_decl(decl: &KExpression<'_>) -> Result<(Vec<String>, Stri
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let bare_signature = sig(
         KType::ANY,
-        vec![kw("TYPE"), arg("name", KType::of_kind(KKind::ProperType))],
+        vec![
+            kw("TYPE"),
+            arg(registries, "name", KType::of_kind(KKind::ProperType)),
+        ],
     );
     crate::builtins::register_builtin(scope, "TYPE", bare_signature, body_bare, registries, gate);
     let hk_signature = sig(
         KType::ANY,
-        vec![kw("TYPE"), arg("decl", KType::KEXPRESSION)],
+        vec![kw("TYPE"), arg(registries, "decl", KType::KEXPRESSION)],
     );
     crate::builtins::register_builtin(scope, "TYPE", hk_signature, body_hk, registries, gate);
 }

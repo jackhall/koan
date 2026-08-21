@@ -16,7 +16,7 @@ fn one_slot(brand: RegionBrand<'_>, kt: KType) -> ExpressionSignature<'_> {
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::ANY),
             elements: vec![SignatureElement::Argument(Argument {
-                name: "v",
+                name: Symbol::of("v"),
                 ktype: kt,
             })],
         },
@@ -30,50 +30,55 @@ fn expr_with_keyword<'a>(brand: RegionBrand<'a>, kw: &'a str) -> KExpression<'a>
 #[test]
 fn most_specific_picks_number_over_any() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let program = program_storage();
     let brand = program.brand().region();
     let any = one_slot(brand, KType::ANY);
     let num = one_slot(brand, KType::NUMBER);
     let cands: Vec<&ExpressionSignature<'_>> = vec![&any, &num];
-    assert_eq!(ExpressionSignature::most_specific(&cands, types), Some(1));
+    assert_eq!(
+        ExpressionSignature::most_specific(&cands, &registries),
+        Some(1)
+    );
 }
 
 #[test]
 fn most_specific_returns_none_for_empty() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let cands: Vec<&ExpressionSignature<'_>> = Vec::new();
-    assert_eq!(ExpressionSignature::most_specific(&cands, types), None);
+    assert_eq!(
+        ExpressionSignature::most_specific(&cands, &registries),
+        None
+    );
 }
 
 #[test]
 fn most_specific_returns_none_when_tied() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     // Ambiguity must surface, not a winner.
     let program = program_storage();
     let brand = program.brand().region();
     let a = one_slot(brand, KType::NUMBER);
     let b = one_slot(brand, KType::NUMBER);
     let cands: Vec<&ExpressionSignature<'_>> = vec![&a, &b];
-    assert_eq!(ExpressionSignature::most_specific(&cands, types), None);
+    assert_eq!(
+        ExpressionSignature::most_specific(&cands, &registries),
+        None
+    );
 }
 
 #[test]
 fn return_type_clone_round_trips_all_arms() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let r = ReturnType::Resolved(KType::NUMBER);
-    assert_eq!(r.name(types), r.clone().name(types));
+    assert_eq!(r.name(&registries), r.clone().name(&registries));
     let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
-    assert_eq!(d.name(types), d.clone().name(types));
+    assert_eq!(d.name(&registries), d.clone().name(&registries));
     let program = program_storage();
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword(
         program.brand().region(),
         "FOO",
     )));
-    assert_eq!(e.name(types), e.clone().name(types));
+    assert_eq!(e.name(&registries), e.clone().name(&registries));
 }
 
 #[test]
@@ -133,17 +138,16 @@ fn deferred_return_debug_renders_both_arms() {
 #[test]
 fn return_type_name_covers_all_arms() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let r = ReturnType::Resolved(KType::NUMBER);
-    assert_eq!(r.name(types), KType::NUMBER.name(types));
+    assert_eq!(r.name(&registries), KType::NUMBER.name(&registries));
     let t = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
-    assert_eq!(t.name(types), "er");
+    assert_eq!(t.name(&registries), "er");
     let program = program_storage();
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword(
         program.brand().region(),
         "FOO",
     )));
-    assert_eq!(e.name(types), "FOO");
+    assert_eq!(e.name(&registries), "FOO");
 }
 
 fn sig_with<'a>(
@@ -156,7 +160,7 @@ fn sig_with<'a>(
         SignatureDraft {
             return_type: ret,
             elements: vec![SignatureElement::Argument(Argument {
-                name: "v",
+                name: Symbol::of("v"),
                 ktype: slot,
             })],
         },
@@ -220,18 +224,17 @@ fn indistinguishable_splits_on_argument_type_and_keywords() {
 #[test]
 fn return_type_matches_value_deferred_always_true_resolved_delegates() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     use crate::machine::model::values::KObject;
     let obj = KObject::Number(42.0);
     // Deferred always matches — per-call check runs elsewhere.
     let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
-    assert!(d.matches_value(&obj, types));
+    assert!(d.matches_value(&obj, &registries));
     assert!(!d.is_resolved());
     let r_num = ReturnType::Resolved(KType::NUMBER);
-    assert!(r_num.matches_value(&obj, types));
+    assert!(r_num.matches_value(&obj, &registries));
     assert!(r_num.is_resolved());
     let r_bool = ReturnType::Resolved(KType::BOOL);
-    assert!(!r_bool.matches_value(&obj, types));
+    assert!(!r_bool.matches_value(&obj, &registries));
 }
 
 /// [`DispatchToken`] equality is the stored form of [`ExpressionSignature::indistinguishable_from`]:
@@ -248,7 +251,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
         let mut elements = vec![SignatureElement::Keyword(keyword)];
         elements.extend(slots.iter().map(|kt| {
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: Symbol::of("v"),
                 ktype: *kt,
             })
         }));
@@ -273,7 +276,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
             SignatureDraft {
                 return_type: ReturnType::Resolved(KType::BOOL),
                 elements: vec![SignatureElement::Argument(Argument {
-                    name: "other",
+                    name: Symbol::of("other"),
                     ktype: KType::NUMBER,
                 })],
             },
@@ -380,7 +383,7 @@ fn a_stored_dispatch_token_matches_what_its_owned_form_does() {
         let mut elements = vec![SignatureElement::Keyword(keyword)];
         elements.extend(slots.iter().map(|kt| {
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: Symbol::of("v"),
                 ktype: *kt,
             })
         }));

@@ -382,7 +382,7 @@ impl<'a> TestRun<'a> {
             Carried::Type(kt) => kt,
             Carried::Object(obj) => panic!(
                 "expected a type result, got value {}",
-                obj.summarize(self.types())
+                obj.summarize(self.registries())
             ),
             Carried::UnresolvedType(ti) => panic!(
                 "expected a resolved type result, got the unlowered name {}",
@@ -471,13 +471,13 @@ pub fn lookup_binding<'a>(scope: &Scope<'a>, name: &str) -> Option<&'a KObject<'
 pub(crate) fn lookup_module<'a>(
     scope: &'a Scope<'a>,
     name: &str,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> &'a Module<'a> {
     match scope.lookup(name) {
         Some(KObject::Module(module)) => module,
         other => panic!(
             "expected `{name}` to bind a module value in data, got {:?}",
-            other.map(|o| o.ktype().name(types)),
+            other.map(|o| o.ktype().name(registries)),
         ),
     }
 }
@@ -570,7 +570,10 @@ pub(crate) fn spliced_part<'a>(
 pub(crate) fn one_slot_sig<'a>(name: &'a str, kt: KType) -> SignatureDraft<'a> {
     SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::Argument(Argument { name, ktype: kt })],
+        elements: vec![SignatureElement::Argument(Argument {
+            name: crate::machine::model::Symbol::of(name),
+            ktype: kt,
+        })],
     }
 }
 

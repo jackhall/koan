@@ -16,7 +16,6 @@ use crate::machine::StepAllocator;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::KKind;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, Module};
 use crate::machine::model::{CarriedFamily, Held, KObject, KType, PartedCell, Record, TypeNode};
@@ -25,6 +24,7 @@ use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 use super::{arg, kw, sig};
 use crate::machine::DeliveredCarried;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::Symbol;
 
 /// Lift an `access_*` result into its terminal [`Action`]: a projected member — object or type —
 /// seals as a [`StepCarried`] carrier naming its reach ([`Action::done(Ok)`]), an error as a
@@ -38,7 +38,10 @@ fn route<'a>(result: Result<StepCarried<'a>, KError>) -> crate::machine::Action<
 
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
 /// type-channel leaf token (resolved or rendered), else a `MissingArg`. Mirrors [`read_field_name`].
-fn read_field_name<'a>(args: &Record<Held<'a>>, types: &TypeRegistry) -> Result<String, KError> {
+fn read_field_name<'a>(
+    args: &Record<Held<'a>>,
+    registries: &RunRegistries,
+) -> Result<String, KError> {
     use crate::machine::{arg_object, arg_type};
     if let Some(obj) = arg_object(args, "field") {
         return match obj {
@@ -46,7 +49,7 @@ fn read_field_name<'a>(args: &Record<Held<'a>>, types: &TypeRegistry) -> Result<
             other => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "field".to_string(),
                 expected: "Identifier".to_string(),
-                got: other.ktype().name(types),
+                got: other.ktype().name(registries),
             })),
         };
     }
@@ -54,7 +57,7 @@ fn read_field_name<'a>(args: &Record<Held<'a>>, types: &TypeRegistry) -> Result<
         return Ok(te.render());
     }
     if let Some(kt) = arg_type(args, "field") {
-        return Ok(kt.name(types));
+        return Ok(kt.name(registries));
     }
     Err(KError::new(KErrorKind::MissingArg("field".to_string())))
 }
@@ -74,17 +77,17 @@ pub fn body_identifier<'a>(
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
                 expected: "Identifier".to_string(),
-                got: other.ktype().name(ctx.types()),
+                got: other.ktype().name(ctx.registries),
             })));
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
-    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types()));
+    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
     // `s` is a bound name: cross the binding's own carrier as the field read's lhs operand, so the
     // projected field folds every region the bound value reaches. The lift is the only read — the
     // field probe runs under the envelope's own pins rather than off a bare reference.
     if let Some(lhs) = ctx.scope.lookup_value_delivered(&s_name) {
-        return route(access_field(&ctx.ctx, &field_name, &lhs, ctx.types()));
+        return route(access_field(&ctx.ctx, &field_name, &lhs, ctx.registries));
     }
     if let Some(kt) = ctx.scope.resolve_type(&s_name)
         && let TypeNode::AbstractType { name, .. } = ctx.types().node(kt)
@@ -103,11 +106,14 @@ pub fn body_identifier<'a>(
 pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{Action, arg_object, arg_type, arg_unresolved_type};
     if let Some(te) = arg_unresolved_type(ctx.args, "s") {
-        let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types()));
+        let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
         return match ctx.scope.resolve_type_identifier(te, None, ctx.types()) {
-            TypeResolution::Done(kt) => {
-                route(access_type_member(ctx.scope, kt, &field_name, ctx.types()))
-            }
+            TypeResolution::Done(kt) => route(access_type_member(
+                ctx.scope,
+                kt,
+                &field_name,
+                ctx.registries,
+            )),
             TypeResolution::Unbound(name) => {
                 Action::done(Err(KError::new(KErrorKind::UnboundName(name))))
             }
@@ -129,18 +135,18 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
                 Some(other) => KError::new(KErrorKind::TypeMismatch {
                     arg: "s".to_string(),
                     expected: "ProperType".to_string(),
-                    got: other.ktype().name(ctx.types()),
+                    got: other.ktype().name(ctx.registries),
                 }),
                 None => KError::new(KErrorKind::MissingArg("s".to_string())),
             }));
         }
     };
-    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types()));
+    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
     route(access_type_member(
         ctx.scope,
         s_kt,
         &field_name,
-        ctx.types(),
+        ctx.registries,
     ))
 }
 
@@ -151,7 +157,7 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mac
         Some(obj) => obj,
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
-    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types()));
+    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
     // The lhs `s` is a computed `Wrapped` value delivered to this call (e.g. `seg.finish.x`), so its
     // carrier names regions the read-site frame may not pin; cross the lhs carrier as the field
     // read's operand so the projected field outlives every region the lhs reaches. A carrier-less
@@ -160,13 +166,18 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mac
     // seal. No region-pure shape is a `Wrapped`, so that arm's diagnostic is what a construction
     // bug would surface here.
     match ctx.arg_carrier("s") {
-        Some(lhs) => route(access_field(&ctx.ctx, &field_name, lhs, ctx.types())),
+        Some(lhs) => route(access_field(&ctx.ctx, &field_name, lhs, ctx.registries)),
         None => {
             let resident = match ctx.scope.deliver_pure_value(target) {
                 Ok(resident) => resident,
                 Err(e) => return Action::done(Err(e)),
             };
-            route(access_field(&ctx.ctx, &field_name, &resident, ctx.types()))
+            route(access_field(
+                &ctx.ctx,
+                &field_name,
+                &resident,
+                ctx.registries,
+            ))
         }
     }
 }
@@ -180,7 +191,7 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
                 expected: "Module".to_string(),
-                got: other.ktype().name(ctx.types()),
+                got: other.ktype().name(ctx.registries),
             })));
         }
         None => {
@@ -191,7 +202,7 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
             })));
         }
     };
-    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types()));
+    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
     route(access_module_member(m, &field_name))
 }
 
@@ -205,8 +216,9 @@ fn access_type_member<'a>(
     scope: &Scope<'a>,
     kt: KType,
     field: &str,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<StepCarried<'a>, KError> {
+    let types = &registries.types;
     match types.node(kt) {
         // ATTR over a first-class signature value — answered from the owned schema. The
         // projected member is a clone out of that schema, allocated fresh into the read-site
@@ -221,7 +233,7 @@ fn access_type_member<'a>(
                 Some(member) => Ok(StepCarried::born(scope.resident(Carried::Type(*member)))),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
-                    kt.name(types),
+                    kt.name(registries),
                     field
                 )))),
             }
@@ -230,7 +242,7 @@ fn access_type_member<'a>(
         _ => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "a type with members".to_string(),
-            got: kt.name(types),
+            got: kt.name(registries),
         })),
     }
 }
@@ -258,26 +270,26 @@ fn abstract_type_has_no_members(name: &str) -> KError {
 fn wrapped_field_cell<'w>(
     target: &'w KObject<'w>,
     field: &str,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<PartedCell<'w>, KError> {
     match target {
         KObject::Wrapped { inner, type_id } => match inner.payload() {
-            KObject::Record(substrate, _) => match substrate.field_index(field) {
+            KObject::Record(substrate, _) => match substrate.field_index(Symbol::of(field)) {
                 Some(at) => Ok(substrate
                     .project(at)
                     .expect("the index came from this substrate's own layout")),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
-                    type_id.name(types),
+                    type_id.name(registries),
                     field
                 )))),
             },
-            payload => wrapped_field_cell(payload, field, types),
+            payload => wrapped_field_cell(payload, field, registries),
         },
         other => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "a value with fields".to_string(),
-            got: other.ktype().name(types),
+            got: other.ktype().name(registries),
         })),
     }
 }
@@ -297,12 +309,12 @@ fn access_field<'a>(
     step: &StepAllocator<'a>,
     field: &str,
     lhs: &DeliveredCarried,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<StepCarried<'a>, KError> {
     // The open borrows the envelope's own pins for the whole read, which covers both the walk and
     // the `lift_out` upgrade below.
     let opened = lhs.open_at();
-    let parted = wrapped_field_cell(opened.value().object(), field, types)?;
+    let parted = wrapped_field_cell(opened.value().object(), field, registries)?;
     match parted.value() {
         // A type member is owned data: it clones out of the container and allocates into the read
         // site's own region, so the read carries no dependence on the lhs carrier.
@@ -417,8 +429,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("ATTR"),
-                arg("s", KType::IDENTIFIER),
-                arg("field", KType::IDENTIFIER),
+                arg(registries, "s", KType::IDENTIFIER),
+                arg(registries, "field", KType::IDENTIFIER),
             ],
         )
     };
@@ -427,8 +439,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("ATTR"),
-                arg("s", KType::EMPTY_SIGNATURE),
-                arg("field", KType::IDENTIFIER),
+                arg(registries, "s", KType::EMPTY_SIGNATURE),
+                arg(registries, "field", KType::IDENTIFIER),
             ],
         )
     };
@@ -445,8 +457,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("ATTR"),
-                arg("s", KType::ANY),
-                arg("field", KType::IDENTIFIER),
+                arg(registries, "s", KType::ANY),
+                arg(registries, "field", KType::IDENTIFIER),
             ],
         )
     };
@@ -455,8 +467,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("ATTR"),
-                arg("s", KType::of_kind(KKind::ProperType)),
-                arg("field", KType::IDENTIFIER),
+                arg(registries, "s", KType::of_kind(KKind::ProperType)),
+                arg(registries, "field", KType::IDENTIFIER),
             ],
         )
     };
@@ -465,8 +477,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("ATTR"),
-                arg("s", KType::of_kind(KKind::ProperType)),
-                arg("field", KType::of_kind(KKind::ProperType)),
+                arg(registries, "s", KType::of_kind(KKind::ProperType)),
+                arg(registries, "field", KType::of_kind(KKind::ProperType)),
             ],
         )
     };
@@ -476,8 +488,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("ATTR"),
-                arg("s", KType::EMPTY_SIGNATURE),
-                arg("field", KType::of_kind(KKind::ProperType)),
+                arg(registries, "s", KType::EMPTY_SIGNATURE),
+                arg(registries, "field", KType::of_kind(KKind::ProperType)),
             ],
         )
     };
@@ -695,7 +707,7 @@ mod tests {
         let types = test_run.registry_handle();
         let result = test_run.run_one(parse_one(&program, "int_ord_view.zero"));
         assert_eq!(
-            result.ktype().name(&types),
+            result.ktype().name(types.registries()),
             "Carrier",
             "opaque-view slot read must carry the abstract `Carrier` identity, got {:?}",
             result.ktype(),

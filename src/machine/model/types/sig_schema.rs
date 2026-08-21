@@ -21,6 +21,7 @@ use super::kkind::KKind;
 use super::ktype::KType;
 use super::node::{NodeSchema, TypeNode};
 use super::registry::TypeRegistry;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::values::ModuleDraft;
 
 /// Normalized signature schema — the carrier the subtyping relation is defined over.
@@ -197,10 +198,11 @@ pub fn constructor_param_names(kt: KType, types: &TypeRegistry) -> Option<Vec<St
 pub fn unsaturated_constructor_message(
     kt: KType,
     position: &str,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Option<String> {
+    let types = &registries.types;
     let param_names = constructor_param_names(kt, types)?;
-    let name = kt.name(types);
+    let name = kt.name(registries);
     let plural = if param_names.len() == 1 { "" } else { "s" };
     let listed = param_names
         .iter()
@@ -430,8 +432,9 @@ impl SigSubtypeFailure {
 pub fn sig_subtype(
     sub: &SigSchema,
     sup: &SigSchema,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<(), Box<SigSubtypeFailure>> {
+    let types = &registries.types;
     // 1. Abstract members: present at the matching kind, and — for a constructor — over the same
     // parameter-name *set*. Parameter names are interface: a family declaring `{Item}` does not
     // supply a slot declared over `{Elem}`. The sub binding may be manifest or abstract.
@@ -456,7 +459,7 @@ pub fn sig_subtype(
             return Err(Box::new(SigSubtypeFailure::KindMismatch {
                 name: name.clone(),
                 expected_params: sup_params,
-                got: sub_binding.render(types),
+                got: sub_binding.render(registries),
             }));
         }
     }
@@ -468,8 +471,8 @@ pub fn sig_subtype(
             Some(got) => {
                 return Err(Box::new(SigSubtypeFailure::ManifestMismatch {
                     name: name.clone(),
-                    got: got.render(types),
-                    expected: fixed.render(types),
+                    got: got.render(registries),
+                    expected: fixed.render(registries),
                 }));
             }
             None => {
@@ -477,8 +480,8 @@ pub fn sig_subtype(
                 if let Some(repr) = sub.abstract_members.get(name) {
                     return Err(Box::new(SigSubtypeFailure::ManifestMismatch {
                         name: name.clone(),
-                        got: repr.render(types),
-                        expected: fixed.render(types),
+                        got: repr.render(registries),
+                        expected: fixed.render(registries),
                     }));
                 }
                 return Err(Box::new(SigSubtypeFailure::MissingTypeMember {
@@ -509,15 +512,15 @@ pub fn sig_subtype(
             }));
         };
         let ok = match sup.sig_id {
-            Some(id) => slot_satisfied_by(*declared, *sub_type, &sub_member_map, id, types),
+            Some(id) => slot_satisfied_by(*declared, *sub_type, &sub_member_map, id, registries),
             // No `sig_id`: nothing to substitute, so the heterogeneous `satisfied_by` is exact.
-            None => declared.satisfied_by(*sub_type, types),
+            None => declared.satisfied_by(*sub_type, registries),
         };
         if !ok {
             return Err(Box::new(SigSubtypeFailure::ValueSlotMismatch {
                 name: name.clone(),
-                got: sub_type.render(types),
-                expected: declared.render(types),
+                got: sub_type.render(registries),
+                expected: declared.render(registries),
             }));
         }
     }
@@ -601,27 +604,28 @@ fn slot_satisfied_by(
     sub_type: KType,
     members: &HashMap<String, KType>,
     sig_id: ScopeId,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> bool {
+    let types = &registries.types;
     if let Some(binding) = substitution_binding(declared, sig_id, members, types) {
-        return binding.satisfied_by(sub_type, types);
+        return binding.satisfied_by(sub_type, registries);
     }
     if !references_sig_member(declared, sig_id, members, types) {
-        return declared.satisfied_by(sub_type, types);
+        return declared.satisfied_by(sub_type, registries);
     }
     match (types.node(declared), types.node(sub_type)) {
         (TypeNode::List { element: ed }, TypeNode::List { element: es }) => {
-            slot_satisfied_by(ed, es, members, sig_id, types)
+            slot_satisfied_by(ed, es, members, sig_id, registries)
         }
         (TypeNode::Dict { key: kd, value: vd }, TypeNode::Dict { key: ks, value: vs }) => {
-            slot_satisfied_by(kd, ks, members, sig_id, types)
-                && slot_satisfied_by(vd, vs, members, sig_id, types)
+            slot_satisfied_by(kd, ks, members, sig_id, registries)
+                && slot_satisfied_by(vd, vs, members, sig_id, registries)
         }
         (TypeNode::Record { fields: fd }, TypeNode::Record { fields: fs }) => {
             // Record-value covariance: every slot field present in the value, covariantly.
             fd.iter().all(|(name, dt)| {
                 fs.get(name)
-                    .is_some_and(|st| slot_satisfied_by(*dt, *st, members, sig_id, types))
+                    .is_some_and(|st| slot_satisfied_by(*dt, *st, members, sig_id, registries))
             })
         }
         (
@@ -638,7 +642,7 @@ fn slot_satisfied_by(
                 && slot_types_equal(cd, cs, members, sig_id, types)
                 && ad.iter().all(|(name, d)| {
                     as_.get(name)
-                        .is_some_and(|s| slot_satisfied_by(*d, *s, members, sig_id, types))
+                        .is_some_and(|s| slot_satisfied_by(*d, *s, members, sig_id, registries))
                 })
         }
         (
@@ -656,10 +660,10 @@ fn slot_satisfied_by(
             ps.keys().all(|k| pd.get(k).is_some())
                 && ps.iter().all(|(name, sp)| {
                     pd.get(name).is_some_and(|dp| {
-                        slot_more_specific_or_equal(*dp, *sp, members, sig_id, types)
+                        slot_more_specific_or_equal(*dp, *sp, members, sig_id, registries)
                     })
                 })
-                && slot_satisfied_by(rd, rs, members, sig_id, types)
+                && slot_satisfied_by(rd, rs, members, sig_id, registries)
         }
         (TypeNode::Union { members: ud }, sub_node) => {
             // A value satisfies a substituted union slot iff it (each of its members, if it is
@@ -671,7 +675,7 @@ fn slot_satisfied_by(
             };
             ys.iter().all(|y| {
                 ud.iter()
-                    .any(|md| slot_satisfied_by(*md, *y, members, sig_id, types))
+                    .any(|md| slot_satisfied_by(*md, *y, members, sig_id, registries))
             })
         }
         _ => false,
@@ -687,13 +691,14 @@ fn slot_more_specific_or_equal(
     target: KType,
     members: &HashMap<String, KType>,
     sig_id: ScopeId,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> bool {
+    let types = &registries.types;
     if let Some(binding) = substitution_binding(declared, sig_id, members, types) {
-        return binding == target || binding.is_more_specific_than(target, types);
+        return binding == target || binding.is_more_specific_than(target, registries);
     }
     if !references_sig_member(declared, sig_id, members, types) {
-        return declared == target || declared.is_more_specific_than(target, types);
+        return declared == target || declared.is_more_specific_than(target, registries);
     }
     // The substituted slot outranks `Any` / an unconstrained name, and refines a union it has a
     // member in — the top guards of `more_specific_walk`, mirrored here.
@@ -707,15 +712,15 @@ fn slot_more_specific_or_equal(
     if let TypeNode::Union { members: ts } = &target_node {
         return ts
             .iter()
-            .any(|t| slot_more_specific_or_equal(declared, *t, members, sig_id, types));
+            .any(|t| slot_more_specific_or_equal(declared, *t, members, sig_id, registries));
     }
     match (types.node(declared), target_node) {
         (TypeNode::List { element: ed }, TypeNode::List { element: et }) => {
-            slot_more_specific_or_equal(ed, et, members, sig_id, types)
+            slot_more_specific_or_equal(ed, et, members, sig_id, registries)
         }
         (TypeNode::Dict { key: kd, value: vd }, TypeNode::Dict { key: kt, value: vt }) => {
-            slot_more_specific_or_equal(kd, kt, members, sig_id, types)
-                && slot_more_specific_or_equal(vd, vt, members, sig_id, types)
+            slot_more_specific_or_equal(kd, kt, members, sig_id, registries)
+                && slot_more_specific_or_equal(vd, vt, members, sig_id, registries)
         }
         (TypeNode::Record { fields: fd }, TypeNode::Record { fields: ft }) => {
             // Record-value covariance with width-superset: the more-specific record has every
@@ -723,7 +728,7 @@ fn slot_more_specific_or_equal(
             ft.keys().all(|k| fd.get(k).is_some())
                 && ft.iter().all(|(name, tt)| {
                     fd.get(name).is_some_and(|dt| {
-                        slot_more_specific_or_equal(*dt, *tt, members, sig_id, types)
+                        slot_more_specific_or_equal(*dt, *tt, members, sig_id, registries)
                     })
                 })
         }
@@ -741,7 +746,7 @@ fn slot_more_specific_or_equal(
                 && slot_types_equal(cd, ct, members, sig_id, types)
                 && ad.iter().all(|(name, d)| {
                     at.get(name).is_some_and(|t| {
-                        slot_more_specific_or_equal(*d, *t, members, sig_id, types)
+                        slot_more_specific_or_equal(*d, *t, members, sig_id, registries)
                     })
                 })
         }
@@ -759,9 +764,9 @@ fn slot_more_specific_or_equal(
             pd.keys().all(|k| pt.get(k).is_some())
                 && pd.iter().all(|(name, dp)| {
                     pt.get(name)
-                        .is_some_and(|tp| slot_satisfied_by(*dp, *tp, members, sig_id, types))
+                        .is_some_and(|tp| slot_satisfied_by(*dp, *tp, members, sig_id, registries))
                 })
-                && slot_more_specific_or_equal(rd, rt, members, sig_id, types)
+                && slot_more_specific_or_equal(rd, rt, members, sig_id, registries)
         }
         _ => false,
     }

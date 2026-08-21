@@ -2,10 +2,10 @@
 
 use crate::machine::ProducerId;
 use crate::machine::model::KType;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, SignatureElement};
 use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{RunRegistries, Symbol};
 use crate::source::Spanned;
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface
@@ -70,15 +70,14 @@ pub(crate) enum ParamListOutcome<'a> {
 pub(crate) fn parse_fn_param_list<'a>(
     signature: &KExpression<'a>,
     elaborator: &mut Elaborator<'_, 'a>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
     resolved: Option<&[(usize, KType)]>,
 ) -> ParamListOutcome<'a> {
+    let types = &registries.types;
     let parts = signature.parts;
-    // Parameter names and fixed tokens ride as `&'a str`: a token and a bare identifier already
-    // borrow program storage, and the one synthesized name (a bare-leaf `Type` part in
-    // parameter-name position) is bumped here so the draft holds a borrow rather than a `String`.
-    // The mint door re-homes all of them at the function's own region.
-    let brand = elaborator.scope.brand();
+    // A parameter name is syntactic, so it interns to a `Symbol` here — including the one
+    // synthesized name (a bare-leaf `Type` part in parameter-name position). Keyword tokens keep
+    // riding as `&'a str`; the mint door re-homes those at the function's own region.
     let mut elements: Vec<SignatureElement<'a>> = Vec::with_capacity(parts.len());
     let mut awaited: Vec<ProducerId> = Vec::new();
     let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
@@ -87,9 +86,15 @@ pub(crate) fn parse_fn_param_list<'a>(
     while i < parts.len() {
         // A bare-leaf `Type` part (e.g. `er` in `FN (LIFT er: Ordered) -> ...`) in
         // parameter-name position denotes a binder, not a type reference.
-        let param_name: Option<&'a str> = match parts[i].value {
-            ExpressionPart::Identifier(name) => Some(name),
-            ExpressionPart::Type(t) => Some(brand.allocator().text(&t.render())),
+        let param_name: Option<(String, Symbol)> = match parts[i].value {
+            ExpressionPart::Identifier(name) => {
+                Some((name.to_string(), registries.labels.intern(name)))
+            }
+            ExpressionPart::Type(t) => {
+                let rendered = t.render();
+                let symbol = registries.labels.intern(&rendered);
+                Some((rendered, symbol))
+            }
             _ => None,
         };
         match (param_name, parts[i].value) {
@@ -97,7 +102,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                 elements.push(SignatureElement::Keyword(s));
                 i += 1;
             }
-            (Some(name), _) => {
+            (Some((name, symbol)), _) => {
                 let slot_idx = i + 1;
                 let ty = parts.get(slot_idx).map(|p| p.value);
                 let feed = resolved.and_then(|r| {
@@ -108,8 +113,10 @@ pub(crate) fn parse_fn_param_list<'a>(
                     (Some(ExpressionPart::Type(t)), _) => {
                         match elaborate_type_identifier(elaborator, &t, types) {
                             TypeResolution::Done(kt) => {
-                                elements
-                                    .push(SignatureElement::Argument(Argument { name, ktype: kt }));
+                                elements.push(SignatureElement::Argument(Argument {
+                                    name: symbol,
+                                    ktype: kt,
+                                }));
                             }
                             TypeResolution::Park(producers) => {
                                 awaited.extend(producers);
@@ -134,7 +141,10 @@ pub(crate) fn parse_fn_param_list<'a>(
                         // finish rejected a non-type terminal before feeding it here. The type is an
                         // interned handle, fed back positionally rather than spliced into the
                         // expression.
-                        elements.push(SignatureElement::Argument(Argument { name, ktype }));
+                        elements.push(SignatureElement::Argument(Argument {
+                            name: symbol,
+                            ktype,
+                        }));
                         i += 2;
                     }
                     (Some(ExpressionPart::Expression(inner)), None) => {

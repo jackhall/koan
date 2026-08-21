@@ -7,7 +7,6 @@ use crate::machine::core::RegionBrand;
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{ExpressionPart, KLiteral, WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, DispatchOutcome, LexicalFrame};
@@ -37,12 +36,12 @@ fn two_slot_sig<'a>(a: KType, b: KType) -> SignatureDraft<'a> {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
-                name: "a",
+                name: crate::machine::model::Symbol::of("a"),
                 ktype: a,
             }),
             SignatureElement::Keyword("OP"),
             SignatureElement::Argument(Argument {
-                name: "b",
+                name: crate::machine::model::Symbol::of("b"),
                 ktype: b,
             }),
         ],
@@ -53,7 +52,6 @@ fn two_slot_sig<'a>(a: KType, b: KType) -> SignatureDraft<'a> {
 #[test]
 fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     register_builtin(
@@ -68,8 +66,9 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     // ONE was registered at `scope`'s BUILTIN index (0); root the chain there one past it
     // so the registration is visible.
     let chain = LexicalFrame::root(scope.id, 1);
-    match drive_scratch(|scratch| scope.resolve_dispatch(&expr, Some(&chain), &[], types, scratch))
-    {
+    match drive_scratch(|scratch| {
+        scope.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
+    }) {
         DispatchOutcome::Resolved(r) => {
             assert_eq!(r.slots.wrap_indices, vec![0]);
         }
@@ -80,7 +79,6 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
 #[test]
 fn resolve_returns_ambiguous_for_tied_overloads() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     register_builtin(
@@ -110,8 +108,9 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
     // NA and AN were both registered at `scope`'s BUILTIN index (0); root the chain there
     // one past it so both are visible and can tie.
     let chain = LexicalFrame::root(scope.id, 1);
-    match drive_scratch(|scratch| scope.resolve_dispatch(&expr, Some(&chain), &[], types, scratch))
-    {
+    match drive_scratch(|scratch| {
+        scope.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
+    }) {
         DispatchOutcome::Ambiguous(n) => assert_eq!(n, 2),
         _ => panic!("expected Ambiguous(2) for tied overloads"),
     }
@@ -122,7 +121,6 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
 #[test]
 fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     // User-position (not BUILTIN) so the builtin root-first short-circuit doesn't fire —
@@ -133,7 +131,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
         two_slot_sig(KType::NUMBER, KType::NUMBER),
         body_a,
         BindingIndex::value(1),
-        &TypeRegistry::new(),
+        &RunRegistries::new(),
         &mut crate::machine::WriteGate::for_test(),
     );
     let inner = outer.alloc_child_under();
@@ -165,8 +163,9 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     // past it. `outer` is never named on this chain, so `OUTER` (index 1) stays visible
     // through the unmentioned-scope "fully visible" rule.
     let chain = LexicalFrame::root(inner.id, 1);
-    match drive_scratch(|scratch| inner.resolve_dispatch(&expr, Some(&chain), &[], types, scratch))
-    {
+    match drive_scratch(|scratch| {
+        inner.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
+    }) {
         DispatchOutcome::Ambiguous(_) => {}
         _ => panic!("inner ambiguity must surface, not fall through to outer's unique overload"),
     }
@@ -177,7 +176,6 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
 #[test]
 fn resolve_tentative_falls_back_only_when_strict_empty() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     register_builtin(
@@ -196,7 +194,13 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
     // it so the registration is visible.
     let chain = LexicalFrame::root(scope.id, 1);
     assert!(matches!(
-        drive_scratch(|scratch| scope.resolve_dispatch(&expr, Some(&chain), &[], types, scratch)),
+        drive_scratch(|scratch| scope.resolve_dispatch(
+            &expr,
+            Some(&chain),
+            &[],
+            &registries,
+            scratch
+        )),
         DispatchOutcome::Unmatched
     ));
 }
@@ -209,7 +213,6 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
 #[test]
 fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     register_builtin(
@@ -238,7 +241,13 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     // it so the registration is visible.
     let chain = LexicalFrame::root(scope.id, 1);
     assert!(matches!(
-        drive_scratch(|scratch| scope.resolve_dispatch(&expr, Some(&chain), &[], types, scratch)),
+        drive_scratch(|scratch| scope.resolve_dispatch(
+            &expr,
+            Some(&chain),
+            &[],
+            &registries,
+            scratch
+        )),
         DispatchOutcome::Deferred
     ));
 }
@@ -249,7 +258,6 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
 #[test]
 fn pending_overload_parks_only_on_exact_bucket_match() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     use crate::machine::ProducerId;
     use crate::machine::model::{UntypedElement, UntypedKey};
     let region = run_root_storage();
@@ -277,8 +285,9 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     // The pending overload was installed at `scope`'s BUILTIN index (0); root the chain
     // there one past it so it is visible.
     let chain = LexicalFrame::root(scope.id, 1);
-    match drive_scratch(|scratch| scope.resolve_dispatch(&bare, Some(&chain), &[], types, scratch))
-    {
+    match drive_scratch(|scratch| {
+        scope.resolve_dispatch(&bare, Some(&chain), &[], &registries, scratch)
+    }) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![ProducerId::for_test(42)]),
         other => panic!(
             "expected ParkOnProducers([42]) for matching bucket, got {}",
@@ -301,7 +310,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
                 &multi,
                 Some(&chain),
                 &[],
-                types,
+                &registries,
                 scratch
             )),
             DispatchOutcome::Unmatched
@@ -316,7 +325,6 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
 #[test]
 fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     use crate::machine::ProducerId;
     let region = run_root_storage();
     let outer = run_root_bare(&region);
@@ -326,7 +334,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
         elements: vec![
             SignatureElement::Keyword("MARK"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: crate::machine::model::Symbol::of("v"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -339,7 +347,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
         outer_sig,
         body_a,
         BindingIndex::value(1),
-        &TypeRegistry::new(),
+        &RunRegistries::new(),
         &mut crate::machine::WriteGate::for_test(),
     );
 
@@ -358,8 +366,9 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     // `inner` one past it. `outer` is never named on this chain, so its strict Pick at
     // index 1 stays visible through the unmentioned-scope "fully visible" rule.
     let chain = LexicalFrame::root(inner.id, 1);
-    match drive_scratch(|scratch| inner.resolve_dispatch(&expr, Some(&chain), &[], types, scratch))
-    {
+    match drive_scratch(|scratch| {
+        inner.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
+    }) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
             ps,
             vec![ProducerId::for_test(55)],
@@ -378,7 +387,6 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
 #[test]
 fn inner_scope_eager_lean_shadows_outer_strict_pick() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     // Outer overload that would strictly Pick once the eager sub resolves.
@@ -423,7 +431,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
                 &expr,
                 Some(&chain),
                 &[],
-                types,
+                &registries,
                 scratch
             )),
             DispatchOutcome::Deferred
@@ -438,7 +446,6 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
 #[test]
 fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     use crate::machine::execute::Resolution;
     let region = run_root_storage();
     let outer = run_root_bare(&region);
@@ -469,7 +476,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     // through the unmentioned-scope "fully visible" rule.
     let chain = LexicalFrame::root(inner.id, 1);
     match drive_scratch(|scratch| {
-        inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, types, scratch)
+        inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, &registries, scratch)
     }) {
         DispatchOutcome::Resolved(r) => assert!(
             matches!(
@@ -505,7 +512,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         elements: vec![
             SignatureElement::Keyword("PICK"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: crate::machine::model::Symbol::of("v"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -516,6 +523,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             "pick_num".to_string(),
             &pick_num_fn,
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("register pick_num overload");
@@ -540,8 +548,9 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     // finalizing overload below lands at index 3 too; root the chain on `scope` one past
     // the highest of those so every entry stays visible across both resolves below.
     let chain = LexicalFrame::root(scope.id, 4);
-    match drive_scratch(|scratch| scope.resolve_dispatch(&expr, Some(&chain), &[], types, scratch))
-    {
+    match drive_scratch(|scratch| {
+        scope.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
+    }) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
             ps,
             vec![ProducerId::for_test(77)],
@@ -561,7 +570,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         elements: vec![
             SignatureElement::Keyword("PICK"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: crate::machine::model::Symbol::of("v"),
                 ktype: KType::STR,
             }),
         ],
@@ -573,12 +582,14 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             "pick_str".to_string(),
             &sibling,
             BindingIndex::value(3),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("register sibling overload");
 
-    match drive_scratch(|scratch| scope.resolve_dispatch(&expr, Some(&chain), &[], types, scratch))
-    {
+    match drive_scratch(|scratch| {
+        scope.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
+    }) {
         DispatchOutcome::Resolved(_) => {}
         other => panic!(
             "bucket must resolve once the pending sibling finalizes; got {}",
@@ -610,7 +621,6 @@ fn scope_install_pending<'a>(
 #[test]
 fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     use crate::machine::ProducerId;
     use crate::machine::model::{UntypedElement, UntypedKey};
     let region = run_root_storage();
@@ -650,8 +660,9 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     // The two sibling pending overloads finalize at indices 3 and 4; root the chain on
     // `scope` one past the higher so both stay visible.
     let chain = LexicalFrame::root(scope.id, 5);
-    match drive_scratch(|scratch| scope.resolve_dispatch(&expr, Some(&chain), &[], types, scratch))
-    {
+    match drive_scratch(|scratch| {
+        scope.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
+    }) {
         DispatchOutcome::ParkOnProducers(ps) => {
             assert_eq!(
                 ps,
@@ -673,7 +684,6 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
 #[test]
 fn parked_bare_name_parks_before_any_pick() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     use crate::machine::ProducerId;
     use crate::machine::execute::Resolution;
     let region = run_root_storage();
@@ -707,7 +717,7 @@ fn parked_bare_name_parks_before_any_pick() {
     let bare_outcomes = vec![Some(Resolution::Parked(producer)), None, None];
     let chain = LexicalFrame::root(scope.id, 1);
     match drive_scratch(|scratch| {
-        scope.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, types, scratch)
+        scope.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, &registries, scratch)
     }) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![producer]),
         other => panic!(
@@ -727,7 +737,6 @@ fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
     use crate::machine::execute::Resolution;
     use crate::machine::model::{KExpression, TypeIdentifier};
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let brand = region.brand();
@@ -760,7 +769,7 @@ fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
                 &decl,
                 Some(&chain),
                 &outcomes,
-                types,
+                &registries,
                 scratch
             )),
             DispatchOutcome::ParkOnProducers(_)
@@ -780,7 +789,7 @@ fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
                 &alias,
                 Some(&chain),
                 &outcomes,
-                types,
+                &registries,
                 scratch
             )),
             DispatchOutcome::ParkOnProducers(_)
@@ -796,7 +805,7 @@ fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
     let producer = ProducerId::for_test(11);
     let outcomes = vec![None, None, None, Some(Resolution::Parked(producer))];
     match drive_scratch(|scratch| {
-        scope.resolve_dispatch(&reference, Some(&chain), &outcomes, types, scratch)
+        scope.resolve_dispatch(&reference, Some(&chain), &outcomes, &registries, scratch)
     }) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![producer]),
         other => panic!(

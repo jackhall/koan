@@ -97,7 +97,7 @@ fn name_renders_parameterized_list() {
     let types = &registries.types;
     let inner = types.list(KType::NUMBER);
     assert_eq!(
-        types.list(inner).name(types),
+        types.list(inner).name(&registries),
         ":(LIST OF :(LIST OF Number))"
     );
 }
@@ -107,7 +107,7 @@ fn name_renders_dict() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let t = types.dict(KType::STR, KType::NUMBER);
-    assert_eq!(t.name(types), ":(MAP Str -> Number)");
+    assert_eq!(t.name(&registries), ":(MAP Str -> Number)");
 }
 
 #[test]
@@ -115,10 +115,13 @@ fn name_renders_function() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let t = types.function_type(
-        Record::from_pairs(vec![("x".into(), KType::NUMBER), ("y".into(), KType::STR)]),
+        Record::from_pairs(vec![
+            (registries.labels.intern("x"), KType::NUMBER),
+            (registries.labels.intern("y"), KType::STR),
+        ]),
         KType::BOOL,
     );
-    assert_eq!(t.name(types), ":(FN (x :Number y :Str) -> Bool)");
+    assert_eq!(t.name(&registries), ":(FN (x :Number y :Str) -> Bool)");
 }
 
 /// A nested sigiled parameter type already opens with `:`, so the renderer must not prefix a
@@ -129,10 +132,13 @@ fn name_renders_function_with_sigiled_param() {
     let types = &registries.types;
     let list_of_number = types.list(KType::NUMBER);
     let t = types.function_type(
-        Record::from_pairs(vec![("xs".into(), list_of_number)]),
+        Record::from_pairs(vec![(registries.labels.intern("xs"), list_of_number)]),
         KType::NUMBER,
     );
-    assert_eq!(t.name(types), ":(FN (xs :(LIST OF Number)) -> Number)");
+    assert_eq!(
+        t.name(&registries),
+        ":(FN (xs :(LIST OF Number)) -> Number)"
+    );
 }
 
 #[test]
@@ -140,16 +146,15 @@ fn name_renders_function_nullary() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let t = types.function_type(Record::new(), KType::NULL);
-    assert_eq!(t.name(types), ":(FN () -> Null)");
+    assert_eq!(t.name(&registries), ":(FN () -> Null)");
 }
 
 #[test]
 fn nominal_kind_surface_keywords() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
-    assert_eq!(KType::of_kind(KKind::NewType).name(types), "NewType");
+    assert_eq!(KType::of_kind(KKind::NewType).name(&registries), "NewType");
     assert_eq!(
-        KType::of_kind(KKind::TypeConstructor).name(types),
+        KType::of_kind(KKind::TypeConstructor).name(&registries),
         "TypeConstructor"
     );
 }
@@ -159,9 +164,11 @@ fn nominal_kind_surface_keywords() {
 #[test]
 fn any_module_and_any_signature_render_surface_keywords() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
-    assert_eq!(KType::EMPTY_SIGNATURE.name(types), "Module");
-    assert_eq!(KType::of_kind(KKind::Signature).name(types), "Signature");
+    assert_eq!(KType::EMPTY_SIGNATURE.name(&registries), "Module");
+    assert_eq!(
+        KType::of_kind(KKind::Signature).name(&registries),
+        "Signature"
+    );
 }
 
 /// A non-empty interface has no declaration label to print, so it renders structurally, in
@@ -174,7 +181,7 @@ fn non_empty_signature_renders_its_members_structurally() {
     schema.value_slots.insert("zero".into(), KType::NUMBER);
     schema.value_slots.insert("label".into(), KType::STR);
     let sig = types.signature(schema);
-    assert_eq!(sig.name(types), "SIG (label: Str, zero: Number)");
+    assert_eq!(sig.name(&registries), "SIG (label: Str, zero: Number)");
 }
 
 /// `:(A | B)` renders members joined by ` | ` and wrapped in the type sigil.
@@ -183,7 +190,7 @@ fn name_renders_union() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let t = types.union_of(vec![KType::NUMBER, KType::STR]);
-    assert_eq!(t.name(types), ":(Number | Str)");
+    assert_eq!(t.name(&registries), ":(Number | Str)");
 }
 
 /// A compound member already opens its own sigil, which nests without a doubled colon.
@@ -193,7 +200,7 @@ fn name_renders_union_with_compound_member() {
     let types = &registries.types;
     let list_of_number = types.list(KType::NUMBER);
     let t = types.union_of(vec![list_of_number, KType::NULL]);
-    assert_eq!(t.name(types), ":(:(LIST OF Number) | Null)");
+    assert_eq!(t.name(&registries), ":(:(LIST OF Number) | Null)");
 }
 
 // --- Identity ---
@@ -272,11 +279,17 @@ fn function_params_order_blind_identity() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let forward = types.function_type(
-        Record::from_pairs(vec![("x".into(), KType::NUMBER), ("y".into(), KType::STR)]),
+        Record::from_pairs(vec![
+            (registries.labels.intern("x"), KType::NUMBER),
+            (registries.labels.intern("y"), KType::STR),
+        ]),
         KType::BOOL,
     );
     let reversed = types.function_type(
-        Record::from_pairs(vec![("y".into(), KType::STR), ("x".into(), KType::NUMBER)]),
+        Record::from_pairs(vec![
+            (registries.labels.intern("y"), KType::STR),
+            (registries.labels.intern("x"), KType::NUMBER),
+        ]),
         KType::BOOL,
     );
     assert_eq!(forward, reversed);
@@ -289,11 +302,11 @@ fn function_params_name_sensitive_identity() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let by_x = types.function_type(
-        Record::from_pairs(vec![("x".into(), KType::NUMBER)]),
+        Record::from_pairs(vec![(registries.labels.intern("x"), KType::NUMBER)]),
         KType::BOOL,
     );
     let by_y = types.function_type(
-        Record::from_pairs(vec![("y".into(), KType::NUMBER)]),
+        Record::from_pairs(vec![(registries.labels.intern("y"), KType::NUMBER)]),
         KType::BOOL,
     );
     assert_ne!(by_x, by_y);

@@ -34,7 +34,7 @@ pub fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         ctx.args,
         "name",
         "MODULE",
-        ctx.types()
+        ctx.registries
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
     let announced = crate::try_action!(announce_type_members(&body_expr, &name));
@@ -143,7 +143,7 @@ pub(super) fn await_module_body<'a>(
         // The self-sig is derived from the draft and interned before the module exists — a
         // plain module carries no SIG, so the raw derivation is the whole signature.
         let self_sig = fctx
-            .types
+            .types()
             .signature(SigSchema::raw_self_sig(child_scope, &draft));
         let module: &'a Module<'a> =
             Module::alloc_at_child_scope(&name_for_finish, child_scope, draft, self_sig);
@@ -203,7 +203,7 @@ pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         ctx.args,
         "name",
         "MODULE",
-        ctx.types()
+        ctx.registries
     ));
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "module `{name}` is named with a Type token, but a module is a value — the Type-token \
@@ -218,9 +218,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::EMPTY_SIGNATURE,
             vec![
                 kw("MODULE"),
-                arg("name", name_kt),
+                arg(registries, "name", name_kt),
                 kw("="),
-                arg("body", KType::KEXPRESSION),
+                arg(registries, "body", KType::KEXPRESSION),
             ],
         )
     };

@@ -29,13 +29,13 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let return_type = types.constructor_apply(
         result_ctor,
         Record::from_pairs([
-            ("Ok".to_string(), KType::ANY),
-            ("Error".to_string(), kerror_ktype(types)),
+            (registries.labels.intern("Ok"), KType::ANY),
+            (registries.labels.intern("Error"), kerror_ktype(types)),
         ]),
     );
     let signature = sig(
         return_type,
-        vec![kw("CATCH"), arg("expr", KType::KEXPRESSION)],
+        vec![kw("CATCH"), arg(registries, "expr", KType::KEXPRESSION)],
     );
     crate::builtins::register_builtin(scope, "CATCH", signature, body, registries, gate);
 }
@@ -83,7 +83,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         let carrier = match &result {
             Ok(carrier) => carrier,
             Err(e) => {
-                tagged_envelope = e.to_tagged_delivered(fctx.scope, fctx.types);
+                tagged_envelope = e.to_tagged_delivered(fctx.scope, fctx.registries);
                 &tagged_envelope
             }
         };

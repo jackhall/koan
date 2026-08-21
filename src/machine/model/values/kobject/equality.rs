@@ -23,6 +23,7 @@ use crate::machine::model::types::{KType, TypeRegistry};
 use crate::machine::model::values::Held;
 
 use super::KObject;
+use crate::machine::model::RunRegistries;
 
 #[cfg(test)]
 mod tests;
@@ -39,8 +40,8 @@ pub enum ValueEqualityError {
 /// Comparability gate for two containers' memoized types: the two are compared iff one
 /// `satisfied_by` the other in either direction (an unrelated pair short-circuits the container to
 /// `Ok(false)`).
-fn types_related(a: KType, b: KType, types: &TypeRegistry) -> bool {
-    a.satisfied_by(b, types) || b.satisfied_by(a, types)
+fn types_related(a: KType, b: KType, registries: &RunRegistries) -> bool {
+    a.satisfied_by(b, registries) || b.satisfied_by(a, registries)
 }
 
 impl<'a> KObject<'a> {
@@ -56,8 +57,9 @@ impl<'a> KObject<'a> {
     pub fn value_equal<'b>(
         &self,
         other: &KObject<'b>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> Result<bool, ValueEqualityError> {
+        let types = &registries.types;
         match (self, other) {
             // Banned operands first, so the error fires even against a mismatched-variant partner.
             (KObject::KFunction(_), _) | (_, KObject::KFunction(_)) => {
@@ -72,11 +74,11 @@ impl<'a> KObject<'a> {
 
             (KObject::List(substrate_a, type_a), KObject::List(substrate_b, type_b)) => {
                 let (items_a, items_b) = (substrate_a.elements(), substrate_b.elements());
-                if !types_related(*type_a, *type_b, types) || items_a.len() != items_b.len() {
+                if !types_related(*type_a, *type_b, registries) || items_a.len() != items_b.len() {
                     return Ok(false);
                 }
                 for (a, b) in items_a.iter().zip(items_b.iter()) {
-                    if !held_equal(a, b, types)? {
+                    if !held_equal(a, b, registries)? {
                         return Ok(false);
                     }
                 }
@@ -84,13 +86,14 @@ impl<'a> KObject<'a> {
             }
 
             (KObject::Dict(substrate_a, type_a), KObject::Dict(substrate_b, type_b)) => {
-                if !types_related(*type_a, *type_b, types) || substrate_a.len() != substrate_b.len()
+                if !types_related(*type_a, *type_b, registries)
+                    || substrate_a.len() != substrate_b.len()
                 {
                     return Ok(false);
                 }
                 for (key, held_a) in substrate_a.entries() {
                     match substrate_b.entry(key) {
-                        Some(held_b) if held_equal(held_a, held_b, types)? => {}
+                        Some(held_b) if held_equal(held_a, held_b, registries)? => {}
                         _ => return Ok(false),
                     }
                 }
@@ -98,14 +101,15 @@ impl<'a> KObject<'a> {
             }
 
             (KObject::Record(substrate_a, type_a), KObject::Record(substrate_b, type_b)) => {
-                if !types_related(*type_a, *type_b, types) || substrate_a.len() != substrate_b.len()
+                if !types_related(*type_a, *type_b, registries)
+                    || substrate_a.len() != substrate_b.len()
                 {
                     return Ok(false);
                 }
                 // Order-blind: same name set, per-name held equality.
                 for (name, held_a) in substrate_a.fields() {
                     match substrate_b.field(name) {
-                        Some(held_b) if held_equal(held_a, held_b, types)? => {}
+                        Some(held_b) if held_equal(held_a, held_b, registries)? => {}
                         _ => return Ok(false),
                     }
                 }
@@ -130,7 +134,7 @@ impl<'a> KObject<'a> {
                 if identity_a != identity_b {
                     return Ok(false);
                 }
-                value_a.payload().value_equal(value_b.payload(), types)
+                value_a.payload().value_equal(value_b.payload(), registries)
             }
 
             (
@@ -148,7 +152,7 @@ impl<'a> KObject<'a> {
                 if type_id_a != type_id_b {
                     return Ok(false);
                 }
-                inner_a.payload().value_equal(inner_b.payload(), types)
+                inner_a.payload().value_equal(inner_b.payload(), registries)
             }
 
             (KObject::KExpression(a), KObject::KExpression(b)) => expression_equal(a, b, types),
@@ -164,10 +168,10 @@ impl<'a> KObject<'a> {
 fn held_equal<'a, 'b>(
     a: &Held<'a>,
     b: &Held<'b>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<bool, ValueEqualityError> {
     match (a, b) {
-        (Held::Object(oa), Held::Object(ob)) => oa.value_equal(ob, types),
+        (Held::Object(oa), Held::Object(ob)) => oa.value_equal(ob, registries),
         (Held::Type(ta), Held::Type(tb)) => Ok(ta == tb),
         _ => Ok(false),
     }

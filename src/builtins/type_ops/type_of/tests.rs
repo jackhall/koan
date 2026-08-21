@@ -36,7 +36,7 @@ fn type_of_module_is_its_self_sig() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("MODULE int_ord = ((LET Elt = Number) (LET zero = 7))");
-    let module = lookup_module(scope, "int_ord", test_run.types());
+    let module = lookup_module(scope, "int_ord", test_run.registries());
     let result = test_run.run_one_type(parse_one(&program, "TYPE OF int_ord"));
     assert!(
         matches!(test_run.types().node(result), TypeNode::Signature { .. }),
@@ -62,8 +62,8 @@ fn type_of_opaque_view_reports_the_view_not_its_source() {
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          LET view = (int_ord :| Ordered)",
     );
-    let view = lookup_module(scope, "view", test_run.types());
-    let source = lookup_module(scope, "int_ord", test_run.types());
+    let view = lookup_module(scope, "view", test_run.registries());
+    let source = lookup_module(scope, "int_ord", test_run.registries());
     let result = test_run.run_one_type(parse_one(&program, "TYPE OF view"));
     let types = test_run.types();
     match types.node(result) {
@@ -130,7 +130,7 @@ fn type_of_module_types_a_parameter_slot() {
     assert!(
         matches!(result, KObject::Number(n) if *n == 7.0),
         "expected the module's `zero`, got {}",
-        result.summarize(test_run.types()),
+        result.summarize(test_run.registries()),
     );
 }
 
@@ -150,7 +150,7 @@ fn type_of_parameter_defers_a_return_type() {
     assert!(
         matches!(result, KObject::Module(_)),
         "the deferred return must admit the module it was resolved from, got {}",
-        result.summarize(test_run.types()),
+        result.summarize(test_run.registries()),
     );
 }
 
@@ -176,7 +176,7 @@ fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
     assert!(
         matches!(result, KObject::Number(n) if *n == 3.0),
         "the alias must admit the functor-minted module, got {}",
-        result.summarize(test_run.types()),
+        result.summarize(test_run.registries()),
     );
 }
 
@@ -223,9 +223,9 @@ fn identical_modules_share_type_of() {
          MODULE m2 = ((LET Elt = Number) (LET zero = 7))\n\
          MODULE m3 = ((LET Elt = Str) (LET zero = 7))",
     );
-    let m1 = lookup_module(scope, "m1", test_run.types());
-    let m2 = lookup_module(scope, "m2", test_run.types());
-    let m3 = lookup_module(scope, "m3", test_run.types());
+    let m1 = lookup_module(scope, "m1", test_run.registries());
+    let m2 = lookup_module(scope, "m2", test_run.registries());
+    let m3 = lookup_module(scope, "m3", test_run.registries());
     assert_eq!(
         KObject::Module(m1).ktype(),
         KObject::Module(m2).ktype(),

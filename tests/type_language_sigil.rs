@@ -16,7 +16,7 @@
 use std::rc::Rc;
 
 use koan::builtins::test_support::{TestRun, lookup_binding};
-use koan::machine::model::{KKind, KObject, KType, NodeSchema, TypeNode, TypeRegistry};
+use koan::machine::model::{KKind, KObject, KType, NodeSchema, Symbol, TypeNode, TypeRegistry};
 use koan::machine::{FrameStorage, ProgramStorage, Scope, program_storage, run_root_storage};
 
 /// Run `src` to completion and hand back the whole run — the seeded scope tests assert
@@ -143,8 +143,8 @@ fn sigil_fn_lowers_to_kfunction_named() {
     match test_run.types().node(cmp) {
         TypeNode::KFunction { params, ret } => {
             assert_eq!(params.len(), 2);
-            assert_eq!(params.get("x"), Some(&KType::NUMBER));
-            assert_eq!(params.get("y"), Some(&KType::STR));
+            assert_eq!(params.get(Symbol::of("x")), Some(&KType::NUMBER));
+            assert_eq!(params.get(Symbol::of("y")), Some(&KType::STR));
             assert_eq!(ret, KType::BOOL);
         }
         _ => panic!("compare must be KType::KFunction, got {cmp:?}"),
@@ -187,7 +187,10 @@ fn sigil_fn_type_param_and_module_return_lowers_to_kfunction() {
     match test_run.types().node(mk) {
         TypeNode::KFunction { params, ret } => {
             assert_eq!(params.len(), 1);
-            assert_eq!(params.get("Ty"), Some(&KType::of_kind(KKind::Signature)));
+            assert_eq!(
+                params.get(Symbol::of("Ty")),
+                Some(&KType::of_kind(KKind::Signature))
+            );
             assert_eq!(ret, KType::EMPTY_SIGNATURE);
         }
         _ => panic!("mk must be KType::KFunction, got {mk:?}"),
@@ -245,7 +248,7 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
     };
     assert_eq!(fields.len(), 1);
     let (xs_name, xs_type) = fields.iter().next().expect("one field");
-    assert_eq!(xs_name, "xs");
+    assert_eq!(xs_name, Symbol::of("xs"));
     match test_run.types().node(*xs_type) {
         TypeNode::List { element } => assert_eq!(element, KType::NUMBER),
         _ => panic!("xs must be KType::List(Number), got {xs_type:?}"),
@@ -322,17 +325,19 @@ fn sigil_fn_forward_reference_defers_via_combine() {
         TypeNode::KFunction { params, ret } => {
             assert_eq!(params.len(), 1);
             // Ordered resolves to its `Signature { .. }` identity post-dep-finish.
-            let ty = *params.get("Ty").expect("param `Ty` must be present");
+            let ty = *params
+                .get(Symbol::of("Ty"))
+                .expect("param `Ty` must be present");
             // A resolved signature now renders structurally, not by declared name: Ordered's
             // interface (its sole member `compare :Number`) renders `SIG (compare: Number)`.
             // Seeing that member content confirms the forward reference resolved to Ordered's
             // Signature identity through the deferral path (rather than a bare kind placeholder).
             assert!(
-                ty.name(test_run.types()).contains("compare")
+                ty.name(test_run.registries()).contains("compare")
                     || ty == KType::of_kind(KKind::Signature),
                 "param `Ty` should carry Ordered's resolved interface, got {ty:?} \
                  (name: {:?})",
-                ty.name(test_run.types()),
+                ty.name(test_run.registries()),
             );
             assert_eq!(ret, KType::EMPTY_SIGNATURE);
         }

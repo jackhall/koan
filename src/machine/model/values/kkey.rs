@@ -2,7 +2,8 @@ use std::hash::{Hash, Hasher};
 
 use super::kobject::KObject;
 use crate::machine::core::SubstrateDoor;
-use crate::machine::model::types::{KType, Parseable, TypeRegistry};
+use crate::machine::model::RunRegistries;
+use crate::machine::model::types::{KType, Parseable};
 
 /// Concrete dict-key value for the `KObject::Dict` map. Restricted to the hashable scalars;
 /// non-scalar keys are rejected at construction via [`Self::try_from_kobject`].
@@ -34,7 +35,7 @@ impl<'a> KKey<'a> {
     /// the table, so residence is settled there rather than here.
     pub fn try_from_kobject(
         obj: &'a KObject<'a>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> Result<KKey<'a>, String> {
         match obj {
             KObject::KString(s) => Ok(KKey::String(s)),
@@ -43,7 +44,7 @@ impl<'a> KKey<'a> {
             KObject::Bool(b) => Ok(KKey::Bool(*b)),
             other => Err(format!(
                 "dict key must be String, Number, or Bool; got {}",
-                other.ktype().name(types)
+                other.ktype().name(registries)
             )),
         }
     }

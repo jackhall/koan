@@ -8,7 +8,9 @@ use crate::machine::model::RunRegistries;
 /// A record type over `pairs`.
 fn record(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
     types.record(Record::from_pairs(
-        pairs.into_iter().map(|(n, t)| (n.to_string(), t)),
+        pairs
+            .into_iter()
+            .map(|(n, t)| (crate::machine::model::Symbol::of(n), t)),
     ))
 }
 
@@ -233,7 +235,9 @@ fn sealed_schema_is_absolute_and_cyclic() {
         _ => panic!("expected a record repr"),
     };
     assert_eq!(
-        fields.get("tail").copied(),
+        fields
+            .get(crate::machine::model::Symbol::of("tail"))
+            .copied(),
         Some(chain),
         "the self-reference seals to the member's own absolute handle",
     );

@@ -458,7 +458,10 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
         module_storage.brand().handle(),
     ))
     .with_holder(&owned_cells);
-    let fields = Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
+    let fields = Record::from_pairs(vec![(
+        crate::machine::model::Symbol::of("a"),
+        Held::Object(KObject::Number(1.0)),
+    )]);
     let record = door.alloc_object_folded(KObject::record_of_held(door, fields, types));
     let sealed =
         module_scope.seal_reaching(Carried::Object(record), module_scope.mint_born_here(false));

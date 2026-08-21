@@ -16,7 +16,6 @@
 use crate::machine::ProducerId;
 use crate::machine::core::{ClassifiedSlots, OpenedFunction};
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 use crate::witnessed::{BumpAllocator, BumpVec};
@@ -24,6 +23,7 @@ use crate::witnessed::{BumpAllocator, BumpVec};
 use super::is_eager_working_part;
 
 use super::resolve::Resolution;
+use crate::machine::model::RunRegistries;
 
 // Test-only entry counter: fast-lane dispatch shapes must route around the
 // candidate machinery, so the counter must not advance for them.
@@ -84,7 +84,7 @@ impl<'step> Scope<'step> {
         expr: &WorkingExpression<'e>,
         chain: Option<&LexicalFrame>,
         bare_outcomes: &[Option<Resolution>],
-        types: &TypeRegistry,
+        registries: &RunRegistries,
         scratch: BumpAllocator<'_>,
     ) -> DispatchOutcome<'step> {
         #[cfg(test)]
@@ -106,7 +106,7 @@ impl<'step> Scope<'step> {
                 root.bindings()
                     .lookup_function_stored(key, root.binding_cutoff(chain), scratch);
             if let ScopeDecision::Terminal(outcome) =
-                decide_scope(root, &lookup, expr, bare_outcomes, types, scratch)
+                decide_scope(root, &lookup, expr, bare_outcomes, registries, scratch)
             {
                 return outcome;
             }
@@ -117,7 +117,7 @@ impl<'step> Scope<'step> {
                 scope
                     .bindings()
                     .lookup_function_stored(key, scope.binding_cutoff(chain), scratch);
-            match decide_scope(scope, &lookup, expr, bare_outcomes, types, scratch) {
+            match decide_scope(scope, &lookup, expr, bare_outcomes, registries, scratch) {
                 ScopeDecision::Terminal(outcome) => return outcome,
                 ScopeDecision::DeadLean(name) => {
                     if dead_lean.is_none() {
@@ -190,7 +190,7 @@ fn decide_scope<'step, 'e>(
     lookup: &FunctionLookup<'_, BumpAllocator<'_>>,
     expr: &WorkingExpression<'e>,
     bare_outcomes: &[Option<Resolution>],
-    types: &TypeRegistry,
+    registries: &RunRegistries,
     scratch: BumpAllocator<'_>,
 ) -> ScopeDecision<'step> {
     // Exact capacity, filled by a push loop: a grown bump buffer abandons its old bytes as dead
@@ -209,17 +209,21 @@ fn decide_scope<'step, 'e>(
     // single wake re-runs the full resolution.
     if let Some(pending) = lookup.pending {
         let mut producers = vec![pending];
-        for p in bucket.relaxed_parked_producers(expr, bare_outcomes, types) {
+        for p in bucket.relaxed_parked_producers(expr, bare_outcomes, registries) {
             if !producers.contains(&p) {
                 producers.push(p);
             }
         }
         return ScopeDecision::Terminal(DispatchOutcome::ParkOnProducers(producers));
     }
-    match bucket.pick_strict(expr, bare_outcomes, types, scratch) {
-        PickPass::Picked(index) => ScopeDecision::Terminal(DispatchOutcome::Resolved(
-            build_resolved(scope.open_function(&lookup.overloads[index]), expr, types),
-        )),
+    match bucket.pick_strict(expr, bare_outcomes, registries, scratch) {
+        PickPass::Picked(index) => {
+            ScopeDecision::Terminal(DispatchOutcome::Resolved(build_resolved(
+                scope.open_function(&lookup.overloads[index]),
+                expr,
+                registries,
+            )))
+        }
         // A tie may break once an unevaluated eager part lands: the typed `Spliced(List …)`
         // re-dispatch is element-aware where the bare literal is shape-only. A genuine tie
         // resurfaces as `Ambiguous` on the post-eager-subs pass.
@@ -228,7 +232,7 @@ fn decide_scope<'step, 'e>(
             ScopeDecision::Terminal(DispatchOutcome::Deferred)
         }
         PickPass::Tie(n) => ScopeDecision::Terminal(DispatchOutcome::Ambiguous(n)),
-        PickPass::Empty => decide_relaxed(&bucket, expr, bare_outcomes, types),
+        PickPass::Empty => decide_relaxed(&bucket, expr, bare_outcomes, registries),
     }
 }
 
@@ -240,13 +244,14 @@ fn decide_relaxed<'step, 'e>(
     bucket: &OverloadBucket<'_, '_>,
     expr: &WorkingExpression<'e>,
     bare_outcomes: &[Option<Resolution>],
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> ScopeDecision<'step> {
     let mut parked: Vec<ProducerId> = Vec::new();
     let mut any_eager_lean = false;
     let mut dead_name: Option<String> = None;
     for f in bucket.candidates.iter() {
-        let Some(leans) = relaxed_admits(&f.value().signature, expr, bare_outcomes, types) else {
+        let Some(leans) = relaxed_admits(&f.value().signature, expr, bare_outcomes, registries)
+        else {
             continue;
         };
         for lean in leans {
@@ -290,7 +295,7 @@ impl OverloadBucket<'_, '_> {
         &self,
         expr: &WorkingExpression<'e>,
         bare_outcomes: &[Option<Resolution>],
-        types: &TypeRegistry,
+        registries: &RunRegistries,
         scratch: BumpAllocator<'_>,
     ) -> PickPass {
         // `candidates.len()` bounds the survivors and the survivor count is exactly the signature
@@ -298,7 +303,7 @@ impl OverloadBucket<'_, '_> {
         let mut survivors: BumpVec<'_, usize> =
             BumpVec::with_capacity_in(self.candidates.len(), scratch);
         for (i, f) in self.candidates.iter().enumerate() {
-            if signature_admits_strict(&f.value().signature, expr, bare_outcomes, types) {
+            if signature_admits_strict(&f.value().signature, expr, bare_outcomes, registries) {
                 survivors.push(i);
             }
         }
@@ -308,7 +313,7 @@ impl OverloadBucket<'_, '_> {
             sigs.push(&self.candidates[*i].value().signature);
         }
         // `most_specific` keeps its contiguous-slice signature: a `BumpVec` derefs to `[T]`.
-        match ExpressionSignature::most_specific(&sigs, types) {
+        match ExpressionSignature::most_specific(&sigs, registries) {
             Some(i) => PickPass::Picked(survivors[i]),
             None if !survivors.is_empty() => PickPass::Tie(survivors.len()),
             None => PickPass::Empty,
@@ -320,11 +325,11 @@ impl OverloadBucket<'_, '_> {
         &self,
         expr: &WorkingExpression<'e>,
         bare_outcomes: &[Option<Resolution>],
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> Vec<ProducerId> {
         let mut producers: Vec<ProducerId> = Vec::new();
         for f in self.candidates.iter() {
-            let Some(leans) = relaxed_admits(&f.value().signature, expr, bare_outcomes, types)
+            let Some(leans) = relaxed_admits(&f.value().signature, expr, bare_outcomes, registries)
             else {
                 continue;
             };
@@ -364,7 +369,7 @@ fn signature_admits_strict<'e>(
     sig: &ExpressionSignature<'_>,
     expr: &WorkingExpression<'e>,
     bare_outcomes: &[Option<Resolution>],
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> bool {
     if sig.elements().len() != expr.parts.len() {
         return false;
@@ -381,7 +386,7 @@ fn signature_admits_strict<'e>(
                 i,
                 has_lazy_kexpr_slot,
                 bare_outcomes,
-                types,
+                registries,
             )
         })
 }
@@ -397,7 +402,7 @@ fn relaxed_admits<'e>(
     sig: &ExpressionSignature<'_>,
     expr: &WorkingExpression<'e>,
     bare_outcomes: &[Option<Resolution>],
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Option<Vec<Lean>> {
     if sig.elements().len() != expr.parts.len() {
         return None;
@@ -411,7 +416,7 @@ fn relaxed_admits<'e>(
             i,
             has_lazy_kexpr_slot,
             bare_outcomes,
-            types,
+            registries,
         ) {
             continue;
         }
@@ -454,8 +459,9 @@ fn slot_admits_strict<'e>(
     i: usize,
     has_lazy_kexpr_slot: bool,
     bare_outcomes: &[Option<Resolution>],
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> bool {
+    let types = &registries.types;
     match (el, slot.as_ast()) {
         (SignatureElement::Keyword(s), Some(ExpressionPart::Keyword(t))) => *s == t,
         (SignatureElement::Keyword(_), _) => false,
@@ -463,7 +469,7 @@ fn slot_admits_strict<'e>(
         // resolved cell opens at its own brand, and a synthesized node / staging hole names no value
         // an argument slot can admit.
         (SignatureElement::Argument(arg), None) => match slot {
-            WorkingPart::Spliced { cell } => arg.ktype.accepts_cell(cell, types),
+            WorkingPart::Spliced { cell } => arg.ktype.accepts_cell(cell, registries),
             _ => false,
         },
         (SignatureElement::Argument(arg), Some(part_value)) => {
@@ -516,7 +522,7 @@ fn slot_admits_strict<'e>(
             match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
                 Some(Resolution::Resolved(delivered)) => arg
                     .ktype
-                    .accepts_carried(delivered.open_at().value(), types),
+                    .accepts_carried(delivered.open_at().value(), registries),
                 // The relaxed pass's `Dead` lean carries the precise `UnboundName`. `Parked` reaches
                 // here only on a slot exempt from the pre-admission park (a binder form's own
                 // operand), where rejecting leaves the pick to the shape-only binder slots.
@@ -537,9 +543,9 @@ fn expr_has_eager_part(expr: &WorkingExpression<'_>) -> bool {
 fn build_resolved<'step, 'e>(
     picked: OpenedFunction<'step>,
     expr: &WorkingExpression<'e>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Resolved<'step> {
-    let slots = picked.value().classify_for_pick(expr, types);
+    let slots = picked.value().classify_for_pick(expr, registries);
     Resolved {
         function: picked,
         slots,

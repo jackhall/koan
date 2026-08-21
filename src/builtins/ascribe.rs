@@ -29,9 +29,9 @@ use crate::machine::model::RunRegistries;
 pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
 
-    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.types()));
+    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.registries));
     let (s_schema, s_digest) = signature_schema(s, ctx.types());
-    let s_name = s.name(ctx.types());
+    let s_name = s.name(ctx.registries);
 
     // Allocate the view scope, replay the source module's members into it, and seed its `types`
     // table with the view's own type members, all in one door: the scope is unreachable until the
@@ -84,7 +84,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
     let new_module: &'a Module<'a> =
         Module::alloc_at_child_scope(m.path, new_scope, draft, self_sig);
 
-    if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types()) {
+    if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.registries) {
         return Action::done(Err(e));
     }
 
@@ -110,10 +110,10 @@ pub fn body_transparent<'a>(
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
 
-    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.types()));
+    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.registries));
     let (s_schema, s_digest) = signature_schema(s, ctx.types());
-    let s_name = s.name(ctx.types());
-    if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types()) {
+    let s_name = s.name(ctx.registries);
+    if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.registries) {
         return Action::done(Err(e));
     }
     // A transparent view re-tags the source module's child scope directly (`m.child_scope()`),
@@ -237,21 +237,22 @@ fn signature_schema(
 /// diagnostic when an operand is absent or the wrong kind.
 fn resolve_module_and_signature<'a>(
     args: &Record<Held<'a>>,
-    types: &crate::machine::model::TypeRegistry,
+    registries: &crate::machine::model::RunRegistries,
 ) -> Result<(&'a crate::machine::model::Module<'a>, KType), KError> {
     use crate::machine::{arg_held, arg_object, arg_type};
+    let types = &registries.types;
 
     fn type_mismatch_or_missing(
         args: &Record<Held<'_>>,
         name: &str,
         expected: &str,
-        types: &crate::machine::model::TypeRegistry,
+        registries: &crate::machine::model::RunRegistries,
     ) -> KError {
         match arg_held(args, name) {
             Some(held) => KError::new(KErrorKind::TypeMismatch {
                 arg: name.to_string(),
                 expected: expected.to_string(),
-                got: held.ktype(types).name(types),
+                got: held.ktype(&registries.types).name(registries),
             }),
             None => KError::new(KErrorKind::MissingArg(name.to_string())),
         }
@@ -259,11 +260,11 @@ fn resolve_module_and_signature<'a>(
 
     let m = match arg_object(args, "m") {
         Some(KObject::Module(module)) => *module,
-        _ => return Err(type_mismatch_or_missing(args, "m", "Module", types)),
+        _ => return Err(type_mismatch_or_missing(args, "m", "Module", registries)),
     };
     let s = match arg_type(args, "s") {
         Some(kt) if matches!(types.node(kt), TypeNode::Signature { .. }) => kt,
-        _ => return Err(type_mismatch_or_missing(args, "s", "Signature", types)),
+        _ => return Err(type_mismatch_or_missing(args, "s", "Signature", registries)),
     };
     Ok((m, s))
 }
@@ -280,12 +281,13 @@ fn check_satisfies<'a>(
     schema: &SigSchema,
     schema_digest: crate::machine::model::TypeDigest,
     sig_name: &str,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<(), KError> {
-    if m.satisfies_sig_schema(schema, schema_digest, types) {
+    let types = &registries.types;
+    if m.satisfies_sig_schema(schema, schema_digest, registries) {
         return Ok(());
     }
-    match sig_subtype(&m.self_sig(types), schema, types) {
+    match sig_subtype(&m.self_sig(types), schema, registries) {
         Ok(()) => unreachable!("a recorded false verdict must re-fail on the diagnostic walk"),
         Err(failure) => Err(KError::new(KErrorKind::ShapeError(format!(
             "module does not satisfy signature `{}`: {}",
@@ -302,17 +304,17 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let opaque_sig = sig(
         KType::EMPTY_SIGNATURE,
         vec![
-            arg("m", KType::EMPTY_SIGNATURE),
+            arg(registries, "m", KType::EMPTY_SIGNATURE),
             kw(":|"),
-            arg("s", KType::of_kind(KKind::Signature)),
+            arg(registries, "s", KType::of_kind(KKind::Signature)),
         ],
     );
     let transparent_sig = sig(
         KType::EMPTY_SIGNATURE,
         vec![
-            arg("m", KType::EMPTY_SIGNATURE),
+            arg(registries, "m", KType::EMPTY_SIGNATURE),
             kw(":!"),
-            arg("s", KType::of_kind(KKind::Signature)),
+            arg(registries, "s", KType::of_kind(KKind::Signature)),
         ],
     );
     crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque, registries, gate);

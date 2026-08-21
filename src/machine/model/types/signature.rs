@@ -14,6 +14,8 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier, Wo
 
 use super::ktype::KType;
 use super::registry::TypeRegistry;
+use crate::machine::model::RunRegistries;
+use crate::machine::model::labels::Symbol;
 
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum UntypedElement {
@@ -257,7 +259,7 @@ pub fn is_keyword_token(s: &str) -> bool {
 /// candidates differ in exactly one type — MATCH's typed arms — needs no signature to run through,
 /// since with a single slot [`ExpressionSignature::specificity_vs`] reduces to the pairwise
 /// [`KType::is_more_specific_than`] probe this reads directly.
-pub fn most_specific_ktype(candidates: &[KType], types: &TypeRegistry) -> Option<usize> {
+pub fn most_specific_ktype(candidates: &[KType], registries: &RunRegistries) -> Option<usize> {
     candidates
         .iter()
         .enumerate()
@@ -265,7 +267,7 @@ pub fn most_specific_ktype(candidates: &[KType], types: &TypeRegistry) -> Option
             candidates
                 .iter()
                 .enumerate()
-                .all(|(j, b)| *i == j || a.is_more_specific_than(*b, types))
+                .all(|(j, b)| *i == j || a.is_more_specific_than(*b, registries))
         })
         .map(|(i, _)| i)
 }
@@ -415,9 +417,9 @@ impl<'a> std::fmt::Debug for DeferredReturn<'a> {
 
 impl<'a> ReturnType<'a> {
     /// Surface name for diagnostics.
-    pub fn name(&self, types: &TypeRegistry) -> String {
+    pub fn name(&self, registries: &RunRegistries) -> String {
         match self {
-            ReturnType::Resolved(kt) => kt.name(types),
+            ReturnType::Resolved(kt) => kt.name(registries),
             ReturnType::Deferred(DeferredReturn::Type(t)) => t.render(),
             ReturnType::Deferred(DeferredReturn::Expression(e)) => e.summarize(),
         }
@@ -429,10 +431,10 @@ impl<'a> ReturnType<'a> {
     pub fn matches_value(
         &self,
         obj: &crate::machine::model::values::KObject<'a>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> bool {
         match self {
-            ReturnType::Resolved(kt) => kt.matches_value(obj, types),
+            ReturnType::Resolved(kt) => kt.matches_value(obj, registries),
             ReturnType::Deferred(_) => true,
         }
     }
@@ -462,10 +464,9 @@ impl<'a> ExpressionSignature<'a> {
                     SignatureElement::Keyword(s) => {
                         SignatureElement::Keyword(brand.allocator().text(&normalized_keyword(s)))
                     }
-                    SignatureElement::Argument(argument) => SignatureElement::Argument(Argument {
-                        name: brand.allocator().text(argument.name),
-                        ktype: argument.ktype,
-                    }),
+                    // An argument's name is already its symbol — fixed-width, region-free — so
+                    // only the keyword text above needs re-homing.
+                    SignatureElement::Argument(argument) => SignatureElement::Argument(argument),
                 })),
         }
     }
@@ -527,15 +528,15 @@ impl<'a> ExpressionSignature<'a> {
     pub fn specificity_vs(
         &self,
         other: &ExpressionSignature<'a>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> Specificity {
         let mut any_more = false;
         let mut any_less = false;
         for (a, b) in self.elements().iter().zip(other.elements().iter()) {
             if let (SignatureElement::Argument(aa), SignatureElement::Argument(bb)) = (a, b) {
-                if aa.ktype.is_more_specific_than(bb.ktype, types) {
+                if aa.ktype.is_more_specific_than(bb.ktype, registries) {
                     any_more = true;
-                } else if bb.ktype.is_more_specific_than(aa.ktype, types) {
+                } else if bb.ktype.is_more_specific_than(aa.ktype, registries) {
                     any_less = true;
                 }
             }
@@ -553,14 +554,14 @@ impl<'a> ExpressionSignature<'a> {
     /// same-arg-type duplicate, which must surface as ambiguity rather than silently win.
     pub fn most_specific(
         candidates: &[&ExpressionSignature<'a>],
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> Option<usize> {
         candidates
             .iter()
             .enumerate()
             .find(|(i, a)| {
                 candidates.iter().enumerate().all(|(j, b)| {
-                    *i == j || matches!(a.specificity_vs(b, types), Specificity::StrictlyMore)
+                    *i == j || matches!(a.specificity_vs(b, registries), Specificity::StrictlyMore)
                 })
             })
             .map(|(i, _)| i)
@@ -600,25 +601,30 @@ impl<'a> ExpressionSignature<'a> {
 #[derive(Clone, Copy, Debug)]
 pub enum SignatureElement<'a> {
     Keyword(&'a str),
-    Argument(Argument<'a>),
+    Argument(Argument),
 }
 
-/// `name` keys the slot in the bound argument record; `ktype` gates what `ExpressionPart`s it
-/// accepts.
+/// `name` keys the slot in the signature's parameter schema; `ktype` gates what `ExpressionPart`s
+/// it accepts. Lifetime-free: a [`Symbol`] is a fixed-width content digest, so an argument borrows
+/// nothing and a signature's parameter names need no region of their own.
 #[derive(Clone, Copy, Debug)]
-pub struct Argument<'a> {
-    pub name: &'a str,
+pub struct Argument {
+    pub name: Symbol,
     pub ktype: KType,
 }
 
-impl Argument<'_> {
+impl Argument {
     pub fn matches<'e>(&self, part: &ExpressionPart<'e>, types: &TypeRegistry) -> bool {
         self.ktype.accepts_part(part, types)
     }
 
     /// The dispatch-path peer of [`Self::matches`], over the scheduler's own part form.
-    pub fn matches_working_part<'e>(&self, part: &WorkingPart<'e>, types: &TypeRegistry) -> bool {
-        self.ktype.accepts_working_part(part, types)
+    pub fn matches_working_part<'e>(
+        &self,
+        part: &WorkingPart<'e>,
+        registries: &RunRegistries,
+    ) -> bool {
+        self.ktype.accepts_working_part(part, registries)
     }
 }
 

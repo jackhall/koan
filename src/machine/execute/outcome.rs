@@ -133,7 +133,7 @@ pub(in crate::machine::execute) fn tail_continue<'step>(
     );
     let winner = view
         .current_obligation_duplicate()
-        .or_else(|| contract.map(ReturnObligation::seal));
+        .or_else(|| contract.map(|c| ReturnObligation::seal(c, view.registries())));
     let label = WorkLabel::of(&tail);
     Outcome::Continue {
         work: super::decide::decide_tail(tail, winner),

@@ -37,7 +37,8 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
     use crate::machine::model::{ReturnType, SignatureDraft, SignatureElement};
     // The captured scope and the function both land in `home`'s region, so the `&KFunction` comes back
     // at `home`'s own lifetime with nothing retyped. Mirrors a closure capturing its defining scope.
-    let types = crate::machine::model::TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     CallFrame::alloc_capturing_scope(
         home,
         SignatureDraft {
@@ -50,7 +51,7 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
                 Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
             )
         }),
-        &types,
+        types,
     )
 }
 
@@ -216,8 +217,10 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
         param_names: vec!["T".into()],
         nonce: None,
     });
-    let identity =
-        types.constructor_apply(ctor, Record::from_pairs([("T".to_string(), KType::NUMBER)]));
+    let identity = types.constructor_apply(
+        ctor,
+        Record::from_pairs([(crate::machine::model::Symbol::of("T"), KType::NUMBER)]),
+    );
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let source_door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(source.brand().handle()))
@@ -389,7 +392,8 @@ fn type_recursive_member_relocates_and_navigates() {
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest = CallFrame::new(scope);
-    let types = crate::machine::model::TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
 
     // A self-recursive `Tree` whose `children` field is `List(Tree)` — the shape a
     // `NEWTYPE Tree = :{children :(LIST OF Tree)}` seals into. The self-edge starts as `Sibling(0)`
@@ -397,11 +401,11 @@ fn type_recursive_member_relocates_and_navigates() {
     let tree = RecursiveGroupWindow::seal_singleton(
         "Tree".into(),
         RelativeSchema::NewType(types.record(Record::from_pairs([(
-            "children".to_string(),
+            crate::machine::model::Symbol::of("children"),
             types.list(types.intern(TypeNode::Sibling(0))),
         )]))),
         None,
-        &types,
+        types,
     );
     let type_value = tree;
 
@@ -426,15 +430,15 @@ fn type_recursive_member_relocates_and_navigates() {
                     ..
                 } => match types.node(repr) {
                     TypeNode::Record { fields } => assert_eq!(
-                        fields.get("children"),
+                        fields.get(crate::machine::model::Symbol::of("children")),
                         Some(&types.list(tree)),
                         "the relocated Tree's children field self-references the sealed Tree member",
                     ),
-                    _ => panic!("expected a record repr, got {}", repr.name(&types)),
+                    _ => panic!("expected a record repr, got {}", repr.name(&registries)),
                 },
                 _ => panic!(
                     "expected a navigable NewType member, got {}",
-                    out.name(&types)
+                    out.name(&registries)
                 ),
             }
         }
@@ -521,8 +525,10 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
             Delivered::destination(Rc::clone(&dest_storage)),
             move |(_region, _cells), _dest_handle, placement| {
                 let door = FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells);
-                let fields =
-                    Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
+                let fields = Record::from_pairs(vec![(
+                    crate::machine::model::Symbol::of("a"),
+                    Held::Object(KObject::Number(1.0)),
+                )]);
                 Carried::Object(
                     door.alloc_object_folded(KObject::record_of_held(door, fields, types)),
                 )
@@ -553,7 +559,7 @@ fn alloc_home_closure_record<'run>(
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
     let fields = Record::from_pairs(vec![(
-        "f".to_string(),
+        crate::machine::model::Symbol::of("f"),
         Held::Object(KObject::KFunction(kf)),
     )]);
     door.alloc_object_folded(KObject::record_of_held(door, fields, types))
@@ -600,11 +606,17 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
         cells
             .iter()
             .map(|h| match h.object() {
-                KObject::Record(substrate, _) => match substrate.field("acc").map(|h| h.object()) {
+                KObject::Record(substrate, _) => match substrate
+                    .field(crate::machine::model::Symbol::of("acc"))
+                    .map(|h| h.object())
+                {
                     Some(KObject::Number(n)) => *n,
                     _ => panic!("expected field acc: Number"),
                 },
-                other => panic!("expected a Record cell, got {}", other.ktype().name(types)),
+                other => panic!(
+                    "expected a Record cell, got {}",
+                    other.ktype().name(&registries)
+                ),
             })
             .collect()
     });
@@ -631,13 +643,12 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
     let scope = test_run.scope;
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
 
     // The seal chokepoint (Ruling 5): every record's carrier conservatively claims its own home as
     // a member at construction; the retention predicate independently walks the rebuilt cell and
     // finds the closure leaf, so the producer is retained either way.
-    let (mut producers, cells, expected_ids) = closure_record_cell_run(scope, types, DEPTH);
+    let (mut producers, cells, expected_ids) = closure_record_cell_run(scope, &registries, DEPTH);
     let acc_final = relocate_cell_run(&dest_storage, &cells);
 
     assert!(
@@ -656,11 +667,17 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
         cells
             .iter()
             .map(|h| match h.object() {
-                KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
+                KObject::Record(substrate, _) => match substrate
+                    .field(crate::machine::model::Symbol::of("f"))
+                    .map(|h| h.object())
+                {
                     Some(KObject::KFunction(f)) => f.captured_scope().id,
                     _ => panic!("expected field f: KFunction"),
                 },
-                other => panic!("expected a Record cell, got {}", other.ktype().name(types)),
+                other => panic!(
+                    "expected a Record cell, got {}",
+                    other.ktype().name(&registries)
+                ),
             })
             .collect()
     });
@@ -701,11 +718,14 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
             let producer: Rc<CallFrame> = CallFrame::new(scope);
             let obj = alloc_home_closure_record(&producer, types);
             expected_ids.push(match obj {
-                KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
+                KObject::Record(substrate, _) => match substrate
+                    .field(crate::machine::model::Symbol::of("f"))
+                    .map(|h| h.object())
+                {
                     Some(KObject::KFunction(f)) => f.captured_scope().id,
                     _ => panic!("expected field f: KFunction"),
                 },
-                other => panic!("expected a Record, got {}", other.ktype().name(types)),
+                other => panic!("expected a Record, got {}", other.ktype().name(&registries)),
             });
             // Born in the producer's own region with a home-borrowing closure leaf, so home is an
             // ordinary member of the description the birth mint stamps.
@@ -736,11 +756,17 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
             // The envelope's own pins cover the read, keeping everything the seam's fold claimed —
             // each pinned producer among it — alive across it.
             envelope.open_ref(|carried| match carried.object() {
-                KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
+                KObject::Record(substrate, _) => match substrate
+                    .field(crate::machine::model::Symbol::of("f"))
+                    .map(|h| h.object())
+                {
                     Some(KObject::KFunction(f)) => f.captured_scope().id,
                     _ => panic!("expected field f: KFunction"),
                 },
-                other => panic!("expected a Record cell, got {}", other.ktype().name(types)),
+                other => panic!(
+                    "expected a Record cell, got {}",
+                    other.ktype().name(&registries)
+                ),
             })
         })
         .collect();
@@ -791,8 +817,16 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
         NAMES
             .iter()
             .enumerate()
-            .map(|(i, name)| ((*name).to_string(), Held::Object(KObject::Number(i as f64))))
-            .chain(std::iter::once((TABLE.to_string(), Held::Object(table))))
+            .map(|(i, name)| {
+                (
+                    crate::machine::model::Symbol::of(name),
+                    Held::Object(KObject::Number(i as f64)),
+                )
+            })
+            .chain(std::iter::once((
+                crate::machine::model::Symbol::of(TABLE),
+                Held::Object(table),
+            )))
             .collect::<Vec<_>>(),
     );
     let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, types));
@@ -809,11 +843,12 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
         KObject::Record(substrate, _) => {
             // Read through the name index twice over: the name-order walk, and a by-name
             // lookup per field — the binary search over the sorted name slice.
-            let walked: Vec<String> = substrate.fields().map(|(n, _)| n.to_string()).collect();
+            let walked: Vec<crate::machine::model::Symbol> =
+                substrate.fields().map(|(n, _)| n).collect();
             let mut sorted = NAMES
                 .iter()
                 .chain(std::iter::once(&TABLE))
-                .map(|n| n.to_string())
+                .map(|n| crate::machine::model::Symbol::of(n))
                 .collect::<Vec<_>>();
             sorted.sort();
             assert_eq!(
@@ -824,7 +859,10 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
             // Then the nested dict's own index, reached *through* the outer one: walk the
             // table, then look every key back up — the hash and the byte-wise compare both
             // read key slices the relocation re-bumped.
-            match substrate.field(TABLE).map(|h| h.object()) {
+            match substrate
+                .field(crate::machine::model::Symbol::of(TABLE))
+                .map(|h| h.object())
+            {
                 Some(KObject::Dict(table, _)) => {
                     assert_eq!(
                         table.entries().count(),
@@ -845,13 +883,18 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
             }
             NAMES
                 .iter()
-                .map(|name| match substrate.field(name).map(|h| h.object()) {
-                    Some(KObject::Number(n)) => ((*name).to_string(), *n),
-                    _ => panic!("expected field {name}: Number"),
+                .map(|name| {
+                    match substrate
+                        .field(crate::machine::model::Symbol::of(name))
+                        .map(|h| h.object())
+                    {
+                        Some(KObject::Number(n)) => ((*name).to_string(), *n),
+                        _ => panic!("expected field {name}: Number"),
+                    }
                 })
                 .collect()
         }
-        other => panic!("expected a Record, got {}", other.ktype().name(types)),
+        other => panic!("expected a Record, got {}", other.ktype().name(&registries)),
     });
     assert_eq!(
         read,
@@ -879,15 +922,16 @@ fn held_flat() -> u64 {
 fn record_memos<'run>(
     home: &'run Rc<CallFrame>,
     fields: Record<Held<'run>>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> (u64, bool) {
+    let types = &registries.types;
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
     match door.alloc_object_folded(KObject::record_of_held(door, fields, types)) {
         KObject::Record(substrate, _) => (substrate.copy_cost(), substrate.borrows_home()),
-        other => panic!("expected a Record, got {}", other.ktype().name(types)),
+        other => panic!("expected a Record, got {}", other.ktype().name(registries)),
     }
 }
 
@@ -900,13 +944,18 @@ fn substrate_memo_scalar_record_is_priceable_and_home_free() {
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
     let registries = RunRegistries::new();
-    let types = &registries.types;
 
     let fields = Record::from_pairs(vec![
-        ("a".to_string(), Held::Object(KObject::Number(1.0))),
-        ("b".to_string(), Held::Object(KObject::Bool(true))),
+        (
+            crate::machine::model::Symbol::of("a"),
+            Held::Object(KObject::Number(1.0)),
+        ),
+        (
+            crate::machine::model::Symbol::of("b"),
+            Held::Object(KObject::Bool(true)),
+        ),
     ]);
-    let (cost, borrows_home) = record_memos(&home, fields, types);
+    let (cost, borrows_home) = record_memos(&home, fields, &registries);
     assert_eq!(cost, 2 * held_flat(), "two scalar cells cost two flat Held");
     assert!(!borrows_home, "no borrow leaf leaves borrows_home clear");
 }
@@ -920,13 +969,12 @@ fn substrate_memo_string_cell_adds_its_length() {
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
     let registries = RunRegistries::new();
-    let types = &registries.types;
 
     let fields = Record::from_pairs(vec![(
-        "s".to_string(),
+        crate::machine::model::Symbol::of("s"),
         Held::Object(KObject::KString("hello")),
     )]);
-    let (cost, borrows_home) = record_memos(&home, fields, types);
+    let (cost, borrows_home) = record_memos(&home, fields, &registries);
     assert_eq!(
         cost,
         held_flat() + 5,
@@ -946,19 +994,27 @@ fn substrate_memo_home_vs_foreign_closure_leaf() {
     let home = CallFrame::new(scope);
     let foreign = CallFrame::new(scope);
     let registries = RunRegistries::new();
-    let types = &registries.types;
 
-    let base = Record::from_pairs(vec![("n".to_string(), Held::Object(KObject::Number(0.0)))]);
-    let (base_cost, base_home) = record_memos(&home, base, types);
+    let base = Record::from_pairs(vec![(
+        crate::machine::model::Symbol::of("n"),
+        Held::Object(KObject::Number(0.0)),
+    )]);
+    let (base_cost, base_home) = record_memos(&home, base, &registries);
     assert_eq!(base_cost, held_flat());
     assert!(!base_home);
 
     let home_kf = alloc_local_kf(&home);
     let with_home = Record::from_pairs(vec![
-        ("n".to_string(), Held::Object(KObject::Number(0.0))),
-        ("f".to_string(), Held::Object(KObject::KFunction(home_kf))),
+        (
+            crate::machine::model::Symbol::of("n"),
+            Held::Object(KObject::Number(0.0)),
+        ),
+        (
+            crate::machine::model::Symbol::of("f"),
+            Held::Object(KObject::KFunction(home_kf)),
+        ),
     ]);
-    let (home_cost, home_bit) = record_memos(&home, with_home, types);
+    let (home_cost, home_bit) = record_memos(&home, with_home, &registries);
     assert_eq!(
         home_cost, base_cost,
         "the 0-weight closure leaf adds no rebuild bytes"
@@ -967,13 +1023,16 @@ fn substrate_memo_home_vs_foreign_closure_leaf() {
 
     let foreign_kf = alloc_local_kf(&foreign);
     let with_foreign = Record::from_pairs(vec![
-        ("n".to_string(), Held::Object(KObject::Number(0.0))),
         (
-            "f".to_string(),
+            crate::machine::model::Symbol::of("n"),
+            Held::Object(KObject::Number(0.0)),
+        ),
+        (
+            crate::machine::model::Symbol::of("f"),
             Held::Object(KObject::KFunction(foreign_kf)),
         ),
     ]);
-    let (foreign_cost, foreign_bit) = record_memos(&home, with_foreign, types);
+    let (foreign_cost, foreign_bit) = record_memos(&home, with_foreign, &registries);
     assert_eq!(
         foreign_cost, base_cost,
         "a foreign closure leaf is equally weightless"
@@ -999,8 +1058,14 @@ fn substrate_memo_nested_record_composes_by_memo() {
 
     let inner_kf = alloc_local_kf(&home);
     let inner_fields = Record::from_pairs(vec![
-        ("x".to_string(), Held::Object(KObject::KString("ab"))),
-        ("f".to_string(), Held::Object(KObject::KFunction(inner_kf))),
+        (
+            crate::machine::model::Symbol::of("x"),
+            Held::Object(KObject::KString("ab")),
+        ),
+        (
+            crate::machine::model::Symbol::of("f"),
+            Held::Object(KObject::KFunction(inner_kf)),
+        ),
     ]);
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let door =
@@ -1009,7 +1074,7 @@ fn substrate_memo_nested_record_composes_by_memo() {
     let inner = door.alloc_object_folded(KObject::record_of_held(door, inner_fields, types));
     let (inner_cost, inner_home) = match inner {
         KObject::Record(substrate, _) => (substrate.copy_cost(), substrate.borrows_home()),
-        other => panic!("expected a Record, got {}", other.ktype().name(types)),
+        other => panic!("expected a Record, got {}", other.ktype().name(&registries)),
     };
     assert_eq!(
         inner_cost,
@@ -1019,10 +1084,10 @@ fn substrate_memo_nested_record_composes_by_memo() {
     assert!(inner_home, "inner holds a home closure");
 
     let outer_fields = Record::from_pairs(vec![(
-        "inner".to_string(),
+        crate::machine::model::Symbol::of("inner"),
         Held::Object(inner.deep_clone()),
     )]);
-    let (cost, borrows_home) = record_memos(&home, outer_fields, types);
+    let (cost, borrows_home) = record_memos(&home, outer_fields, &registries);
     assert_eq!(
         cost, inner_cost,
         "the nested record contributes its own memoized copy_cost"
@@ -1052,8 +1117,11 @@ fn substrate_memo_list_cell_is_priceable_and_home_free() {
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
     let list = KObject::list_of_held(list_door, &[Held::Object(KObject::Number(1.0))], types);
-    let fields = Record::from_pairs(vec![("l".to_string(), Held::Object(list))]);
-    let (cost, borrows_home) = record_memos(&home, fields, types);
+    let fields = Record::from_pairs(vec![(
+        crate::machine::model::Symbol::of("l"),
+        Held::Object(list),
+    )]);
+    let (cost, borrows_home) = record_memos(&home, fields, &registries);
     assert_eq!(
         cost,
         held_flat(),
@@ -1111,7 +1179,10 @@ mod seam_verb_table {
 
         // Program storage is where a raw AST node lives; an expression cell points into it.
         let expr = KObject::KExpression(program.brand().new_expression(&[]));
-        let fields = Record::from_pairs(vec![("e".to_string(), Held::Object(expr))]);
+        let fields = Record::from_pairs(vec![(
+            crate::machine::model::Symbol::of("e"),
+            Held::Object(expr),
+        )]);
         let value = build_record(&home, fields, types);
 
         assert_eq!(
@@ -1162,8 +1233,10 @@ mod seam_verb_table {
             home.brand().alloc_scalar(Scalar::Number(n as f64));
         }
 
-        let fields =
-            Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
+        let fields = Record::from_pairs(vec![(
+            crate::machine::model::Symbol::of("a"),
+            Held::Object(KObject::Number(1.0)),
+        )]);
         let value = build_record(&home, fields, types);
         assert!(
             !substrate_of(value).borrows_home(),
@@ -1194,7 +1267,7 @@ mod seam_verb_table {
         // the host region, so they price on both sides of the ratio — the rebuild cost is still the
         // dominant term, so the verb pins.
         let fields = Record::from_pairs(vec![(
-            "s".to_string(),
+            crate::machine::model::Symbol::of("s"),
             Held::Object(KObject::KString(&big)),
         )]);
         let value = build_record(&home, fields, types);
@@ -1224,8 +1297,10 @@ mod seam_verb_table {
         let registries = RunRegistries::new();
         let types = &registries.types;
 
-        let fields =
-            Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
+        let fields = Record::from_pairs(vec![(
+            crate::machine::model::Symbol::of("a"),
+            Held::Object(KObject::Number(1.0)),
+        )]);
         let value = build_record(&home, fields, types);
         assert!(
             !substrate_of(value).homed_in(foreign.region()),
@@ -1259,7 +1334,8 @@ fn a_mixed_run_retains_exactly_the_producers_its_own_cells_still_borrow() {
     let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
 
-    let (closure_producers, closure_cells, captured_ids) = closure_record_cell_run(scope, types, 1);
+    let (closure_producers, closure_cells, captured_ids) =
+        closure_record_cell_run(scope, &registries, 1);
     let (plain_producers, plain_cells) = plain_record_cell_run(scope, types, 2);
     let mut cells = closure_cells;
     cells.extend(plain_cells);
@@ -1300,16 +1376,25 @@ fn a_mixed_run_retains_exactly_the_producers_its_own_cells_still_borrow() {
     let read: Vec<String> = relocated.open_ref(|(_region, run)| {
         run.iter()
             .map(|held| match held.object() {
-                KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
+                KObject::Record(substrate, _) => match substrate
+                    .field(crate::machine::model::Symbol::of("f"))
+                    .map(|h| h.object())
+                {
                     Some(KObject::KFunction(function)) => {
                         format!("closure:{:?}", function.captured_scope().id)
                     }
-                    _ => match substrate.field("acc").map(|h| h.object()) {
+                    _ => match substrate
+                        .field(crate::machine::model::Symbol::of("acc"))
+                        .map(|h| h.object())
+                    {
                         Some(KObject::Number(n)) => format!("plain:{n}"),
                         _ => panic!("expected field acc: Number"),
                     },
                 },
-                other => panic!("expected a Record cell, got {}", other.ktype().name(types)),
+                other => panic!(
+                    "expected a Record cell, got {}",
+                    other.ktype().name(&registries)
+                ),
             })
             .collect()
     });
@@ -1391,7 +1476,7 @@ fn plain_record_cell_run<'run>(
         ))
         .with_holder(&born_cells);
         let fields = Record::from_pairs(vec![(
-            "acc".to_string(),
+            crate::machine::model::Symbol::of("acc"),
             Held::Object(KObject::Number(index as f64)),
         )]);
         let object: &KObject<'_> =
@@ -1458,16 +1543,17 @@ fn two_element_relocation_allocates_no_more_than_the_pairwise_fold() {
 /// assertion against the run is sensitive to order.
 fn closure_record_cell_run<'run>(
     scope: &'run Scope<'run>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
     count: usize,
 ) -> (Vec<Rc<CallFrame>>, Vec<DeliveredCarried>, Vec<ScopeId>) {
+    let types = &registries.types;
     let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(count);
     let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(count);
     let mut captured: Vec<ScopeId> = Vec::with_capacity(count);
     for _ in 0..count {
         let producer: Rc<CallFrame> = CallFrame::new(scope);
         let object = alloc_home_closure_record(&producer, types);
-        captured.push(captured_scope_id(object, types));
+        captured.push(captured_scope_id(object, registries));
         let sealed = producer.seal_born_here(Carried::Object(object), true);
         cells.push(Delivered::lift(
             crate::witnessed::Retained::from_sealed(Sealed::seal(
@@ -1483,12 +1569,15 @@ fn closure_record_cell_run<'run>(
 
 /// The captured-scope id of the closure held in a [`alloc_home_closure_record`] record — the
 /// per-producer tell a read-back assertion pairs the relocated run against.
-fn captured_scope_id(object: &KObject<'_>, types: &TypeRegistry) -> ScopeId {
+fn captured_scope_id(object: &KObject<'_>, registries: &RunRegistries) -> ScopeId {
     match object {
-        KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
+        KObject::Record(substrate, _) => match substrate
+            .field(crate::machine::model::Symbol::of("f"))
+            .map(|h| h.object())
+        {
             Some(KObject::KFunction(function)) => function.captured_scope().id,
             _ => panic!("expected field f: KFunction"),
         },
-        other => panic!("expected a Record, got {}", other.ktype().name(types)),
+        other => panic!("expected a Record, got {}", other.ktype().name(registries)),
     }
 }

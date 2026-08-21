@@ -119,7 +119,7 @@ fn anonymous_fn_in_list_element_is_legal() {
         }
         other => panic!(
             "expected `xs` bound to a List, got {:?}",
-            other.map(|o| o.ktype().name(test_run.types())),
+            other.map(|o| o.ktype().name(test_run.registries())),
         ),
     }
 }

@@ -642,7 +642,7 @@ impl<'run> Host<'run> {
                             super::finalize::check_spliced_return(
                                 &obligation,
                                 value,
-                                self.ambient.types(),
+                                self.ambient.registries(),
                             )
                         }) {
                             Ok(checked) => checked,
@@ -674,7 +674,7 @@ impl<'run> Host<'run> {
                                 super::finalize::check_spliced_return(
                                     &obligation,
                                     value,
-                                    view.types(),
+                                    view.registries(),
                                 )
                             });
                             match checked {

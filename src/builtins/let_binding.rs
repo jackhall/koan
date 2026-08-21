@@ -45,10 +45,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "LET name must be a bare type name, got `{}`",
-                    name_kt.render(ctx.types()),
+                    name_kt.render(ctx.registries),
                 ))));
             }
-            Some(name_kt) => Some(name_kt.name(ctx.types())),
+            Some(name_kt) => Some(name_kt.name(ctx.registries)),
             None => None,
         },
     };
@@ -98,7 +98,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 Held::Object(o) => {
                     return done_err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
-                        got: o.ktype().name(ctx.types()),
+                        got: o.ktype().name(ctx.registries),
                     }));
                 }
             }
@@ -108,7 +108,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             return done_err(KError::new(KErrorKind::TypeMismatch {
                 arg: "name".to_string(),
                 expected: "Identifier or ProperType".to_string(),
-                got: other.ktype().name(ctx.types()),
+                got: other.ktype().name(ctx.registries),
             }));
         }
         (None, None) => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
@@ -221,9 +221,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("LET"),
-                arg("name", KType::IDENTIFIER),
+                arg(registries, "name", KType::IDENTIFIER),
                 kw("="),
-                arg("value", KType::ANY),
+                arg(registries, "value", KType::ANY),
             ],
         )
     };
@@ -232,9 +232,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("LET"),
-                arg("name", KType::of_kind(KKind::ProperType)),
+                arg(registries, "name", KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg("value", KType::ANY),
+                arg(registries, "value", KType::ANY),
             ],
         )
     };

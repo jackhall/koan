@@ -4,11 +4,11 @@
 //! The classifiers share the "bare-name" predicate ([`is_bare_name`]) — the
 //! load-bearing shape concept the auto-wrap rail turns on.
 
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, SignatureElement};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 
 use super::KFunction;
+use crate::machine::model::RunRegistries;
 
 /// Per-slot classification produced by [`KFunction::classify_for_pick`]:
 /// - `eager_indices`: `Some(indices)` when the picked function is a *lazy candidate* — the
@@ -39,7 +39,7 @@ impl<'a> KFunction<'a> {
     pub fn lazy_eager_indices<'e>(
         &self,
         expr: &WorkingExpression<'e>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> Option<Vec<usize>> {
         let sig = &self.signature;
         if sig.elements().len() != expr.parts.len() {
@@ -110,7 +110,7 @@ impl<'a> KFunction<'a> {
                         {
                             continue;
                         }
-                        if !slot_admits(arg, other, types) {
+                        if !slot_admits(arg, other, registries) {
                             return None;
                         }
                     }
@@ -131,9 +131,9 @@ impl<'a> KFunction<'a> {
     pub fn classify_for_pick<'e>(
         &self,
         expr: &WorkingExpression<'e>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> ClassifiedSlots {
-        let eager_indices = self.lazy_eager_indices(expr, types);
+        let eager_indices = self.lazy_eager_indices(expr, registries);
         let mut wrap_indices: Vec<usize> = Vec::new();
         for (i, (el, part)) in self
             .signature
@@ -164,10 +164,11 @@ impl<'a> KFunction<'a> {
 /// ([`KType::accepts_part`](crate::machine::model::KType::accepts_part)); a resolved sub-result
 /// classifies by the carrier resting in its cell, opened at that cell's own brand. A synthesized
 /// nested node and a staging hole denote no value yet, so neither satisfies a slot.
-pub fn slot_admits(arg: &Argument, part: &WorkingPart<'_>, types: &TypeRegistry) -> bool {
+pub fn slot_admits(arg: &Argument, part: &WorkingPart<'_>, registries: &RunRegistries) -> bool {
+    let types = &registries.types;
     match part {
         WorkingPart::Ast(ast) => arg.matches(ast, types),
-        WorkingPart::Spliced { cell } => arg.ktype.accepts_cell(cell, types),
+        WorkingPart::Spliced { cell } => arg.ktype.accepts_cell(cell, registries),
         WorkingPart::Expression(_) | WorkingPart::RecordType(_) | WorkingPart::StagedSlot => false,
     }
 }

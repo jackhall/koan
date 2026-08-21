@@ -21,7 +21,7 @@ fn functor_returns_a_module() {
     test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
     test_run.run("LET set_value = (MAKESET int_ord_a)");
 
-    let m = lookup_module(scope, "set_value", test_run.types());
+    let m = lookup_module(scope, "set_value", test_run.registries());
     let inner = m.child_scope().lookup("inner");
     assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0));
 }
@@ -42,7 +42,7 @@ fn functor_body_reads_signature_typed_parameter() {
     );
     test_run.run("LET set_value = (MAKESET int_ord_a)");
 
-    let m = lookup_module(scope, "set_value", test_run.types());
+    let m = lookup_module(scope, "set_value", test_run.registries());
     let sample = m.child_scope().lookup("sample");
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
@@ -65,8 +65,8 @@ fn functor_application_is_generative() {
     test_run.run("LET set_one = (MAKESET (int_ord_a))");
     test_run.run("LET set_two = (MAKESET (int_ord_a))");
 
-    let m1 = lookup_module(scope, "set_one", test_run.types());
-    let m2 = lookup_module(scope, "set_two", test_run.types());
+    let m1 = lookup_module(scope, "set_one", test_run.registries());
+    let m2 = lookup_module(scope, "set_two", test_run.registries());
     assert_ne!(
         m1.scope_id(),
         m2.scope_id(),
@@ -116,8 +116,8 @@ fn functor_application_mints_distinct_abstract_types() {
         }
     }
 
-    let one = lookup_module(scope, "set_one", test_run.types());
-    let two = lookup_module(scope, "set_two", test_run.types());
+    let one = lookup_module(scope, "set_one", test_run.registries());
+    let two = lookup_module(scope, "set_two", test_run.registries());
     let one_carrier = one.type_members.get(&"Carrier").copied();
     let two_carrier = two.type_members.get(&"Carrier").copied();
     assert!(
@@ -173,7 +173,7 @@ fn functor_admits_unascribed_module_structurally() {
     test_run.run("LET unascribed = int_ord");
     test_run.run("LET set_value = (MAKESET unascribed)");
 
-    let m = lookup_module(scope, "set_value", test_run.types());
+    let m = lookup_module(scope, "set_value", test_run.registries());
     let inner = m.child_scope().lookup("inner");
     assert!(
         matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
@@ -241,8 +241,8 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
     test_run.run("LET ord_set = (MAKESET (int_ord_a))");
     test_run.run("LET hash_set = (MAKESET (int_hash_a))");
 
-    let mo = lookup_module(scope, "ord_set", test_run.types());
-    let mh = lookup_module(scope, "hash_set", test_run.types());
+    let mo = lookup_module(scope, "ord_set", test_run.registries());
+    let mh = lookup_module(scope, "hash_set", test_run.registries());
     let to = mo.child_scope().lookup("tag");
     let th = mh.child_scope().lookup("tag");
     assert!(
@@ -275,7 +275,7 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
     );
     test_run.run("LET set_value = (MAKESET int_view)");
 
-    let m = lookup_module(scope, "set_value", test_run.types());
+    let m = lookup_module(scope, "set_value", test_run.registries());
     let sample = m.child_scope().lookup("sample");
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
@@ -304,7 +304,7 @@ fn hk_value_slot_satisfies_after_substitution() {
     test_run.run("LET view = (id_monad :| Monad)");
     assert!(
         matches!(
-            lookup_module(scope, "view", test_run.types()),
+            lookup_module(scope, "view", test_run.registries()),
             m if m.child_scope().bindings().data().get("pure").is_some()
         ),
         "id_monad must satisfy Monad and bind a view module carrying `pure`",
@@ -356,7 +356,7 @@ fn functor_argument_bare_type_token_auto_wraps() {
     );
     test_run.run("LET set_value = (MAKESET int_ord_a)");
 
-    let m = lookup_module(scope, "set_value", test_run.types());
+    let m = lookup_module(scope, "set_value", test_run.registries());
     let sample = m.child_scope().lookup("sample");
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
@@ -393,8 +393,8 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
             panic!("expr {} errored: {}", i, e);
         }
     }
-    let a = lookup_module(scope, "first", test_run.types());
-    let b = lookup_module(scope, "second", test_run.types());
+    let a = lookup_module(scope, "first", test_run.registries());
+    let b = lookup_module(scope, "second", test_run.registries());
     let a_wrap = a.type_members.get(&"Wrap").copied();
     let b_wrap = b.type_members.get(&"Wrap").copied();
     let is_type_constructor = |kt: Option<KType>| {
@@ -448,7 +448,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
          MODULE int_ord = ((LET compare = 7) (LET helper = FN (HELP x :Number) -> Number = (x)))\n\
          LET held = (int_ord :| Ordered)",
     );
-    let held = lookup_module(scope, "held", test_run.types());
+    let held = lookup_module(scope, "held", test_run.registries());
 
     // Churn the run-root region, then re-ascribe to allocate a second re-bind
     // scope. The original `held` must still walk through to its own pair.

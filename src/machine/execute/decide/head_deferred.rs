@@ -12,7 +12,6 @@
 
 use crate::machine::core::DepPlacement;
 use crate::machine::model::Carried;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
@@ -23,6 +22,7 @@ use super::apply_callable::{ResolvedCallable, apply_callable};
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
 use crate::machine::AdoptSeam;
+use crate::machine::model::RunRegistries;
 use crate::scheduler::Deps;
 
 pub(in crate::machine::execute) fn initial_expr<'step>(
@@ -97,7 +97,7 @@ fn park_on_head<'step>(
                 let head = ctx
                     .current_scope()
                     .adopt_carried(&head_delivered, AdoptSeam::Retaining);
-                match classify_head(head, type_only, ctx.types()) {
+                match classify_head(head, type_only, ctx.registries()) {
                     Ok(c) => c,
                     Err(e) => return Outcome::Done(Err(e)),
                 }
@@ -125,17 +125,17 @@ fn park_on_head<'step>(
 fn classify_head<'step>(
     head: Carried<'step>,
     type_only: bool,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<ResolvedCallable<'step>, KError> {
     match head {
         Carried::Object(obj) => match obj {
             other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "Type".to_string(),
-                got: other.summarize(types),
+                got: other.summarize(registries),
             })),
             other => Err(KError::new(KErrorKind::DispatchFailed {
-                expr: other.summarize(types),
+                expr: other.summarize(registries),
                 reason: "head evaluates to a non-callable value".to_string(),
             })),
         },

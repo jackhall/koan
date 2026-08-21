@@ -8,22 +8,26 @@ mod functor;
 use crate::builtins::test_support::{TestRun, binds_module, parse_one};
 use crate::machine::KErrorKind;
 use crate::machine::model::Held;
-use crate::machine::model::{KObject, TypeRegistry};
+use crate::machine::model::KObject;
+use crate::machine::model::RunRegistries;
 use crate::machine::{program_storage, run_root_storage};
 
 /// The numbers of a `KObject::List` — the member bodies below return one of their two list
 /// operands, so association is observable in which list comes back.
-fn list_numbers(object: &KObject<'_>, types: &TypeRegistry) -> Vec<f64> {
+fn list_numbers(object: &KObject<'_>, registries: &RunRegistries) -> Vec<f64> {
     match object {
         KObject::List(items, _) => items
             .elements()
             .iter()
             .map(|item| match item {
                 Held::Object(KObject::Number(n)) => *n,
-                other => panic!("expected a Number element, got {}", other.summarize(types)),
+                other => panic!(
+                    "expected a Number element, got {}",
+                    other.summarize(registries)
+                ),
             })
             .collect(),
-        other => panic!("expected a list, got {}", other.ktype().name(types)),
+        other => panic!("expected a list, got {}", other.ktype().name(registries)),
     }
 }
 
@@ -54,13 +58,16 @@ fn group_mixed_run_reduces_fold_left_inside_the_body_and_through_using() {
     assert_eq!(
         list_numbers(
             test_run.run_one(parse_one(&program, "vec_ops.inside")),
-            &types
+            types.registries()
         ),
         vec![3.0],
         "the mixed run reduces fold-left through both member bodies inside the group body",
     );
     assert_eq!(
-        list_numbers(test_run.run_one(parse_one(&program, "outside")), &types),
+        list_numbers(
+            test_run.run_one(parse_one(&program, "outside")),
+            types.registries()
+        ),
         vec![3.0],
         "a USING window surfaces the group's registry entries alongside its operator bodies",
     );
@@ -85,7 +92,7 @@ fn group_fold_right_nests_right_associated() {
     assert_eq!(
         list_numbers(
             test_run.run_one(parse_one(&program, "vec_ops.inside")),
-            &types
+            types.registries()
         ),
         vec![1.0],
         "a fold-right run nests `xs + (ys - zs)`, which returns `xs`",
@@ -138,7 +145,7 @@ fn pairwise_group_folds_pair_results_in_the_declared_direction() {
         assert!(
             matches!(result, KObject::Number(n) if *n == expected),
             "a {direction} fold of the pair results must give {expected}; got {}",
-            result.summarize(test_run.types()),
+            result.summarize(test_run.registries()),
         );
     }
 }

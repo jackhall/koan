@@ -20,6 +20,7 @@ use crate::machine::model::Carried;
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::Symbol;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
@@ -63,12 +64,12 @@ pub fn scope_frame(scope: &Scope<'_>) -> Rc<FrameStorage> {
 /// Read a builtin argument's `KObject` from `BodyCtx::args` by name. `None` if the named field is
 /// a type cell.
 pub fn arg_object<'a, 'c>(args: &'c Record<Held<'a>>, name: &str) -> Option<&'c KObject<'a>> {
-    args.get(name).and_then(Held::as_object)
+    args.get(Symbol::of(name)).and_then(Held::as_object)
 }
 
 /// Read a builtin argument's `KType` (a type-cell arg) from `BodyCtx::args` by name.
 pub fn arg_type(args: &Record<Held<'_>>, name: &str) -> Option<KType> {
-    args.get(name).and_then(Held::as_type)
+    args.get(Symbol::of(name)).and_then(Held::as_type)
 }
 
 /// Read a builtin argument's unlowered type name (a [`Held::UnresolvedType`] cell) from
@@ -79,7 +80,7 @@ pub fn arg_unresolved_type<'a, 'c>(
     args: &'c Record<Held<'a>>,
     name: &str,
 ) -> Option<&'c TypeIdentifier<'a>> {
-    match args.get(name) {
+    match args.get(Symbol::of(name)) {
         Some(Held::UnresolvedType(ti)) => Some(ti),
         _ => None,
     }
@@ -89,7 +90,7 @@ pub fn arg_unresolved_type<'a, 'c>(
 /// [`Held::UnresolvedType`]) from `BodyCtx::args` by
 /// name — for builtins that branch on the value vs type channel (e.g. LET's name/value slots).
 pub fn arg_held<'a, 'c>(args: &'c Record<Held<'a>>, name: &str) -> Option<&'c Held<'a>> {
-    args.get(name)
+    args.get(Symbol::of(name))
 }
 
 /// Read a builtin argument's `KType` (a type-cell arg), or the canonical diagnostic —
@@ -97,14 +98,14 @@ pub fn arg_held<'a, 'c>(args: &'c Record<Held<'a>>, name: &str) -> Option<&'c He
 pub fn require_ktype<'a>(
     args: &Record<Held<'a>>,
     name: &str,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<KType, KError> {
     match arg_held(args, name) {
         Some(Held::Type(kt)) => Ok(*kt),
         Some(Held::Object(o)) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.to_string(),
             expected: "ProperType".to_string(),
-            got: o.ktype().name(types),
+            got: o.ktype().name(registries),
         })),
         // Every slot reaching here is `OfKind(AnyType)`, which dispatch auto-wraps into a
         // resolved type carrier, so an unlowered name is not a shape this door serves.
@@ -126,13 +127,13 @@ pub fn require_identifier_name<'a>(
     args: &Record<Held<'a>>,
     slot: &str,
     surface: &str,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<String, KError> {
     match arg_object(args, slot) {
         Some(KObject::KString(s)) => Ok((*s).to_string()),
         Some(other) => Err(KError::new(KErrorKind::ShapeError(format!(
             "{surface} {slot} must be a bare identifier, got `{}`",
-            other.ktype().name(types),
+            other.ktype().name(registries),
         )))),
         None => Err(KError::new(KErrorKind::MissingArg(slot.to_string()))),
     }
@@ -147,13 +148,13 @@ pub fn require_bare_type_name<'a>(
     args: &Record<Held<'a>>,
     slot: &str,
     surface: &str,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<String, KError> {
     match arg_held(args, slot) {
         // A binder name is exactly the shape the bind seam leaves unlowered: a bare user type
         // name with nothing bound to it yet.
         Some(Held::UnresolvedType(ti)) => Ok(ti.render()),
-        Some(Held::Type(t)) => bare_type_name(*t, slot, surface, types),
+        Some(Held::Type(t)) => bare_type_name(*t, slot, surface, registries),
         Some(Held::Object(_)) | None => Err(KError::new(KErrorKind::MissingArg(slot.to_string()))),
     }
 }
@@ -166,8 +167,9 @@ fn bare_type_name(
     t: KType,
     name: &str,
     surface: &str,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<String, KError> {
+    let types = &registries.types;
     match types.node(t) {
         TypeNode::Number
         | TypeNode::Str
@@ -181,7 +183,7 @@ fn bare_type_name(
         | TypeNode::Any
         | TypeNode::SetMember { .. }
         | TypeNode::Signature { .. }
-        | TypeNode::AbstractType { .. } => Ok(t.name(types)),
+        | TypeNode::AbstractType { .. } => Ok(t.name(registries)),
         TypeNode::List { .. }
         | TypeNode::Dict { .. }
         | TypeNode::Record { .. }
@@ -191,7 +193,7 @@ fn bare_type_name(
         | TypeNode::Union { .. }
         | TypeNode::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
             "{surface} {name} must be a bare type name, got `{}`",
-            t.render(types),
+            t.render(registries),
         )))),
     }
 }
@@ -302,7 +304,7 @@ impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
     /// The reach carrier of argument `name` — `Some` when it arrived as a resolved value (so a
     /// value-embedding body can fold / merge it), `None` for a scalar-literal (region-pure) argument.
     pub fn arg_carrier(&self, name: &str) -> Option<&'c DeliveredCarried> {
-        self.arg_carriers.get(name).copied()
+        self.arg_carriers.get(Symbol::of(name)).copied()
     }
 
     /// The allocation capability for this body's own scope region, branded at the step lifetime
@@ -325,7 +327,7 @@ impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
         FinishCtx {
             scope: self.scope,
             ctx: self.ctx.clone(),
-            types: self.types(),
+            registries: self.registries,
         }
     }
 }
@@ -338,11 +340,11 @@ impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
 pub struct FinishCtx<'a, 'r> {
     pub scope: &'a Scope<'a>,
     pub ctx: StepAllocator<'a>,
-    /// The run's subtype-verdict registry, mirroring [`BodyCtx::types`] so a wake-time finish
-    /// runs the same type predicates a synchronous body does. Borrowed for the duration of the
-    /// finish call: the site building this context holds the registry and consumes the context as
-    /// a short `&FinishCtx`, so `'r` is independent of the step brand `'a`.
-    pub types: &'r TypeRegistry,
+    /// The run's lookup state, mirroring [`BodyCtx::registries`] so a wake-time finish runs the
+    /// same type predicates and resolves the same labels a synchronous body does. Borrowed for the
+    /// duration of the finish call: the site building this context holds the registries and
+    /// consumes the context as a short `&FinishCtx`, so `'r` is independent of the step brand `'a`.
+    pub registries: &'r RunRegistries,
 }
 
 impl<'a, 'r> FinishCtx<'a, 'r> {
@@ -351,12 +353,17 @@ impl<'a, 'r> FinishCtx<'a, 'r> {
     /// combinator's `Done` arm, a unit test). `scope_frame(scope)` names the same dest frame the
     /// harness step context wraps at wake, so both allocate in the same region. A site that already
     /// holds the live step context (a builtin body) uses [`BodyCtx::finish_ctx`] instead.
-    pub fn for_scope(scope: &'a Scope<'a>, types: &'r TypeRegistry) -> Self {
+    pub fn for_scope(scope: &'a Scope<'a>, registries: &'r RunRegistries) -> Self {
         FinishCtx {
             scope,
             ctx: StepAllocator::for_scope(scope),
-            types,
+            registries,
         }
+    }
+
+    /// The run's type registry — the currency for pure type-structure questions.
+    pub fn types(&self) -> &'r TypeRegistry {
+        &self.registries.types
     }
 
     /// The allocation capability for this finish's own scope region, branded at the step lifetime

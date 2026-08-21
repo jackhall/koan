@@ -8,18 +8,20 @@
 use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::KErrorKind;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{KType, Record, TypeNode, TypeRegistry};
+use crate::machine::model::{KType, Record, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
 
 /// The `(name, arg)` pairs of a `ConstructorApply`, in the order the args record carries them —
 /// the constructor's declared parameter order.
-fn applied_args(kt: KType, types: &TypeRegistry) -> Vec<(String, KType)> {
-    match types.node(kt) {
-        TypeNode::ConstructorApply { arguments, .. } => arguments
-            .iter()
-            .map(|(name, arg)| (name.clone(), *arg))
-            .collect(),
-        _ => panic!("expected a ConstructorApply, got {}", kt.name(types)),
+fn applied_args(
+    kt: KType,
+    registries: &RunRegistries,
+) -> Vec<(crate::machine::model::Symbol, KType)> {
+    match registries.types.node(kt) {
+        TypeNode::ConstructorApply { arguments, .. } => {
+            arguments.iter().map(|(name, arg)| (name, *arg)).collect()
+        }
+        _ => panic!("expected a ConstructorApply, got {}", kt.name(registries)),
     }
 }
 
@@ -33,10 +35,10 @@ fn result_applies_named_type_arguments() {
     let applied =
         test_run.run_one_type(parse_one(&program, ":(Result {Ok = Number, Error = Str})"));
     assert_eq!(
-        applied_args(applied, test_run.types()),
+        applied_args(applied, test_run.registries()),
         vec![
-            ("Ok".to_string(), KType::NUMBER),
-            ("Error".to_string(), KType::STR),
+            (crate::machine::model::Symbol::of("Ok"), KType::NUMBER),
+            (crate::machine::model::Symbol::of("Error"), KType::STR),
         ],
     );
 }
@@ -50,8 +52,8 @@ fn user_family_applies_named_type_argument() {
     test_run.run("NEWTYPE (Elem AS Wrap)");
     let applied = test_run.run_one_type(parse_one(&program, ":(Wrap {Elem = Number})"));
     assert_eq!(
-        applied_args(applied, test_run.types()),
-        vec![("Elem".to_string(), KType::NUMBER)],
+        applied_args(applied, test_run.registries()),
+        vec![(crate::machine::model::Symbol::of("Elem"), KType::NUMBER)],
     );
 }
 
@@ -65,8 +67,11 @@ fn compound_type_argument_sub_dispatches() {
     test_run.run("NEWTYPE (Elem AS Wrap)");
     let applied = test_run.run_one_type(parse_one(&program, ":(Wrap {Elem = (LIST OF Number)})"));
     assert_eq!(
-        applied_args(applied, test_run.types()),
-        vec![("Elem".to_string(), test_run.types().list(KType::NUMBER))],
+        applied_args(applied, test_run.registries()),
+        vec![(
+            crate::machine::model::Symbol::of("Elem"),
+            test_run.types().list(KType::NUMBER)
+        )],
     );
 }
 
@@ -116,7 +121,7 @@ fn constructor_apply_name_round_trips() {
         ":(Result {Ok = (LIST OF Number), Error = Str})",
     ] {
         let applied = test_run.run_one_type(parse_one(&program, source));
-        let rendered = applied.name(test_run.types());
+        let rendered = applied.name(test_run.registries());
         let reparsed = test_run.run_one_type(parse_one(&program, &rendered));
         assert_eq!(
             applied.digest(),
@@ -231,10 +236,10 @@ fn multi_parameter_family_rejects_value_construction() {
     // The type-application surface stays open for the same family.
     let applied = test_run.run_one_type(parse_one(&program, ":(Pair {One = Number, Two = Str})"));
     assert_eq!(
-        applied_args(applied, test_run.types()),
+        applied_args(applied, test_run.registries()),
         vec![
-            ("One".to_string(), KType::NUMBER),
-            ("Two".to_string(), KType::STR),
+            (crate::machine::model::Symbol::of("One"), KType::NUMBER),
+            (crate::machine::model::Symbol::of("Two"), KType::STR),
         ],
     );
 }
@@ -254,11 +259,11 @@ fn erased_result_carrier_admits_named_application() {
     let value = scope.expect_value("wrapped");
     let types = test_run.registry_handle();
     assert!(
-        admitting.matches_value(value, &types),
+        admitting.matches_value(value, types.registries()),
         "an `Ok` carrier of a Number must inhabit `:(Result {{Ok = Number, Error = Any}})`",
     );
     assert!(
-        !refusing.matches_value(value, &types),
+        !refusing.matches_value(value, types.registries()),
         "the same carrier must not inhabit an application binding `Ok` to Str",
     );
 }
@@ -298,7 +303,7 @@ fn constructor_apply_over_abstract_slot_is_a_type_constructor() {
     });
     let applied = types.constructor_apply(
         ctor,
-        Record::from_pairs([("Elem".to_string(), KType::NUMBER)]),
+        Record::from_pairs([(crate::machine::model::Symbol::of("Elem"), KType::NUMBER)]),
     );
     assert_eq!(applied.kind_of(types), KKind::TypeConstructor);
 }

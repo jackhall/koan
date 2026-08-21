@@ -29,7 +29,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
     }
     test_run.run("LET other_set = (MAKESET (int_ord_a))");
 
-    let m = lookup_module(scope, "held_set", test_run.types());
+    let m = lookup_module(scope, "held_set", test_run.registries());
     let inner = m.child_scope().lookup("inner");
     assert!(
         matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
@@ -125,7 +125,7 @@ fn functor_returning_bare_signature_typed_param_does_not_panic() {
         other => {
             panic!(
                 "MAKESET ord_view must return the passed-through module carrier, got {}",
-                other.summarize(test_run.types())
+                other.summarize(test_run.registries())
             )
         }
     }

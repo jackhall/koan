@@ -450,7 +450,13 @@ fn a_two_bucket_binder_retires_the_key_it_did_not_seal() {
     assert_eq!(bindings.pending_overload_entries(&bridge_key).len(), 1);
 
     scope
-        .register_function_direct("FOO".to_string(), &f, BindingIndex::value(1), &mut gate)
+        .register_function_direct(
+            "FOO".to_string(),
+            &f,
+            BindingIndex::value(1),
+            &registries,
+            &mut gate,
+        )
         .expect("the seal lands and retires this key's claim");
     assert!(
         bindings.pending_overload_entries(&sealed_key).is_empty(),
@@ -633,7 +639,13 @@ fn bump_backed_tables_full_churn() {
                 .expect("a sibling claim appends");
         }
         scope
-            .register_function_direct("FOO".to_string(), &f, BindingIndex::value(1), &mut gate)
+            .register_function_direct(
+                "FOO".to_string(),
+                &f,
+                BindingIndex::value(1),
+                &registries,
+                &mut gate,
+            )
             .expect("the seal appends and retires this binder's own claim");
 
         // A second producer's claim on its own bucket, retired without a commit — the failed-binder

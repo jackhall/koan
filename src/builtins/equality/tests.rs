@@ -20,7 +20,7 @@ fn eval_bool(source_setup: &str, probe: &str) -> bool {
         KObject::Bool(b) => *b,
         other => panic!(
             "expected Bool from `{probe}`, got {}",
-            other.summarize(test_run.types())
+            other.summarize(test_run.registries())
         ),
     }
 }

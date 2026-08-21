@@ -558,15 +558,24 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
     ))
     .with_holder(&owned_cells);
     let fields = Record::from_pairs(vec![
-        ("x".to_string(), Held::Object(KObject::Number(1.0))),
-        ("y".to_string(), Held::Object(KObject::Number(2.0))),
+        (
+            crate::machine::model::Symbol::of("x"),
+            Held::Object(KObject::Number(1.0)),
+        ),
+        (
+            crate::machine::model::Symbol::of("y"),
+            Held::Object(KObject::Number(2.0)),
+        ),
     ]);
     let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
     // `RecordSubstrate` is invariant in its lifetime, so the comparison casts through `usize`
     // rather than keeping a lifetime-parameterized raw pointer type alive across the fold below.
     let expected_addr = match obj {
         KObject::Record(substrate, _) => *substrate as *const RecordSubstrate<'_> as usize,
-        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+        other => panic!(
+            "expected a Record, got {}",
+            other.ktype().name(types.registries())
+        ),
     };
     let dep: DeliveredCarried = producer_frame
         .brand()
@@ -575,7 +584,10 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
     // Consumer: a different frame — FROM's own step surface, narrowing to just `{x}`.
     let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
-    let narrowed_type = types.record(Record::from_pairs([("x".to_string(), KType::NUMBER)]));
+    let narrowed_type = types.record(Record::from_pairs([(
+        crate::machine::model::Symbol::of("x"),
+        KType::NUMBER,
+    )]));
     let sealed: StepCarried = ctx.alloc_carried_with(&[&dep], move |b, views| {
         let substrate = match views[0] {
             Carried::Object(KObject::Record(substrate, _)) => substrate,
@@ -599,7 +611,10 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
             );
             *substrate as *const RecordSubstrate<'_> as usize
         }
-        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+        other => panic!(
+            "expected a Record, got {}",
+            other.ktype().name(types.registries())
+        ),
     });
     assert_eq!(
         read_addr, expected_addr,
@@ -631,18 +646,27 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
         producer_frame.brand().handle(),
     ))
     .with_holder(&owned_cells);
-    let fields = Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(3.0)))]);
+    let fields = Record::from_pairs(vec![(
+        crate::machine::model::Symbol::of("a"),
+        Held::Object(KObject::Number(3.0)),
+    )]);
     let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
     let expected_addr = match obj {
         KObject::Record(substrate, _) => *substrate as *const RecordSubstrate<'_> as usize,
-        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+        other => panic!(
+            "expected a Record, got {}",
+            other.ktype().name(types.registries())
+        ),
     };
     let envelope: DeliveredCarried = producer_frame
         .brand()
         .deliver_resident::<CarriedFamily>(Carried::Object(obj));
 
     // The declared type the return re-stamps to — a distinct handle for the same record shape.
-    let declared = types.record(Record::from_pairs([("a".to_string(), KType::NUMBER)]));
+    let declared = types.record(Record::from_pairs([(
+        crate::machine::model::Symbol::of("a"),
+        KType::NUMBER,
+    )]));
 
     // Re-stamp in place: re-tag the top node to `declared`, re-anchored into the producer's own
     // region through the folded placement — the substrate rides shared (`deep_clone` pointer-copies
@@ -683,7 +707,10 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
             assert_eq!(*record_type, declared, "re-stamped to the declared type");
             *substrate as *const RecordSubstrate<'_> as usize
         }
-        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+        other => panic!(
+            "expected a Record, got {}",
+            other.ktype().name(types.registries())
+        ),
     });
     assert_eq!(
         read_addr, expected_addr,
@@ -942,13 +969,15 @@ fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
         let owned_cells = crate::machine::core::FrameCoverage::empty();
         let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
             .with_holder(&owned_cells);
-        let fields =
-            Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
+        let fields = Record::from_pairs(vec![(
+            crate::machine::model::Symbol::of("x"),
+            Held::Object(KObject::Number(1.0)),
+        )]);
         Carried::Object(door.alloc_object_folded(KObject::record_of_held(door, fields, types)))
     });
     let homed = stored.open_ref(|c| match c.object() {
         KObject::Record(substrate, _) => substrate.homed_in(frame.region()),
-        other => panic!("expected a Record, got {}", other.ktype().name(types)),
+        other => panic!("expected a Record, got {}", other.ktype().name(&registries)),
     });
     assert!(
         homed,
@@ -1045,6 +1074,7 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
 #[test]
 fn region_death_frees_every_drop_free_family() {
     use crate::machine::model::KKey;
+    use crate::machine::model::Symbol;
     use std::collections::HashMap;
     let program = program_storage();
     let root = run_root_storage();
@@ -1079,7 +1109,7 @@ fn region_death_frees_every_drop_free_family() {
         scope.fold_resident_object(|brand| {
             let door = brand.with_holder(&owned_cells);
             let fields = Record::from_pairs(vec![(
-                "field".to_string(),
+                crate::machine::model::Symbol::of("field"),
                 Held::Object(KObject::KString(door.allocator().text("payload"))),
             )]);
             KObject::record_of_held(door, fields, &types)
@@ -1113,7 +1143,7 @@ fn region_death_frees_every_drop_free_family() {
                 elements: vec![
                     SignatureElement::Keyword(brand.allocator().text(&format!("TAKE_{i}"))),
                     SignatureElement::Argument(Argument {
-                        name: brand.allocator().text(&format!("operand_{i}")),
+                        name: Symbol::of(&format!("operand_{i}")),
                         ktype: KType::NUMBER,
                     }),
                 ],

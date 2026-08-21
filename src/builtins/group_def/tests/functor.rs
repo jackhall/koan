@@ -54,7 +54,10 @@ fn functor_instantiated_at_a_concrete_type_yields_operators_over_that_type() {
          LET mixed = (USING number_ops SCOPE (xs + ys - zs))",
     ));
     assert_eq!(
-        list_numbers(test_run.run_one(parse_one(&program, "mixed")), &types),
+        list_numbers(
+            test_run.run_one(parse_one(&program, "mixed")),
+            types.registries()
+        ),
         vec![3.0],
         "the instantiated group's members reduce `xs + ys - zs` fold-left to `zs`",
     );

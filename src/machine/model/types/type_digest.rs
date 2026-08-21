@@ -28,6 +28,7 @@
 use std::collections::HashMap;
 
 use crate::machine::core::ScopeId;
+use crate::machine::model::labels::Symbol;
 
 use super::kkind::KKind;
 use super::ktype::KType;
@@ -108,6 +109,13 @@ impl DigestHasher {
 
     fn digest(&mut self, d: TypeDigest) -> &mut Self {
         self.inner.update(&d.0.to_le_bytes());
+        self
+    }
+
+    /// A [`Symbol`], fixed-width: its 128 bits little-endian. No length prefix — every symbol is
+    /// the same width, so the stream stays unambiguous without one.
+    fn symbol(&mut self, symbol: Symbol) -> &mut Self {
+        self.inner.update(&symbol.0.to_le_bytes());
         self
     }
 
@@ -278,7 +286,7 @@ fn union_digest(members: &[KType]) -> TypeDigest {
     h.finish()
 }
 
-/// `ConstructorApply(ctor, args)` — the args feed name-keyed and name-sorted (see
+/// `ConstructorApply(ctor, args)` — the args feed symbol-keyed and symbol-sorted (see
 /// [`feed_record`]), matching the order-blind identity of the args `Record`.
 fn constructor_apply_digest(ctor: TypeDigest, args: &Record<KType>) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_CONSTRUCTOR_APPLY);
@@ -460,14 +468,14 @@ fn feed_record_canonical(
     schema: &SigSchema,
     types: &TypeRegistry,
 ) {
-    let mut pairs: Vec<(&str, TypeDigest)> = record
+    let mut pairs: Vec<(Symbol, TypeDigest)> = record
         .iter()
-        .map(|(name, value)| (name.as_str(), canonical_type_digest(*value, schema, types)))
+        .map(|(symbol, value)| (symbol, canonical_type_digest(*value, schema, types)))
         .collect();
-    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    pairs.sort_unstable_by_key(|pair| pair.0);
     h.count(pairs.len());
-    for (name, d) in pairs {
-        h.string(name).digest(d);
+    for (symbol, d) in pairs {
+        h.symbol(symbol).digest(d);
     }
 }
 
@@ -486,18 +494,18 @@ pub(crate) fn member_ref_digest(scc_digest: TypeDigest, index: usize) -> TypeDig
         .finish()
 }
 
-/// Order-blind record digest: `(name, field digest)` pairs sorted by name, each
-/// length-prefixed. Matches `Record`'s `IndexMap` (order-blind) equality. Shared by
-/// `Record` and `KFunction` params.
+/// Order-blind record digest: `(symbol, field digest)` pairs in canonical order — the numeric order
+/// of the symbols. Matches `Record`'s order-blind equality. Shared by `Record` and `KFunction`
+/// params.
 fn feed_record(h: &mut DigestHasher, record: &Record<KType>) {
-    let mut pairs: Vec<(&str, TypeDigest)> = record
+    let mut pairs: Vec<(Symbol, TypeDigest)> = record
         .iter()
-        .map(|(name, value)| (name.as_str(), value.digest()))
+        .map(|(symbol, value)| (symbol, value.digest()))
         .collect();
-    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    pairs.sort_unstable_by_key(|pair| pair.0);
     h.count(pairs.len());
-    for (name, d) in pairs {
-        h.string(name).digest(d);
+    for (symbol, d) in pairs {
+        h.symbol(symbol).digest(d);
     }
 }
 

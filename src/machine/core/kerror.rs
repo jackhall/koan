@@ -10,6 +10,7 @@ use crate::witnessed::RegionHandleFamily;
 
 use super::{DeliveredCarried, FoldingBrand, RegionBrand, SubstrateDoor};
 use super::{KoanStorageProfile, Scope, scope_frame};
+use crate::machine::model::RunRegistries;
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
@@ -179,7 +180,12 @@ impl KError {
     /// `door` is the substrate door the payload's `Record` substrate is born through — a caller with
     /// no fold in hand mints a zero-dep one (see [`Self::to_tagged_delivered`]). Every cell here is
     /// freshly built owned data, so the door needs no holder.
-    pub fn to_tagged<'a>(&self, door: SubstrateDoor<'a, '_>, types: &TypeRegistry) -> KObject<'a> {
+    pub fn to_tagged<'a>(
+        &self,
+        door: SubstrateDoor<'a, '_>,
+        registries: &RunRegistries,
+    ) -> KObject<'a> {
+        let types = &registries.types;
         let brand = **door;
         let (name, fields) = self.kind.to_struct_fields(brand);
         let frames_list = KObject::list(
@@ -199,9 +205,19 @@ impl KError {
                 .collect(),
             types,
         );
+        // Every label here is a fixed literal of the error shape — syntactic in the same sense a
+        // source-written field name is, so each interns and renders back through the interner.
         let mut pairs: Vec<(String, KObject<'a>)> = fields;
         pairs.push(("frames".to_string(), frames_list));
-        let record = KObject::record(door, Record::from_pairs(pairs), types);
+        let record = KObject::record(
+            door,
+            Record::from_pairs(
+                pairs
+                    .into_iter()
+                    .map(|(name, value)| (registries.labels.intern(&name), value)),
+            ),
+            types,
+        );
         let payload = KObject::wrapped_peel(
             door,
             &record,
@@ -226,7 +242,7 @@ impl KError {
     pub fn to_tagged_delivered<'a>(
         &self,
         scope: &'a Scope<'a>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> DeliveredCarried {
         let frame = scope_frame(scope);
         // The seed is a bare region handle living in this scope's own region — it borrows nothing,
@@ -238,11 +254,9 @@ impl KError {
             |_handle, _dest, placement| {
                 let owned_cells = crate::machine::core::FrameCoverage::empty();
                 let brand = FoldingBrand::in_fold_closure(placement);
-                Carried::Object(
-                    brand.alloc_object_folded(
-                        self.to_tagged(brand.with_holder(&owned_cells), types),
-                    ),
-                )
+                Carried::Object(brand.alloc_object_folded(
+                    self.to_tagged(brand.with_holder(&owned_cells), registries),
+                ))
             },
         )
     }

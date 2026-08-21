@@ -16,6 +16,7 @@ use crate::machine::core::{
     CarrierWitness, FrameCoverage, FrameStorage, program_storage, run_root_storage,
 };
 use crate::machine::model::Scalar;
+use crate::machine::model::Symbol;
 use crate::machine::model::{Carried, KObject, RunRegistries};
 use crate::machine::model::{KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::witnessed::{Delivered, Sealed};
@@ -326,7 +327,7 @@ fn aggregate_of_mixed_call_results_releases_every_producer_frame() {
                         assert_eq!(*n, 1.0, "the scalar cell survives its producer's release")
                     }
                     (1, KObject::Record(substrate, _)) => {
-                        match substrate.field("acc").map(|h| h.object()) {
+                        match substrate.field(Symbol::of("acc")).map(|h| h.object()) {
                             Some(KObject::Number(n)) => {
                                 assert_eq!(*n, 1.0, "the acc field survives the total copy")
                             }
@@ -335,14 +336,14 @@ fn aggregate_of_mixed_call_results_releases_every_producer_frame() {
                     }
                     (_, other) => panic!(
                         "cell {i}: expected an alternating scalar / record, got {}",
-                        other.ktype().name(test_run.types())
+                        other.ktype().name(test_run.registries())
                     ),
                 }
             }
         }
         other => panic!(
             "expected a {CALLS}-element List, got {}",
-            other.ktype().name(test_run.types())
+            other.ktype().name(test_run.registries())
         ),
     }
     let total = FRAME_CENSUS.with(|census| census.borrow().len());
@@ -472,7 +473,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
         }
         Carried::Type(other) => panic!(
             "expected the passed-through Number, got {}",
-            other.name(test_run.types())
+            other.name(test_run.registries())
         ),
         Carried::UnresolvedType(ti) => {
             panic!("expected the passed-through Number, got {}", ti.render())

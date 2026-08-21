@@ -44,13 +44,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         value,
         ctx.scope,
         ctx.chain.clone(),
-        ctx.types(),
+        ctx.registries,
     ) {
         Ok(Some(arm)) => arm,
         Ok(None) => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "inexhaustive match = no branch for value of type `{}`",
-                value.ktype().name(ctx.types())
+                value.ktype().name(ctx.registries)
             )))));
         }
         Err(msg) => return Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
@@ -87,11 +87,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::ANY,
         vec![
             kw("MATCH"),
-            arg("value", KType::ANY),
+            arg(registries, "value", KType::ANY),
             kw("->"),
-            arg("return_type", KType::of_kind(KKind::ProperType)),
+            arg(registries, "return_type", KType::of_kind(KKind::ProperType)),
             kw("WITH"),
-            arg("branches", KType::KEXPRESSION),
+            arg(registries, "branches", KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "MATCH", signature, body, registries, gate);

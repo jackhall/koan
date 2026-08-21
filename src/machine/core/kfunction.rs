@@ -22,6 +22,8 @@ pub mod body;
 pub mod exec;
 pub mod pick;
 
+use crate::machine::model::RunRegistries;
+use crate::machine::model::{Symbol, render_label};
 pub use action::ActionFn;
 pub use body::Body;
 pub use pick::ClassifiedSlots;
@@ -177,14 +179,18 @@ impl<'a> KFunction<'a> {
         self.captured
     }
 
-    pub fn summarize(&self) -> String {
+    /// The callable's shape for a diagnostic: keywords verbatim, each argument as its name in
+    /// angle brackets. A parameter name is a symbol, so the text resolves through the interner.
+    pub fn summarize(&self, registries: &RunRegistries) -> String {
         let parts: Vec<String> = self
             .signature
             .elements()
             .iter()
             .map(|el| match el {
                 SignatureElement::Keyword(s) => (*s).to_string(),
-                SignatureElement::Argument(arg) => format!("<{}>", arg.name),
+                SignatureElement::Argument(arg) => {
+                    format!("<{}>", render_label(arg.name, registries))
+                }
             })
             .collect();
         format!("fn({})", parts.join(" "))
@@ -200,7 +206,7 @@ impl<'a> KFunction<'a> {
     pub(crate) fn validate_call_args(
         &'a self,
         parts: &[Spanned<WorkingPart<'a>>],
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> Result<(), KError> {
         if self.signature.elements().len() != parts.len() {
             return Err(KError::new(KErrorKind::ArityMismatch {
@@ -226,10 +232,10 @@ impl<'a> KFunction<'a> {
                     }
                 },
                 SignatureElement::Argument(arg) => {
-                    if !slot_admits(arg, &part.value, types) {
+                    if !slot_admits(arg, &part.value, registries) {
                         return Err(KError::new(KErrorKind::TypeMismatch {
-                            arg: arg.name.to_string(),
-                            expected: arg.ktype.name(types),
+                            arg: render_label(arg.name, registries),
+                            expected: arg.ktype.name(registries),
                             got: part.value.summarize(),
                         }));
                     }
@@ -257,16 +263,14 @@ impl<'a> KFunction<'a> {
         &'a self,
         parts: &[Spanned<WorkingPart<'a>>],
         scope: &'a Scope<'a>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> Result<Record<Held<'a>>, KError> {
-        self.validate_call_args(parts, types)?;
+        let types = &registries.types;
+        self.validate_call_args(parts, registries)?;
         let mut args: Record<Held<'a>> = Record::new();
         for (el, part) in self.signature.elements().iter().zip(parts.iter()) {
             if let SignatureElement::Argument(arg) = el {
-                args.insert(
-                    arg.name.to_string(),
-                    part.value.resolve_for(&arg.ktype, scope, types),
-                );
+                args.insert(arg.name, part.value.resolve_for(&arg.ktype, scope, types));
             }
         }
         Ok(args)
@@ -289,9 +293,10 @@ impl<'a> KFunction<'a> {
     pub fn reconstruct_positional<'b>(
         &self,
         brand: RegionBrand<'b>,
-        fields: Vec<(String, ExpressionPart<'b>)>,
+        fields: Vec<(Symbol, ExpressionPart<'b>)>,
+        registries: &RunRegistries,
     ) -> Result<WorkingExpression<'b>, KError> {
-        let mut pairs = NamedPairs::from_fields(fields)
+        let mut pairs = NamedPairs::from_fields(fields, registries)
             .map_err(|msg| KError::new(KErrorKind::ShapeError(msg)))?;
         // Every named slot is checked present before the run is reserved, so the fill below cannot
         // fail partway and the reconstruction builds straight into the region's bytes. Presence is
@@ -302,7 +307,9 @@ impl<'a> KFunction<'a> {
             SignatureElement::Argument(a) if !pairs.contains(a.name) => Some(a.name),
             _ => None,
         }) {
-            return Err(KError::new(KErrorKind::MissingArg(missing.to_string())));
+            return Err(KError::new(KErrorKind::MissingArg(render_label(
+                missing, registries,
+            ))));
         }
         Ok(WorkingExpression::new_from_iter(
             brand,
@@ -344,7 +351,7 @@ fn function_value_ktype(signature: &ExpressionSignature<'_>, types: &TypeRegistr
         .elements()
         .iter()
         .filter_map(|el| match el {
-            SignatureElement::Argument(a) => Some((a.name.to_string(), a.ktype)),
+            SignatureElement::Argument(a) => Some((a.name, a.ktype)),
             _ => None,
         })
         .collect();

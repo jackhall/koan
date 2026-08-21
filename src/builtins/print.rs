@@ -12,7 +12,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) via
     // `Held::summarize`.
     let rendered = match arg_held(ctx.args, "msg") {
-        Some(value) => value.summarize(ctx.types()),
+        Some(value) => value.summarize(ctx.registries),
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("msg".to_string())))),
     };
     let line = format!("{rendered}\n");
@@ -29,6 +29,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
-    let signature = sig(KType::STR, vec![kw("PRINT"), arg("msg", KType::ANY)]);
+    let signature = sig(
+        KType::STR,
+        vec![kw("PRINT"), arg(registries, "msg", KType::ANY)],
+    );
     crate::builtins::register_builtin(scope, "PRINT", signature, body, registries, gate);
 }

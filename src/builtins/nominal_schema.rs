@@ -10,6 +10,7 @@
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::DeclWindow;
 use crate::machine::model::KType;
+use crate::machine::model::Symbol;
 use crate::machine::model::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts,
     parse_typed_field_list_via_elaborator,
@@ -25,7 +26,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
     &FinishCtx<'a, '_>,
     String,
     &DeclWindow<'a>,
-    Vec<(String, KType)>,
+    Vec<(Symbol, KType)>,
     DeclarationSite,
 ) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError>;
 
@@ -64,7 +65,7 @@ pub(crate) fn nominal_schema_action<'a>(
             name_kind,
             &mut elaborator,
             None,
-            ctx.types(),
+            ctx.registries,
         )
     };
     match outcome {

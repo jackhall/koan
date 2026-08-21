@@ -197,7 +197,7 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
          SIG Container = ((TYPE Elt) (VAL item :Number))\n\
          LET view = (implementation :| Container)",
     );
-    let view = lookup_module(scope, "view", test_run.types());
+    let view = lookup_module(scope, "view", test_run.registries());
     let elt = view.type_members.get(&"Elt").copied();
     let declared = member_type(scope, test_run.types(), "Container", "Elt");
     match elt {
@@ -238,7 +238,7 @@ fn two_ascriptions_of_one_sig_mint_distinct_slot_types() {
          LET two = (implementation :| Container)",
     );
     let elt = |view_name: &str| {
-        lookup_module(scope, view_name, test_run.types())
+        lookup_module(scope, view_name, test_run.registries())
             .type_members
             .get(&"Elt")
             .copied()
@@ -328,7 +328,10 @@ fn fn_return_type_constructor_apply_root_scope() {
             TypeNode::ConstructorApply { arguments, .. } => {
                 assert_eq!(
                     arguments,
-                    Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
+                    Record::from_pairs([(
+                        crate::machine::model::Symbol::of("Type"),
+                        KType::NUMBER
+                    )]),
                 );
             }
             _ => panic!("expected Resolved(ConstructorApply), got {:?}", handle),
@@ -342,6 +345,7 @@ fn fn_return_type_constructor_apply_root_scope() {
 /// SIG decl-scope's `bindings.types["Wrap"]` entry.
 #[test]
 fn monad_signature_smoke() {
+    use crate::machine::model::Symbol;
     use crate::parse::parse;
     let program = program_storage();
     let region = run_root_storage();
@@ -393,7 +397,7 @@ fn monad_signature_smoke() {
         .expect("pure must live in Monad's stored schema value_slots");
     match types.node(pure) {
         TypeNode::KFunction { params, ret } => {
-            assert_eq!(params.get("x").copied(), Some(KType::NUMBER));
+            assert_eq!(params.get(Symbol::of("x")).copied(), Some(KType::NUMBER));
             assert_eq!(params.len(), 1);
             match types.node(ret) {
                 TypeNode::ConstructorApply {
@@ -403,7 +407,10 @@ fn monad_signature_smoke() {
                     assert_type_constructor(constructor, &["Type"], types);
                     assert_eq!(
                         arguments,
-                        Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
+                        Record::from_pairs([(
+                            crate::machine::model::Symbol::of("Type"),
+                            KType::NUMBER
+                        )]),
                     );
                 }
                 _ => panic!(
@@ -432,7 +439,7 @@ fn module_attr_access_returns_type_constructor() {
          MODULE int_list = ((LET Wrap = Wrapper))\n\
          LET mo = (int_list :| Monad)",
     );
-    let mo = lookup_module(scope, "mo", test_run.types());
+    let mo = lookup_module(scope, "mo", test_run.registries());
     let wrap_t = mo.type_members.get(&"Wrap").copied();
     match wrap_t {
         Some(kt) => {

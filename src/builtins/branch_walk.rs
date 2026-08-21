@@ -15,6 +15,7 @@ use crate::machine::model::{TypeResolution, most_specific_ktype};
 use crate::machine::DeliveredCarried;
 use crate::machine::LexicalFrame;
 use crate::machine::ReturnContract;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::{Carried, CarriedFamily, KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 use std::rc::Rc;
@@ -260,8 +261,9 @@ pub(crate) fn find_branch_body_by_type<'a>(
     scrutinee: &KObject<'a>,
     scope: &Scope<'a>,
     chain: Option<Rc<LexicalFrame>>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<Option<SelectedArm<'a>>, String> {
+    let types = &registries.types;
     let parts = &branches.parts;
     if !parts.len().is_multiple_of(3) {
         return Err(format!(
@@ -382,7 +384,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
             .collect();
         return Err(format!(
             "ambiguous match: value of type `{}` admits arms {} with no most-specific arm",
-            scrutinee.ktype().name(types),
+            scrutinee.ktype().name(registries),
             heads.join(", ")
         ));
     }
@@ -399,13 +401,13 @@ pub(crate) fn find_branch_body_by_type<'a>(
     // entirely on the head's own `KType`.
     let admitted: Vec<TypedArm<'a>> = typed_arms
         .into_iter()
-        .filter(|arm| arm.ktype.matches_value(scrutinee, types))
+        .filter(|arm| arm.ktype.matches_value(scrutinee, registries))
         .collect();
     if admitted.is_empty() {
         return Ok(None);
     }
     let heads: Vec<KType> = admitted.iter().map(|arm| arm.ktype).collect();
-    match most_specific_ktype(&heads, types) {
+    match most_specific_ktype(&heads, registries) {
         Some(winner) => {
             let arm = admitted
                 .into_iter()
@@ -423,7 +425,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
                 .collect();
             Err(format!(
                 "ambiguous match: value of type `{}` admits arms {} with no most-specific arm",
-                scrutinee.ktype().name(types),
+                scrutinee.ktype().name(registries),
                 heads.join(", ")
             ))
         }

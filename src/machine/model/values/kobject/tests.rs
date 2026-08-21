@@ -105,7 +105,7 @@ fn matches_value_list_number_rejects_string_element() {
         vec![KObject::Number(1.0), KObject::KString("x")],
         types,
     );
-    assert!(!t.matches_value(&bad, types));
+    assert!(!t.matches_value(&bad, &registries));
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn matches_value_list_number_accepts_all_numbers() {
         vec![KObject::Number(1.0), KObject::Number(2.0)],
         types,
     );
-    assert!(t.matches_value(&good, types));
+    assert!(t.matches_value(&good, &registries));
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn matches_value_list_any_accepts_any_list() {
         vec![KObject::Number(1.0), KObject::KString("x")],
         types,
     );
-    assert!(t.matches_value(&mixed, types));
+    assert!(t.matches_value(&mixed, &registries));
 }
 
 /// Carrier is authoritative for `ktype()`: a stamped `List<Any>` reports `Any`
@@ -177,8 +177,8 @@ fn type_constructor_ktype_erased_vs_applied() {
         _ => panic!("expected SetMember, got {erased_handle:?}"),
     }
     let arguments = Record::from_pairs([
-        ("Ok".to_string(), KType::NUMBER),
-        ("Error".to_string(), KType::STR),
+        (crate::machine::model::Symbol::of("Ok"), KType::NUMBER),
+        (crate::machine::model::Symbol::of("Error"), KType::STR),
     ]);
     let applied = KObject::tagged(
         door,
@@ -252,7 +252,7 @@ fn wrapped_summarize_renders_surface_form() {
     container_door!(_storage, door);
     let type_id = newtype_singleton("Distance", KType::NUMBER, types);
     let w = KObject::wrapped_peel(door, &KObject::Number(3.0), type_id);
-    assert_eq!(w.summarize(types), "Distance(3)");
+    assert_eq!(w.summarize(&registries), "Distance(3)");
 }
 
 /// `deep_clone` is shallow: it pointer-copies the payload substrate borrow (sharing the same

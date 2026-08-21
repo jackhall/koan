@@ -9,7 +9,6 @@ use crate::machine::core::{Action, BodyCtx};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 
@@ -60,7 +59,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         elements: vec![
             SignatureElement::Keyword("MARK"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: crate::machine::model::Symbol::of("v"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -73,7 +72,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         outer_sig,
         body_outer_number,
         BindingIndex::value(1),
-        &TypeRegistry::new(),
+        &RunRegistries::new(),
         &mut crate::machine::WriteGate::for_test(),
     );
 
@@ -83,7 +82,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         elements: vec![
             SignatureElement::Keyword("MARK"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: crate::machine::model::Symbol::of("v"),
                 ktype: KType::ANY,
             }),
         ],
@@ -159,8 +158,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     let id = runtime.install_edge_for_test(slot, scope);
     runtime.execute().unwrap();
     let registries = RunRegistries::new();
-    let types = &registries.types;
-    let err = match runtime.read_edge_result_with(id, |v| v.summarize(types)) {
+    let err = match runtime.read_edge_result_with(id, |v| v.summarize(&registries)) {
         Err(e) => e.clone(),
         Ok(summary) => panic!(
             "stateful BareIdentifier must surface UnboundName for an unbound name; \
@@ -187,7 +185,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
         elements: vec![
             SignatureElement::Keyword("foo"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: crate::machine::model::Symbol::of("v"),
                 ktype: KType::NUMBER,
             }),
         ],

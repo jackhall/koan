@@ -6,6 +6,7 @@ use crate::machine::model::{Argument, KObject, KType, SignatureElement};
 use crate::machine::{program_storage, run_root_storage};
 
 use super::capture_program_output;
+use crate::machine::model::Symbol;
 
 #[test]
 fn fn_typed_param_records_ktype_on_signature() {
@@ -22,7 +23,7 @@ fn fn_typed_param_records_ktype_on_signature() {
             SignatureElement::Argument(Argument { name, ktype }),
         ] => {
             assert_eq!(*kw, "DOUBLE");
-            assert_eq!(*name, "x");
+            assert_eq!(*name, Symbol::of("x"));
             assert_eq!(*ktype, KType::NUMBER);
         }
         _ => panic!("expected signature shape [Keyword(\"DOUBLE\"), Argument(x :Number)]"),

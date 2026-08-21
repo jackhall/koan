@@ -29,7 +29,7 @@ use crate::machine::model::{
     DeclWindow, Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts,
     ResultFeed, parse_typed_field_list_via_elaborator,
 };
-use crate::machine::model::{KType, Record, TypeRegistry};
+use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, Scope, TraceFrame};
 use crate::scheduler::{Dep, Deps};
 use crate::witnessed::BumpAllocator;
@@ -39,12 +39,14 @@ use super::super::TerminalDepFinish;
 use super::super::outcome::{Await, Outcome, StepDeps, dep_error_frame};
 use super::SubDispatch;
 use super::ctx::DecideCtx;
+use crate::machine::model::RunRegistries;
+use crate::machine::model::Symbol;
 
 /// Composes the final `KType` from the elaborated pairs, plus whatever owned type content the
 /// caller closed over (e.g. the FN return type). The composed value is allocated into the
 /// consumer's own region through the single type door.
 pub(crate) type BrandCompose<'step> = Box<
-    dyn for<'r> FnOnce(Vec<(String, KType)>, &'r TypeRegistry) -> Result<KType, KError> + 'step,
+    dyn for<'r> FnOnce(Vec<(Symbol, KType)>, &'r RunRegistries) -> Result<KType, KError> + 'step,
 >;
 
 /// `Action`-path finalize, returning a witnessed carrier beside the binding writes the declarator
@@ -54,7 +56,7 @@ pub(crate) type FieldListFinalizeAction<'a> = Box<
     dyn for<'r, 'w> FnOnce(
             &FinishCtx<'a, 'r>,
             Option<&'w DeclWindow<'a>>,
-            Vec<(String, KType)>,
+            Vec<(Symbol, KType)>,
         ) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError>
         + 'a,
 >;
@@ -83,8 +85,8 @@ impl<'step> FieldListRewalk<'step> {
         &self,
         scope: &Scope<'step>,
         feed: &[Carried<'f>],
-        types: &TypeRegistry,
-    ) -> Result<Vec<(String, KType)>, KError> {
+        registries: &RunRegistries,
+    ) -> Result<Vec<(Symbol, KType)>, KError> {
         let mut result_feed = ResultFeed::new(feed);
         let mut elaborator = Elaborator::new(scope)
             .with_threaded(self.threaded.iter().cloned())
@@ -98,7 +100,7 @@ impl<'step> FieldListRewalk<'step> {
             self.name_kind,
             &mut elaborator,
             Some(&mut result_feed),
-            types,
+            registries,
         ) {
             FieldListOutcome::Done(fields) => Ok(fields),
             FieldListOutcome::Err(msg) => {
@@ -125,10 +127,10 @@ fn compose_field_list<'step, 'f>(
     rewalk: FieldListRewalk<'step>,
     feed: &[Carried<'f>],
     compose: BrandCompose<'step>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<StepCarried<'step>, KError> {
-    let fields = rewalk.run(scope, feed, types)?;
-    Ok(step_ctx.type_carried(compose(fields, types)?))
+    let fields = rewalk.run(scope, feed, registries)?;
+    Ok(step_ctx.type_carried(compose(fields, registries)?))
 }
 
 /// One field-list deferral, ready to finish into either dispatch currency. Holds the forward-ref
@@ -249,7 +251,7 @@ impl<'a> FieldListDeferral<'a> {
                 rewalk,
                 &owned,
                 compose,
-                view.types(),
+                view.registries(),
             ) {
                 Ok(sealed) => Outcome::Done(Ok(sealed)),
                 Err(e) => Outcome::Done(Err(e)),
@@ -291,7 +293,7 @@ impl<'a> FieldListDeferral<'a> {
             let owned: Vec<Carried<'_>> = opened.iter().map(|o| o.value()).collect();
             Action::done_writing(
                 rewalk
-                    .run(fctx.scope, &owned, fctx.types)
+                    .run(fctx.scope, &owned, fctx.registries)
                     .and_then(|fields| finalize(fctx, rewalk.window.as_ref(), fields)),
             )
         });
@@ -307,7 +309,7 @@ impl<'a> FieldListDeferral<'a> {
         self.action(Box::new(move |fctx, _window, fields| {
             // A composed structural type declares no binder, so it writes nothing.
             Ok((
-                fctx.ctx.type_carried(compose(fields, fctx.types)?),
+                fctx.ctx.type_carried(compose(fields, fctx.registries)?),
                 Vec::new(),
             ))
         }))
@@ -330,7 +332,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
         FieldNameKind::Identifier,
         &mut elaborator,
         None,
-        view.types(),
+        view.registries(),
     ) {
         FieldListOutcome::Done(pairs) => {
             let kt = view.types().record(Record::from_pairs(pairs));
@@ -349,7 +351,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
         )
         .with_chain(chain)
         .outcome(
-            Box::new(|pairs, types| Ok(types.record(Record::from_pairs(pairs)))),
+            Box::new(|pairs, registries| Ok(registries.types.record(Record::from_pairs(pairs)))),
             view.scratch(),
         ),
     }

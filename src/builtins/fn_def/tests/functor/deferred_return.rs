@@ -30,7 +30,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
         other => {
             panic!(
                 "expected the int_ord view satisfying the per-call signature, got {}",
-                other.summarize(test_run.types())
+                other.summarize(test_run.registries())
             )
         }
     }
@@ -96,7 +96,7 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
                 type_id,
             );
             assert_eq!(
-                type_id.name(test_run.types()),
+                type_id.name(test_run.registries()),
                 "Carrier",
                 "the abstract identity is the SIG-named member `Carrier`",
             );

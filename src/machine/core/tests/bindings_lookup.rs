@@ -14,6 +14,7 @@ use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, Signatu
 use super::{body_no_op, unit_signature};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
+use crate::machine::model::Symbol;
 
 #[test]
 fn lookup_value_chain_cutoff_none_admits_every_index() {
@@ -137,6 +138,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
             "FOO".to_string(),
             &cell,
             BindingIndex::value(99),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -163,7 +165,7 @@ fn lookup_function_filters_per_overload_visibility() {
         elements: vec![
             SignatureElement::Keyword("BAR"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: Symbol::of("v"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -173,7 +175,7 @@ fn lookup_function_filters_per_overload_visibility() {
         elements: vec![
             SignatureElement::Keyword("BAR"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: Symbol::of("v"),
                 ktype: KType::STR,
             }),
         ],
@@ -188,6 +190,7 @@ fn lookup_function_filters_per_overload_visibility() {
             "BAR".to_string(),
             &early,
             BindingIndex::value(2),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -196,6 +199,7 @@ fn lookup_function_filters_per_overload_visibility() {
             "BAR".to_string(),
             &late,
             BindingIndex::value(7),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -250,6 +254,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
             "FOO".to_string(),
             &f,
             BindingIndex::value(2),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -281,6 +286,7 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
             "FOO".to_string(),
             &f,
             BindingIndex::value(9),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -307,6 +313,7 @@ fn retirement_drops_every_bucket_the_statement_claimed() {
             "FOO".to_string(),
             &f,
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();

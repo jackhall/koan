@@ -23,6 +23,7 @@ use super::super::outcome::dep_error_frame;
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
 use super::{PartWalk, StagedSubs, constructors, stage_all_eager_parts};
+use crate::machine::model::RunRegistries;
 
 #[cfg(test)]
 mod tests;
@@ -156,7 +157,7 @@ fn apply_constructor<'step>(
         return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "constructible Type".to_string(),
-            got: identity.name(ctx.types()),
+            got: identity.name(ctx.registries()),
         })));
     };
     match schema {
@@ -174,6 +175,7 @@ fn apply_constructor<'step>(
                 brand,
                 identity,
                 fields,
+                ctx.registries(),
                 ctx.scratch(),
             ),
             _ => constructors::dispatch_construct_newtype(
@@ -234,7 +236,7 @@ fn apply_named_type_args<'step>(
     // key check the non-empty path runs.
     if fields.is_empty() {
         return Outcome::Done(
-            build_apply_args(identity, &param_names, Vec::new(), ctx.types()).map(|args| {
+            build_apply_args(identity, &param_names, Vec::new(), ctx.registries()).map(|args| {
                 ctx.step_ctx()
                     .type_carried(ctx.types().constructor_apply(identity, args))
             }),
@@ -263,7 +265,7 @@ fn apply_named_type_args<'step>(
                 Carried::Object(object) => Err(KError::new(KErrorKind::TypeMismatch {
                     arg: name.clone(),
                     expected: "Type".to_string(),
-                    got: object.ktype().name(view.types()),
+                    got: object.ktype().name(view.registries()),
                 })),
                 Carried::UnresolvedType(ti) => {
                     Err(KError::new(KErrorKind::UnboundName(ti.render())))
@@ -271,7 +273,7 @@ fn apply_named_type_args<'step>(
             })
             .collect();
         Outcome::Done(supplied.and_then(|supplied| {
-            let args = build_apply_args(identity, &param_names, supplied, view.types())?;
+            let args = build_apply_args(identity, &param_names, supplied, view.registries())?;
             Ok(view
                 .step_ctx()
                 .type_carried(view.types().constructor_apply(identity, args)))
@@ -289,7 +291,7 @@ fn build_apply_args(
     identity: KType,
     param_names: &[String],
     supplied: Vec<(String, KType)>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Result<Record<KType>, KError> {
     let mut supplied: HashMap<String, KType> = supplied.into_iter().collect();
     let missing: Vec<&str> = param_names
@@ -314,7 +316,7 @@ fn build_apply_args(
         let declared: Vec<&str> = param_names.iter().map(String::as_str).collect();
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "`{}` takes type parameters {} — {}",
-            identity.name(types),
+            identity.name(registries),
             quoted_list(&declared),
             problems.join(", "),
         ))));
@@ -323,7 +325,7 @@ fn build_apply_args(
         let arg = supplied
             .remove(name)
             .expect("every declared parameter is supplied — the key check passed");
-        (name.clone(), arg)
+        (registries.labels.intern(name), arg)
     })))
 }
 
@@ -443,11 +445,16 @@ fn apply_function<'step>(
     match body {
         CallBody::Named(fields) => {
             let brand = ctx.current_scope().brand();
+            // A named-argument label is syntactic, so it interns here and matches the parameter
+            // symbol the signature already carries.
             let fields = fields
                 .iter()
-                .map(|(name, part)| ((*name).to_string(), *part))
+                .map(|(name, part)| (ctx.registries().labels.intern(name), *part))
                 .collect();
-            match f.value().reconstruct_positional(brand, fields) {
+            match f
+                .value()
+                .reconstruct_positional(brand, fields, ctx.registries())
+            {
                 Ok(rebuilt) => install_eager_subs_track(ctx, rebuilt, f),
                 Err(e) => Outcome::Done(Err(e)),
             }
@@ -469,7 +476,7 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
     let brand = ctx.current_scope().brand();
     let wrap_indices = picked
         .value()
-        .classify_for_pick(&expr, ctx.types())
+        .classify_for_pick(&expr, ctx.registries())
         .wrap_indices;
     // A call whose slots are all filled stages nothing, so the node handed to the walk is the one
     // the committed call folds over — no rebuild.

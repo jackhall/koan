@@ -23,7 +23,7 @@ use crate::machine::WriteGate;
 use crate::machine::BindingIndex;
 use crate::machine::GroupSeal;
 use crate::machine::model::{FoldDirection, ReductionMode};
-use crate::machine::model::{Held, KObject, KType, Record, TypeRegistry};
+use crate::machine::model::{Held, KObject, KType, Record};
 use crate::machine::{Action, BodyCtx, arg_object};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -32,49 +32,63 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 
 /// Read a `:Number` operand named `name`, or the canonical missing/mismatch diagnostic.
-fn number_arg(args: &Record<Held<'_>>, name: &str, types: &TypeRegistry) -> Result<f64, KError> {
+fn number_arg(
+    args: &Record<Held<'_>>,
+    name: &str,
+    registries: &RunRegistries,
+) -> Result<f64, KError> {
     match arg_object(args, name) {
         Some(KObject::Number(n)) => Ok(*n),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.to_string(),
             expected: "Number".to_string(),
-            got: other.ktype().name(types),
+            got: other.ktype().name(registries),
         })),
         None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
     }
 }
 
 /// Read the `left` / `right` `:Number` operands.
-fn number_operands(args: &Record<Held<'_>>, types: &TypeRegistry) -> Result<(f64, f64), KError> {
+fn number_operands(
+    args: &Record<Held<'_>>,
+    registries: &RunRegistries,
+) -> Result<(f64, f64), KError> {
     Ok((
-        number_arg(args, "left", types)?,
-        number_arg(args, "right", types)?,
+        number_arg(args, "left", registries)?,
+        number_arg(args, "right", registries)?,
     ))
 }
 
 /// Read a `:Bool` operand named `name`, or the canonical missing/mismatch diagnostic.
-fn bool_arg(args: &Record<Held<'_>>, name: &str, types: &TypeRegistry) -> Result<bool, KError> {
+fn bool_arg(
+    args: &Record<Held<'_>>,
+    name: &str,
+    registries: &RunRegistries,
+) -> Result<bool, KError> {
     match arg_object(args, name) {
         Some(KObject::Bool(b)) => Ok(*b),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.to_string(),
             expected: "Bool".to_string(),
-            got: other.ktype().name(types),
+            got: other.ktype().name(registries),
         })),
         None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
     }
 }
 
 /// Read the `left` / `right` `:Bool` operands.
-fn bool_operands(args: &Record<Held<'_>>, types: &TypeRegistry) -> Result<(bool, bool), KError> {
+fn bool_operands(
+    args: &Record<Held<'_>>,
+    registries: &RunRegistries,
+) -> Result<(bool, bool), KError> {
     Ok((
-        bool_arg(args, "left", types)?,
-        bool_arg(args, "right", types)?,
+        bool_arg(args, "left", registries)?,
+        bool_arg(args, "right", registries)?,
     ))
 }
 
 pub fn body_add<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.registries));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -82,7 +96,7 @@ pub fn body_add<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_sub<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.registries));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -90,7 +104,7 @@ pub fn body_sub<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_mul<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.registries));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -102,7 +116,7 @@ pub fn body_mul<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 /// (`KErrorKind::User`, the in-language-error landing pad) rather than following IEEE 754's
 /// infinity/NaN convention — no NaN value is ever minted onto a koan `Number`.
 pub fn body_div<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.registries));
     if right == 0.0 {
         return Action::done(Err(KError::new(KErrorKind::User(
             "/ : division by zero".to_string(),
@@ -115,7 +129,7 @@ pub fn body_div<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_lt<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.registries));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -123,7 +137,7 @@ pub fn body_lt<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_le<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.registries));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -131,7 +145,7 @@ pub fn body_le<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_gt<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.registries));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -139,7 +153,7 @@ pub fn body_gt<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_ge<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.registries));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -147,7 +161,7 @@ pub fn body_ge<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_and<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(bool_operands(ctx.args, ctx.types()));
+    let (left, right) = crate::try_action!(bool_operands(ctx.args, ctx.registries));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -159,9 +173,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::NUMBER,
             vec![
-                arg("left", KType::NUMBER),
+                arg(registries, "left", KType::NUMBER),
                 kw(op),
-                arg("right", KType::NUMBER),
+                arg(registries, "right", KType::NUMBER),
             ],
         )
     };
@@ -169,9 +183,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::BOOL,
             vec![
-                arg("left", KType::NUMBER),
+                arg(registries, "left", KType::NUMBER),
                 kw(op),
-                arg("right", KType::NUMBER),
+                arg(registries, "right", KType::NUMBER),
             ],
         )
     };
@@ -189,9 +203,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let and_sig = sig(
         KType::BOOL,
         vec![
-            arg("left", KType::BOOL),
+            arg(registries, "left", KType::BOOL),
             kw("AND"),
-            arg("right", KType::BOOL),
+            arg(registries, "right", KType::BOOL),
         ],
     );
     crate::builtins::register_builtin(scope, "AND", and_sig, body_and, registries, gate);

@@ -62,7 +62,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         elements: vec![
             SignatureElement::Keyword("OP"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: Symbol::of("v"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -84,7 +84,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         ],
     );
     let f = find_match(scope, &expr, types).expect("OP <Number> should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), types);
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &registries);
     assert_eq!(pick.wrap_indices, vec![1]);
 }
 
@@ -101,11 +101,11 @@ fn classify_excludes_literal_name_slots_from_wrap() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
-                name: "verb",
+                name: Symbol::of("verb"),
                 ktype: KType::IDENTIFIER,
             }),
             SignatureElement::Argument(Argument {
-                name: "args",
+                name: Symbol::of("args"),
                 ktype: KType::KEXPRESSION,
             }),
         ],
@@ -137,7 +137,7 @@ fn classify_excludes_literal_name_slots_from_wrap() {
     );
     let f = find_match(scope, &expr, types)
         .expect("test overload should match an Identifier-leading expression");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), types);
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &registries);
     assert!(pick.wrap_indices.is_empty());
 }
 
@@ -161,7 +161,10 @@ fn classify_excludes_binder_name_slot_from_wrap() {
         ],
     );
     let f = find_match(scope, &expr, &types).expect("LET should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
+    let pick = f.classify_for_pick(
+        &WorkingExpression::from_ast(brand, expr),
+        types.registries(),
+    );
     assert!(
         pick.wrap_indices.is_empty(),
         "LET's Identifier name slot is a declaration, not a reference; \
@@ -185,7 +188,7 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
         elements: vec![
             SignatureElement::Keyword("OP"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: Symbol::of("v"),
                 ktype: KType::of_kind(KKind::ProperType),
             }),
         ],
@@ -207,7 +210,7 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
         ],
     );
     let f = find_match(scope, &expr, types).expect("OP <ProperType> should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), types);
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &registries);
     assert!(pick.wrap_indices.is_empty());
 }
 
@@ -225,7 +228,7 @@ fn function_value_ktype_projects_kfunction() {
         elements: vec![
             SignatureElement::Keyword("CALL"),
             SignatureElement::Argument(crate::machine::model::Argument {
-                name: "x",
+                name: Symbol::of("x"),
                 ktype: KType::NUMBER,
             }),
         ],
@@ -234,11 +237,11 @@ fn function_value_ktype_projects_kfunction() {
     let obj = KObject::KFunction(f);
     match types.node(obj.ktype()) {
         TypeNode::KFunction { params, ret } => {
-            assert_eq!(params.get("x"), Some(&KType::NUMBER));
+            assert_eq!(params.get(Symbol::of("x")), Some(&KType::NUMBER));
             assert_eq!(params.len(), 1);
             assert_eq!(ret, KType::NUMBER);
         }
-        _ => panic!("expected KFunction, got {}", obj.ktype().name(types)),
+        _ => panic!("expected KFunction, got {}", obj.ktype().name(&registries)),
     }
 }
 
@@ -256,7 +259,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
         elements: vec![
             SignatureElement::Keyword("OP"),
             SignatureElement::Argument(Argument {
-                name: "v",
+                name: Symbol::of("v"),
                 ktype: KType::ANY,
             }),
         ],
@@ -278,6 +281,6 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
         ],
     );
     let f = find_match(scope, &expr, types).expect("OP <Any> should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), types);
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &registries);
     assert_eq!(pick.wrap_indices, vec![1]);
 }

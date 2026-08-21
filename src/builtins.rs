@@ -1,7 +1,5 @@
 use crate::machine::model::KKind;
 use crate::machine::model::RunRegistries;
-#[cfg(test)]
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::{BindingIndex, Scope, WriteGate};
 use crate::machine::{Body, KFunction};
@@ -48,9 +46,18 @@ pub(crate) fn kw(s: &str) -> SignatureElement<'_> {
     SignatureElement::Keyword(s)
 }
 
-/// Signature-element constructor for an argument slot. Same borrowed-text story as [`kw`].
-pub(crate) fn arg(name: &str, ktype: KType) -> SignatureElement<'_> {
-    SignatureElement::Argument(Argument { name, ktype })
+/// Signature-element constructor for an argument slot. The name is syntactic, so it interns here:
+/// the symbol it becomes is the whole argument, and diagnostics resolve the text back through the
+/// same interner.
+pub(crate) fn arg<'a>(
+    registries: &RunRegistries,
+    name: &str,
+    ktype: KType,
+) -> SignatureElement<'a> {
+    SignatureElement::Argument(Argument {
+        name: registries.labels.intern(name),
+        ktype,
+    })
 }
 
 /// Assemble a [`SignatureDraft`] with `Resolved(return_type)`. Builtins needing
@@ -82,7 +89,8 @@ pub(crate) fn register_builtin<'a>(
     gate: &mut WriteGate,
 ) {
     let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), &registries.types);
-    let _ = scope.register_function_direct(name.into(), &cell, BindingIndex::BUILTIN, gate);
+    let _ =
+        scope.register_function_direct(name.into(), &cell, BindingIndex::BUILTIN, registries, gate);
 }
 
 /// Test-only: register one overload at an explicit [`BindingIndex`]. A test uses this to
@@ -96,12 +104,12 @@ pub(crate) fn register_overload_at<'a>(
     signature: SignatureDraft<'a>,
     body: crate::machine::ActionFn,
     index: BindingIndex,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
     gate: &mut WriteGate,
 ) {
-    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), types);
+    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), &registries.types);
     scope
-        .register_function_direct(name.into(), &cell, index, gate)
+        .register_function_direct(name.into(), &cell, index, registries, gate)
         .expect("register_overload_at: user-index overload should not collide with a builtin");
 }
 

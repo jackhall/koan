@@ -53,7 +53,7 @@ fn pairwise_combiner_folds_left() {
     assert!(
         matches!(result, KObject::Number(n) if *n == 8.0),
         "a left fold nests ((p1 ⊙ p2) ⊙ p3) = (14 - 5) - 1 = 8; got {}",
-        result.summarize(test_run.types()),
+        result.summarize(test_run.registries()),
     );
 }
 
@@ -69,7 +69,7 @@ fn pairwise_combiner_folds_right() {
     assert!(
         matches!(result, KObject::Number(n) if *n == 10.0),
         "a right fold nests (p1 ⊙ (p2 ⊙ p3)) = 14 - (5 - 1) = 10; got {}",
-        result.summarize(test_run.types()),
+        result.summarize(test_run.registries()),
     );
 }
 
@@ -87,7 +87,7 @@ fn pairwise_combiner_evaluates_a_shared_operand_once() {
     assert!(
         matches!(result, KObject::Number(n) if *n == -2.0),
         "the pairs are 1 + 2 = 3 and 2 + 3 = 5, folded through `MINUS` to 3 - 5 = -2; got {}",
-        result.summarize(test_run.types()),
+        result.summarize(test_run.registries()),
     );
     let bytes = captured.borrow().clone();
     assert_eq!(

@@ -15,6 +15,9 @@
 //!
 //! Predicates live in `ktype_predicates.rs`; elaboration lives in `ktype_resolution.rs`.
 
+use crate::machine::model::labels::Symbol;
+use crate::machine::model::registries::RunRegistries;
+
 use super::kkind::KKind;
 use super::node::TypeNode;
 use super::record::Record;
@@ -90,7 +93,8 @@ impl KType {
     /// Surface-syntax rendering. The rendered form parses back to the same type through the
     /// dispatch-driven type-language path (see
     /// [type-language via dispatch](../../../../design/typing/type-language-via-dispatch.md)).
-    pub fn name(self, types: &TypeRegistry) -> String {
+    pub fn name(self, registries: &RunRegistries) -> String {
+        let types = &registries.types;
         match types.node(self) {
             TypeNode::Number => "Number".into(),
             TypeNode::Str => "Str".into(),
@@ -102,23 +106,29 @@ impl KType {
             TypeNode::RecordType => "RecordType".into(),
             TypeNode::Any => "Any".into(),
             TypeNode::OfKind(kind) => kind.surface_keyword().into(),
-            TypeNode::List { element } => format!(":(LIST OF {})", element.name(types)),
+            TypeNode::List { element } => format!(":(LIST OF {})", element.name(registries)),
             TypeNode::Dict { key, value } => {
-                format!(":(MAP {} -> {})", key.name(types), value.name(types))
+                format!(
+                    ":(MAP {} -> {})",
+                    key.name(registries),
+                    value.name(registries)
+                )
             }
             // `:{x :Number y :Str}` — the braced type-sigil surface. Fields render
             // space-separated like FN params (the field-list parser accepts that).
-            TypeNode::Record { fields } => format!(":{{{}}}", render_param_record(&fields, types)),
+            TypeNode::Record { fields } => {
+                format!(":{{{}}}", render_param_record(&fields, registries))
+            }
             TypeNode::KFunction { params, ret } => format!(
                 ":(FN ({}) -> {})",
-                render_param_record(&params, types),
-                ret.name(types)
+                render_param_record(&params, registries),
+                ret.name(registries)
             ),
             TypeNode::DeferredReturn(surface) => surface.render(),
             // `:(A | B)` — members joined by ` | ` and wrapped in the type sigil. A compound
             // member already opens its own sigil (`:(LIST OF Number)`), which nests fine.
             TypeNode::Union { members } => {
-                let rendered: Vec<String> = members.iter().map(|m| m.name(types)).collect();
+                let rendered: Vec<String> = members.iter().map(|m| m.name(registries)).collect();
                 format!(":({})", rendered.join(" | "))
             }
             TypeNode::ConstructorApply {
@@ -127,9 +137,19 @@ impl KType {
             } => {
                 let bindings: Vec<String> = arguments
                     .iter()
-                    .map(|(name, kt)| format!("{name} = {}", kt.name(types)))
+                    .map(|(symbol, kt)| {
+                        format!(
+                            "{} = {}",
+                            render_label(symbol, registries),
+                            kt.name(registries)
+                        )
+                    })
                     .collect();
-                format!(":({} {{{}}})", constructor.name(types), bindings.join(", "))
+                format!(
+                    ":({} {{{}}})",
+                    constructor.name(registries),
+                    bindings.join(", ")
+                )
             }
             TypeNode::AbstractType { name, .. } => name,
             // A sealed nominal member renders by its own member name — a bare newtype
@@ -147,7 +167,7 @@ impl KType {
                 if schema_digest == empty_schema_digest() {
                     "Module".to_string()
                 } else {
-                    render_sig_schema(&schema, types)
+                    render_sig_schema(&schema, registries)
                 }
             }
             // Diagnostic only: a sibling reference is meaningful against its window and never
@@ -157,8 +177,8 @@ impl KType {
     }
 
     /// Stable entry point for diagnostic rendering. Reserved seam for cycle-aware printing.
-    pub fn render(self, types: &TypeRegistry) -> String {
-        self.name(types)
+    pub fn render(self, registries: &RunRegistries) -> String {
+        self.name(registries)
     }
 
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
@@ -189,11 +209,12 @@ impl KType {
 /// Render an FN parameter record as the comma-free `name :type` group the `:(FN (...) -> _)`
 /// surface re-parses. A leaf type surface gets a `:` prefix; one that already opens a sigil
 /// (`:(LIST OF Number)`) is left as-is (no `::`).
-fn render_param_record(params: &Record<KType>, types: &TypeRegistry) -> String {
+fn render_param_record(params: &Record<KType>, registries: &RunRegistries) -> String {
     params
         .iter()
-        .map(|(name, kt)| {
-            let surface = kt.name(types);
+        .map(|(symbol, kt)| {
+            let name = render_label(symbol, registries);
+            let surface = kt.name(registries);
             if surface.starts_with(':') {
                 format!("{name} {surface}")
             } else {
@@ -204,10 +225,21 @@ fn render_param_record(params: &Record<KType>, types: &TypeRegistry) -> String {
         .join(" ")
 }
 
+/// A label's text, resolved through the run's interner. Every syntactic label is interned where it
+/// is built, so a miss means the symbol came from somewhere else entirely — a runtime probe, a
+/// hand-built handle. Rendering stays total: the placeholder prints instead of panicking, because
+/// error formatting must never be the thing that fails.
+pub fn render_label(symbol: Symbol, registries: &RunRegistries) -> String {
+    registries
+        .labels
+        .resolve(symbol)
+        .unwrap_or_else(|| "<label>".to_string())
+}
+
 /// The structural rendering of a non-empty interface: `SIG (member: Type, …)` over every member
 /// the schema names — abstract, manifest and value slot alike — in member-name order, which is
 /// the only order the schema's unordered maps admit deterministically.
-fn render_sig_schema(schema: &SigSchema, types: &TypeRegistry) -> String {
+fn render_sig_schema(schema: &SigSchema, registries: &RunRegistries) -> String {
     let mut members: Vec<(&str, KType)> = schema
         .abstract_members
         .iter()
@@ -218,7 +250,7 @@ fn render_sig_schema(schema: &SigSchema, types: &TypeRegistry) -> String {
     members.sort_by(|a, b| a.0.cmp(b.0));
     let rendered: Vec<String> = members
         .into_iter()
-        .map(|(name, kt)| format!("{name}: {}", kt.name(types)))
+        .map(|(name, kt)| format!("{name}: {}", kt.name(registries)))
         .collect();
     format!("SIG ({})", rendered.join(", "))
 }

@@ -19,7 +19,9 @@ use crate::machine::model::types::{KType, Record, TypeNode};
 
 fn record(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
     types.record(Record::from_pairs(
-        pairs.into_iter().map(|(n, t)| (n.to_string(), t)),
+        pairs
+            .into_iter()
+            .map(|(n, t)| (crate::machine::model::Symbol::of(n), t)),
     ))
 }
 
@@ -224,7 +226,11 @@ fn constructor_apply_digest_is_order_blind() {
     let apply = |pairs: Vec<(&str, KType)>| {
         types.constructor_apply(
             ctor,
-            Record::from_pairs(pairs.into_iter().map(|(n, t)| (n.to_string(), t))),
+            Record::from_pairs(
+                pairs
+                    .into_iter()
+                    .map(|(n, t)| (crate::machine::model::Symbol::of(n), t)),
+            ),
         )
     };
     let declared = apply(vec![("Ok", KType::NUMBER), ("Error", KType::STR)]);

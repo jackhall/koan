@@ -26,7 +26,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     use super::await_body::await_body_in_scope;
     use crate::machine::{Action, require_bare_type_name, require_kexpression};
 
-    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "SIG", ctx.types()));
+    let name = crate::try_action!(require_bare_type_name(
+        ctx.args,
+        "name",
+        "SIG",
+        ctx.registries
+    ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", "body"));
 
     let decl_scope = ctx.scope.alloc_child_under_sig(&name);
@@ -34,8 +39,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let site = ctx.declaration_site();
     let name_for_finish = name;
     await_body_in_scope(decl_scope, body_expr, move |fctx| {
-        let schema = SigSchema::project_decl(decl_scope, fctx.types);
-        let identity = fctx.types.signature(schema);
+        let schema = SigSchema::project_decl(decl_scope, fctx.types());
+        let identity = fctx.types().signature(schema);
         Action::done(Ok(fctx.ctx.type_carried(identity))).with_effect(
             crate::machine::core::bindings::WriteOp::Type {
                 name: name_for_finish,
@@ -53,9 +58,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::of_kind(KKind::Signature),
         vec![
             kw("SIG"),
-            arg("name", KType::of_kind(KKind::ProperType)),
+            arg(registries, "name", KType::of_kind(KKind::ProperType)),
             kw("="),
-            arg("body", KType::KEXPRESSION),
+            arg(registries, "body", KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "SIG", signature, body, registries, gate);
@@ -107,7 +112,7 @@ mod tests {
         let types = test_run.types();
         assert!(matches!(types.node(handle), TypeNode::Signature { .. }));
         assert_eq!(
-            handle.name(types),
+            handle.name(test_run.registries()),
             "SIG (x: Number)",
             "a signature names itself by its content, not its binder",
         );
