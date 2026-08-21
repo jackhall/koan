@@ -44,6 +44,12 @@ Root concerns:
   how the run loop nests inside the substrate's access brand. The
   substrate itself is
   [workgraph/design/witnessed-memory.md](../workgraph/design/witnessed-memory.md).
+- [label-interning.md](label-interning.md) — run-scoped label identity:
+  the pure content-digest `Symbol`, the `RunRegistries` bundle on the run
+  frame, symbol-keyed `Record`s (owned only at the type-registry intern
+  boundary, bumped slices everywhere transient), symbol-order
+  canonicalization, and the schema-keyed argument currency that ends
+  per-call re-keying.
 - [scheduler-library.md](scheduler-library.md) — the north star for the
   runtime substrate: the scheduler + region memory + witnessed machinery
   as one extractable, Koan-agnostic library whose public surface is

@@ -2,35 +2,7 @@
 # (the four scoring columns are total cost / fixed denominator D=1000;
 #  root-loc is the absolute subtree LOC, tracked for context only)
 # managed by `tools/modgraph score|regen --baseline`; newest first, capped to 5 entries
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
+2026-08-20 2896e5ef+ 6371.34 2476.78 1623.24 2271.32 23613
 2026-08-20 ab28b88e+ 6340.86 2464.28 1615.14 2261.45 23505
-=======
-=======
-=======
-=======
-=======
-=======
-2026-08-20 c95604f9+ 6364.59 2475.24 1622.08 2267.27 23584
->>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)
-2026-08-20 93b488b3+ 6367.82 2475.24 1622.08 2270.50 23584
->>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
-2026-08-20 64c0b849+ 6367.82 2475.24 1622.08 2270.50 23584
->>>>>>> 93b488b3 (Build the eager-subs park in the walk that stages it)
-2026-08-20 da2c54f9+ 6360.25 2472.48 1620.24 2267.53 23561
->>>>>>> 64c0b849 (Host a park's dep list on the step's scratch arena)
-2026-08-20 9cb05bdb+ 6343.86 2465.32 1615.48 2263.06 23501
-<<<<<<< HEAD
->>>>>>> da2c54f9 (Thread the step scratch handle through the koan wiring path)
 2026-08-20 ab28b88e+ 6335.84 2462.74 1613.98 2259.12 23476
-<<<<<<< HEAD
->>>>>>> b2712fbc (Give Deps an allocator seam and recycle the slot rows)
 2026-08-20 58c70ea0+ 6335.45 2462.74 1613.98 2258.73 23476
-=======
->>>>>>> c95604f9 (Rebaseline the allocation shapes on the recycled wiring path)
-=======
->>>>>>> a1f4cf96 (Document park-wiring buffer recycling and retire its roadmap item)

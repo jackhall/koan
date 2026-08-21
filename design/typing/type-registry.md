@@ -10,8 +10,9 @@ is reached.
 
 ## Terms
 
-- **Registry** — the single owner of all type content in a run. A component of the
-  scheduler-owned run frame ([`frame.rs`](../../src/machine/core/arena/frame.rs)),
+- **Registry** — the single owner of all type content in a run. One half of the run
+  frame's owned `RunRegistries` bundle ([`frame.rs`](../../src/machine/core/arena/frame.rs)),
+  beside the label interner ([label-interning.md](../label-interning.md)),
   reached through execution context by reference. Not a global, not a `thread_local!`
   static: it is dropped with its run frame, and nothing outlives it that can name it.
 - **Node** — one interned type. A node stores its variant tag, its scalar payload
