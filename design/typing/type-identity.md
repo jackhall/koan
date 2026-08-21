@@ -60,8 +60,9 @@ where abstraction demands it and nowhere else.
 
 The sole remaining id-keyed leaf is `AbstractType`. Its digest folds all four
 of its fields — the nonce, the binder scope the member is named against, its
-name, and its parameter names, the last fed as a *set* (sorted, so declaration
-order is presentation, matching the schema encoding below). It is stable within
+name, and its parameter names, the last fed as a *set* (every name fed as
+fixed-width symbol bits and sorted by them, so declaration order is
+presentation, matching the schema encoding below). It is stable within
 a run, and the order-independence property above is scoped to types without
 such a leaf. Because generativity rides the nonce rather than the binder scope,
 an opaque mint shares its declaration's binder and name; the matchers that read
@@ -70,7 +71,8 @@ reference test, and the schema self-reference canonicalization — therefore
 require a nonce-free one, so a mint never reads as a reference to the
 declaration it was threaded from. A `Signature` is *not* id-keyed —
 it digests by its source's schema content (member names, each abstract member's
-parameter names — sorted, so declaration order is presentation — and
+parameter names — each fed as symbol bits and sorted by them, so declaration
+order is presentation — and
 manifest-member / value-slot type digests), with references to the
 schema's own abstract members canonicalized to a name leaf. Two textually
 identical `SIG` declarations, and two modules with identical interfaces, are

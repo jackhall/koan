@@ -48,7 +48,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Deferred signature summaries](reduce_allocs/deferred-signature-summaries.md)
 - [Symbol-keyed dispatch buckets](reduce_allocs/symbol-keyed-dispatch-buckets.md)
-- [Symbol-keyed SigSchema](reduce_allocs/symbol-keyed-sig-schema.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)

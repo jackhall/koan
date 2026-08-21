@@ -150,10 +150,10 @@ are fixed syntax and bind to nothing, so they are not a variant: **nothing binds
 keyword**, and a keyword-class name mints no `ValueSymbol`. A keyworded dispatch
 registration labels a bucket rather than binding a name, so it is untouched by that rule.
 
-## Scope binding tables
+## Name-keyed tables
 
-Every name-keyed binding table keys by this vocabulary, identity-hashed, so a lookup is a
-`u128` compare and a key re-homes nothing into the scope's region:
+Every name-keyed table keys by this vocabulary, identity-hashed, so a lookup is a
+`u128` compare and a key re-homes nothing into a region:
 
 | table | key |
 |---|---|
@@ -162,10 +162,19 @@ Every name-keyed binding table keys by this vocabulary, identity-hashed, so a lo
 | `Bindings::operators` (probe → group) | `KeywordSymbol` |
 | the SIG decl scope's `VAL`-slot collector | `ValueSymbol` |
 | a `Module`'s `type_members` / `slot_type_tags` | `TypeSymbol` / `ValueSymbol` |
+| a `SigSchema`'s `abstract_members` / `manifest_members` | `TypeSymbol` |
+| a `SigSchema`'s `value_slots` | `ValueSymbol` |
 
 The claim store's name channel keys by the raw `Symbol`: a claim is stamped before its
 producer's kind has settled and spans both bindable classes, and one map stays sound
 because the two classes name disjoint text.
+
+Interned [type nodes](typing/type-registry.md) carry the same currency wherever they carry
+a binding name: an `AbstractType`'s `name` and `param_names`, and a `TypeConstructor`
+schema's `param_names`, are `TypeSymbol`s. So a schema's member table and the nodes it
+holds compare without touching text, and the digest feeds those names as fixed-width symbol
+bits sorted by those bits — a canonical order over the member set, distinct from the
+alphabetical-by-rendered-text order a schema *renders* in.
 
 The `data`/`types` partition is therefore a property of the **key types** — a
 `ValueSymbol` and a `TypeSymbol` can never wrap the same text, so a name reaching both
