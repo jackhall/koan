@@ -79,3 +79,6 @@ parameter schema are shipped substrate ([design/label-interning.md](../../design
 
 - [Symbol-keyed dispatch buckets](symbol-keyed-dispatch-buckets.md) — reuses the
   `KeywordSymbol` vocabulary and seam conventions minted here for the dispatch bucket keys.
+- [Symbol-keyed SigSchema](symbol-keyed-sig-schema.md) — flips the module-signature
+  schema maps to the classified vocabulary, removing the declaration-time
+  symbol↔text translation this item leaves at the SIG-projection and ascription seams.
