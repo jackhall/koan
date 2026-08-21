@@ -19,9 +19,10 @@ not an identifier, and no value or type ever binds under one. The value name a c
 `LET name = FN …` form binds is an ordinary value token with no relation to the
 signature's keywords. Keyword identity is therefore its own vocabulary: `KeywordSymbol`,
 disjoint from the value/type symbol vocabularies, minted only from keyword-class text and
-interned at declaration so diagnostics can render it. The newtype ships with
-[Symbol-keyed scope binding tables](symbol-keyed-scope-tables.md), where the operator
-table already keys by it; this item extends the vocabulary to the dispatch bucket keys.
+interned at declaration so diagnostics can render it. `KeywordSymbol` is shipped
+substrate ([src/machine/model/labels.rs](../../src/machine/model/labels.rs)) and the
+operator table already keys by it; this item extends the vocabulary to the dispatch
+bucket keys.
 
 **Acceptance criteria.**
 
@@ -55,11 +56,12 @@ table already keys by it; this item extends the vocabulary to the dispatch bucke
 - *Where keyword symbols are computed — open. Recommended: the parse boundary.*
   `ExpressionPart::Keyword` carries the symbol beside its text (text stays for rendering
   and error paths), so neither registration nor dispatch ever re-hashes. The lookup-seam
-  alternative the scope-tables item chose is wrong here: `Symbol::of` is a BLAKE3 hash,
-  and paying it per keyword per dispatch on the hot probe path is a regression risk the
-  parse-time cache removes outright.
+  alternative the scope binding tables take
+  ([src/machine/core/scope/resolve.rs](../../src/machine/core/scope/resolve.rs)) is wrong
+  here: `Symbol::of` is a BLAKE3 hash, and paying it per keyword per dispatch on the hot
+  probe path is a regression risk the parse-time cache removes outright.
 - *Operator keys share the keyword vocabulary — decided per
-  [Symbol-keyed scope binding tables](symbol-keyed-scope-tables.md).* A letterless token
+  [design/label-interning.md](../../design/label-interning.md).* A letterless token
   (`+`, `:!`) satisfies `is_keyword_token`, and the operator table already keys by the
   `KeywordSymbol` of its space-joined probe; a keyword element inside a dispatch key
   carries the same newtype, so an operator glyph names one symbol on both surfaces.
@@ -69,11 +71,8 @@ table already keys by it; this item extends the vocabulary to the dispatch bucke
 
 ## Dependencies
 
-**Requires:**
-
-- [Symbol-keyed scope binding tables](symbol-keyed-scope-tables.md) — the classified
-  symbol vocabulary (`ValueSymbol` / `TypeSymbol` / `KeywordSymbol`), the
-  declaration-seam interning conventions, and the identity-hashed table plumbing all
-  land there.
+**Requires:** none — the classified symbol vocabulary, the declaration-seam interning
+conventions and the identity-hashed table plumbing are shipped substrate
+([design/label-interning.md](../../design/label-interning.md)).
 
 **Unblocks:** none.

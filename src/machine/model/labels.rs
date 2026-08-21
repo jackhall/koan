@@ -185,8 +185,8 @@ classified_symbol!(
 ///
 /// This is the currency of a seam that accepts either class and routes on the answer: an FN
 /// parameter name, a placeholder install, a member probe. The variant *is* the
-/// [`BindKind`](crate::machine::model::BindKind), so a site carrying one no longer threads a
-/// separate kind tag beside the name.
+/// [`BindKind`](crate::machine::model::BindKind), so a site carrying one threads no separate kind
+/// tag beside the name.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub enum BinderSymbol {
     Value(ValueSymbol),

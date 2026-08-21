@@ -31,8 +31,8 @@ shape (`Vec<String>` on the registry node).
 
 **Directions.**
 
-- *Key types — decided.* The classified vocabulary minted by
-  [symbol-keyed scope tables](symbol-keyed-scope-tables.md): `TypeSymbol` for type
+- *Key types — decided.* The classified vocabulary in
+  [src/machine/model/labels.rs](../../src/machine/model/labels.rs): `TypeSymbol` for type
   members, `ValueSymbol` for value slots. No new newtypes.
 - *`AbstractType.param_names` — open.* Constructor parameter names ride the registry
   node as `Vec<String>` and feed the digest as text. Flipping them to symbols follows
@@ -41,10 +41,8 @@ shape (`Vec<String>` on the registry node).
 
 ## Dependencies
 
-**Requires:**
-
-- [Symbol-keyed scope binding tables](symbol-keyed-scope-tables.md) — supplies the
-  classified newtypes and the seams (SIG slot collector, view seeding) this item
-  consumes.
+**Requires:** none — the classified newtypes and the seams this item consumes (the SIG
+slot collector, view seeding) are shipped substrate
+([design/label-interning.md](../../design/label-interning.md)).
 
 **Unblocks:** none — leaf.

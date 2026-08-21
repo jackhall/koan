@@ -54,7 +54,7 @@ pub(crate) fn mock_declaration_site(index: usize) -> DeclarationSite {
 
 /// A fixture's value-token name as the [`ValueSymbol`] a binding door takes, interned so a
 /// diagnostic naming it renders the text back. Panics on a name of the wrong token class — a
-/// fixture binding a value under a Type token was always ill-formed.
+/// fixture binding a value under a Type token is ill-formed.
 #[cfg(test)]
 pub(crate) fn value_name(
     text: &str,

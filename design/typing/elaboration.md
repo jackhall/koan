@@ -173,21 +173,28 @@ arm of the slot it will resolve into, in whichever of those three tables that is
 
 `types` and `data` are **different universes, and a name's token class decides which one it
 belongs to** — a Type token names something that can type a field, a value token names
-something a field can hold. A write whose name classifies against the map it is entering is a
-hard error, not a convention: `Bindings::partition_guard` refuses a value token entering
-`types` ("`int_ord` is a value token, so it names a value") and a Type token entering `data`
-("`IntOrd` is a Type token, so it names a type"). It is the **single enforcement point** —
-every binder reaches a map through [`WriteOp::apply`](../../src/machine/core/bindings/ops.rs), so
-no caller can bind
-across the line and none needs its own check. A keyword-class name (all-uppercase, no
-lowercase — `PRINT`) is not a Type token, so builtin dispatch registration passes the
-value-side gate untouched.
+something a field can hold. The enforcement is the **key types**: `types` keys by
+`TypeSymbol` and `data` by `ValueSymbol`, classified newtypes over a label `Symbol` minted
+only from text of their own token class
+([label-interning.md § Classified label vocabulary](../label-interning.md#classified-label-vocabulary)).
+The two classify disjoint text, so a name reaching both maps is unrepresentable rather than
+rejected, and a write door needs no cross-kind probe.
+
+The rule is a runtime answer at exactly one place: the **text→symbol declaration seam**,
+where a binder's source text is classified into the channel it binds into. A name that
+will not classify there raises a `ShapeError` naming the partition it crosses — a value
+token entering the type channel ("`int_ord` is a value token, so it names a value"), a Type
+token entering the value channel ("`IntOrd` is a Type token, so it names a type"). Past
+that seam every key carries its own class. A keyword-class name (all-uppercase, no
+lowercase — `PRINT`) classifies into neither bindable channel: **nothing binds to a
+keyword**. Keyworded dispatch registration is unaffected, because it labels a bucket in
+`functions` rather than binding a name.
 
 Two consequences follow, and both are load-bearing elsewhere in this tree:
 
 - **A name is committed to one universe before any value reaches it.** A *cross-kind
-  collision* — the same name in both maps — is therefore unconstructible; the collision check
-  that would reject it survives as a belt-and-braces backstop, never a routine gate.
+  collision* — the same name in both maps — is therefore unconstructible, with no runtime
+  check standing behind it.
 - **A parameter's name picks its universe, not its argument.** A `:Type`- or
   `:Signature`-slotted parameter carries a type-language value, so it must spell as a Type
   token (`Ty`, `Er`); a module-valued parameter carries a *value*, so it must spell snake_case
@@ -249,7 +256,7 @@ before any definition is built. Any other object rejects with
 Result, and signature —
 routes through `register_type` (type-only): the schema or `&Signature`
 rides the `KType` identity, so a plain `types` write preserves dispatch identity
-without a value-side copy. A `LET S2 = Ordered` signature alias therefore dispatches
+without a value-side copy. A `LET Sortable = Ordered` signature alias therefore dispatches
 identically to the original, with no separate nominal-install path.
 
 The partition is one-way and total against type-language carriers. A

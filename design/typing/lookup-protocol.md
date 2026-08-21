@@ -77,24 +77,27 @@ one probe each of the structure that answers it
 store](../execution/name-placeholders.md#a-claim-lives-in-the-scopes-claim-store)),
 and a [`BindKind`](../../src/machine/core/bindings.rs) — `Value` or `Type` —
 picks which table a name-keyed claim eventually commits into. The `data`/`types`
-split is **structural, not conventional**, and it is enforced twice over. First by
-**token class**: `Bindings::partition_guard` refuses a value token entering `types` and a
-Type token entering `data`, so a name is committed to one universe by its spelling alone,
-before any binding reaches it (see
+split is **structural, not conventional**, and the **key types** are what enforce it:
+`data` keys by `ValueSymbol` and `types` by `TypeSymbol`, classified newtypes minted only
+from text of their own token class
+([label-interning.md § Classified label vocabulary](../label-interning.md#classified-label-vocabulary)).
+The two classify disjoint text, so a name committed to one universe is unrepresentable in
+the other and no write path carries a cross-kind probe (see
 [tokens.md § Token class is a binding rule](tokens.md#token-class-is-a-binding-rule-not-just-a-lexical-one)
-and [elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)). Second by
-**cross-kind exclusion**: every value write path rejects a
-name already committed to `types`, and every type write path rejects one
-already in `data` (a `Rebind` either way). The token-class gate makes the second
-unreachable — a name that cannot cross cannot collide — so cross-kind exclusion is a
-belt-and-braces backstop rather than a routine gate: no map mixes classes, since a SIG body's
-value slots live off the binding map in the decl scope's slot collector.
-One name can never hold both a
+and [elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)). No map
+mixes classes, since a SIG body's value slots live off the binding map in the decl scope's
+slot collector. One name can never hold both a
 value and a type, and a lookup can never return the wrong kind. `bind_value`
 and `register_function` finalize their own claim by overwriting the slot holding
 it, and a claim of one kind lives in a table a write of the other kind never
 touches — so a value bind can never satisfy an in-flight type producer's claim,
 nor the reverse.
+
+A name that arrives as source text is classified **once, at the lookup seam**: each
+resolve-ladder entry point takes `&str`, converts with the pure `of` constructor, and
+compares symbol bits for the rest of the walk. A wrong-class probe returns `None` at that
+conversion — a miss against a map that could never have held such a key — so the walk
+never carries a name it would have to reject further down.
 
 - [`Bindings::lookup_value`](../../src/machine/core/bindings.rs)
   reads the one `data[name]` slot, whose arm is bound xor pending. Returns

@@ -110,8 +110,74 @@ correspondence (`validate_call_args`) is what makes the positional fill sound.
 Nothing is re-keyed per call, on either the builtin or the user-defined lane, and
 the per-call heap cost of argument passing is zero.
 
-The scope tables a user-defined call binds its parameters *into* are the one seam
-where a symbol still meets text — see [Open work](#open-work).
+A parameter's schema entry carries its name as a **classified** symbol (below), which
+is the same currency the scope binding tables key by. A user-defined call therefore
+binds each parameter straight off the schema: no interner reach, and no `String` built
+per parameter per call.
+
+## Classified label vocabulary
+
+A binding name's **token class** ([typing/tokens.md](typing/tokens.md)) is carried in the
+type of its symbol, not re-derived from text at each door. Three newtypes over `Symbol`
+([`labels.rs`](../src/machine/model/labels.rs)) partition the token space:
+
+- **`ValueSymbol`** — a value token (`xs`, `int_ord`, `it`): neither keyword-class nor
+  Type-class.
+- **`TypeSymbol`** — a Type token per `is_type_name` (`IntOrd`, `Carrier`).
+- **`KeywordSymbol`** — a keyword-class token per `is_keyword_token` (`FN`, `+`, `<=`),
+  including the space-joined operator probe keys built out of them (`"+ *"`), which gain
+  no lowercase letter and so stay keyword-class.
+
+Each is minted **only** by a constructor that runs its class predicate on the text.
+There is no raw-`Symbol` constructor: a digest alone carries no evidence of what its text
+looked like, so admitting one would let a caller assert a class the digest cannot witness.
+A seam holding a bare `Symbol` that needs a class either classifies where the text still
+existed, or resolves the text through the interner and classifies that.
+
+Two constructors, and the split is the interning rule stated above:
+
+- **`of(text)`** — pure classification, no interning. The *probe* constructor: a lookup
+  arriving as source text converts once here, and a wrong-class name misses by returning
+  `None` at the seam rather than by probing a table.
+- **`declared(text, labels)`** — classify **and** intern. The *declaration* constructor:
+  a name entering a binding table is recorded so a later diagnostic naming it renders.
+
+**`BinderSymbol`** is the fourth type: an enum over the two *bindable* classes,
+`Value(ValueSymbol) | Type(TypeSymbol)`, for a seam that accepts either and routes on the
+answer — an FN parameter name, a placeholder install, a module member probe. Its variant
+*is* the bind kind, so such a site threads no separate kind tag beside the name. Keywords
+are fixed syntax and bind to nothing, so they are not a variant: **nothing binds to a
+keyword**, and a keyword-class name mints no `ValueSymbol`. A keyworded dispatch
+registration labels a bucket rather than binding a name, so it is untouched by that rule.
+
+## Scope binding tables
+
+Every name-keyed binding table keys by this vocabulary, identity-hashed, so a lookup is a
+`u128` compare and a key re-homes nothing into the scope's region:
+
+| table | key |
+|---|---|
+| `Bindings::data` (values) | `ValueSymbol` |
+| `Bindings::types` | `TypeSymbol` |
+| `Bindings::operators` (probe → group) | `KeywordSymbol` |
+| the SIG decl scope's `VAL`-slot collector | `ValueSymbol` |
+| a `Module`'s `type_members` / `slot_type_tags` | `TypeSymbol` / `ValueSymbol` |
+
+The claim store's name channel keys by the raw `Symbol`: a claim is stamped before its
+producer's kind has settled and spans both bindable classes, and one map stays sound
+because the two classes name disjoint text.
+
+The `data`/`types` partition is therefore a property of the **key types** — a
+`ValueSymbol` and a `TypeSymbol` can never wrap the same text, so a name reaching both
+maps is unrepresentable rather than something a write door probes for. The partition's
+user-visible disposition is raised at the text→symbol declaration seam
+([typing/elaboration.md § Binding-map partition](typing/elaboration.md#binding-map-partition)),
+which is the one place the rule is a runtime answer rather than a type.
+
+Conversion sits at the **lookup seam**, not the parse boundary: a resolve ladder takes
+`&str`, classifies once at the top with `of`, and compares symbol bits from there down.
+A wrong-class probe misses at that conversion — against a map that could never have held
+such a key.
 
 ## Probes never intern
 
@@ -128,9 +194,3 @@ resolves text through the label interner reached from the execution context via
 continue to take the type registry alone; anything that renders text takes the
 bundle. A resolve miss renders a stable placeholder rather than failing: error
 paths stay total.
-
-## Open work
-
-- [roadmap/reduce_allocs/symbol-keyed-scope-tables.md](../roadmap/reduce_allocs/symbol-keyed-scope-tables.md)
-  — flipping a scope's binding tables from text keys to `Symbol`, which is what
-  removes the frame bind's per-parameter resolve back through the interner.

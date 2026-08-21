@@ -306,7 +306,7 @@ parameter door. **No binding door installs a module into `bindings.types`**, and
 
 `SIG` declarations still bind **type-side**: finalize installs
 `KType::Signature { schema, .. }` into `bindings.types` via
-[`Scope::register_type_upsert`](../../src/machine/core/scope.rs), and a `LET S2 =
+[`Scope::register_type_upsert`](../../src/machine/core/scope.rs), and a `LET Sortable =
 Ordered` signature alias routes through `register_type` against that entry. A
 signature identity rides the `Type` arm, surfaced from the type entry on demand by
 [`Scope::resolve_type_identifier`](../../src/machine/execute/decide/resolve_type_identifier.rs).

@@ -191,9 +191,10 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 /// Measured 2026-08-21: **1 175** for 32 one-parameter calls (36.7 each) and **2 006** for 32
 /// eight-parameter calls (62.7 each), a slope of 831 — 3.71 per parameter per call. Down from
 /// 1 206 / 2 231 (slope 1 025, 4.58 per parameter) when the frame bind resolved each parameter's
-/// symbol back to text through the run's label interner: the 0.87-per-parameter drop is that
-/// `String`, one per parameter per call, and the one-parameter shape's own 31-allocation drop is
-/// the same string at n = 1.
+/// symbol back to text through the run's label interner. That resolve built one `String` per
+/// parameter per call, and the drop tracks it: 0.87 per parameter, and 31 of the 32 calls' worth
+/// at n = 1. Both sit just under one allocation apiece, and the shapes do not isolate the
+/// remainder finely enough to say what the shortfall is.
 ///
 /// Both bounds are the measurement plus 32, so one re-introduced per-call allocation fails the
 /// first and a re-introduced per-parameter one fails the second by ≈224.

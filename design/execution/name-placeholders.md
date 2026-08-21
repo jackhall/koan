@@ -62,10 +62,11 @@ The store ([`claims.rs`](../../src/machine/core/bindings/claims.rs)) has three
 parts, each answering one question. A `Claim` is the pair (`ProducerId`,
 `BindingIndex`) throughout:
 
-- `by_name` — name → `Claim`. The name channel's read path, and a name admits at
-  most one claim. One map covers value and type claims alike:
-  [`partition_guard`](../../src/machine/core/bindings.rs) decides Value from Type
-  by token class alone, so the two are disjoint by construction.
+- `by_name` — the name's label [`Symbol`](../../src/machine/model/labels.rs) → `Claim`.
+  The name channel's read path, and a name admits at most one claim. One map covers value
+  and type claims alike — a claim is stamped before its producer's kind has settled — and
+  it stays sound because the two bindable token classes name disjoint text
+  ([label-interning.md § Classified label vocabulary](../label-interning.md#classified-label-vocabulary)).
 - `by_bucket` — bucket key → a **run** of `Claim`, in install order. The bucket
   channel's read path. The value is a run and not a single claim because sibling
   binders legitimately share one bucket key, each claiming at its own

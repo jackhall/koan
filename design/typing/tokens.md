@@ -23,22 +23,30 @@ without quoting. `FN (x :Number) -> Str = (...)` works because `Number` and
 
 The class a name lexes as decides **which universe it binds into**, and that is enforced, not
 conventional. The type map and the value map are different universes — a Type token names
-something that can type a field, a value token names something a field can hold — and
-[`Bindings`](../../src/machine/core/bindings.rs)'s partition guard makes a crossing a hard
-error at the write:
+something that can type a field, a value token names something a field can hold — and each
+keys by a symbol newtype minted only from text of its own class
+([label-interning.md § Classified label vocabulary](../label-interning.md#classified-label-vocabulary)),
+so a crossing is unrepresentable past the point where the name's text is classified.
+That classification happens at the declaration seam, and a name that will not classify into
+the channel it binds into is a hard error there:
 
-- a value token entering the type map — *"`int_ord` is a value token, so it names a value — a
+- a value token entering the type channel — *"`int_ord` is a value token, so it names a value — a
   type binds under a Type token"*;
-- a Type token entering the value map — *"`IntOrd` is a Type token, so it names a type — a
+- a Type token entering the value channel — *"`IntOrd` is a Type token, so it names a type — a
   value binds under a value token (snake_case)"*.
 
-A keyword-class name (all-uppercase, no lowercase) is neither, so builtin dispatch
-registration is unaffected. The rule reaches past declarations to **parameters**: a
+A keyword-class name (all-uppercase, no lowercase) classifies into neither bindable
+channel: **nothing binds to a keyword**, so an all-caps name can hold no value binding and
+no type binding. Keyworded dispatch registration is unaffected — an `FN` or `OP`
+registration labels a bucket in the dispatch table rather than binding a name.
+
+The rule reaches past declarations to **parameters**: a
 parameter's *name* picks its universe, not the argument it is handed, so a `:Type` /
 `:Signature` parameter spells as a Type token (`Ty`, `Er`) and a module-valued parameter
-spells snake_case (`er`). The partition admits no exception: a SIG body's value slots
-(`VAL <name> :Type`) are recorded off the binding map entirely, in the decl scope's own slot
-collector, so no value token ever lands in the type map (see
+spells snake_case (`er`); handing a module to a Type-token parameter raises the same
+partition diagnostic at the frame bind. The partition admits no exception: a SIG body's
+value slots (`VAL <name> :Type`) are recorded off the binding map entirely, in the decl
+scope's own slot collector, so no value token ever lands in the type map (see
 [elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)).
 
 A token that starts uppercase but classifies as neither keyword nor type

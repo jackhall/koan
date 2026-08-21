@@ -34,12 +34,15 @@ use super::record::Record;
 use super::sig_schema::SigSchema;
 use super::type_digest::{self, TypeDigest, schema_content_digest};
 
-/// The node table's hasher. A [`TypeDigest`] is the low 128 bits of a BLAKE3 hash, so it is
-/// already uniformly distributed and re-hashing it would only cost cycles: keep the low 64 bits
+/// The hasher every 128-bit-digest-keyed table runs: the node table here, the label interner, and
+/// the classified scope binding tables
+/// ([design/label-interning.md](../../../../design/label-interning.md)). A [`TypeDigest`] and a
+/// [`Symbol`](crate::machine::model::Symbol) are each the low 128 bits of a BLAKE3 hash, so they
+/// are already uniformly distributed and re-hashing would only cost cycles: keep the low 64 bits
 /// and use them directly as the bucket index.
 ///
-/// Every other write is a bug — the map is keyed by `TypeDigest` and nothing else, so a call to
-/// any other `write_*` means a key type slipped in that this hasher cannot distribute.
+/// Every other write is a bug — such a table is keyed by one `u128` digest and nothing else, so a
+/// call to any other `write_*` means a key type slipped in that this hasher cannot distribute.
 #[derive(Default)]
 pub struct IdentityHasher(u64);
 
@@ -49,7 +52,7 @@ impl Hasher for IdentityHasher {
     }
 
     fn write(&mut self, _bytes: &[u8]) {
-        panic!("the node table is keyed by TypeDigest alone, which hashes as one u128");
+        panic!("an identity-hashed table is keyed by a single 128-bit digest and nothing else");
     }
 
     fn write_u128(&mut self, value: u128) {
