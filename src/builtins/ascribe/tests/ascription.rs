@@ -78,11 +78,11 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     // `KType::AbstractType { name, nonce: Some(<view module's scope id>), .. }`.
     assert!(matches!(
         a_t.map(|h| test_run.types().node(h)),
-        Some(TypeNode::AbstractType { name, .. }) if name == "Carrier"
+        Some(TypeNode::AbstractType { name, .. }) if name == carrier
     ));
     assert!(matches!(
         b_t.map(|h| test_run.types().node(h)),
-        Some(TypeNode::AbstractType { name, .. }) if name == "Carrier"
+        Some(TypeNode::AbstractType { name, .. }) if name == carrier
     ));
     assert_ne!(
         a_t, b_t,
@@ -125,7 +125,9 @@ fn roadmap_example_int_ord_with_ordered_sig() {
         .copied()
         .expect("opaque ascription should mint a Carrier member");
     match test_run.types().node(minted) {
-        TypeNode::AbstractType { name, .. } => assert_eq!(name, "Carrier"),
+        TypeNode::AbstractType { name, .. } => {
+            assert_eq!(name, type_name("Carrier", test_run.registries()))
+        }
         _ => panic!(
             "minted abstract type must be AbstractType, got {:?}",
             minted
@@ -360,7 +362,7 @@ fn opaque_view_scope_holds_exactly_the_views_type_members() {
     let elem = seeded[0].1;
     assert!(
         matches!(test_run.types().node(elem), TypeNode::AbstractType { name, nonce, .. }
-            if name == "Elem" && nonce == Some(view.scope_id())),
+            if name == type_name("Elem", test_run.registries()) && nonce == Some(view.scope_id())),
         "the abstract member is seeded as this view's per-call mint",
     );
     assert_eq!(

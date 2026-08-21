@@ -3,6 +3,7 @@
 
 use super::super::record::Record;
 use super::*;
+use crate::builtins::test_support::type_name;
 use crate::machine::model::RunRegistries;
 
 /// A record type over `pairs`.
@@ -280,7 +281,7 @@ fn type_constructor_schema_binds_siblings() {
         "Maybe".into(),
         RelativeSchema::TypeConstructor {
             schema,
-            param_names: vec!["Elem".to_string()],
+            param_names: vec![type_name("Elem", &registries)],
         },
         None,
         types,

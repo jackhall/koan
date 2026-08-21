@@ -11,7 +11,10 @@
 
 mod golden;
 
+use std::collections::HashMap;
+
 use super::*;
+use crate::builtins::test_support::type_name;
 use crate::machine::core::ScopeId;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
@@ -97,25 +100,31 @@ fn abstract_type_digest_keys_on_full_content() {
     let member = |param_names: Vec<&str>| {
         types.intern(TypeNode::AbstractType {
             source,
-            name: "Elt".into(),
-            param_names: param_names.into_iter().map(str::to_string).collect(),
+            name: type_name("Elt", &registries),
+            param_names: param_names
+                .into_iter()
+                .map(|p| type_name(p, &registries))
+                .collect(),
             nonce: None,
         })
     };
 
     // Order separates a first-order member from a same-named constructor.
-    assert_ne!(member(vec![]).digest(), member(vec!["X"]).digest());
-    assert_ne!(member(vec![]), member(vec!["X"]));
+    assert_ne!(member(vec![]).digest(), member(vec!["Elem"]).digest());
+    assert_ne!(member(vec![]), member(vec!["Elem"]));
     // Arity separates two constructors.
-    assert_ne!(member(vec!["X"]).digest(), member(vec!["X", "Y"]).digest(),);
+    assert_ne!(
+        member(vec!["Elem"]).digest(),
+        member(vec!["Elem", "Item"]).digest(),
+    );
     // A renamed parameter is a different interface.
-    assert_ne!(member(vec!["X"]).digest(), member(vec!["Y"]).digest());
+    assert_ne!(member(vec!["Elem"]).digest(), member(vec!["Item"]).digest());
     // Parameter *order* is immaterial — identity is the name set.
     assert_eq!(
-        member(vec!["X", "Y"]).digest(),
-        member(vec!["Y", "X"]).digest(),
+        member(vec!["Elem", "Item"]).digest(),
+        member(vec!["Item", "Elem"]).digest(),
     );
-    assert_eq!(member(vec!["X", "Y"]), member(vec!["Y", "X"]));
+    assert_eq!(member(vec!["Elem", "Item"]), member(vec!["Item", "Elem"]));
 
     // A different name is a different member.
     assert_ne!(
@@ -123,7 +132,7 @@ fn abstract_type_digest_keys_on_full_content() {
         types
             .intern(TypeNode::AbstractType {
                 source,
-                name: "Other".into(),
+                name: type_name("Other", &registries),
                 param_names: Vec::new(),
                 nonce: None,
             })
@@ -142,7 +151,7 @@ fn abstract_type_nonce_is_generative() {
     let mint = |nonce: Option<ScopeId>| {
         types.intern(TypeNode::AbstractType {
             source,
-            name: "Elt".into(),
+            name: type_name("Elt", &registries),
             param_names: Vec::new(),
             nonce,
         })
@@ -176,18 +185,21 @@ fn schema_digest_binds_abstract_member_param_names() {
     let schema = |param_names: Vec<&str>| SigSchema {
         sig_id: Some(sig_id),
         abstract_members: [(
-            "Wrap".to_string(),
+            type_name("Wrap", &registries),
             types.intern(TypeNode::AbstractType {
                 source: sig_id,
-                name: "Wrap".into(),
-                param_names: param_names.into_iter().map(str::to_string).collect(),
+                name: type_name("Wrap", &registries),
+                param_names: param_names
+                    .into_iter()
+                    .map(|p| type_name(p, &registries))
+                    .collect(),
                 nonce: None,
             }),
         )]
         .into_iter()
         .collect(),
-        manifest_members: HashMap::new(),
-        value_slots: HashMap::new(),
+        manifest_members: crate::machine::model::TypeMemberMap::default(),
+        value_slots: HashMap::default(),
     };
     assert_ne!(
         schema_content_digest(&schema(vec!["Elem"]), types),
@@ -219,8 +231,11 @@ fn constructor_apply_digest_is_order_blind() {
     let types = &registries.types;
     let ctor = types.intern(TypeNode::AbstractType {
         source: ScopeId::from_raw(0, 0xC70A),
-        name: "Both".into(),
-        param_names: vec!["Ok".into(), "Error".into()],
+        name: type_name("Both", &registries),
+        param_names: vec![
+            type_name("Ok", &registries),
+            type_name("Error", &registries),
+        ],
         nonce: None,
     });
     let apply = |pairs: Vec<(&str, KType)>| {

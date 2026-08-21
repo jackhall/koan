@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 
 use crate::machine::core::ScopeId;
+use crate::machine::model::labels::TypeSymbol;
 
 use super::kkind::KKind;
 use super::ktype::KType;
@@ -52,13 +53,16 @@ pub enum TypeNode {
     /// `param_names` carries the member's order — empty is a first-order proper type
     /// (`TYPE Elt`), non-empty a constructor over those named parameters (`TYPE (Elem AS Wrap)`).
     ///
+    /// `name` and each parameter name are Type-class labels, interned at their declaration; a
+    /// diagnostic naming one resolves the text through the run's label interner.
+    ///
     /// All four fields are identity; nothing here is digest-excluded. `param_names` feeds kind
     /// classification and `source` feeds member substitution, so both are functional reads and
     /// interning must not collapse across them.
     AbstractType {
         source: ScopeId,
-        name: String,
-        param_names: Vec<String>,
+        name: TypeSymbol,
+        param_names: Vec<TypeSymbol>,
         nonce: Option<ScopeId>,
     },
     /// `List<element>`. Bare `List` lowers to `List<Any>`.
@@ -142,9 +146,10 @@ pub enum TypeNode {
 pub enum NodeSchema {
     /// Fresh nominal over a transparent representation.
     NewType(KType),
-    /// Higher-kinded constructor: erased-parameter variant schema plus parameter names.
+    /// Higher-kinded constructor: erased-parameter variant schema plus parameter names. The
+    /// parameter names are Type-class labels, interned at the declaration that mints the family.
     TypeConstructor {
         schema: HashMap<String, KType>,
-        param_names: Vec<String>,
+        param_names: Vec<TypeSymbol>,
     },
 }

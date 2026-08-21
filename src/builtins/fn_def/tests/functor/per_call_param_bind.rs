@@ -58,7 +58,8 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
     match test_run.types().node(result) {
         TypeNode::AbstractType { name, .. } => {
             assert_eq!(
-                name, "Carrier",
+                name,
+                crate::builtins::test_support::type_name("Carrier", test_run.registries()),
                 "abstract type member should be named Carrier"
             );
         }
@@ -93,7 +94,10 @@ fn functor_closure_escape_pins_type_class_bind() {
     let result = test_run.run_one_type(parse_one(&program, "maker {x = 1}"));
     match test_run.types().node(result) {
         TypeNode::AbstractType { name, .. } => {
-            assert_eq!(name, "Carrier");
+            assert_eq!(
+                name,
+                crate::builtins::test_support::type_name("Carrier", test_run.registries())
+            );
         }
         _ => panic!(
             "expected AbstractType {{ name: \"Carrier\", .. }} after closure escape, got {result:?}",

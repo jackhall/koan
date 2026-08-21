@@ -44,8 +44,8 @@ pub(crate) use binder::{TypeDeclarationSurface, announced_type_declaration};
 pub(crate) use binder::{type_binder, value_binder};
 pub(crate) use types::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
-    SealOutcome, SigSchema, TypeResolution, constructor_param_names, declarator_window,
-    elaborate_type_identifier, finalize_nominal_member, pair_list_names,
+    SealOutcome, SigSchema, TypeMemberMap, TypeResolution, constructor_param_names,
+    declarator_window, elaborate_type_identifier, finalize_nominal_member, pair_list_names,
     parse_typed_field_list_via_elaborator, rewrite_window_refs, seal_writes,
     unsaturated_constructor_message,
 };

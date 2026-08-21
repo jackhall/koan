@@ -43,6 +43,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::machine::core::ScopeId;
+use crate::machine::model::labels::TypeSymbol;
 
 use super::kkind::KKind;
 use super::ktype::KType;
@@ -56,10 +57,11 @@ use super::type_digest::{ComponentMember, TypeDigest, component_digest, member_r
 pub enum RelativeSchema {
     /// Fresh nominal over a transparent representation.
     NewType(KType),
-    /// Higher-kinded constructor: erased-parameter variant schema plus parameter names.
+    /// Higher-kinded constructor: erased-parameter variant schema plus parameter names, the
+    /// Type-class labels the declaration interned.
     TypeConstructor {
         schema: HashMap<String, KType>,
-        param_names: Vec<String>,
+        param_names: Vec<TypeSymbol>,
     },
 }
 

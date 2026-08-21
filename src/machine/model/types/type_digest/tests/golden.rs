@@ -16,9 +16,16 @@ use super::super::{TypeDigest, empty_schema_digest, schema_content_digest};
 use crate::machine::core::ScopeId;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
+use crate::machine::model::TypeSymbol;
 use crate::machine::model::types::{
-    KKind, KType, Record, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeNode,
+    KKind, KType, Record, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeMemberMap, TypeNode,
 };
+
+/// A fixture's Type-class name as the [`TypeSymbol`] the schema and node types key by. The pins
+/// here compare digests and never render, so the pure probe constructor is enough.
+fn type_symbol(text: &str) -> TypeSymbol {
+    TypeSymbol::of(text).expect("a golden fixture names its members with Type tokens")
+}
 
 #[track_caller]
 fn assert_pinned(label: &str, actual: TypeDigest, expected: u128) {
@@ -104,7 +111,7 @@ fn constructor(types: &TypeRegistry) -> KType {
         "Maybe",
         RelativeSchema::TypeConstructor {
             schema,
-            param_names: vec!["Elem".to_string()],
+            param_names: vec![type_symbol("Elem")],
         },
         types,
     )
@@ -157,8 +164,8 @@ const SIG_SOURCE: ScopeId = ScopeId::from_raw(0, 0x51C0);
 fn abstract_member(types: &TypeRegistry, name: &str, param_names: Vec<&str>) -> KType {
     types.intern(TypeNode::AbstractType {
         source: SIG_SOURCE,
-        name: name.into(),
-        param_names: param_names.into_iter().map(str::to_string).collect(),
+        name: type_symbol(name),
+        param_names: param_names.into_iter().map(type_symbol).collect(),
         nonce: None,
     })
 }
@@ -169,26 +176,26 @@ fn mixed_schema(types: &TypeRegistry, wrap_params: Vec<&str>) -> SigSchema {
         sig_id: Some(SIG_SOURCE),
         abstract_members: [
             (
-                "Elem".to_string(),
+                type_symbol("Elem"),
                 abstract_member(types, "Elem", Vec::new()),
             ),
             (
-                "Wrap".to_string(),
+                type_symbol("Wrap"),
                 abstract_member(types, "Wrap", wrap_params),
             ),
         ]
         .into_iter()
         .collect(),
-        manifest_members: HashMap::new(),
-        value_slots: HashMap::new(),
+        manifest_members: TypeMemberMap::default(),
+        value_slots: HashMap::default(),
     }
 }
 
 fn constructor_apply(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
     let both = types.intern(TypeNode::AbstractType {
         source: ScopeId::from_raw(0, 0xC70A),
-        name: "Both".into(),
-        param_names: vec!["Ok".into(), "Error".into()],
+        name: type_symbol("Both"),
+        param_names: vec![type_symbol("Ok"), type_symbol("Error")],
         nonce: None,
     });
     types.constructor_apply(
@@ -360,12 +367,12 @@ fn type_constructor_digests_are_pinned() {
     assert_pinned(
         "Maybe component",
         component_of(member, types),
-        0x8fce3135_01caf69c_dae1dfba_79f02281,
+        0x5b88ad72_92f349ae_d359021c_0e07a008,
     );
     assert_handle_pinned(
         "Maybe member reference",
         member,
-        0x5ebc2110_fa8a5b65_ae71cd45_ee6636cf,
+        0x239f12a8_b45df47c_ae112f5a_e9f2d40f,
     );
 }
 
@@ -423,12 +430,12 @@ fn constructor_apply_digest_is_pinned_and_order_blind() {
     assert_handle_pinned(
         "Both(Ok = Number, Error = Str)",
         declared,
-        0xde065410_a4c8b064_ef148ed9_1dd254f6,
+        0x740b934e_d6d9a6e8_6db7cb80_1246dd74,
     );
     assert_handle_pinned(
         "Both applied in reverse argument order",
         reversed,
-        0xde065410_a4c8b064_ef148ed9_1dd254f6,
+        0x740b934e_d6d9a6e8_6db7cb80_1246dd74,
     );
 }
 
@@ -442,16 +449,16 @@ fn schema_abstract_member_digests_are_pinned() {
     assert_pinned(
         "schema with higher-kinded Wrap",
         schema_content_digest(&mixed_schema(types, vec!["Inner", "Outer"]), types),
-        0x74c887c4_2b7bdd55_7a481826_b15078ee,
+        0xa840be7d_0e0e19e2_4b6cca13_32304af0,
     );
     assert_pinned(
         "schema with Wrap's parameters reordered",
         schema_content_digest(&mixed_schema(types, vec!["Outer", "Inner"]), types),
-        0x74c887c4_2b7bdd55_7a481826_b15078ee,
+        0xa840be7d_0e0e19e2_4b6cca13_32304af0,
     );
     assert_pinned(
         "schema with first-order Wrap",
         schema_content_digest(&mixed_schema(types, Vec::new()), types),
-        0xdcaf6f29_107c1417_c55d837b_7e90fe20,
+        0x76aa2294_c71a336a_eb294e3b_bd0abfc9,
     );
 }

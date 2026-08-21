@@ -295,10 +295,12 @@ fn constructor_apply_over_abstract_slot_is_a_type_constructor() {
     use crate::machine::model::KKind;
     let registries = RunRegistries::new();
     let types = &registries.types;
+    let wrap = crate::builtins::test_support::type_name("Wrap", &registries);
+    let elem = crate::builtins::test_support::type_name("Elem", &registries);
     let ctor = types.intern(TypeNode::AbstractType {
         source: ScopeId::from_raw(0, 0xB0B),
-        name: "Wrap".into(),
-        param_names: vec!["Elem".into()],
+        name: wrap,
+        param_names: vec![elem],
         nonce: None,
     });
     let applied = types.constructor_apply(

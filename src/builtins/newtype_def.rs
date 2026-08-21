@@ -243,7 +243,7 @@ pub fn body_record_repr<'a>(
 /// and the declared `param_names`. The member's singleton component is its interned identity.
 pub(crate) fn mint_type_constructor(
     member_name: String,
-    param_names: Vec<String>,
+    param_names: Vec<crate::machine::model::TypeSymbol>,
     types: &TypeRegistry,
 ) -> KType {
     RecursiveGroupWindow::seal_singleton(
@@ -280,6 +280,16 @@ pub fn body_constructor_family<'a>(
         &member_name,
         ctx.registries
     ));
+    // `parse_hk_decl` hands back source text; the parameter names classify and intern here, at
+    // the declaration seam, so diagnostics can render them later.
+    let param_names = match param_names
+        .iter()
+        .map(|p| crate::machine::model::type_binder(p, ctx.registries))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(names) => names,
+        Err(e) => return Action::done(Err(e)),
+    };
     let kt = mint_type_constructor(member_name, param_names, ctx.types());
     // The handle names the same interned type in every region, so the terminal seals from it
     // directly and the `types` write rides the outcome, mirroring `type_decl::bind_abstract_member`.
@@ -1014,7 +1024,7 @@ mod tests {
                             schema.is_empty(),
                             "a constructor family has an empty schema"
                         );
-                        assert_eq!(param_names, vec!["Type".to_string()]);
+                        assert_eq!(param_names, vec![type_name("Type", test_run.registries())]);
                     }
                     _ => panic!("expected a TypeConstructor schema for {handle:?}"),
                 }
@@ -1105,7 +1115,10 @@ mod tests {
             .expect("Wrapper must bind a type");
         assert_eq!(
             crate::machine::model::constructor_param_names(kt, test_run.types()),
-            Some(vec!["One".to_string(), "Two".to_string()]),
+            Some(vec![
+                type_name("One", test_run.registries()),
+                type_name("Two", test_run.registries()),
+            ]),
         );
     }
 
@@ -1335,8 +1348,8 @@ mod tests {
         let scope = test_run.scope;
         let kt = test_run.types().intern(TypeNode::AbstractType {
             source: scope.id,
-            name: "Abstract".into(),
-            param_names: vec!["Type".into()],
+            name: type_name("Abstract", test_run.registries()),
+            param_names: vec![type_name("Type", test_run.registries())],
             nonce: None,
         });
         scope.register_builtin_type(

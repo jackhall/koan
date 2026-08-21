@@ -34,10 +34,12 @@ shape (`Vec<String>` on the registry node).
 - *Key types — decided.* The classified vocabulary in
   [src/machine/model/labels.rs](../../src/machine/model/labels.rs): `TypeSymbol` for type
   members, `ValueSymbol` for value slots. No new newtypes.
-- *`AbstractType.param_names` — open.* Constructor parameter names ride the registry
-  node as `Vec<String>` and feed the digest as text. Flipping them to symbols follows
-  the same pattern, but their token class needs confirming before choosing the
-  wrapper (`TypeSymbol` vs unclassified `Symbol`).
+- *`param_names` — decided.* Constructor parameter names are Type-class tokens
+  (`parse_hk_decl` accepts only parser-tagged Type parts), so they flip to
+  `Vec<TypeSymbol>` — on `AbstractType` **and** on the `TypeConstructor` schemas
+  (`NodeSchema` / `RelativeSchema`), since `sig_subtype` compares parameter-name sets
+  across both carriers through one `constructor_param_names` return type. Comparison
+  and digest feeds go by symbol bits; diagnostics render through the interner.
 
 ## Dependencies
 

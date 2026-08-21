@@ -151,7 +151,7 @@ impl KType {
                     bindings.join(", ")
                 )
             }
-            TypeNode::AbstractType { name, .. } => name,
+            TypeNode::AbstractType { name, .. } => render_label(name.symbol(), registries),
             // A sealed nominal member renders by its own member name — a bare newtype
             // (`:Wrapper`) or a per-variant member reached through its union (`:(Maybe Some)`
             // yields the `Some` member, printed as `Some`).
@@ -240,14 +240,22 @@ pub fn render_label(symbol: Symbol, registries: &RunRegistries) -> String {
 /// the schema names — abstract, manifest and value slot alike — in member-name order, which is
 /// the only order the schema's unordered maps admit deterministically.
 fn render_sig_schema(schema: &SigSchema, registries: &RunRegistries) -> String {
-    let mut members: Vec<(&str, KType)> = schema
+    // Presentation order is alphabetical by the *rendered* text, so names resolve before the
+    // sort. The digest feeds sort by symbol instead — identity needs a canonical order, not a
+    // readable one.
+    let mut members: Vec<(String, KType)> = schema
         .abstract_members
         .iter()
         .chain(schema.manifest_members.iter())
-        .chain(schema.value_slots.iter())
-        .map(|(name, kt)| (name.as_str(), *kt))
+        .map(|(name, kt)| (render_label(name.symbol(), registries), *kt))
+        .chain(
+            schema
+                .value_slots
+                .iter()
+                .map(|(name, kt)| (render_label(name.symbol(), registries), *kt)),
+        )
         .collect();
-    members.sort_by(|a, b| a.0.cmp(b.0));
+    members.sort_by(|a, b| a.0.cmp(&b.0));
     let rendered: Vec<String> = members
         .into_iter()
         .map(|(name, kt)| format!("{name}: {}", kt.name(registries)))

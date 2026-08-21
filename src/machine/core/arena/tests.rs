@@ -1194,8 +1194,7 @@ fn region_death_frees_every_drop_free_family() {
                 value_name(&format!("slot_{i}"), types.registries()),
                 KType::NUMBER,
             );
-            let self_sig =
-                types.signature(SigSchema::raw_self_sig(child, &draft, types.registries()));
+            let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
             Module::alloc_at_child_scope(&format!("module_{i}"), child, draft, self_sig)
         })
         .collect();

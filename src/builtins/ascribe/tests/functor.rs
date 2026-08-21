@@ -122,11 +122,11 @@ fn functor_application_mints_distinct_abstract_types() {
     let one_carrier = one.type_members.get(&carrier).copied();
     let two_carrier = two.type_members.get(&carrier).copied();
     assert!(
-        matches!(one_carrier.map(|h| test_run.types().node(h)), Some(TypeNode::AbstractType { name, .. }) if name == "Carrier"),
+        matches!(one_carrier.map(|h| test_run.types().node(h)), Some(TypeNode::AbstractType { name, .. }) if name == carrier),
         "the first application must mint an abstract Carrier, got {one_carrier:?}",
     );
     assert!(
-        matches!(two_carrier.map(|h| test_run.types().node(h)), Some(TypeNode::AbstractType { name, .. }) if name == "Carrier"),
+        matches!(two_carrier.map(|h| test_run.types().node(h)), Some(TypeNode::AbstractType { name, .. }) if name == carrier),
         "the second application must mint an abstract Carrier, got {two_carrier:?}",
     );
     assert_ne!(

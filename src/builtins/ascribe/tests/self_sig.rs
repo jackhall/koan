@@ -3,7 +3,9 @@
 //! view records per-call abstract identities and re-expresses SIG-declared value slots against
 //! them; a transparent view records the source's concrete types.
 
-use crate::builtins::test_support::{TestRun, binds_module, lookup_module, parse_one, type_name};
+use crate::builtins::test_support::{
+    TestRun, binds_module, lookup_module, parse_one, type_name, value_name,
+};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Module;
@@ -34,9 +36,17 @@ fn plain_module_self_sig_is_manifest_and_raw_value_slots() {
         sig.abstract_members.is_empty(),
         "a plain module has no abstract members"
     );
-    assert_eq!(sig.manifest_members.get("Tag"), Some(&KType::NUMBER));
+    assert_eq!(
+        sig.manifest_members
+            .get(&type_name("Tag", test_run.registries())),
+        Some(&KType::NUMBER)
+    );
     // `compare = 5` reads its raw value type — a plain module records no declared type.
-    assert_eq!(sig.value_slots.get("compare"), Some(&KType::NUMBER));
+    assert_eq!(
+        sig.value_slots
+            .get(&value_name("compare", test_run.registries())),
+        Some(&KType::NUMBER)
+    );
 }
 
 #[test]
@@ -65,14 +75,25 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
         test_run.types().node(elem_abstract),
         TypeNode::AbstractType { .. }
     ));
-    assert_eq!(sig.manifest_members.get("Elem"), Some(&elem_abstract));
+    assert_eq!(
+        sig.manifest_members
+            .get(&type_name("Elem", test_run.registries())),
+        Some(&elem_abstract)
+    );
 
     // The `zero` slot, declared `:Elem`, reads that same abstract identity (not `Number`).
-    assert_eq!(sig.value_slots.get("zero"), Some(&elem_abstract));
+    assert_eq!(
+        sig.value_slots
+            .get(&value_name("zero", test_run.registries())),
+        Some(&elem_abstract)
+    );
 
     // The `compare` slot's `x` param reads the abstract identity — the substitution reaches
     // inside the function type, the case a raw value read would get wrong.
-    let compare = sig.value_slots.get("compare").copied();
+    let compare = sig
+        .value_slots
+        .get(&value_name("compare", test_run.registries()))
+        .copied();
     match compare.map(|h| test_run.types().node(h)) {
         Some(TypeNode::KFunction { params, ret }) => {
             assert_eq!(params.get(Symbol::of("x")), Some(&elem_abstract));
@@ -99,10 +120,21 @@ fn transparent_view_self_sig_reads_source_concrete_types() {
     let sig = view.self_sig(test_run.types());
 
     // A transparent view reads the source's concrete `Elem = Number`.
-    assert_eq!(sig.manifest_members.get("Elem"), Some(&KType::NUMBER));
+    assert_eq!(
+        sig.manifest_members
+            .get(&type_name("Elem", test_run.registries())),
+        Some(&KType::NUMBER)
+    );
     // Declared slots substitute to the concrete source type.
-    assert_eq!(sig.value_slots.get("zero"), Some(&KType::NUMBER));
-    let compare = sig.value_slots.get("compare").copied();
+    assert_eq!(
+        sig.value_slots
+            .get(&value_name("zero", test_run.registries())),
+        Some(&KType::NUMBER)
+    );
+    let compare = sig
+        .value_slots
+        .get(&value_name("compare", test_run.registries()))
+        .copied();
     match compare.map(|h| test_run.types().node(h)) {
         Some(TypeNode::KFunction { params, ret }) => {
             assert_eq!(params.get(Symbol::of("x")), Some(&KType::NUMBER));
@@ -127,15 +159,13 @@ fn two_opaque_views_carry_distinct_abstract_identities() {
     let first = module_named(scope, "first", test_run.registries());
     let second = module_named(scope, "second", test_run.registries());
     // Generativity: each ascription mints its own abstract `Elem`, so the self-sigs differ.
+    let elem = type_name("Elem", test_run.registries());
     assert_ne!(
-        first
-            .self_sig(test_run.types())
-            .manifest_members
-            .get("Elem"),
+        first.self_sig(test_run.types()).manifest_members.get(&elem),
         second
             .self_sig(test_run.types())
             .manifest_members
-            .get("Elem"),
+            .get(&elem),
     );
 }
 

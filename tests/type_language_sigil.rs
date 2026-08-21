@@ -16,7 +16,9 @@
 use std::rc::Rc;
 
 use koan::builtins::test_support::{TestRun, lookup_binding};
-use koan::machine::model::{KKind, KObject, KType, NodeSchema, Symbol, TypeNode, TypeRegistry};
+use koan::machine::model::{
+    KKind, KObject, KType, NodeSchema, Symbol, TypeNode, TypeRegistry, ValueSymbol,
+};
 use koan::machine::{FrameStorage, ProgramStorage, Scope, program_storage, run_root_storage};
 
 /// Run `src` to completion and hand back the whole run — the seeded scope tests assert
@@ -64,10 +66,8 @@ fn lookup_sig_value_kt(
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("`{sig_name}` should bind a Signature KType, got {handle:?}"),
     };
-    schema
-        .value_slots
-        .get(name)
-        .copied()
+    ValueSymbol::of(name)
+        .and_then(|slot| schema.value_slots.get(&slot).copied())
         .unwrap_or_else(|| panic!("`{name}` should be bound in the SIG's stored schema"))
 }
 

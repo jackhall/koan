@@ -37,7 +37,7 @@ pub use resolver::{
     finalize_nominal_member, seal_writes,
 };
 pub use sig_schema::{
-    SigSchema, constructor_param_names, sig_subtype, substitute_sig_members,
+    SigSchema, TypeMemberMap, constructor_param_names, sig_subtype, substitute_sig_members,
     unsaturated_constructor_message,
 };
 #[allow(unused_imports)]

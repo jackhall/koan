@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::builtins::test_support::type_name;
 use crate::machine::core::program_storage;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
@@ -294,7 +295,7 @@ fn tagged_erased_and_stamped_are_distinct_identities() {
         "Box".into(),
         RelativeSchema::TypeConstructor {
             schema: HashMap::new(),
-            param_names: vec!["Type".into()],
+            param_names: vec![type_name("Type", &registries)],
         },
         None,
         types,
@@ -522,11 +523,7 @@ fn module_operand_is_error() {
     let test_run = TestRun::silent(&program, &storage);
     let types = test_run.registry_handle();
     let draft = ModuleDraft::empty();
-    let self_sig = types.signature(SigSchema::raw_self_sig(
-        test_run.scope,
-        &draft,
-        types.registries(),
-    ));
+    let self_sig = types.signature(SigSchema::raw_self_sig(test_run.scope, &draft));
     let m = Module::alloc_at_child_scope("m", test_run.scope, draft, self_sig);
     let module = KObject::Module(m);
     assert_eq!(

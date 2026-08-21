@@ -17,11 +17,7 @@ fn module_child_scope_reads_back_after_the_born_store() {
     let scope = test_run.scope;
     let types = test_run.types();
     let draft = ModuleDraft::empty();
-    let self_sig = types.signature(SigSchema::raw_self_sig(
-        scope,
-        &draft,
-        test_run.registries(),
-    ));
+    let self_sig = types.signature(SigSchema::raw_self_sig(scope, &draft));
     let module = Module::alloc_at_child_scope("Test", scope, draft, self_sig);
     let recovered = module.child_scope();
     assert!(ptr::eq(recovered, scope));
@@ -48,7 +44,7 @@ fn module_members_read_back_through_the_bumped_maps() {
     let mut draft = ModuleDraft::empty();
     let member = types.intern(TypeNode::AbstractType {
         source: scope.id,
-        name: "Type".into(),
+        name: type_name("Type", test_run.registries()),
         param_names: Vec::new(),
         nonce: None,
     });
@@ -58,11 +54,7 @@ fn module_members_read_back_through_the_bumped_maps() {
     draft
         .slot_type_tags
         .insert(value_name("zero", test_run.registries()), member);
-    let self_sig = types.signature(SigSchema::raw_self_sig(
-        scope,
-        &draft,
-        test_run.registries(),
-    ));
+    let self_sig = types.signature(SigSchema::raw_self_sig(scope, &draft));
     let module = Module::alloc_at_child_scope("M", scope, draft, self_sig);
     let _other = region
         .brand()
@@ -84,7 +76,7 @@ fn module_members_read_back_through_the_bumped_maps() {
     match types.node(handle) {
         TypeNode::AbstractType { source, name, .. } => {
             assert_eq!(source, scope.id);
-            assert_eq!(name.as_str(), "Type");
+            assert_eq!(name, type_name("Type", test_run.registries()));
         }
         _ => panic!("expected an AbstractType member, got {handle:?}"),
     }
@@ -100,11 +92,7 @@ fn bare_module_self_sig_is_empty_after_raw_seal() {
     let scope = test_run.scope;
     let types = test_run.types();
     let draft = ModuleDraft::empty();
-    let self_sig = types.signature(SigSchema::raw_self_sig(
-        scope,
-        &draft,
-        test_run.registries(),
-    ));
+    let self_sig = types.signature(SigSchema::raw_self_sig(scope, &draft));
     let module = Module::alloc_at_child_scope("Bare", scope, draft, self_sig);
     let sig = module.self_sig(types);
     assert!(sig.abstract_members.is_empty());

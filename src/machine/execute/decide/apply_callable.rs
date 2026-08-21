@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::{DepPlacement, OpenedFunction};
-use crate::machine::model::{Carried, Record, constructor_param_names};
+use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::render_label;
+use crate::machine::model::{Carried, Record, TypeMemberMap, constructor_param_names};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KType, NodeSchema, TypeNode, TypeRegistry};
 use crate::machine::{KError, KErrorKind};
@@ -148,6 +150,7 @@ fn apply_constructor<'step>(
     } = ctx.types().node(identity)
         && !param_names.is_empty()
     {
+        let name = render_label(name.symbol(), ctx.registries());
         return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
             "`{name}` is an abstract constructor slot declared by TYPE; only a \
                  NEWTYPE-declared constructor can construct values"
@@ -229,7 +232,7 @@ fn apply_constructor<'step>(
 fn apply_named_type_args<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     identity: KType,
-    param_names: Vec<String>,
+    param_names: Vec<TypeSymbol>,
     fields: &[(&'step str, ExpressionPart<'step>)],
 ) -> Outcome<'step> {
     // An empty argument record supplies no dep to park on, so it decides here — against the same
@@ -289,20 +292,32 @@ fn apply_named_type_args<'step>(
 /// order is presentation — it is what `KType::name()` renders and re-parses.
 fn build_apply_args(
     identity: KType,
-    param_names: &[String],
+    param_names: &[TypeSymbol],
     supplied: Vec<(String, KType)>,
     registries: &RunRegistries,
 ) -> Result<Record<KType>, KError> {
-    let mut supplied: HashMap<String, KType> = supplied.into_iter().collect();
+    // Argument names arrive as source text, so they classify once here and match by symbol bits.
+    // A name that will not classify as a Type token names no declared parameter, so it joins the
+    // misspellings in `unknown`.
+    let mut matched = TypeMemberMap::default();
+    let mut unknown: Vec<&str> = Vec::new();
+    for (name, kt) in &supplied {
+        match TypeSymbol::of(name) {
+            Some(symbol) if param_names.contains(&symbol) => {
+                matched.insert(symbol, *kt);
+            }
+            _ => unknown.push(name.as_str()),
+        }
+    }
+    let declared: Vec<String> = param_names
+        .iter()
+        .map(|name| render_label(name.symbol(), registries))
+        .collect();
     let missing: Vec<&str> = param_names
         .iter()
-        .map(String::as_str)
-        .filter(|name| !supplied.contains_key(*name))
-        .collect();
-    let mut unknown: Vec<&str> = supplied
-        .keys()
-        .map(String::as_str)
-        .filter(|name| !param_names.iter().any(|p| p == name))
+        .zip(&declared)
+        .filter(|(name, _)| !matched.contains_key(*name))
+        .map(|(_, text)| text.as_str())
         .collect();
     unknown.sort_unstable();
     if !missing.is_empty() || !unknown.is_empty() {
@@ -313,7 +328,7 @@ fn build_apply_args(
         if !unknown.is_empty() {
             problems.push(format!("unknown {}", quoted_list(&unknown)));
         }
-        let declared: Vec<&str> = param_names.iter().map(String::as_str).collect();
+        let declared: Vec<&str> = declared.iter().map(String::as_str).collect();
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "`{}` takes type parameters {} — {}",
             identity.name(registries),
@@ -321,11 +336,13 @@ fn build_apply_args(
             problems.join(", "),
         ))));
     }
+    // The parameter name was interned where the constructor was declared, so the record key is
+    // the symbol it already carries.
     Ok(Record::from_pairs(param_names.iter().map(|name| {
-        let arg = supplied
+        let arg = matched
             .remove(name)
             .expect("every declared parameter is supplied — the key check passed");
-        (registries.labels.intern(name), arg)
+        (name.symbol(), arg)
     })))
 }
 

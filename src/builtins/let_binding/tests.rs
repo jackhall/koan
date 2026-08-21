@@ -334,7 +334,7 @@ fn let_type_class_with_plain_function_rejects() {
 /// SIG body means manifest; abstract members use `TYPE` (which has no RHS).
 #[test]
 fn let_type_class_in_sig_body_binds_manifest() {
-    use crate::builtins::test_support::TestRun;
+    use crate::builtins::test_support::{TestRun, type_name};
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
     let program = program_storage();
@@ -350,9 +350,13 @@ fn let_type_class_in_sig_body_binds_manifest() {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("WithTag should be a Signature KType, got {:?}", handle),
     };
-    let bound = schema.manifest_members.get("Tag").copied().expect(
-        "Tag binding should survive in the SIG schema's manifest members after manifest LET",
-    );
+    let bound = schema
+        .manifest_members
+        .get(&type_name("Tag", test_run.registries()))
+        .copied()
+        .expect(
+            "Tag binding should survive in the SIG schema's manifest members after manifest LET",
+        );
     assert_eq!(
         bound,
         KType::NUMBER,

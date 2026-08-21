@@ -592,9 +592,9 @@ fn finish_witnessed<'step>(
                     .expect("an identity-wrapper family declares one type parameter"),
                 _ => unreachable!("a ConstructorApply ctor is a TypeConstructor-kind member"),
             };
-            // The parameter name is syntactic — declared with the constructor — so it interns and
-            // the applied argument's label renders back through the interner.
-            let param_symbol = view.registries().labels.intern(&param_name);
+            // The parameter name interned where the constructor was declared, so the applied
+            // argument's label is the symbol it already carries.
+            let param_symbol = param_name.symbol();
             let home = build_type_operand(view.dest_frame(), identity);
             let types = view.types();
             // The wrap keeps the value verbatim — see the `NewType` arm's holder.

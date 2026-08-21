@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 
 use crate::machine::model::render_label;
-use crate::machine::model::{Held, KObject, KType, TypeNode};
+use crate::machine::model::{Held, KObject, KType, TypeNode, TypeSymbol};
 use crate::machine::{KError, KErrorKind};
 
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
@@ -55,28 +55,22 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             )));
         }
     };
-    // A binding names either an abstract slot (recorded as a pin) or a manifest member (its
-    // type is already fixed). Slot names are capitalized, so a lowercase / unknown key is in
-    // neither set; no separate name-shape check is needed.
-    let abstract_slots: HashSet<String> = schema.abstract_members.keys().cloned().collect();
-    let manifest_members: std::collections::HashMap<String, KType> = schema
-        .manifest_members
-        .iter()
-        .map(|(n, t)| (n.clone(), *t))
-        .collect();
     // Validation only: every pin must name a known slot and hold a type. A slot already fixed —
     // a manifest member, which is also what an earlier WITH's fold left behind — admits only an
     // equal re-pin, which normalizes away (added to `dropped`, never folded), so
     // `S WITH {Tag = Number}` and `(S WITH {A = Number}) WITH {A = Number}` keep their source's
     // signature identity; an unequal re-pin is a type error.
-    let mut dropped: HashSet<String> = HashSet::new();
+    let mut dropped: HashSet<TypeSymbol> = HashSet::new();
     for (symbol, value) in bindings.fields() {
-        // A WITH pin names a signature slot, and the schema's member tables key by text, so the
-        // pin's symbol resolves back through the interner that recorded it. Declaration-time only.
+        // A pin arrives as a raw record-field symbol, which carries no evidence of its token
+        // class, and the classified newtypes admit no raw `Symbol`. So the text resolves through
+        // the interner that recorded it and classifies here — one resolve per pin, at
+        // declaration time. A pin that is not a Type token names no slot and falls to the
+        // no-such-slot error below, the same disposition an unknown Type name gets.
         let name = render_label(symbol, ctx.registries);
-        let name = name.as_str();
-        let is_abstract = abstract_slots.contains(name);
-        let manifest = manifest_members.get(name);
+        let slot = TypeSymbol::of(&name);
+        let is_abstract = slot.is_some_and(|slot| schema.abstract_members.contains_key(&slot));
+        let manifest = slot.and_then(|slot| schema.manifest_members.get(&slot));
         if !is_abstract && manifest.is_none() {
             return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "{} has no abstract type slot `{name}`",
@@ -97,7 +91,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         };
         if let Some(fixed) = manifest {
             if pin_type == fixed {
-                dropped.insert(name.to_string());
+                dropped.insert(slot.expect("a manifest member is keyed by a Type token"));
             } else {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}.{name}` is a manifest type member fixed to `{}`; \
@@ -110,15 +104,18 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         }
     }
 
-    let pins: Vec<(String, KType)> = bindings
+    let pins: Vec<(TypeSymbol, KType)> = bindings
         .fields()
-        .map(|(symbol, value)| (render_label(symbol, ctx.registries), value))
-        .filter(|(name, _)| !dropped.contains(name))
-        .map(|(name, value)| match value {
-            Held::Type(kt) => (name, *kt),
-            Held::Object(_) | Held::UnresolvedType(_) => {
-                unreachable!("validated above: every pin value is a type")
-            }
+        .filter_map(|(symbol, value)| {
+            let name = render_label(symbol, ctx.registries);
+            let slot = TypeSymbol::of(&name)
+                .expect("validated above: every pin names a schema member, keyed by a Type token");
+            (!dropped.contains(&slot)).then(|| match value {
+                Held::Type(kt) => (slot, *kt),
+                Held::Object(_) | Held::UnresolvedType(_) => {
+                    unreachable!("validated above: every pin value is a type")
+                }
+            })
         })
         .collect();
     let folded = schema.fold_pins(&pins, ctx.types());
@@ -127,7 +124,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::builtins::test_support::{TestRun, parse_one, type_name, value_name};
     use crate::machine::model::{KType, TypeNode};
     use crate::machine::{program_storage, run_root_storage};
 
@@ -150,7 +147,12 @@ mod tests {
                     schema.abstract_members.is_empty(),
                     "the pinned member is no longer abstract",
                 );
-                assert_eq!(schema.manifest_members.get("Carrier"), Some(&KType::NUMBER));
+                assert_eq!(
+                    schema
+                        .manifest_members
+                        .get(&type_name("Carrier", test_run.registries())),
+                    Some(&KType::NUMBER),
+                );
             }
             _ => panic!("expected Signature type, got {result:?}"),
         }
@@ -173,7 +175,9 @@ mod tests {
         match test_run.types().node(pinned) {
             TypeNode::Signature { schema, .. } => {
                 assert_eq!(
-                    schema.value_slots.get("compare"),
+                    schema
+                        .value_slots
+                        .get(&value_name("compare", test_run.registries())),
                     Some(&KType::NUMBER),
                     "the slot's reference to Carrier substitutes to the pinned type",
                 );
@@ -201,8 +205,18 @@ mod tests {
         ));
         match test_run.types().node(result) {
             TypeNode::Signature { schema, .. } => {
-                assert_eq!(schema.manifest_members.get("Elt"), Some(&KType::NUMBER));
-                assert_eq!(schema.manifest_members.get("Ord"), Some(&KType::STR));
+                assert_eq!(
+                    schema
+                        .manifest_members
+                        .get(&type_name("Elt", test_run.registries())),
+                    Some(&KType::NUMBER),
+                );
+                assert_eq!(
+                    schema
+                        .manifest_members
+                        .get(&type_name("Ord", test_run.registries())),
+                    Some(&KType::STR),
+                );
             }
             _ => panic!("expected Signature type, got {result:?}"),
         }
@@ -282,15 +296,18 @@ mod tests {
              LET elem = (int_ord :| Ordered)",
         );
         let result = test_run.run_one_type(parse_one(&program, "Set WITH {Elt = elem.Carrier}"));
-        let types = test_run.types();
+        let registries = test_run.registries();
+        let types = &registries.types;
         match types.node(result) {
             TypeNode::Signature { schema, .. } => {
                 let elt = schema
                     .manifest_members
-                    .get("Elt")
+                    .get(&type_name("Elt", registries))
                     .expect("Elt folds to a manifest member");
                 match types.node(*elt) {
-                    TypeNode::AbstractType { name, .. } => assert_eq!(name, "Carrier"),
+                    TypeNode::AbstractType { name, .. } => {
+                        assert_eq!(name, type_name("Carrier", registries))
+                    }
                     _ => panic!("expected Elt = AbstractType(Carrier), got {elt:?}"),
                 }
             }
@@ -390,8 +407,18 @@ mod tests {
         match test_run.types().node(result) {
             TypeNode::Signature { schema, .. } => {
                 assert!(schema.abstract_members.is_empty());
-                assert_eq!(schema.manifest_members.get("Elt"), Some(&KType::STR));
-                assert_eq!(schema.manifest_members.get("Tag"), Some(&KType::NUMBER));
+                assert_eq!(
+                    schema
+                        .manifest_members
+                        .get(&type_name("Elt", test_run.registries())),
+                    Some(&KType::STR),
+                );
+                assert_eq!(
+                    schema
+                        .manifest_members
+                        .get(&type_name("Tag", test_run.registries())),
+                    Some(&KType::NUMBER),
+                );
             }
             _ => panic!("expected Signature type, got {result:?}"),
         }

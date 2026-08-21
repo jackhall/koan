@@ -20,10 +20,15 @@ use crate::machine::core::{Scope, ScopeId};
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::node::{NodeSchema, TypeNode};
-use super::registry::TypeRegistry;
+use super::registry::{IdentityBuildHasher, TypeRegistry};
 use crate::machine::model::RunRegistries;
+use crate::machine::model::labels::{TypeSymbol, ValueSymbol};
 use crate::machine::model::render_label;
 use crate::machine::model::values::ModuleDraft;
+
+/// A schema's type-member table: Type-class name → the member's type, identity-hashed on the
+/// symbol's digest bits.
+pub type TypeMemberMap = HashMap<TypeSymbol, KType, IdentityBuildHasher>;
 
 /// Normalized signature schema — the carrier the subtyping relation is defined over.
 ///
@@ -46,11 +51,11 @@ pub struct SigSchema {
     /// Abstract type members: name → the bound `AbstractType` as found in the decl scope. Its
     /// `param_names` carry the member's order (empty = first-order, non-empty = a constructor
     /// over those parameters), read on demand through [`constructor_param_names`].
-    pub abstract_members: HashMap<String, KType>,
+    pub abstract_members: TypeMemberMap,
     /// Manifest type members: name → the fixed type.
-    pub manifest_members: HashMap<String, KType>,
+    pub manifest_members: TypeMemberMap,
     /// Value slots: name → declared (SIG) or derived (self-sig) type.
-    pub value_slots: HashMap<String, KType>,
+    pub value_slots: HashMap<ValueSymbol, KType, IdentityBuildHasher>,
 }
 
 impl SigSchema {
@@ -60,9 +65,9 @@ impl SigSchema {
     pub fn empty() -> SigSchema {
         SigSchema {
             sig_id: None,
-            abstract_members: HashMap::new(),
-            manifest_members: HashMap::new(),
-            value_slots: HashMap::new(),
+            abstract_members: TypeMemberMap::default(),
+            manifest_members: TypeMemberMap::default(),
+            value_slots: HashMap::default(),
         }
     }
 
@@ -72,29 +77,24 @@ impl SigSchema {
     /// abstract/manifest by representation; the value slots come from the scope's own slot
     /// collector. Runs once per SIG.
     ///
-    /// The schema names its members by text while the scope tables key by symbol, so each name
-    /// resolves through the run's label interner here. That is a declaration-time reach — one pass
-    /// per SIG, not per lookup.
+    /// The schema and the scope tables share one currency — the classified symbols the decl scope
+    /// already keys by — so projection copies keys straight across.
     pub(crate) fn project_decl(decl_scope: &Scope<'_>, registries: &RunRegistries) -> SigSchema {
         let types = &registries.types;
         let declared = decl_scope.id;
-        let mut abstract_members = HashMap::new();
-        let mut manifest_members = HashMap::new();
+        let mut abstract_members = TypeMemberMap::default();
+        let mut manifest_members = TypeMemberMap::default();
         for (name, kt) in decl_scope.bindings().iter_types() {
             let canonical = canonicalize_binder(kt, declared, types);
-            let name = render_label(name.symbol(), registries);
             if is_abstract_sig_member(canonical, types) {
                 abstract_members.insert(name, canonical);
             } else {
                 manifest_members.insert(name, canonical);
             }
         }
-        let mut value_slots = HashMap::new();
+        let mut value_slots = HashMap::default();
         for (name, kt) in decl_scope.sig_value_slots() {
-            value_slots.insert(
-                render_label(name.symbol(), registries),
-                canonicalize_binder(kt, declared, types),
-            );
+            value_slots.insert(name, canonicalize_binder(kt, declared, types));
         }
         SigSchema {
             sig_id: Some(ScopeId::SENTINEL),
@@ -112,16 +112,15 @@ impl SigSchema {
     /// `Carrier = Number` outright (or a structurally identical module self-sig) carries, so
     /// specialization introduces no second spelling of a concrete interface. A no-op clone when
     /// `pins` is empty.
-    pub fn fold_pins(&self, pins: &[(String, KType)], types: &TypeRegistry) -> SigSchema {
+    pub fn fold_pins(&self, pins: &[(TypeSymbol, KType)], types: &TypeRegistry) -> SigSchema {
         let mut schema = self.clone();
         if pins.is_empty() {
             return schema;
         }
-        let substitutions: HashMap<String, KType> =
-            pins.iter().map(|(n, t)| (n.clone(), *t)).collect();
+        let substitutions: TypeMemberMap = pins.iter().copied().collect();
         for (name, kt) in pins {
             schema.abstract_members.remove(name);
-            schema.manifest_members.insert(name.clone(), *kt);
+            schema.manifest_members.insert(*name, *kt);
         }
         if let Some(sig_id) = schema.sig_id {
             for kt in schema
@@ -148,35 +147,26 @@ impl SigSchema {
     /// `slot_type_tags` map overriding by name (an opaque view's abstract slot identities).
     ///
     /// [`KObject::ktype`]: crate::machine::model::values::KObject::ktype
-    pub fn raw_self_sig(
-        child: &Scope<'_>,
-        draft: &ModuleDraft,
-        registries: &RunRegistries,
-    ) -> SigSchema {
-        // The schema names members by text; scope tables and draft maps key by symbol, so each
-        // name resolves through the run's label interner. One pass per module build.
-        let mut manifest_members: HashMap<String, KType> = HashMap::new();
+    pub fn raw_self_sig(child: &Scope<'_>, draft: &ModuleDraft) -> SigSchema {
+        let mut manifest_members = TypeMemberMap::default();
         for (name, kt) in child.bindings().iter_types() {
-            manifest_members.insert(render_label(name.symbol(), registries), kt);
+            manifest_members.insert(name, kt);
         }
         for (name, kt) in draft.type_members.iter() {
-            manifest_members.insert(render_label(name.symbol(), registries), *kt);
+            manifest_members.insert(*name, *kt);
         }
-        let mut value_slots: HashMap<String, KType> = HashMap::new();
+        let mut value_slots: HashMap<ValueSymbol, KType, IdentityBuildHasher> = HashMap::default();
         // A value member's slot type: the seal's own `'home` brand covers the re-anchor, and only
         // the `Copy` `KType` leaves the open.
         for (name, sealed) in child.bindings().iter_data() {
-            value_slots.insert(
-                render_label(name.symbol(), registries),
-                sealed.open_at().value().object().ktype(),
-            );
+            value_slots.insert(name, sealed.open_at().value().object().ktype());
         }
         for (name, tag) in draft.slot_type_tags.iter() {
-            value_slots.insert(render_label(name.symbol(), registries), *tag);
+            value_slots.insert(*name, *tag);
         }
         SigSchema {
             sig_id: None,
-            abstract_members: HashMap::new(),
+            abstract_members: TypeMemberMap::default(),
             manifest_members,
             value_slots,
         }
@@ -187,7 +177,7 @@ impl SigSchema {
 /// `TypeConstructor`-kind member, whose names ride its sealed schema) or a SIG's abstract
 /// higher-kinded member (an `AbstractType` node carrying them directly). `None` for a
 /// first-order type. Arity is the returned list's length.
-pub fn constructor_param_names(kt: KType, types: &TypeRegistry) -> Option<Vec<String>> {
+pub fn constructor_param_names(kt: KType, types: &TypeRegistry) -> Option<Vec<TypeSymbol>> {
     match types.node(kt) {
         TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => Some(param_names),
         TypeNode::SetMember {
@@ -224,12 +214,16 @@ pub fn unsaturated_constructor_message(
     let param_names = constructor_param_names(kt, types)?;
     let name = kt.name(registries);
     let plural = if param_names.len() == 1 { "" } else { "s" };
-    let listed = param_names
+    let rendered: Vec<String> = param_names
+        .iter()
+        .map(|p| render_label(p.symbol(), registries))
+        .collect();
+    let listed = rendered
         .iter()
         .map(|p| format!("`{p}`"))
         .collect::<Vec<_>>()
         .join(", ");
-    let applied = param_names
+    let applied = rendered
         .iter()
         .map(|p| format!("{p} = <Type>"))
         .collect::<Vec<_>>()
@@ -242,13 +236,14 @@ pub fn unsaturated_constructor_message(
 }
 
 /// Order-blind comparison of two constructor parameter lists: identity is the name set, and
-/// declaration order is presentation.
-pub(super) fn name_sets_equal(left: &[String], right: &[String]) -> bool {
+/// declaration order is presentation. Symbol order is the canonical order — an arbitrary but
+/// stable total order over the same names, which is all a set comparison needs.
+pub(super) fn name_sets_equal(left: &[TypeSymbol], right: &[TypeSymbol]) -> bool {
     if left.len() != right.len() {
         return false;
     }
-    let mut left: Vec<&str> = left.iter().map(String::as_str).collect();
-    let mut right: Vec<&str> = right.iter().map(String::as_str).collect();
+    let mut left: Vec<TypeSymbol> = left.to_vec();
+    let mut right: Vec<TypeSymbol> = right.to_vec();
     left.sort_unstable();
     right.sort_unstable();
     left == right
@@ -265,16 +260,16 @@ pub(super) fn name_sets_equal(left: &[String], right: &[String]) -> bool {
 pub fn substitute_sig_members(
     kt: KType,
     sig_id: ScopeId,
-    members: &HashMap<String, KType>,
+    members: &TypeMemberMap,
     types: &TypeRegistry,
 ) -> KType {
     match types.node(kt) {
         TypeNode::AbstractType {
             source,
-            ref name,
+            name,
             nonce: None,
             ..
-        } if source == sig_id => members.get(name).copied().unwrap_or(kt),
+        } if source == sig_id => members.get(&name).copied().unwrap_or(kt),
         TypeNode::List { element } => {
             let element = substitute_sig_members(element, sig_id, members, types);
             types.list(element)
@@ -380,7 +375,8 @@ pub enum SigSubtypeFailure {
     },
     /// A type member's kind or parameter names disagreed. `expected_params` is `Some(names)` when
     /// the super signature declares a constructor over those parameters, `None` when it declares
-    /// a first-order proper type; `got` is the rendered sub binding that failed to match.
+    /// a first-order proper type; `got` is the rendered sub binding that failed to match. The
+    /// parameter names are rendered at the failure site, like every other field here.
     KindMismatch {
         name: String,
         expected_params: Option<Vec<String>>,
@@ -465,7 +461,7 @@ pub fn sig_subtype(
             .or_else(|| sub.abstract_members.get(name));
         let Some(sub_binding) = sub_binding else {
             return Err(Box::new(SigSubtypeFailure::MissingTypeMember {
-                name: name.clone(),
+                name: render_label(name.symbol(), registries),
             }));
         };
         let sup_params = constructor_param_names(*sup_repr, types);
@@ -477,8 +473,13 @@ pub fn sig_subtype(
         };
         if !agrees {
             return Err(Box::new(SigSubtypeFailure::KindMismatch {
-                name: name.clone(),
-                expected_params: sup_params,
+                name: render_label(name.symbol(), registries),
+                expected_params: sup_params.map(|params| {
+                    params
+                        .iter()
+                        .map(|p| render_label(p.symbol(), registries))
+                        .collect()
+                }),
                 got: sub_binding.render(registries),
             }));
         }
@@ -490,7 +491,7 @@ pub fn sig_subtype(
             Some(got) if got == fixed => {}
             Some(got) => {
                 return Err(Box::new(SigSubtypeFailure::ManifestMismatch {
-                    name: name.clone(),
+                    name: render_label(name.symbol(), registries),
                     got: got.render(registries),
                     expected: fixed.render(registries),
                 }));
@@ -499,13 +500,13 @@ pub fn sig_subtype(
                 // An abstract `sub` member supplies no witness for a manifest requirement.
                 if let Some(repr) = sub.abstract_members.get(name) {
                     return Err(Box::new(SigSubtypeFailure::ManifestMismatch {
-                        name: name.clone(),
+                        name: render_label(name.symbol(), registries),
                         got: repr.render(registries),
                         expected: fixed.render(registries),
                     }));
                 }
                 return Err(Box::new(SigSubtypeFailure::MissingTypeMember {
-                    name: name.clone(),
+                    name: render_label(name.symbol(), registries),
                 }));
             }
         }
@@ -518,17 +519,17 @@ pub fn sig_subtype(
     // `substitute_sig_members(declared, id, sub_member_map).satisfied_by(sub_type)` by comparing
     // structurally and swapping in `sub`'s binding on reaching a self-abstract reference, so no
     // substituted type is ever built.
-    let mut sub_member_map: HashMap<String, KType> = HashMap::new();
+    let mut sub_member_map = TypeMemberMap::default();
     for (name, kt) in &sub.manifest_members {
-        sub_member_map.insert(name.clone(), *kt);
+        sub_member_map.insert(*name, *kt);
     }
     for (name, repr) in &sub.abstract_members {
-        sub_member_map.insert(name.clone(), *repr);
+        sub_member_map.insert(*name, *repr);
     }
     for (name, declared) in &sup.value_slots {
         let Some(sub_type) = sub.value_slots.get(name) else {
             return Err(Box::new(SigSubtypeFailure::MissingValueSlot {
-                name: name.clone(),
+                name: render_label(name.symbol(), registries),
             }));
         };
         let ok = match sup.sig_id {
@@ -538,7 +539,7 @@ pub fn sig_subtype(
         };
         if !ok {
             return Err(Box::new(SigSubtypeFailure::ValueSlotMismatch {
-                name: name.clone(),
+                name: render_label(name.symbol(), registries),
                 got: sub_type.render(registries),
                 expected: declared.render(registries),
             }));
@@ -554,7 +555,7 @@ pub fn sig_subtype(
 fn references_sig_member(
     declared: KType,
     sig_id: ScopeId,
-    members: &HashMap<String, KType>,
+    members: &TypeMemberMap,
     types: &TypeRegistry,
 ) -> bool {
     match types.node(declared) {
@@ -599,7 +600,7 @@ fn references_sig_member(
 fn substitution_binding(
     declared: KType,
     sig_id: ScopeId,
-    members: &HashMap<String, KType>,
+    members: &TypeMemberMap,
     types: &TypeRegistry,
 ) -> Option<KType> {
     match types.node(declared) {
@@ -622,7 +623,7 @@ fn substitution_binding(
 fn slot_satisfied_by(
     declared: KType,
     sub_type: KType,
-    members: &HashMap<String, KType>,
+    members: &TypeMemberMap,
     sig_id: ScopeId,
     registries: &RunRegistries,
 ) -> bool {
@@ -709,7 +710,7 @@ fn slot_satisfied_by(
 fn slot_more_specific_or_equal(
     declared: KType,
     target: KType,
-    members: &HashMap<String, KType>,
+    members: &TypeMemberMap,
     sig_id: ScopeId,
     registries: &RunRegistries,
 ) -> bool {
@@ -798,7 +799,7 @@ fn slot_more_specific_or_equal(
 fn slot_types_equal(
     declared: KType,
     other: KType,
-    members: &HashMap<String, KType>,
+    members: &TypeMemberMap,
     sig_id: ScopeId,
     types: &TypeRegistry,
 ) -> bool {

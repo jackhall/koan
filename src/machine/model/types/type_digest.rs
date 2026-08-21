@@ -25,10 +25,8 @@
 //! concatenation is unambiguous, and every child digest / `ScopeId` / integer is fed
 //! little-endian.
 
-use std::collections::HashMap;
-
 use crate::machine::core::ScopeId;
-use crate::machine::model::labels::Symbol;
+use crate::machine::model::labels::{Symbol, TypeSymbol};
 
 use super::kkind::KKind;
 use super::ktype::KType;
@@ -171,7 +169,7 @@ pub(crate) fn node_digest(node: &TypeNode) -> TypeDigest {
             name,
             param_names,
             nonce,
-        } => abstract_type_digest(*source, name, param_names, *nonce),
+        } => abstract_type_digest(*source, *name, param_names, *nonce),
         TypeNode::List { element } => list_digest(element.digest()),
         TypeNode::Dict { key, value } => dict_digest(key.digest(), value.digest()),
         TypeNode::Record { fields } => record_digest(fields),
@@ -219,11 +217,12 @@ fn sibling_digest(index: usize) -> TypeDigest {
 
 /// An abstract member's four identity fields: the generativity `nonce` first, then the binder
 /// `source`, the name, and the parameter names fed sorted so the encoding is order-blind
-/// (identity is the name set, as in [`schema_content_digest`]).
+/// (identity is the name set, as in [`schema_content_digest`]). Names feed as fixed-width symbol
+/// bits and sort by those bits — a canonical order over the same set.
 fn abstract_type_digest(
     source: ScopeId,
-    name: &str,
-    param_names: &[String],
+    name: TypeSymbol,
+    param_names: &[TypeSymbol],
     nonce: Option<ScopeId>,
 ) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_ABSTRACT_TYPE);
@@ -235,11 +234,13 @@ fn abstract_type_digest(
             h.byte(0);
         }
     }
-    h.scope_id(source).string(name).count(param_names.len());
-    let mut sorted: Vec<&str> = param_names.iter().map(String::as_str).collect();
+    h.scope_id(source)
+        .symbol(name.symbol())
+        .count(param_names.len());
+    let mut sorted: Vec<TypeSymbol> = param_names.to_vec();
     sorted.sort_unstable();
     for param in sorted {
-        h.string(param);
+        h.symbol(param.symbol());
     }
     h.finish()
 }
@@ -306,7 +307,7 @@ fn signature_digest(content_digest: TypeDigest) -> TypeDigest {
 
 /// The content digest of a normalized signature schema — a pure function of its members:
 /// abstract members `(name, parameter names)`, manifest members `(name, type)`, and value slots
-/// `(name, type)`, each group fed in name-sorted order (the maps are unordered). References to
+/// `(name, type)`, each group fed in symbol-sorted order (the maps are unordered). References to
 /// the schema's *own* abstract members are canonicalized to a `(TAG_SIG_SELF_REF, name)` leaf, so
 /// two textually identical declarations digest identically. Every other minted `AbstractType` (an
 /// opaque view's slot tags, a manifest member sourced from another sig) keeps its own digest, so
@@ -321,7 +322,7 @@ pub(crate) fn schema_content_digest(schema: &SigSchema, types: &TypeRegistry) ->
     // Each abstract member feeds its name, then its order: `0x00` for a first-order proper type,
     // `0x01` + parameter count + the parameter names for a constructor. The names feed sorted, so
     // the encoding is order-blind — parameter identity is the name set.
-    let mut abstracts: Vec<(&str, Vec<String>)> = schema
+    let mut abstracts: Vec<(TypeSymbol, Vec<TypeSymbol>)> = schema
         .abstract_members
         .iter()
         .map(|(name, kt)| {
@@ -329,27 +330,40 @@ pub(crate) fn schema_content_digest(schema: &SigSchema, types: &TypeRegistry) ->
                 TypeNode::AbstractType { param_names, .. } => param_names,
                 _ => Vec::new(),
             };
-            (name.as_str(), params)
+            (*name, params)
         })
         .collect();
-    abstracts.sort_by(|a, b| a.0.cmp(b.0));
+    abstracts.sort_by_key(|(name, _)| *name);
     h.count(abstracts.len());
     for (name, param_names) in abstracts {
-        h.string(name);
+        h.symbol(name.symbol());
         if param_names.is_empty() {
             h.byte(0);
         } else {
             h.byte(1).count(param_names.len());
-            let mut sorted: Vec<&str> = param_names.iter().map(String::as_str).collect();
+            let mut sorted: Vec<TypeSymbol> = param_names;
             sorted.sort_unstable();
             for param in sorted {
-                h.string(param);
+                h.symbol(param.symbol());
             }
         }
     }
 
-    feed_named_types(&mut h, &schema.manifest_members, schema, types);
-    feed_named_types(&mut h, &schema.value_slots, schema, types);
+    feed_named_types(
+        &mut h,
+        schema
+            .manifest_members
+            .iter()
+            .map(|(n, kt)| (n.symbol(), *kt)),
+        schema,
+        types,
+    );
+    feed_named_types(
+        &mut h,
+        schema.value_slots.iter().map(|(n, kt)| (n.symbol(), *kt)),
+        schema,
+        types,
+    );
     h.finish()
 }
 
@@ -367,23 +381,23 @@ pub(crate) fn empty_schema_digest() -> TypeDigest {
     h.finish()
 }
 
-/// Feed a `name -> type` member map into `h` in name-sorted order (the map is unordered), each
-/// type digested through [`canonical_type_digest`] so self-member references collapse to a name
-/// leaf. Shared by manifest members and value slots.
+/// Feed a `name -> type` member sequence into `h` in symbol-sorted order (the source maps are
+/// unordered), each type digested through [`canonical_type_digest`] so self-member references
+/// collapse to a name leaf. Shared by the manifest members (Type-keyed) and the value slots
+/// (value-keyed), which is why it takes raw [`Symbol`]s rather than one classified key type.
 fn feed_named_types(
     h: &mut DigestHasher,
-    members: &HashMap<String, KType>,
+    members: impl Iterator<Item = (Symbol, KType)>,
     schema: &SigSchema,
     types: &TypeRegistry,
 ) {
-    let mut pairs: Vec<(&str, TypeDigest)> = members
-        .iter()
-        .map(|(name, kt)| (name.as_str(), canonical_type_digest(*kt, schema, types)))
+    let mut pairs: Vec<(Symbol, TypeDigest)> = members
+        .map(|(name, kt)| (name, canonical_type_digest(kt, schema, types)))
         .collect();
-    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    pairs.sort_by_key(|(name, _)| *name);
     h.count(pairs.len());
     for (name, d) in pairs {
-        h.string(name).digest(d);
+        h.symbol(name).digest(d);
     }
 }
 
@@ -396,7 +410,9 @@ fn feed_named_types(
 fn canonical_type_digest(kt: KType, schema: &SigSchema, types: &TypeRegistry) -> TypeDigest {
     let node = types.node(kt);
     if let Some(name) = schema_self_ref(&node, schema) {
-        return DigestHasher::new(TAG_SIG_SELF_REF).string(name).finish();
+        return DigestHasher::new(TAG_SIG_SELF_REF)
+            .symbol(name.symbol())
+            .finish();
     }
     match node {
         TypeNode::List { element } => DigestHasher::new(TAG_LIST)
@@ -448,14 +464,14 @@ fn canonical_type_digest(kt: KType, schema: &SigSchema, types: &TypeRegistry) ->
 /// shape `substitute_sig_members` rewrites. `None` for a self-sig (no binder, no abstract
 /// members), so a self-sig's member digests are its content unchanged — including any generative
 /// `AbstractType` mints, which carry a nonce and stay id-keyed.
-fn schema_self_ref<'n>(node: &'n TypeNode, schema: &SigSchema) -> Option<&'n str> {
+fn schema_self_ref(node: &TypeNode, schema: &SigSchema) -> Option<TypeSymbol> {
     match node {
         TypeNode::AbstractType {
             source,
             name,
             nonce: None,
             ..
-        } if schema.sig_id == Some(*source) => Some(name),
+        } if schema.sig_id == Some(*source) => Some(*name),
         _ => None,
     }
 }
@@ -568,7 +584,7 @@ pub(crate) fn component_digest(
                 }
                 h.count(param_names.len());
                 for p in param_names {
-                    h.string(p);
+                    h.symbol(p.symbol());
                 }
             }
         }

@@ -213,13 +213,16 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
     // union member's `identity` interns to.
     let ctor = types.intern(TypeNode::AbstractType {
         source: ScopeId::from_raw(0, 0x11),
-        name: "Maybe".into(),
-        param_names: vec!["T".into()],
+        name: crate::builtins::test_support::type_name("Maybe", types.registries()),
+        param_names: vec![crate::builtins::test_support::type_name(
+            "Elem",
+            types.registries(),
+        )],
         nonce: None,
     });
     let identity = types.constructor_apply(
         ctor,
-        Record::from_pairs([(crate::machine::model::Symbol::of("T"), KType::NUMBER)]),
+        Record::from_pairs([(crate::machine::model::Symbol::of("Elem"), KType::NUMBER)]),
     );
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let source_door =
@@ -287,7 +290,7 @@ fn wrapped_relocation_rebuilds_payload_into_dest() {
 
     let type_id = types.intern(TypeNode::AbstractType {
         source: ScopeId::from_raw(0, 0x12),
-        name: "Distance".into(),
+        name: crate::builtins::test_support::type_name("Distance", types.registries()),
         param_names: vec![],
         nonce: None,
     });

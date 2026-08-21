@@ -66,20 +66,24 @@ fn resolve_type_expr_user_struct_resolves_after_finalize() {
 /// depth is a dependency the gate must see.
 #[test]
 fn user_type_refs_yields_nested_declared_slots_in_order() {
-    let types = crate::machine::model::TypeRegistry::new();
+    let registries = crate::machine::model::RunRegistries::new();
+    let types = &registries.types;
     let scope_id = crate::machine::core::ScopeId::next();
     let abstract_slot = |name: &str| {
         types.intern(TypeNode::AbstractType {
             source: scope_id,
-            name: name.to_string(),
+            name: crate::builtins::test_support::type_name(name, &registries),
             param_names: Vec::new(),
             nonce: None,
         })
     };
     // Dict<Aa, List<Bb>>
     let kt = types.dict(abstract_slot("Aa"), types.list(abstract_slot("Bb")));
-    let refs = user_type_refs(kt, &types);
-    let names: Vec<&str> = refs.iter().map(|r| r.name.as_str()).collect();
+    let refs = user_type_refs(kt, types);
+    let names: Vec<String> = refs
+        .iter()
+        .map(|r| crate::machine::model::render_label(r.name.symbol(), &registries))
+        .collect();
     assert_eq!(names, vec!["Aa", "Bb"], "slots come back in walk order");
 }
 
@@ -88,10 +92,11 @@ fn user_type_refs_yields_nested_declared_slots_in_order() {
 #[test]
 fn user_type_refs_does_not_recurse_into_a_sealed_member() {
     use crate::machine::model::{RecursiveGroupWindow, RelativeSchema};
-    let types = crate::machine::model::TypeRegistry::new();
+    let registries = crate::machine::model::RunRegistries::new();
+    let types = &registries.types;
     let slot = types.intern(TypeNode::AbstractType {
         source: crate::machine::core::ScopeId::next(),
-        name: "Carrier".to_string(),
+        name: crate::builtins::test_support::type_name("Carrier", &registries),
         param_names: Vec::new(),
         nonce: None,
     });
@@ -99,10 +104,10 @@ fn user_type_refs_does_not_recurse_into_a_sealed_member() {
         "Chain".into(),
         RelativeSchema::NewType(types.list(slot)),
         None,
-        &types,
+        types,
     );
     assert!(
-        user_type_refs(sealed, &types).is_empty(),
+        user_type_refs(sealed, types).is_empty(),
         "a sealed member is finished and its schema is not walked",
     );
 }

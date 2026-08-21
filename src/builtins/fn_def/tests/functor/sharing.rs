@@ -32,7 +32,8 @@ fn sharing_constraint_rejects_mismatched_module_type() {
          MODULE num_bare = ((LET Elem = Number) (LET compare = 0))",
     );
 
-    let slot = types.signature(schema.fold_pins(&[("Elem".into(), KType::NUMBER)], &types));
+    let elem = crate::builtins::test_support::type_name("Elem", types.registries());
+    let slot = types.signature(schema.fold_pins(&[(elem, KType::NUMBER)], &types));
 
     // A module binds value-side, so both the overload probe and the built argument cell carry it
     // on the Object channel — its satisfaction of a `Signature` slot goes through
@@ -118,7 +119,9 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
             );
             match test_run.types().node(handle) {
                 TypeNode::Signature { schema, .. } => {
-                    assert_eq!(schema.manifest_members.get("Elt"), Some(&KType::NUMBER));
+                    let elt =
+                        crate::builtins::test_support::type_name("Elt", test_run.registries());
+                    assert_eq!(schema.manifest_members.get(&elt), Some(&KType::NUMBER));
                 }
                 _ => {
                     panic!("expected Resolved(Signature) on MAKESETN's return type, got {handle:?}")
@@ -247,7 +250,8 @@ fn transparent_view_pin_agreement_reads_source_types() {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("Ordered must bind a Signature KType, got {ordered:?}"),
     };
-    let slot = types.signature(schema.fold_pins(&[("Elem".to_string(), KType::NUMBER)], &types));
+    let elem = crate::builtins::test_support::type_name("Elem", types.registries());
+    let slot = types.signature(schema.fold_pins(&[(elem, KType::NUMBER)], &types));
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let num_view = scope.lookup("num_view").expect("num_view bound");
     let str_view = scope.lookup("str_view").expect("str_view bound");
@@ -299,8 +303,8 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
         ))
         .copied()
         .expect("opaque view mints an abstract `Carrier`");
-    let slot =
-        types.signature(schema.fold_pins(&[("Carrier".to_string(), carrier_abstract)], &types));
+    let carrier = crate::builtins::test_support::type_name("Carrier", types.registries());
+    let slot = types.signature(schema.fold_pins(&[(carrier, carrier_abstract)], &types));
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let view_obj = scope.lookup("view").expect("view bound");
     assert!(

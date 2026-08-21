@@ -92,7 +92,9 @@ pub fn body_identifier<'a>(
     if let Some(kt) = ctx.scope.resolve_type(&s_name)
         && let TypeNode::AbstractType { name, .. } = ctx.types().node(kt)
     {
-        return Action::done(Err(abstract_type_has_no_members(&name)));
+        return Action::done(Err(abstract_type_has_no_members(
+            &crate::machine::model::render_label(name.symbol(), ctx.registries),
+        )));
     }
     Action::done(Err(KError::new(KErrorKind::UnboundName(s_name))))
 }
@@ -224,11 +226,15 @@ fn access_type_member<'a>(
         // projected member is a clone out of that schema, allocated fresh into the read-site
         // scope's own region.
         TypeNode::Signature { schema, .. } => {
-            let member = schema
-                .manifest_members
-                .get(field)
-                .or_else(|| schema.abstract_members.get(field))
-                .or_else(|| schema.value_slots.get(field));
+            // The field arrives as source text. It classifies once against each side of the
+            // schema's partition; a name that will not classify for a side cannot key that map,
+            // so it simply misses and falls to the no-member error below.
+            let type_field = crate::machine::model::TypeSymbol::of(field);
+            let slot_field = crate::machine::model::ValueSymbol::of(field);
+            let member = type_field
+                .and_then(|name| schema.manifest_members.get(&name))
+                .or_else(|| type_field.and_then(|name| schema.abstract_members.get(&name)))
+                .or_else(|| slot_field.and_then(|name| schema.value_slots.get(&name)));
             match member {
                 Some(member) => Ok(StepCarried::born(scope.resident(Carried::Type(*member)))),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
@@ -238,7 +244,9 @@ fn access_type_member<'a>(
                 )))),
             }
         }
-        TypeNode::AbstractType { name, .. } => Err(abstract_type_has_no_members(&name)),
+        TypeNode::AbstractType { name, .. } => Err(abstract_type_has_no_members(
+            &crate::machine::model::render_label(name.symbol(), registries),
+        )),
         _ => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "a type with members".to_string(),

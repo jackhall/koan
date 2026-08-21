@@ -237,7 +237,7 @@ fn constructor_apply_name_renders_surface_form() {
         "Wrap".into(),
         RelativeSchema::TypeConstructor {
             schema: std::collections::HashMap::new(),
-            param_names: vec!["Type".into()],
+            param_names: vec![type_name("Type", &registries)],
         },
         None,
         types,

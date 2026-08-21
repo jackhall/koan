@@ -300,11 +300,9 @@ fn module_finalize_short_circuits_on_idempotent_state() {
     // module derives its interface from the same (empty) draft production would, before the
     // value exists.
     let draft = ModuleDraft::empty();
-    let self_sig = test_run.types().signature(SigSchema::raw_self_sig(
-        child,
-        &draft,
-        test_run.registries(),
-    ));
+    let self_sig = test_run
+        .types()
+        .signature(SigSchema::raw_self_sig(child, &draft));
     let module: &Module<'_> = Module::alloc_at_child_scope("foo", child, draft, self_sig);
     let sealed = scope.seal_module(module);
     scope

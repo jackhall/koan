@@ -1,6 +1,7 @@
 use super::super::node::TypeNode;
 use super::super::sig_schema::SigSchema;
 use super::*;
+use crate::builtins::test_support::{type_name, value_name};
 use crate::machine::core::ScopeId;
 use crate::machine::model::RunRegistries;
 
@@ -178,8 +179,12 @@ fn non_empty_signature_renders_its_members_structurally() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let mut schema = SigSchema::empty();
-    schema.value_slots.insert("zero".into(), KType::NUMBER);
-    schema.value_slots.insert("label".into(), KType::STR);
+    schema
+        .value_slots
+        .insert(value_name("zero", &registries), KType::NUMBER);
+    schema
+        .value_slots
+        .insert(value_name("label", &registries), KType::STR);
     let sig = types.signature(schema);
     assert_eq!(sig.name(&registries), "SIG (label: Str, zero: Number)");
 }
@@ -237,7 +242,7 @@ fn abstract_type_identity_keys_on_full_content() {
     let mint = |name: &str, nonce: Option<ScopeId>| {
         types.intern(TypeNode::AbstractType {
             source,
-            name: name.into(),
+            name: type_name(name, &registries),
             param_names: Vec::new(),
             nonce,
         })
@@ -262,8 +267,11 @@ fn abstract_type_parameter_names_are_an_order_blind_set() {
     let mint = |params: Vec<&str>| {
         types.intern(TypeNode::AbstractType {
             source,
-            name: "Wrap".into(),
-            param_names: params.into_iter().map(str::to_string).collect(),
+            name: type_name("Wrap", &registries),
+            param_names: params
+                .into_iter()
+                .map(|p| type_name(p, &registries))
+                .collect(),
             nonce: None,
         })
     };

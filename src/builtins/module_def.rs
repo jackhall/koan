@@ -146,11 +146,9 @@ pub(super) fn await_module_body<'a>(
         }
         // The self-sig is derived from the draft and interned before the module exists — a
         // plain module carries no SIG, so the raw derivation is the whole signature.
-        let self_sig = fctx.types().signature(SigSchema::raw_self_sig(
-            child_scope,
-            &draft,
-            fctx.registries,
-        ));
+        let self_sig = fctx
+            .types()
+            .signature(SigSchema::raw_self_sig(child_scope, &draft));
         let module: &'a Module<'a> =
             Module::alloc_at_child_scope(&name_for_finish, child_scope, draft, self_sig);
         // Fused MODULE-finish seal: the module reference held **directly** here (never

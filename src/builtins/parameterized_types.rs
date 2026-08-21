@@ -113,8 +113,9 @@ mod action_bodies {
             )))));
         };
         // `AS` is arity-1 sugar: the applied type fills the constructor's sole parameter, so
-        // `:(Number AS Wrap)` elaborates exactly as `:(Wrap {Elem = Number})` does.
-        let args = Record::from_pairs([(ctx.registries.labels.intern(param_name), applied)]);
+        // `:(Number AS Wrap)` elaborates exactly as `:(Wrap {Elem = Number})` does. The parameter
+        // name interned at the constructor's declaration, so its symbol keys the record directly.
+        let args = Record::from_pairs([(param_name.symbol(), applied)]);
         let apply = ctx.types().constructor_apply(ctor, args);
         Action::done(Ok(ctx.ctx.type_carried(apply)))
     }
@@ -279,7 +280,7 @@ mod tests {
                 0,
                 RelativeSchema::TypeConstructor {
                     schema: std::collections::HashMap::new(),
-                    param_names: vec!["Type".into()],
+                    param_names: vec![type_name("Type", test_run.registries())],
                 },
                 test_run.types(),
             )

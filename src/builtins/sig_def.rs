@@ -69,7 +69,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::builtins::test_support::{TestRun, parse_one, type_name, value_name};
     use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
@@ -138,7 +138,7 @@ mod tests {
         };
         let x = *schema
             .value_slots
-            .get("x")
+            .get(&value_name("x", test_run.registries()))
             .expect("VAL slot `x` must live in the signature's stored schema");
         assert_eq!(
             x,
@@ -267,8 +267,9 @@ mod tests {
             TypeNode::Signature { schema, .. } => schema,
             _ => panic!("Container should be a signature"),
         };
-        let pin_num = types.signature(schema.fold_pins(&[("Elem".into(), KType::NUMBER)], types));
-        let pin_str = types.signature(schema.fold_pins(&[("Elem".into(), KType::STR)], types));
+        let elem = type_name("Elem", test_run.registries());
+        let pin_num = types.signature(schema.fold_pins(&[(elem, KType::NUMBER)], types));
+        let pin_str = types.signature(schema.fold_pins(&[(elem, KType::STR)], types));
         assert_ne!(pin_num, pin_str, "unequal pins are unequal types");
         assert_ne!(
             pin_num, handle,

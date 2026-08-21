@@ -20,6 +20,13 @@ use crate::machine::Scope;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{KType, RecursiveGroupWindow, RelativeSchema};
 
+/// Classify and intern one of the family's parameter names. The two literals below are
+/// Type-class by inspection, so a miss is a programming error in this registration.
+fn declared_param(text: &str, registries: &RunRegistries) -> crate::machine::model::TypeSymbol {
+    crate::machine::model::TypeSymbol::declared(text, &registries.labels)
+        .expect("a builtin constructor parameter name is a Type token")
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let types = &registries.types;
     let mut schema: HashMap<String, KType> = HashMap::with_capacity(2);
@@ -31,7 +38,10 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         "Result".into(),
         RelativeSchema::TypeConstructor {
             schema,
-            param_names: vec!["Ok".into(), "Error".into()],
+            param_names: vec![
+                declared_param("Ok", registries),
+                declared_param("Error", registries),
+            ],
         },
         None,
         types,

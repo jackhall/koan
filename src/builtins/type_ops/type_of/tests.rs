@@ -1,7 +1,7 @@
 //! `TYPE OF <value>` — the value's own reported type, surfaced as a type value. General over the
 //! value channel (scalar, container, module, view), and the door a module takes to type position.
 
-use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one, type_name};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
@@ -76,7 +76,7 @@ fn type_of_opaque_view_reports_the_view_not_its_source() {
             );
             let elt = schema
                 .manifest_members
-                .get("Elt")
+                .get(&type_name("Elt", test_run.registries()))
                 .copied()
                 .expect("the view's self-sig has an `Elt` manifest member");
             assert!(
@@ -106,7 +106,10 @@ fn type_of_transparent_view_reports_concrete_slots() {
     match types.node(result) {
         TypeNode::Signature { schema, .. } => {
             assert_eq!(
-                schema.manifest_members.get("Elt").copied(),
+                schema
+                    .manifest_members
+                    .get(&type_name("Elt", test_run.registries()))
+                    .copied(),
                 Some(KType::NUMBER),
                 "a transparent view records the source's concrete `Elt`",
             );

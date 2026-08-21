@@ -1,4 +1,4 @@
-use crate::builtins::test_support::{TestRun, binds_module, parse_one};
+use crate::builtins::test_support::{TestRun, binds_module, parse_one, type_name, value_name};
 use crate::machine::model::Symbol;
 use crate::machine::model::{KType, SigSchema, TypeNode, TypeRegistry};
 use crate::machine::{KErrorKind, ScopeId};
@@ -26,7 +26,7 @@ fn val_inside_sig_binds_typeexpr_carrier() {
     test_run.run("SIG Ordered = ((VAL zero :Number))");
     let zero = sig_schema(scope, test_run.types(), "Ordered")
         .value_slots
-        .get("zero")
+        .get(&value_name("zero", test_run.registries()))
         .copied()
         .expect("zero must live in Ordered's stored schema value_slots");
     assert_eq!(zero, KType::NUMBER);
@@ -45,13 +45,14 @@ fn val_resolves_sig_local_type_shadow() {
     test_run.run("SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
     let zero = sig_schema(scope, test_run.types(), "WithZero")
         .value_slots
-        .get("zero")
+        .get(&value_name("zero", test_run.registries()))
         .copied()
         .expect("zero must live in WithZero's stored schema value_slots");
     match test_run.types().node(zero) {
         TypeNode::AbstractType { source, name, .. } => {
             assert_eq!(
-                name, "Carrier",
+                name,
+                type_name("Carrier", test_run.registries()),
                 "VAL slot must record that it names the SIG-local abstract `Carrier`",
             );
             assert_eq!(source, ScopeId::SENTINEL);
@@ -131,7 +132,7 @@ fn val_function_typed_slot() {
     test_run.run("SIG Ordered = ((VAL compare :(FN (x :Number, y :Number) -> Number)))");
     let compare = sig_schema(scope, test_run.types(), "Ordered")
         .value_slots
-        .get("compare")
+        .get(&value_name("compare", test_run.registries()))
         .copied()
         .expect("compare must live in Ordered's stored schema value_slots");
     match test_run.types().node(compare) {
@@ -201,23 +202,24 @@ fn val_with_abstract_type_member_declaration() {
     let scope = test_run.scope;
     test_run.run("SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
     let schema = sig_schema(scope, test_run.types(), "WithZero");
+    let carrier = type_name("Carrier", test_run.registries());
     let type_kt = schema
         .abstract_members
-        .get("Carrier")
+        .get(&carrier)
         .copied()
         .expect("Carrier must live in WithZero's stored schema abstract_members");
     assert!(matches!(
         test_run.types().node(type_kt),
-        TypeNode::AbstractType { source, name, .. } if source == ScopeId::SENTINEL && name == "Carrier"
+        TypeNode::AbstractType { source, name, .. } if source == ScopeId::SENTINEL && name == carrier
     ));
     let zero = schema
         .value_slots
-        .get("zero")
+        .get(&value_name("zero", test_run.registries()))
         .copied()
         .expect("zero must live in WithZero's stored schema value_slots");
     assert!(matches!(
         test_run.types().node(zero),
-        TypeNode::AbstractType { source, name, .. } if source == ScopeId::SENTINEL && name == "Carrier"
+        TypeNode::AbstractType { source, name, .. } if source == ScopeId::SENTINEL && name == carrier
     ));
     assert_eq!(type_kt, zero, "both name the same abstract identity");
 }

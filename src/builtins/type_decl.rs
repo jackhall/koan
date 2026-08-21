@@ -42,14 +42,10 @@ fn not_in_sig_body() -> KError {
 /// frame's registry, so the handle names the same type in every region.
 fn bind_abstract_member<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
-    name: String,
+    name: crate::machine::model::TypeSymbol,
     kt: KType,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    let name = match crate::machine::model::type_binder(&name, ctx.registries) {
-        Ok(name) => name,
-        Err(e) => return Action::done(Err(e)),
-    };
     let carrier = ctx.scope.resident(Carried::Type(kt));
     Action::done(Ok(StepCarried::born(carrier))).with_effect(
         crate::machine::core::bindings::WriteOp::Type {
@@ -73,9 +69,15 @@ pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machin
         Ok(name) => name,
         Err(e) => return Action::done(Err(e)),
     };
+    // The member name enters both the node and the scope's type table, so it classifies once
+    // here and travels as a symbol from there.
+    let name = match crate::machine::model::type_binder(&name, ctx.registries) {
+        Ok(name) => name,
+        Err(e) => return Action::done(Err(e)),
+    };
     let kt = ctx.types().intern(TypeNode::AbstractType {
         source: ctx.scope.id,
-        name: name.clone(),
+        name,
         param_names: Vec::new(),
         nonce: None,
     });
@@ -99,9 +101,23 @@ pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine:
         Ok(pair) => pair,
         Err(e) => return Action::done(Err(e)),
     };
+    // `parse_hk_decl` is a pure parse over source text; the declaration seam is here, where the
+    // interner is in reach. Parameter names intern too — diagnostics name them.
+    let param_names = match param_names
+        .iter()
+        .map(|p| crate::machine::model::type_binder(p, ctx.registries))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(names) => names,
+        Err(e) => return Action::done(Err(e)),
+    };
+    let member_name = match crate::machine::model::type_binder(&member_name, ctx.registries) {
+        Ok(name) => name,
+        Err(e) => return Action::done(Err(e)),
+    };
     let kt = ctx.types().intern(TypeNode::AbstractType {
         source: ctx.scope.id,
-        name: member_name.clone(),
+        name: member_name,
         param_names,
         nonce: None,
     });

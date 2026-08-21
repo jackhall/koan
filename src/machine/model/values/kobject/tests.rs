@@ -1,4 +1,5 @@
 use super::*;
+use crate::builtins::test_support::type_name;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
@@ -165,7 +166,10 @@ fn type_constructor_ktype_erased_vs_applied() {
         "Result".into(),
         RelativeSchema::TypeConstructor {
             schema: HashMap::new(),
-            param_names: vec!["Ok".into(), "Error".into()],
+            param_names: vec![
+                type_name("Ok", &registries),
+                type_name("Error", &registries),
+            ],
         },
         None,
         types,

@@ -11,6 +11,7 @@ use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
+use crate::machine::model::render_label;
 use crate::machine::model::{
     KKind, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeNode, sig_subtype,
     substitute_sig_members,
@@ -69,16 +70,15 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
         draft.type_members.insert(name, kt);
     }
 
-    // A slot's tag is keyed by the slot's own value-token name, its value by the per-call mint
-    // the abstract member resolved to — both classified here, where the schema's text is in hand.
+    // A slot's tag is keyed by the slot's own name, its value by the per-call mint the abstract
+    // member resolved to — the schema and the draft share the classified currency, so both keys
+    // travel straight across.
     let mut tags: Vec<(ValueSymbol, KType)> = Vec::new();
     for (slot_name, kt) in &s_schema.value_slots {
         if let TypeNode::AbstractType { name: member, .. } = ctx.types().node(*kt)
-            && let Some(member) = TypeSymbol::of(&member)
             && let Some(per_call) = draft.type_members.get(&member)
-            && let Some(slot_name) = ValueSymbol::declared(slot_name, &ctx.registries.labels)
         {
-            tags.push((slot_name, *per_call));
+            tags.push((*slot_name, *per_call));
         }
     }
     for (slot_name, tag) in tags {
@@ -154,12 +154,6 @@ fn view_type_members(
     registries: &RunRegistries,
 ) -> Vec<(TypeSymbol, KType)> {
     let types = &registries.types;
-    // A SIG member is declared under a Type token, so classification here cannot miss; the name is
-    // interned so a later diagnostic over the view's `types` table can render it.
-    let member_name = |name: &str| {
-        TypeSymbol::declared(name, &registries.labels)
-            .expect("a SIG type member is declared under a Type token")
-    };
     let mut members: Vec<(TypeSymbol, KType)> = Vec::new();
     // Per-slot kind: a SIG-declared higher-kinded slot (`TYPE (Elem AS Wrap)`) mints a fresh
     // `TypeConstructor` family over the slot's declared parameter names rather than the default
@@ -167,8 +161,11 @@ fn view_type_members(
     for (name, kt) in &signature.abstract_members {
         let minted_kt = match types.node(*kt) {
             TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => {
+                // `seal_singleton` takes the member's display name — `SetMember.name` is the
+                // rendered payload, digest-excluded — so this one name resolves through the
+                // interner.
                 RecursiveGroupWindow::seal_singleton(
-                    name.clone(),
+                    render_label(name.symbol(), registries),
                     RelativeSchema::TypeConstructor {
                         schema: HashMap::new(),
                         param_names,
@@ -181,7 +178,7 @@ fn view_type_members(
             // declaring SIG's binder — the two meanings ride separate fields.
             TypeNode::AbstractType { source, .. } => types.intern(TypeNode::AbstractType {
                 source,
-                name: name.clone(),
+                name: *name,
                 param_names: Vec::new(),
                 nonce: Some(nonce),
             }),
@@ -189,12 +186,12 @@ fn view_type_members(
             // `abstract_members`, so the two arms above are exhaustive over this map.
             _ => *kt,
         };
-        members.push((member_name(name), minted_kt));
+        members.push((*name, minted_kt));
     }
     // A manifest member reads concretely through the opaque view: its declared identity is the
     // view's, unhidden.
     for (name, kt) in &signature.manifest_members {
-        members.push((member_name(name), *kt));
+        members.push((*name, *kt));
     }
     members
 }
@@ -213,18 +210,18 @@ fn view_self_sig(
     registries: &RunRegistries,
 ) -> KType {
     let types = &registries.types;
-    let mut view_sig = SigSchema::raw_self_sig(child_scope, draft, registries);
-    let member_map: std::collections::HashMap<String, KType> = view_sig
+    let mut view_sig = SigSchema::raw_self_sig(child_scope, draft);
+    let member_map: crate::machine::model::TypeMemberMap = view_sig
         .manifest_members
         .iter()
-        .map(|(n, t)| (n.clone(), *t))
+        .map(|(n, t)| (*n, *t))
         .collect();
     // SIG-own abstract members canonicalize to `ScopeId::SENTINEL`; the empty interface names no
     // member, so its (empty) slot loop never substitutes.
     let sig_id = signature.sig_id.unwrap_or(ScopeId::SENTINEL);
     for (slot_name, declared) in &signature.value_slots {
         view_sig.value_slots.insert(
-            slot_name.clone(),
+            *slot_name,
             substitute_sig_members(*declared, sig_id, &member_map, types),
         );
     }

@@ -70,7 +70,7 @@ impl FinalizeGate<'_, '_> {
     fn pending_sources(&self, kt: KType) -> Vec<ProducerId> {
         let mut pending: Vec<ProducerId> = Vec::new();
         for UserTypeRef { scope_id, name } in user_type_refs(kt, self.types) {
-            if let Some(node_id) = self.declared_source(scope_id, &name)
+            if let Some(node_id) = self.declared_source(scope_id, name)
                 && !pending.contains(&node_id)
             {
                 pending.push(node_id);
@@ -81,11 +81,13 @@ impl FinalizeGate<'_, '_> {
 
     /// The in-flight claim edge of the scope that declared a SIG / abstract slot: find
     /// that scope by id, park iff it still holds a type placeholder for `name`.
-    fn declared_source(&self, scope_id: ScopeId, name: &str) -> Option<ProducerId> {
+    fn declared_source(
+        &self,
+        scope_id: ScopeId,
+        name: crate::machine::model::TypeSymbol,
+    ) -> Option<ProducerId> {
         let owner = self.scope.ancestors().find(|s| s.id == scope_id)?;
-        owner
-            .bindings()
-            .type_placeholder_producer(crate::machine::model::TypeSymbol::of(name)?)
+        owner.bindings().type_placeholder_producer(name)
     }
 }
 
@@ -93,7 +95,7 @@ impl FinalizeGate<'_, '_> {
 /// identified by its declaring scope id.
 struct UserTypeRef {
     scope_id: ScopeId,
-    name: String,
+    name: crate::machine::model::TypeSymbol,
 }
 
 /// Every top-level [`UserTypeRef`] in `kt`.

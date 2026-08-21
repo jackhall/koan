@@ -1,10 +1,11 @@
 use super::*;
-use crate::builtins::test_support::{spliced_part, type_name};
+use crate::builtins::test_support::{spliced_part, type_name, value_name};
 use crate::machine::core::SubstrateDoor;
 use crate::machine::model::Carried;
 use crate::machine::model::ModuleDraft;
 use crate::machine::model::Record;
 use crate::machine::model::Scalar;
+use crate::machine::model::TypeMemberMap;
 use crate::machine::model::ast::{ExpressionPart, WorkingPart};
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 
@@ -370,7 +371,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     // A module value surfaces its principal signature, interned from its members before the value
     // exists — build it through the same door production does.
     let draft = ModuleDraft::empty();
-    let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft, types.registries()));
+    let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
     let module = Module::alloc_at_child_scope("IntMod", child, draft, self_sig);
     // A module is a value: it reaches a slot on the Object channel, and a `:Type` slot refuses it.
     let module_value = scope.brand().allocator().value(KObject::Module(module));
@@ -528,36 +529,42 @@ fn is_more_specific_for_pinned_signature_bound() {
     let types = &registries.types;
     let ordered_schema = SigSchema {
         sig_id: Some(crate::machine::core::ScopeId::SENTINEL),
-        abstract_members: std::collections::HashMap::new(),
-        manifest_members: std::collections::HashMap::new(),
-        value_slots: [("a".to_string(), KType::NUMBER)].into_iter().collect(),
+        abstract_members: TypeMemberMap::default(),
+        manifest_members: TypeMemberMap::default(),
+        value_slots: [(value_name("a", &registries), KType::NUMBER)]
+            .into_iter()
+            .collect(),
     };
     let hashed_schema = SigSchema {
         sig_id: Some(crate::machine::core::ScopeId::SENTINEL),
-        abstract_members: std::collections::HashMap::new(),
-        manifest_members: std::collections::HashMap::new(),
-        value_slots: [("b".to_string(), KType::NUMBER)].into_iter().collect(),
+        abstract_members: TypeMemberMap::default(),
+        manifest_members: TypeMemberMap::default(),
+        value_slots: [(value_name("b", &registries), KType::NUMBER)]
+            .into_iter()
+            .collect(),
     };
+
+    let type_sym = type_name("Type", &registries);
+    let elt_sym = type_name("Elt", &registries);
 
     let bare = types.signature(ordered_schema.clone());
     let pinned_number = types.signature(
         ordered_schema
             .clone()
-            .fold_pins(&[("Type".into(), KType::NUMBER)], types),
+            .fold_pins(&[(type_sym, KType::NUMBER)], types),
     );
     let pinned_str = types.signature(
         ordered_schema
             .clone()
-            .fold_pins(&[("Type".into(), KType::STR)], types),
+            .fold_pins(&[(type_sym, KType::STR)], types),
     );
-    let pinned_two = types.signature(ordered_schema.clone().fold_pins(
-        &[("Type".into(), KType::NUMBER), ("Elt".into(), KType::STR)],
-        types,
-    ));
-    let other_sig =
-        types.signature(hashed_schema.fold_pins(&[("Type".into(), KType::NUMBER)], types));
-    let pinned_elt =
-        types.signature(ordered_schema.fold_pins(&[("Elt".into(), KType::NUMBER)], types));
+    let pinned_two = types.signature(
+        ordered_schema
+            .clone()
+            .fold_pins(&[(type_sym, KType::NUMBER), (elt_sym, KType::STR)], types),
+    );
+    let other_sig = types.signature(hashed_schema.fold_pins(&[(type_sym, KType::NUMBER)], types));
+    let pinned_elt = types.signature(ordered_schema.fold_pins(&[(elt_sym, KType::NUMBER)], types));
 
     assert!(pinned_number.is_more_specific_than(bare, &registries));
     assert!(!bare.is_more_specific_than(pinned_number, &registries));
@@ -574,12 +581,13 @@ fn is_more_specific_for_pinned_signature_bound() {
 /// A shared `Result` `TypeConstructor` member handle. Identity is content, so a `ConstructorApply`
 /// slot and a `Tagged` carrier match only when they name the *same* member — every test below
 /// threads this one member through both the slot ctor and the value.
-fn result_member(types: &TypeRegistry) -> KType {
+fn result_member(registries: &RunRegistries) -> KType {
+    let types = &registries.types;
     RecursiveGroupWindow::seal_singleton(
         "Result".into(),
         RelativeSchema::TypeConstructor {
             schema: std::collections::HashMap::new(),
-            param_names: vec!["Ok".into(), "Error".into()],
+            param_names: vec![type_name("Ok", registries), type_name("Error", registries)],
         },
         None,
         types,
@@ -635,7 +643,7 @@ fn constructor_apply_result_checks_inhabited_error_param() {
     let types = &registries.types;
     container_door!(_storage, door);
 
-    let r_member = result_member(types);
+    let r_member = result_member(&registries);
     let kerror_ty = error_type_member("KError", types);
     let my_error_ty = error_type_member("MyError", types);
 
@@ -658,7 +666,7 @@ fn constructor_apply_result_ok_admits_any_error_param() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
-    let r_member = result_member(types);
+    let r_member = result_member(&registries);
     let my_error_ty = error_type_member("MyError", types);
     let ok_value = result_value(door, r_member, "Ok", &KObject::Number(42.0));
     let slot = types.constructor_apply(r_member, result_args(KType::NUMBER, my_error_ty));
@@ -676,7 +684,7 @@ fn constructor_apply_covariant_admission_and_specificity() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
-    let r_member = result_member(types);
+    let r_member = result_member(&registries);
     let my_error = error_type_member("MyError", types);
     let stamped = KObject::tagged(
         door,
@@ -699,7 +707,7 @@ fn constructor_apply_stamped_type_args_checked_structurally() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
-    let r_member = result_member(types);
+    let r_member = result_member(&registries);
     let stamped = KObject::tagged(
         door,
         "Ok",
@@ -935,7 +943,7 @@ fn module_object_ktype_reports_self_sig() {
         draft
             .type_members
             .insert(type_name("Elt", types.registries()), elt);
-        let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft, types.registries()));
+        let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
         (
             Module::alloc_at_child_scope(name, child, draft, self_sig),
             self_sig,
@@ -984,18 +992,19 @@ fn matches_value_admits_module_object_via_signature_slot() {
     draft
         .type_members
         .insert(type_name("Type", types.registries()), KType::NUMBER);
-    let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft, types.registries()));
+    let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
     let m: &Module = Module::alloc_at_child_scope("M", child, draft, self_sig);
 
     let declared = types.signature(schema.clone());
     assert!(declared.matches_value(&KObject::Module(m), types.registries()));
 
+    let type_sym = type_name("Type", types.registries());
     let pinned_ok = types.signature(
         schema
             .clone()
-            .fold_pins(&[("Type".into(), KType::NUMBER)], &types),
+            .fold_pins(&[(type_sym, KType::NUMBER)], &types),
     );
-    let pinned_bad = types.signature(schema.fold_pins(&[("Type".into(), KType::STR)], &types));
+    let pinned_bad = types.signature(schema.fold_pins(&[(type_sym, KType::STR)], &types));
     assert!(pinned_ok.matches_value(&KObject::Module(m), types.registries()));
     assert!(!pinned_bad.matches_value(&KObject::Module(m), types.registries()));
 
