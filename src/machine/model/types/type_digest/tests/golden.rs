@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use super::super::{TypeDigest, empty_schema_digest, schema_content_digest};
 use crate::machine::core::ScopeId;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::types::{
     KKind, KType, Record, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeNode,
@@ -262,7 +263,8 @@ fn of_kind_digests_are_pinned() {
 /// The two fixed composites the container builtins lower to.
 #[test]
 fn fixed_composite_digests_are_pinned() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     assert_handle_pinned(
         "List<Any>",
         types.list(KType::ANY),
@@ -279,7 +281,8 @@ fn fixed_composite_digests_are_pinned() {
 /// that wraps it.
 #[test]
 fn empty_signature_digests_are_pinned() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     assert_pinned(
         "empty schema content",
         empty_schema_digest(),
@@ -294,11 +297,12 @@ fn empty_signature_digests_are_pinned() {
 
 #[test]
 fn non_recursive_newtype_digests_are_pinned() {
-    let types = TypeRegistry::new();
-    let member = meters(&types);
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let member = meters(types);
     assert_pinned(
         "Meters component",
-        component_of(member, &types),
+        component_of(member, types),
         0xa5bab723_08985b67_fdc176d5_b9e836b1,
     );
     assert_handle_pinned(
@@ -310,11 +314,12 @@ fn non_recursive_newtype_digests_are_pinned() {
 
 #[test]
 fn self_recursive_newtype_digests_are_pinned() {
-    let types = TypeRegistry::new();
-    let member = chain(&types);
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let member = chain(types);
     assert_pinned(
         "Chain component",
-        component_of(member, &types),
+        component_of(member, types),
         0xaaab8251_b184aebe_af32f73c_592df0cf,
     );
     assert_handle_pinned(
@@ -326,11 +331,12 @@ fn self_recursive_newtype_digests_are_pinned() {
 
 #[test]
 fn self_referencing_union_digests_are_pinned() {
-    let types = TypeRegistry::new();
-    let member = recursive_union(&types);
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let member = recursive_union(types);
     assert_pinned(
         "Tree component",
-        component_of(member, &types),
+        component_of(member, types),
         0xd0d777d4_90760cd1_778b02fd_6ecdf5ca,
     );
     assert_handle_pinned(
@@ -342,11 +348,12 @@ fn self_referencing_union_digests_are_pinned() {
 
 #[test]
 fn type_constructor_digests_are_pinned() {
-    let types = TypeRegistry::new();
-    let member = constructor(&types);
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let member = constructor(types);
     assert_pinned(
         "Maybe component",
-        component_of(member, &types),
+        component_of(member, types),
         0x8fce3135_01caf69c_dae1dfba_79f02281,
     );
     assert_handle_pinned(
@@ -358,11 +365,12 @@ fn type_constructor_digests_are_pinned() {
 
 #[test]
 fn generative_set_digests_are_pinned() {
-    let types = TypeRegistry::new();
-    let member = generative(&types);
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let member = generative(types);
     assert_pinned(
         "Opaque component",
-        component_of(member, &types),
+        component_of(member, types),
         0xedf73e8f_68d1d2a2_5ceee390_0def9a25,
     );
     assert_handle_pinned(
@@ -378,11 +386,12 @@ fn generative_set_digests_are_pinned() {
 /// permanent.
 #[test]
 fn recursive_pair_digests_are_pinned() {
-    let types = TypeRegistry::new();
-    let members = recursive_pair(&types);
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let members = recursive_pair(types);
     assert_pinned(
         "Odd/Even component",
-        component_of(members[0], &types),
+        component_of(members[0], types),
         0xd547f989_55b718b9_e72fdf74_0b0e0543,
     );
     assert_handle_pinned(
@@ -401,9 +410,10 @@ fn recursive_pair_digests_are_pinned() {
 /// order of the arguments record is presentation: both orders land on one pinned value.
 #[test]
 fn constructor_apply_digest_is_pinned_and_order_blind() {
-    let types = TypeRegistry::new();
-    let declared = constructor_apply(&types, vec![("Ok", KType::NUMBER), ("Error", KType::STR)]);
-    let reversed = constructor_apply(&types, vec![("Error", KType::STR), ("Ok", KType::NUMBER)]);
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let declared = constructor_apply(types, vec![("Ok", KType::NUMBER), ("Error", KType::STR)]);
+    let reversed = constructor_apply(types, vec![("Error", KType::STR), ("Ok", KType::NUMBER)]);
     assert_handle_pinned(
         "Both(Ok = Number, Error = Str)",
         declared,
@@ -421,20 +431,21 @@ fn constructor_apply_digest_is_pinned_and_order_blind() {
 /// on one pinned value, and making `Wrap` first-order lands on a different one.
 #[test]
 fn schema_abstract_member_digests_are_pinned() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     assert_pinned(
         "schema with higher-kinded Wrap",
-        schema_content_digest(&mixed_schema(&types, vec!["Inner", "Outer"]), &types),
+        schema_content_digest(&mixed_schema(types, vec!["Inner", "Outer"]), types),
         0x74c887c4_2b7bdd55_7a481826_b15078ee,
     );
     assert_pinned(
         "schema with Wrap's parameters reordered",
-        schema_content_digest(&mixed_schema(&types, vec!["Outer", "Inner"]), &types),
+        schema_content_digest(&mixed_schema(types, vec!["Outer", "Inner"]), types),
         0x74c887c4_2b7bdd55_7a481826_b15078ee,
     );
     assert_pinned(
         "schema with first-order Wrap",
-        schema_content_digest(&mixed_schema(&types, Vec::new()), &types),
+        schema_content_digest(&mixed_schema(types, Vec::new()), types),
         0xdcaf6f29_107c1417_c55d837b_7e90fe20,
     );
 }

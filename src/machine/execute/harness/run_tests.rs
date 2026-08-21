@@ -319,7 +319,7 @@ fn let_type_to_value_name_rejected() {
     let scope = test_run.scope;
     let watch = test_run.dispatch_watched_in(scope, parse_one(&program, "LET ty = Number"));
     test_run.runtime.execute().unwrap();
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     match test_run
         .runtime
         .read_edge_result_with(watch, |v| format!("{:?}", v.ktype(&types)))

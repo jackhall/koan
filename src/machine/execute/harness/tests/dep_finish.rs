@@ -135,7 +135,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
             elements: vec![SignatureElement::Keyword("DEFERTEST")],
         },
         body,
-        &test_run.types,
+        test_run.registries(),
         &mut crate::machine::WriteGate::for_test(),
     );
 

@@ -98,7 +98,7 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
     let ReturnType::Resolved(kt) = f.signature.return_type() else {
         panic!("USE return type should resolve to List<Number> after dep-finish wake");
     };
-    assert_eq!(kt, test_run.types.list(KType::NUMBER));
+    assert_eq!(kt, test_run.types().list(KType::NUMBER));
 }
 
 /// A bare return type with no parameters parks on the still-in-flight `LET MyT`'s

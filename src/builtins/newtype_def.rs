@@ -35,6 +35,7 @@ use crate::source::Spanned;
 
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
+use crate::machine::model::RunRegistries;
 
 /// Seal a resolved `repr` into the NEWTYPE's identity and register it. Fills the declaration
 /// window's member with `repr`; the window is a fresh singleton for a standalone declaration, or
@@ -132,7 +133,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     use crate::machine::{Action, arg_object, arg_type, require_bare_type_name};
 
     let name = crate::try_action!(require_bare_type_name(
-        ctx.args, "name", "NEWTYPE", ctx.types
+        ctx.args,
+        "name",
+        "NEWTYPE",
+        ctx.types()
     ));
     let chain = ctx.chain.clone();
     let site = ctx.declaration_site();
@@ -149,12 +153,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             },
             // A bare-leaf name resolved against scope bindings, not a dep terminal.
             move |fctx, kt| Action::done_writing(finalize_newtype(fctx, name, kt, site)),
-            ctx.types,
+            ctx.types(),
         )
     } else if let Some(repr_kt) = arg_type(ctx.args, "repr") {
         Action::done_writing(finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site))
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
-        defer_resolved_sigil(ctx.scope, name, *inner, site, ctx.types)
+        defer_resolved_sigil(ctx.scope, name, *inner, site, ctx.types())
     } else {
         Action::done(Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
@@ -204,7 +208,10 @@ pub fn body_record_repr<'a>(
     use crate::machine::{Action, arg_object, require_bare_type_name};
 
     let name = crate::try_action!(require_bare_type_name(
-        ctx.args, "name", "NEWTYPE", ctx.types
+        ctx.args,
+        "name",
+        "NEWTYPE",
+        ctx.types()
     ));
     let fields = match arg_object(ctx.args, "repr") {
         Some(KObject::KExpression(e)) => e.node(),
@@ -268,7 +275,7 @@ pub fn body_constructor_family<'a>(
         Ok(pair) => pair,
         Err(e) => return Action::done(Err(e)),
     };
-    let kt = mint_type_constructor(member_name.clone(), param_names, ctx.types);
+    let kt = mint_type_constructor(member_name.clone(), param_names, ctx.types());
     // The handle names the same interned type in every region, so the terminal seals from it
     // directly and the `types` write rides the outcome, mirroring `type_decl::bind_abstract_member`.
     let carrier = ctx.scope.resident(Carried::Type(kt));
@@ -281,7 +288,7 @@ pub fn body_constructor_family<'a>(
     })
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     // Three overloads, selected by the repr part-kind. Construction lives in the `TypeCall`
     // fast lane via `constructors::dispatch_construct_newtype`.
     let scalar_sig = || {
@@ -320,14 +327,14 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
     use crate::builtins::register_builtin;
     // Scalar / bare-leaf repr (`= Number`, `= Foo`) and non-record sigil repr (`= :(LIST OF T)`)
     // share `body`; the record repr (`= :{…}`) routes to `body_record_repr`.
-    register_builtin(scope, "NEWTYPE", scalar_sig(), body, types, gate);
-    register_builtin(scope, "NEWTYPE", sigil_sig(), body, types, gate);
+    register_builtin(scope, "NEWTYPE", scalar_sig(), body, registries, gate);
+    register_builtin(scope, "NEWTYPE", sigil_sig(), body, registries, gate);
     register_builtin(
         scope,
         "NEWTYPE",
         record_sig(),
         body_record_repr,
-        types,
+        registries,
         gate,
     );
     // Constructor-family declarator `NEWTYPE (Type AS Wrapper)`. Its keyword set is `{NEWTYPE}`
@@ -343,7 +350,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         "NEWTYPE",
         constructor_family_sig,
         body_constructor_family,
-        types,
+        registries,
         gate,
     );
 }
@@ -1061,7 +1068,7 @@ mod tests {
             .resolve_type("Wrapper")
             .expect("Wrapper must bind a type");
         assert_eq!(
-            crate::machine::model::constructor_param_names(kt, &test_run.types),
+            crate::machine::model::constructor_param_names(kt, test_run.types()),
             Some(vec!["One".to_string(), "Two".to_string()]),
         );
     }

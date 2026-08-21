@@ -14,6 +14,7 @@ use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, Signatu
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 
 use super::working;
+use crate::machine::model::RunRegistries;
 use crate::machine::{program_storage, run_root_storage};
 use crate::source::Spanned;
 
@@ -92,7 +93,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         "inner_loose",
         inner_sig,
         body_inner_any,
-        &TypeRegistry::new(),
+        &RunRegistries::new(),
         &mut crate::machine::WriteGate::for_test(),
     );
 
@@ -137,7 +138,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
         "any_first",
         one_slot_sig("v", KType::ANY),
         body_marker_any,
-        &TypeRegistry::new(),
+        &RunRegistries::new(),
         &mut crate::machine::WriteGate::for_test(),
     );
     register_builtin(
@@ -145,7 +146,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
         "ident_second",
         one_slot_sig("v", KType::IDENTIFIER),
         body_identifier,
-        &TypeRegistry::new(),
+        &RunRegistries::new(),
         &mut crate::machine::WriteGate::for_test(),
     );
 
@@ -157,8 +158,9 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     let slot = runtime.dispatch_in_scope(working(&program, expr), scope, 1);
     let id = runtime.install_edge_for_test(slot, scope);
     runtime.execute().unwrap();
-    let types = TypeRegistry::new();
-    let err = match runtime.read_edge_result_with(id, |v| v.summarize(&types)) {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let err = match runtime.read_edge_result_with(id, |v| v.summarize(types)) {
         Err(e) => e.clone(),
         Ok(summary) => panic!(
             "stateful BareIdentifier must surface UnboundName for an unbound name; \
@@ -195,7 +197,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
         "FOO",
         sig,
         body_lowercase,
-        &TypeRegistry::new(),
+        &RunRegistries::new(),
         &mut crate::machine::WriteGate::for_test(),
     );
 

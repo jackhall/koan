@@ -29,7 +29,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
     }
     test_run.run("LET other_set = (MAKESET (int_ord_a))");
 
-    let m = lookup_module(scope, "held_set", &test_run.types);
+    let m = lookup_module(scope, "held_set", test_run.types());
     let inner = m.child_scope().lookup("inner");
     assert!(
         matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
@@ -55,7 +55,7 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
     let result = test_run.run_one_type(parse_one(&program, "USE_TYPE int_ord_view"));
     // Opaque ascription mints a fresh abstract `Carrier` member; the body must return
     // that identity, not the underlying concrete `Number`.
-    match test_run.types.node(result) {
+    match test_run.types().node(result) {
         TypeNode::AbstractType { name, .. } => {
             assert_eq!(
                 name, "Carrier",
@@ -91,7 +91,7 @@ fn functor_closure_escape_pins_type_class_bind() {
         test_run.run_one(parse_one(&program, "PRINT 1"));
     }
     let result = test_run.run_one_type(parse_one(&program, "maker {x = 1}"));
-    match test_run.types.node(result) {
+    match test_run.types().node(result) {
         TypeNode::AbstractType { name, .. } => {
             assert_eq!(name, "Carrier");
         }
@@ -125,7 +125,7 @@ fn functor_returning_bare_signature_typed_param_does_not_panic() {
         other => {
             panic!(
                 "MAKESET ord_view must return the passed-through module carrier, got {}",
-                other.summarize(&test_run.types)
+                other.summarize(test_run.types())
             )
         }
     }

@@ -2,6 +2,7 @@ use super::*;
 use crate::builtins::register_builtin;
 use crate::builtins::test_support::{TestRun, marker, run_root_bare};
 use crate::machine::core::{FrameStorageExt, Scope, program_storage, run_root_storage};
+use crate::machine::model::RunRegistries;
 use crate::machine::model::UntypedKeyProbe;
 use crate::machine::model::{Argument, KExpression, KType, ReturnType, SignatureDraft};
 use crate::machine::model::{KKind, KObject};
@@ -52,7 +53,8 @@ fn find_match<'a>(
 /// resolved through the `BareIdentifier` fast lane.
 #[test]
 fn classify_returns_wrap_indices_for_value_slot_identifiers() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = SignatureDraft {
@@ -70,7 +72,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         "OP",
         sig,
         body_any,
-        &types,
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
     let brand = region.brand();
@@ -81,8 +83,8 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
             Spanned::bare(ExpressionPart::Identifier("someName")),
         ],
     );
-    let f = find_match(scope, &expr, &types).expect("OP <Number> should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
+    let f = find_match(scope, &expr, types).expect("OP <Number> should match");
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), types);
     assert_eq!(pick.wrap_indices, vec![1]);
 }
 
@@ -91,7 +93,8 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
 /// and the token rides to the bind unresolved.
 #[test]
 fn classify_excludes_literal_name_slots_from_wrap() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = SignatureDraft {
@@ -112,7 +115,7 @@ fn classify_excludes_literal_name_slots_from_wrap() {
         "ident_call_probe",
         sig,
         body_any,
-        &types,
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
     let brand = region.brand();
@@ -132,9 +135,9 @@ fn classify_excludes_literal_name_slots_from_wrap() {
             Spanned::bare(inner),
         ],
     );
-    let f = find_match(scope, &expr, &types)
+    let f = find_match(scope, &expr, types)
         .expect("test overload should match an Identifier-leading expression");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), types);
     assert!(pick.wrap_indices.is_empty());
 }
 
@@ -146,7 +149,7 @@ fn classify_excludes_binder_name_slot_from_wrap() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let brand = region.brand();
     let expr = KExpression::new(
         brand,
@@ -173,7 +176,8 @@ fn classify_excludes_binder_name_slot_from_wrap() {
 /// [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
 fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = SignatureDraft {
@@ -191,7 +195,7 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
         "OP",
         sig,
         body_any,
-        &types,
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
     let brand = region.brand();
@@ -202,8 +206,8 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
             Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("IntOrd"))),
         ],
     );
-    let f = find_match(scope, &expr, &types).expect("OP <ProperType> should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
+    let f = find_match(scope, &expr, types).expect("OP <ProperType> should match");
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), types);
     assert!(pick.wrap_indices.is_empty());
 }
 
@@ -211,8 +215,9 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
 /// carrying its parameter record and return slot.
 #[test]
 fn function_value_ktype_projects_kfunction() {
-    use crate::machine::model::{ReturnType, SignatureDraft, TypeNode, TypeRegistry};
-    let types = TypeRegistry::new();
+    use crate::machine::model::{ReturnType, SignatureDraft, TypeNode};
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = SignatureDraft {
@@ -225,7 +230,7 @@ fn function_value_ktype_projects_kfunction() {
             }),
         ],
     };
-    let f = KFunction::alloc_captured_for_test(scope, sig, Body::Builtin(body_any), &types);
+    let f = KFunction::alloc_captured_for_test(scope, sig, Body::Builtin(body_any), types);
     let obj = KObject::KFunction(f);
     match types.node(obj.ktype()) {
         TypeNode::KFunction { params, ret } => {
@@ -233,7 +238,7 @@ fn function_value_ktype_projects_kfunction() {
             assert_eq!(params.len(), 1);
             assert_eq!(ret, KType::NUMBER);
         }
-        _ => panic!("expected KFunction, got {}", obj.ktype().name(&types)),
+        _ => panic!("expected KFunction, got {}", obj.ktype().name(types)),
     }
 }
 
@@ -242,7 +247,8 @@ fn function_value_ktype_projects_kfunction() {
 /// lane.
 #[test]
 fn classify_type_token_in_any_slot_returns_wrap_indices() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = SignatureDraft {
@@ -260,7 +266,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
         "OP",
         sig,
         body_any,
-        &types,
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
     let brand = region.brand();
@@ -271,7 +277,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
             Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Number"))),
         ],
     );
-    let f = find_match(scope, &expr, &types).expect("OP <Any> should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), &types);
+    let f = find_match(scope, &expr, types).expect("OP <Any> should match");
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), types);
     assert_eq!(pick.wrap_indices, vec![1]);
 }

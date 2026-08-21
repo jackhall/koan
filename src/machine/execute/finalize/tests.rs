@@ -16,7 +16,7 @@ use crate::machine::core::{
     CarrierWitness, FrameCoverage, FrameStorage, program_storage, run_root_storage,
 };
 use crate::machine::model::Scalar;
-use crate::machine::model::{Carried, KObject, TypeRegistry};
+use crate::machine::model::{Carried, KObject, RunRegistries};
 use crate::machine::model::{KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::witnessed::{Delivered, Sealed};
 
@@ -85,7 +85,7 @@ fn region_pure_scalar_rides_the_envelope_and_releases_at_envelope_drop() {
         Carried::Object(KObject::Number(n)) => assert_eq!(*n, 7.0, "value rides the envelope"),
         other => panic!(
             "expected the retained Number, got {:?}",
-            other.ktype(&test_run.types)
+            other.ktype(test_run.types())
         ),
     });
     drop(envelope);
@@ -194,7 +194,7 @@ fn probe_body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 
 /// Register `(PROBE)` — a nullary keyword builtin returning `Number` — into `scope`, against the
 /// run's own registry.
-fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>, types: &TypeRegistry) {
+fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>, registries: &RunRegistries) {
     let signature = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![SignatureElement::Keyword("PROBE")],
@@ -204,7 +204,7 @@ fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>, types: &TypeRegistry
         "PROBE",
         signature,
         probe_body,
-        types,
+        registries,
         &mut crate::machine::WriteGate::for_test(),
     );
 }
@@ -230,7 +230,7 @@ fn user_fn_call_releases_callee_frame() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    register_probe(scope, &test_run.types);
+    register_probe(scope, test_run.registries());
     test_run.run("FN (GETONE) -> Number = (PROBE)");
 
     let result = test_run.run_one(parse_one(&program, "GETONE"));
@@ -262,7 +262,7 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    register_probe(scope, &test_run.types);
+    register_probe(scope, test_run.registries());
     test_run.run("FN (GETONE) -> Number = (PROBE)");
 
     let calls = vec!["(GETONE)"; 100].join(" ");
@@ -307,7 +307,7 @@ fn aggregate_of_mixed_call_results_releases_every_producer_frame() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    register_probe(scope, &test_run.types);
+    register_probe(scope, test_run.registries());
     test_run.run(
         "FN (GETONE) -> Number = (PROBE)\n\
          FN (GETREC) -> :{acc :Number, tag :Number} = ({acc = 1, tag = (PROBE)})",
@@ -335,14 +335,14 @@ fn aggregate_of_mixed_call_results_releases_every_producer_frame() {
                     }
                     (_, other) => panic!(
                         "cell {i}: expected an alternating scalar / record, got {}",
-                        other.ktype().name(&test_run.types)
+                        other.ktype().name(test_run.types())
                     ),
                 }
             }
         }
         other => panic!(
             "expected a {CALLS}-element List, got {}",
-            other.ktype().name(&test_run.types)
+            other.ktype().name(test_run.types())
         ),
     }
     let total = FRAME_CENSUS.with(|census| census.borrow().len());
@@ -411,7 +411,7 @@ fn retaining_adopt_object_rides_retention_across_producer_shell_drop() {
         }
         other => panic!(
             "expected the adopted Number, got {:?}",
-            other.ktype(&test_run.types)
+            other.ktype(test_run.types())
         ),
     }
 }
@@ -472,7 +472,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
         }
         Carried::Type(other) => panic!(
             "expected the passed-through Number, got {}",
-            other.name(&test_run.types)
+            other.name(test_run.types())
         ),
         Carried::UnresolvedType(ti) => {
             panic!("expected the passed-through Number, got {}", ti.render())

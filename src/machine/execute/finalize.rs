@@ -63,7 +63,7 @@ impl NodeFinalize for Host<'_> {
         let Some((declared, per_call)) = obligation.declared() else {
             return Ok(envelope);
         };
-        let types = self.ambient.type_registry();
+        let types = self.ambient.types();
         // Classifying under the envelope's own host pin keeps this a pure read: no relocation,
         // nothing allocated until the disposition is known.
         let disposition = envelope.open(|carried| match carried {

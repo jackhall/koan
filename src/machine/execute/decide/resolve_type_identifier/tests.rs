@@ -8,7 +8,7 @@ fn resolve_type_expr_builtin_leaf_resolves_stably() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let te = TypeIdentifier::leaf("Number");
     let first = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
@@ -28,7 +28,7 @@ fn resolve_type_expr_unbound_returns_unbound() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let te = TypeIdentifier::leaf("NotABuiltin");
     match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Unbound(_) => {}
@@ -45,7 +45,7 @@ fn resolve_type_expr_user_struct_resolves_after_finalize() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let te = TypeIdentifier::leaf("Point");
     let kt = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
@@ -119,8 +119,8 @@ mod bare_leaf_resolution {
     use crate::machine::core::run_root_storage;
     use crate::machine::core::{BindingIndex, DeclarationSite};
     use crate::machine::model::KType;
+    use crate::machine::model::RunRegistries;
     use crate::machine::model::TypeIdentifier;
-    use crate::machine::model::TypeRegistry;
     use crate::machine::model::TypeResolution;
 
     #[test]
@@ -133,9 +133,10 @@ mod bare_leaf_resolution {
             DeclarationSite::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
         );
-        let types = TypeRegistry::new();
+        let registries = RunRegistries::new();
+        let types = &registries.types;
         let leaf = TypeIdentifier::leaf("Number");
-        match scope.resolve_type_identifier(&leaf, None, &types) {
+        match scope.resolve_type_identifier(&leaf, None, types) {
             TypeResolution::Done(resolved) if resolved == KType::NUMBER => {}
             other => panic!("expected Done(Number), got {:?}", outcome_tag(&other)),
         }
@@ -145,9 +146,10 @@ mod bare_leaf_resolution {
     fn unbound_returns_unbound() {
         let region = run_root_storage();
         let scope = run_root_bare(&region);
-        let types = TypeRegistry::new();
+        let registries = RunRegistries::new();
+        let types = &registries.types;
         let leaf = TypeIdentifier::leaf("Missing");
-        match scope.resolve_type_identifier(&leaf, None, &types) {
+        match scope.resolve_type_identifier(&leaf, None, types) {
             // The bridge surfaces the elaborator's `unknown type name` diagnostic, which
             // names the leaf rather than carrying the bare name.
             TypeResolution::Unbound(message) => assert!(
@@ -185,9 +187,10 @@ mod bare_leaf_resolution {
             )
             .expect("placeholder install");
 
-        let types = TypeRegistry::new();
+        let registries = RunRegistries::new();
+        let types = &registries.types;
         let leaf = TypeIdentifier::leaf("Node");
-        match scope.resolve_type_identifier(&leaf, None, &types) {
+        match scope.resolve_type_identifier(&leaf, None, types) {
             TypeResolution::Park(producers) => {
                 assert_eq!(
                     producers,
@@ -207,7 +210,7 @@ mod bare_leaf_resolution {
                 0,
                 types.record(Record::from_pairs([("x".to_string(), KType::NUMBER)])),
                 scope.brand(),
-                &types,
+                types,
             )
             .expect("the only member's fill seals the window");
         let member = sealed.member(0).expect("the sole member");
@@ -221,7 +224,7 @@ mod bare_leaf_resolution {
         .apply(scope, &mut crate::machine::WriteGate::for_test())
         .expect("install the sealed identity");
 
-        match scope.resolve_type_identifier(&leaf, None, &types) {
+        match scope.resolve_type_identifier(&leaf, None, types) {
             TypeResolution::Done(resolved) => assert_eq!(resolved, member),
             other => panic!(
                 "expected Done(member) after seal, got {:?}",
@@ -256,9 +259,10 @@ mod bare_leaf_resolution {
         // pending marker of its own.
         let inner = announced_module(outer, &["Node"]);
 
-        let types = TypeRegistry::new();
+        let registries = RunRegistries::new();
+        let types = &registries.types;
         let leaf = TypeIdentifier::leaf("Node");
-        match inner.resolve_type_identifier(&leaf, None, &types) {
+        match inner.resolve_type_identifier(&leaf, None, types) {
             TypeResolution::Unbound(_) => {}
             other => panic!(
                 "the outer same-named declaration must not capture this reference, got {:?}",

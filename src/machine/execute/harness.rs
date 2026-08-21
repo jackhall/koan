@@ -217,10 +217,16 @@ impl<'run> KoanRuntime<'run> {
         self.host.ensure_run_frame(scope);
     }
 
-    /// The run frame's subtype-verdict registry, cloned out of the ambient context. `None` until
+    /// The run frame's registries, borrowed through the ambient context. `None` until
     /// `ensure_run_frame` mints the run frame — i.e. before the first submission.
-    pub(crate) fn type_registry(&self) -> Option<Rc<crate::machine::model::types::TypeRegistry>> {
-        self.host.ambient.type_registry_cloned()
+    pub(crate) fn registries(&self) -> Option<&crate::machine::model::RunRegistries> {
+        self.host.ambient.registries_opt()
+    }
+
+    /// The run frame itself, shared out. The registries hang off it, so a holder of this handle
+    /// reads them without borrowing the runtime — and keeps them alive past the runtime's drop.
+    pub(crate) fn run_frame(&self) -> Option<Rc<CallFrame>> {
+        self.host.ambient.run_frame_ref().cloned()
     }
 
     /// Submit each `statement` as a fresh lexical block over `scope`. The program / test-harness
@@ -636,7 +642,7 @@ impl<'run> Host<'run> {
                             super::finalize::check_spliced_return(
                                 &obligation,
                                 value,
-                                self.ambient.type_registry(),
+                                self.ambient.types(),
                             )
                         }) {
                             Ok(checked) => checked,

@@ -1,5 +1,5 @@
 use crate::machine::core::{ProgramBrand, program_storage};
-use crate::machine::model::TypeRegistry;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier, classify_dispatch_shape,
 };
@@ -53,14 +53,15 @@ fn build<'a>(brand: ProgramBrand<'a>, items: Vec<ExpressionPart<'a>>) -> KExpres
 
 #[test]
 fn resolve_for_lowers_builtin_leaf_to_type_arm() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let part = ExpressionPart::Type(TypeIdentifier::leaf("Number"));
     let slot = KType::of_kind(KKind::ProperType);
     // Consume the scope-tied `Held` inside `matches!` so no borrow outlives `storage`.
     assert!(matches!(
-        part.resolve_for(&slot, scope, &types),
+        part.resolve_for(&slot, scope, types),
         Held::Type(t) if t == KType::NUMBER
     ));
 }
@@ -72,14 +73,15 @@ fn resolve_for_lowers_builtin_leaf_to_type_arm() {
 fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType"));
     let slot = KType::of_kind(KKind::ProperType);
-    match part.resolve_for(&slot, scope, &types) {
+    match part.resolve_for(&slot, scope, types) {
         Held::UnresolvedType(te) => assert_eq!(te.render(), "MyType"),
         other => panic!(
             "expected the unlowered-name carrier, got {}",
-            other.summarize(&types)
+            other.summarize(types)
         ),
     }
 }
@@ -90,11 +92,12 @@ fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
 fn unresolved_carrier_classifies_as_a_proper_type() {
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType"));
     let slot = KType::of_kind(KKind::ProperType);
-    let held = part.resolve_for(&slot, scope, &types);
-    assert_eq!(held.ktype(&types), KType::of_kind(KKind::ProperType));
+    let held = part.resolve_for(&slot, scope, types);
+    assert_eq!(held.ktype(types), KType::of_kind(KKind::ProperType));
     assert!(held.as_type().is_none(), "it carries no type handle");
     assert!(held.as_object().is_none(), "and it is not a value");
 }
@@ -160,7 +163,8 @@ fn kexpression_summarize_joins_parts_with_spaces() {
 fn structural_equal_and_ktype_for_kexpression() {
     let program = program_storage();
     let brand = program.brand();
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     use crate::machine::model::values::KObject;
     let a =
         KObject::KExpression(brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("x")])));
@@ -168,8 +172,8 @@ fn structural_equal_and_ktype_for_kexpression() {
         KObject::KExpression(brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("x")])));
     let c =
         KObject::KExpression(brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("y")])));
-    assert_eq!(a.value_equal(&b, &types), Ok(true));
-    assert_eq!(a.value_equal(&c, &types), Ok(false));
+    assert_eq!(a.value_equal(&b, types), Ok(true));
+    assert_eq!(a.value_equal(&c, types), Ok(false));
     assert_eq!(a.ktype(), KType::KEXPRESSION);
 }
 

@@ -16,6 +16,7 @@ use crate::machine::KoanRuntime;
 use crate::machine::ScopeId;
 #[cfg(test)]
 use crate::machine::SealedFunction;
+use crate::machine::core::CallFrame;
 #[cfg(test)]
 use crate::machine::core::StatementId;
 use crate::machine::core::{ProgramBrand, ProgramStorage, RegionBrand};
@@ -25,6 +26,7 @@ use crate::machine::model::KExpression;
 use crate::machine::model::KObject;
 #[cfg(test)]
 use crate::machine::model::Module;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 #[cfg(test)]
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
@@ -68,8 +70,9 @@ pub struct TestRun<'a> {
     /// The runtime holding the run frame. Tests that drive the scheduler directly use it in place
     /// of a `KoanRuntime::new()` of their own.
     pub runtime: KoanRuntime<'a>,
-    /// The run frame's registry, cloned out so it stays readable after the runtime drops.
-    pub types: Rc<TypeRegistry>,
+    /// The run frame, shared out so its registries stay readable after the runtime drops — and
+    /// without borrowing the runtime, which every `run` call needs mutably.
+    run_frame: Rc<CallFrame>,
     /// Per-scope statement cursors — the session's own record of how many top-level statements it
     /// has submitted against each scope, which is what numbers the next one. The lexical position
     /// of a statement-at-a-time submission exists only in the submitting session (statement N is
@@ -90,15 +93,16 @@ impl<'a> TestRun<'a> {
         // The run frame adopts `child`, exactly as `interpret` does: dispatch targets it, and the
         // frame it mints carries the registry seeding needs.
         runtime.ensure_run_frame(child);
-        let types = runtime
-            .type_registry()
+        let registries = runtime
+            .registries()
             .expect("run frame was just established");
-        crate::machine::seed_run_root(root, &types);
+        crate::machine::seed_run_root(root, registries);
+        let run_frame = runtime.run_frame().expect("run frame was just established");
         Self {
             program,
             scope: child,
             runtime,
-            types,
+            run_frame,
             cursors: HashMap::new(),
         }
     }
@@ -118,9 +122,22 @@ impl<'a> TestRun<'a> {
         (run, buf)
     }
 
+    /// The run frame held for its registries — what a test binds when it needs the registry
+    /// across `run` calls, which borrow the `TestRun` mutably.
+    pub fn registry_handle(&self) -> RegistryHandle {
+        RegistryHandle(Rc::clone(&self.run_frame))
+    }
+
+    /// The run's lookup state — the currency for anything that renders a label or builds a record.
+    pub fn registries(&self) -> &RunRegistries {
+        self.run_frame
+            .registries()
+            .expect("the run frame carries the registries")
+    }
+
     /// The run's registry as a plain reference — the `types` argument the type-system surface takes.
     pub fn types(&self) -> &TypeRegistry {
-        &self.types
+        &self.registries().types
     }
 
     /// This run's own region brand, for a test that builds AST directly rather than parsing it.
@@ -365,7 +382,7 @@ impl<'a> TestRun<'a> {
             Carried::Type(kt) => kt,
             Carried::Object(obj) => panic!(
                 "expected a type result, got value {}",
-                obj.summarize(&self.types)
+                obj.summarize(self.types())
             ),
             Carried::UnresolvedType(ti) => panic!(
                 "expected a resolved type result, got the unlowered name {}",
@@ -418,9 +435,9 @@ impl<'a> TestRun<'a> {
         &mut self,
         prelude: &str,
         probe: &str,
-    ) -> (Rc<TypeRegistry>, usize, usize) {
+    ) -> (RegistryHandle, usize, usize) {
         self.run(prelude);
-        let registry = Rc::clone(&self.types);
+        let registry = self.registry_handle();
         let hits_before_probe = registry.hit_count();
         let misses_before_probe = registry.miss_count();
         self.run(probe);
@@ -554,5 +571,27 @@ pub(crate) fn one_slot_sig<'a>(name: &'a str, kt: KType) -> SignatureDraft<'a> {
     SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![SignatureElement::Argument(Argument { name, ktype: kt })],
+    }
+}
+
+/// A run frame held for its registries. The registries are owned by the frame, so reading them off
+/// the [`TestRun`] borrows it — which every `run` call needs mutably. Holding the frame instead
+/// decouples the two, and keeps the registries readable after the runtime drops.
+///
+/// Derefs to the type registry, the half nearly every assertion wants.
+pub struct RegistryHandle(Rc<CallFrame>);
+
+impl RegistryHandle {
+    pub fn registries(&self) -> &RunRegistries {
+        self.0
+            .registries()
+            .expect("run frame carries the registries")
+    }
+}
+
+impl std::ops::Deref for RegistryHandle {
+    type Target = TypeRegistry;
+    fn deref(&self) -> &TypeRegistry {
+        &self.registries().types
     }
 }

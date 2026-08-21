@@ -20,6 +20,7 @@ use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 use std::collections::HashMap;
 
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
 /// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as a
@@ -28,9 +29,9 @@ use super::{arg, kw, sig};
 pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
 
-    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.types));
-    let (s_schema, s_digest) = signature_schema(s, ctx.types);
-    let s_name = s.name(ctx.types);
+    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.types()));
+    let (s_schema, s_digest) = signature_schema(s, ctx.types());
+    let s_name = s.name(ctx.types());
 
     // Allocate the view scope, replay the source module's members into it, and seed its `types`
     // table with the view's own type members, all in one door: the scope is unreachable until the
@@ -46,7 +47,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
         // door before the scope is published (`Module::scope_id` reports the same id once the
         // module is built). Abstract and manifest members are disjoint by `SigSchema` construction
         // — a SIG member is one or the other — so the strict inserts cannot collide.
-        |nonce| view_type_members(&s_schema, nonce, ctx.types),
+        |nonce| view_type_members(&s_schema, nonce, ctx.types()),
     ) {
         Ok(scope) => scope,
         Err(e) => return Action::done(Err(e)),
@@ -67,7 +68,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
 
     let mut tags: Vec<(String, KType)> = Vec::new();
     for (slot_name, kt) in &s_schema.value_slots {
-        if let TypeNode::AbstractType { name: member, .. } = ctx.types.node(*kt)
+        if let TypeNode::AbstractType { name: member, .. } = ctx.types().node(*kt)
             && let Some(per_call) = draft.type_members.get(&member)
         {
             tags.push((slot_name.clone(), *per_call));
@@ -79,11 +80,11 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
 
     // The view's self-sig is derived from the draft the mints and slot tags just filled, then the
     // module is born carrying it.
-    let self_sig = view_self_sig(new_scope, &draft, &s_schema, ctx.types);
+    let self_sig = view_self_sig(new_scope, &draft, &s_schema, ctx.types());
     let new_module: &'a Module<'a> =
         Module::alloc_at_child_scope(m.path, new_scope, draft, self_sig);
 
-    if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types) {
+    if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types()) {
         return Action::done(Err(e));
     }
 
@@ -109,10 +110,10 @@ pub fn body_transparent<'a>(
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
 
-    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.types));
-    let (s_schema, s_digest) = signature_schema(s, ctx.types);
-    let s_name = s.name(ctx.types);
-    if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types) {
+    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.types()));
+    let (s_schema, s_digest) = signature_schema(s, ctx.types());
+    let s_name = s.name(ctx.types());
+    if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types()) {
         return Action::done(Err(e));
     }
     // A transparent view re-tags the source module's child scope directly (`m.child_scope()`),
@@ -129,7 +130,7 @@ pub fn body_transparent<'a>(
     let sealed = ctx.scope.store_transparent_view(
         format!("{} :! {}", m.path, s_name),
         m.child_scope(),
-        |scope_view| view_self_sig(scope_view, &ModuleDraft::empty(), &s_schema, ctx.types),
+        |scope_view| view_self_sig(scope_view, &ModuleDraft::empty(), &s_schema, ctx.types()),
     );
     Action::done(Ok(StepCarried::born_delivered(
         ctx.scope.lift_resident(sealed),
@@ -294,7 +295,7 @@ fn check_satisfies<'a>(
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     // Slots are typed `Module` / `Signature`. A bare module operand (`int_ord :| Ordered`) is an
     // Identifier that resolves value-side and rides the auto-wrap rails into a value-typed future,
     // so no parallel Type-Type overload is required.
@@ -314,8 +315,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             arg("s", KType::of_kind(KKind::Signature)),
         ],
     );
-    crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque, types, gate);
-    crate::builtins::register_builtin(scope, ":!", transparent_sig, body_transparent, types, gate);
+    crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque, registries, gate);
+    crate::builtins::register_builtin(
+        scope,
+        ":!",
+        transparent_sig,
+        body_transparent,
+        registries,
+        gate,
+    );
 }
 
 #[cfg(test)]

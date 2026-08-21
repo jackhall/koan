@@ -30,7 +30,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
         other => {
             panic!(
                 "expected the int_ord view satisfying the per-call signature, got {}",
-                other.summarize(&test_run.types)
+                other.summarize(test_run.types())
             )
         }
     }
@@ -88,12 +88,15 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
     match result {
         KObject::Wrapped { inner, type_id } => {
             assert!(
-                matches!(test_run.types.node(*type_id), TypeNode::AbstractType { .. }),
+                matches!(
+                    test_run.types().node(*type_id),
+                    TypeNode::AbstractType { .. }
+                ),
                 "re-tagged slot read must carry an AbstractType identity, got {:?}",
                 type_id,
             );
             assert_eq!(
-                type_id.name(&test_run.types),
+                type_id.name(test_run.types()),
                 "Carrier",
                 "the abstract identity is the SIG-named member `Carrier`",
             );
@@ -161,7 +164,7 @@ fn functor_deferred_return_coarsens_list_carrier() {
     match result {
         KObject::List(_, list_type) => assert_eq!(
             *list_type,
-            test_run.types.list(KType::ANY),
+            test_run.types().list(KType::ANY),
             "deferred return stamped to (LIST OF Any) must coarsen the element type to Any, got {list_type:?}",
         ),
         other => panic!(

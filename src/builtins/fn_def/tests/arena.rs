@@ -263,7 +263,7 @@ fn tail_call_stamps_result_against_first_callers_return_contract() {
     match result {
         KObject::List(_, list_type) => assert_eq!(
             *list_type,
-            test_run.types.list(KType::ANY),
+            test_run.types().list(KType::ANY),
             "FF -> (LIST OF Any) must coarsen the tail-chain result to List<Any>, got {list_type:?}",
         ),
         other => panic!("expected a List from FF, got {:?}", other.ktype()),
@@ -291,7 +291,7 @@ fn deep_tail_chain_satisfies_arm_return_contract() {
          FN (AA) -> Any = (BB)\n\
          LET b = (Bit (One null))",
     );
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let result = test_run.run_one(parse_one(
         &program,
         "MATCH (b) -> :Str WITH (\
@@ -531,7 +531,7 @@ fn let_bound_list_of_call_produced_strings_and_closures_survives_every_producer_
                     Held::Object(KObject::KString(s)) => *s,
                     other => panic!(
                         "expected a string cell, got {:?}",
-                        other.ktype(&test_run.types)
+                        other.ktype(test_run.types())
                     ),
                 })
                 .collect();

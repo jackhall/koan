@@ -12,7 +12,6 @@
 //! [design/typing/ktype/parameterization-and-variance.md § Variance](../../design/typing/ktype/parameterization-and-variance.md#variance).
 
 use crate::machine::WriteGate;
-use crate::machine::model::TypeRegistry;
 
 use crate::machine::model::Carried;
 use crate::machine::model::ExpressionPart;
@@ -21,6 +20,7 @@ use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 
 /// `(x y) FROM <record:{}>` — re-tag the record's carried type to the named fields.
 ///
@@ -61,7 +61,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         Some(other) => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "FROM record operand must be a record, got `{}`",
-                other.ktype().name(ctx.types),
+                other.ktype().name(ctx.types()),
             )))));
         }
         None => {
@@ -75,7 +75,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // here). The at-brand rebuild below re-reads the same map from the operand view, so the two
     // cannot disagree on which fields the narrowed carrier keeps.
     let record_fields = match record_obj {
-        KObject::Record(_, record_type) => match ctx.types.node(*record_type) {
+        KObject::Record(_, record_type) => match ctx.types().node(*record_type) {
             crate::machine::model::TypeNode::Record { fields } => fields,
             _ => unreachable!("a Record value's type is always a Record node"),
         },
@@ -91,7 +91,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // The narrowed record type — interned once here where the registry is in scope, then copied
     // into the at-brand rebuild below.
     let narrowed_type = ctx
-        .types
+        .types()
         .record(Record::from_pairs(names.iter().map(|name| {
             (
                 name.clone(),
@@ -135,7 +135,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     })))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
+    let types = &registries.types;
     // Return type `:{}` is contract-only ("FROM returns a record"): a native
     // `Outcome::Done(Value)` flows straight to Done without being stamped against the
     // declared return, so the empty `:{}` does not coarsen the body's narrowed
@@ -149,7 +150,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             arg("record", types.record(Record::new())),
         ],
     );
-    crate::builtins::register_builtin(scope, "FROM", signature, body, types, gate);
+    crate::builtins::register_builtin(scope, "FROM", signature, body, registries, gate);
 }
 
 #[cfg(test)]

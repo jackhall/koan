@@ -173,7 +173,7 @@ fn union_with_signature_member_admits_module_and_number() {
             KObject::KString(s) => assert_eq!(*s, "admitted", "for `{call}`"),
             other => panic!(
                 "`{call}` should dispatch, got {}",
-                other.ktype().name(&test_run.types)
+                other.ktype().name(test_run.types())
             ),
         }
     }

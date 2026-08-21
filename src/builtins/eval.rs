@@ -1,11 +1,11 @@
 use crate::machine::WriteGate;
-use crate::machine::model::TypeRegistry;
 use std::rc::Rc;
 
 use crate::machine::model::KType;
 use crate::machine::{CallFrame, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 
 /// `EVAL <expr:Any>` — surface form `$(expr)`. Reads the evaluated `expr` (must be a
 /// `KExpression`) and tail-replaces into it in a fresh call-site frame (`FreshChild` — the UAF
@@ -25,7 +25,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "expr".to_string(),
                 expected: "KExpression".to_string(),
-                got: other.ktype().name(ctx.types),
+                got: other.ktype().name(ctx.types()),
             })));
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
@@ -42,13 +42,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         None,
         BlockBody::Single(inner),
         None,
-        ctx.types,
+        ctx.types(),
     )
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let signature = sig(KType::ANY, vec![kw("EVAL"), arg("expr", KType::ANY)]);
-    crate::builtins::register_builtin(scope, "EVAL", signature, body, types, gate);
+    crate::builtins::register_builtin(scope, "EVAL", signature, body, registries, gate);
 }
 
 #[cfg(test)]

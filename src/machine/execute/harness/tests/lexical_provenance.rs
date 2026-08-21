@@ -94,7 +94,7 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
     // Body slot has terminalized by now and dropped its chain; the body-chain
     // shape is exercised end-to-end by the recursive smoke tests below. A module is a value,
     // so the `&Module` rides the Object-arm value in `data`.
-    let module = lookup_module(root, "foo", &test_run.types);
+    let module = lookup_module(root, "foo", test_run.types());
     let _: &Module<'_> = module;
 }
 

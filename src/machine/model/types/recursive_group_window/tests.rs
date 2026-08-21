@@ -3,6 +3,7 @@
 
 use super::super::record::Record;
 use super::*;
+use crate::machine::model::RunRegistries;
 
 /// A record type over `pairs`.
 fn record(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
@@ -54,10 +55,11 @@ fn placement(types: &TypeRegistry, member: KType) -> (TypeDigest, usize) {
 /// the same type: the unreferenced member is in nobody's component, so it is in nobody's fold.
 #[test]
 fn unreferenced_co_declared_member_does_not_move_a_sibling() {
-    let types = TypeRegistry::new();
-    let alone = seal(&types, vec![("Meters", newtype(KType::NUMBER))]);
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let alone = seal(types, vec![("Meters", newtype(KType::NUMBER))]);
     let beside = seal(
-        &types,
+        types,
         vec![
             ("Meters", newtype(KType::NUMBER)),
             ("Unrelated", newtype(KType::STR)),
@@ -73,16 +75,17 @@ fn unreferenced_co_declared_member_does_not_move_a_sibling() {
 /// standalone declaration of the same content — the declaration boundary is not identity.
 #[test]
 fn non_recursive_group_member_equals_its_standalone_twin() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let standalone =
-        RecursiveGroupWindow::seal_singleton("Leaf".into(), newtype(KType::NUMBER), None, &types);
+        RecursiveGroupWindow::seal_singleton("Leaf".into(), newtype(KType::NUMBER), None, types);
     // `Leaf` sits in a group beside a self-recursive `Trunk` that does not name it.
     let grouped = seal(
-        &types,
+        types,
         vec![
             (
                 "Trunk",
-                newtype(record(&types, vec![("next", sibling(&types, 0))])),
+                newtype(record(types, vec![("next", sibling(types, 0))])),
             ),
             ("Leaf", newtype(KType::NUMBER)),
         ],
@@ -97,41 +100,42 @@ fn non_recursive_group_member_equals_its_standalone_twin() {
 /// orders produce the same component and the same per-name identities.
 #[test]
 fn member_declaration_order_is_immaterial() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     // Odd references Even, Even references Odd.
     let odd_first = seal(
-        &types,
+        types,
         vec![
             (
                 "Odd",
-                newtype(record(&types, vec![("pred", sibling(&types, 1))])),
+                newtype(record(types, vec![("pred", sibling(types, 1))])),
             ),
             (
                 "Even",
-                newtype(record(&types, vec![("pred", sibling(&types, 0))])),
+                newtype(record(types, vec![("pred", sibling(types, 0))])),
             ),
         ],
     );
     let even_first = seal(
-        &types,
+        types,
         vec![
             (
                 "Even",
-                newtype(record(&types, vec![("pred", sibling(&types, 1))])),
+                newtype(record(types, vec![("pred", sibling(types, 1))])),
             ),
             (
                 "Odd",
-                newtype(record(&types, vec![("pred", sibling(&types, 0))])),
+                newtype(record(types, vec![("pred", sibling(types, 0))])),
             ),
         ],
     );
     assert_eq!(odd_first[0], even_first[1], "Odd is Odd either way round");
     assert_eq!(odd_first[1], even_first[0], "Even is Even either way round");
-    let (digest, size) = placement(&types, odd_first[0]);
+    let (digest, size) = placement(types, odd_first[0]);
     assert_eq!(size, 2, "the pair is one two-member component");
     assert_eq!(
         digest,
-        placement(&types, odd_first[1]).0,
+        placement(types, odd_first[1]).0,
         "both members name the same component",
     );
 }
@@ -140,15 +144,16 @@ fn member_declaration_order_is_immaterial() {
 /// cross-component reference folds the referent's own digest into the component.
 #[test]
 fn external_reference_distinguishes_otherwise_identical_groups() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let over = |leaf: KType| {
         seal(
-            &types,
+            types,
             vec![(
                 "Wrapper",
                 newtype(record(
-                    &types,
-                    vec![("value", leaf), ("next", sibling(&types, 0))],
+                    types,
+                    vec![("value", leaf), ("next", sibling(types, 0))],
                 )),
             )],
         )[0]
@@ -164,23 +169,24 @@ fn external_reference_distinguishes_otherwise_identical_groups() {
 /// components are separately identified and the downstream one is not part of the upstream's fold.
 #[test]
 fn cross_component_reference_folds_the_finished_handle() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     // `Forest` names `Tree`; `Tree` is self-recursive and never names `Forest`.
     let members = seal(
-        &types,
+        types,
         vec![
             (
                 "Forest",
-                newtype(record(&types, vec![("trees", sibling(&types, 1))])),
+                newtype(record(types, vec![("trees", sibling(types, 1))])),
             ),
             (
                 "Tree",
-                newtype(record(&types, vec![("child", sibling(&types, 1))])),
+                newtype(record(types, vec![("child", sibling(types, 1))])),
             ),
         ],
     );
-    let (forest_digest, forest_size) = placement(&types, members[0]);
-    let (tree_digest, tree_size) = placement(&types, members[1]);
+    let (forest_digest, forest_size) = placement(types, members[0]);
+    let (tree_digest, tree_size) = placement(types, members[1]);
     assert_eq!(forest_size, 1, "Forest is its own component");
     assert_eq!(tree_size, 1, "Tree is its own component");
     assert_ne!(forest_digest, tree_digest);
@@ -189,9 +195,9 @@ fn cross_component_reference_folds_the_finished_handle() {
     // Tree's fold.
     let alone = RecursiveGroupWindow::seal_singleton(
         "Tree".into(),
-        newtype(record(&types, vec![("child", sibling(&types, 0))])),
+        newtype(record(types, vec![("child", sibling(types, 0))])),
         None,
-        &types,
+        types,
     );
     assert_eq!(
         alone, members[1],
@@ -203,15 +209,16 @@ fn cross_component_reference_folds_the_finished_handle() {
 /// to itself — which is what makes the group's composition edges navigable without a window.
 #[test]
 fn sealed_schema_is_absolute_and_cyclic() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let chain = RecursiveGroupWindow::seal_singleton(
         "Chain".into(),
         newtype(record(
-            &types,
-            vec![("head", KType::NUMBER), ("tail", sibling(&types, 0))],
+            types,
+            vec![("head", KType::NUMBER), ("tail", sibling(types, 0))],
         )),
         None,
-        &types,
+        types,
     );
     let schema = match types.node(chain) {
         TypeNode::SetMember { schema, .. } => schema,
@@ -237,9 +244,10 @@ fn sealed_schema_is_absolute_and_cyclic() {
 #[test]
 fn generative_nonce_separates_two_mints() {
     use crate::machine::core::ScopeId;
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let mint = |nonce: Option<ScopeId>| {
-        RecursiveGroupWindow::seal_singleton("Opaque".into(), newtype(KType::NUMBER), nonce, &types)
+        RecursiveGroupWindow::seal_singleton("Opaque".into(), newtype(KType::NUMBER), nonce, types)
     };
     let first = mint(Some(ScopeId::from_raw(0, 1)));
     let second = mint(Some(ScopeId::from_raw(0, 2)));
@@ -256,10 +264,11 @@ fn generative_nonce_separates_two_mints() {
 /// `NewType` representation does.
 #[test]
 fn type_constructor_schema_binds_siblings() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let schema: HashMap<String, KType> = [
         ("Empty".to_string(), KType::NULL),
-        ("Full".to_string(), sibling(&types, 0)),
+        ("Full".to_string(), sibling(types, 0)),
     ]
     .into_iter()
     .collect();
@@ -270,7 +279,7 @@ fn type_constructor_schema_binds_siblings() {
             param_names: vec!["Elem".to_string()],
         },
         None,
-        &types,
+        types,
     );
     match types.node(handle) {
         TypeNode::SetMember {
@@ -289,15 +298,16 @@ fn type_constructor_schema_binds_siblings() {
 /// it walks its own schema still mints stable relative handles.
 #[test]
 fn sibling_announces_an_unseen_name() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let window = RecursiveGroupWindow::new(vec![("Leaf".into(), KKind::NewType)]);
     assert_eq!(
-        window.sibling("Leaf", KKind::NewType, &types),
-        sibling(&types, 0)
+        window.sibling("Leaf", KKind::NewType, types),
+        sibling(types, 0)
     );
     assert_eq!(
-        window.sibling("Node", KKind::NewType, &types),
-        sibling(&types, 1)
+        window.sibling("Node", KKind::NewType, types),
+        sibling(types, 1)
     );
     assert_eq!(window.len(), 2);
     assert_eq!(window.unfilled_member_names(), vec!["Leaf", "Node"]);
@@ -310,13 +320,14 @@ fn sibling_announces_an_unseen_name() {
 /// binder.
 #[test]
 fn binder_union_covers_every_owned_member() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let window =
         RecursiveGroupWindow::for_binder("Maybe".into(), vec!["Some".into(), "None".into()]);
     assert!(window.binds("Maybe"));
     assert_eq!(
-        window.binder_union("Maybe", &types),
-        Some(types.union_of(vec![sibling(&types, 0), sibling(&types, 1)])),
+        window.binder_union("Maybe", types),
+        Some(types.union_of(vec![sibling(types, 0), sibling(types, 1)])),
     );
     assert_eq!(window.variant_index("Maybe", "None"), Some(1));
     assert_eq!(
@@ -333,7 +344,8 @@ fn binder_union_covers_every_owned_member() {
 #[test]
 fn same_tag_under_two_binders_seals_to_distinct_members() {
     use super::{SealBinderInput, SealMemberInput, seal_group};
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let members = vec![
         SealMemberInput {
             name: "Node",
@@ -358,7 +370,7 @@ fn same_tag_under_two_binders_seals_to_distinct_members() {
             members: &[1],
         },
     ];
-    let sealed = seal_group(&members, &binders, None, &types);
+    let sealed = seal_group(&members, &binders, None, types);
     assert_ne!(
         sealed.members[0], sealed.members[1],
         "differing payloads digest apart",
@@ -374,7 +386,7 @@ fn same_tag_under_two_binders_seals_to_distinct_members() {
         "Node".into(),
         newtype(KType::NUMBER),
         None,
-        &types,
+        types,
     );
     assert_eq!(sealed.members[0], standalone);
 }

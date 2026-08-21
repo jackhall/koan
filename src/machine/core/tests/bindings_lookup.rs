@@ -8,11 +8,11 @@ use crate::machine::ProducerId;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{BindingIndex, FrameStorageExt, NameLookup, run_root_storage};
 use crate::machine::model::KObject;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::UntypedKeyProbe;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 
 use super::{body_no_op, unit_signature};
+use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 
 #[test]
@@ -126,11 +126,11 @@ fn lookup_type_strict_less_than_hides_later_sibling() {
 
 #[test]
 fn lookup_function_chain_cutoff_none_returns_full_bucket() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let cell =
-        KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let cell = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     let f = cell.adopt_into(scope.brand().handle());
     scope
         .register_function_direct(
@@ -152,7 +152,8 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
 
 #[test]
 fn lookup_function_filters_per_overload_visibility() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     // Two overloads sharing the same bucket key but differing on a value-side
@@ -179,8 +180,8 @@ fn lookup_function_filters_per_overload_visibility() {
     };
     let key = sig_num.untyped_key();
     debug_assert_eq!(key, sig_str.untyped_key(), "untyped keys must collide");
-    let early = KFunction::alloc_captured(scope, sig_num, Body::Builtin(body_no_op), &types);
-    let late = KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), &types);
+    let early = KFunction::alloc_captured(scope, sig_num, Body::Builtin(body_no_op), types);
+    let late = KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), types);
     let f_early = early.adopt_into(scope.brand().handle());
     scope
         .register_function_direct(
@@ -239,10 +240,11 @@ fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
 
 #[test]
 fn lookup_function_surfaces_pending_overload_alongside_bucket() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -269,10 +271,11 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
 
 #[test]
 fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -294,10 +297,11 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
 /// them in one array read; a sibling statement's claim and a finalized overload both survive.
 #[test]
 fn retirement_drops_every_bucket_the_statement_claimed() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     scope
         .register_function_direct(
             "FOO".to_string(),

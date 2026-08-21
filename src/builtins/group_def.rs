@@ -37,7 +37,6 @@
 //! Surface design: [design/operators.md](../../design/operators.md).
 
 use crate::machine::WriteGate;
-use crate::machine::model::TypeRegistry;
 
 use crate::machine::body_statement_refs;
 use crate::machine::model::KExpression;
@@ -50,6 +49,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 
 use super::op_def::{symbol_from_parts, symbol_from_slot};
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 
 /// The reduction a `GROUP` overload declares, before the combiner symbol is read out of the args.
 #[derive(Clone, Copy)]
@@ -69,7 +69,10 @@ enum GroupMode {
 /// uses ([`super::module_def::await_module_body`]).
 fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
     let name = crate::try_action!(require_identifier_name(
-        ctx.args, "name", "GROUP", ctx.types
+        ctx.args,
+        "name",
+        "GROUP",
+        ctx.types()
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "GROUP", "body"));
     let mode = crate::try_action!(reduction_mode(ctx, group_mode));
@@ -162,7 +165,7 @@ fn body_pairwise_right<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     build(ctx, GroupMode::Pairwise(FoldDirection::Right))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     use crate::builtins::register_builtin;
 
     // `FOLD <LEFT|RIGHT>` and `PAIRWISE FOLD #(<combiner>) <LEFT|RIGHT>`, each over the two name
@@ -213,7 +216,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             "GROUP",
             fold(KType::IDENTIFIER, direction),
             fold_body,
-            types,
+            registries,
             gate,
         );
         register_builtin(
@@ -221,7 +224,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             "GROUP",
             pairwise(KType::IDENTIFIER, direction),
             pairwise_body,
-            types,
+            registries,
             gate,
         );
         register_builtin(
@@ -229,7 +232,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             "GROUP",
             fold(KType::of_kind(KKind::ProperType), direction),
             super::module_def::body_type_named,
-            types,
+            registries,
             gate,
         );
         register_builtin(
@@ -237,7 +240,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             "GROUP",
             pairwise(KType::of_kind(KKind::ProperType), direction),
             super::module_def::body_type_named,
-            types,
+            registries,
             gate,
         );
     }

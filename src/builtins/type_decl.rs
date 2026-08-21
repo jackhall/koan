@@ -22,12 +22,12 @@ use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::KType;
 use crate::machine::model::TypeNode;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
+use crate::machine::model::RunRegistries;
 
 fn not_in_sig_body() -> KError {
     KError::new(KErrorKind::ShapeError(
@@ -65,11 +65,11 @@ pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machin
     if !ctx.scope.is_in_sig_body() {
         return Action::done(Err(not_in_sig_body()));
     }
-    let name = match require_bare_type_name(ctx.args, "name", "TYPE", ctx.types) {
+    let name = match require_bare_type_name(ctx.args, "name", "TYPE", ctx.types()) {
         Ok(name) => name,
         Err(e) => return Action::done(Err(e)),
     };
-    let kt = ctx.types.intern(TypeNode::AbstractType {
+    let kt = ctx.types().intern(TypeNode::AbstractType {
         source: ctx.scope.id,
         name: name.clone(),
         param_names: Vec::new(),
@@ -95,7 +95,7 @@ pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine:
         Ok(pair) => pair,
         Err(e) => return Action::done(Err(e)),
     };
-    let kt = ctx.types.intern(TypeNode::AbstractType {
+    let kt = ctx.types().intern(TypeNode::AbstractType {
         source: ctx.scope.id,
         name: member_name.clone(),
         param_names,
@@ -142,17 +142,17 @@ pub(crate) fn parse_hk_decl(decl: &KExpression<'_>) -> Result<(Vec<String>, Stri
     Ok((param_names, member_name))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let bare_signature = sig(
         KType::ANY,
         vec![kw("TYPE"), arg("name", KType::of_kind(KKind::ProperType))],
     );
-    crate::builtins::register_builtin(scope, "TYPE", bare_signature, body_bare, types, gate);
+    crate::builtins::register_builtin(scope, "TYPE", bare_signature, body_bare, registries, gate);
     let hk_signature = sig(
         KType::ANY,
         vec![kw("TYPE"), arg("decl", KType::KEXPRESSION)],
     );
-    crate::builtins::register_builtin(scope, "TYPE", hk_signature, body_hk, types, gate);
+    crate::builtins::register_builtin(scope, "TYPE", hk_signature, body_hk, registries, gate);
 }
 
 #[cfg(test)]

@@ -20,6 +20,7 @@ use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 use crate::machine::{BrandCompose, FieldListDeferral};
 
 /// Diagnostic nouns for the shared field-list parser when it walks an `:(FN …)` parameter list.
@@ -65,47 +66,51 @@ mod action_bodies {
     /// owned `KType` and assemble the composite from those values, then allocate it into the
     /// step's own region through the single type door.
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-        let elem = crate::try_action!(require_ktype(ctx.args, "elem", ctx.types));
+        let elem = crate::try_action!(require_ktype(ctx.args, "elem", ctx.types()));
         crate::try_action!(require_proper_type(
             elem,
             "the element type of `LIST OF`",
-            ctx.types
+            ctx.types()
         ));
-        let list = ctx.types.list(elem);
+        let list = ctx.types().list(elem);
         Action::done(Ok(ctx.ctx.type_carried(list)))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-        let k = crate::try_action!(require_ktype(ctx.args, "k", ctx.types));
-        let v = crate::try_action!(require_ktype(ctx.args, "v", ctx.types));
-        crate::try_action!(require_proper_type(k, "the key type of `MAP`", ctx.types));
-        crate::try_action!(require_proper_type(v, "the value type of `MAP`", ctx.types));
-        let dict = ctx.types.dict(k, v);
+        let k = crate::try_action!(require_ktype(ctx.args, "k", ctx.types()));
+        let v = crate::try_action!(require_ktype(ctx.args, "v", ctx.types()));
+        crate::try_action!(require_proper_type(k, "the key type of `MAP`", ctx.types()));
+        crate::try_action!(require_proper_type(
+            v,
+            "the value type of `MAP`",
+            ctx.types()
+        ));
+        let dict = ctx.types().dict(k, v);
         Action::done(Ok(ctx.ctx.type_carried(dict)))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-        let applied = crate::try_action!(require_ktype(ctx.args, "applied", ctx.types));
-        let ctor = crate::try_action!(require_ktype(ctx.args, "ctor", ctx.types));
+        let applied = crate::try_action!(require_ktype(ctx.args, "applied", ctx.types()));
+        let ctor = crate::try_action!(require_ktype(ctx.args, "ctor", ctx.types()));
         // A declared family and a SIG's abstract constructor slot both name their parameters.
-        let Some(param_names) = constructor_param_names(ctor, ctx.types) else {
+        let Some(param_names) = constructor_param_names(ctor, ctx.types()) else {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "right-hand side of `AS` must be a type constructor, got `{}`",
-                ctor.name(ctx.types),
+                ctor.name(ctx.types()),
             )))));
         };
         let [param_name] = &param_names[..] else {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`{}` takes {} type arguments; the `AS` form supplies one, so \
                  multi-parameter application is not yet supported",
-                ctor.name(ctx.types),
+                ctor.name(ctx.types()),
                 param_names.len(),
             )))));
         };
         // `AS` is arity-1 sugar: the applied type fills the constructor's sole parameter, so
         // `:(Number AS Wrap)` elaborates exactly as `:(Wrap {Elem = Number})` does.
         let args = Record::from_pairs([(param_name.clone(), applied)]);
-        let apply = ctx.types.constructor_apply(ctor, args);
+        let apply = ctx.types().constructor_apply(ctor, args);
         Action::done(Ok(ctx.ctx.type_carried(apply)))
     }
 
@@ -132,11 +137,11 @@ fn build_carrier<'a>(
 ) -> crate::machine::Action<'a> {
     use crate::machine::{Action, require_kexpression, require_ktype};
     let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
-    let ret = crate::try_action!(require_ktype(ctx.args, ret_slot, ctx.types));
+    let ret = crate::try_action!(require_ktype(ctx.args, ret_slot, ctx.types()));
     crate::try_action!(require_proper_type(
         ret,
         "the return type of an `:(FN …)` type",
-        ctx.types
+        ctx.types()
     ));
     let mut elaborator = Elaborator::new(ctx.scope);
     match parse_typed_field_list_via_elaborator(
@@ -145,10 +150,10 @@ fn build_carrier<'a>(
         FN_PARAM_NAME_KIND,
         &mut elaborator,
         None,
-        ctx.types,
+        ctx.types(),
     ) {
         FieldListOutcome::Done(fields) => {
-            let carrier = finalize_carrier(fields, ret, ctx.types);
+            let carrier = finalize_carrier(fields, ret, ctx.types());
             Action::done(Ok(ctx.ctx.type_carried(carrier)))
         }
         FieldListOutcome::Err(msg) => Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
@@ -166,7 +171,7 @@ fn build_carrier<'a>(
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     use crate::builtins::register_builtin;
     register_builtin(
         scope,
@@ -180,7 +185,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             ],
         ),
         action_bodies::body_list_of,
-        types,
+        registries,
         gate,
     );
     register_builtin(
@@ -196,7 +201,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             ],
         ),
         action_bodies::body_map,
-        types,
+        registries,
         gate,
     );
     register_builtin(
@@ -211,7 +216,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             ],
         ),
         action_bodies::body_apply_as,
-        types,
+        registries,
         gate,
     );
     register_builtin(
@@ -229,7 +234,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             ],
         ),
         action_bodies::body_fn,
-        types,
+        registries,
         gate,
     );
 }

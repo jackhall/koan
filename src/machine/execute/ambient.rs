@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::machine::model::RunRegistries;
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::{CallFrame, RunWriter};
 
@@ -59,22 +60,22 @@ impl AmbientContext {
         self.active_payload.as_ref()
     }
 
-    /// The run's subtype-verdict store, owned by the run frame. `ensure_run_frame` installs that
-    /// frame before any step runs, so the registry is always reachable from step code.
-    pub(in crate::machine::execute) fn type_registry(&self) -> &Rc<TypeRegistry> {
-        self.run_frame
-            .as_ref()
-            .and_then(|frame| frame.type_registry())
-            .expect("run frame (and its type registry) established before any step")
+    /// The run's lookup state, owned by the run frame. `ensure_run_frame` installs that frame
+    /// before any step runs, so the registries are always reachable from step code.
+    pub(in crate::machine::execute) fn registries(&self) -> &RunRegistries {
+        self.registries_opt()
+            .expect("run frame (and its registries) established before any step")
     }
 
-    /// [`Self::type_registry`] cloned out — a detached read, valid before the run frame exists and
-    /// after the run ends.
-    pub(in crate::machine::execute) fn type_registry_cloned(&self) -> Option<Rc<TypeRegistry>> {
-        self.run_frame
-            .as_ref()
-            .and_then(|frame| frame.type_registry())
-            .cloned()
+    /// [`Self::registries`] as an `Option` — a detached read, valid before the run frame exists
+    /// and after the run ends.
+    pub(in crate::machine::execute) fn registries_opt(&self) -> Option<&RunRegistries> {
+        self.run_frame.as_ref().and_then(|frame| frame.registries())
+    }
+
+    /// The run's type registry alone — the currency for pure type-structure questions.
+    pub(in crate::machine::execute) fn types(&self) -> &TypeRegistry {
+        &self.registries().types
     }
 
     /// The run's output sink, owned by the run frame exactly as the type registry is, and reached

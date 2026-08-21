@@ -83,8 +83,8 @@ fn sigil_list_of_lowers_to_list_carrier() {
         &region,
         "SIG Holder = ((VAL items :(LIST OF Number)))",
     );
-    let items_kt = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "items");
-    match test_run.types.node(items_kt) {
+    let items_kt = lookup_sig_value_kt(test_run.scope, test_run.types(), "Holder", "items");
+    match test_run.types().node(items_kt) {
         TypeNode::List { element } => assert_eq!(element, KType::NUMBER),
         _ => panic!("items must be KType::List(Number), got {items_kt:?}"),
     }
@@ -116,8 +116,8 @@ fn sigil_map_lowers_to_dict_carrier() {
         &region,
         "SIG Holder = ((VAL table :(MAP Str -> Number)))",
     );
-    let table_kt = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "table");
-    match test_run.types.node(table_kt) {
+    let table_kt = lookup_sig_value_kt(test_run.scope, test_run.types(), "Holder", "table");
+    match test_run.types().node(table_kt) {
         TypeNode::Dict { key, value } => {
             assert_eq!(key, KType::STR);
             assert_eq!(value, KType::NUMBER);
@@ -139,8 +139,8 @@ fn sigil_fn_lowers_to_kfunction_named() {
         &region,
         "SIG Holder = ((VAL compare :(FN (x :Number, y :Str) -> Bool)))",
     );
-    let cmp = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "compare");
-    match test_run.types.node(cmp) {
+    let cmp = lookup_sig_value_kt(test_run.scope, test_run.types(), "Holder", "compare");
+    match test_run.types().node(cmp) {
         TypeNode::KFunction { params, ret } => {
             assert_eq!(params.len(), 2);
             assert_eq!(params.get("x"), Some(&KType::NUMBER));
@@ -161,8 +161,8 @@ fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
         &region,
         "SIG Holder = ((VAL gen :(FN () -> Number)))",
     );
-    let r#gen = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "gen");
-    match test_run.types.node(r#gen) {
+    let r#gen = lookup_sig_value_kt(test_run.scope, test_run.types(), "Holder", "gen");
+    match test_run.types().node(r#gen) {
         TypeNode::KFunction { params, ret } => {
             assert!(params.is_empty());
             assert_eq!(ret, KType::NUMBER);
@@ -183,8 +183,8 @@ fn sigil_fn_type_param_and_module_return_lowers_to_kfunction() {
         &region,
         "SIG Holder = ((VAL mk :(FN (Ty :Signature) -> Module)))",
     );
-    let mk = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "mk");
-    match test_run.types.node(mk) {
+    let mk = lookup_sig_value_kt(test_run.scope, test_run.types(), "Holder", "mk");
+    match test_run.types().node(mk) {
         TypeNode::KFunction { params, ret } => {
             assert_eq!(params.len(), 1);
             assert_eq!(params.get("Ty"), Some(&KType::of_kind(KKind::Signature)));
@@ -233,11 +233,11 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
         .scope
         .resolve_type("Foo")
         .expect("Foo must resolve to a type");
-    let fields = match test_run.types.node(foo) {
+    let fields = match test_run.types().node(foo) {
         TypeNode::SetMember {
             schema: NodeSchema::NewType(repr),
             ..
-        } => match test_run.types.node(repr) {
+        } => match test_run.types().node(repr) {
             TypeNode::Record { fields } => fields,
             _ => panic!("Foo must project a record-repr NewType schema"),
         },
@@ -246,7 +246,7 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
     assert_eq!(fields.len(), 1);
     let (xs_name, xs_type) = fields.iter().next().expect("one field");
     assert_eq!(xs_name, "xs");
-    match test_run.types.node(*xs_type) {
+    match test_run.types().node(*xs_type) {
         TypeNode::List { element } => assert_eq!(element, KType::NUMBER),
         _ => panic!("xs must be KType::List(Number), got {xs_type:?}"),
     }
@@ -269,10 +269,10 @@ fn union_field_accepts_keyworded_map_sigil() {
         .scope
         .resolve_type("Maybe")
         .expect("Maybe must resolve to a type");
-    let some_repr = match test_run.types.node(maybe) {
+    let some_repr = match test_run.types().node(maybe) {
         TypeNode::Union { members } => members
             .iter()
-            .find_map(|m| match test_run.types.node(*m) {
+            .find_map(|m| match test_run.types().node(*m) {
                 TypeNode::SetMember {
                     name,
                     schema: NodeSchema::NewType(repr),
@@ -283,7 +283,7 @@ fn union_field_accepts_keyworded_map_sigil() {
             .expect("Some variant must project a NewType repr"),
         _ => panic!("Maybe must be a Union in types, got {maybe:?}"),
     };
-    match test_run.types.node(some_repr) {
+    match test_run.types().node(some_repr) {
         TypeNode::Dict { key, value } => {
             assert_eq!(key, KType::STR);
             assert_eq!(value, KType::NUMBER);
@@ -317,8 +317,8 @@ fn sigil_fn_forward_reference_defers_via_combine() {
         "SIG Outer = ((VAL mk :(FN (Ty :Ordered) -> Module)))\n\
          SIG Ordered = (VAL compare :Number)",
     );
-    let mk = lookup_sig_value_kt(test_run.scope, &test_run.types, "Outer", "mk");
-    match test_run.types.node(mk) {
+    let mk = lookup_sig_value_kt(test_run.scope, test_run.types(), "Outer", "mk");
+    match test_run.types().node(mk) {
         TypeNode::KFunction { params, ret } => {
             assert_eq!(params.len(), 1);
             // Ordered resolves to its `Signature { .. }` identity post-dep-finish.
@@ -328,11 +328,11 @@ fn sigil_fn_forward_reference_defers_via_combine() {
             // Seeing that member content confirms the forward reference resolved to Ordered's
             // Signature identity through the deferral path (rather than a bare kind placeholder).
             assert!(
-                ty.name(&test_run.types).contains("compare")
+                ty.name(test_run.types()).contains("compare")
                     || ty == KType::of_kind(KKind::Signature),
                 "param `Ty` should carry Ordered's resolved interface, got {ty:?} \
                  (name: {:?})",
-                ty.name(&test_run.types),
+                ty.name(test_run.types()),
             );
             assert_eq!(ret, KType::EMPTY_SIGNATURE);
         }

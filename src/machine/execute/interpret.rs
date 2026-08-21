@@ -6,7 +6,7 @@
 use super::KoanRuntime;
 use crate::builtins::{seed_builtins, unseeded_scopes};
 use crate::machine::core::{program_storage, run_root_storage};
-use crate::machine::model::TypeRegistry;
+use crate::machine::model::RunRegistries;
 use crate::machine::{KError, Scope, WriteGate};
 use crate::parse::{parse, parse_with_path};
 
@@ -14,8 +14,8 @@ use crate::parse::{parse, parse_with_path};
 /// starts, so builtin registration is a construction-time write. `crate::builtins` cannot mint a
 /// [`WriteGate`] itself, so the seed takes one as a parameter rather than helping itself to a
 /// write verb, and this is where that gate is minted.
-pub(crate) fn seed_run_root<'a>(root: &'a Scope<'a>, types: &TypeRegistry) {
-    seed_builtins(root, types, &mut WriteGate::for_unpublished_scope());
+pub(crate) fn seed_run_root<'a>(root: &'a Scope<'a>, registries: &RunRegistries) {
+    seed_builtins(root, registries, &mut WriteGate::for_unpublished_scope());
 }
 
 /// Parse Koan source and run it on a fresh `KoanRegion`; all values allocated by the
@@ -53,10 +53,10 @@ pub fn interpret_with_writer_path(
     // The run frame adopts `top`, the same scope `run_program` dispatches top-level statements
     // against. Establishing it before seeding puts the builtins in the run's own type registry.
     runtime.ensure_run_frame(top);
-    let types = runtime
-        .type_registry()
+    let registries = runtime
+        .registries()
         .expect("run frame was just established");
-    seed_run_root(root, &types);
+    seed_run_root(root, registries);
     runtime.run_program(top, exprs)
 }
 

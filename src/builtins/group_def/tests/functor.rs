@@ -47,7 +47,7 @@ fn functor_instantiated_at_a_concrete_type_yields_operators_over_that_type() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     test_run.run(&format!(
         "{TYPE_PARAMETER_FUNCTOR}\
          LET number_ops = (MAKEOPS Number)\n\

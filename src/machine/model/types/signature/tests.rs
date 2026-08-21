@@ -2,6 +2,7 @@ use std::hash::BuildHasher;
 
 use super::*;
 use crate::machine::core::{RegionBrand, program_storage};
+use crate::machine::model::RunRegistries;
 use crate::source::Spanned;
 
 // `KType` leaf constants replace the retired enum variants (`KType::NUMBER` etc.); these tests
@@ -28,47 +29,51 @@ fn expr_with_keyword<'a>(brand: RegionBrand<'a>, kw: &'a str) -> KExpression<'a>
 
 #[test]
 fn most_specific_picks_number_over_any() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let program = program_storage();
     let brand = program.brand().region();
     let any = one_slot(brand, KType::ANY);
     let num = one_slot(brand, KType::NUMBER);
     let cands: Vec<&ExpressionSignature<'_>> = vec![&any, &num];
-    assert_eq!(ExpressionSignature::most_specific(&cands, &types), Some(1));
+    assert_eq!(ExpressionSignature::most_specific(&cands, types), Some(1));
 }
 
 #[test]
 fn most_specific_returns_none_for_empty() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let cands: Vec<&ExpressionSignature<'_>> = Vec::new();
-    assert_eq!(ExpressionSignature::most_specific(&cands, &types), None);
+    assert_eq!(ExpressionSignature::most_specific(&cands, types), None);
 }
 
 #[test]
 fn most_specific_returns_none_when_tied() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     // Ambiguity must surface, not a winner.
     let program = program_storage();
     let brand = program.brand().region();
     let a = one_slot(brand, KType::NUMBER);
     let b = one_slot(brand, KType::NUMBER);
     let cands: Vec<&ExpressionSignature<'_>> = vec![&a, &b];
-    assert_eq!(ExpressionSignature::most_specific(&cands, &types), None);
+    assert_eq!(ExpressionSignature::most_specific(&cands, types), None);
 }
 
 #[test]
 fn return_type_clone_round_trips_all_arms() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let r = ReturnType::Resolved(KType::NUMBER);
-    assert_eq!(r.name(&types), r.clone().name(&types));
+    assert_eq!(r.name(types), r.clone().name(types));
     let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
-    assert_eq!(d.name(&types), d.clone().name(&types));
+    assert_eq!(d.name(types), d.clone().name(types));
     let program = program_storage();
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword(
         program.brand().region(),
         "FOO",
     )));
-    assert_eq!(e.name(&types), e.clone().name(&types));
+    assert_eq!(e.name(types), e.clone().name(types));
 }
 
 #[test]
@@ -82,7 +87,8 @@ fn type_name_eq_compares_leaf_names() {
 
 #[test]
 fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let program = program_storage();
     let brand = program.brand().region();
     let sig = ExpressionSignature::mint(
@@ -93,7 +99,7 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
         },
     );
     let empty: KExpression<'_> = KExpression::new(brand, &[]);
-    assert!(!sig.matches(&empty, &types));
+    assert!(!sig.matches(&empty, types));
 
     let mismatched = KExpression::new(
         brand,
@@ -101,10 +107,10 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
             crate::machine::model::ast::KLiteral::Number(1.0),
         ))],
     );
-    assert!(!sig.matches(&mismatched, &types));
+    assert!(!sig.matches(&mismatched, types));
 
     let matching = KExpression::new(brand, &[Spanned::bare(ExpressionPart::Keyword("FOO"))]);
-    assert!(sig.matches(&matching, &types));
+    assert!(sig.matches(&matching, types));
 }
 
 #[test]
@@ -126,17 +132,18 @@ fn deferred_return_debug_renders_both_arms() {
 
 #[test]
 fn return_type_name_covers_all_arms() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let r = ReturnType::Resolved(KType::NUMBER);
-    assert_eq!(r.name(&types), KType::NUMBER.name(&types));
+    assert_eq!(r.name(types), KType::NUMBER.name(types));
     let t = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
-    assert_eq!(t.name(&types), "er");
+    assert_eq!(t.name(types), "er");
     let program = program_storage();
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword(
         program.brand().region(),
         "FOO",
     )));
-    assert_eq!(e.name(&types), "FOO");
+    assert_eq!(e.name(types), "FOO");
 }
 
 fn sig_with<'a>(
@@ -212,18 +219,19 @@ fn indistinguishable_splits_on_argument_type_and_keywords() {
 
 #[test]
 fn return_type_matches_value_deferred_always_true_resolved_delegates() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     use crate::machine::model::values::KObject;
     let obj = KObject::Number(42.0);
     // Deferred always matches — per-call check runs elsewhere.
     let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
-    assert!(d.matches_value(&obj, &types));
+    assert!(d.matches_value(&obj, types));
     assert!(!d.is_resolved());
     let r_num = ReturnType::Resolved(KType::NUMBER);
-    assert!(r_num.matches_value(&obj, &types));
+    assert!(r_num.matches_value(&obj, types));
     assert!(r_num.is_resolved());
     let r_bool = ReturnType::Resolved(KType::BOOL);
-    assert!(!r_bool.matches_value(&obj, &types));
+    assert!(!r_bool.matches_value(&obj, types));
 }
 
 /// [`DispatchToken`] equality is the stored form of [`ExpressionSignature::indistinguishable_from`]:

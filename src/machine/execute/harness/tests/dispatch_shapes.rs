@@ -122,7 +122,7 @@ fn bare_type_leaf_short_circuits() {
     assert!(
         matches!(result, Carried::Type(KType::NUMBER)),
         "(Number) must terminate to a Number type; got {}",
-        result.summarize(&test_run.types),
+        result.summarize(test_run.types()),
     );
 }
 
@@ -149,7 +149,7 @@ fn function_value_call_named_args_short_circuits() {
     assert!(
         matches!(result, KObject::Number(n) if (*n - 7.0).abs() < 1e-9),
         "(f {{x = 7}}) must evaluate to 7.0 (DOUBLE returns x); got {}",
-        result.summarize(&test_run.types),
+        result.summarize(test_run.types()),
     );
 }
 
@@ -174,7 +174,7 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
     assert!(
         matches!(result, KObject::Number(n) if (*n - 1.0).abs() < 1e-9),
         "(f {{b = 2, a = 1}}) returning `a` must yield 1.0; got {}",
-        result.summarize(&test_run.types),
+        result.summarize(test_run.types()),
     );
 }
 
@@ -191,7 +191,7 @@ fn function_value_call_named_args_missing_short_circuits() {
     test_run.run("LET f = FN (a :Number PICK b :Number) -> Number = (a)");
     let expr = parse_one(&program, "f {a = 1}");
     reset_resolve_dispatch_entry_count();
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let id = test_run.dispatch_watched_in(scope, working(scope, expr));
     test_run
         .runtime
@@ -232,7 +232,7 @@ fn fn_definition_with_a_repeated_parameter_name_is_refused() {
         &program,
         "FN (BETWEEN x :Number AND x :Number) -> Number = (x)",
     );
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let id = test_run.dispatch_watched_in(scope, working(scope, expr));
     test_run
         .runtime
@@ -396,7 +396,7 @@ fn fast_lane_on_tagged_union_constructs() {
         } => {
             assert_eq!(*tag, "Some");
             assert!(matches!(value.payload(), KObject::Number(n) if *n == 42.0));
-            match test_run.types.node(*identity) {
+            match test_run.types().node(*identity) {
                 TypeNode::SetMember { name, .. } => {
                     assert_eq!(name, "Some");
                 }
@@ -431,7 +431,7 @@ fn fast_lane_on_newtype_record_type_constructs() {
     );
     match result {
         KObject::Wrapped { inner, type_id } => {
-            assert_eq!(type_id.name(&test_run.types), "Pt");
+            assert_eq!(type_id.name(test_run.types()), "Pt");
             match inner.payload() {
                 KObject::Record(substrate, _) => {
                     assert!(
@@ -535,7 +535,7 @@ fn fast_lane_list_of_closures_escapes_outer_call() {
         KObject::List(items, _) => items,
         other => panic!(
             "expected MAKE to return a List, got {}",
-            other.summarize(&test_run.types)
+            other.summarize(test_run.types())
         ),
     };
     assert_eq!(
@@ -703,7 +703,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    bind_identity_fn(scope, &test_run.types);
+    bind_identity_fn(scope, test_run.types());
 
     let expr_a = parse_one(&program, "(List MAYBE Number)");
     reset_resolve_dispatch_entry_count();
@@ -783,7 +783,7 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
         Some(KObject::KString(s)) => assert_eq!(*s, "numbers"),
         Some(other) => panic!(
             "expected KString(\"numbers\"), got {}",
-            other.summarize(&test_run.types)
+            other.summarize(test_run.types())
         ),
         None => panic!("LET out = ... must bind `out` in scope"),
     }
@@ -836,7 +836,7 @@ fn operator_chain_undeclared_errors_cleanly() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let id = test_run.dispatch_watched_in(scope, working(scope, parse_one(&program, "a % b % c")));
     test_run
         .runtime
@@ -876,7 +876,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let inner = scope.alloc_child_under();
 
     let record = inner.birth_operator_group(&["-"], ReductionMode::FoldRight);
@@ -937,7 +937,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let record = scope.birth_operator_group(&["~"], ReductionMode::Unary);
     scope
         .register_operator_group_direct(
@@ -998,10 +998,10 @@ fn type_call_constructs_struct() {
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
     let out = test_run.run_one(parse_one(&program, "Point {x = 1, y = 2}"));
     assert_eq!(
-        out.ktype().name(&test_run.types),
+        out.ktype().name(test_run.types()),
         "Point",
         "got {}",
-        out.summarize(&test_run.types)
+        out.summarize(test_run.types())
     );
 }
 
@@ -1020,7 +1020,7 @@ fn head_deferred_calls_returned_function() {
     assert!(
         matches!(out, KObject::Number(n) if (*n - 7.0).abs() < 1e-9),
         "(GET_F) {{n = 7}} must call the returned FN and yield 7.0; got {}",
-        out.summarize(&test_run.types),
+        out.summarize(test_run.types()),
     );
 }
 
@@ -1040,7 +1040,7 @@ fn head_deferred_applies_returned_functor_to_module() {
     assert!(
         matches!(out, KObject::Module(_)),
         "applying a functor value must yield a module; got {}",
-        out.summarize(&test_run.types),
+        out.summarize(test_run.types()),
     );
 }
 
@@ -1057,10 +1057,10 @@ fn head_deferred_constructs_from_returned_type_value() {
     // type leaf to the type-carried `Point` identity, then the body constructs.
     let out = test_run.run_one(parse_one(&program, "(Point) {x = 1, y = 2}"));
     assert_eq!(
-        out.ktype().name(&test_run.types),
+        out.ktype().name(test_run.types()),
         "Point",
         "got {}",
-        out.summarize(&test_run.types)
+        out.summarize(test_run.types())
     );
 }
 
@@ -1115,10 +1115,10 @@ fn type_head_deferred_constructs_from_sigil_type() {
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
     let out = test_run.run_one(parse_one(&program, ":(Point) {x = 1, y = 2}"));
     assert_eq!(
-        out.ktype().name(&test_run.types),
+        out.ktype().name(test_run.types()),
         "Point",
         "got {}",
-        out.summarize(&test_run.types)
+        out.summarize(test_run.types())
     );
 }
 

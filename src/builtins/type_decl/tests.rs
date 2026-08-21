@@ -92,7 +92,7 @@ fn abstract_member_kind_tracks_parameters() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("SIG Monad = ((TYPE Elt) (TYPE (Type AS Wrap)))");
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     assert_eq!(
         member_type(scope, &types, "Monad", "Wrap").kind_of(&types),
         KKind::TypeConstructor,
@@ -197,7 +197,7 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
          SIG Container = ((TYPE Elt) (VAL item :Number))\n\
          LET view = (implementation :| Container)",
     );
-    let view = lookup_module(scope, "view", &test_run.types);
+    let view = lookup_module(scope, "view", test_run.types());
     let elt = view.type_members.get(&"Elt").copied();
     let declared = member_type(scope, test_run.types(), "Container", "Elt");
     match elt {
@@ -238,7 +238,7 @@ fn two_ascriptions_of_one_sig_mint_distinct_slot_types() {
          LET two = (implementation :| Container)",
     );
     let elt = |view_name: &str| {
-        lookup_module(scope, view_name, &test_run.types)
+        lookup_module(scope, view_name, test_run.types())
             .type_members
             .get(&"Elt")
             .copied()
@@ -432,7 +432,7 @@ fn module_attr_access_returns_type_constructor() {
          MODULE int_list = ((LET Wrap = Wrapper))\n\
          LET mo = (int_list :| Monad)",
     );
-    let mo = lookup_module(scope, "mo", &test_run.types);
+    let mo = lookup_module(scope, "mo", test_run.types());
     let wrap_t = mo.type_members.get(&"Wrap").copied();
     match wrap_t {
         Some(kt) => {

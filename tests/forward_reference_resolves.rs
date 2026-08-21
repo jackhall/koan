@@ -274,7 +274,7 @@ fn let_alias_via_module_qualified_type_resolves() {
     assert!(
         scope.resolve_type("MyT") == Some(KType::NUMBER),
         "expected MyT to resolve to Number via mo.Ty, got {:?}",
-        scope.resolve_type("MyT").map(|t| t.name(&test_run.types)),
+        scope.resolve_type("MyT").map(|t| t.name(test_run.types())),
     );
 }
 

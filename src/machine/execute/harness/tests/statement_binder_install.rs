@@ -249,7 +249,7 @@ fn announced_group_install_lets_sibling_resolve() {
          )",
     );
     let module =
-        crate::builtins::test_support::lookup_module(test_run.scope, "pair", &test_run.types);
+        crate::builtins::test_support::lookup_module(test_run.scope, "pair", test_run.types());
     let members = module.child_scope();
     let aa = members.resolve_type("Aa");
     assert!(aa.is_some(), "the announced group must bind member `Aa`");

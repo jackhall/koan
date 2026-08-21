@@ -13,10 +13,10 @@
 use crate::machine::Scope;
 use crate::machine::WriteGate;
 use crate::machine::model::KType;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KKind, SigSchema};
 
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 
 /// The SIG body: mints the declaration scope, dispatches the SIG body block against it via
 /// [`await_body_in_scope`](super::await_body::await_body_in_scope), and the finish projects
@@ -26,7 +26,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     use super::await_body::await_body_in_scope;
     use crate::machine::{Action, require_bare_type_name, require_kexpression};
 
-    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "SIG", ctx.types));
+    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "SIG", ctx.types()));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", "body"));
 
     let decl_scope = ctx.scope.alloc_child_under_sig(&name);
@@ -48,7 +48,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     })
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let signature = sig(
         KType::of_kind(KKind::Signature),
         vec![
@@ -58,7 +58,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             arg("body", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, "SIG", signature, body, types, gate);
+    crate::builtins::register_builtin(scope, "SIG", signature, body, registries, gate);
 }
 
 #[cfg(test)]

@@ -64,7 +64,7 @@ pub(crate) fn nominal_schema_action<'a>(
             name_kind,
             &mut elaborator,
             None,
-            ctx.types,
+            ctx.types(),
         )
     };
     match outcome {

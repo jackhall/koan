@@ -1,5 +1,4 @@
 use crate::machine::WriteGate;
-use crate::machine::model::TypeRegistry;
 
 use crate::machine::model::KKind;
 
@@ -8,6 +7,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 
 use super::branch_walk::find_branch_body_by_type;
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 
 /// `MATCH <value:Any> -> :<T> WITH <branches:KExpression>` — branch by type.
 ///
@@ -44,13 +44,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         value,
         ctx.scope,
         ctx.chain.clone(),
-        ctx.types,
+        ctx.types(),
     ) {
         Ok(Some(arm)) => arm,
         Ok(None) => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "inexhaustive match = no branch for value of type `{}`",
-                value.ktype().name(ctx.types)
+                value.ktype().name(ctx.types())
             )))));
         }
         Err(msg) => return Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
@@ -79,10 +79,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         true => payload_envelope(&scrutinee),
         false => scrutinee,
     };
-    arm_tail(ctx.scope, it_carrier, selected.body, contract, ctx.types)
+    arm_tail(ctx.scope, it_carrier, selected.body, contract, ctx.types())
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let signature = sig(
         KType::ANY,
         vec![
@@ -94,7 +94,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             arg("branches", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, "MATCH", signature, body, types, gate);
+    crate::builtins::register_builtin(scope, "MATCH", signature, body, registries, gate);
 }
 
 #[cfg(test)]

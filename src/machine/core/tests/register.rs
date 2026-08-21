@@ -7,11 +7,11 @@ use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::UntypedKeyProbe;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 
 use super::{body_no_op, unit_signature};
+use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 
 // `BindingIndex::BUILTIN` is used throughout because these tests exercise the
@@ -132,10 +132,11 @@ fn close_is_per_scope_open_child_still_binds() {
 
 #[test]
 fn register_function_dedupes_exact_signature() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f1 = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let f1 = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -144,7 +145,7 @@ fn register_function_dedupes_exact_signature() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let f2 = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let f2 = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     let err = scope
         .register_function_direct(
             "FOO".to_string(),
@@ -164,10 +165,11 @@ fn register_function_dedupes_exact_signature() {
 /// `FN` — the bind lands and the bucket keeps its single registered overload.
 #[test]
 fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f1 = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let f1 = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -176,7 +178,7 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let f2 = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let f2 = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     scope
         .bind_value_direct(
             "OTHER_NAME".to_string(),
@@ -200,14 +202,15 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
 /// callable never collide.
 #[test]
 fn bind_value_direct_with_kfunction_pointer_equal_alias_no_op() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f = KFunction::alloc_captured_for_test(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
-        &types,
+        types,
     );
     let obj1 = scope.brand().allocator().value(KObject::KFunction(f));
     let obj2 = scope.brand().allocator().value(KObject::KFunction(f));
@@ -231,7 +234,8 @@ fn bind_value_direct_with_kfunction_pointer_equal_alias_no_op() {
 
 #[test]
 fn register_function_allows_overload_with_different_arg_types() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig_num = SignatureDraft {
@@ -254,8 +258,8 @@ fn register_function_allows_overload_with_different_arg_types() {
             }),
         ],
     };
-    let f1 = KFunction::alloc_captured(scope, sig_num, Body::Builtin(body_no_op), &types);
-    let f2 = KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), &types);
+    let f1 = KFunction::alloc_captured(scope, sig_num, Body::Builtin(body_no_op), types);
+    let f2 = KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), types);
     scope
         .register_function_direct(
             "BAR".to_string(),
@@ -278,7 +282,8 @@ fn register_function_allows_overload_with_different_arg_types() {
 /// coexist with a same-name value binding. The two namespaces stay independent.
 #[test]
 fn register_function_coexists_with_same_name_value() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_scalar(Scalar::Number(1.0));
@@ -290,7 +295,7 @@ fn register_function_coexists_with_same_name_value() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -316,7 +321,8 @@ fn register_function_coexists_with_same_name_value() {
 /// so it is exempt: a same-name type and a bare FN coexist.
 #[test]
 fn register_function_coexists_with_same_name_type() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let _ = scope.register_type_direct(
@@ -325,7 +331,7 @@ fn register_function_coexists_with_same_name_type() {
         DeclarationSite::BUILTIN,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     scope
         .register_function_direct(
             "Foo".to_string(),
@@ -640,10 +646,11 @@ fn sig_scope_bindings_reject_value_token_type_write() {
 /// registration doors.
 #[test]
 fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     let sealed = scope.store_function_cell(&f);
     scope
         .bind_value_direct(

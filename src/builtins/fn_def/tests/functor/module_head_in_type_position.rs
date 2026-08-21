@@ -33,7 +33,7 @@ fn deferred_type_of_param_return_yields_the_module() {
         KObject::Module(m) => assert_eq!(m.path, "int_ord"),
         other => panic!(
             "USE_ORD int_ord must return the passed-through module value, got {}",
-            other.ktype().name(&test_run.types),
+            other.ktype().name(test_run.types()),
         ),
     }
 }
@@ -60,7 +60,7 @@ fn deferred_type_of_param_return_admits_a_per_call_region_module() {
         KObject::Module(m) => assert_eq!(m.path, "generated"),
         other => panic!(
             "USE_ORD int_set must return the functor-minted module, got {}",
-            other.ktype().name(&test_run.types),
+            other.ktype().name(test_run.types()),
         ),
     }
     test_run.run("LET back = (USE_ORD int_set)");

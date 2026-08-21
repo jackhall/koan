@@ -1,13 +1,17 @@
 pub mod ast;
 pub(crate) mod binder;
+pub(crate) mod labels;
 pub mod operators;
+pub(crate) mod registries;
 pub(crate) mod types;
 pub(crate) mod values;
 
+pub use labels::{LabelInterner, Symbol};
 pub use operators::{
     FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode, binary_key, probe_key,
     unary_key,
 };
+pub use registries::RunRegistries;
 pub use types::TypeRegistry;
 pub use types::{
     AnnouncedData, AnnouncedMember, AnnouncedWindow, Argument, DeclWindow, DeferredReturn,

@@ -76,7 +76,7 @@ fn record_value_reports_record_ktype() {
     let result = test_run.run_one(parse_one(&program, "{x = 1, y = \"a\"}"));
     assert_eq!(
         result.ktype(),
-        test_run.types.record(Record::from_pairs(vec![
+        test_run.types().record(Record::from_pairs(vec![
             ("x".into(), KType::NUMBER),
             ("y".into(), KType::STR),
         ])),

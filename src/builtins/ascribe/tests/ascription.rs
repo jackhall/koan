@@ -67,18 +67,18 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
             panic!("expr {} errored: {}", i, e);
         }
     }
-    let a = lookup_module(scope, "first_abstract", &test_run.types);
-    let b = lookup_module(scope, "second_abstract", &test_run.types);
+    let a = lookup_module(scope, "first_abstract", test_run.types());
+    let b = lookup_module(scope, "second_abstract", test_run.types());
     let a_t = a.type_members.get(&"Carrier").copied();
     let b_t = b.type_members.get(&"Carrier").copied();
     // An opaque-ascription abstract-type member mints as
     // `KType::AbstractType { name, nonce: Some(<view module's scope id>), .. }`.
     assert!(matches!(
-        a_t.map(|h| test_run.types.node(h)),
+        a_t.map(|h| test_run.types().node(h)),
         Some(TypeNode::AbstractType { name, .. }) if name == "Carrier"
     ));
     assert!(matches!(
-        b_t.map(|h| test_run.types.node(h)),
+        b_t.map(|h| test_run.types().node(h)),
         Some(TypeNode::AbstractType { name, .. }) if name == "Carrier"
     ));
     assert_ne!(
@@ -98,7 +98,7 @@ fn transparent_ascription_does_not_mint_module_types() {
          SIG Ordered = (VAL compare :Number)\n\
          LET view_mod = (int_ord :! Ordered)",
     );
-    let v = lookup_module(scope, "view_mod", &test_run.types);
+    let v = lookup_module(scope, "view_mod", test_run.types());
     assert!(v.type_members.is_empty());
 }
 
@@ -115,13 +115,13 @@ fn roadmap_example_int_ord_with_ordered_sig() {
          LET int_ord_abstract = (int_ord :| Ordered)",
     );
 
-    let abstract_mod = lookup_module(scope, "int_ord_abstract", &test_run.types);
+    let abstract_mod = lookup_module(scope, "int_ord_abstract", test_run.types());
     let minted = abstract_mod
         .type_members
         .get(&"Carrier")
         .copied()
         .expect("opaque ascription should mint a Carrier member");
-    match test_run.types.node(minted) {
+    match test_run.types().node(minted) {
         TypeNode::AbstractType { name, .. } => assert_eq!(name, "Carrier"),
         _ => panic!(
             "minted abstract type must be AbstractType, got {:?}",
@@ -152,7 +152,7 @@ fn opaque_view_reads_manifest_type_member_concretely() {
          SIG Tagged = ((LET Tag = Number) (VAL item :Number))\n\
          LET view = (implementation :| Tagged)",
     );
-    let view = lookup_module(scope, "view", &test_run.types);
+    let view = lookup_module(scope, "view", test_run.types());
     let tag = view.type_members.get(&"Tag").copied();
     assert_eq!(
         tag,
@@ -176,7 +176,7 @@ fn opaque_view_manifest_typed_val_slot_reads_concrete() {
          SIG Tagged = ((LET Tag = Number) (VAL x :Tag))\n\
          LET view = (implementation :| Tagged)",
     );
-    let view = lookup_module(scope, "view", &test_run.types);
+    let view = lookup_module(scope, "view", test_run.types());
     assert!(
         view.slot_type_tags.get(&"x").is_none(),
         "a manifest-typed VAL slot must not be re-tagged in slot_type_tags",
@@ -309,7 +309,7 @@ fn a_returned_transparent_view_keeps_the_region_it_was_minted_in() {
     test_run.run("FN (VIEWIT) -> Module = (int_ord :! Ordered)");
     test_run.run("LET view = (VIEWIT)");
 
-    let m = lookup_module(scope, "view", &test_run.types);
+    let m = lookup_module(scope, "view", test_run.types());
     assert!(
         matches!(m.child_scope().lookup("compare"), Some(KObject::Number(n)) if *n == 7.0),
         "the returned view reads its member back after its minting frame is gone",
@@ -333,7 +333,7 @@ fn opaque_view_scope_holds_exactly_the_views_type_members() {
                            (LET zero = 0) (LET label = \"n\"))\n\
          LET sealed = (int_ord :| Boxed)",
     );
-    let view = lookup_module(scope, "sealed", &test_run.types);
+    let view = lookup_module(scope, "sealed", test_run.types());
     let mut seeded: Vec<(String, KType)> = view.child_scope().bindings().iter_types();
     seeded.sort_by(|a, b| a.0.cmp(&b.0));
     let names: Vec<&str> = seeded.iter().map(|(n, _)| n.as_str()).collect();
@@ -345,7 +345,7 @@ fn opaque_view_scope_holds_exactly_the_views_type_members() {
 
     let elem = seeded[0].1;
     assert!(
-        matches!(test_run.types.node(elem), TypeNode::AbstractType { name, nonce, .. }
+        matches!(test_run.types().node(elem), TypeNode::AbstractType { name, nonce, .. }
             if name == "Elem" && nonce == Some(view.scope_id())),
         "the abstract member is seeded as this view's per-call mint",
     );
@@ -378,7 +378,7 @@ fn two_opaque_ascriptions_seed_distinct_mints() {
          LET second = (int_ord :| Pointed)",
     );
     let seeded = |name: &str| {
-        lookup_module(scope, name, &test_run.types)
+        lookup_module(scope, name, test_run.types())
             .child_scope()
             .bindings()
             .lookup_type("Elem", None)

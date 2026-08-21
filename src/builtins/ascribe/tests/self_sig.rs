@@ -23,8 +23,8 @@ fn plain_module_self_sig_is_manifest_and_raw_value_slots() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("MODULE int_ord = ((LET Tag = Number) (LET compare = 5))");
-    let m = module_named(scope, "int_ord", &test_run.types);
-    let sig = m.self_sig(&test_run.types);
+    let m = module_named(scope, "int_ord", test_run.types());
+    let sig = m.self_sig(test_run.types());
     assert!(
         sig.abstract_members.is_empty(),
         "a plain module has no abstract members"
@@ -47,8 +47,8 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
          (VAL compare :(FN (x :Elem) -> Number)))\n\
          LET view = (int_ord :| Ordered)",
     );
-    let view = module_named(scope, "view", &test_run.types);
-    let sig = view.self_sig(&test_run.types);
+    let view = module_named(scope, "view", test_run.types());
+    let sig = view.self_sig(test_run.types());
 
     // The view's manifest `Elem` is the per-call abstract identity it minted.
     let elem_abstract = view
@@ -57,7 +57,7 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
         .copied()
         .expect("opaque view mints an abstract `Elem`");
     assert!(matches!(
-        test_run.types.node(elem_abstract),
+        test_run.types().node(elem_abstract),
         TypeNode::AbstractType { .. }
     ));
     assert_eq!(sig.manifest_members.get("Elem"), Some(&elem_abstract));
@@ -68,7 +68,7 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
     // The `compare` slot's `x` param reads the abstract identity — the substitution reaches
     // inside the function type, the case a raw value read would get wrong.
     let compare = sig.value_slots.get("compare").copied();
-    match compare.map(|h| test_run.types.node(h)) {
+    match compare.map(|h| test_run.types().node(h)) {
         Some(TypeNode::KFunction { params, ret }) => {
             assert_eq!(params.get("x"), Some(&elem_abstract));
             assert_eq!(ret, KType::NUMBER);
@@ -90,15 +90,15 @@ fn transparent_view_self_sig_reads_source_concrete_types() {
          (VAL compare :(FN (x :Elem) -> Number)))\n\
          LET view = (int_ord :! Ordered)",
     );
-    let view = module_named(scope, "view", &test_run.types);
-    let sig = view.self_sig(&test_run.types);
+    let view = module_named(scope, "view", test_run.types());
+    let sig = view.self_sig(test_run.types());
 
     // A transparent view reads the source's concrete `Elem = Number`.
     assert_eq!(sig.manifest_members.get("Elem"), Some(&KType::NUMBER));
     // Declared slots substitute to the concrete source type.
     assert_eq!(sig.value_slots.get("zero"), Some(&KType::NUMBER));
     let compare = sig.value_slots.get("compare").copied();
-    match compare.map(|h| test_run.types.node(h)) {
+    match compare.map(|h| test_run.types().node(h)) {
         Some(TypeNode::KFunction { params, ret }) => {
             assert_eq!(params.get("x"), Some(&KType::NUMBER));
             assert_eq!(ret, KType::NUMBER);
@@ -119,13 +119,16 @@ fn two_opaque_views_carry_distinct_abstract_identities() {
          LET first = (int_ord :| Pointed)\n\
          LET second = (int_ord :| Pointed)",
     );
-    let first = module_named(scope, "first", &test_run.types);
-    let second = module_named(scope, "second", &test_run.types);
+    let first = module_named(scope, "first", test_run.types());
+    let second = module_named(scope, "second", test_run.types());
     // Generativity: each ascription mints its own abstract `Elem`, so the self-sigs differ.
     assert_ne!(
-        first.self_sig(&test_run.types).manifest_members.get("Elem"),
+        first
+            .self_sig(test_run.types())
+            .manifest_members
+            .get("Elem"),
         second
-            .self_sig(&test_run.types)
+            .self_sig(test_run.types())
             .manifest_members
             .get("Elem"),
     );
@@ -238,8 +241,8 @@ fn opaque_views_have_distinct_type_of() {
          LET v1 = (int_ord :| Ordered)\n\
          LET v2 = (int_ord :| Ordered)",
     );
-    let v1 = lookup_module(scope, "v1", &test_run.types);
-    let v2 = lookup_module(scope, "v2", &test_run.types);
+    let v1 = lookup_module(scope, "v1", test_run.types());
+    let v2 = lookup_module(scope, "v2", test_run.types());
     assert_ne!(
         KObject::Module(v1).ktype(),
         KObject::Module(v2).ktype(),

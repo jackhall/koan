@@ -15,7 +15,7 @@ fn module_child_scope_reads_back_after_the_born_store() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = &test_run.types;
+    let types = test_run.types();
     let draft = ModuleDraft::empty();
     let self_sig = types.signature(SigSchema::raw_self_sig(scope, &draft));
     let module = Module::alloc_at_child_scope("Test", scope, draft, self_sig);
@@ -40,7 +40,7 @@ fn module_members_read_back_through_the_bumped_maps() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = &test_run.types;
+    let types = test_run.types();
     let mut draft = ModuleDraft::empty();
     let member = types.intern(TypeNode::AbstractType {
         source: scope.id,
@@ -83,7 +83,7 @@ fn bare_module_self_sig_is_empty_after_raw_seal() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = &test_run.types;
+    let types = test_run.types();
     let draft = ModuleDraft::empty();
     let self_sig = types.signature(SigSchema::raw_self_sig(scope, &draft));
     let module = Module::alloc_at_child_scope("Bare", scope, draft, self_sig);

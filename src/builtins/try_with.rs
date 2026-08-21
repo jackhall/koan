@@ -11,7 +11,6 @@
 //! would short-circuit through eager-subs dep-error propagation before `TRY`'s body ran.
 
 use crate::machine::WriteGate;
-use crate::machine::model::TypeRegistry;
 
 use crate::machine::model::KKind;
 
@@ -20,6 +19,7 @@ use crate::machine::{DeliveredCarried, KError, KErrorKind, Scope};
 
 use super::branch_walk::find_branch_body_by_tag;
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 
 /// Watches `expr`, then a `Catch` finish walks the arms against the `Result`, tail-replacing
 /// into the matched arm under the `-> :T` contract and re-raising on no match.
@@ -79,7 +79,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     )
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let signature = sig(
         KType::ANY,
         vec![
@@ -91,7 +91,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             arg("branches", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, "TRY", signature, body, types, gate);
+    crate::builtins::register_builtin(scope, "TRY", signature, body, registries, gate);
 }
 
 #[cfg(test)]

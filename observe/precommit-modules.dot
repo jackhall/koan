@@ -97,7 +97,9 @@ digraph {
     "koan::machine::model::ast::shape" [label="koan::machine::model::ast::shape"];
     "koan::machine::model::ast::working" [label="koan::machine::model::ast::working"];
     "koan::machine::model::binder" [label="koan::machine::model::binder"];
+    "koan::machine::model::labels" [label="koan::machine::model::labels"];
     "koan::machine::model::operators" [label="koan::machine::model::operators"];
+    "koan::machine::model::registries" [label="koan::machine::model::registries"];
     "koan::machine::model::types" [label="koan::machine::model::types"];
     "koan::machine::model::types::declaration_window" [label="koan::machine::model::types::declaration_window"];
     "koan::machine::model::types::kkind" [label="koan::machine::model::types::kkind"];
@@ -232,7 +234,9 @@ digraph {
     "koan::machine::execute::decide" -> "koan::machine::execute::decide::submit" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::ast" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::binder" [label="owns", style="solid"];
+    "koan::machine::model" -> "koan::machine::model::labels" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::operators" [label="owns", style="solid"];
+    "koan::machine::model" -> "koan::machine::model::registries" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::types" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::values" [label="owns", style="solid"];
     "koan::machine::model::ast" -> "koan::machine::model::ast::program" [label="owns", style="solid"];
@@ -471,6 +475,7 @@ digraph {
     "koan::machine::core::arena::frame" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::arena::frame" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::arena::frame" -> "koan::machine::core::arena" [label="uses", style="dashed"];
+    "koan::machine::core::arena::frame" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::arena::frame" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::arena::step_allocator" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::arena::step_allocator" -> "koan::machine" [label="uses", style="dashed"];
@@ -578,6 +583,7 @@ digraph {
     "koan::machine::execute::ambient" -> "koan::machine::execute::harness" [label="uses", style="dashed"];
     "koan::machine::execute::ambient" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::ambient" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
+    "koan::machine::execute::ambient" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::ambient" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::builtins::test_support" [label="uses", style="dashed"];
@@ -805,8 +811,12 @@ digraph {
     "koan::machine::model::binder" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::parse" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::labels" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::labels" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::operators" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::operators" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::machine::model::registries" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::registries" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::declaration_window" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::declaration_window" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::declaration_window" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
@@ -885,6 +895,7 @@ digraph {
     "koan::machine::model::types::resolver" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::types::sig_schema" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
@@ -892,6 +903,7 @@ digraph {
     "koan::machine::model::types::sig_schema" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::types::signature" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
@@ -926,6 +938,7 @@ digraph {
     "koan::machine::model::values::container_substrate" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::values::kkey" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::values::kobject" [label="uses", style="dashed"];

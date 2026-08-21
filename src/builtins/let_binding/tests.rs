@@ -48,6 +48,7 @@ fn let_t_cycle_errors() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let types = test_run.registry_handle();
     let runtime = &mut test_run.runtime;
     let exprs = parse(program.brand(), "LET Ty = Ty").unwrap();
     let exprs = exprs
@@ -59,7 +60,6 @@ fn let_t_cycle_errors() {
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let types = test_run.types.clone();
     let res = runtime.read_edge_result_with(edge, |v| format!("{:?}", v.ktype(&types)));
     match res {
         // The bare-leaf RHS resolves through the memoized type-expr bridge, whose miss
@@ -101,7 +101,7 @@ fn let_type_class_with_non_type_value_errors() {
             .runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        let types = test_run.types.clone();
+        let types = test_run.registry_handle();
         match test_run
             .runtime
             .read_edge_result_with(edge, |v| format!("{:?}", v.ktype(&types)))
@@ -217,7 +217,7 @@ fn let_parameterized_type_lhs_still_shape_errors() {
         .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let res = test_run
         .runtime
         .read_edge_result_with(edges[0], |v| format!("{:?}", v.ktype(&types)));

@@ -33,10 +33,10 @@
 
 use crate::machine::WriteGate;
 use crate::machine::model::KType;
-use crate::machine::model::TypeRegistry;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 
 /// USING's result is the body's tail — the block's last statement's own witnessed terminal via the
 /// ordinary `DoneWitnessed` path, not a forwarded dep. The block runs in the owned scope
@@ -71,7 +71,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         None,
         BlockBody::Block(body_expr),
         None,
-        ctx.types,
+        ctx.types(),
     )
 }
 
@@ -83,9 +83,9 @@ fn non_module_argument(ctx: &crate::machine::BodyCtx<'_, '_, '_>) -> KError {
     use crate::machine::model::Held;
 
     let got = match arg_held(ctx.args, "m") {
-        Some(Held::Type(other)) => other.name(ctx.types),
+        Some(Held::Type(other)) => other.name(ctx.types()),
         Some(Held::UnresolvedType(ti)) => ti.render(),
-        Some(Held::Object(other)) => other.ktype().name(ctx.types).to_string(),
+        Some(Held::Object(other)) => other.ktype().name(ctx.types()).to_string(),
         None => return KError::new(KErrorKind::MissingArg("m".to_string())),
     };
     KError::new(KErrorKind::TypeMismatch {
@@ -95,7 +95,7 @@ fn non_module_argument(ctx: &crate::machine::BodyCtx<'_, '_, '_>) -> KError {
     })
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let signature = sig(
         KType::ANY,
         vec![
@@ -105,7 +105,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             arg("body", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, "USING", signature, body, types, gate);
+    crate::builtins::register_builtin(scope, "USING", signature, body, registries, gate);
 }
 
 #[cfg(test)]

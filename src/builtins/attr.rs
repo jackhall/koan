@@ -24,6 +24,7 @@ use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
 use super::{arg, kw, sig};
 use crate::machine::DeliveredCarried;
+use crate::machine::model::RunRegistries;
 
 /// Lift an `access_*` result into its terminal [`Action`]: a projected member — object or type —
 /// seals as a [`StepCarried`] carrier naming its reach ([`Action::done(Ok)`]), an error as a
@@ -73,20 +74,20 @@ pub fn body_identifier<'a>(
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
                 expected: "Identifier".to_string(),
-                got: other.ktype().name(ctx.types),
+                got: other.ktype().name(ctx.types()),
             })));
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
-    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
+    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types()));
     // `s` is a bound name: cross the binding's own carrier as the field read's lhs operand, so the
     // projected field folds every region the bound value reaches. The lift is the only read — the
     // field probe runs under the envelope's own pins rather than off a bare reference.
     if let Some(lhs) = ctx.scope.lookup_value_delivered(&s_name) {
-        return route(access_field(&ctx.ctx, &field_name, &lhs, ctx.types));
+        return route(access_field(&ctx.ctx, &field_name, &lhs, ctx.types()));
     }
     if let Some(kt) = ctx.scope.resolve_type(&s_name)
-        && let TypeNode::AbstractType { name, .. } = ctx.types.node(kt)
+        && let TypeNode::AbstractType { name, .. } = ctx.types().node(kt)
     {
         return Action::done(Err(abstract_type_has_no_members(&name)));
     }
@@ -102,10 +103,10 @@ pub fn body_identifier<'a>(
 pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{Action, arg_object, arg_type, arg_unresolved_type};
     if let Some(te) = arg_unresolved_type(ctx.args, "s") {
-        let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
-        return match ctx.scope.resolve_type_identifier(te, None, ctx.types) {
+        let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types()));
+        return match ctx.scope.resolve_type_identifier(te, None, ctx.types()) {
             TypeResolution::Done(kt) => {
-                route(access_type_member(ctx.scope, kt, &field_name, ctx.types))
+                route(access_type_member(ctx.scope, kt, &field_name, ctx.types()))
             }
             TypeResolution::Unbound(name) => {
                 Action::done(Err(KError::new(KErrorKind::UnboundName(name))))
@@ -128,14 +129,19 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
                 Some(other) => KError::new(KErrorKind::TypeMismatch {
                     arg: "s".to_string(),
                     expected: "ProperType".to_string(),
-                    got: other.ktype().name(ctx.types),
+                    got: other.ktype().name(ctx.types()),
                 }),
                 None => KError::new(KErrorKind::MissingArg("s".to_string())),
             }));
         }
     };
-    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
-    route(access_type_member(ctx.scope, s_kt, &field_name, ctx.types))
+    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types()));
+    route(access_type_member(
+        ctx.scope,
+        s_kt,
+        &field_name,
+        ctx.types(),
+    ))
 }
 
 /// Reads the `Wrapped` runtime lhs and projects the field through [`access_field`].
@@ -145,7 +151,7 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mac
         Some(obj) => obj,
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
-    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
+    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types()));
     // The lhs `s` is a computed `Wrapped` value delivered to this call (e.g. `seg.finish.x`), so its
     // carrier names regions the read-site frame may not pin; cross the lhs carrier as the field
     // read's operand so the projected field outlives every region the lhs reaches. A carrier-less
@@ -154,13 +160,13 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mac
     // seal. No region-pure shape is a `Wrapped`, so that arm's diagnostic is what a construction
     // bug would surface here.
     match ctx.arg_carrier("s") {
-        Some(lhs) => route(access_field(&ctx.ctx, &field_name, lhs, ctx.types)),
+        Some(lhs) => route(access_field(&ctx.ctx, &field_name, lhs, ctx.types())),
         None => {
             let resident = match ctx.scope.deliver_pure_value(target) {
                 Ok(resident) => resident,
                 Err(e) => return Action::done(Err(e)),
             };
-            route(access_field(&ctx.ctx, &field_name, &resident, ctx.types))
+            route(access_field(&ctx.ctx, &field_name, &resident, ctx.types()))
         }
     }
 }
@@ -174,7 +180,7 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
                 expected: "Module".to_string(),
-                got: other.ktype().name(ctx.types),
+                got: other.ktype().name(ctx.types()),
             })));
         }
         None => {
@@ -185,7 +191,7 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
             })));
         }
     };
-    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
+    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types()));
     route(access_module_member(m, &field_name))
 }
 
@@ -405,7 +411,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let identifier_sig = || {
         sig(
             KType::ANY,
@@ -482,17 +488,24 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         "ATTR",
         identifier_sig(),
         body_identifier,
-        types,
+        registries,
         gate,
     );
-    register_builtin(scope, "ATTR", module_field_sig(), body_module, types, gate);
-    register_builtin(scope, "ATTR", newtype_sig(), body_newtype, types, gate);
+    register_builtin(
+        scope,
+        "ATTR",
+        module_field_sig(),
+        body_module,
+        registries,
+        gate,
+    );
+    register_builtin(scope, "ATTR", newtype_sig(), body_newtype, registries, gate);
     register_builtin(
         scope,
         "ATTR",
         type_identifier_field_sig(),
         body_type_lhs,
-        types,
+        registries,
         gate,
     );
     register_builtin(
@@ -500,7 +513,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         "ATTR",
         type_type_field_sig(),
         body_type_lhs,
-        types,
+        registries,
         gate,
     );
     register_builtin(
@@ -508,7 +521,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         "ATTR",
         module_type_field_sig(),
         body_module,
-        types,
+        registries,
         gate,
     );
 }
@@ -679,7 +692,7 @@ mod tests {
              MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
              LET int_ord_view = (int_ord :| WithZero)",
         );
-        let types = test_run.types.clone();
+        let types = test_run.registry_handle();
         let result = test_run.run_one(parse_one(&program, "int_ord_view.zero"));
         assert_eq!(
             result.ktype().name(&types),

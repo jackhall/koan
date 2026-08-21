@@ -20,6 +20,7 @@ use crate::machine::{Action, BodyCtx, arg_held};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 
 /// Render a banned-operand error for operator `op`.
@@ -57,7 +58,7 @@ fn compare(ctx: &BodyCtx<'_, '_, '_>, op: &str) -> Result<bool, KError> {
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("left".to_string())))?;
     let right = arg_held(ctx.args, "right")
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("right".to_string())))?;
-    cells_equal(left, right, op, ctx.types)
+    cells_equal(left, right, op, ctx.types())
 }
 
 pub fn body_eq<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
@@ -78,15 +79,15 @@ pub fn body_ne<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 
 /// Register `==` / `!=` as binary-only builtins. Deliberately **not** seeded into any operator
 /// group (see [`super::arithmetic::register_builtin_operator_groups`]) — equality does not chain.
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let eq_sig = |op: &'static str| {
         sig(
             KType::BOOL,
             vec![arg("left", KType::ANY), kw(op), arg("right", KType::ANY)],
         )
     };
-    crate::builtins::register_builtin(scope, "==", eq_sig("=="), body_eq, types, gate);
-    crate::builtins::register_builtin(scope, "!=", eq_sig("!="), body_ne, types, gate);
+    crate::builtins::register_builtin(scope, "==", eq_sig("=="), body_eq, registries, gate);
+    crate::builtins::register_builtin(scope, "!=", eq_sig("!="), body_ne, registries, gate);
 }
 
 #[cfg(test)]

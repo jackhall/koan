@@ -19,8 +19,9 @@ use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::GroupSeal;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::tests::{body_no_op, unit_signature};
+use crate::machine::model::RunRegistries;
 use crate::machine::model::{
-    ReductionMode, ReturnType, SignatureDraft, SignatureElement, TypeRegistry, probe_key,
+    ReductionMode, ReturnType, SignatureDraft, SignatureElement, probe_key,
 };
 
 /// Seal `obj` as resident in `region` under a description naming `foreign` — the shape a bind
@@ -421,11 +422,12 @@ fn value_write_commits_and_retires_its_own_claim() {
 /// releases.
 #[test]
 fn a_two_bucket_binder_retires_the_key_it_did_not_seal() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let mut gate = crate::machine::WriteGate::for_test();
-    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     let sealed_key = f.open(|f| f.signature.untyped_key());
     let bridge_key: UntypedKey = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
@@ -578,7 +580,8 @@ fn a_bound_identity_and_a_live_claim_stand_on_one_name_at_once() {
 /// assert at [`bump_table`] and on [`Bindings`] rather than something a run could observe.
 #[test]
 fn bump_backed_tables_full_churn() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let region = run_root_storage();
     {
         let scope = run_root_bare(&region);
@@ -617,7 +620,7 @@ fn bump_backed_tables_full_churn() {
         // A dispatch bucket claimed by two sibling binders, one of which finalizes and retires its
         // own claim while the sibling's stands.
         let f =
-            KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), &types);
+            KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
         let sealed_key = f.open(|f| f.signature.untyped_key());
         for claim in [ProducerId::for_test(7), ProducerId::for_test(8)] {
             scope

@@ -30,7 +30,7 @@ pub(crate) fn resolve_arm_contract<'a>(
     let ret_kt = if let Some(te) = arg_unresolved_type(ctx.args, "return_type") {
         match ctx
             .scope
-            .resolve_type_identifier(te, ctx.chain.clone(), ctx.types)
+            .resolve_type_identifier(te, ctx.chain.clone(), ctx.types())
         {
             TypeResolution::Done(kt) => kt,
             // The builtin fallback is already tried inside `resolve_type_identifier`; a

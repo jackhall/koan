@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use super::*;
 use crate::builtins::test_support::TestRun;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::{
@@ -20,7 +21,8 @@ use crate::witnessed::{Delivered, FoldedPlacement, Sealed};
 /// A `KFunction` whose captured scope lives in `home`'s region, allocated into `home`'s region — a
 /// borrow leaf pointing at `home`, the shape a closure capturing its own defining frame takes.
 fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KFunction<'run> {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     CallFrame::alloc_capturing_scope(
         home,
         SignatureDraft {
@@ -33,7 +35,7 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KFunction<'run> 
                 Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
             )
         }),
-        &types,
+        types,
     )
 }
 
@@ -79,9 +81,10 @@ fn adopt_for_binding_pins_a_home_borrowing_record() {
     let test_run = TestRun::silent(&program, &root);
     let consumer = test_run.scope;
     let producer: Rc<CallFrame> = CallFrame::new(consumer);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
 
-    let record = alloc_home_borrowing_record(&producer, 7.0, &types);
+    let record = alloc_home_borrowing_record(&producer, 7.0, types);
     let producer_substrate = substrate_address(record);
 
     // Precondition: the cost chooser selects Pin for this home-crossing, borrows-home record.
@@ -176,9 +179,10 @@ fn a_projected_cell_carries_its_own_run_not_the_containers_union() {
     // one provably does not cover the other.
     let home: Rc<CallFrame> = CallFrame::new(consumer);
     let foreign: Rc<CallFrame> = CallFrame::new(consumer);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
 
-    let record = alloc_split_reach_record(&home, &foreign, &types);
+    let record = alloc_split_reach_record(&home, &foreign, types);
     let substrate = match record {
         KObject::Record(substrate, _) => substrate,
         other => panic!("expected a Record, got {:?}", other.ktype()),

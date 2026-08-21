@@ -23,7 +23,7 @@ fn run_expecting_dispatch_error<'a>(test_run: &mut TestRun<'a>, expr: KExpressio
     match test_run.runtime.execute() {
         Err(e) => e,
         Ok(()) => {
-            let types = test_run.types.clone();
+            let types = test_run.registry_handle();
             match test_run
                 .runtime
                 .read_edge_result_with(edge, |v| v.ktype(&types).name(&types).to_string())
@@ -49,7 +49,7 @@ fn functor_admits_bare_number_token_at_type_slot() {
         other => {
             panic!(
                 "expected MAKETREE Number to dispatch and return a module, got {}",
-                other.summarize(&test_run.types)
+                other.summarize(test_run.types())
             )
         }
     }
@@ -69,7 +69,7 @@ fn functor_admits_bare_str_bool_null_tokens_at_type_slot() {
             other => {
                 panic!(
                     "expected MAKETREE {token} to dispatch and return a module, got {}",
-                    other.summarize(&test_run.types)
+                    other.summarize(test_run.types())
                 )
             }
         }
@@ -90,7 +90,7 @@ fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
         KObject::Module(module) => *module,
         other => panic!(
             "expected module result, got {}",
-            other.summarize(&test_run.types)
+            other.summarize(test_run.types())
         ),
     };
     match module.type_members.get(&"ElemType").copied() {

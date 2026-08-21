@@ -135,7 +135,7 @@ fn let_binds_stamped_empty_list_from_typed_fn_return() {
             assert!(items.elements().is_empty());
             assert_eq!(
                 obj.ktype(),
-                test_run.types.list(crate::machine::model::KType::NUMBER),
+                test_run.types().list(crate::machine::model::KType::NUMBER),
             );
         }
         _ => panic!("expected `xs` bound to a stamped empty List<Number>"),

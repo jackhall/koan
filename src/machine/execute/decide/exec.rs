@@ -288,7 +288,7 @@ fn run_action_builtin<'step>(
             arg_carriers: &arg_carriers,
             installer: view.installer(),
             ctx: view.step_ctx(),
-            types: view.types(),
+            registries: view.registries(),
             out: view.out(),
             program: view.program(),
         };

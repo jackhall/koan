@@ -19,6 +19,7 @@ use crate::machine::execute::StepCarried;
 use crate::machine::model::Carried;
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
@@ -245,13 +246,16 @@ pub struct BodyCtx<'program: 'a, 'a, 'c> {
     /// `'a`: its doors return a [`StepCarried`] that cannot outlive the step. The same allocator a
     /// wake-time [`FinishCtx`] carries.
     pub ctx: StepAllocator<'a>,
-    /// The run's subtype-verdict registry, borrowed from the scheduler view at the call. A builtin
-    /// body that runs a type predicate (ascription, MATCH arm selection, `==`) passes it down. The
-    /// registry is owned by the run frame and outlives the call, so the body forwards the borrow
-    /// rather than sharing ownership.
-    pub types: &'c TypeRegistry,
+    /// The run's lookup state — the type registry and the label interner — borrowed from the
+    /// scheduler view at the call. A body that runs a type predicate (ascription, MATCH arm
+    /// selection, `==`) reaches the registry through [`Self::types`]; a body that builds a record
+    /// or renders a label interns and resolves through `registries.labels`. The registries are
+    /// owned by the run frame and outlive the call, so the body forwards the borrow rather than
+    /// sharing ownership.
+    pub registries: &'c RunRegistries,
     /// The run's output sink, borrowed from the scheduler view at the call — the same channel and
-    /// the same run-frame owner as [`Self::types`]. A body that emits program output writes here.
+    /// the same run-frame owner as [`Self::registries`]. A body that emits program output writes
+    /// here.
     pub out: &'c RunWriter,
     /// The run's program storage allocation capability, threaded down from the scheduler view. A
     /// body that has to synthesize a node reaching the **value channel** builds it through this,
@@ -265,6 +269,11 @@ pub struct BodyCtx<'program: 'a, 'a, 'c> {
 }
 
 impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
+    /// The run's type registry — the currency for pure type-structure questions.
+    pub fn types(&self) -> &'c TypeRegistry {
+        &self.registries.types
+    }
+
     /// The lexical position a binding the builtin installs takes: the ambient chain head's index —
     /// this step's own statement position in its block — or [`BindingIndex::BUILTIN`] when there is
     /// no chain (a top-level / direct-body binder, e.g. a test fixture that bypasses the
@@ -316,7 +325,7 @@ impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
         FinishCtx {
             scope: self.scope,
             ctx: self.ctx.clone(),
-            types: self.types,
+            types: self.types(),
         }
     }
 }

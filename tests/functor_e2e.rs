@@ -88,7 +88,7 @@ fn functor_e2e_makeset_produces_module() {
     let makeset = lookup_fn(scope, "MAKESET");
     assert!(
         matches!(
-            test_run.types.node(KObject::KFunction(makeset).ktype()),
+            test_run.types().node(KObject::KFunction(makeset).ktype()),
             TypeNode::KFunction { .. }
         ),
         "a module-returning FN types as a function type",
@@ -115,7 +115,7 @@ fn functor_e2e_makeset_produces_module() {
     // structurally (`SIG (tag: Number)`), not by the module name — the type a `:Signature` slot
     // matches it against.
     assert_eq!(
-        KObject::Module(m).ktype().name(&test_run.types),
+        KObject::Module(m).ktype().name(test_run.types()),
         "SIG (tag: Number)",
         "a module value is typed by its self-sig",
     );

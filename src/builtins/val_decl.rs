@@ -25,6 +25,7 @@ use crate::source::Spanned;
 
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
+use crate::machine::model::RunRegistries;
 
 fn typeexpr_from_carrier<'a>(
     brand: RegionBrand<'a>,
@@ -89,7 +90,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             return done_err(KError::new(KErrorKind::TypeMismatch {
                 arg: "name".to_string(),
                 expected: "Identifier".to_string(),
-                got: other.ktype().name(ctx.types),
+                got: other.ktype().name(ctx.types()),
             }));
         }
         None => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
@@ -107,13 +108,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let carrier = match arg_unresolved_type(ctx.args, "ty") {
         Some(te) => CarrierForm::Raw(*te),
         None => match arg_type(ctx.args, "ty") {
-            Some(kt) => typeexpr_from_carrier(ctx.scope.brand(), kt, ctx.types),
+            Some(kt) => typeexpr_from_carrier(ctx.scope.brand(), kt, ctx.types()),
             None => {
                 return done_err(match arg_object(ctx.args, "ty") {
                     Some(other) => KError::new(KErrorKind::TypeMismatch {
                         arg: "ty".to_string(),
                         expected: "ProperType".to_string(),
-                        got: other.ktype().name(ctx.types),
+                        got: other.ktype().name(ctx.types()),
                     }),
                     None => KError::new(KErrorKind::MissingArg("ty".to_string())),
                 });
@@ -171,7 +172,7 @@ fn finalize_val<'a>(
     })
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     // Design-B sigil consumes `:`; no explicit colon keyword in the signature.
     let signature = sig(
         KType::ANY,
@@ -186,7 +187,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
     // extractors to match — no name, no bucket. Its declaration slot is still
     // declaration-classified in dispatch, via the spec entry's `name_slot` cached on the
     // expression.
-    crate::builtins::register_builtin(scope, "VAL", signature, body, types, gate);
+    crate::builtins::register_builtin(scope, "VAL", signature, body, registries, gate);
 }
 
 #[cfg(test)]

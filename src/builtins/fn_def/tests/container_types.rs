@@ -18,7 +18,7 @@ fn fn_return_coarsens_list_carrier_to_declared() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (NUMS) -> :(LIST OF Any) = ([1 2 3])");
     let result = test_run.run_one(parse_one(&program, "NUMS"));
-    assert_eq!(result.ktype(), test_run.types.list(KType::ANY));
+    assert_eq!(result.ktype(), test_run.types().list(KType::ANY));
 }
 
 /// Without an annotation, a list keeps its precise memoized join type.
@@ -29,7 +29,7 @@ fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (NUMS) -> :(LIST OF Number) = ([1 2 3])");
     let result = test_run.run_one(parse_one(&program, "NUMS"));
-    assert_eq!(result.ktype(), test_run.types.list(KType::NUMBER));
+    assert_eq!(result.ktype(), test_run.types().list(KType::NUMBER));
 }
 
 /// A heterogeneous literal carries `List<Any>` and does not satisfy a precise
@@ -63,7 +63,7 @@ fn fn_return_empty_list_stamps_declared_element_type() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (EMPTY) -> :(LIST OF Number) = ([])");
     let result = test_run.run_one(parse_one(&program, "EMPTY"));
-    assert_eq!(result.ktype(), test_run.types.list(KType::NUMBER));
+    assert_eq!(result.ktype(), test_run.types().list(KType::NUMBER));
 }
 
 #[test]
@@ -565,7 +565,7 @@ fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (ECHO xs :(LIST OF Any)) -> :(LIST OF Any) = (xs)");
     let result = test_run.run_one(parse_one(&program, "ECHO [1]"));
-    assert_eq!(result.ktype(), test_run.types.list(KType::ANY));
+    assert_eq!(result.ktype(), test_run.types().list(KType::ANY));
 }
 
 /// A correct-element call into a precise slot keeps the precise element type.
@@ -576,5 +576,5 @@ fn fn_typed_list_param_accepts_matching_element_at_call() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (ECHO xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
     let result = test_run.run_one(parse_one(&program, "ECHO [1]"));
-    assert_eq!(result.ktype(), test_run.types.list(KType::NUMBER));
+    assert_eq!(result.ktype(), test_run.types().list(KType::NUMBER));
 }

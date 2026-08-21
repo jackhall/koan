@@ -1,4 +1,6 @@
 use crate::machine::model::KKind;
+use crate::machine::model::RunRegistries;
+#[cfg(test)]
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::{BindingIndex, Scope, WriteGate};
@@ -76,10 +78,10 @@ pub(crate) fn register_builtin<'a>(
     name: &str,
     signature: SignatureDraft<'a>,
     body: crate::machine::ActionFn,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
     gate: &mut WriteGate,
 ) {
-    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), types);
+    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), &registries.types);
     let _ = scope.register_function_direct(name.into(), &cell, BindingIndex::BUILTIN, gate);
 }
 
@@ -121,7 +123,11 @@ pub fn unseeded_scopes<'a>(
 ///
 /// Registration order does not affect dispatch — [`Scope::resolve_dispatch`] buckets by
 /// untyped signature shape and picks overloads by `KType` specificity.
-pub(crate) fn seed_builtins<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub(crate) fn seed_builtins<'a>(
+    scope: &'a Scope<'a>,
+    registries: &RunRegistries,
+    gate: &mut WriteGate,
+) {
     scope.register_builtin_type("Number".into(), KType::NUMBER, gate);
     scope.register_builtin_type("Str".into(), KType::STR, gate);
     scope.register_builtin_type("Bool".into(), KType::BOOL, gate);
@@ -134,30 +140,30 @@ pub(crate) fn seed_builtins<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate
     scope.register_builtin_type("Signature".into(), KType::of_kind(KKind::Signature), gate);
     scope.register_builtin_type("Any".into(), KType::ANY, gate);
 
-    let_binding::register(scope, types, gate);
-    print::register(scope, types, gate);
-    fn_def::register(scope, types, gate);
-    union::register(scope, types, gate);
-    result::register(scope, types, gate);
-    newtype_def::register(scope, types, gate);
-    match_case::register(scope, types, gate);
-    try_with::register(scope, types, gate);
-    using_scope::register(scope, types, gate);
-    catch::register(scope, types, gate);
-    attr::register(scope, types, gate);
-    eval::register(scope, types, gate);
-    module_def::register(scope, types, gate);
-    sig_def::register(scope, types, gate);
-    val_decl::register(scope, types, gate);
-    type_decl::register(scope, types, gate);
-    ascribe::register(scope, types, gate);
-    record_projection::register(scope, types, gate);
-    type_ops::register(scope, types, gate);
-    parameterized_types::register(scope, types, gate);
-    type_union::register(scope, types, gate);
-    op_def::register(scope, types, gate);
-    group_def::register(scope, types, gate);
-    arithmetic::register(scope, types, gate);
-    arithmetic::register_builtin_operator_groups(scope, types, gate);
-    equality::register(scope, types, gate);
+    let_binding::register(scope, registries, gate);
+    print::register(scope, registries, gate);
+    fn_def::register(scope, registries, gate);
+    union::register(scope, registries, gate);
+    result::register(scope, registries, gate);
+    newtype_def::register(scope, registries, gate);
+    match_case::register(scope, registries, gate);
+    try_with::register(scope, registries, gate);
+    using_scope::register(scope, registries, gate);
+    catch::register(scope, registries, gate);
+    attr::register(scope, registries, gate);
+    eval::register(scope, registries, gate);
+    module_def::register(scope, registries, gate);
+    sig_def::register(scope, registries, gate);
+    val_decl::register(scope, registries, gate);
+    type_decl::register(scope, registries, gate);
+    ascribe::register(scope, registries, gate);
+    record_projection::register(scope, registries, gate);
+    type_ops::register(scope, registries, gate);
+    parameterized_types::register(scope, registries, gate);
+    type_union::register(scope, registries, gate);
+    op_def::register(scope, registries, gate);
+    group_def::register(scope, registries, gate);
+    arithmetic::register(scope, registries, gate);
+    arithmetic::register_builtin_operator_groups(scope, registries, gate);
+    equality::register(scope, registries, gate);
 }

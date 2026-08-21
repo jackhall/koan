@@ -7,12 +7,12 @@ use crate::machine::WriteGate;
 use crate::machine::model::Elaborator;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeNode;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, SignatureElement};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 
+use crate::machine::model::RunRegistries;
 use finalize::{FnKind, FnPlan, ParamListResult, classify, finalize_fn_with_kind, fn_action};
 use return_type::classify_return_type;
 use signature::ParamListOutcome;
@@ -55,10 +55,10 @@ pub(crate) fn build_fn_like<'a>(
         ctx.scope,
         ctx.chain.clone(),
         "FN return-type slot",
-        ctx.types,
+        ctx.types(),
     ));
     let params =
-        match signature::parse_fn_param_list(&signature_expr, &mut elaborator, ctx.types, None) {
+        match signature::parse_fn_param_list(&signature_expr, &mut elaborator, ctx.types(), None) {
             ParamListOutcome::Done(es) => ParamListResult::Done(es),
             ParamListOutcome::Err(msg) => {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))));
@@ -83,7 +83,7 @@ pub(crate) fn build_fn_like<'a>(
             body_expr,
             kind,
             bind_index,
-            ctx.types,
+            ctx.types(),
         )),
         FnPlan::Deferred(inputs) => defer(
             ctx.scope,
@@ -150,7 +150,7 @@ pub fn body_let_combined_type_named<'a>(
     let name = match arg_unresolved_type(ctx.args, "name") {
         Some(te) => te.render(),
         None => match arg_type(ctx.args, "name") {
-            Some(kt) => kt.name(ctx.types),
+            Some(kt) => kt.name(ctx.types()),
             None => return Action::done(Err(KError::new(KErrorKind::MissingArg("name".into())))),
         },
     };
@@ -172,7 +172,7 @@ pub fn body_value_named_return<'a>(
         ctx.args,
         "return_type",
         "FN",
-        ctx.types
+        ctx.types()
     ));
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "FN return-type slot names a type, but `{name}` is a value. For the type of a value — a \
@@ -197,12 +197,12 @@ pub fn body_record_schema<'a>(
     use return_type::extract_return_type_raw;
 
     let schema = match arg_type(ctx.args, "signature") {
-        Some(kt) => match ctx.types.node(kt) {
+        Some(kt) => match ctx.types().node(kt) {
             TypeNode::Record { fields } => fields,
             _ => {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",
-                    kt.name(ctx.types),
+                    kt.name(ctx.types()),
                 )))));
             }
         },
@@ -233,7 +233,7 @@ pub fn body_record_schema<'a>(
         ctx.scope,
         ctx.chain.clone(),
         "FN return-type slot",
-        ctx.types,
+        ctx.types(),
     ));
     let bind_index = ctx.bind_index();
     match classify(return_type_state, ParamListResult::Done(Vec::new())) {
@@ -244,7 +244,7 @@ pub fn body_record_schema<'a>(
             body_expr,
             FnKind::Anonymous,
             bind_index,
-            ctx.types,
+            ctx.types(),
         )),
         FnPlan::Deferred(mut inputs) => {
             inputs.prebuilt_elements = Some(elements);
@@ -260,7 +260,7 @@ pub fn body_record_schema<'a>(
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     // Declared return is `KType::ANY`: a function's structural type only exists
     // once its signature is known. The constructed `KObject::KFunction` projects
     // its full signature through `ktype()` at the call site.
@@ -372,24 +372,31 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         )
     };
     use crate::builtins::register_builtin;
-    register_builtin(scope, "FN", typeexpr_sig(), body, types, gate);
-    register_builtin(scope, "FN", sigil_sig(), body, types, gate);
+    register_builtin(scope, "FN", typeexpr_sig(), body, registries, gate);
+    register_builtin(scope, "FN", sigil_sig(), body, registries, gate);
     register_builtin(
         scope,
         "FN",
         value_named_return_sig(),
         body_value_named_return,
-        types,
+        registries,
         gate,
     );
-    register_builtin(scope, "FN", record_sig(), body_record_schema, types, gate);
+    register_builtin(
+        scope,
+        "FN",
+        record_sig(),
+        body_record_schema,
+        registries,
+        gate,
+    );
     for return_type in [KType::of_kind(KKind::ProperType), KType::SIGILED_TYPE_EXPR] {
         register_builtin(
             scope,
             "LET",
             combined_sig(KType::IDENTIFIER, KType::KEXPRESSION, return_type),
             body_let_combined,
-            types,
+            registries,
             gate,
         );
     }
@@ -398,7 +405,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         "LET",
         combined_sig(KType::IDENTIFIER, KType::KEXPRESSION, KType::IDENTIFIER),
         body_value_named_return,
-        types,
+        registries,
         gate,
     );
     // A diagnostic overload — it always errors, so it installs nothing: a function is a value, and
@@ -419,7 +426,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             KType::of_kind(KKind::ProperType),
         ),
         body_let_combined_type_named,
-        types,
+        registries,
         gate,
     );
 }

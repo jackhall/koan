@@ -23,6 +23,7 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::Held;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
@@ -98,7 +99,7 @@ fn list_relocation_rebuilds_substrate_into_dest() {
     let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
 
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let source_door =
@@ -153,7 +154,7 @@ fn dict_relocation_rebuilds_substrate_into_dest() {
     let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
 
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let source_door =
@@ -205,7 +206,7 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
     let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
 
     // The value's own type handle: a `Maybe` constructor applied to `Number` — the shape a tagged
     // union member's `identity` interns to.
@@ -279,7 +280,7 @@ fn wrapped_relocation_rebuilds_payload_into_dest() {
     let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
 
     let type_id = types.intern(TypeNode::AbstractType {
         source: ScopeId::from_raw(0, 0x12),
@@ -502,7 +503,8 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
 
     // An aggregate operand shaped like `fold_cells`'s product: a bare handle on the destination
@@ -522,7 +524,7 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
                 let fields =
                     Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
                 Carried::Object(
-                    door.alloc_object_folded(KObject::record_of_held(door, fields, &types)),
+                    door.alloc_object_folded(KObject::record_of_held(door, fields, types)),
                 )
             },
         );
@@ -571,14 +573,15 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
 
     // The seal chokepoint (Ruling 5, design/value-substrates.md): every record's carrier
     // conservatively claims its own home as a member at construction, regardless of its own
     // contents — the retention predicate's walk over the rebuilt cell is what actually decides
     // release vs. retain below; the claim only matters if the source is retained.
-    let (mut producers, cells) = plain_record_cell_run(scope, &types, DEPTH);
+    let (mut producers, cells) = plain_record_cell_run(scope, types, DEPTH);
     let acc_final = relocate_cell_run(&dest_storage, &cells);
 
     assert!(
@@ -601,7 +604,7 @@ fn plain_record_cells_select_released_and_survive_every_producer_free() {
                     Some(KObject::Number(n)) => *n,
                     _ => panic!("expected field acc: Number"),
                 },
-                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+                other => panic!("expected a Record cell, got {}", other.ktype().name(types)),
             })
             .collect()
     });
@@ -627,13 +630,14 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
 
     // The seal chokepoint (Ruling 5): every record's carrier conservatively claims its own home as
     // a member at construction; the retention predicate independently walks the rebuilt cell and
     // finds the closure leaf, so the producer is retained either way.
-    let (mut producers, cells, expected_ids) = closure_record_cell_run(scope, &types, DEPTH);
+    let (mut producers, cells, expected_ids) = closure_record_cell_run(scope, types, DEPTH);
     let acc_final = relocate_cell_run(&dest_storage, &cells);
 
     assert!(
@@ -656,7 +660,7 @@ fn closure_embedding_record_cells_select_copied_and_pin_every_producer() {
                     Some(KObject::KFunction(f)) => f.captured_scope().id,
                     _ => panic!("expected field f: KFunction"),
                 },
-                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+                other => panic!("expected a Record cell, got {}", other.ktype().name(types)),
             })
             .collect()
     });
@@ -686,7 +690,8 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
 
     let mut producers: Vec<Rc<CallFrame>> = Vec::with_capacity(DEPTH);
@@ -694,13 +699,13 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
     let relocated: Vec<DeliveredCarried> = (0..DEPTH)
         .map(|_| {
             let producer: Rc<CallFrame> = CallFrame::new(scope);
-            let obj = alloc_home_closure_record(&producer, &types);
+            let obj = alloc_home_closure_record(&producer, types);
             expected_ids.push(match obj {
                 KObject::Record(substrate, _) => match substrate.field("f").map(|h| h.object()) {
                     Some(KObject::KFunction(f)) => f.captured_scope().id,
                     _ => panic!("expected field f: KFunction"),
                 },
-                other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+                other => panic!("expected a Record, got {}", other.ktype().name(types)),
             });
             // Born in the producer's own region with a home-borrowing closure leaf, so home is an
             // ordinary member of the description the birth mint stamps.
@@ -735,7 +740,7 @@ fn record_seam_pin_verb_shares_substrate_and_survives_producer_free() {
                     Some(KObject::KFunction(f)) => f.captured_scope().id,
                     _ => panic!("expected field f: KFunction"),
                 },
-                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+                other => panic!("expected a Record cell, got {}", other.ktype().name(types)),
             })
         })
         .collect();
@@ -768,7 +773,8 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
 
     let producer: Rc<CallFrame> = CallFrame::new(scope);
@@ -780,7 +786,7 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
     for (i, key) in KEYS.iter().enumerate() {
         map.insert(KKey::String(key), Held::Object(KObject::Number(i as f64)));
     }
-    let table = KObject::dict_of_held(door, map, &types);
+    let table = KObject::dict_of_held(door, map, types);
     let fields = Record::from_pairs(
         NAMES
             .iter()
@@ -789,7 +795,7 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
             .chain(std::iter::once((TABLE.to_string(), Held::Object(table))))
             .collect::<Vec<_>>(),
     );
-    let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
+    let obj: &KObject<'_> = door.alloc_object_folded(KObject::record_of_held(door, fields, types));
     let sealed = producer.seal_born_here(Carried::Object(obj), true);
     let dep: DeliveredCarried = Delivered::lift(
         crate::witnessed::Retained::from_sealed(Sealed::seal(sealed, producer.brand().handle())),
@@ -845,7 +851,7 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
                 })
                 .collect()
         }
-        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+        other => panic!("expected a Record, got {}", other.ktype().name(types)),
     });
     assert_eq!(
         read,
@@ -893,13 +899,14 @@ fn substrate_memo_scalar_record_is_priceable_and_home_free() {
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
 
     let fields = Record::from_pairs(vec![
         ("a".to_string(), Held::Object(KObject::Number(1.0))),
         ("b".to_string(), Held::Object(KObject::Bool(true))),
     ]);
-    let (cost, borrows_home) = record_memos(&home, fields, &types);
+    let (cost, borrows_home) = record_memos(&home, fields, types);
     assert_eq!(cost, 2 * held_flat(), "two scalar cells cost two flat Held");
     assert!(!borrows_home, "no borrow leaf leaves borrows_home clear");
 }
@@ -912,13 +919,14 @@ fn substrate_memo_string_cell_adds_its_length() {
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
 
     let fields = Record::from_pairs(vec![(
         "s".to_string(),
         Held::Object(KObject::KString("hello")),
     )]);
-    let (cost, borrows_home) = record_memos(&home, fields, &types);
+    let (cost, borrows_home) = record_memos(&home, fields, types);
     assert_eq!(
         cost,
         held_flat() + 5,
@@ -937,10 +945,11 @@ fn substrate_memo_home_vs_foreign_closure_leaf() {
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
     let foreign = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
 
     let base = Record::from_pairs(vec![("n".to_string(), Held::Object(KObject::Number(0.0)))]);
-    let (base_cost, base_home) = record_memos(&home, base, &types);
+    let (base_cost, base_home) = record_memos(&home, base, types);
     assert_eq!(base_cost, held_flat());
     assert!(!base_home);
 
@@ -949,7 +958,7 @@ fn substrate_memo_home_vs_foreign_closure_leaf() {
         ("n".to_string(), Held::Object(KObject::Number(0.0))),
         ("f".to_string(), Held::Object(KObject::KFunction(home_kf))),
     ]);
-    let (home_cost, home_bit) = record_memos(&home, with_home, &types);
+    let (home_cost, home_bit) = record_memos(&home, with_home, types);
     assert_eq!(
         home_cost, base_cost,
         "the 0-weight closure leaf adds no rebuild bytes"
@@ -964,7 +973,7 @@ fn substrate_memo_home_vs_foreign_closure_leaf() {
             Held::Object(KObject::KFunction(foreign_kf)),
         ),
     ]);
-    let (foreign_cost, foreign_bit) = record_memos(&home, with_foreign, &types);
+    let (foreign_cost, foreign_bit) = record_memos(&home, with_foreign, types);
     assert_eq!(
         foreign_cost, base_cost,
         "a foreign closure leaf is equally weightless"
@@ -985,7 +994,8 @@ fn substrate_memo_nested_record_composes_by_memo() {
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
 
     let inner_kf = alloc_local_kf(&home);
     let inner_fields = Record::from_pairs(vec![
@@ -996,10 +1006,10 @@ fn substrate_memo_nested_record_composes_by_memo() {
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
-    let inner = door.alloc_object_folded(KObject::record_of_held(door, inner_fields, &types));
+    let inner = door.alloc_object_folded(KObject::record_of_held(door, inner_fields, types));
     let (inner_cost, inner_home) = match inner {
         KObject::Record(substrate, _) => (substrate.copy_cost(), substrate.borrows_home()),
-        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+        other => panic!("expected a Record, got {}", other.ktype().name(types)),
     };
     assert_eq!(
         inner_cost,
@@ -1012,7 +1022,7 @@ fn substrate_memo_nested_record_composes_by_memo() {
         "inner".to_string(),
         Held::Object(inner.deep_clone()),
     )]);
-    let (cost, borrows_home) = record_memos(&home, outer_fields, &types);
+    let (cost, borrows_home) = record_memos(&home, outer_fields, types);
     assert_eq!(
         cost, inner_cost,
         "the nested record contributes its own memoized copy_cost"
@@ -1032,7 +1042,8 @@ fn substrate_memo_list_cell_is_priceable_and_home_free() {
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let home = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
 
     // The list cell is itself born through a door homed in `home`; its one scalar element costs one
     // flat `Held`, which the enclosing record's memo pass reads back through the list's own memo.
@@ -1040,9 +1051,9 @@ fn substrate_memo_list_cell_is_priceable_and_home_free() {
     let list_door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
-    let list = KObject::list_of_held(list_door, &[Held::Object(KObject::Number(1.0))], &types);
+    let list = KObject::list_of_held(list_door, &[Held::Object(KObject::Number(1.0))], types);
     let fields = Record::from_pairs(vec![("l".to_string(), Held::Object(list))]);
-    let (cost, borrows_home) = record_memos(&home, fields, &types);
+    let (cost, borrows_home) = record_memos(&home, fields, types);
     assert_eq!(
         cost,
         held_flat(),
@@ -1095,12 +1106,13 @@ mod seam_verb_table {
         let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
-        let types = TypeRegistry::new();
+        let registries = RunRegistries::new();
+        let types = &registries.types;
 
         // Program storage is where a raw AST node lives; an expression cell points into it.
         let expr = KObject::KExpression(program.brand().new_expression(&[]));
         let fields = Record::from_pairs(vec![("e".to_string(), Held::Object(expr))]);
-        let value = build_record(&home, fields, &types);
+        let value = build_record(&home, fields, types);
 
         assert_eq!(
             copy_or_pin(substrate_of(value), home.region()),
@@ -1118,11 +1130,12 @@ mod seam_verb_table {
         let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
-        let types = TypeRegistry::new();
+        let registries = RunRegistries::new();
+        let types = &registries.types;
 
         // `alloc_home_closure_record` builds `{f = <home closure>}` through `home`'s door: priceable
         // (the closure leaf is 0-weight) with `borrows_home` set.
-        let value = alloc_home_closure_record(&home, &types);
+        let value = alloc_home_closure_record(&home, types);
         assert!(substrate_of(value).borrows_home(), "precondition: bit set");
 
         assert_eq!(
@@ -1141,7 +1154,8 @@ mod seam_verb_table {
         let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
-        let types = TypeRegistry::new();
+        let registries = RunRegistries::new();
+        let types = &registries.types;
 
         // Inflate the host's allocated total so a one-scalar record is far under 1/ALPHA_DIVISOR of it.
         for n in 0..300 {
@@ -1150,7 +1164,7 @@ mod seam_verb_table {
 
         let fields =
             Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
-        let value = build_record(&home, fields, &types);
+        let value = build_record(&home, fields, types);
         assert!(
             !substrate_of(value).borrows_home(),
             "precondition: bit clear"
@@ -1173,7 +1187,8 @@ mod seam_verb_table {
         let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
-        let types = TypeRegistry::new();
+        let registries = RunRegistries::new();
+        let types = &registries.types;
 
         // A long string dominates the record's rebuild cost. The record door re-bumps the bytes into
         // the host region, so they price on both sides of the ratio — the rebuild cost is still the
@@ -1182,7 +1197,7 @@ mod seam_verb_table {
             "s".to_string(),
             Held::Object(KObject::KString(&big)),
         )]);
-        let value = build_record(&home, fields, &types);
+        let value = build_record(&home, fields, types);
         assert!(
             !substrate_of(value).borrows_home(),
             "precondition: bit clear"
@@ -1206,11 +1221,12 @@ mod seam_verb_table {
         let scope = test_run.scope;
         let home = CallFrame::new(scope);
         let foreign = CallFrame::new(scope);
-        let types = TypeRegistry::new();
+        let registries = RunRegistries::new();
+        let types = &registries.types;
 
         let fields =
             Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
-        let value = build_record(&home, fields, &types);
+        let value = build_record(&home, fields, types);
         assert!(
             !substrate_of(value).homed_in(foreign.region()),
             "precondition: the foreign host is not the substrate's home"
@@ -1239,12 +1255,12 @@ fn a_mixed_run_retains_exactly_the_producers_its_own_cells_still_borrow() {
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
 
-    let (closure_producers, closure_cells, captured_ids) =
-        closure_record_cell_run(scope, &types, 1);
-    let (plain_producers, plain_cells) = plain_record_cell_run(scope, &types, 2);
+    let (closure_producers, closure_cells, captured_ids) = closure_record_cell_run(scope, types, 1);
+    let (plain_producers, plain_cells) = plain_record_cell_run(scope, types, 2);
     let mut cells = closure_cells;
     cells.extend(plain_cells);
     let mut producers = closure_producers;
@@ -1293,7 +1309,7 @@ fn a_mixed_run_retains_exactly_the_producers_its_own_cells_still_borrow() {
                         _ => panic!("expected field acc: Number"),
                     },
                 },
-                other => panic!("expected a Record cell, got {}", other.ktype().name(&types)),
+                other => panic!("expected a Record cell, got {}", other.ktype().name(types)),
             })
             .collect()
     });
@@ -1325,10 +1341,11 @@ fn region_bytes_for_a_relocated_run_grow_linearly_in_its_length() {
         let test_run = TestRun::silent(&program, &root);
         let scope = test_run.scope;
         let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
-        let types = TypeRegistry::new();
+        let registries = RunRegistries::new();
+        let types = &registries.types;
         let dest_storage = dest_frame.storage_rc();
         let baseline = dest_frame.region().allocated_total();
-        let (_producers, cells) = plain_record_cell_run(scope, &types, count);
+        let (_producers, cells) = plain_record_cell_run(scope, types, count);
         let relocated = relocate_cell_run(&dest_storage, &cells);
         assert_eq!(
             relocated.open_ref(|(_region, run)| run.len()),
@@ -1410,10 +1427,11 @@ fn two_element_relocation_allocates_no_more_than_the_pairwise_fold() {
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let dest_storage = dest_frame.storage_rc();
 
-    let (_producers, cells) = plain_record_cell_run(scope, &types, 2);
+    let (_producers, cells) = plain_record_cell_run(scope, types, 2);
 
     let before = crate::tests::allocation_count();
     let relocated = relocate_cell_run(&dest_storage, &cells);

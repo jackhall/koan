@@ -1,4 +1,5 @@
 use super::*;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::values::KKey;
@@ -28,118 +29,128 @@ macro_rules! container_door {
 
 #[test]
 fn ktype_of_homogeneous_number_list() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
     let l: KObject<'_> = KObject::list(
         door,
         vec![KObject::Number(1.0), KObject::Number(2.0)],
-        &types,
+        types,
     );
     assert_eq!(l.ktype(), types.list(KType::NUMBER));
 }
 
 #[test]
 fn ktype_of_mixed_list_is_list_any() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
     let l: KObject<'_> = KObject::list(
         door,
         vec![KObject::Number(1.0), KObject::KString("x")],
-        &types,
+        types,
     );
     assert_eq!(l.ktype(), types.list(KType::ANY));
 }
 
 #[test]
 fn ktype_of_empty_list_is_list_any() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
-    let l: KObject<'_> = KObject::list(door, vec![], &types);
+    let l: KObject<'_> = KObject::list(door, vec![], types);
     assert_eq!(l.ktype(), types.list(KType::ANY));
 }
 
 #[test]
 fn ktype_of_nested_list() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
-    let inner: KObject<'_> = KObject::list(door, vec![KObject::Number(1.0)], &types);
-    let outer: KObject<'_> = KObject::list(door, vec![inner], &types);
+    let inner: KObject<'_> = KObject::list(door, vec![KObject::Number(1.0)], types);
+    let outer: KObject<'_> = KObject::list(door, vec![inner], types);
     assert_eq!(outer.ktype(), types.list(types.list(KType::NUMBER)));
 }
 
 #[test]
 fn ktype_of_dict_string_number() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
     let mut map: HashMap<KKey, KObject<'_>> = HashMap::new();
     map.insert(KKey::String("a"), KObject::Number(1.0));
     map.insert(KKey::String("b"), KObject::Number(2.0));
-    let d: KObject<'_> = KObject::dict(door, map, &types);
+    let d: KObject<'_> = KObject::dict(door, map, types);
     assert_eq!(d.ktype(), types.dict(KType::STR, KType::NUMBER));
 }
 
 #[test]
 fn ktype_of_empty_dict_is_dict_any_any() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
     let map: HashMap<KKey, KObject<'_>> = HashMap::new();
-    let d: KObject<'_> = KObject::dict(door, map, &types);
+    let d: KObject<'_> = KObject::dict(door, map, types);
     assert_eq!(d.ktype(), types.dict(KType::ANY, KType::ANY));
 }
 
 #[test]
 fn matches_value_list_number_rejects_string_element() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
     let t = types.list(KType::NUMBER);
     let bad: KObject<'_> = KObject::list(
         door,
         vec![KObject::Number(1.0), KObject::KString("x")],
-        &types,
+        types,
     );
-    assert!(!t.matches_value(&bad, &types));
+    assert!(!t.matches_value(&bad, types));
 }
 
 #[test]
 fn matches_value_list_number_accepts_all_numbers() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
     let t = types.list(KType::NUMBER);
     let good: KObject<'_> = KObject::list(
         door,
         vec![KObject::Number(1.0), KObject::Number(2.0)],
-        &types,
+        types,
     );
-    assert!(t.matches_value(&good, &types));
+    assert!(t.matches_value(&good, types));
 }
 
 #[test]
 fn matches_value_list_any_accepts_any_list() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
     let t = types.list(KType::ANY);
     let mixed: KObject<'_> = KObject::list(
         door,
         vec![KObject::Number(1.0), KObject::KString("x")],
-        &types,
+        types,
     );
-    assert!(t.matches_value(&mixed, &types));
+    assert!(t.matches_value(&mixed, types));
 }
 
 /// Carrier is authoritative for `ktype()`: a stamped `List<Any>` reports `Any`
 /// even when contents would join to `Number`.
 #[test]
 fn list_with_type_carrier_is_authoritative_for_ktype() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
     let list_any = types.list(KType::ANY);
     // Contents join to `Number`; the stamp re-tags the shared substrate to `List<Any>`.
     let stamped = KObject::list(
         door,
         vec![KObject::Number(1.0), KObject::Number(2.0)],
-        &types,
+        types,
     )
-    .stamp_type(list_any, &types);
+    .stamp_type(list_any, types);
     assert_eq!(stamped.ktype(), list_any);
 }
 
@@ -147,7 +158,8 @@ fn list_with_type_carrier_is_authoritative_for_ktype() {
 /// holds the bare member reference, a stamped carrier the applied `ConstructorApply`.
 #[test]
 fn type_constructor_ktype_erased_vs_applied() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
     let ctor = RecursiveGroupWindow::seal_singleton(
         "Result".into(),
@@ -156,7 +168,7 @@ fn type_constructor_ktype_erased_vs_applied() {
             param_names: vec!["Ok".into(), "Error".into()],
         },
         None,
-        &types,
+        types,
     );
     let erased = KObject::tagged(door, "Ok", &KObject::Number(1.0), ctor);
     let erased_handle = erased.ktype();
@@ -188,40 +200,43 @@ fn type_constructor_ktype_erased_vs_applied() {
 
 #[test]
 fn stamp_type_coarsens_list_carrier() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
-    let value = KObject::list(door, vec![KObject::Number(1.0)], &types);
+    let value = KObject::list(door, vec![KObject::Number(1.0)], types);
     assert_eq!(value.ktype(), types.list(KType::NUMBER));
     let list_any = types.list(KType::ANY);
-    let stamped = value.stamp_type(list_any, &types);
+    let stamped = value.stamp_type(list_any, types);
     assert_eq!(stamped.ktype(), list_any);
 }
 
 #[test]
 fn unstamped_empty_container_detection() {
     use std::collections::HashMap;
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
-    assert!(KObject::list(door, vec![], &types).is_unstamped_empty_container());
-    let stamped = KObject::list(door, vec![], &types).stamp_type(types.list(KType::NUMBER), &types);
+    assert!(KObject::list(door, vec![], types).is_unstamped_empty_container());
+    let stamped = KObject::list(door, vec![], types).stamp_type(types.list(KType::NUMBER), types);
     assert!(!stamped.is_unstamped_empty_container());
     let hetero = KObject::list(
         door,
         vec![KObject::Number(1.0), KObject::KString("x")],
-        &types,
+        types,
     );
     assert!(!hetero.is_unstamped_empty_container());
     let map: HashMap<KKey, KObject<'_>> = HashMap::new();
-    assert!(KObject::dict(door, map, &types).is_unstamped_empty_container());
+    assert!(KObject::dict(door, map, types).is_unstamped_empty_container());
 }
 
 /// `Wrapped.ktype()` reports a copy of the member-handle identity the dispatcher reads for
 /// per-declaration identity comparisons.
 #[test]
 fn wrapped_ktype_reports_clone_of_type_id() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
-    let type_id = newtype_singleton("Distance", KType::NUMBER, &types);
+    let type_id = newtype_singleton("Distance", KType::NUMBER, types);
     let w = KObject::wrapped_peel(door, &KObject::Number(3.0), type_id);
     let handle = w.ktype();
     match types.node(handle) {
@@ -232,11 +247,12 @@ fn wrapped_ktype_reports_clone_of_type_id() {
 
 #[test]
 fn wrapped_summarize_renders_surface_form() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
-    let type_id = newtype_singleton("Distance", KType::NUMBER, &types);
+    let type_id = newtype_singleton("Distance", KType::NUMBER, types);
     let w = KObject::wrapped_peel(door, &KObject::Number(3.0), type_id);
-    assert_eq!(w.summarize(&types), "Distance(3)");
+    assert_eq!(w.summarize(types), "Distance(3)");
 }
 
 /// `deep_clone` is shallow: it pointer-copies the payload substrate borrow (sharing the same
@@ -244,9 +260,10 @@ fn wrapped_summarize_renders_surface_form() {
 /// `type_id` handle.
 #[test]
 fn wrapped_deep_clone_shares_inner_substrate_and_type_id() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     container_door!(_storage, door);
-    let type_id = newtype_singleton("Distance", KType::NUMBER, &types);
+    let type_id = newtype_singleton("Distance", KType::NUMBER, types);
     let original = KObject::wrapped_peel(door, &KObject::Number(3.0), type_id);
     // The source's payload rides its own region-resident substrate; `deep_clone` must share *that*
     // substrate borrow, never allocate a fresh one.

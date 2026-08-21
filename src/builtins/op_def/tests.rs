@@ -71,7 +71,7 @@ fn sigiled_operand_type_declares_over_lists() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     test_run.run(
         "LET xs = [1 2]\n\
          LET ys = [3]\n\
@@ -94,7 +94,7 @@ fn declared_plus_over_lists_leaves_number_arithmetic_alone() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     test_run.run(
         "LET xs = [1]\n\
          LET ys = [2]\n\
@@ -146,7 +146,7 @@ fn unary_operator_collects_the_run_prefix_infix_and_pair() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     test_run.run(
         "LET one = 1\n\
          LET two = 2\n\
@@ -320,7 +320,7 @@ fn a_run_parks_on_a_still_finalizing_declaration() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     test_run.run(
         "LET xs = [1]\n\
          LET ys = [2]\n\
@@ -375,7 +375,7 @@ fn declaration_evaluates_to_the_operator_function() {
     assert!(
         matches!(value, KObject::KFunction(_)),
         "an OP statement evaluates to its synthesized function, got {}",
-        value.ktype().name(&test_run.types),
+        value.ktype().name(test_run.types()),
     );
 }
 
@@ -402,7 +402,7 @@ fn combined_binary_form_installs_name_and_operator() {
     assert!(
         matches!(bound, KObject::KFunction(..)),
         "the bound name holds the operator's own function, got {}",
-        bound.summarize(&test_run.types),
+        bound.summarize(test_run.types()),
     );
 }
 
@@ -413,7 +413,7 @@ fn combined_unary_form_installs_both_bucket_keys() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     test_run.run(
         "MODULE gather = (\
            (LET collect = UNARY OP #(~) OVER Number -> :(LIST OF Number) = (operands))\

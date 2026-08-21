@@ -17,7 +17,7 @@ fn list_of_let_binding_is_ktype_value() {
     let kt = scope
         .resolve_type("MyList")
         .expect("MyList should be bound in bindings.types");
-    assert_eq!(kt, test_run.types.list(KType::NUMBER));
+    assert_eq!(kt, test_run.types().list(KType::NUMBER));
 }
 
 /// `elaborate_type_identifier` lowers a leaf naming a type-side LET binding back to its
@@ -32,7 +32,7 @@ fn elaborator_lowers_ktype_value_binding() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("LET MyList = :(LIST OF Number)");
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &TypeIdentifier::leaf("MyList"), &types) {
         TypeResolution::Done(kt) => assert_eq!(kt, types.list(KType::NUMBER)),
@@ -57,7 +57,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     );
     // SIG installs a single type-side identity; read it from `bindings.types`.
     let ordered = scope.resolve_type("Ordered");
-    let sig_id = match ordered.map(|h| test_run.types.node(h)) {
+    let sig_id = match ordered.map(|h| test_run.types().node(h)) {
         Some(TypeNode::Signature { schema, .. }) => schema.sig_id,
         _ => panic!("Ordered should be a Signature KType, got {ordered:?}"),
     };
@@ -69,7 +69,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
         ] => {
             assert_eq!(*kw, "USE_ORD");
             assert_eq!(*name, "er");
-            match test_run.types.node(*ktype) {
+            match test_run.types().node(*ktype) {
                 TypeNode::Signature { schema, .. } => {
                     assert_eq!(
                         schema.sig_id, sig_id,
@@ -77,7 +77,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
                     );
                     // The node carries no declaration label (ruling 12); a non-empty interface
                     // renders structurally in member-name order.
-                    assert_eq!(ktype.name(&test_run.types), "SIG (compare: Number)");
+                    assert_eq!(ktype.name(test_run.types()), "SIG (compare: Number)");
                 }
                 _ => panic!("expected Signature, got {ktype:?}"),
             }

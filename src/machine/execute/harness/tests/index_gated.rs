@@ -92,7 +92,9 @@ fn returned_block_locals_visible_from_outer_chain() {
     assert!(
         matches!(scope.lookup("result"), Some(KObject::Number(n)) if *n == 7.0),
         "expected result = 7 via mo.inside; got {:?}",
-        scope.lookup("result").map(|o| o.summarize(&test_run.types)),
+        scope
+            .lookup("result")
+            .map(|o| o.summarize(test_run.types())),
     );
 }
 
@@ -108,7 +110,7 @@ fn nested_block_cutoff_is_per_scope() {
         "LET top = 1\n\
          MODULE mo = ((LET a = 2) (LET b = a))",
     );
-    let m = lookup_module(test_run.scope, "mo", &test_run.types);
+    let m = lookup_module(test_run.scope, "mo", test_run.types());
     assert!(
         matches!(m.child_scope().lookup("b"), Some(KObject::Number(n)) if *n == 2.0),
         "inner backward ref `b = a` should resolve a from the same module body",
@@ -147,7 +149,7 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
     assert!(
         matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 42.0),
         "expected out = 42 via mutual PING/PONG; got {:?}",
-        scope.lookup("out").map(|o| o.summarize(&test_run.types)),
+        scope.lookup("out").map(|o| o.summarize(test_run.types())),
     );
 }
 
@@ -169,7 +171,7 @@ fn using_block_post_reference_visible() {
         "expected visible = 99 via USING mo SCOPE; got {:?}",
         scope
             .lookup("visible")
-            .map(|o| o.summarize(&test_run.types)),
+            .map(|o| o.summarize(test_run.types())),
     );
 }
 
@@ -191,7 +193,9 @@ fn overload_pre_filter_hides_later_sibling_overload() {
     assert!(
         matches!(scope.lookup("result"), Some(KObject::KString(s)) if *s == "numbers"),
         "expected result = 'numbers' (only earlier overload visible); got {:?}",
-        scope.lookup("result").map(|o| o.summarize(&test_run.types)),
+        scope
+            .lookup("result")
+            .map(|o| o.summarize(test_run.types())),
     );
 }
 
@@ -268,6 +272,6 @@ fn fn_return_type_backward_reference_resolves() {
     assert!(
         scope.lookup("out").is_some(),
         "a backward return-type reference must resolve; got {:?}",
-        scope.lookup("out").map(|o| o.summarize(&test_run.types)),
+        scope.lookup("out").map(|o| o.summarize(test_run.types())),
     );
 }

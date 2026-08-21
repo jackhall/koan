@@ -40,7 +40,7 @@ fn module_returning_fn_ktype_is_kfunction() {
         .expect("make_set must bind value-side");
     let ktype = bound.ktype();
     assert!(
-        matches!(test_run.types.node(ktype), TypeNode::KFunction { .. }),
+        matches!(test_run.types().node(ktype), TypeNode::KFunction { .. }),
         "a module-returning FN's ktype() must be a function type, got {:?}",
         ktype,
     );
@@ -58,7 +58,7 @@ fn module_returning_fn_applies_by_the_keyworded_call_convention() {
         KObject::Module(module) => module,
         other => panic!(
             "(MAKESET int_ord) must return a module, got {}",
-            other.summarize(&test_run.types),
+            other.summarize(test_run.types()),
         ),
     };
     let inner = module.child_scope().lookup("inner");

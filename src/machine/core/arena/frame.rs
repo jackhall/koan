@@ -11,6 +11,8 @@ use std::rc::Rc;
 use super::{KoanRegion, KoanStorageProfile, RegionBrand};
 use crate::machine::CarrierWitness;
 use crate::machine::core::{Scope, ScopeId, ScopeRefFamily, scope_frame};
+use crate::machine::model::RunRegistries;
+#[cfg(test)]
 use crate::machine::model::types::TypeRegistry;
 use crate::witnessed::{
     Delivered, ReachDescription, RegionHandle, RegionHost, SealedExtern, StepCoverage,
@@ -233,12 +235,14 @@ pub struct CallFrame {
     /// boundary skips the lift for a non-dying frame (lift exists to rescue values from a *dying*
     /// per-call region). Every per-call frame is `false`.
     non_dying: bool,
-    /// The run's subtype-verdict store, `Some` only on the run frame ([`Self::adopting`]). Per-call
-    /// frames reach it through the execution context rather than owning one, so a verdict recorded
-    /// anywhere in the run is visible everywhere in it; the map drops when the run frame does.
-    type_registry: Option<Rc<TypeRegistry>>,
+    /// The run's lookup state — the type registry and the label interner — `Some` only on the run
+    /// frame ([`Self::adopting`]). Per-call frames reach it through the execution context rather
+    /// than owning one, so a verdict recorded or a label interned anywhere in the run is visible
+    /// everywhere in it; the maps drop when the run frame does. Owned outright, not `Rc`-shared:
+    /// nothing needs shared ownership, and the heap tables inside must `Drop`.
+    run_registries: Option<RunRegistries>,
     /// The run's output sink, `Some` only on the run frame ([`Self::adopting`]) — the same home and
-    /// the same reach path as [`type_registry`](Self::type_registry): per-call frames own none and
+    /// the same reach path as [`run_registries`](Self::run_registries): per-call frames own none and
     /// `PRINT` reaches this one through the execution context.
     writer: Option<RunWriter>,
 }
@@ -281,7 +285,7 @@ impl CallFrame {
             envelope,
             storage,
             non_dying: false,
-            type_registry: None,
+            run_registries: None,
             writer: None,
         })
     }
@@ -299,7 +303,7 @@ impl CallFrame {
     /// scope's borrow is erased into the envelope exactly as every per-call child scope's is — the
     /// fabrication hazard is deferred to the witness-bounded re-attach.
     ///
-    /// `out` is the run's output sink, taken here for the same reason the type registry is minted
+    /// `out` is the run's output sink, taken here for the same reason the registries are minted
     /// here: both are run-lifetime state with exactly one home, and this constructor is the only one
     /// that fills the two fields ([`Self::new`] leaves them `None`).
     pub fn adopting<'a>(scope: &'a Scope<'a>, out: Box<dyn std::io::Write>) -> Rc<CallFrame> {
@@ -311,16 +315,16 @@ impl CallFrame {
             envelope,
             storage: scope_frame(scope),
             non_dying: true,
-            type_registry: Some(Rc::new(TypeRegistry::new())),
+            run_registries: Some(RunRegistries::new()),
             writer: Some(RunWriter::new(out)),
         })
     }
 
-    /// The run's subtype-verdict store — `Some` only on the run frame. The execution context reads
-    /// it from there (`AmbientContext::type_registry`) and hands `&TypeRegistry` to the memoized
-    /// predicates.
-    pub(crate) fn type_registry(&self) -> Option<&Rc<TypeRegistry>> {
-        self.type_registry.as_ref()
+    /// The run's type registry and label interner — `Some` only on the run frame. The execution
+    /// context reads them from there (`AmbientContext::registries`) and hands `&TypeRegistry` to
+    /// the memoized predicates, `&RunRegistries` to anything that renders or constructs a record.
+    pub(crate) fn registries(&self) -> Option<&RunRegistries> {
+        self.run_registries.as_ref()
     }
 
     /// The run's output sink — `Some` only on the run frame, read the same way the registry is

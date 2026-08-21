@@ -42,7 +42,7 @@ fn group_mixed_run_reduces_fold_left_inside_the_body_and_through_using() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     test_run.run(&format!(
         "{LISTS}\
          GROUP vec_ops FOLD LEFT = (\
@@ -74,7 +74,7 @@ fn group_fold_right_nests_right_associated() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     test_run.run(&format!(
         "{LISTS}\
          GROUP vec_ops FOLD RIGHT = (\
@@ -138,7 +138,7 @@ fn pairwise_group_folds_pair_results_in_the_declared_direction() {
         assert!(
             matches!(result, KObject::Number(n) if *n == expected),
             "a {direction} fold of the pair results must give {expected}; got {}",
-            result.summarize(&test_run.types),
+            result.summarize(test_run.types()),
         );
     }
 }

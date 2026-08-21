@@ -13,7 +13,6 @@ use crate::machine::body_statement_refs;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{AnnouncedData, FieldNameKind, pair_list_names};
 use crate::machine::model::{KKind, SigSchema};
 use crate::machine::model::{Module, ModuleDraft};
@@ -23,6 +22,7 @@ use crate::machine::{KError, KErrorKind};
 use crate::machine::{NameLookup, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 
 /// The MODULE body: pre-announces the body's top-level type declarations, mints the child scope
 /// carrying that window, and hands it to [`await_module_body`], which dispatches the body block
@@ -31,7 +31,10 @@ pub fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     use crate::machine::{require_identifier_name, require_kexpression};
 
     let name = crate::try_action!(require_identifier_name(
-        ctx.args, "name", "MODULE", ctx.types
+        ctx.args,
+        "name",
+        "MODULE",
+        ctx.types()
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
     let announced = crate::try_action!(announce_type_members(&body_expr, &name));
@@ -197,7 +200,10 @@ pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     use crate::machine::{KError, KErrorKind};
 
     let name = crate::try_action!(require_bare_type_name(
-        ctx.args, "name", "MODULE", ctx.types
+        ctx.args,
+        "name",
+        "MODULE",
+        ctx.types()
     ));
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "module `{name}` is named with a Type token, but a module is a value — the Type-token \
@@ -206,7 +212,7 @@ pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     )))))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let module_sig = |name_kt: KType| {
         sig(
             KType::EMPTY_SIGNATURE,
@@ -223,7 +229,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         "MODULE",
         module_sig(KType::IDENTIFIER),
         body,
-        types,
+        registries,
         gate,
     );
     crate::builtins::register_builtin(
@@ -231,7 +237,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         "MODULE",
         module_sig(KType::of_kind(KKind::ProperType)),
         body_type_named,
-        types,
+        registries,
         gate,
     );
 }

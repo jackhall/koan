@@ -53,7 +53,7 @@ fn module_mutual_newtype_pair_seals_in_either_order() {
              NEWTYPE {second} = :{{other :{first}}}\n)",
         );
         test_run.run(&source);
-        let module = lookup_module(scope, "pair", &test_run.types);
+        let module = lookup_module(scope, "pair", test_run.types());
         let members = module.child_scope();
         let types = test_run.types();
         let (a_scc, a_size, a_fields) = member_scc_and_fields(members, types, "Aa");
@@ -134,7 +134,7 @@ fn co_declared_types_unify_with_their_standalone_twins() {
          NEWTYPE Distance = Number\n\
          UNION Maybe = (Some :Number, None :Null)",
     );
-    let module = lookup_module(scope, "t", &test_run.types);
+    let module = lookup_module(scope, "t", test_run.types());
     let inside = module.child_scope();
     assert_eq!(
         inside.resolve_type("Distance"),
@@ -196,7 +196,7 @@ fn an_announced_member_keeps_its_standalone_identity() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("MODULE t = (\n  NEWTYPE Boxed = Number\n  LET n = 1\n)");
-    let module = lookup_module(scope, "t", &test_run.types);
+    let module = lookup_module(scope, "t", test_run.types());
     let announced = module
         .child_scope()
         .resolve_type("Boxed")
@@ -219,7 +219,7 @@ fn consumer_in_body_waits_for_seal() {
              NEWTYPE Rest = :{{next :Cell}}\n  {after}\n)",
         );
         test_run.run(&source);
-        let module = lookup_module(scope, "t", &test_run.types);
+        let module = lookup_module(scope, "t", test_run.types());
         let members = module.child_scope();
         assert_eq!(
             members.resolve_type("Alias"),
@@ -326,7 +326,7 @@ fn group_body_announces_its_type_declarations() {
            OP #(+) OVER Number = (left)\n\
          )",
     );
-    let group = lookup_module(scope, "g", &test_run.types);
+    let group = lookup_module(scope, "g", test_run.types());
     let members = group.child_scope();
     let types = test_run.types();
     let (_, size, _) = member_scc_and_fields(members, types, "Cell");
@@ -380,7 +380,7 @@ fn variants_are_not_module_type_members() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("MODULE t = (\n  UNION Maybe = (Some :Number, None :Null)\n  NEWTYPE Aa = Str\n)");
-    let module = lookup_module(scope, "t", &test_run.types);
+    let module = lookup_module(scope, "t", test_run.types());
     let mut members: Vec<String> = module
         .child_scope()
         .bindings()

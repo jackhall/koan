@@ -2,6 +2,7 @@ use super::*;
 use crate::builtins::test_support::{TestRun, mock_declaration_site};
 use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
 use crate::machine::model::Record;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::values::Carried;
@@ -49,7 +50,7 @@ fn type_token_cannot_bind_value_side() {
             if msg.contains("`Gee` is a Type token")),
         "expected the token-class partition error, got {error}",
     );
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &leaf("Gee"), &types) {
         TypeResolution::Unbound(msg) => assert!(
@@ -66,7 +67,7 @@ fn unbound_leaf_names_unknown_type() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &leaf("NopeType"), &types) {
         TypeResolution::Unbound(msg) => assert!(
@@ -88,7 +89,7 @@ fn announced_member_lowers_to_sibling_for_a_declarator() {
     let parent = parent_test_run.scope;
     let child = announced_module(parent, &["A", "B"]);
     let window = child.own_declaration_window().expect("the body announced");
-    let types = parent_test_run.types.clone();
+    let types = parent_test_run.registry_handle();
     let mut el = Elaborator::new(child).with_window(WindowView::Announced(window));
     match elaborate_type_identifier(&mut el, &leaf("B"), &types) {
         TypeResolution::Done(kt) => assert_eq!(kt, types.intern(TypeNode::Sibling(1))),
@@ -112,7 +113,7 @@ fn announced_member_never_lowers_to_sibling_for_a_consumer() {
     let region = run_root_storage();
     let parent_test_run = TestRun::silent(&program, &region);
     let child = announced_module(parent_test_run.scope, &["A", "B"]);
-    let types = parent_test_run.types.clone();
+    let types = parent_test_run.registry_handle();
     let mut el = Elaborator::new(child);
     match elaborate_type_identifier(&mut el, &leaf("B"), &types) {
         TypeResolution::Unbound(msg) => assert!(
@@ -130,7 +131,7 @@ fn window_binder_resolves_to_the_union_of_its_members() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let window =
         RecursiveGroupWindow::for_binder("Tree".into(), vec!["Leaf".into(), "Node".into()]);
     let mut el = Elaborator::new(test_run.scope).with_window(WindowView::Local(&window));
@@ -151,7 +152,7 @@ fn announced_member_defers_until_the_window_seals() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = announced_module(test_run.scope, &["Node", "Leaf"]);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
     let window = DeclWindow::Ambient(scope.own_declaration_window().expect("announced"));
     let fill = |name: &str, repr: KType, site: DeclarationSite| {
         finalize_nominal_member(&window, name, |_| repr, site, scope.brand(), &types)
@@ -225,7 +226,8 @@ fn outcome_tag(outcome: &SealOutcome) -> &'static str {
 
 #[test]
 fn constructor_apply_name_renders_surface_form() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let ctor = RecursiveGroupWindow::seal_singleton(
         "Wrap".into(),
         RelativeSchema::TypeConstructor {
@@ -233,11 +235,11 @@ fn constructor_apply_name_renders_surface_form() {
             param_names: vec!["Type".into()],
         },
         None,
-        &types,
+        types,
     );
     let app = types.constructor_apply(
         ctor,
         Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
     );
-    assert_eq!(app.name(&types), ":(Wrap {Type = Number})");
+    assert_eq!(app.name(types), ":(Wrap {Type = Number})");
 }

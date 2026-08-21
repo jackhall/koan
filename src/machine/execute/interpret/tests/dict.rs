@@ -42,7 +42,7 @@ fn let_binds_an_empty_record_literal() {
         }
         other => panic!(
             "expected `d` bound to an empty Record, got {:?}",
-            other.map(|o| o.ktype().name(&test_run.types))
+            other.map(|o| o.ktype().name(test_run.types()))
         ),
     }
 }

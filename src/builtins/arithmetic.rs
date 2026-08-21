@@ -28,6 +28,7 @@ use crate::machine::{Action, BodyCtx, arg_object};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 
 /// Read a `:Number` operand named `name`, or the canonical missing/mismatch diagnostic.
@@ -73,7 +74,7 @@ fn bool_operands(args: &Record<Held<'_>>, types: &TypeRegistry) -> Result<(bool,
 }
 
 pub fn body_add<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -81,7 +82,7 @@ pub fn body_add<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_sub<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -89,7 +90,7 @@ pub fn body_sub<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_mul<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -101,7 +102,7 @@ pub fn body_mul<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 /// (`KErrorKind::User`, the in-language-error landing pad) rather than following IEEE 754's
 /// infinity/NaN convention — no NaN value is ever minted onto a koan `Number`.
 pub fn body_div<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
     if right == 0.0 {
         return Action::done(Err(KError::new(KErrorKind::User(
             "/ : division by zero".to_string(),
@@ -114,7 +115,7 @@ pub fn body_div<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_lt<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -122,7 +123,7 @@ pub fn body_lt<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_le<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -130,7 +131,7 @@ pub fn body_le<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_gt<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -138,7 +139,7 @@ pub fn body_gt<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_ge<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types()));
     Action::done(Ok(ctx
         .scope
         .brand()
@@ -146,14 +147,14 @@ pub fn body_ge<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 }
 
 pub fn body_and<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(bool_operands(ctx.args, ctx.types));
+    let (left, right) = crate::try_action!(bool_operands(ctx.args, ctx.types()));
     Action::done(Ok(ctx
         .scope
         .brand()
         .alloc_scalar_witnessed(Scalar::Bool(left && right))))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let number_sig = |op: &'static str| {
         sig(
             KType::NUMBER,
@@ -175,15 +176,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
         )
     };
 
-    crate::builtins::register_builtin(scope, "+", number_sig("+"), body_add, types, gate);
-    crate::builtins::register_builtin(scope, "-", number_sig("-"), body_sub, types, gate);
-    crate::builtins::register_builtin(scope, "*", number_sig("*"), body_mul, types, gate);
-    crate::builtins::register_builtin(scope, "/", number_sig("/"), body_div, types, gate);
+    crate::builtins::register_builtin(scope, "+", number_sig("+"), body_add, registries, gate);
+    crate::builtins::register_builtin(scope, "-", number_sig("-"), body_sub, registries, gate);
+    crate::builtins::register_builtin(scope, "*", number_sig("*"), body_mul, registries, gate);
+    crate::builtins::register_builtin(scope, "/", number_sig("/"), body_div, registries, gate);
 
-    crate::builtins::register_builtin(scope, "<", comparison_sig("<"), body_lt, types, gate);
-    crate::builtins::register_builtin(scope, "<=", comparison_sig("<="), body_le, types, gate);
-    crate::builtins::register_builtin(scope, ">", comparison_sig(">"), body_gt, types, gate);
-    crate::builtins::register_builtin(scope, ">=", comparison_sig(">="), body_ge, types, gate);
+    crate::builtins::register_builtin(scope, "<", comparison_sig("<"), body_lt, registries, gate);
+    crate::builtins::register_builtin(scope, "<=", comparison_sig("<="), body_le, registries, gate);
+    crate::builtins::register_builtin(scope, ">", comparison_sig(">"), body_gt, registries, gate);
+    crate::builtins::register_builtin(scope, ">=", comparison_sig(">="), body_ge, registries, gate);
 
     let and_sig = sig(
         KType::BOOL,
@@ -193,7 +194,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             arg("right", KType::BOOL),
         ],
     );
-    crate::builtins::register_builtin(scope, "AND", and_sig, body_and, types, gate);
+    crate::builtins::register_builtin(scope, "AND", and_sig, body_and, registries, gate);
 }
 
 /// Seeds the three builtin operator groups: comparison (`< <= > >=`, pairwise, combined by
@@ -210,7 +211,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
 /// own operator's body above, and the pair results fold left through the `AND` keyword combiner.
 pub fn register_builtin_operator_groups<'a>(
     scope: &'a Scope<'a>,
-    _types: &TypeRegistry,
+    _registries: &RunRegistries,
     gate: &mut WriteGate,
 ) {
     seed(

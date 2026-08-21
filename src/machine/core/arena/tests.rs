@@ -11,8 +11,8 @@ use crate::machine::core::Bindings;
 use crate::machine::core::{Action, Body, KFunction};
 use crate::machine::model::KType;
 use crate::machine::model::Record;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::values::RecordSubstrate;
 use crate::machine::model::{Argument, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{Carried, CarriedFamily, Held, KObject};
@@ -385,7 +385,8 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
     });
     // The consumer's own frame: the region the finished list node lands in.
     let dest_frame = run_root_storage();
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     // `yoke` the empty accumulator (the dest region + no cells yet) into the dest frame's region.
     let acc0: Delivered<AggBuildFamily, CarrierWitness, FrameStorage> =
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&dest_frame), |region| {
@@ -425,7 +426,7 @@ fn fold_witnessed_builds_a_list_over_independent_foreign_deps() {
         let owned_cells = crate::machine::core::FrameCoverage::empty();
         let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
             .with_holder(&owned_cells);
-        Carried::Object(region.alloc_object_folded(KObject::list_of_held(region, cells, &types)))
+        Carried::Object(region.alloc_object_folded(KObject::list_of_held(region, cells, types)))
     });
     // Drop the producer handles: the dest arena's minted set solely owns both foreign regions; the
     // dest region itself rides the envelope's own pins, which cover the read.
@@ -544,7 +545,7 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
 
     // Producer: a plain-data record resident in its own frame's region, born through the fold
     // door — the exact shape FROM's `record` operand arrives as. Allocated through the frame's own
@@ -620,7 +621,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
     let scope = test_run.scope;
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
 
     // Producer: a plain-data record resident in its own frame's region, born through the fold door —
     // the shape a declared substrate return arrives as at the Done boundary.
@@ -928,7 +929,8 @@ fn raw_expression_seals_through_the_expression_door() {
 #[test]
 fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
     let frame = run_root_storage();
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let acc0: Delivered<AggBuildFamily, CarrierWitness, FrameStorage> =
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&frame), |region| {
             (region.handle(), &[][..])
@@ -942,11 +944,11 @@ fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
             .with_holder(&owned_cells);
         let fields =
             Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
-        Carried::Object(door.alloc_object_folded(KObject::record_of_held(door, fields, &types)))
+        Carried::Object(door.alloc_object_folded(KObject::record_of_held(door, fields, types)))
     });
     let homed = stored.open_ref(|c| match c.object() {
         KObject::Record(substrate, _) => substrate.homed_in(frame.region()),
-        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
+        other => panic!("expected a Record, got {}", other.ktype().name(types)),
     });
     assert!(
         homed,
@@ -1047,7 +1049,7 @@ fn region_death_frees_every_drop_free_family() {
     let program = program_storage();
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
-    let types = test_run.types.clone();
+    let types = test_run.registry_handle();
 
     let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
     let scope = run_root_bare(frame.storage());

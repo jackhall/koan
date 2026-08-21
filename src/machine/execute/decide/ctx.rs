@@ -16,7 +16,7 @@ use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::scope_frame;
 use crate::machine::core::{FrameStorage, ProgramBrand, RunWriter, StepAllocator};
 use crate::machine::model::types::TypeRegistry;
-use crate::machine::model::{ExpressionPart, WorkingPart};
+use crate::machine::model::{ExpressionPart, RunRegistries, WorkingPart};
 use crate::machine::{CallFrame, Installer, LexicalFrame, Scope};
 use crate::source::Spanned;
 use crate::witnessed::{BumpAllocator, BumpVec};
@@ -157,10 +157,16 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
         self.scope
     }
 
+    /// The run's lookup state, read through the ambient context's run frame — the currency for
+    /// anything that renders a label or constructs a record.
+    pub(in crate::machine::execute) fn registries(&self) -> &RunRegistries {
+        self.ambient.registries()
+    }
+
     /// The run's subtype-verdict store, read through the ambient context's run frame. Memoized
     /// predicates take it as their final parameter.
     pub(in crate::machine::execute) fn types(&self) -> &TypeRegistry {
-        self.ambient.type_registry()
+        &self.registries().types
     }
 
     /// The run's output sink, read through the ambient context's run frame — the same channel and

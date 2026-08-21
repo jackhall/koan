@@ -37,14 +37,14 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         Some(kt) => kt,
         None => match arg_held(ctx.args, "sig") {
             Some(Held::Object(object)) => {
-                return done_err(mismatch(object.ktype().name(ctx.types)));
+                return done_err(mismatch(object.ktype().name(ctx.types())));
             }
             _ => return done_err(KError::new(KErrorKind::MissingArg("sig".to_string()))),
         },
     };
-    let schema = match ctx.types.node(sig_handle) {
+    let schema = match ctx.types().node(sig_handle) {
         TypeNode::Signature { schema, .. } => schema,
-        _ => return done_err(mismatch(sig_handle.name(ctx.types))),
+        _ => return done_err(mismatch(sig_handle.name(ctx.types()))),
     };
     let bindings = match arg_object(ctx.args, "bindings") {
         Some(KObject::Record(substrate, _types)) => substrate,
@@ -75,7 +75,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         if !is_abstract && manifest.is_none() {
             return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "{} has no abstract type slot `{name}`",
-                sig_handle.name(ctx.types),
+                sig_handle.name(ctx.types()),
             ))));
         }
         let pin_type = match value {
@@ -83,7 +83,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             Held::Object(other) => {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "WITH binding `{name}` value must be a type, got `{}`",
-                    other.ktype().name(ctx.types),
+                    other.ktype().name(ctx.types()),
                 ))));
             }
             Held::UnresolvedType(ti) => {
@@ -97,9 +97,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}.{name}` is a manifest type member fixed to `{}`; \
                      WITH cannot re-pin it to `{}`",
-                    sig_handle.name(ctx.types),
-                    fixed.render(ctx.types),
-                    pin_type.render(ctx.types),
+                    sig_handle.name(ctx.types()),
+                    fixed.render(ctx.types()),
+                    pin_type.render(ctx.types()),
                 ))));
             }
         }
@@ -115,8 +115,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             }
         })
         .collect();
-    let folded = schema.fold_pins(&pins, ctx.types);
-    Action::done(Ok(ctx.ctx.type_carried(ctx.types.signature(folded))))
+    let folded = schema.fold_pins(&pins, ctx.types());
+    Action::done(Ok(ctx.ctx.type_carried(ctx.types().signature(folded))))
 }
 
 #[cfg(test)]

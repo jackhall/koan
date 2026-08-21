@@ -11,6 +11,7 @@ mod type_members;
 
 use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::KErrorKind;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{program_storage, run_root_storage};
 
@@ -441,13 +442,14 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
 
     use crate::builtins::test_support::{per_call_storage, run_root_bare};
     use crate::machine::core::{FoldingBrand, FrameStorageExt};
-    use crate::machine::model::{Held, Record, RegionEscape, TypeRegistry, copy_or_pin};
+    use crate::machine::model::{Held, Record, RegionEscape, copy_or_pin};
     use crate::machine::{BindingIndex, FrameCoverage};
     use crate::witnessed::FoldedPlacement;
 
     let module_storage = per_call_storage();
     let module_scope = run_root_bare(&module_storage);
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
 
     // A plain-data record built in the module's own region: no leaf borrows home, so the chooser
     // has a real decision to make once the crossing is recognized as a home crossing at all.
@@ -457,7 +459,7 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
     ))
     .with_holder(&owned_cells);
     let fields = Record::from_pairs(vec![("a".to_string(), Held::Object(KObject::Number(1.0)))]);
-    let record = door.alloc_object_folded(KObject::record_of_held(door, fields, &types));
+    let record = door.alloc_object_folded(KObject::record_of_held(door, fields, types));
     let sealed =
         module_scope.seal_reaching(Carried::Object(record), module_scope.mint_born_here(false));
     module_scope

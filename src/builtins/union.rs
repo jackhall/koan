@@ -5,13 +5,13 @@ use crate::machine::FinishCtx;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::FieldListContext;
 use crate::machine::model::KType;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{DeclWindow, RecursiveGroupWindow};
 use crate::machine::model::{FieldNameKind, pair_list_names, seal_writes};
 use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
 use crate::machine::{StepCarried, seal_type_identity};
 
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 
 /// Fill the elaborated variant payloads into the declaration window's owned members and bind the
 /// union name to the anonymous union of the sealed variants. Every variant is one member of the
@@ -84,7 +84,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     use crate::machine::model::KObject;
     use crate::machine::{Action, arg_object, require_bare_type_name};
 
-    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "UNION", ctx.types));
+    let name = crate::try_action!(require_bare_type_name(
+        ctx.args,
+        "name",
+        "UNION",
+        ctx.types()
+    ));
     let schema_expr = match arg_object(ctx.args, "schema") {
         Some(KObject::KExpression(e)) => e.node(),
         _ => {
@@ -130,7 +135,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     )
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let signature = sig(
         KType::of_kind(KKind::AnyType),
         vec![
@@ -140,7 +145,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             arg("schema", KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, "UNION", signature, body, types, gate);
+    crate::builtins::register_builtin(scope, "UNION", signature, body, registries, gate);
 }
 
 #[cfg(test)]
@@ -215,11 +220,11 @@ mod tests {
             _ => panic!("expected Union type for Maybe, got {result:?}"),
         }
         assert_eq!(
-            variant_repr(scope, "Maybe", "Some", &test_run.types),
+            variant_repr(scope, "Maybe", "Some", test_run.types()),
             KType::NUMBER
         );
         assert_eq!(
-            variant_repr(scope, "Maybe", "None", &test_run.types),
+            variant_repr(scope, "Maybe", "None", test_run.types()),
             KType::NULL
         );
         assert!(
@@ -313,7 +318,7 @@ mod tests {
         let region = run_root_storage();
         let test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        let types = test_run.types.clone();
+        let types = test_run.registry_handle();
         let fctx = crate::machine::FinishCtx::for_scope(scope, &types);
         let fields = || {
             vec![
@@ -345,11 +350,11 @@ mod tests {
                 .expect("the first install lands");
         }
         assert_eq!(
-            variant_repr(scope, "Maybe", "Some", &test_run.types),
+            variant_repr(scope, "Maybe", "Some", test_run.types()),
             KType::NUMBER
         );
         assert_eq!(
-            variant_repr(scope, "Maybe", "None", &test_run.types),
+            variant_repr(scope, "Maybe", "None", test_run.types()),
             KType::NULL
         );
         // Second finalize: the sealed window refills to the same handles and the upsert sees the

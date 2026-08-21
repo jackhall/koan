@@ -14,13 +14,14 @@
 //! to the one identity.
 
 use crate::machine::WriteGate;
-use crate::machine::model::TypeRegistry;
 use std::collections::HashMap;
 
 use crate::machine::Scope;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::{KType, RecursiveGroupWindow, RelativeSchema};
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
+    let types = &registries.types;
     let mut schema: HashMap<String, KType> = HashMap::with_capacity(2);
     schema.insert("Ok".into(), KType::ANY);
     schema.insert("Error".into(), KType::ANY);

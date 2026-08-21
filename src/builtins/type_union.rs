@@ -15,12 +15,12 @@ use crate::machine::model::Held;
 use crate::machine::model::KKind;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
-use crate::machine::model::TypeRegistry;
 use crate::machine::{Action, arg_object, require_ktype};
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
 
 use super::op_def::OperatorForm;
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 
 const MEMBERS_SLOT: &str = "`|` members";
 
@@ -29,11 +29,11 @@ const MEMBERS_SLOT: &str = "`|` members";
 /// union directly — mirroring `parameterized_types::body_map`. The composite allocates into this
 /// step's own region through the single type door.
 fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let left = crate::try_action!(require_ktype(ctx.args, "left", ctx.types));
-    let right = crate::try_action!(require_ktype(ctx.args, "right", ctx.types));
+    let left = crate::try_action!(require_ktype(ctx.args, "left", ctx.types()));
+    let right = crate::try_action!(require_ktype(ctx.args, "right", ctx.types()));
     Action::done(Ok(ctx
         .ctx
-        .type_carried(ctx.types.union_of(vec![left, right]))))
+        .type_carried(ctx.types().union_of(vec![left, right]))))
 }
 
 /// The reduced `Unary` form `[Keyword("|"), ListLiteral([members...])]`: the members ride an
@@ -63,19 +63,20 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
             other => {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "{MEMBERS_SLOT}: every member must be a type, got `{}`",
-                    other.summarize(ctx.types),
+                    other.summarize(ctx.types()),
                 )))));
             }
         }
     }
-    Action::done(Ok(ctx.ctx.type_carried(ctx.types.union_of(members))))
+    Action::done(Ok(ctx.ctx.type_carried(ctx.types().union_of(members))))
 }
 
 /// `|` seeds its triple — the reduced `Unary` form `| [members...]`, the two-member keyworded form
 /// `A | B`, and its own single-member `Unary` operator group — through the shared unary-operator
 /// door in [`super::op_def`]. The bodies are native: a `KType` composed from owned members, not a
 /// synthesized koan AST. A single-member group must never share a group with another operator.
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
+    let types = &registries.types;
     let (_carrier, writes) = super::op_def::register_unary_operator(
         scope,
         "|",

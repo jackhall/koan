@@ -53,6 +53,7 @@ use crate::witnessed::Witnessed;
 use super::fn_def::return_type::{ReturnTypeState, classify_return_type, extract_type_slot_raw};
 use super::resolve_or_await::{expect_type_terminal, resolve_at_wake};
 use super::{arg, kw, sig};
+use crate::machine::model::RunRegistries;
 
 /// The two operand names a binary operator body binds. A pairwise group's combiner is itself an
 /// `OP`, so it binds the same pair — but positionally, by the infix shape the reducer synthesizes,
@@ -203,7 +204,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
         ctx.scope,
         ctx.chain.clone(),
         OPERAND_SLOT,
-        ctx.types,
+        ctx.types(),
     ));
     let result_state = if has_result {
         let raw = crate::try_action!(extract_type_slot_raw(ctx.args, "return_type", RESULT_SLOT));
@@ -213,7 +214,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
             ctx.scope,
             ctx.chain.clone(),
             RESULT_SLOT,
-            ctx.types,
+            ctx.types(),
         )))
     } else {
         None
@@ -244,16 +245,16 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
         bound_name,
     };
     if deps.is_empty() {
-        let operand = crate::try_action!(done_type(operand_capture, OPERAND_SLOT, ctx.types));
+        let operand = crate::try_action!(done_type(operand_capture, OPERAND_SLOT, ctx.types()));
         let result = match result_capture {
             Some(capture) => Some(crate::try_action!(done_type(
                 capture,
                 RESULT_SLOT,
-                ctx.types
+                ctx.types()
             ))),
             None => None,
         };
-        return op_action(plan.finalize(ctx.scope, operand, result, ctx.types));
+        return op_action(plan.finalize(ctx.scope, operand, result, ctx.types()));
     }
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let operand = crate::try_action!(resolve_capture(
@@ -635,7 +636,7 @@ fn combined<'a>(mut elements: Vec<SignatureElement<'a>>) -> SignatureDraft<'a> {
     sig(KType::ANY, prefixed)
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     use crate::builtins::register_builtin;
 
     // Declared return is `KType::ANY`: an operator declaration evaluates to the function it
@@ -693,7 +694,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             "OP",
             sig(KType::ANY, binary(operand)),
             body_binary,
-            types,
+            registries,
             gate,
         );
         register_builtin(
@@ -701,7 +702,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             "LET",
             combined(binary(operand)),
             body_binary_combined,
-            types,
+            registries,
             gate,
         );
         register_builtin(
@@ -709,7 +710,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             "OP",
             sig(KType::ANY, unary_missing_result(operand)),
             body_unary_missing_result,
-            types,
+            registries,
             gate,
         );
         register_builtin(
@@ -717,7 +718,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             "LET",
             combined(unary_missing_result(operand)),
             body_unary_missing_result_combined,
-            types,
+            registries,
             gate,
         );
         for result in type_carriers() {
@@ -726,7 +727,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
                 "OP",
                 sig(KType::ANY, binary_with_result(operand, result)),
                 body_binary,
-                types,
+                registries,
                 gate,
             );
             register_builtin(
@@ -734,7 +735,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
                 "LET",
                 combined(binary_with_result(operand, result)),
                 body_binary_combined,
-                types,
+                registries,
                 gate,
             );
             register_builtin(
@@ -742,7 +743,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
                 "OP",
                 sig(KType::ANY, unary(operand, result)),
                 body_unary,
-                types,
+                registries,
                 gate,
             );
             register_builtin(
@@ -750,7 +751,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
                 "LET",
                 combined(unary(operand, result)),
                 body_unary_combined,
-                types,
+                registries,
                 gate,
             );
         }

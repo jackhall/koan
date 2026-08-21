@@ -13,6 +13,7 @@ mod golden;
 
 use super::*;
 use crate::machine::core::ScopeId;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::types::{KType, Record, TypeNode};
 
@@ -24,9 +25,10 @@ fn record(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
 
 #[test]
 fn same_content_built_twice_digests_equal() {
-    let types = TypeRegistry::new();
-    let r1 = record(&types, vec![("x", KType::NUMBER), ("y", KType::STR)]);
-    let r2 = record(&types, vec![("x", KType::NUMBER), ("y", KType::STR)]);
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let r1 = record(types, vec![("x", KType::NUMBER), ("y", KType::STR)]);
+    let r2 = record(types, vec![("x", KType::NUMBER), ("y", KType::STR)]);
     assert_eq!(r1.digest(), r2.digest());
 
     let u1 = types.union_of(vec![KType::NUMBER, KType::STR]);
@@ -36,17 +38,18 @@ fn same_content_built_twice_digests_equal() {
 
 #[test]
 fn record_digest_is_order_blind_but_binds_name_to_type() {
-    let types = TypeRegistry::new();
-    let ordered = record(&types, vec![("x", KType::NUMBER), ("y", KType::STR)]);
-    let reversed = record(&types, vec![("y", KType::STR), ("x", KType::NUMBER)]);
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let ordered = record(types, vec![("x", KType::NUMBER), ("y", KType::STR)]);
+    let reversed = record(types, vec![("y", KType::STR), ("x", KType::NUMBER)]);
     assert_eq!(
         ordered.digest(),
         reversed.digest(),
         "record identity ignores declaration order"
     );
 
-    let x_number = record(&types, vec![("x", KType::NUMBER)]);
-    let y_number = record(&types, vec![("y", KType::NUMBER)]);
+    let x_number = record(types, vec![("x", KType::NUMBER)]);
+    let y_number = record(types, vec![("y", KType::NUMBER)]);
     assert_ne!(
         x_number.digest(),
         y_number.digest(),
@@ -56,7 +59,8 @@ fn record_digest_is_order_blind_but_binds_name_to_type() {
 
 #[test]
 fn union_digest_is_order_blind() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let forward = types.union_of(vec![KType::NUMBER, KType::STR]);
     let reversed = types.union_of(vec![KType::STR, KType::NUMBER]);
     assert_eq!(forward.digest(), reversed.digest());
@@ -64,7 +68,8 @@ fn union_digest_is_order_blind() {
 
 #[test]
 fn leaves_and_composites_digest_distinctly_by_shape() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     assert_ne!(KType::NUMBER.digest(), KType::STR.digest());
     assert_ne!(KType::BOOL.digest(), KType::NULL.digest());
     assert_ne!(
@@ -84,7 +89,8 @@ fn leaves_and_composites_digest_distinctly_by_shape() {
 /// *order* is presentation.
 #[test]
 fn abstract_type_digest_keys_on_full_content() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let source = ScopeId::from_raw(0, 0xA11C);
     let member = |param_names: Vec<&str>| {
         types.intern(TypeNode::AbstractType {
@@ -128,7 +134,8 @@ fn abstract_type_digest_keys_on_full_content() {
 /// and both stay distinct from the SIG-body declaration they were threaded from.
 #[test]
 fn abstract_type_nonce_is_generative() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let source = ScopeId::from_raw(0, 0xA11C);
     let mint = |nonce: Option<ScopeId>| {
         types.intern(TypeNode::AbstractType {
@@ -161,7 +168,8 @@ fn abstract_type_nonce_is_generative() {
 #[test]
 fn schema_digest_binds_abstract_member_param_names() {
     use crate::machine::model::types::SigSchema;
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let sig_id = ScopeId::from_raw(0, 0x51C0);
     let schema = |param_names: Vec<&str>| SigSchema {
         sig_id: Some(sig_id),
@@ -180,23 +188,23 @@ fn schema_digest_binds_abstract_member_param_names() {
         value_slots: HashMap::new(),
     };
     assert_ne!(
-        schema_content_digest(&schema(vec!["Elem"]), &types),
-        schema_content_digest(&schema(vec!["Item"]), &types),
+        schema_content_digest(&schema(vec!["Elem"]), types),
+        schema_content_digest(&schema(vec!["Item"]), types),
         "a renamed parameter is a different interface",
     );
     assert_ne!(
-        schema_content_digest(&schema(vec!["Elem"]), &types),
-        schema_content_digest(&schema(vec![]), &types),
+        schema_content_digest(&schema(vec!["Elem"]), types),
+        schema_content_digest(&schema(vec![]), types),
         "a first-order member and a constructor member are different interfaces",
     );
     assert_ne!(
-        schema_content_digest(&schema(vec!["Elem"]), &types),
-        schema_content_digest(&schema(vec!["Elem", "Item"]), &types),
+        schema_content_digest(&schema(vec!["Elem"]), types),
+        schema_content_digest(&schema(vec!["Elem", "Item"]), types),
         "arity is part of the interface",
     );
     assert_eq!(
-        schema_content_digest(&schema(vec!["Elem", "Item"]), &types),
-        schema_content_digest(&schema(vec!["Item", "Elem"]), &types),
+        schema_content_digest(&schema(vec!["Elem", "Item"]), types),
+        schema_content_digest(&schema(vec!["Item", "Elem"]), types),
         "a member's parameter identity is its name set, not its declaration order",
     );
 }
@@ -205,7 +213,8 @@ fn schema_digest_binds_abstract_member_param_names() {
 /// name-to-type map is one application however the args record was built.
 #[test]
 fn constructor_apply_digest_is_order_blind() {
-    let types = TypeRegistry::new();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
     let ctor = types.intern(TypeNode::AbstractType {
         source: ScopeId::from_raw(0, 0xC70A),
         name: "Both".into(),

@@ -14,8 +14,10 @@
 //! costs a re-walk of the structural predicate, never a wrong answer. Keeping them separable from
 //! content is what lets a future cross-thread transfer move nodes without moving cache.
 //!
-//! One [`TypeRegistry`] hangs off the scheduler-owned run frame (`CallFrame::type_registry`),
-//! reached by reference through the execution context, so there is no process-global state.
+//! One [`TypeRegistry`] hangs off the scheduler-owned run frame, inside the
+//! [`RunRegistries`](crate::machine::model::RunRegistries) bundle it shares with the label
+//! interner, reached by reference through the execution context — so there is no process-global
+//! state.
 //!
 //! See [design/typing/type-registry.md](../../../../design/typing/type-registry.md).
 

@@ -3,12 +3,12 @@ use crate::machine::WriteGate;
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::model::KKind;
 use crate::machine::model::TypeNode;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
+use crate::machine::model::RunRegistries;
 
 /// `LET <name> = <value:Any>` — deep-clones the bound value into the region and inserts it
 /// under `name`. Two overloads share this body, differing only in the `name` slot's `KType`:
@@ -36,7 +36,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         None => match arg_type(ctx.args, "name") {
             Some(name_kt)
                 if matches!(
-                    ctx.types.node(name_kt),
+                    ctx.types().node(name_kt),
                     TypeNode::List { .. }
                         | TypeNode::Dict { .. }
                         | TypeNode::KFunction { .. }
@@ -45,10 +45,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "LET name must be a bare type name, got `{}`",
-                    name_kt.render(ctx.types),
+                    name_kt.render(ctx.types()),
                 ))));
             }
-            Some(name_kt) => Some(name_kt.name(ctx.types)),
+            Some(name_kt) => Some(name_kt.name(ctx.types())),
             None => None,
         },
     };
@@ -57,7 +57,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             // A type-language carrier under a value-classified name is a cross-kind error. A module
             // is *not* one: it is a value, and a value-classified name is exactly where it belongs.
             let type_kind = match rhs {
-                Held::Type(kt) if matches!(ctx.types.node(*kt), TypeNode::Signature { .. }) => {
+                Held::Type(kt) if matches!(ctx.types().node(*kt), TypeNode::Signature { .. }) => {
                     Some("signature")
                 }
                 Held::Type(_) | Held::UnresolvedType(_) => Some("type"),
@@ -98,7 +98,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 Held::Object(o) => {
                     return done_err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
-                        got: o.ktype().name(ctx.types),
+                        got: o.ktype().name(ctx.types()),
                     }));
                 }
             }
@@ -108,7 +108,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             return done_err(KError::new(KErrorKind::TypeMismatch {
                 arg: "name".to_string(),
                 expected: "Identifier or ProperType".to_string(),
-                got: other.ktype().name(ctx.types),
+                got: other.ktype().name(ctx.types()),
             }));
         }
         (None, None) => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
@@ -215,7 +215,7 @@ fn capitalize_identifier(name: &str) -> String {
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut WriteGate) {
+pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let identifier_sig = || {
         sig(
             KType::ANY,
@@ -238,8 +238,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry, gate: &mut Write
             ],
         )
     };
-    crate::builtins::register_builtin(scope, "LET", identifier_sig(), body, types, gate);
-    crate::builtins::register_builtin(scope, "LET", type_sig(), body, types, gate);
+    crate::builtins::register_builtin(scope, "LET", identifier_sig(), body, registries, gate);
+    crate::builtins::register_builtin(scope, "LET", type_sig(), body, registries, gate);
 }
 
 #[cfg(test)]
