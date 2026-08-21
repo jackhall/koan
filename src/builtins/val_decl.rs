@@ -73,7 +73,7 @@ enum CarrierForm<'a> {
 /// sub-dispatch) for a leaf that re-resolves against decl_scope.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::dispatch_type_then;
-    use crate::machine::{Action, arg_object, arg_type, arg_unresolved_type};
+    use crate::machine::Action;
 
     let done_err = |e: KError| Action::done(Err(e));
 
@@ -85,7 +85,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         )));
     }
 
-    let name = match arg_object(ctx.args, "name") {
+    let name = match ctx.args.object("name") {
         Some(KObject::KString(s)) => (*s).to_string(),
         Some(other) => {
             return done_err(KError::new(KErrorKind::TypeMismatch {
@@ -106,12 +106,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         ))));
     }
 
-    let carrier = match arg_unresolved_type(ctx.args, "ty") {
+    let carrier = match ctx.args.unresolved_type("ty") {
         Some(te) => CarrierForm::Raw(*te),
-        None => match arg_type(ctx.args, "ty") {
+        None => match ctx.args.ktype("ty") {
             Some(kt) => typeexpr_from_carrier(ctx.scope.brand(), kt, ctx.registries),
             None => {
-                return done_err(match arg_object(ctx.args, "ty") {
+                return done_err(match ctx.args.object("ty") {
                     Some(other) => KError::new(KErrorKind::TypeMismatch {
                         arg: "ty".to_string(),
                         expected: "ProperType".to_string(),

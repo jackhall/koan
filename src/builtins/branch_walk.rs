@@ -27,8 +27,7 @@ pub(crate) fn resolve_arm_contract<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
     kind: &'static str,
 ) -> Result<ReturnContract<'a>, KError> {
-    use crate::machine::{arg_type, arg_unresolved_type};
-    let ret_kt = if let Some(te) = arg_unresolved_type(ctx.args, "return_type") {
+    let ret_kt = if let Some(te) = ctx.args.unresolved_type("return_type") {
         match ctx
             .scope
             .resolve_type_identifier(te, ctx.chain.clone(), ctx.types())
@@ -44,7 +43,7 @@ pub(crate) fn resolve_arm_contract<'a>(
             }
         }
     } else {
-        match arg_type(ctx.args, "return_type") {
+        match ctx.args.ktype("return_type") {
             Some(other) => other,
             None => {
                 return Err(KError::new(KErrorKind::MissingArg(

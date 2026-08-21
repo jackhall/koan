@@ -14,12 +14,12 @@ use super::super::outcome::Outcome;
 use super::ctx::DecideCtx;
 use std::rc::Rc;
 
+use crate::machine::core::BoundArgs;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::{Body, CallFrame, KFunction, OpenedFunction};
 use crate::machine::core::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
-use crate::machine::model::{Record, SignatureElement};
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
 use crate::witnessed::BumpVec;
 
@@ -81,13 +81,20 @@ fn invoke_builtin<'step>(
     // A literal arg is region-pure and contributes no cell — on the builtin lane nothing binds at a
     // `for<'b>` brand, so an absent entry reads as "no foreign reach".
     let arg_carriers = carriers_from_expr(view, &working_expr);
-    let arg_carriers = map_arg_carriers(function, &arg_carriers);
-    let args = match function.bind_args(working_expr.parts, view.current_scope(), view.registries())
-    {
-        Ok(args) => args,
-        Err(e) => return Outcome::Done(Err(e)),
-    };
-    run_action_builtin(view, f, args, arg_carriers)
+    // The values half of the argument view, on the step scratch: one slot per declared parameter,
+    // aligned with the signature's own schema. No name-keyed container is built for the call.
+    let schema = function.signature.params();
+    let mut slots = BumpVec::with_capacity_in(schema.len(), view.scratch());
+    if let Err(e) = function.bind_args_into(
+        working_expr.parts,
+        view.current_scope(),
+        view.registries(),
+        &arg_carriers,
+        &mut slots,
+    ) {
+        return Outcome::Done(Err(e));
+    }
+    run_action_builtin(view, f, BoundArgs::new(schema, &slots))
 }
 
 /// Enter a resolved **user-defined** call: mint the per-call cart and bind the call's arguments into
@@ -116,7 +123,7 @@ fn enter_user_fn<'step>(
     // Each envelope's relocation at the bind door mints that binding's reach in the per-call region,
     // so every foreign region an argument borrows into is pinned for the call's life — no separate
     // deposit here.
-    let named_carriers = map_arg_carriers(function, &arg_carriers);
+    let named_carriers = parameter_carriers(function, &arg_carriers, view.scratch());
     // Chained off the closure's captured (definition) scope, so a closure's captured per-call frame
     // survives the hop while the caller's cart does not.
     let frame = CallFrame::new(function.captured_scope());
@@ -246,35 +253,35 @@ fn carriers_from_expr<'step>(
     carriers
 }
 
-/// Re-key the slot-indexed arg carriers onto their parameter names. A committed call's parts line up
-/// 1:1 with `picked`'s signature elements ([`KFunction::validate_call_args`] enforces it), so the
-/// element at a carrier's slot names its parameter. A `None` entry contributes no record field — the
-/// shape a region-pure arg takes on the builtin lane, where nothing binds at a `for<'b>` brand. A
-/// user-defined call fills every value slot ([`deliver_value_args`]), so the record this returns
-/// there holds one envelope per parameter and is the whole argument currency the frame bind reads.
-fn map_arg_carriers<'e, 'step>(
+/// Select the delivery envelopes belonging to a call's *parameters*, in declaration order — the
+/// values half of the user-defined lane's argument view. A committed call's parts line up 1:1 with
+/// the signature's elements ([`KFunction::validate_call_args`] enforces it), so `part_slots`
+/// addresses each parameter's envelope positionally. Every value slot is filled on this lane
+/// ([`deliver_value_args`] guarantees it), so the slice this returns holds one envelope per
+/// parameter and is the whole argument currency the frame bind reads. Nothing is keyed.
+fn parameter_carriers<'e, 'step>(
     picked: &KFunction<'step>,
     arg_carriers: &'e [Option<DeliveredCarried>],
-) -> Record<&'e DeliveredCarried> {
-    let mut record = Record::new();
-    for (slot, carrier) in arg_carriers.iter().enumerate() {
-        if let (Some(carrier), Some(SignatureElement::Argument(arg))) =
-            (carrier, picked.signature.elements().get(slot))
-        {
-            record.insert(arg.name, carrier);
-        }
-    }
-    record
+    scratch: crate::witnessed::BumpAllocator<'step>,
+) -> BumpVec<'step, &'e DeliveredCarried> {
+    let slots = picked.signature.part_slots();
+    let mut carriers = BumpVec::with_capacity_in(slots.len(), scratch);
+    carriers.extend(
+        slots
+            .iter()
+            .filter_map(|slot| arg_carriers.get(*slot as usize).and_then(Option::as_ref)),
+    );
+    carriers
 }
 
-/// `args` reaches the `BodyCtx` by reference as a transient record — never a `KObject`, never
-/// region-allocated. `arg_carriers` are the per-parameter reach carriers (a value-embedding body
-/// folds / merges the one it embeds; an absent entry is region-pure).
+/// `args` reaches the `BodyCtx` as the schema-keyed view — never a `KObject`, never
+/// region-allocated, and never a per-call map. Its slots carry the bound cells and the
+/// per-parameter reach carriers (a value-embedding body folds / merges the one it embeds; an
+/// absent carrier is region-pure).
 fn run_action_builtin<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     f: crate::machine::core::ActionFn,
-    args: Record<crate::machine::model::Held<'step>>,
-    arg_carriers: Record<&DeliveredCarried>,
+    args: BoundArgs<'step, '_>,
 ) -> Outcome<'step> {
     use crate::machine::core::BodyCtx;
 
@@ -285,8 +292,7 @@ fn run_action_builtin<'step>(
             scope: view.current_scope(),
             frame: frame.as_ref(),
             chain,
-            args: &args,
-            arg_carriers: &arg_carriers,
+            args,
             installer: view.installer(),
             ctx: view.step_ctx(),
             registries: view.registries(),

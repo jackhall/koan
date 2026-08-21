@@ -59,13 +59,15 @@ fn allocations_for(source: &str, path: &str) -> u64 {
     delta
 }
 
-/// 100 tail-recursive steps, 118.0 allocations each — exactly linear, measured flat at
-/// 10/50/100/200. Measured 2026-08-20 at 14 917; the bound is that plus 41, less than the 100
-/// a single new per-step allocation would add. Tight on purpose: a looser bound cannot see
-/// one allocation, and rebaselining is meant to be a deliberate edit.
+/// 100 tail-recursive steps, 98.9 allocations each — exactly linear, measured flat at
+/// 10/50/100/200. Measured 2026-08-21 at 12 489, down from 14 917 when a call re-keyed its
+/// arguments onto parameter names: the schema-keyed argument view pays no per-parameter name
+/// and no per-call container on either lane. The bound is that plus 41, less than the 100 a
+/// single new per-step allocation would add. Tight on purpose: a looser bound cannot see one
+/// allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
-    const BOUND: u64 = 14_958;
+    const BOUND: u64 = 12_530;
     let delta = allocations_for(
         include_str!("../audit/shapes/tail_loop.koan"),
         "audit/shapes/tail_loop.koan",
@@ -78,13 +80,14 @@ fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
     );
 }
 
-/// A 128-operand `+` chain, so 127 dispatches at ≈30 allocations each — mildly superlinear,
-/// with marginal cost rising 28.9 → 31.3 across the 16→32 … 128→256 operand doublings.
-/// Measured 2026-08-20 at 6 689; the bound is that plus 41, under the 127 a single new
-/// per-dispatch allocation would add. Same headroom rule as the loop.
+/// A 128-operand `+` chain, so 127 dispatches at ≈26 allocations each — mildly superlinear,
+/// with marginal cost rising across the 16→32 … 128→256 operand doublings. Measured 2026-08-21
+/// at 5 893, down from 6 689 for the same reason the loop shape dropped. The bound is that plus
+/// 41, under the 127 a single new per-dispatch allocation would add. Same headroom rule as the
+/// loop.
 #[test]
 fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
-    const BOUND: u64 = 6_730;
+    const BOUND: u64 = 5_934;
     let delta = allocations_for(
         include_str!("../audit/shapes/operator_chain.koan"),
         "audit/shapes/operator_chain.koan",
@@ -107,7 +110,7 @@ fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
 /// dispatches' marginal cost; differencing *those* leaves what 8 extra scopes cost per
 /// dispatch. Before the walk's buffers moved onto the step scratch arena that difference
 /// measured 509 — ≈2 heap allocations per extra scope walked, per dispatch. Measured
-/// 2026-08-20 it is **−3**: 1 883 allocations for 32 dispatches at depth 10 against 1 886 at
+/// 2026-08-21 it is **−3**: 1 595 allocations for 32 dispatches at depth 10 against 1 598 at
 /// depth 2, the two depths indistinguishable and the deeper walk marginally the cheaper.
 ///
 /// The bound is one allocation per extra dispatch, far under the ≥256 that a single

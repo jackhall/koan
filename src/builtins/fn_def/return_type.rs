@@ -8,12 +8,13 @@ use crate::machine::ProducerId;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{DeferredReturn, ReturnType};
-use crate::machine::model::{Held, KExpression, Record, TypeIdentifier};
+use crate::machine::model::{KExpression, TypeIdentifier};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 use std::rc::Rc;
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
+use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
 
 /// `ExprCarrier` is captured raw rather than sub-dispatched in the outer scope because a
@@ -52,7 +53,7 @@ pub(crate) enum ReturnTypeCapture<'a> {
 
 /// Read the `return_type` slot from a `BodyCtx::args` record into a `ReturnTypeRaw`.
 pub(crate) fn extract_return_type_raw<'a>(
-    args: &Record<Held<'a>>,
+    args: BoundArgs<'a, '_>,
 ) -> Result<ReturnTypeRaw<'a>, KError> {
     extract_type_slot_raw(args, "return_type", "FN return-type slot")
 }
@@ -63,16 +64,15 @@ pub(crate) fn extract_return_type_raw<'a>(
 /// type. `slot` names the args field; `label` names the surface in the shape error. Shared by
 /// `FN`'s return slot and `OP`'s operand / return slots.
 pub(crate) fn extract_type_slot_raw<'a>(
-    args: &Record<Held<'a>>,
+    args: BoundArgs<'a, '_>,
     slot: &str,
     label: &str,
 ) -> Result<ReturnTypeRaw<'a>, KError> {
-    use crate::machine::{arg_object, arg_type, arg_unresolved_type};
-    if let Some(te) = arg_unresolved_type(args, slot) {
+    if let Some(te) = args.unresolved_type(slot) {
         Ok(ReturnTypeRaw::TypeExprCarrier(*te))
-    } else if let Some(kt) = arg_type(args, slot) {
+    } else if let Some(kt) = args.ktype(slot) {
         Ok(ReturnTypeRaw::Resolved(kt))
-    } else if let Some(KObject::KExpression(e)) = arg_object(args, slot) {
+    } else if let Some(KObject::KExpression(e)) = args.object(slot) {
         Ok(ReturnTypeRaw::ExprCarrier(e.node()))
     } else {
         Err(KError::new(KErrorKind::ShapeError(format!(

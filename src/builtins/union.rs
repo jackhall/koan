@@ -87,7 +87,7 @@ fn finalize_union<'a>(
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use super::nominal_schema::nominal_schema_action;
     use crate::machine::model::KObject;
-    use crate::machine::{Action, arg_object, require_bare_type_name};
+    use crate::machine::{Action, require_bare_type_name};
 
     let name = crate::try_action!(require_bare_type_name(
         ctx.args,
@@ -95,7 +95,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         "UNION",
         ctx.registries
     ));
-    let schema_expr = match arg_object(ctx.args, "schema") {
+    let schema_expr = match ctx.args.object("schema") {
         Some(KObject::KExpression(e)) => e.node(),
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(

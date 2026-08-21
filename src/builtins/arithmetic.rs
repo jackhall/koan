@@ -23,21 +23,22 @@ use crate::machine::WriteGate;
 use crate::machine::BindingIndex;
 use crate::machine::GroupSeal;
 use crate::machine::model::{FoldDirection, ReductionMode};
-use crate::machine::model::{Held, KObject, KType, Record};
-use crate::machine::{Action, BodyCtx, arg_object};
+use crate::machine::model::{KObject, KType};
+use crate::machine::{Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 
 /// Read a `:Number` operand named `name`, or the canonical missing/mismatch diagnostic.
 fn number_arg(
-    args: &Record<Held<'_>>,
+    args: BoundArgs<'_, '_>,
     name: &str,
     registries: &RunRegistries,
 ) -> Result<f64, KError> {
-    match arg_object(args, name) {
+    match args.object(name) {
         Some(KObject::Number(n)) => Ok(*n),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.to_string(),
@@ -50,7 +51,7 @@ fn number_arg(
 
 /// Read the `left` / `right` `:Number` operands.
 fn number_operands(
-    args: &Record<Held<'_>>,
+    args: BoundArgs<'_, '_>,
     registries: &RunRegistries,
 ) -> Result<(f64, f64), KError> {
     Ok((
@@ -61,11 +62,11 @@ fn number_operands(
 
 /// Read a `:Bool` operand named `name`, or the canonical missing/mismatch diagnostic.
 fn bool_arg(
-    args: &Record<Held<'_>>,
+    args: BoundArgs<'_, '_>,
     name: &str,
     registries: &RunRegistries,
 ) -> Result<bool, KError> {
-    match arg_object(args, name) {
+    match args.object(name) {
         Some(KObject::Bool(b)) => Ok(*b),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.to_string(),
@@ -78,7 +79,7 @@ fn bool_arg(
 
 /// Read the `left` / `right` `:Bool` operands.
 fn bool_operands(
-    args: &Record<Held<'_>>,
+    args: BoundArgs<'_, '_>,
     registries: &RunRegistries,
 ) -> Result<(bool, bool), KError> {
     Ok((

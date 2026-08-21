@@ -16,10 +16,10 @@ use crate::machine::model::RunRegistries;
 /// The `EVAL` head-keyword is not part of the surface; user code goes through the `$` sigil.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::model::KObject;
-    use crate::machine::{Action, FramePlacement, arg_object};
+    use crate::machine::{Action, FramePlacement};
     use crate::machine::{BlockBody, BlockScope, block_tail};
     use crate::machine::{KError, KErrorKind};
-    let inner = match arg_object(ctx.args, "expr") {
+    let inner = match ctx.args.object("expr") {
         Some(KObject::KExpression(e)) => e.node(),
         Some(other) => {
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {

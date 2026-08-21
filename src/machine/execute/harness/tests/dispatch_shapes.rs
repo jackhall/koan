@@ -10,7 +10,7 @@
 
 use crate::builtins::test_support::{TestRun, parse_one};
 use crate::machine::ProducerId;
-use crate::machine::core::{Action, BodyCtx, arg_object};
+use crate::machine::core::{Action, BodyCtx};
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::execute::decide::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
@@ -62,7 +62,7 @@ fn sched_read_carried<'run>(
 /// (no keywords), which means no koan user surface can call it directly — tests
 /// using it only inspect routing, never the call outcome.
 fn body_identity<'run>(ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
-    match arg_object(ctx.args, "n") {
+    match ctx.args.object("n") {
         Some(obj) => Action::done_resident(
             ctx.scope,
             Carried::Object(

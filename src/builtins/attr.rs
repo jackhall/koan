@@ -18,10 +18,11 @@ use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, Module};
-use crate::machine::model::{CarriedFamily, Held, KObject, KType, PartedCell, Record, TypeNode};
+use crate::machine::model::{CarriedFamily, Held, KObject, KType, PartedCell, TypeNode};
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::BoundArgs;
 use crate::machine::DeliveredCarried;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Symbol;
@@ -39,11 +40,10 @@ fn route<'a>(result: Result<StepCarried<'a>, KError>) -> crate::machine::Action<
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
 /// type-channel leaf token (resolved or rendered), else a `MissingArg`. Mirrors [`read_field_name`].
 fn read_field_name<'a>(
-    args: &Record<Held<'a>>,
+    args: BoundArgs<'a, '_>,
     registries: &RunRegistries,
 ) -> Result<String, KError> {
-    use crate::machine::{arg_object, arg_type};
-    if let Some(obj) = arg_object(args, "field") {
+    if let Some(obj) = args.object("field") {
         return match obj {
             KObject::KString(s) => Ok((*s).to_string()),
             other => Err(KError::new(KErrorKind::TypeMismatch {
@@ -53,10 +53,10 @@ fn read_field_name<'a>(
             })),
         };
     }
-    if let Some(te) = crate::machine::arg_unresolved_type(args, "field") {
+    if let Some(te) = args.unresolved_type("field") {
         return Ok(te.render());
     }
-    if let Some(kt) = arg_type(args, "field") {
+    if let Some(kt) = args.ktype("field") {
         return Ok(kt.name(registries));
     }
     Err(KError::new(KErrorKind::MissingArg("field".to_string())))
@@ -70,8 +70,8 @@ fn read_field_name<'a>(
 pub fn body_identifier<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, arg_object};
-    let s_name = match arg_object(ctx.args, "s") {
+    use crate::machine::Action;
+    let s_name = match ctx.args.object("s") {
         Some(KObject::KString(s)) => (*s).to_string(),
         Some(other) => {
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
@@ -104,8 +104,8 @@ pub fn body_identifier<'a>(
 /// an unlowered name carrier through the memoized bridge first. A module lhs rides the value channel
 /// and picks [`body_module`] instead, so `Foo.Carrier` projects off the module value.
 pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, arg_object, arg_type, arg_unresolved_type};
-    if let Some(te) = arg_unresolved_type(ctx.args, "s") {
+    use crate::machine::Action;
+    if let Some(te) = ctx.args.unresolved_type("s") {
         let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
         return match ctx.scope.resolve_type_identifier(te, None, ctx.types()) {
             TypeResolution::Done(kt) => route(access_type_member(
@@ -128,10 +128,10 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
             }
         };
     }
-    let s_kt = match arg_type(ctx.args, "s") {
+    let s_kt = match ctx.args.ktype("s") {
         Some(kt) => kt,
         None => {
-            return Action::done(Err(match arg_object(ctx.args, "s") {
+            return Action::done(Err(match ctx.args.object("s") {
                 Some(other) => KError::new(KErrorKind::TypeMismatch {
                     arg: "s".to_string(),
                     expected: "ProperType".to_string(),
@@ -152,8 +152,8 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
 
 /// Reads the `Wrapped` runtime lhs and projects the field through [`access_field`].
 pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, arg_object};
-    let target = match arg_object(ctx.args, "s") {
+    use crate::machine::Action;
+    let target = match ctx.args.object("s") {
         Some(obj) => obj,
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
@@ -165,7 +165,7 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mac
     // through the shape-split pure door and enveloped there — coverage-equivalent to an empty-reach
     // seal. No region-pure shape is a `Wrapped`, so that arm's diagnostic is what a construction
     // bug would surface here.
-    match ctx.arg_carrier("s") {
+    match ctx.args.carrier("s") {
         Some(lhs) => route(access_field(&ctx.ctx, &field_name, lhs, ctx.registries)),
         None => {
             let resident = match ctx.scope.deliver_pure_value(target) {
@@ -184,8 +184,8 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mac
 
 /// Projects the field off a module lhs riding the value channel's Object arm.
 pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, arg_object};
-    let m = match arg_object(ctx.args, "s") {
+    use crate::machine::Action;
+    let m = match ctx.args.object("s") {
         Some(KObject::Module(module)) => *module,
         Some(other) => {
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {

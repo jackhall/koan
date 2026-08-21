@@ -24,7 +24,7 @@ use crate::machine::{KError, KErrorKind};
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
 /// returns the specialized signature handle as a `Carried::Type`.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, arg_held, arg_object, arg_type};
+    use crate::machine::Action;
 
     let done_err = |e: KError| Action::done(Err(e));
     let mismatch = |got: String| {
@@ -34,9 +34,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             got,
         })
     };
-    let sig_handle = match arg_type(ctx.args, "sig") {
+    let sig_handle = match ctx.args.ktype("sig") {
         Some(kt) => kt,
-        None => match arg_held(ctx.args, "sig") {
+        None => match ctx.args.held("sig") {
             Some(Held::Object(object)) => {
                 return done_err(mismatch(object.ktype().name(ctx.registries)));
             }
@@ -47,7 +47,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         TypeNode::Signature { schema, .. } => schema,
         _ => return done_err(mismatch(sig_handle.name(ctx.registries))),
     };
-    let bindings = match arg_object(ctx.args, "bindings") {
+    let bindings = match ctx.args.object("bindings") {
         Some(KObject::Record(substrate, _types)) => substrate,
         _ => {
             return done_err(KError::new(KErrorKind::ShapeError(

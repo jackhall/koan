@@ -5,13 +5,16 @@
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::source::Spanned;
 
+use crate::machine::core::DeliveredCarried;
 use crate::machine::core::carrier_witness::DeliveredFunction;
+use crate::machine::core::kfunction::action::BoundArg;
 use crate::machine::core::{
     FoldingBrand, KError, KErrorKind, KoanStorageProfile, RegionBrand, Scope,
 };
+use crate::machine::model::NamedPairs;
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, Record, SignatureDraft, SignatureElement};
-use crate::machine::model::{Held, NamedPairs};
+use crate::witnessed::BumpVec;
 use crate::witnessed::RegionHandleFamily;
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
@@ -197,7 +200,7 @@ impl<'a> KFunction<'a> {
     }
 
     /// Validate a positional call's `parts` against this signature: arity, keyword spellings, and
-    /// each argument's type ([`slot_admits`]). Shared by [`Self::bind_args`] and the `exec`
+    /// each argument's type ([`slot_admits`]). Shared by [`Self::bind_args_into`] and the `exec`
     /// executor — the latter re-keys the call's delivery envelopes onto parameter names by slot
     /// (`map_arg_carriers`, a pure rename that trusts the picker), so for a uniquely-picked call
     /// (admitted shape-only by dispatch) this is where a non-satisfying typed argument becomes a
@@ -245,35 +248,43 @@ impl<'a> KFunction<'a> {
         Ok(())
     }
 
-    /// Bind a builtin call's positional argument `parts` to this signature's parameters, producing
-    /// the owned argument record [`Record<Held>`] directly. Each argument is resolved against its
-    /// declared parameter type by the slot-aware [`WorkingPart::resolve_for`], which lifts a
-    /// resolved sub-result out of its cell and lowers a raw `Type` / `SigiledTypeExpr` /
-    /// `RecordType` part into the matching [`Held`] arm.
+    /// Bind a builtin call's positional argument `parts` into `slots`, one entry per declared
+    /// parameter in declaration order — the values half of the argument view, aligned with the
+    /// signature's own [`params`](crate::machine::model::ExpressionSignature::params) schema.
     ///
-    /// This is the builtin counterpart to the user-defined-call binder (`map_arg_carriers`, in the
-    /// dispatcher's `exec` lane). The two hold *different currencies for a reason*: this binder
-    /// produces owned `Held` cells because a builtin receives raw argument parts that `resolve_for`
-    /// resolves into fresh values; the user-defined lane re-keys the call's **delivery envelopes**
-    /// onto parameter names, because a user-defined call arrives with its value parts already
-    /// delivered by dispatch and the frame bind relocates each one through its own envelope. `scope`
-    /// is the call scope: `resolve_for` adopts a spliced **cell** into it before owning the value,
-    /// so an owned type that still borrows the producer region stays pinned.
-    pub fn bind_args(
+    /// Each argument is resolved against its declared parameter type by the slot-aware
+    /// [`WorkingPart::resolve_for`], which lifts a resolved sub-result out of its cell and lowers a
+    /// raw `Type` / `SigiledTypeExpr` / `RecordType` part into the matching [`Held`] arm; its
+    /// delivery envelope is read off `carriers` at the same part index. `scope` is the call scope:
+    /// `resolve_for` adopts a spliced **cell** into it before owning the value, so an owned type
+    /// that still borrows the producer region stays pinned.
+    ///
+    /// Nothing is keyed here, on either lane. A committed call's parts line up 1:1 with the
+    /// signature's elements ([`Self::validate_call_args`] enforces it), so
+    /// [`part_slots`](crate::machine::model::ExpressionSignature::part_slots) addresses each
+    /// parameter's part positionally and the view's named reads resolve against the
+    /// definition-time schema.
+    pub fn bind_args_into<'c>(
         &'a self,
         parts: &[Spanned<WorkingPart<'a>>],
         scope: &'a Scope<'a>,
         registries: &RunRegistries,
-    ) -> Result<Record<Held<'a>>, KError> {
-        let types = &registries.types;
+        carriers: &'c [Option<DeliveredCarried>],
+        slots: &mut BumpVec<'_, BoundArg<'a, 'c>>,
+    ) -> Result<(), KError> {
         self.validate_call_args(parts, registries)?;
-        let mut args: Record<Held<'a>> = Record::new();
-        for (el, part) in self.signature.elements().iter().zip(parts.iter()) {
-            if let SignatureElement::Argument(arg) = el {
-                args.insert(arg.name, part.value.resolve_for(&arg.ktype, scope, types));
-            }
+        let types = &registries.types;
+        for slot in self.signature.part_slots() {
+            let at = *slot as usize;
+            let SignatureElement::Argument(arg) = self.signature.elements()[at] else {
+                unreachable!("part_slots indexes exactly the signature's argument elements");
+            };
+            slots.push(BoundArg {
+                value: parts[at].value.resolve_for(&arg.ktype, scope, types),
+                carrier: carriers.get(at).and_then(Option::as_ref),
+            });
         }
-        Ok(args)
+        Ok(())
     }
 
     /// Reorder a call's named arguments (the `{name = value}` record literal's fields)
@@ -347,14 +358,9 @@ fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>]) -> String {
 /// shape directly instead of seeing it coarsened to `Any`. See
 /// [ktype/records-and-limits.md § Record fields](../../../design/typing/ktype/records-and-limits.md#record-fields-and-ktype-hashing).
 fn function_value_ktype(signature: &ExpressionSignature<'_>, types: &TypeRegistry) -> KType {
-    let params: Record<KType> = signature
-        .elements()
-        .iter()
-        .filter_map(|el| match el {
-            SignatureElement::Argument(a) => Some((a.name, a.ktype)),
-            _ => None,
-        })
-        .collect();
+    // The signature already owns its parameter schema; the function type shares it rather than
+    // re-deriving one — one intern-boundary copy per definition, never per call.
+    let params = Record::from_slice(signature.params());
     let ret = match signature.return_type() {
         ReturnType::Resolved(kt) => kt,
         ReturnType::Deferred(d) => types.intern(TypeNode::DeferredReturn(

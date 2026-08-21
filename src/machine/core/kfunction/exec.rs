@@ -17,7 +17,7 @@ use std::rc::Rc;
 use crate::machine::core::{BindingIndex, CallFrame, DeclarationSite, KError};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
-use crate::machine::model::{DeferredReturn, KType, Record, ReturnType, TypeResolution};
+use crate::machine::model::{DeferredReturn, KType, ReturnType, TypeResolution};
 
 use super::KFunction;
 use super::body::{Body, body_statement_refs};
@@ -82,7 +82,7 @@ pub enum PerCallReturn {
 /// type. Body statements are borrowed (`'ast`).
 pub fn run_user_fn<'ast>(
     func: &'ast KFunction<'ast>,
-    args: &Record<&DeliveredCarried>,
+    args: &[&DeliveredCarried],
     ctx: &ExecFrame,
     in_contract_chain: bool,
     registries: &RunRegistries,
@@ -99,7 +99,10 @@ pub fn run_user_fn<'ast>(
         // The frame's own scope: minted for this call and not yet published, so the parameter binds
         // take the construction door rather than riding a step outcome.
         let gate = &mut crate::machine::core::bindings::WriteGate::for_unpublished_scope();
-        for (symbol, delivered) in args.iter() {
+        // The signature's own parameter schema names each slot; the slice supplies its value.
+        // Nothing was re-keyed for this call — the pair is zipped in declaration order.
+        for ((symbol, _), delivered) in func.signature.params().iter().zip(args) {
+            let symbol = *symbol;
             // The scope tables key by text, so a parameter's symbol resolves back through the
             // interner that recorded it at definition. See
             // [roadmap/reduce_allocs/symbol-keyed-scope-tables.md] — once the tables key by

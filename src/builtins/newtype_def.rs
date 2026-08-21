@@ -131,7 +131,7 @@ fn seal_outcome_into_carrier<'a>(
 /// sub-dispatches via [`defer_resolved_sigil`].
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::{classify_name_lookup, resolve_or_await};
-    use crate::machine::{Action, arg_object, arg_type, require_bare_type_name};
+    use crate::machine::{Action, require_bare_type_name};
 
     let name = crate::try_action!(require_bare_type_name(
         ctx.args,
@@ -141,7 +141,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     ));
     let chain = ctx.chain.clone();
     let site = ctx.declaration_site();
-    if let Some(te) = crate::machine::arg_unresolved_type(ctx.args, "repr") {
+    if let Some(te) = ctx.args.unresolved_type("repr") {
         let te = *te;
         resolve_or_await(
             ctx.scope,
@@ -156,9 +156,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             move |fctx, kt| Action::done_writing(finalize_newtype(fctx, name, kt, site)),
             ctx.registries,
         )
-    } else if let Some(repr_kt) = arg_type(ctx.args, "repr") {
+    } else if let Some(repr_kt) = ctx.args.ktype("repr") {
         Action::done_writing(finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site))
-    } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
+    } else if let Some(KObject::KExpression(inner)) = ctx.args.object("repr") {
         defer_resolved_sigil(ctx.scope, name, *inner, site, ctx.types())
     } else {
         Action::done(Err(KError::new(KErrorKind::ShapeError(
@@ -206,7 +206,7 @@ pub fn body_record_repr<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
     use super::nominal_schema::nominal_schema_action;
-    use crate::machine::{Action, arg_object, require_bare_type_name};
+    use crate::machine::{Action, require_bare_type_name};
 
     let name = crate::try_action!(require_bare_type_name(
         ctx.args,
@@ -214,7 +214,7 @@ pub fn body_record_repr<'a>(
         "NEWTYPE",
         ctx.registries
     ));
-    let fields = match arg_object(ctx.args, "repr") {
+    let fields = match ctx.args.object("repr") {
         Some(KObject::KExpression(e)) => e.node(),
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(

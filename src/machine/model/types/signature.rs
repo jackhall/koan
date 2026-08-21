@@ -325,6 +325,15 @@ pub enum Specificity {
 pub struct ExpressionSignature<'a> {
     return_type: ReturnType<'a>,
     elements: &'a [SignatureElement<'a>],
+    /// The parameter schema: `(symbol, declared type)` in declaration order, bumped once at
+    /// [`Self::mint`]. This is the argument currency's key half — a call carries only a values
+    /// slice aligned to it, so no name-keyed container is built per call. Shared with the function
+    /// type's parameter record, which is built from this same slice.
+    params: &'a [(Symbol, KType)],
+    /// For each parameter, its index into [`Self::elements`] — and therefore into a committed
+    /// call's `parts`, which `validate_call_args` pins 1:1 with the elements. What lets a call fill
+    /// the values slice positionally.
+    part_slots: &'a [u16],
 }
 
 /// The pre-mint form of an [`ExpressionSignature`]: the same elements in a growable buffer, before
@@ -456,9 +465,8 @@ impl<'a> ExpressionSignature<'a> {
     /// builtin literal, so "a signature's text lives in the signature's own region" holds with no
     /// exceptions and a draft is free to name text borrowed from anywhere at `'a`.
     pub fn mint(brand: RegionBrand<'a>, draft: SignatureDraft<'a>) -> Self {
-        ExpressionSignature {
-            return_type: draft.return_type,
-            elements: brand
+        let elements: &'a [SignatureElement<'a>] =
+            brand
                 .allocator()
                 .slice_from_iter(draft.elements.into_iter().map(|element| match element {
                     SignatureElement::Keyword(s) => {
@@ -467,8 +475,45 @@ impl<'a> ExpressionSignature<'a> {
                     // An argument's name is already its symbol — fixed-width, region-free — so
                     // only the keyword text above needs re-homing.
                     SignatureElement::Argument(argument) => SignatureElement::Argument(argument),
-                })),
+                }));
+        // The parameter schema, built once here: every later call reads it rather than re-keying
+        // its own. Both slices ride the signature's own region, so they live exactly as long as it.
+        let params = brand.allocator().slice_from_iter(
+            elements
+                .iter()
+                .filter_map(|element| match element {
+                    SignatureElement::Argument(argument) => Some((argument.name, argument.ktype)),
+                    SignatureElement::Keyword(_) => None,
+                })
+                .collect::<Vec<_>>(),
+        );
+        let part_slots = brand.allocator().slice_from_iter(
+            elements
+                .iter()
+                .enumerate()
+                .filter_map(|(slot, element)| match element {
+                    SignatureElement::Argument(_) => Some(slot as u16),
+                    SignatureElement::Keyword(_) => None,
+                })
+                .collect::<Vec<_>>(),
+        );
+        ExpressionSignature {
+            return_type: draft.return_type,
+            elements,
+            params,
+            part_slots,
         }
+    }
+
+    /// The parameter schema — `(symbol, declared type)` in declaration order. The key half of the
+    /// argument currency; a call pairs it with a values slice on the step scratch.
+    pub fn params(&self) -> &'a [(Symbol, KType)] {
+        self.params
+    }
+
+    /// Each parameter's index into [`Self::elements`], parallel to [`Self::params`].
+    pub fn part_slots(&self) -> &'a [u16] {
+        self.part_slots
     }
 
     /// This signature's declared return contract.

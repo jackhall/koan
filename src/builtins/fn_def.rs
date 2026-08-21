@@ -12,6 +12,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 
+use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::render_label;
 use finalize::{FnKind, FnPlan, ParamListResult, classify, finalize_fn_with_kind, fn_action};
@@ -116,11 +117,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 /// lifetime — an `Identifier` name part arrives as a `KObject::KString` cell, exactly as plain
 /// `LET` reads it. The slot is typed `IDENTIFIER`, so any other shape reaches a sibling overload
 /// rather than this read.
-pub(super) fn combined_bound_name<'a>(
-    args: &crate::machine::model::Record<crate::machine::model::Held<'a>>,
-) -> Result<&'a str, KError> {
+pub(super) fn combined_bound_name<'a>(args: BoundArgs<'a, '_>) -> Result<&'a str, KError> {
     use crate::machine::model::KObject;
-    match crate::machine::arg_object(args, "name") {
+    match args.object("name") {
         Some(KObject::KString(s)) => Ok(s),
         Some(_) => Err(KError::new(KErrorKind::ShapeError(
             "LET name must be a bare identifier".to_string(),
@@ -151,10 +150,10 @@ pub fn body_let_combined<'a>(
 pub fn body_let_combined_type_named<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, arg_type, arg_unresolved_type};
-    let name = match arg_unresolved_type(ctx.args, "name") {
+    use crate::machine::Action;
+    let name = match ctx.args.unresolved_type("name") {
         Some(te) => te.render(),
-        None => match arg_type(ctx.args, "name") {
+        None => match ctx.args.ktype("name") {
             Some(kt) => kt.name(ctx.registries),
             None => return Action::done(Err(KError::new(KErrorKind::MissingArg("name".into())))),
         },
@@ -197,11 +196,11 @@ pub fn body_value_named_return<'a>(
 pub fn body_record_schema<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, arg_type, require_kexpression};
+    use crate::machine::{Action, require_kexpression};
     use finalize::defer;
     use return_type::extract_return_type_raw;
 
-    let schema = match arg_type(ctx.args, "signature") {
+    let schema = match ctx.args.ktype("signature") {
         Some(kt) => match ctx.types().node(kt) {
             TypeNode::Record { fields } => fields,
             _ => {

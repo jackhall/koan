@@ -15,7 +15,7 @@ use crate::machine::model::Held;
 use crate::machine::model::KKind;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
-use crate::machine::{Action, arg_object, require_ktype};
+use crate::machine::{Action, require_ktype};
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
 
 use super::op_def::OperatorForm;
@@ -43,7 +43,7 @@ fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
 /// sub-dispatch — so every member kind reaches the body already lowered to a `KType` cell, and the
 /// composite union builds through [`TypeRegistry::union_of`].
 fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let substrate = match arg_object(ctx.args, "members") {
+    let substrate = match ctx.args.object("members") {
         Some(KObject::List(substrate, _)) => *substrate,
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(

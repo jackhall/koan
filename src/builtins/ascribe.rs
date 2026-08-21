@@ -11,15 +11,16 @@ use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{Held, KObject, Module, ModuleDraft, Record};
 use crate::machine::model::{
     KKind, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeNode, sig_subtype,
     substitute_sig_members,
 };
+use crate::machine::model::{KObject, Module, ModuleDraft};
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 use std::collections::HashMap;
 
 use super::{arg, kw, sig};
+use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
@@ -236,19 +237,18 @@ fn signature_schema(
 /// value channel's Object arm, the signature off the type channel, producing a missing / mismatch
 /// diagnostic when an operand is absent or the wrong kind.
 fn resolve_module_and_signature<'a>(
-    args: &Record<Held<'a>>,
+    args: BoundArgs<'a, '_>,
     registries: &crate::machine::model::RunRegistries,
 ) -> Result<(&'a crate::machine::model::Module<'a>, KType), KError> {
-    use crate::machine::{arg_held, arg_object, arg_type};
     let types = &registries.types;
 
     fn type_mismatch_or_missing(
-        args: &Record<Held<'_>>,
+        args: BoundArgs<'_, '_>,
         name: &str,
         expected: &str,
         registries: &crate::machine::model::RunRegistries,
     ) -> KError {
-        match arg_held(args, name) {
+        match args.held(name) {
             Some(held) => KError::new(KErrorKind::TypeMismatch {
                 arg: name.to_string(),
                 expected: expected.to_string(),
@@ -258,11 +258,11 @@ fn resolve_module_and_signature<'a>(
         }
     }
 
-    let m = match arg_object(args, "m") {
+    let m = match args.object("m") {
         Some(KObject::Module(module)) => *module,
         _ => return Err(type_mismatch_or_missing(args, "m", "Module", registries)),
     };
-    let s = match arg_type(args, "s") {
+    let s = match args.ktype("s") {
         Some(kt) if matches!(types.node(kt), TypeNode::Signature { .. }) => kt,
         _ => return Err(type_mismatch_or_missing(args, "s", "Signature", registries)),
     };

@@ -516,6 +516,7 @@ digraph {
     "koan::machine::core::kfunction" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan" [label="uses", style="dashed"];

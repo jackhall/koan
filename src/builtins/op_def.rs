@@ -37,12 +37,12 @@ use crate::machine::core::ProgramBrand;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::bindings::{WriteOp, powerset_probes};
 use crate::machine::model::CarriedFamily;
+use crate::machine::model::KType;
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::{Held, KType, Record};
 use crate::machine::model::{KKind, SignatureDraft, SignatureElement};
 use crate::machine::model::{OperatorGroup, ReductionMode, binary_key, unary_key};
 use crate::machine::{
-    Action, AwaitContinue, BodyCtx, DepPlacement, DepTerminal, FinishCtx, SubDispatch, arg_held,
+    Action, AwaitContinue, BodyCtx, DepPlacement, DepTerminal, FinishCtx, SubDispatch,
     require_kexpression,
 };
 use crate::machine::{Body, CarrierWitness, KError, KErrorKind, Scope};
@@ -82,6 +82,7 @@ enum OpKind {
 // re-imported here for the registration sites and re-exported for `GROUP`, which reads its member
 // operators the same way.
 
+use crate::machine::BoundArgs;
 pub(super) use crate::machine::model::symbol_from_parts;
 use crate::machine::model::symbol_from_quote_body;
 use crate::machine::{GroupSeal, OverloadSeal};
@@ -89,7 +90,7 @@ use crate::machine::{GroupSeal, OverloadSeal};
 /// Body-side symbol read: a quoted slot's raw `KObject::KExpression` is the quote body. Shared with
 /// `GROUP`, whose pairwise `combiner` slot names an operator the same way (`super::group_def`).
 pub(super) fn symbol_from_slot<'a>(
-    args: &Record<Held<'a>>,
+    args: BoundArgs<'a, '_>,
     builtin: &str,
     slot: &str,
 ) -> Result<&'a str, KError> {
@@ -199,7 +200,7 @@ fn resolve_capture<'a>(
 fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str>) -> Action<'a> {
     let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", "symbol"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "OP", "body"));
-    let has_result = arg_held(ctx.args, "return_type").is_some();
+    let has_result = ctx.args.held("return_type").is_some();
     let group = ctx.scope.nearest_group_context();
     crate::try_action!(check_group_context(kind, has_result, group, sym));
 

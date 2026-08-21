@@ -24,7 +24,7 @@ use crate::machine::model::Symbol;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::{KType, Record, TypeNode};
+use crate::machine::model::{KType, TypeNode};
 use crate::machine::{
     BindingIndex, DeclarationSite, DeliveredCarried, Installer, KError, KErrorKind,
 };
@@ -61,46 +61,115 @@ pub fn scope_frame(scope: &Scope<'_>) -> Rc<FrameStorage> {
     )
 }
 
-/// Read a builtin argument's `KObject` from `BodyCtx::args` by name. `None` if the named field is
-/// a type cell.
-pub fn arg_object<'a, 'c>(args: &'c Record<Held<'a>>, name: &str) -> Option<&'c KObject<'a>> {
-    args.get(Symbol::of(name)).and_then(Held::as_object)
+/// One bound argument slot: the resolved value and, when the argument arrived as a delivered
+/// sub-result, its reach carrier. Positional — its meaning comes from the schema slot it sits at.
+#[derive(Clone, Copy)]
+pub struct BoundArg<'a, 'c> {
+    pub value: Held<'a>,
+    pub carrier: Option<&'c DeliveredCarried>,
 }
 
-/// Read a builtin argument's `KType` (a type-cell arg) from `BodyCtx::args` by name.
-pub fn arg_type(args: &Record<Held<'_>>, name: &str) -> Option<KType> {
-    args.get(Symbol::of(name)).and_then(Held::as_type)
+/// A call's arguments as a **schema-keyed view**: the signature's own parameter schema paired with
+/// a values-only slice on the step scratch, aligned slot-for-slot.
+///
+/// Nothing is re-keyed per call. The schema is built once at
+/// [`ExpressionSignature::mint`](crate::machine::model::ExpressionSignature::mint) and shared by
+/// every call to that signature; the slice holds only the bound values and their delivery
+/// envelopes. A named read computes `Symbol::of(name)` and scans the schema — linear over call
+/// arity, no map, no allocation.
+///
+/// See [design/label-interning.md](../../../../design/label-interning.md).
+#[derive(Clone, Copy)]
+pub struct BoundArgs<'a, 'c> {
+    schema: &'c [(Symbol, KType)],
+    slots: &'c [BoundArg<'a, 'c>],
 }
 
-/// Read a builtin argument's unlowered type name (a [`Held::UnresolvedType`] cell) from
-/// `BodyCtx::args` by name. The bind seam parks a bare user type name here rather than lowering
-/// it to a type handle, so a type-slot consumer probes this before [`arg_type`] and resolves the
-/// name against its own scope chain.
-pub fn arg_unresolved_type<'a, 'c>(
-    args: &'c Record<Held<'a>>,
-    name: &str,
-) -> Option<&'c TypeIdentifier<'a>> {
-    match args.get(Symbol::of(name)) {
-        Some(Held::UnresolvedType(ti)) => Some(ti),
-        _ => None,
+impl<'a, 'c> BoundArgs<'a, 'c> {
+    /// Pair a signature's schema with the call's filled slots. The two must be the same length —
+    /// the binder fills one slot per parameter, in `part_slots` order.
+    pub fn new(schema: &'c [(Symbol, KType)], slots: &'c [BoundArg<'a, 'c>]) -> Self {
+        debug_assert_eq!(
+            schema.len(),
+            slots.len(),
+            "an argument view pairs one slot per declared parameter",
+        );
+        BoundArgs { schema, slots }
     }
-}
 
-/// Read a builtin argument's raw cell ([`Held::Object`] / [`Held::Type`] /
-/// [`Held::UnresolvedType`]) from `BodyCtx::args` by
-/// name — for builtins that branch on the value vs type channel (e.g. LET's name/value slots).
-pub fn arg_held<'a, 'c>(args: &'c Record<Held<'a>>, name: &str) -> Option<&'c Held<'a>> {
-    args.get(Symbol::of(name))
+    /// The empty view — a nullary call, and the shape a test fixture with no arguments takes.
+    pub fn empty() -> Self {
+        BoundArgs {
+            schema: &[],
+            slots: &[],
+        }
+    }
+
+    fn slot(&self, name: &str) -> Option<&'c BoundArg<'a, 'c>> {
+        let symbol = Symbol::of(name);
+        self.schema
+            .iter()
+            .position(|(candidate, _)| *candidate == symbol)
+            .and_then(|at| self.slots.get(at))
+    }
+
+    /// The argument's raw cell ([`Held::Object`] / [`Held::Type`] / [`Held::UnresolvedType`]) — for
+    /// a builtin that branches on the value vs type channel (e.g. LET's name/value slots).
+    pub fn held(&self, name: &str) -> Option<&'c Held<'a>> {
+        self.slot(name).map(|slot| &slot.value)
+    }
+
+    /// The argument's `KObject`. `None` if the named slot is a type cell.
+    pub fn object(&self, name: &str) -> Option<&'c KObject<'a>> {
+        self.held(name).and_then(Held::as_object)
+    }
+
+    /// The argument's `KType` — a type-cell argument.
+    pub fn ktype(&self, name: &str) -> Option<KType> {
+        self.held(name).and_then(Held::as_type)
+    }
+
+    /// The argument's unlowered type name. The bind seam parks a bare user type name here rather
+    /// than lowering it to a handle, so a type-slot consumer probes this before [`Self::ktype`] and
+    /// resolves the name against its own scope chain.
+    pub fn unresolved_type(&self, name: &str) -> Option<&'c TypeIdentifier<'a>> {
+        match self.held(name) {
+            Some(Held::UnresolvedType(ti)) => Some(ti),
+            _ => None,
+        }
+    }
+
+    /// The argument's reach carrier — `Some` when it arrived as a resolved value (so a
+    /// value-embedding body can fold / merge it), `None` for a region-pure scalar literal.
+    pub fn carrier(&self, name: &str) -> Option<&'c DeliveredCarried> {
+        self.slot(name).and_then(|slot| slot.carrier)
+    }
+
+    /// Every argument in declaration order, as `(symbol, cell)`.
+    pub fn iter(&self) -> impl Iterator<Item = (Symbol, &'c Held<'a>)> {
+        self.schema
+            .iter()
+            .zip(self.slots)
+            .map(|((symbol, _), slot)| (*symbol, &slot.value))
+    }
+
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
 }
 
 /// Read a builtin argument's `KType` (a type-cell arg), or the canonical diagnostic —
 /// `TypeMismatch{expected: "ProperType"}` for an object cell, `MissingArg` when absent.
 pub fn require_ktype<'a>(
-    args: &Record<Held<'a>>,
+    args: BoundArgs<'a, '_>,
     name: &str,
     registries: &RunRegistries,
 ) -> Result<KType, KError> {
-    match arg_held(args, name) {
+    match args.held(name) {
         Some(Held::Type(kt)) => Ok(*kt),
         Some(Held::Object(o)) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.to_string(),
@@ -124,12 +193,12 @@ pub fn require_ktype<'a>(
 /// The value-channel twin of [`require_bare_type_name`]; an `Identifier` name part resolves to a
 /// `KObject::KString` cell.
 pub fn require_identifier_name<'a>(
-    args: &Record<Held<'a>>,
+    args: BoundArgs<'a, '_>,
     slot: &str,
     surface: &str,
     registries: &RunRegistries,
 ) -> Result<String, KError> {
-    match arg_object(args, slot) {
+    match args.object(slot) {
         Some(KObject::KString(s)) => Ok((*s).to_string()),
         Some(other) => Err(KError::new(KErrorKind::ShapeError(format!(
             "{surface} {slot} must be a bare identifier, got `{}`",
@@ -145,12 +214,12 @@ pub fn require_identifier_name<'a>(
 /// embedded in the diagnostic. The `Action`-side twin of
 /// [`extract_bare_type_name`](super::argument_bundle::extract_bare_type_name).
 pub fn require_bare_type_name<'a>(
-    args: &Record<Held<'a>>,
+    args: BoundArgs<'a, '_>,
     slot: &str,
     surface: &str,
     registries: &RunRegistries,
 ) -> Result<String, KError> {
-    match arg_held(args, slot) {
+    match args.held(slot) {
         // A binder name is exactly the shape the bind seam leaves unlowered: a bare user type
         // name with nothing bound to it yet.
         Some(Held::UnresolvedType(ti)) => Ok(ti.render()),
@@ -202,11 +271,11 @@ fn bare_type_name(
 /// `ShapeError` (`"<builtin> <slot> slot must be a parenthesized expression"`), owning that error
 /// text so every `KExpression`-slot builtin reports it identically.
 pub fn require_kexpression<'a>(
-    args: &Record<Held<'a>>,
+    args: BoundArgs<'a, '_>,
     builtin: &str,
     slot: &str,
 ) -> Result<KExpression<'a>, KError> {
-    match arg_object(args, slot) {
+    match args.object(slot) {
         Some(KObject::KExpression(e)) => Ok(e.node()),
         _ => Err(KError::new(KErrorKind::ShapeError(format!(
             "{builtin} {slot} slot must be a parenthesized expression"
@@ -224,22 +293,24 @@ pub type ActionFn = for<'a> fn(&BodyCtx<'_, 'a, '_>) -> Action<'a>;
 /// the cart `Rc`* (so a body that seals a type operand can `Rc::clone` it), `None` for def-time
 /// builtins. `chain` is `None` for a top-level binder (`bind_index` → `BindingIndex::BUILTIN`). `args`
 /// is the builtin's bound arguments as a transient owned record, borrowed for the call — never a
-/// `KObject`, never region-allocated; unevaluated args ride as `KObject::KExpression` cells.
+/// is the schema-keyed argument view — never a `KObject`, never region-allocated; unevaluated args
+/// ride as `KObject::KExpression` cells.
 pub struct BodyCtx<'program: 'a, 'a, 'c> {
     pub scope: &'a Scope<'a>,
     pub frame: Option<&'c Rc<CallFrame>>,
     /// The ambient lexical chain (an `Rc`, as `active_chain` hands it out — binders read
     /// its `index` for `BindingIndex`, MATCH passes it to `resolve_type_identifier`). `None` at top level.
     pub chain: Option<Rc<LexicalFrame>>,
-    pub args: &'c Record<Held<'a>>,
-    /// Per-parameter reach carriers, keyed by parameter name: the [`Sealed`] carrier of each argument
-    /// that arrived as a resolved value (a spliced sub-result or a bound-name read), naming every
-    /// region that value reaches. A value-embedding body folds the carrier of the value it deposits (a
-    /// bind into the scope reach-set) or `merge`s the one it embeds (a `Wrapped` / re-tagged `Record`),
-    /// so the result names that reach by construction. A scalar-literal argument is region-pure and has
-    /// no entry — [`arg_carrier`](Self::arg_carrier) reads `None`, i.e. "no foreign reach". Each carrier
-    /// is borrowed off the working expression's own splice cells (which outlive the call), never copied.
-    pub arg_carriers: &'c Record<&'c DeliveredCarried>,
+    /// The call's arguments as a schema-keyed view: the signature's own parameter schema paired
+    /// with a values-only slice on the step scratch. Each slot carries the bound cell and, when the
+    /// argument arrived as a resolved value (a spliced sub-result or a bound-name read), its
+    /// [`Sealed`] reach carrier naming every region that value reaches. A value-embedding body
+    /// folds the carrier of the value it deposits (a bind into the scope reach-set) or `merge`s the
+    /// one it embeds (a `Wrapped` / re-tagged `Record`), so the result names that reach by
+    /// construction; a region-pure scalar literal has no carrier, which reads as "no foreign
+    /// reach". Every carrier is borrowed off the working expression's own splice cells (which
+    /// outlive the call), never copied.
+    pub args: BoundArgs<'a, 'c>,
     /// The statement running this body, as its installing declaration's identity. A type binder
     /// threads it into the `types` entry through [`Self::declaration_site`]; value-side binders
     /// (LET etc.) read only [`Self::bind_index`].
@@ -299,12 +370,6 @@ impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
             installer: self.installer,
             index: self.bind_index(),
         }
-    }
-
-    /// The reach carrier of argument `name` — `Some` when it arrived as a resolved value (so a
-    /// value-embedding body can fold / merge it), `None` for a scalar-literal (region-pure) argument.
-    pub fn arg_carrier(&self, name: &str) -> Option<&'c DeliveredCarried> {
-        self.arg_carriers.get(Symbol::of(name)).copied()
     }
 
     /// The allocation capability for this body's own scope region, branded at the step lifetime

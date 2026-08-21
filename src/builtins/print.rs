@@ -8,10 +8,10 @@ use crate::machine::model::RunRegistries;
 /// `PRINT <msg:Any>` — renders the `msg` object cell, writes it plus a newline to the run's
 /// output sink, and returns the rendered string as a `KObject::KString` value.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, arg_held};
+    use crate::machine::Action;
     // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) via
     // `Held::summarize`.
-    let rendered = match arg_held(ctx.args, "msg") {
+    let rendered = match ctx.args.held("msg") {
         Some(value) => value.summarize(ctx.registries),
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("msg".to_string())))),
     };

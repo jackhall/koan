@@ -25,11 +25,11 @@ use crate::machine::model::RunRegistries;
 /// naming the scrutinee's runtime type; an F1 ambiguity or malformed shape → `ShapeError`.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use super::branch_walk::{arm_tail, payload_envelope, resolve_arm_contract};
-    use crate::machine::{Action, arg_object, require_kexpression};
+    use crate::machine::{Action, require_kexpression};
 
     // Selection needs only a borrow of the scrutinee — it never stores the reference — so no
     // upfront copy is made.
-    let value = match arg_object(ctx.args, "value") {
+    let value = match ctx.args.object("value") {
         Some(v) => v,
         None => {
             return Action::done(Err(KError::new(KErrorKind::MissingArg(
@@ -68,7 +68,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                     .deliver_pure_value(&crate::machine::model::KObject::Null)
             )
         } else {
-            match ctx.arg_carrier("value") {
+            match ctx.args.carrier("value") {
                 Some(carrier) => carrier.duplicate(),
                 None => crate::try_action!(ctx.scope.deliver_pure_value(value)),
             }

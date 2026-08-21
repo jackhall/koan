@@ -15,7 +15,7 @@
 
 use crate::machine::WriteGate;
 use crate::machine::model::{Held, KType, ValueEqualityError};
-use crate::machine::{Action, BodyCtx, arg_held};
+use crate::machine::{Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -55,9 +55,13 @@ fn cells_equal(
 
 /// Read both operands and compare, or the canonical missing-arg diagnostic.
 fn compare(ctx: &BodyCtx<'_, '_, '_>, op: &str) -> Result<bool, KError> {
-    let left = arg_held(ctx.args, "left")
+    let left = ctx
+        .args
+        .held("left")
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("left".to_string())))?;
-    let right = arg_held(ctx.args, "right")
+    let right = ctx
+        .args
+        .held("right")
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("right".to_string())))?;
     cells_equal(left, right, op, ctx.registries)
 }

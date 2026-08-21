@@ -30,7 +30,7 @@ use crate::machine::model::Symbol;
 /// operand is typed `:{}`, so dispatch shape-gates the slot to records and the body
 /// reads a guaranteed `KObject::Record` carrier.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, arg_object, require_kexpression};
+    use crate::machine::{Action, require_kexpression};
 
     let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", "fields"));
 
@@ -57,7 +57,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         }
     }
 
-    let record_obj = match arg_object(ctx.args, "record") {
+    let record_obj = match ctx.args.object("record") {
         Some(obj @ KObject::Record(_, _)) => obj,
         // The `:{}` slot shape-gates to records, so a non-record argument is a
         // dispatch non-match that never reaches the body. Defensive arm only.
@@ -109,7 +109,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // pure door and enveloped there — coverage-equivalent to an empty-reach seal. No region-pure
     // shape is a `Record`, so that arm's diagnostic is what a construction bug would surface here.
     let resident;
-    let lhs: &crate::machine::DeliveredCarried = match ctx.arg_carrier("record") {
+    let lhs: &crate::machine::DeliveredCarried = match ctx.args.carrier("record") {
         Some(c) => c,
         None => {
             resident = match ctx.scope.deliver_pure_value(record_obj) {
