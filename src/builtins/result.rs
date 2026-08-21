@@ -39,7 +39,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // Type-only: the variant schema rides the sealed member, so construction reads it via a
     // fresh `types["Result"]` lookup — no value-side carrier. Prelude build runs once; a
     // collision would be a programming error.
-    scope.register_builtin_type("Result".into(), identity, gate);
+    scope.register_builtin_type(
+        super::builtin_type_name("Result", registries),
+        identity,
+        registries,
+        gate,
+    );
 }
 
 #[cfg(test)]

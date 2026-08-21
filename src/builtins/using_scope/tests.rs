@@ -467,9 +467,10 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
         module_scope.seal_reaching(Carried::Object(record), module_scope.mint_born_here(false));
     module_scope
         .bind_value_direct(
-            "rec".to_string(),
+            crate::builtins::test_support::value_name("rec", &registries),
             sealed,
             BindingIndex::value(0),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("fresh binding name in an unborrowed scope");

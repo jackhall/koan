@@ -1,4 +1,4 @@
-use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::{TestRun, type_name, value_name};
 use crate::machine::model::{KObject, KType};
 
 #[test]
@@ -30,7 +30,12 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
         );
     }
     test_run.runtime.execute().unwrap();
-    assert!(scope.bindings().pending_value("hello").is_none());
+    assert!(
+        scope
+            .bindings()
+            .pending_value(value_name("hello", test_run.registries()))
+            .is_none()
+    );
     assert!(matches!(scope.lookup("hello"), Some(KObject::Number(n)) if *n == 1.0));
 }
 
@@ -249,11 +254,11 @@ fn let_aliases_struct_preserves_type_identity() {
     );
     let types = scope.bindings().types();
     let pt: KType = types
-        .get("Pt")
+        .get(&type_name("Pt", test_run.registries()))
         .map(|(kt, _)| *kt)
         .expect("Pt should be bound in bindings.types after alias");
     let point: KType = types
-        .get("Point")
+        .get(&type_name("Point", test_run.registries()))
         .map(|(kt, _)| *kt)
         .expect("Point should be bound in bindings.types");
     assert_eq!(pt, point, "alias must preserve type identity field-wise");
@@ -273,8 +278,10 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let _err = test_run.run_one_err(parse_one(&program, "SIG Bad = (LET compare = 0)"));
+    // `Bad` is a Type token and `data` keys by `ValueSymbol`, so no key spells it; what the
+    // rejection means for the value table is that it stayed empty.
     assert!(
-        scope.bindings().data().get("Bad").is_none(),
+        scope.bindings().data().is_empty(),
         "SIG with lowercase-LET in body must not bind",
     );
     // Verify the diagnostic shape directly against a synthetic SIG scope — the

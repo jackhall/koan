@@ -18,14 +18,42 @@ use crate::machine::model::{StoredElement, owned_untyped_key};
 use crate::source::Spanned;
 
 /// Whether a binding — committed or an in-flight placeholder — lives in the value
-/// language or the type language. The `data`/`types` partition is mutually exclusive
-/// (a name is one xor the other; see the cross-kind check in the write paths), and a
-/// forward-reference placeholder is tagged with its kind so a type placeholder is
-/// never satisfied by a value bind, nor the reverse.
+/// language or the type language. The `data`/`types` partition is mutually exclusive: the two
+/// tables key by disjoint classified symbol types, so a name is one xor the other by
+/// construction. A forward-reference placeholder carries its name's own class
+/// ([`BinderSymbol`](crate::machine::model::BinderSymbol)), so a type placeholder is never
+/// satisfied by a value bind, nor the reverse.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum BindKind {
     Value,
     Type,
+}
+
+/// Classify a declaration's binder name into the **type** channel and record it for rendering, or
+/// the `ShapeError` naming the partition it crosses. This is the text→symbol declaration seam: past
+/// it every table key carries its own class, so a value/type crossing is unrepresentable rather
+/// than something a write door probes for.
+pub fn type_binder(
+    name: &str,
+    registries: &crate::machine::model::RunRegistries,
+) -> Result<crate::machine::model::TypeSymbol, KError> {
+    crate::machine::model::TypeSymbol::declared(name, &registries.labels).ok_or_else(|| {
+        KError::new(KErrorKind::ShapeError(
+            crate::machine::model::wrong_binder_class(name, BindKind::Type),
+        ))
+    })
+}
+
+/// The **value** channel's half of [`type_binder`].
+pub fn value_binder(
+    name: &str,
+    registries: &crate::machine::model::RunRegistries,
+) -> Result<crate::machine::model::ValueSymbol, KError> {
+    crate::machine::model::ValueSymbol::declared(name, &registries.labels).ok_or_else(|| {
+        KError::new(KErrorKind::ShapeError(
+            crate::machine::model::wrong_binder_class(name, BindKind::Value),
+        ))
+    })
 }
 
 /// Structural name extractor for a binder builtin. Returning `Some(name)` names the placeholder a
@@ -92,10 +120,20 @@ pub struct StoredBinderKey<'a> {
 
 impl<'a> StoredBinderKey<'a> {
     /// The owned [`BinderKey`] this stands for — materialized where an install path needs map keys
-    /// for the bindings tables.
-    pub fn to_owned_key(self) -> BinderKey {
+    /// for the bindings tables. The name is classified into the binding vocabulary here, at the one
+    /// seam where the declaration's source text is still in hand, and interned so a `Rebind`
+    /// naming it can render. A keyword-class name classifies to `None` — nothing binds to a
+    /// keyword, so the statement claims no name.
+    pub fn to_owned_key(self, labels: &crate::machine::model::LabelInterner) -> BinderKey {
         BinderKey {
-            name: self.name.map(|(name, kind)| (name.to_string(), kind)),
+            name: self.name.and_then(|(name, kind)| {
+                let binder = crate::machine::model::BinderSymbol::declared(name, labels);
+                debug_assert!(
+                    binder.is_none_or(|binder| binder.bind_kind() == kind),
+                    "a binder spec's declared kind agrees with its name's token class",
+                );
+                binder
+            }),
             buckets: self
                 .buckets
                 .into_iter()
@@ -109,7 +147,7 @@ impl<'a> StoredBinderKey<'a> {
 /// bindings tables, whose keys are owned.
 #[derive(Clone, Debug)]
 pub struct BinderKey {
-    pub name: Option<(String, BindKind)>,
+    pub name: Option<crate::machine::model::BinderSymbol>,
     /// 0..=2 entries, in declaration order.
     pub buckets: Vec<UntypedKey>,
 }

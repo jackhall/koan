@@ -3,7 +3,9 @@
 //! — these tests fail when Miri reports UB, not on values.
 
 use super::*;
-use crate::builtins::test_support::{TestRun, per_call_storage, run_root_bare};
+use crate::builtins::test_support::{
+    TestRun, per_call_storage, run_root_bare, type_name, value_name,
+};
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
@@ -98,12 +100,14 @@ fn with_scope_opens_child_scope_at_brand() {
     let id = frame.with_scope(|s| s.id);
     assert_eq!(id, frame.scope_id());
     // In-place bind + lookup, all at the brand `'b` (value allocated via the opened scope's region).
+    let registries = test_run.registries();
     frame.with_scope(|s| {
         let v = s.brand().alloc_scalar(Scalar::Number(7.0));
         s.bind_resident_for_test(
-            "k".to_string(),
+            value_name("k", registries),
             v,
             BindingIndex::BUILTIN,
+            registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -130,13 +134,15 @@ fn with_scope_relocates_seed_value_into_brand() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(scope);
+    let registries = test_run.registries();
     frame.with_scope(|child| {
         child
             .bind_delivered_direct(
-                "it".to_string(),
+                value_name("it", registries),
                 &it_carrier,
                 BindingIndex::BUILTIN,
                 |carried| Ok(carried.object()),
+                registries,
                 &mut crate::machine::WriteGate::for_test(),
             )
             .unwrap();
@@ -159,6 +165,7 @@ fn born_child_scope_survives_subsequent_alloc_in_its_own_region() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(scope);
+    let registries = test_run.registries();
     frame.with_scope(|child| {
         let _sibling = child.brand().alloc_scalar(Scalar::Number(1.0));
         assert!(std::ptr::eq(child.region(), frame.region()));
@@ -169,9 +176,10 @@ fn born_child_scope_survives_subsequent_alloc_in_its_own_region() {
         let it_obj: &KObject<'_> = grandchild.brand().alloc_scalar(Scalar::Number(42.0));
         grandchild
             .bind_resident_for_test(
-                "it".to_string(),
+                value_name("it", registries),
                 it_obj,
                 BindingIndex::BUILTIN,
+                registries,
                 &mut crate::machine::WriteGate::for_test(),
             )
             .unwrap();
@@ -489,6 +497,7 @@ fn region_union_foreign_pins_release_at_region_death() {
     let foreign = per_call_storage();
     let weak = Rc::downgrade(&foreign);
     let dest = run_root_storage();
+    let registries = RunRegistries::new();
     {
         let scope = run_root_bare(&dest);
         let obj = scope.brand().alloc_scalar(Scalar::Number(1.0));
@@ -498,9 +507,10 @@ fn region_union_foreign_pins_release_at_region_death() {
         let bindings = Bindings::new(scope.brand());
         bindings
             .write_value(
-                "x",
+                value_name("x", &registries),
                 BindingIndex::BUILTIN,
                 scope.seal_reaching(Carried::Object(obj), reach),
+                &registries,
                 &mut crate::machine::WriteGate::for_test(),
             )
             .expect("a fresh value bind lands");
@@ -1176,19 +1186,25 @@ fn region_death_frees_every_drop_free_family() {
         .map(|i| {
             let child = scope.alloc_child_under_module(&format!("member_module_{i}"), None);
             let mut draft = ModuleDraft::empty();
-            draft
-                .type_members
-                .insert(format!("Member_{i}"), KType::NUMBER);
-            draft
-                .slot_type_tags
-                .insert(format!("slot_{i}"), KType::NUMBER);
-            let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
+            draft.type_members.insert(
+                type_name(&format!("Member_{i}"), types.registries()),
+                KType::NUMBER,
+            );
+            draft.slot_type_tags.insert(
+                value_name(&format!("slot_{i}"), types.registries()),
+                KType::NUMBER,
+            );
+            let self_sig =
+                types.signature(SigSchema::raw_self_sig(child, &draft, types.registries()));
             Module::alloc_at_child_scope(&format!("module_{i}"), child, draft, self_sig)
         })
         .collect();
     assert_eq!(modules.len(), 2, "every module is live in the region");
     assert!(
-        modules[0].type_members.get(&"Member_0").is_some(),
+        modules[0]
+            .type_members
+            .get(&type_name("Member_0", types.registries()))
+            .is_some(),
         "the member map reads back by content through its re-homed keys",
     );
 
@@ -1203,19 +1219,29 @@ fn region_death_frees_every_drop_free_family() {
         let value = block.brand().alloc_scalar(Scalar::Number(i as f64));
         block
             .bind_resident_for_test(
-                format!("value_{i}"),
+                value_name(&format!("value_{i}"), types.registries()),
                 value,
                 BindingIndex::value(i),
+                types.registries(),
                 &mut gate,
             )
             .expect("a fresh value bind lands");
     }
-    assert!(block.bindings().lookup_value("value_95", None).is_some());
+    assert!(
+        block
+            .bindings()
+            .lookup_value(value_name("value_95", types.registries()), None)
+            .is_some()
+    );
 
     let sig_child = block.alloc_child_under_sig("Shape");
     for i in 0..64 {
         sig_child
-            .write_sig_slot(format!("slot_{i}"), KType::NUMBER)
+            .write_sig_slot(
+                value_name(&format!("slot_{i}"), types.registries()),
+                KType::NUMBER,
+                types.registries(),
+            )
             .expect("a fresh VAL slot records");
     }
     assert_eq!(sig_child.sig_value_slots().len(), 64);
@@ -1224,8 +1250,17 @@ fn region_death_frees_every_drop_free_family() {
     // so the walk itself dereferences the chain after every table above has reallocated.
     let leaf = sig_child.alloc_child_under();
     assert_eq!(leaf.ancestors().count(), 4);
-    assert!(leaf.bindings().lookup_value("value_95", None).is_none());
-    assert!(block.bindings().lookup_value("value_95", None).is_some());
+    assert!(
+        leaf.bindings()
+            .lookup_value(value_name("value_95", types.registries()), None)
+            .is_none()
+    );
+    assert!(
+        block
+            .bindings()
+            .lookup_value(value_name("value_95", types.registries()), None)
+            .is_some()
+    );
 
     // Nothing outside the region borrows into it, so this is the whole of region death: every family
     // here lives in the bump, which frees its chunks without a destructor pass.

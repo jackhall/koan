@@ -12,12 +12,12 @@
 
 use std::rc::Rc;
 
-use crate::builtins::test_support::{TestRun, run_root_bare};
+use crate::builtins::test_support::{TestRun, keyword_name, run_root_bare};
 use crate::machine::DeliveredOperatorGroup;
 use crate::machine::core::{
     BindingIndex, CallFrame, GroupSeal, Scope, program_storage, run_root_storage,
 };
-use crate::machine::model::{OperatorGroup, ReductionMode, probe_key};
+use crate::machine::model::{OperatorGroup, ReductionMode, RunRegistries, probe_key};
 
 /// The declaration door a fixture takes: birth the record in `scope`'s own region and rest that
 /// envelope, which is what every registry entry for this declaration then holds a bit-copy of.
@@ -38,6 +38,7 @@ fn record_address(delivered: &DeliveredOperatorGroup) -> usize {
 
 #[test]
 fn register_then_resolve_group_by_probe() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let group = arithmetic_group(scope);
@@ -47,9 +48,10 @@ fn register_then_resolve_group_by_probe() {
     assert_eq!(key, "+ -");
     scope
         .register_operator_group_direct(
-            key.clone(),
+            keyword_name(&key, &registries),
             group,
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -65,14 +67,16 @@ fn register_then_resolve_group_by_probe() {
 
 #[test]
 fn undeclared_probe_misses() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let group = arithmetic_group(scope);
     scope
         .register_operator_group_direct(
-            "+".to_string(),
+            keyword_name("+", &registries),
             group,
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -82,31 +86,35 @@ fn undeclared_probe_misses() {
 
 #[test]
 fn cross_group_probe_misses() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let group = arithmetic_group(scope);
     // Only the within-group subsets are registered.
     scope
         .register_operator_group_direct(
-            "+".to_string(),
+            keyword_name("+", &registries),
             group.clone(),
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     scope
         .register_operator_group_direct(
-            "-".to_string(),
+            keyword_name("-", &registries),
             group.clone(),
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     scope
         .register_operator_group_direct(
-            probe_key(&["+", "-"]),
+            keyword_name(&probe_key(&["+", "-"]), &registries),
             group,
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -121,6 +129,7 @@ fn cross_group_probe_misses() {
 
 #[test]
 fn innermost_scope_shadows_outer() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     let inner = outer.alloc_child_under();
@@ -130,17 +139,19 @@ fn innermost_scope_shadows_outer() {
 
     outer
         .register_operator_group_direct(
-            "+".to_string(),
+            keyword_name("+", &registries),
             outer_group,
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     inner
         .register_operator_group_direct(
-            "+".to_string(),
+            keyword_name("+", &registries),
             inner_group,
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -160,14 +171,16 @@ fn innermost_scope_shadows_outer() {
 
 #[test]
 fn visibility_cutoff_hides_later_sibling_registration() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let group = arithmetic_group(scope);
     scope
         .register_operator_group_direct(
-            "+".to_string(),
+            keyword_name("+", &registries),
             group,
             BindingIndex::value(5),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -175,14 +188,14 @@ fn visibility_cutoff_hides_later_sibling_registration() {
     assert!(
         scope
             .bindings()
-            .lookup_operator_group("+", Some(3))
+            .lookup_operator_group(keyword_name("+", &registries), Some(3))
             .is_none()
     );
     // A consumer at cutoff 9 can.
     assert!(
         scope
             .bindings()
-            .lookup_operator_group("+", Some(9))
+            .lookup_operator_group(keyword_name("+", &registries), Some(9))
             .is_some()
     );
 }
@@ -224,9 +237,10 @@ fn inner_registration_of_a_builtin_probe_wins_inside_and_not_outside() {
     let group = declare(inner, &["+"], ReductionMode::FoldRight);
     inner
         .register_operator_group_direct(
-            "+".to_string(),
+            keyword_name("+", test_run.registries()),
             group,
             BindingIndex::value(1),
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("a builtin probe is shadowable, not a rebind");
@@ -249,6 +263,7 @@ fn inner_registration_of_a_builtin_probe_wins_inside_and_not_outside() {
 /// two `OP` statements over one symbol (two bucket overloads, one registry entry) do not collide.
 #[test]
 fn re_registering_an_equal_record_is_a_no_op() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
 
@@ -261,25 +276,28 @@ fn re_registering_an_equal_record_is_a_no_op() {
     );
     scope
         .register_operator_group_direct(
-            "+".to_string(),
+            keyword_name("+", &registries),
             first.clone(),
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     scope
         .register_operator_group_direct(
-            "+".to_string(),
+            keyword_name("+", &registries),
             first,
             BindingIndex::value(2),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("an address-identical re-register is idempotent");
     scope
         .register_operator_group_direct(
-            "+".to_string(),
+            keyword_name("+", &registries),
             second,
             BindingIndex::value(3),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("an equal mode + member set is the same declaration");
@@ -288,7 +306,7 @@ fn re_registering_an_equal_record_is_a_no_op() {
     assert!(
         scope
             .bindings()
-            .lookup_operator_group("+", Some(2))
+            .lookup_operator_group(keyword_name("+", &registries), Some(2))
             .is_some()
     );
 }
@@ -297,6 +315,7 @@ fn re_registering_an_equal_record_is_a_no_op() {
 /// mode per operator. The diagnostic names the probe.
 #[test]
 fn re_registering_a_conflicting_mode_errors() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
 
@@ -304,17 +323,19 @@ fn re_registering_a_conflicting_mode_errors() {
     let unary = declare(scope, &["+"], ReductionMode::Unary);
     scope
         .register_operator_group_direct(
-            "+".to_string(),
+            keyword_name("+", &registries),
             fold,
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let error = scope
         .register_operator_group_direct(
-            "+".to_string(),
+            keyword_name("+", &registries),
             unary,
             BindingIndex::value(2),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect_err("a different chaining mode under one probe is a conflict");
@@ -330,6 +351,7 @@ fn re_registering_a_conflicting_mode_errors() {
 /// module's group.
 #[test]
 fn using_window_surfaces_the_modules_operator_group() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let root = run_root_bare(&region);
 
@@ -337,9 +359,10 @@ fn using_window_surfaces_the_modules_operator_group() {
     let group = declare(module, &["+"], ReductionMode::FoldRight);
     module
         .register_operator_group_direct(
-            "+".to_string(),
+            keyword_name("+", &registries),
             group,
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -360,6 +383,7 @@ fn using_window_surfaces_the_modules_operator_group() {
 /// is what one allocation behind the whole powerset buys.
 #[test]
 fn subset_registration_covers_every_probe_of_the_member_set() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let group = arithmetic_group(scope);
@@ -368,6 +392,7 @@ fn subset_registration_covers_every_probe_of_the_member_set() {
             &["+", "-"],
             group,
             BindingIndex::value(1),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -410,9 +435,10 @@ fn resolved_group_survives_the_declaring_frames_shell_drop() {
         let group = declare(scope, &["≺"], ReductionMode::FoldRight);
         scope
             .register_operator_group_direct(
-                "≺".to_string(),
+                keyword_name("≺", test_run.registries()),
                 group,
                 BindingIndex::value(0),
+                test_run.registries(),
                 &mut crate::machine::WriteGate::for_test(),
             )
             .expect("the declaring scope owns the probe");
@@ -449,9 +475,10 @@ fn resolved_carrier_reaches_the_declaring_ancestors_region() {
     let group = declare(ancestor, &["~"], ReductionMode::FoldLeft);
     ancestor
         .register_operator_group_direct(
-            "~".to_string(),
+            keyword_name("~", test_run.registries()),
             group,
             BindingIndex::value(1),
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();

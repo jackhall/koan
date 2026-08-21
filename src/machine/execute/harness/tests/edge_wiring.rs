@@ -129,8 +129,11 @@ fn a_binder_that_fails_after_its_sibling_parked_surfaces_unbound_name() {
         "expected UnboundName('z') from the retired claim, got {error}",
     );
     assert!(
-        scope.bindings().pending_names().is_empty(),
+        scope
+            .bindings()
+            .pending_names(test_run.registries())
+            .is_empty(),
         "the failed binder's claim is gone, got {:?}",
-        scope.bindings().pending_names(),
+        scope.bindings().pending_names(test_run.registries()),
     );
 }

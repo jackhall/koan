@@ -32,30 +32,32 @@ use crate::machine::core::{RegionBrand, Scope, ScopeId};
 use crate::witnessed::BumpBackedMap;
 
 use super::super::types::{
-    KType, Relation, SigSchema, TypeDigest, TypeNode, TypeRegistry, empty_schema_digest,
-    sig_subtype,
+    IdentityBuildHasher, KType, Relation, SigSchema, TypeDigest, TypeNode, TypeRegistry,
+    empty_schema_digest, sig_subtype,
 };
 use crate::machine::model::RunRegistries;
+use crate::machine::model::{TypeSymbol, ValueSymbol};
 
 /// The owned members a module is assembled from — gathered by a construction site before the value
 /// exists, because a built module's maps are frozen. Both maps are keyed by member name and resolve
 /// duplicates last-wins, so an overlay (an opaque ascription's per-call mints under its mirrored
 /// manifest members) is expressed by insertion order here rather than by a post-alloc write.
 ///
-/// Plain owned data with no lifetime: the draft never enters a region. [`Module::assemble`] re-homes
-/// every key at the destination brand on the way in.
+/// Plain owned data with no lifetime: the draft never enters a region. Both maps key by the
+/// classified symbol vocabulary the scope binding tables use, so [`Module::assemble`] freezes them
+/// with no key re-home at all.
 #[derive(Default)]
 pub struct ModuleDraft {
     /// Member name → type: a mirror of the child scope's type bindings, for a plain `MODULE` and an
     /// opaque view alike (the ascription seeds the view scope with the per-call abstract mints and
     /// the signature's manifest members, then reads them straight back out). A transparent view
     /// reuses its source's child scope and leaves this map empty, reading types through that scope.
-    pub type_members: HashMap<String, KType>,
+    pub type_members: HashMap<TypeSymbol, KType>,
     /// VAL-slot name → the per-call abstract `KType` an opaque ascription minted for the slot's
     /// SIG-declared type. ATTR re-tags a value-side slot read with this identity so
     /// `(int_ord.zero)` reads as the abstract `Type`, not the underlying concrete value. Empty for
     /// unascribed and transparently-ascribed (`:!`) modules.
-    pub slot_type_tags: HashMap<String, KType>,
+    pub slot_type_tags: HashMap<ValueSymbol, KType>,
 }
 
 impl ModuleDraft {
@@ -74,12 +76,12 @@ impl ModuleDraft {
 pub struct Module<'a> {
     pub path: &'a str,
     child_scope_ref: &'a Scope<'a>,
-    /// Member name → type, frozen at assembly from [`ModuleDraft::type_members`]. Lookup is by
-    /// content, so a shorter-lived `&str` probe reads it.
-    pub type_members: &'a BumpBackedMap<'a, &'a str, KType>,
+    /// Member name → type, frozen at assembly from [`ModuleDraft::type_members`]. Keyed by the
+    /// member's [`TypeSymbol`], so a probe is a `u128` compare.
+    pub type_members: &'a BumpBackedMap<'a, TypeSymbol, KType, IdentityBuildHasher>,
     /// VAL-slot name → the opaque-ascription tag, frozen at assembly from
     /// [`ModuleDraft::slot_type_tags`]. Empty for unascribed and transparently-ascribed modules.
-    pub slot_type_tags: &'a BumpBackedMap<'a, &'a str, KType>,
+    pub slot_type_tags: &'a BumpBackedMap<'a, ValueSymbol, KType, IdentityBuildHasher>,
     /// The module's principal signature (self-sig): the handle naming the interned `Signature`
     /// node this module is typed by. Interned from the draft before the value exists, so "every
     /// mint seals" is structural rather than an invariant a read has to check.
@@ -92,9 +94,9 @@ impl<'a> Module<'a> {
     /// scope `MODULE` opened for its body.
     ///
     /// The destination is derived from `child_scope`'s own brand rather than passed alongside it, so
-    /// pairing a module with a foreign region is unrepresentable. `path` and the draft's keys may
-    /// borrow from anywhere — [`Self::assemble`] re-homes every byte at that same brand before the
-    /// value is assembled — and the store is the plain bump verb a `Copy` value takes,
+    /// pairing a module with a foreign region is unrepresentable. `path` may borrow from anywhere —
+    /// [`Self::assemble`] re-homes it at that same brand before the value is assembled — and the
+    /// store is the plain bump verb a `Copy` value takes,
     /// [`BumpAllocator::value`](crate::witnessed::BumpAllocator::value). Nothing is erased and re-anchored on the way in, so no residence audit
     /// stands behind this door: every reference the value holds is a plain `&'a` the borrow checker
     /// already checked against the lifetime the destination brand borrows its region for.
@@ -114,14 +116,14 @@ impl<'a> Module<'a> {
             .value(Self::assemble(brand, path, child_scope, draft, self_sig))
     }
 
-    /// Assemble a module value over `child_scope`, re-homing `path` and every draft key into
-    /// `brand`'s region and freezing both member tables there
-    /// ([`BumpAllocator::frozen_table`](crate::witnessed::BumpAllocator::frozen_table)).
+    /// Assemble a module value over `child_scope`, re-homing `path` into `brand`'s region and
+    /// freezing both member tables there
+    /// ([`BumpAllocator::frozen_table_with_hasher`](crate::witnessed::BumpAllocator::frozen_table_with_hasher)).
     /// Crate-internal, and never a store: the caller places the assembled value.
     ///
-    /// The single `brand` parameter is the residence discipline: path bytes, key bytes and both
-    /// bucket arrays land in one region, and it is the destination's — a `String` key would fail
-    /// the table verb's no-drop-glue assert, so the re-home is the only spelling that builds.
+    /// The single `brand` parameter is the residence discipline: path bytes and both bucket arrays
+    /// land in one region, and it is the destination's. The keys are `Copy` digests, so nothing
+    /// else crosses.
     pub(crate) fn assemble<'b>(
         brand: RegionBrand<'b>,
         path: &str,
@@ -129,18 +131,15 @@ impl<'a> Module<'a> {
         draft: ModuleDraft,
         self_sig: KType,
     ) -> Module<'b> {
-        let rehome = |entries: HashMap<String, KType>| {
-            brand.allocator().frozen_table(
-                entries
-                    .into_iter()
-                    .map(|(name, kt)| (brand.allocator().text(&name) as &'b str, kt)),
-            )
-        };
         Module {
             path: brand.allocator().text(path),
             child_scope_ref: child_scope,
-            type_members: rehome(draft.type_members),
-            slot_type_tags: rehome(draft.slot_type_tags),
+            type_members: brand
+                .allocator()
+                .frozen_table_with_hasher(draft.type_members),
+            slot_type_tags: brand
+                .allocator()
+                .frozen_table_with_hasher(draft.slot_type_tags),
             self_sig,
         }
     }

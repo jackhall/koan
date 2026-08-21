@@ -67,7 +67,7 @@ fn finalize_newtype<'a>(
         |_window| repr,
         site,
         scope.brand(),
-        fctx.types(),
+        fctx.registries,
     );
     seal_outcome_into_carrier(fctx, &name, outcome)
 }
@@ -96,7 +96,7 @@ fn finalize_record_newtype<'a>(
         |_window| fctx.types().record(Record::from_pairs(fields)),
         site,
         fctx.scope.brand(),
-        fctx.types(),
+        fctx.registries,
     );
     seal_outcome_into_carrier(fctx, &name, outcome)
 }
@@ -276,12 +276,16 @@ pub fn body_constructor_family<'a>(
         Ok(pair) => pair,
         Err(e) => return Action::done(Err(e)),
     };
-    let kt = mint_type_constructor(member_name.clone(), param_names, ctx.types());
+    let member = crate::try_action!(crate::machine::model::type_binder(
+        &member_name,
+        ctx.registries
+    ));
+    let kt = mint_type_constructor(member_name, param_names, ctx.types());
     // The handle names the same interned type in every region, so the terminal seals from it
     // directly and the `types` write rides the outcome, mirroring `type_decl::bind_abstract_member`.
     let carrier = ctx.scope.resident(Carried::Type(kt));
     Action::done(Ok(StepCarried::born(carrier))).with_effect(WriteOp::Type {
-        name: member_name,
+        name: member,
         kt,
         site: ctx.declaration_site(),
         policy: TypeWritePolicy::Insert,
@@ -359,7 +363,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 #[cfg(test)]
 mod tests {
 
-    use crate::builtins::test_support::{TestRun, binds_module, parse_one};
+    use crate::builtins::test_support::{TestRun, binds_module, parse_one, type_name};
     use crate::machine::model::{KKind, NodeSchema, TypeNode, TypeRegistry};
     use crate::machine::model::{KObject, KType, Record};
     use crate::machine::program_storage;
@@ -414,7 +418,7 @@ mod tests {
         let handle = {
             let bindings = scope.bindings().types();
             let (kt, _) = bindings
-                .get("Distance")
+                .get(&type_name("Distance", test_run.registries()))
                 .expect("Distance should be bound in bindings.types");
             *kt
         };
@@ -431,9 +435,10 @@ mod tests {
             }
             _ => panic!("expected NewType SetMember identity, got {handle:?}"),
         }
-        let data = scope.bindings().data();
+        // `Distance` is a Type token and `data` is keyed by `ValueSymbol`: no key spells it, so
+        // the check is that the value table is untouched.
         assert!(
-            data.get("Distance").is_none(),
+            scope.bindings().data().is_empty(),
             "NEWTYPE must not write a value-side carrier",
         );
     }
@@ -488,9 +493,12 @@ mod tests {
         // No claim may survive the declaration run: a leaked one corrupts the next
         // scheduler on this REPL-persistent scope.
         assert!(
-            scope.bindings().pending_names().is_empty(),
+            scope
+                .bindings()
+                .pending_names(test_run.registries())
+                .is_empty(),
             "NEWTYPE declarations must leave no pending binding, got {:?}",
-            scope.bindings().pending_names(),
+            scope.bindings().pending_names(test_run.registries()),
         );
         let result = test_run.run_one(parse_one(&program, "(Boxed (Point {x = 1, y = 2}))"));
         assert!(
@@ -511,9 +519,12 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("NEWTYPE Boxed = Nope");
         assert!(
-            scope.bindings().pending_names().is_empty(),
+            scope
+                .bindings()
+                .pending_names(test_run.registries())
+                .is_empty(),
             "a failed NEWTYPE must not leak a pending binding, got {:?}",
-            scope.bindings().pending_names(),
+            scope.bindings().pending_names(test_run.registries()),
         );
         let err = test_run.run_one_err(parse_one(&program, "(Boxed (3.0))"));
         assert!(
@@ -645,7 +656,12 @@ mod tests {
             Some(node_handle),
             "next seals to the member's own handle (a self-reference)",
         );
-        assert!(scope.bindings().type_placeholder_producer("Node").is_none());
+        assert!(
+            scope
+                .bindings()
+                .type_placeholder_producer(type_name("Node", test_run.registries()))
+                .is_none()
+        );
     }
 
     /// A `:(LIST OF Self)` field threads the self-reference through the deferred sigil-field path:
@@ -673,7 +689,12 @@ mod tests {
             Some(types.list(tree_handle)),
             "children seals its self-reference to List of the member's own handle",
         );
-        assert!(scope.bindings().type_placeholder_producer("Tree").is_none());
+        assert!(
+            scope
+                .bindings()
+                .type_placeholder_producer(type_name("Tree", test_run.registries()))
+                .is_none()
+        );
     }
 
     /// A record type nested as a field type elaborates *inline* through the shared field
@@ -706,7 +727,7 @@ mod tests {
         assert!(
             scope
                 .bindings()
-                .type_placeholder_producer("Outer")
+                .type_placeholder_producer(type_name("Outer", test_run.registries()))
                 .is_none()
         );
     }
@@ -747,7 +768,12 @@ mod tests {
             ),
             _ => panic!("expected the list element to be a record type, got {element:?}"),
         }
-        assert!(scope.bindings().type_placeholder_producer("Tree").is_none());
+        assert!(
+            scope
+                .bindings()
+                .type_placeholder_producer(type_name("Tree", test_run.registries()))
+                .is_none()
+        );
     }
 
     /// The declaration-window sibling cell read back from a *different step* than the one that
@@ -969,7 +995,7 @@ mod tests {
         let handle = {
             let bindings = scope.bindings().types();
             let (kt, _) = bindings
-                .get("Wrapper")
+                .get(&type_name("Wrapper", test_run.registries()))
                 .expect("Wrapper should be bound in bindings.types");
             *kt
         };
@@ -996,7 +1022,7 @@ mod tests {
             _ => panic!("expected a TypeConstructor SetMember identity, got {handle:?}"),
         }
         assert!(
-            scope.bindings().data().get("Wrapper").is_none(),
+            scope.bindings().data().is_empty(),
             "a constructor-family declaration writes no value-side carrier",
         );
     }
@@ -1314,8 +1340,9 @@ mod tests {
             nonce: None,
         });
         scope.register_builtin_type(
-            "Abstract".into(),
+            type_name("Abstract", test_run.registries()),
             kt,
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         );
         let err = test_run.run_one_err(parse_one(&program, "Abstract (3.0)"));

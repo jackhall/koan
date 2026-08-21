@@ -52,7 +52,8 @@ impl<'run> Host<'run> {
         // form is exempt — an eager sub-dispatch cannot install into the enclosing scope soundly,
         // and a definition whose registration silently vanished would be worse than an error. A
         // value position takes the anonymous `FN :{…} -> <Return> = (…)`, which installs nothing.
-        let installs = statement_binder_plan(&expr).map(StoredBinderKey::to_owned_key);
+        let installs = statement_binder_plan(&expr)
+            .map(|plan| plan.to_owned_key(&self.ambient.registries().labels));
         if let (SubmitContext::SubDispatch, Some(key)) = (ctx, &installs) {
             let carrier = expr.summarize();
             // A rejected declaration that registers overloads (an `FN` / `OP` in a `LET`'s value
@@ -95,14 +96,14 @@ impl<'run> Host<'run> {
             let mut edges: Vec<EdgeId> = Vec::new();
             let claim = |sched: &mut Scheduler<KoanWorkload>| sched.install_edge(id, &destination);
             let mut gate = WriteGate::for_run_loop();
-            if let Some((name, kind)) = key.name {
+            if let Some(name) = key.name {
                 let edge = claim(sched);
                 edges.push(edge);
                 let _ = scope.install_placeholder(
                     name,
                     ProducerId::from_scheduler_edge(edge),
                     bind_index,
-                    kind,
+                    self.ambient.registries(),
                     &mut gate,
                 );
             }

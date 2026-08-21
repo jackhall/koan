@@ -7,7 +7,7 @@
 //! observable: over `10 % 4 % 1 % 0` the three pairs are `14`, `5`, `1`, which fold left to
 //! `(14 - 5) - 1` = 8 and right to `14 - (5 - 1)` = 10.
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::{TestRun, keyword_name, parse_one};
 use crate::machine::BindingIndex;
 use crate::machine::GroupSeal;
 use crate::machine::core::{program_storage, run_root_storage};
@@ -33,9 +33,10 @@ fn register_pairwise_fixture<'a>(
     );
     scope
         .register_operator_group_direct(
-            "%".to_string(),
+            keyword_name("%", test_run.registries()),
             GroupSeal::of_delivered(scope, &record),
             BindingIndex::BUILTIN,
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("register the pairwise operator group");

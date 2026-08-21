@@ -4,7 +4,7 @@
 //! workgraph slate's born-door group; these run under plain `cargo test`. See
 //! [`design/memory-model.md`](../../../../../design/memory-model.md).
 use super::*;
-use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::{TestRun, type_name, value_name};
 use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
 use std::ptr;
 /// The child-scope borrow a module carries reads back co-located after the door's round trip, and
@@ -17,7 +17,11 @@ fn module_child_scope_reads_back_after_the_born_store() {
     let scope = test_run.scope;
     let types = test_run.types();
     let draft = ModuleDraft::empty();
-    let self_sig = types.signature(SigSchema::raw_self_sig(scope, &draft));
+    let self_sig = types.signature(SigSchema::raw_self_sig(
+        scope,
+        &draft,
+        test_run.registries(),
+    ));
     let module = Module::alloc_at_child_scope("Test", scope, draft, self_sig);
     let recovered = module.child_scope();
     assert!(ptr::eq(recovered, scope));
@@ -48,9 +52,17 @@ fn module_members_read_back_through_the_bumped_maps() {
         param_names: Vec::new(),
         nonce: None,
     });
-    draft.type_members.insert("Type".into(), member);
-    draft.slot_type_tags.insert("zero".into(), member);
-    let self_sig = types.signature(SigSchema::raw_self_sig(scope, &draft));
+    draft
+        .type_members
+        .insert(type_name("Type", test_run.registries()), member);
+    draft
+        .slot_type_tags
+        .insert(value_name("zero", test_run.registries()), member);
+    let self_sig = types.signature(SigSchema::raw_self_sig(
+        scope,
+        &draft,
+        test_run.registries(),
+    ));
     let module = Module::alloc_at_child_scope("M", scope, draft, self_sig);
     let _other = region
         .brand()
@@ -58,11 +70,14 @@ fn module_members_read_back_through_the_bumped_maps() {
     assert_eq!(module.path, "M");
     let handle = module
         .type_members
-        .get(&"Type")
+        .get(&type_name("Type", test_run.registries()))
         .copied()
         .expect("the Type member was assembled into the map");
     assert_eq!(
-        module.slot_type_tags.get(&"zero").copied(),
+        module
+            .slot_type_tags
+            .get(&value_name("zero", test_run.registries()))
+            .copied(),
         Some(handle),
         "the slot tag names the same member handle",
     );
@@ -85,7 +100,11 @@ fn bare_module_self_sig_is_empty_after_raw_seal() {
     let scope = test_run.scope;
     let types = test_run.types();
     let draft = ModuleDraft::empty();
-    let self_sig = types.signature(SigSchema::raw_self_sig(scope, &draft));
+    let self_sig = types.signature(SigSchema::raw_self_sig(
+        scope,
+        &draft,
+        test_run.registries(),
+    ));
     let module = Module::alloc_at_child_scope("Bare", scope, draft, self_sig);
     let sig = module.self_sig(types);
     assert!(sig.abstract_members.is_empty());

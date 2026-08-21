@@ -8,8 +8,8 @@
 //! (ruling F1). [`resolve_arm_contract`] builds the `-> :T` return contract both arms
 //! enforce on their result.
 
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
+use crate::machine::model::{TypeRegistry, ValueSymbol};
 use crate::machine::model::{TypeResolution, most_specific_ktype};
 
 use crate::machine::DeliveredCarried;
@@ -100,24 +100,26 @@ pub(crate) fn arm_tail<'a>(
     it_carrier: crate::machine::DeliveredCarried,
     body_expr: KExpression<'a>,
     contract: ReturnContract<'a>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> crate::machine::Action<'a> {
     use crate::machine::FramePlacement;
     use crate::machine::{BindingIndex, CallFrame};
     use crate::machine::{BlockBody, BlockScope, BlockSeed, block_tail};
     let frame: Rc<CallFrame> = CallFrame::new(root);
-    let seed: BlockSeed<'a> = Box::new(move |child, _types: &TypeRegistry, gate| {
+    let seed: BlockSeed<'a> = Box::new(move |child, registries, gate| {
         // Fused copy + bind of `it` at idx 0 in the fresh arm frame: one structural copy made
         // directly into the arm frame's region inside the envelope's pinned open, the binding
         // storing the copy's derived reach (a residence-only host is dropped, so a tail loop's
         // retiring frame does not ride the arm's binding). The projection is identity — the
         // envelope already names exactly what `it` binds — and a later read of `it` rebuilds its
         // carrier from the stored reach.
+        let it = ValueSymbol::declared("it", &registries.labels).expect("`it` is a value token");
         let _ = child.bind_delivered_direct(
-            "it".to_string(),
+            it,
             &it_carrier,
             BindingIndex::value(0),
             |carried| Ok(carried.object()),
+            registries,
             gate,
         );
     });
@@ -128,7 +130,7 @@ pub(crate) fn arm_tail<'a>(
         Some(seed),
         BlockBody::Block(body_expr),
         Some(contract),
-        types,
+        registries,
     )
 }
 

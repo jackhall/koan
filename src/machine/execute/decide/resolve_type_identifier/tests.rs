@@ -115,7 +115,9 @@ fn user_type_refs_yields_nothing_for_leaf() {
 }
 
 mod bare_leaf_resolution {
-    use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
+    use crate::builtins::test_support::{
+        binder_name, mock_declaration_site, run_root_bare, type_name,
+    };
     use crate::machine::core::run_root_storage;
     use crate::machine::core::{BindingIndex, DeclarationSite};
     use crate::machine::model::KType;
@@ -127,13 +129,14 @@ mod bare_leaf_resolution {
     fn builtin_synthesizes_type_carrier() {
         let region = run_root_storage();
         let scope = run_root_bare(&region);
+        let registries = RunRegistries::new();
         let _ = scope.register_type_direct(
-            "Number".into(),
+            type_name("Number", &registries),
             KType::NUMBER,
             DeclarationSite::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         );
-        let registries = RunRegistries::new();
         let types = &registries.types;
         let leaf = TypeIdentifier::leaf("Number");
         match scope.resolve_type_identifier(&leaf, None, types) {
@@ -175,19 +178,19 @@ mod bare_leaf_resolution {
         let outer = run_root_bare(&region);
         let scope = announced_module(outer, &["Node"]);
         let window = scope.own_declaration_window().expect("announced");
+        let registries = RunRegistries::new();
         // Mark the binder in-flight: the type-side placeholder the finalize gate reads, naming the
         // producer node a consumer parks on.
         scope
             .install_placeholder(
-                "Node".into(),
+                binder_name("Node", &registries),
                 ProducerId::for_test(7),
                 BindingIndex::value(0),
-                crate::machine::model::BindKind::Type,
+                &registries,
                 &mut crate::machine::WriteGate::for_test(),
             )
             .expect("placeholder install");
 
-        let registries = RunRegistries::new();
         let types = &registries.types;
         let leaf = TypeIdentifier::leaf("Node");
         match scope.resolve_type_identifier(&leaf, None, types) {
@@ -218,13 +221,17 @@ mod bare_leaf_resolution {
             .expect("the only member's fill seals the window");
         let member = sealed.member(0).expect("the sole member");
         crate::machine::core::bindings::WriteOp::Type {
-            name: "Node".into(),
+            name: type_name("Node", &registries),
             kt: member,
             site: mock_declaration_site(0),
             policy: crate::machine::core::bindings::TypeWritePolicy::UpsertEqual,
             builtin_shadow_guard: true,
         }
-        .apply(scope, &mut crate::machine::WriteGate::for_test())
+        .apply(
+            scope,
+            &registries,
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect("install the sealed identity");
 
         match scope.resolve_type_identifier(&leaf, None, types) {
@@ -248,12 +255,13 @@ mod bare_leaf_resolution {
         let root = run_root_bare(&region);
         // An outer module body with an in-flight `Node` of its own.
         let outer = announced_module(root, &["Node"]);
+        let registries = RunRegistries::new();
         outer
             .install_placeholder(
-                "Node".into(),
+                binder_name("Node", &registries),
                 ProducerId::for_test(11),
                 BindingIndex::value(0),
-                crate::machine::model::BindKind::Type,
+                &registries,
                 &mut crate::machine::WriteGate::for_test(),
             )
             .expect("placeholder install");
@@ -262,7 +270,6 @@ mod bare_leaf_resolution {
         // pending marker of its own.
         let inner = announced_module(outer, &["Node"]);
 
-        let registries = RunRegistries::new();
         let types = &registries.types;
         let leaf = TypeIdentifier::leaf("Node");
         match inner.resolve_type_identifier(&leaf, None, types) {

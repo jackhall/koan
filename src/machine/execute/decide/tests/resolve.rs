@@ -1,4 +1,4 @@
-use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::{TestRun, binder_name, value_name};
 use crate::machine::BindingIndex;
 use crate::machine::ProducerId;
 use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
@@ -18,9 +18,10 @@ fn resolve_name_identifier_resolved() {
     let bound = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
-            "x".to_string(),
+            value_name("x", test_run.registries()),
             bound,
             BindingIndex::BUILTIN,
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -86,10 +87,10 @@ fn resolve_name_parked() {
         ProducerId::from_scheduler_edge(test_run.runtime.install_edge_for_test(producer, scope));
     scope
         .install_placeholder(
-            "fwd".to_string(),
+            binder_name("fwd", test_run.registries()),
             claim,
             BindingIndex::BUILTIN,
-            crate::machine::model::BindKind::Value,
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();

@@ -120,11 +120,15 @@ pub(super) fn await_module_body<'a>(
 
     let name_for_finish = name;
     await_body_in_scope(child_scope, body_expr, move |fctx| {
+        // A module is a value, so its name binds under a value token. The seam classifies once and
+        // the finish reads symbol bits from here down.
+        let binder = match crate::machine::model::value_binder(&name_for_finish, fctx.registries) {
+            Ok(binder) => binder,
+            Err(e) => return Action::done(Err(e)),
+        };
         // Idempotent-finalize guard: a re-bound name short-circuits, re-surfacing the
         // already-bound module value from its **stored** reach.
-        if let Some(NameLookup::Bound(sealed)) =
-            fctx.scope.bindings().lookup_value(&name_for_finish, None)
-        {
+        if let Some(NameLookup::Bound(sealed)) = fctx.scope.bindings().lookup_value(binder, None) {
             return Action::done(Ok(StepCarried::born_delivered(
                 fctx.scope.lift_resident(sealed),
             )));
@@ -132,8 +136,8 @@ pub(super) fn await_module_body<'a>(
         if let Some(error) = unsealed_announcement_error(child_scope, &name_for_finish) {
             return Action::done(Err(error));
         }
-        // Mirror the module's type members into the draft. The cross-kind exclusion keeps
-        // `data` and `types` disjoint by name, so this is an exact mirror of `iter_types` (no
+        // Mirror the module's type members into the draft. The classified key types keep `data`
+        // and `types` disjoint by name, so this is an exact mirror of `iter_types` (no
         // value-member name can also be a type name to filter out). A nested `MODULE` is a
         // value member, so it lives in the child's `data` and is typed by its own self-sig.
         let mut draft = ModuleDraft::empty();
@@ -142,9 +146,11 @@ pub(super) fn await_module_body<'a>(
         }
         // The self-sig is derived from the draft and interned before the module exists — a
         // plain module carries no SIG, so the raw derivation is the whole signature.
-        let self_sig = fctx
-            .types()
-            .signature(SigSchema::raw_self_sig(child_scope, &draft));
+        let self_sig = fctx.types().signature(SigSchema::raw_self_sig(
+            child_scope,
+            &draft,
+            fctx.registries,
+        ));
         let module: &'a Module<'a> =
             Module::alloc_at_child_scope(&name_for_finish, child_scope, draft, self_sig);
         // Fused MODULE-finish seal: the module reference held **directly** here (never
@@ -154,7 +160,7 @@ pub(super) fn await_module_body<'a>(
         // from the same composed reach; the value-side (`bindings.data`) write rides the outcome.
         let sealed = fctx.scope.seal_module(module);
         let write = WriteOp::Value {
-            name: name_for_finish,
+            name: binder,
             index: bind_index,
             sealed: sealed.duplicate(),
         };

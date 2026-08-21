@@ -79,7 +79,11 @@ fn body_identity<'run>(ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
 
 /// Bind a function value `f` with signature `<n :Number>` on `scope`, giving an
 /// Identifier head that resolves to a function value without going through FN/LET.
-fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
+fn bind_identity_fn<'run>(
+    scope: &'run Scope<'run>,
+    types: &TypeRegistry,
+    registries: &crate::machine::model::RunRegistries,
+) {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![SignatureElement::Argument(Argument {
@@ -97,9 +101,10 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
     let obj = scope.brand().allocator().value(KObject::KFunction(f));
     scope
         .bind_resident_for_test(
-            "f".to_string(),
+            crate::builtins::test_support::value_name("f", registries),
             obj,
             BindingIndex::BUILTIN,
+            registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bind_value should succeed");
@@ -563,7 +568,9 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let runtime = &mut test_run.runtime;
+    let producer_target_name =
+        crate::builtins::test_support::value_name("producer_target", test_run.registries());
+    let f_name = crate::builtins::test_support::binder_name("f", test_run.registries());
 
     // The producer is a `FunctionValueCall` on a non-function value: the fast lane
     // errors with `TypeMismatch` (a `Number` head isn't callable) without entering
@@ -572,12 +579,14 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
     let producer_target = scope.brand().alloc_scalar(Scalar::Number(42.0));
     scope
         .bind_resident_for_test(
-            "producer_target".to_string(),
+            producer_target_name,
             producer_target,
             BindingIndex::BUILTIN,
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bind_value should succeed");
+    let runtime = &mut test_run.runtime;
     let producer = runtime.dispatch_in_scope(
         working(scope, parse_one(&program, "producer_target {y = 1}")),
         scope,
@@ -586,14 +595,15 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
     let claim = ProducerId::from_scheduler_edge(runtime.install_edge_for_test(producer, scope));
     scope
         .install_placeholder(
-            "f".to_string(),
+            f_name,
             claim,
             BindingIndex::BUILTIN,
-            crate::machine::model::BindKind::Value,
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("install_placeholder should succeed");
 
+    let runtime = &mut test_run.runtime;
     let f_call_slot =
         runtime.dispatch_in_scope(working(scope, parse_one(&program, "f {x = 7}")), scope, 2);
     let f_call_id = runtime.install_edge_for_test(f_call_slot, scope);
@@ -704,7 +714,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    bind_identity_fn(scope, test_run.types());
+    bind_identity_fn(scope, test_run.types(), test_run.registries());
 
     let expr_a = parse_one(&program, "(List MAYBE Number)");
     reset_resolve_dispatch_entry_count();
@@ -883,9 +893,10 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let record = inner.birth_operator_group(&["-"], ReductionMode::FoldRight);
     inner
         .register_operator_group_direct(
-            "-".to_string(),
+            crate::builtins::test_support::keyword_name("-", types.registries()),
             GroupSeal::of_delivered(inner, &record),
             BindingIndex::value(0),
+            types.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("an inner scope may register a builtin operator's probe");
@@ -942,9 +953,10 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
     let record = scope.birth_operator_group(&["~"], ReductionMode::Unary);
     scope
         .register_operator_group_direct(
-            "~".to_string(),
+            crate::builtins::test_support::keyword_name("~", types.registries()),
             GroupSeal::of_delivered(scope, &record),
             BindingIndex::BUILTIN,
+            types.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("register operator group");

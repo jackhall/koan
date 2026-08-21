@@ -2,7 +2,8 @@
 //! mutually-recursive group declared in a plain `MODULE` seals and every member's name is visible
 //! body-wide regardless of order.
 
-use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one, value_name};
+use crate::machine::model::render_label;
 use crate::machine::model::{AnnouncedData, NodeSchema, TypeDigest, TypeNode, TypeRegistry};
 use crate::machine::model::{KExpression, KObject, KType};
 use crate::machine::{KErrorKind, Scope, program_storage, run_root_storage};
@@ -75,9 +76,12 @@ fn module_mutual_newtype_pair_seals_in_either_order() {
             (crate::machine::model::Symbol::of("other"), aa)
         );
         assert!(
-            members.bindings().pending_names().is_empty(),
+            members
+                .bindings()
+                .pending_names(test_run.registries())
+                .is_empty(),
             "a sealed group leaves no pending binding, got {:?}",
-            members.bindings().pending_names(),
+            members.bindings().pending_names(test_run.registries()),
         );
     }
 }
@@ -250,13 +254,20 @@ fn consumer_of_a_dead_member_errors_without_hanging() {
     let scope = test_run.scope;
     test_run.run("MODULE t = (\n  NEWTYPE Cell = :{tail :Bogus}\n  LET Alias = Cell\n)");
     assert!(
-        scope.bindings().data().get("t").is_none(),
+        scope
+            .bindings()
+            .data()
+            .get(&value_name("t", test_run.registries()))
+            .is_none(),
         "a module whose member failed to seal binds nothing",
     );
     assert!(
-        scope.bindings().pending_names().is_empty(),
+        scope
+            .bindings()
+            .pending_names(test_run.registries())
+            .is_empty(),
         "the failed declaration leaks no pending binding, got {:?}",
-        scope.bindings().pending_names(),
+        scope.bindings().pending_names(test_run.registries()),
     );
 }
 
@@ -396,7 +407,7 @@ fn variants_are_not_module_type_members() {
         .bindings()
         .iter_types()
         .into_iter()
-        .map(|(name, _)| name)
+        .map(|(name, _)| render_label(name.symbol(), test_run.registries()))
         .collect();
     members.sort();
     assert_eq!(

@@ -898,7 +898,6 @@ digraph {
     "koan::machine::model::types::resolver" -> "koan::machine::model::types::node" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::types::recursive_group_window" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
-    "koan::machine::model::types::resolver" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -983,7 +982,6 @@ digraph {
     "koan::machine::model::values::rehomed" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::rehomed" -> "koan::machine::model::values::carried" [label="uses", style="dashed"];
     "koan::machine::model::values::rehomed" -> "koan::machine::model::values::kobject" [label="uses", style="dashed"];
-    "koan::parse" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::parse::dict_literal" -> "koan::machine" [label="uses", style="dashed"];
     "koan::parse::dict_literal" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::parse::dict_literal" -> "koan::machine::model::ast" [label="uses", style="dashed"];

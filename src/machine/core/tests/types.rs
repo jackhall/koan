@@ -3,11 +3,14 @@
 
 use std::rc::Rc;
 
-use crate::builtins::test_support::{mock_declaration_site, per_call_storage, run_root_bare};
+use crate::builtins::test_support::{
+    mock_declaration_site, per_call_storage, run_root_bare, type_name, value_name,
+};
 use crate::machine::AdoptSeam;
 use crate::machine::core::{FrameCoverage, run_root_storage};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::{BindingIndex, DeclarationSite};
 
@@ -15,15 +18,26 @@ use crate::machine::{BindingIndex, DeclarationSite};
 fn register_type_inserts_into_types_map_not_data() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
+    let registries = RunRegistries::new();
     let _ = scope.register_type_direct(
-        "Foo".into(),
+        type_name("Foo", &registries),
         KType::NUMBER,
         DeclarationSite::BUILTIN,
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
-    assert!(scope.bindings().types().get("Foo").is_some());
     assert!(
-        scope.bindings().data().get("Foo").is_none(),
+        scope
+            .bindings()
+            .types()
+            .get(&type_name("Foo", &registries))
+            .is_some()
+    );
+    // `data` is keyed by `ValueSymbol` and `types` by `TypeSymbol`, so a Type token like `Foo`
+    // has no key to probe `data` under at all — the partition is a property of the key types. What
+    // stands here is the containing fact: registering a type writes nothing into `data`.
+    assert!(
+        scope.bindings().data().is_empty(),
         "type binding must not appear in data map",
     );
 }
@@ -32,10 +46,12 @@ fn register_type_inserts_into_types_map_not_data() {
 fn resolve_type_walks_outer_chain_and_returns_none_past_root() {
     let region = run_root_storage();
     let root = run_root_bare(&region);
+    let registries = RunRegistries::new();
     let _ = root.register_type_direct(
-        "Foo".into(),
+        type_name("Foo", &registries),
         KType::NUMBER,
         DeclarationSite::BUILTIN,
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
     let child = root.alloc_child_under();
@@ -52,17 +68,20 @@ fn resolve_type_inner_scope_shadows_outer() {
     let root = run_root_bare(&region);
     // User (non-BUILTIN) types: a builtin is unshadowable and would resolve root-first,
     // so this exercises the user-vs-user innermost-wins walk.
+    let registries = RunRegistries::new();
     let _ = root.register_type_direct(
-        "Foo".into(),
+        type_name("Foo", &registries),
         KType::NUMBER,
         mock_declaration_site(1),
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
     let child = root.alloc_child_under();
     let _ = child.register_type_direct(
-        "Foo".into(),
+        type_name("Foo", &registries),
         KType::STR,
         mock_declaration_site(1),
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(matches!(child.resolve_type("Foo"), Some(kt) if kt == KType::STR));
@@ -122,11 +141,13 @@ fn a_stored_module_reaches_the_child_region_which_owns_its_members_reaches() {
     let obj: &KObject = source_scope.brand().alloc_scalar(Scalar::Number(1.0));
     let reach = source_scope.mint_retained(&[&FrameCoverage::of(Rc::clone(&inner_storage))]);
     let sealed = source_scope.seal_reaching(Carried::Object(obj), reach);
+    let source_registries = RunRegistries::new();
     source_scope
         .bind_value_direct(
-            "m".to_string(),
+            value_name("m", &source_registries),
             sealed,
             BindingIndex::value(0),
+            &source_registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bind should succeed");

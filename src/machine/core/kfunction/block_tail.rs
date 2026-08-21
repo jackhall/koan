@@ -9,7 +9,7 @@ use std::rc::Rc;
 use crate::machine::Scope;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::bindings::WriteGate;
-use crate::machine::model::TypeRegistry;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::{ReturnContract, split_body_statements};
@@ -38,15 +38,15 @@ pub(crate) enum BlockScope<'a> {
 
 /// A step run against the block scope before the tail dispatches. `for<'b>` so it binds whether the
 /// block scope arrives as a short `with_scope` borrow (`FrameOwn`) or the `'a` overlay (`Overlay`).
-/// The run's type registry arrives as a parameter rather than a capture: [`block_tail`] runs the
-/// seed before it returns, so the seed borrows the registry for that call instead of owning a share.
+/// The run's registries arrive as a parameter rather than a capture: [`block_tail`] runs the seed
+/// before it returns, so the seed borrows them for that call instead of owning a share.
 ///
 /// The [`WriteGate`] arrives the same way. A seed binds into a block scope that has not dispatched
 /// a statement yet — the construction door — but the seed itself is written builtin-side, where no
 /// gate can be minted. [`block_tail`] mints one for the duration of the seed call and hands it in,
 /// so the capability is the caller's to give, never the builtin's to take.
 pub(crate) type BlockSeed<'a> =
-    Box<dyn for<'b> FnOnce(&'b Scope<'b>, &TypeRegistry, &mut WriteGate) + 'a>;
+    Box<dyn for<'b> FnOnce(&'b Scope<'b>, &RunRegistries, &mut WriteGate) + 'a>;
 
 /// Run a block and yield its last statement as the tail — the shared constructor. `brand` is the
 /// region the working copies of the body's statements are frozen into: the body arrives as raw AST
@@ -58,7 +58,7 @@ pub(crate) fn block_tail<'a>(
     seed: Option<BlockSeed<'a>>,
     body: BlockBody<'a>,
     contract: Option<ReturnContract<'a>>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> Action<'a> {
     let block_entry = match block {
         BlockScope::None => {
@@ -73,14 +73,14 @@ pub(crate) fn block_tail<'a>(
                 // The frame is freshly minted and its scope has run nothing, so the seed writes
                 // through the construction door.
                 frame.with_scope(|child| {
-                    seed(child, types, &mut WriteGate::for_unpublished_scope())
+                    seed(child, registries, &mut WriteGate::for_unpublished_scope())
                 });
             }
             BlockEntry::FrameScope(Rc::clone(frame))
         }
         BlockScope::Overlay(overlay) => {
             if let Some(seed) = seed {
-                seed(overlay, types, &mut WriteGate::for_unpublished_scope());
+                seed(overlay, registries, &mut WriteGate::for_unpublished_scope());
             }
             BlockEntry::Overlay(overlay)
         }

@@ -3,7 +3,7 @@
 
 mod announcement;
 
-use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one, value_name};
 use crate::machine::model::KObject;
 use crate::machine::model::SigSchema;
 use crate::machine::model::{Module, ModuleDraft};
@@ -30,14 +30,19 @@ fn type_token_module_name_errors_with_the_snake_case_respelling() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    // `IntOrd` is Type-classified, so `data` — keyed by `ValueSymbol` — holds no key that spells
+    // it, and the partition is a property of the key types rather than a probe. What stands in
+    // its place: the value table's entry count is unchanged by the failed dispatch.
+    let before = scope.bindings().data().len();
     let err = test_run.run_one_err(parse_one(&program, "MODULE IntOrd = (LET x = 1)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("a module is a value") && msg.contains("`int_ord`")),
         "expected the snake_case respelling diagnostic, got {err}",
     );
-    assert!(
-        scope.bindings().data().get("IntOrd").is_none(),
+    assert_eq!(
+        scope.bindings().data().len(),
+        before,
         "the erroring overload binds nothing",
     );
 }
@@ -64,7 +69,11 @@ fn module_member_named_type_collides_with_builtin_type() {
         "a MODULE member named `Type` must be a Rebind naming `Type`, got {err}",
     );
     assert!(
-        scope.bindings().data().get("int_ord").is_none(),
+        scope
+            .bindings()
+            .data()
+            .get(&value_name("int_ord", test_run.registries()))
+            .is_none(),
         "the colliding module binds nothing",
     );
 }
@@ -215,7 +224,12 @@ fn module_member_function_via_let_fn() {
     let scope = test_run.scope;
     test_run.run("MODULE foo = (LET double = FN (DOUBLE x :Number) -> Number = (x))");
     let foo = lookup_module(scope, "foo", test_run.registries());
-    assert!(foo.child_scope().bindings().data().contains_key("double"));
+    assert!(
+        foo.child_scope()
+            .bindings()
+            .data()
+            .contains_key(&value_name("double", test_run.registries()))
+    );
 }
 
 #[test]
@@ -263,7 +277,11 @@ fn module_body_error_short_circuits_finalize() {
     let scope = test_run.scope;
     test_run.run("MODULE foo = (LET x = nonexistent_name)");
     assert!(
-        scope.bindings().data().get("foo").is_none(),
+        scope
+            .bindings()
+            .data()
+            .get(&value_name("foo", test_run.registries()))
+            .is_none(),
         "foo must not bind when its body errors",
     );
 }
@@ -282,16 +300,19 @@ fn module_finalize_short_circuits_on_idempotent_state() {
     // module derives its interface from the same (empty) draft production would, before the
     // value exists.
     let draft = ModuleDraft::empty();
-    let self_sig = test_run
-        .types()
-        .signature(SigSchema::raw_self_sig(child, &draft));
+    let self_sig = test_run.types().signature(SigSchema::raw_self_sig(
+        child,
+        &draft,
+        test_run.registries(),
+    ));
     let module: &Module<'_> = Module::alloc_at_child_scope("foo", child, draft, self_sig);
     let sealed = scope.seal_module(module);
     scope
         .bind_value_direct(
-            "foo".into(),
+            value_name("foo", test_run.registries()),
             sealed,
             BindingIndex::value(0),
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("pre-seed the module value binding");

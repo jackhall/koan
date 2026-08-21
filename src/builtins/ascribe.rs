@@ -16,6 +16,7 @@ use crate::machine::model::{
     substitute_sig_members,
 };
 use crate::machine::model::{KObject, Module, ModuleDraft};
+use crate::machine::model::{TypeSymbol, ValueSymbol};
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 use std::collections::HashMap;
 
@@ -44,11 +45,12 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
         ctx.scope,
         format!("{} :| {}", m.path, s_name),
         m.child_scope().bindings(),
+        ctx.registries,
         // The nonce every per-call mint carries is the newborn view scope's id, handed in by the
         // door before the scope is published (`Module::scope_id` reports the same id once the
         // module is built). Abstract and manifest members are disjoint by `SigSchema` construction
         // — a SIG member is one or the other — so the strict inserts cannot collide.
-        |nonce| view_type_members(&s_schema, nonce, ctx.types()),
+        |nonce| view_type_members(&s_schema, nonce, ctx.registries),
     ) {
         Ok(scope) => scope,
         Err(e) => return Action::done(Err(e)),
@@ -67,12 +69,16 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
         draft.type_members.insert(name, kt);
     }
 
-    let mut tags: Vec<(String, KType)> = Vec::new();
+    // A slot's tag is keyed by the slot's own value-token name, its value by the per-call mint
+    // the abstract member resolved to — both classified here, where the schema's text is in hand.
+    let mut tags: Vec<(ValueSymbol, KType)> = Vec::new();
     for (slot_name, kt) in &s_schema.value_slots {
         if let TypeNode::AbstractType { name: member, .. } = ctx.types().node(*kt)
+            && let Some(member) = TypeSymbol::of(&member)
             && let Some(per_call) = draft.type_members.get(&member)
+            && let Some(slot_name) = ValueSymbol::declared(slot_name, &ctx.registries.labels)
         {
-            tags.push((slot_name.clone(), *per_call));
+            tags.push((slot_name, *per_call));
         }
     }
     for (slot_name, tag) in tags {
@@ -81,7 +87,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
 
     // The view's self-sig is derived from the draft the mints and slot tags just filled, then the
     // module is born carrying it.
-    let self_sig = view_self_sig(new_scope, &draft, &s_schema, ctx.types());
+    let self_sig = view_self_sig(new_scope, &draft, &s_schema, ctx.registries);
     let new_module: &'a Module<'a> =
         Module::alloc_at_child_scope(m.path, new_scope, draft, self_sig);
 
@@ -131,7 +137,7 @@ pub fn body_transparent<'a>(
     let sealed = ctx.scope.store_transparent_view(
         format!("{} :! {}", m.path, s_name),
         m.child_scope(),
-        |scope_view| view_self_sig(scope_view, &ModuleDraft::empty(), &s_schema, ctx.types()),
+        |scope_view| view_self_sig(scope_view, &ModuleDraft::empty(), &s_schema, ctx.registries),
     );
     Action::done(Ok(StepCarried::born_delivered(
         ctx.scope.lift_resident(sealed),
@@ -145,9 +151,16 @@ pub fn body_transparent<'a>(
 fn view_type_members(
     signature: &SigSchema,
     nonce: ScopeId,
-    types: &TypeRegistry,
-) -> Vec<(String, KType)> {
-    let mut members: Vec<(String, KType)> = Vec::new();
+    registries: &RunRegistries,
+) -> Vec<(TypeSymbol, KType)> {
+    let types = &registries.types;
+    // A SIG member is declared under a Type token, so classification here cannot miss; the name is
+    // interned so a later diagnostic over the view's `types` table can render it.
+    let member_name = |name: &str| {
+        TypeSymbol::declared(name, &registries.labels)
+            .expect("a SIG type member is declared under a Type token")
+    };
+    let mut members: Vec<(TypeSymbol, KType)> = Vec::new();
     // Per-slot kind: a SIG-declared higher-kinded slot (`TYPE (Elem AS Wrap)`) mints a fresh
     // `TypeConstructor` family over the slot's declared parameter names rather than the default
     // `AbstractType` arm, preserving the higher-kinded shape across the ascription barrier.
@@ -176,12 +189,12 @@ fn view_type_members(
             // `abstract_members`, so the two arms above are exhaustive over this map.
             _ => *kt,
         };
-        members.push((name.clone(), minted_kt));
+        members.push((member_name(name), minted_kt));
     }
     // A manifest member reads concretely through the opaque view: its declared identity is the
     // view's, unhidden.
     for (name, kt) in &signature.manifest_members {
-        members.push((name.clone(), *kt));
+        members.push((member_name(name), *kt));
     }
     members
 }
@@ -197,9 +210,10 @@ fn view_self_sig(
     child_scope: &Scope<'_>,
     draft: &ModuleDraft,
     signature: &SigSchema,
-    types: &crate::machine::model::TypeRegistry,
+    registries: &RunRegistries,
 ) -> KType {
-    let mut view_sig = SigSchema::raw_self_sig(child_scope, draft);
+    let types = &registries.types;
+    let mut view_sig = SigSchema::raw_self_sig(child_scope, draft, registries);
     let member_map: std::collections::HashMap<String, KType> = view_sig
         .manifest_members
         .iter()

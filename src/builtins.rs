@@ -130,6 +130,14 @@ pub fn unseeded_scopes<'a>(
     (root, child)
 }
 
+/// A builtin type's name as a [`TypeSymbol`]. Builtin registration text is programmer-controlled
+/// and every entry below is a Type token, so a classification miss is a build-time typo rather
+/// than a runtime disposition.
+fn builtin_type_name(name: &str, registries: &RunRegistries) -> crate::machine::model::TypeSymbol {
+    crate::machine::model::TypeSymbol::declared(name, &registries.labels)
+        .expect("a builtin type name is a Type token")
+}
+
 /// Register every builtin type and `KFunction` onto the run root. `types` is the run
 /// frame's registry, the home the seeded types answer from.
 ///
@@ -140,17 +148,72 @@ pub(crate) fn seed_builtins<'a>(
     registries: &RunRegistries,
     gate: &mut WriteGate,
 ) {
-    scope.register_builtin_type("Number".into(), KType::NUMBER, gate);
-    scope.register_builtin_type("Str".into(), KType::STR, gate);
-    scope.register_builtin_type("Bool".into(), KType::BOOL, gate);
-    scope.register_builtin_type("Null".into(), KType::NULL, gate);
-    scope.register_builtin_type("List".into(), KType::LIST_OF_ANY, gate);
-    scope.register_builtin_type("Dict".into(), KType::DICT_ANY_ANY, gate);
-    scope.register_builtin_type("KExpression".into(), KType::KEXPRESSION, gate);
-    scope.register_builtin_type("Type".into(), KType::of_kind(KKind::AnyType), gate);
-    scope.register_builtin_type("Module".into(), KType::EMPTY_SIGNATURE, gate);
-    scope.register_builtin_type("Signature".into(), KType::of_kind(KKind::Signature), gate);
-    scope.register_builtin_type("Any".into(), KType::ANY, gate);
+    scope.register_builtin_type(
+        builtin_type_name("Number", registries),
+        KType::NUMBER,
+        registries,
+        gate,
+    );
+    scope.register_builtin_type(
+        builtin_type_name("Str", registries),
+        KType::STR,
+        registries,
+        gate,
+    );
+    scope.register_builtin_type(
+        builtin_type_name("Bool", registries),
+        KType::BOOL,
+        registries,
+        gate,
+    );
+    scope.register_builtin_type(
+        builtin_type_name("Null", registries),
+        KType::NULL,
+        registries,
+        gate,
+    );
+    scope.register_builtin_type(
+        builtin_type_name("List", registries),
+        KType::LIST_OF_ANY,
+        registries,
+        gate,
+    );
+    scope.register_builtin_type(
+        builtin_type_name("Dict", registries),
+        KType::DICT_ANY_ANY,
+        registries,
+        gate,
+    );
+    scope.register_builtin_type(
+        builtin_type_name("KExpression", registries),
+        KType::KEXPRESSION,
+        registries,
+        gate,
+    );
+    scope.register_builtin_type(
+        builtin_type_name("Type", registries),
+        KType::of_kind(KKind::AnyType),
+        registries,
+        gate,
+    );
+    scope.register_builtin_type(
+        builtin_type_name("Module", registries),
+        KType::EMPTY_SIGNATURE,
+        registries,
+        gate,
+    );
+    scope.register_builtin_type(
+        builtin_type_name("Signature", registries),
+        KType::of_kind(KKind::Signature),
+        registries,
+        gate,
+    );
+    scope.register_builtin_type(
+        builtin_type_name("Any", registries),
+        KType::ANY,
+        registries,
+        gate,
+    );
 
     let_binding::register(scope, registries, gate);
     print::register(scope, registries, gate);

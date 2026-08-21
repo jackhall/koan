@@ -3,7 +3,9 @@
 //! [`crate::machine::core::Bindings::lookup_function`] — the visibility-aware
 //! lookups the index-gated resolver walks.
 
-use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
+use crate::builtins::test_support::{
+    binder_name, mock_declaration_site, run_root_bare, type_name, value_name,
+};
 use crate::machine::ProducerId;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{BindingIndex, FrameStorageExt, NameLookup, run_root_storage};
@@ -19,12 +21,14 @@ use crate::machine::model::Scalar;
 fn lookup_value_chain_cutoff_none_admits_every_index() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
+    let registries = RunRegistries::new();
     let value = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
-            "late".to_string(),
+            value_name("late", &registries),
             value,
             BindingIndex::value(99),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -38,28 +42,37 @@ fn lookup_value_chain_cutoff_none_admits_every_index() {
 fn lookup_value_strict_less_than_hides_later_sibling() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
+    let registries = RunRegistries::new();
     let value = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
-            "later".to_string(),
+            value_name("later", &registries),
             value,
             BindingIndex::value(5),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    assert!(scope.bindings().lookup_value("later", Some(3)).is_none());
+    assert!(
+        scope
+            .bindings()
+            .lookup_value(value_name("later", &registries), Some(3))
+            .is_none()
+    );
 }
 
 #[test]
 fn lookup_value_strict_less_than_admits_earlier_sibling() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
+    let registries = RunRegistries::new();
     let value = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
-            "earlier".to_string(),
+            value_name("earlier", &registries),
             value,
             BindingIndex::value(2),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -73,22 +86,26 @@ fn lookup_value_strict_less_than_admits_earlier_sibling() {
 fn lookup_value_placeholder_filtered_same_as_value() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
+    let registries = RunRegistries::new();
     scope
         .install_placeholder(
-            "placeholder".to_string(),
+            binder_name("placeholder", &registries),
             ProducerId::for_test(2),
             BindingIndex::value(5),
-            crate::machine::model::BindKind::Value,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     assert!(
         scope
             .bindings()
-            .lookup_value("placeholder", Some(3))
+            .lookup_value(value_name("placeholder", &registries), Some(3))
             .is_none()
     );
-    match scope.bindings().lookup_value("placeholder", Some(9)) {
+    match scope
+        .bindings()
+        .lookup_value(value_name("placeholder", &registries), Some(9))
+    {
         Some(NameLookup::Parked(id)) => assert_eq!(id, ProducerId::for_test(2)),
         _ => panic!("placeholder must be visible past its install index"),
     }
@@ -98,14 +115,16 @@ fn lookup_value_placeholder_filtered_same_as_value() {
 fn lookup_type_chain_cutoff_none_admits_every_index() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
+    let registries = RunRegistries::new();
     let _ = scope.register_type_direct(
-        "Tee".into(),
+        type_name("Tee", &registries),
         KType::NUMBER,
         mock_declaration_site(99),
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(matches!(
-        scope.bindings().lookup_type("Tee", None),
+        scope.bindings().lookup_type(type_name("Tee", &registries), None),
         Some(NameLookup::Bound(kt)) if kt == KType::NUMBER,
     ));
 }
@@ -114,14 +133,26 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
 fn lookup_type_strict_less_than_hides_later_sibling() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
+    let registries = RunRegistries::new();
     let _ = scope.register_type_direct(
-        "TyLate".into(),
+        type_name("TyLate", &registries),
         KType::NUMBER,
         mock_declaration_site(5),
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
-    assert!(scope.bindings().lookup_type("TyLate", Some(3)).is_none());
-    assert!(scope.bindings().lookup_type("TyLate", Some(9)).is_some());
+    assert!(
+        scope
+            .bindings()
+            .lookup_type(type_name("TyLate", &registries), Some(3))
+            .is_none()
+    );
+    assert!(
+        scope
+            .bindings()
+            .lookup_type(type_name("TyLate", &registries), Some(9))
+            .is_some()
+    );
 }
 
 #[test]

@@ -37,9 +37,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let decl_scope = ctx.scope.alloc_child_under_sig(&name);
 
     let site = ctx.declaration_site();
-    let name_for_finish = name;
+    let name_for_finish =
+        crate::try_action!(crate::machine::model::type_binder(&name, ctx.registries));
     await_body_in_scope(decl_scope, body_expr, move |fctx| {
-        let schema = SigSchema::project_decl(decl_scope, fctx.types());
+        let schema = SigSchema::project_decl(decl_scope, fctx.registries);
         let identity = fctx.types().signature(schema);
         Action::done(Ok(fctx.ctx.type_carried(identity))).with_effect(
             crate::machine::core::bindings::WriteOp::Type {
@@ -90,7 +91,9 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("SIG Ordered = (VAL x :Number)");
         // SIG installs a single type-side identity; nothing lands in `bindings.data`.
-        assert!(scope.bindings().data().get("Ordered").is_none());
+        // `Ordered` is a Type token, so `data` — keyed by `ValueSymbol` — holds no key that
+        // spells it. What stands in place of the probe: the value table is untouched.
+        assert!(scope.bindings().data().is_empty());
         let handle = scope.resolve_type("Ordered").expect("Ordered binds");
         assert!(matches!(
             test_run.types().node(handle),

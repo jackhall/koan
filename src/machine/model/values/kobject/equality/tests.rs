@@ -522,7 +522,11 @@ fn module_operand_is_error() {
     let test_run = TestRun::silent(&program, &storage);
     let types = test_run.registry_handle();
     let draft = ModuleDraft::empty();
-    let self_sig = types.signature(SigSchema::raw_self_sig(test_run.scope, &draft));
+    let self_sig = types.signature(SigSchema::raw_self_sig(
+        test_run.scope,
+        &draft,
+        types.registries(),
+    ));
     let m = Module::alloc_at_child_scope("m", test_run.scope, draft, self_sig);
     let module = KObject::Module(m);
     assert_eq!(

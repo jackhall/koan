@@ -175,3 +175,58 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
          with `audit/measure.sh` and rebaseline deliberately if the cost is intended"
     );
 }
+
+/// **Per-call cost of a *user-defined* function call, and its slope in the parameter count.**
+/// The four `audit/shapes/user_fn_params*.koan` shapes are a parameter-count × call-count grid:
+/// a one-parameter and an eight-parameter `FN`, each called 8 and 40 times. Differencing the two
+/// call counts at one arity cancels interpreter startup and the definition itself, leaving 32
+/// calls' marginal cost; differencing *those* leaves what seven extra parameters cost per call.
+///
+/// This is the frame bind's own axis. A user call binds each parameter into the fresh per-call
+/// scope, and the name it binds under comes straight off the signature's parameter schema — which
+/// carries the classified symbol the binding table keys by, so the bind reaches no interner and
+/// builds no string. What remains in the slope is per-*argument* cost the bind does not own: the
+/// extra source the call site parses, and the delivery carrier each argument travels in.
+///
+/// Measured 2026-08-21: **1 175** for 32 one-parameter calls (36.7 each) and **2 006** for 32
+/// eight-parameter calls (62.7 each), a slope of 831 — 3.71 per parameter per call. Down from
+/// 1 206 / 2 231 (slope 1 025, 4.58 per parameter) when the frame bind resolved each parameter's
+/// symbol back to text through the run's label interner: the 0.87-per-parameter drop is that
+/// `String`, one per parameter per call, and the one-parameter shape's own 31-allocation drop is
+/// the same string at n = 1.
+///
+/// Both bounds are the measurement plus 32, so one re-introduced per-call allocation fails the
+/// first and a re-introduced per-parameter one fails the second by ≈224.
+#[test]
+fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
+    const PER_CALL_BOUND: u64 = 1_207;
+    const PER_PARAMETER_BOUND: u64 = 863;
+    let arity1 = allocations_for(
+        include_str!("../audit/shapes/user_fn_params1_calls40.koan"),
+        "audit/shapes/user_fn_params1_calls40.koan",
+    ) - allocations_for(
+        include_str!("../audit/shapes/user_fn_params1_calls8.koan"),
+        "audit/shapes/user_fn_params1_calls8.koan",
+    );
+    let arity8 = allocations_for(
+        include_str!("../audit/shapes/user_fn_params8_calls40.koan"),
+        "audit/shapes/user_fn_params8_calls40.koan",
+    ) - allocations_for(
+        include_str!("../audit/shapes/user_fn_params8_calls8.koan"),
+        "audit/shapes/user_fn_params8_calls8.koan",
+    );
+    assert!(
+        arity1 <= PER_CALL_BOUND,
+        "32 one-parameter user calls allocated {arity1} times, over the {PER_CALL_BOUND} bound \
+         — an allocation was added to the per-call frame bind; re-measure with \
+         `audit/measure.sh` and rebaseline deliberately if the cost is intended"
+    );
+    let slope = arity8 - arity1;
+    assert!(
+        slope <= PER_PARAMETER_BOUND,
+        "seven extra parameters cost {slope} allocations over 32 calls ({arity8} at arity 8 \
+         against {arity1} at arity 1), over the {PER_PARAMETER_BOUND} bound — the frame bind is \
+         building something per parameter again; the schema's own symbol is what it binds under, \
+         so it should reach neither the interner nor the heap"
+    );
+}

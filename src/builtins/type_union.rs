@@ -107,7 +107,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // Root seeding: a construction-time door, so the writes apply here rather than riding a step.
     for write in writes {
         write
-            .apply(scope, gate)
+            .apply(scope, registries, gate)
             .expect("builtin `|` unary-operator seeding must not collide");
     }
 }

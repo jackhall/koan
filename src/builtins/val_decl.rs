@@ -97,14 +97,17 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         None => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
 
-    // Defense-in-depth: type members (Type-class names) are declared with `TYPE` (abstract)
-    // or `LET` (manifest), not `VAL`.
-    if crate::parse::is_type_name(&name) {
+    // A slot binds a value name. Type members (Type-class names) are declared with `TYPE`
+    // (abstract) or `LET` (manifest), not `VAL` — so a Type token here gets the spelling
+    // correction rather than the generic partition message.
+    let Some(slot_name) =
+        crate::machine::model::ValueSymbol::declared(&name, &ctx.registries.labels)
+    else {
         return done_err(KError::new(KErrorKind::ShapeError(format!(
             "VAL slot name `{name}` classifies as a Type token; declare an abstract type \
              member with `TYPE {name}` or a manifest one with `LET {name} = <Type>`",
         ))));
-    }
+    };
 
     let carrier = match ctx.args.unresolved_type("ty") {
         Some(te) => CarrierForm::Raw(*te),
@@ -124,7 +127,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     };
 
     let te = match carrier {
-        CarrierForm::Direct(kt) => return finalize_val(&ctx.finish_ctx(), name, kt),
+        CarrierForm::Direct(kt) => return finalize_val(&ctx.finish_ctx(), slot_name, kt),
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
         // `LET <name> = ...` shadow wins over the builtin table. A `Raw` carrier always holds a
         // bare-leaf `TypeIdentifier` (parameterized surface forms sub-Dispatch earlier).
@@ -135,7 +138,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let brand = ctx.scope.brand();
     let expr = KExpression::new(brand, &[Spanned::bare(ExpressionPart::Type(te))]);
     dispatch_type_then(brand, expr, "VAL type slot", move |fctx, kt| {
-        finalize_val(fctx, name, kt)
+        finalize_val(fctx, slot_name, kt)
     })
 }
 
@@ -153,13 +156,16 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 /// the terminal.
 fn finalize_val<'a>(
     fctx: &FinishCtx<'a, '_>,
-    name: String,
+    name: crate::machine::model::ValueSymbol,
     declared_kt: KType,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
     if let Some(message) = crate::machine::model::unsaturated_constructor_message(
         declared_kt,
-        &format!("the type of SIG value slot `{name}`"),
+        &format!(
+            "the type of SIG value slot `{}`",
+            crate::machine::model::render_label(name.symbol(), fctx.registries)
+        ),
         fctx.registries,
     ) {
         return Action::done(Err(KError::new(KErrorKind::ShapeError(message))));

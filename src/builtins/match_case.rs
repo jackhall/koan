@@ -79,7 +79,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         true => payload_envelope(&scrutinee),
         false => scrutinee,
     };
-    arm_tail(ctx.scope, it_carrier, selected.body, contract, ctx.types())
+    arm_tail(
+        ctx.scope,
+        it_carrier,
+        selected.body,
+        contract,
+        ctx.registries,
+    )
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {

@@ -382,7 +382,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                 if !in_group {
                     let record = scope.birth_operator_group(&[sym], ReductionMode::FoldLeft);
                     writes.push(WriteOp::Group {
-                        probes: powerset_probes(&[sym]),
+                        probes: powerset_probes(&[sym], &registries.labels),
                         seal: GroupSeal::of_delivered(scope, &record),
                         index: bind_index,
                     });
@@ -437,7 +437,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
         // stamps: the bound name and the registered overload are the same operator body.
         if let Some(bound_name) = bound_name {
             writes.push(WriteOp::Value {
-                name: bound_name.to_string(),
+                name: crate::machine::model::value_binder(bound_name, registries)?,
                 index: bind_index,
                 sealed: cell.duplicate(),
             });
@@ -524,7 +524,7 @@ pub(super) fn register_unary_operator<'a>(
     let record = scope.birth_operator_group(&[sym], ReductionMode::Unary);
     let mut writes = vec![list_overload, binary_overload];
     writes.push(WriteOp::Group {
-        probes: powerset_probes(&[sym]),
+        probes: powerset_probes(&[sym], &registries.labels),
         seal: GroupSeal::of_delivered(scope, &record),
         index: bind_index,
     });

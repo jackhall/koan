@@ -21,6 +21,7 @@ use std::rc::Rc;
 use crate::machine::ProducerId;
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::core::{DeclarationSite, LexicalFrame, NameLookup, Scope};
+use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::TypeIdentifier;
 
 use super::declaration_window::{DeclWindow, WindowView};
@@ -156,7 +157,9 @@ fn park_until_seal(el: &Elaborator<'_, '_>, view: WindowView<'_, '_>) -> TypeRes
     let mut producers: Vec<ProducerId> = Vec::new();
     for (name, member_owner) in view.unfilled_members() {
         let declarer = member_owner.unwrap_or(name);
-        match owner.bindings().type_placeholder_producer(&declarer) {
+        let claim = crate::machine::model::TypeSymbol::of(&declarer)
+            .and_then(|declarer| owner.bindings().type_placeholder_producer(declarer));
+        match claim {
             Some(node_id) => {
                 if !producers.contains(&node_id) {
                     producers.push(node_id);
@@ -237,9 +240,9 @@ pub fn elaborate_type_identifier(
         Some(NameLookup::Parked(edge)) => return TypeResolution::Park(vec![edge]),
         None => {}
     }
-    // Not a type binding, and there is no value side to consult: the token-class partition
-    // ([`Bindings::partition_guard`](crate::machine::core::Bindings)) commits a Type token to the
-    // type universe, so a name reaching here can hold no value to layer a sharper miss over. What
+    // Not a type binding, and there is no value side to consult: the token-class partition commits
+    // a Type token to the type universe — `data` keys by `ValueSymbol`, which no Type token mints
+    // — so a name reaching here can hold no value to layer a sharper miss over. What
     // remains is the builtin table — tried last so a fixture scope that skips builtin registration
     // still resolves builtin names — and then an unknown-name failure.
     match KType::from_type_identifier(t, types) {
@@ -272,11 +275,16 @@ pub enum SealOutcome<'a> {
 /// idempotent: it recognizes the re-entry by its installing
 /// [`Installer`](crate::machine::core::Installer) matching the stored entry's, while a genuine
 /// redeclaration installs under a different statement and surfaces as `Rebind`.
-pub fn seal_writes<'a>(view: WindowView<'_, 'a>, site: DeclarationSite) -> Vec<WriteOp<'a>> {
+pub fn seal_writes<'a>(
+    view: WindowView<'_, 'a>,
+    site: DeclarationSite,
+    registries: &RunRegistries,
+) -> Vec<WriteOp<'a>> {
     view.installable()
         .into_iter()
         .map(|(name, kt)| WriteOp::Type {
-            name,
+            name: crate::machine::model::TypeSymbol::declared(&name, &registries.labels)
+                .expect("an announced type member is declared under a Type token"),
             kt,
             site,
             policy: TypeWritePolicy::UpsertEqual,
@@ -303,8 +311,9 @@ pub fn finalize_nominal_member<'a>(
     build_repr: impl FnOnce(WindowView<'_, 'a>) -> KType,
     site: DeclarationSite,
     brand: crate::machine::core::RegionBrand<'a>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> SealOutcome<'a> {
+    let types = &registries.types;
     let index = match window.view().member_index(name) {
         Some(index) => index,
         // The declarator handed a window that does not announce its own binder — a wiring bug, not
@@ -322,7 +331,7 @@ pub fn finalize_nominal_member<'a>(
     };
     SealOutcome::Sealed {
         kt,
-        writes: seal_writes(view, site),
+        writes: seal_writes(view, site, registries),
     }
 }
 

@@ -226,7 +226,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 /// own operator's body above, and the pair results fold left through the `AND` keyword combiner.
 pub fn register_builtin_operator_groups<'a>(
     scope: &'a Scope<'a>,
-    _registries: &RunRegistries,
+    registries: &RunRegistries,
     gate: &mut WriteGate,
 ) {
     seed(
@@ -236,20 +236,45 @@ pub fn register_builtin_operator_groups<'a>(
             combiner: "AND",
             direction: FoldDirection::Left,
         },
+        registries,
         gate,
     );
-    seed(scope, &["+", "-"], ReductionMode::FoldLeft, gate);
-    seed(scope, &["*", "/"], ReductionMode::FoldLeft, gate);
+    seed(
+        scope,
+        &["+", "-"],
+        ReductionMode::FoldLeft,
+        registries,
+        gate,
+    );
+    seed(
+        scope,
+        &["*", "/"],
+        ReductionMode::FoldLeft,
+        registries,
+        gate,
+    );
 }
 
 /// One builtin seed: the group record in the root's own region, then its powerset keys at
 /// [`BindingIndex::BUILTIN`]. The root's region is the eternal tier, so a builtin group outlives
 /// every per-call region and an inner scope's resolved carrier names an ordinary foreign member.
-fn seed<'a>(scope: &'a Scope<'a>, members: &[&str], mode: ReductionMode<'_>, gate: &mut WriteGate) {
+fn seed<'a>(
+    scope: &'a Scope<'a>,
+    members: &[&str],
+    mode: ReductionMode<'_>,
+    registries: &RunRegistries,
+    gate: &mut WriteGate,
+) {
     let cell = scope.birth_operator_group(members, mode);
     let seal = GroupSeal::of_delivered(scope, &cell);
     scope
-        .register_group_under_all_subsets_direct(members, seal, BindingIndex::BUILTIN, gate)
+        .register_group_under_all_subsets_direct(
+            members,
+            seal,
+            BindingIndex::BUILTIN,
+            registries,
+            gate,
+        )
         .expect("builtin operator-group seeding must not collide");
 }
 

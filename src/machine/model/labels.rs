@@ -226,5 +226,23 @@ impl BinderSymbol {
     }
 }
 
+/// The diagnostic a declaration raises when its binder name will not classify into the channel it
+/// binds into: `wanted` is that channel, `name` the text as written. This is the token-class
+/// partition stated **at the text→symbol seam** — past it the classified key types make a crossing
+/// unrepresentable, so this is the one place the rule is a runtime disposition rather than a type.
+/// See [design/typing/tokens.md](../../../design/typing/tokens.md).
+pub fn wrong_binder_class(name: &str, wanted: super::BindKind) -> String {
+    match wanted {
+        super::BindKind::Type => format!(
+            "`{name}` is a value token, so it names a value — a type binds under a Type token \
+             (uppercase-leading with at least one lowercase letter)"
+        ),
+        super::BindKind::Value => format!(
+            "`{name}` is a Type token, so it names a type — a value binds under a value token \
+             (snake_case)"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -83,7 +83,9 @@ impl FinalizeGate<'_, '_> {
     /// that scope by id, park iff it still holds a type placeholder for `name`.
     fn declared_source(&self, scope_id: ScopeId, name: &str) -> Option<ProducerId> {
         let owner = self.scope.ancestors().find(|s| s.id == scope_id)?;
-        owner.bindings().type_placeholder_producer(name)
+        owner
+            .bindings()
+            .type_placeholder_producer(crate::machine::model::TypeSymbol::of(name)?)
     }
 }
 

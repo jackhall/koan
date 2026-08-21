@@ -1,7 +1,9 @@
 //! `register` arm of `machine::core` tests.
 
 use super::super::{BindingIndex, DeclarationSite, NameLookup};
-use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
+use crate::builtins::test_support::{
+    binder_name, mock_declaration_site, run_root_bare, type_name, value_name,
+};
 use crate::machine::ProducerId;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{FrameStorageExt, run_root_storage};
@@ -20,23 +22,26 @@ use crate::machine::model::Scalar;
 
 #[test]
 fn bind_value_direct_errors_on_same_scope_rebind() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v1 = region.brand().alloc_scalar(Scalar::Number(1.0));
     let v2 = region.brand().alloc_scalar(Scalar::Number(2.0));
     scope
         .bind_resident_for_test(
-            "x".to_string(),
+            value_name("x", &registries),
             v1,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let err = scope
         .bind_resident_for_test(
-            "x".to_string(),
+            value_name("x", &registries),
             v2,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap_err();
@@ -48,14 +53,16 @@ fn bind_value_direct_errors_on_same_scope_rebind() {
 
 #[test]
 fn bind_value_direct_allows_shadowing_in_child_scope() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     let v1 = region.brand().alloc_scalar(Scalar::Number(1.0));
     outer
         .bind_resident_for_test(
-            "x".to_string(),
+            value_name("x", &registries),
             v1,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -63,9 +70,10 @@ fn bind_value_direct_allows_shadowing_in_child_scope() {
     let v2 = region.brand().alloc_scalar(Scalar::Number(2.0));
     inner
         .bind_resident_for_test(
-            "x".to_string(),
+            value_name("x", &registries),
             v2,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -75,14 +83,16 @@ fn bind_value_direct_allows_shadowing_in_child_scope() {
 
 #[test]
 fn close_marks_scope_and_is_idempotent_reads_still_work() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_scalar(Scalar::Number(1.0));
     scope
         .bind_resident_for_test(
-            "x".to_string(),
+            value_name("x", &registries),
             v,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -99,20 +109,23 @@ fn close_marks_scope_and_is_idempotent_reads_still_work() {
 #[test]
 #[should_panic(expected = "closed scope")]
 fn bind_after_close_panics() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope.close();
     let v = region.brand().alloc_scalar(Scalar::Number(1.0));
     let _ = scope.bind_resident_for_test(
-        "x".to_string(),
+        value_name("x", &registries),
         v,
         BindingIndex::BUILTIN,
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
 }
 
 #[test]
 fn close_is_per_scope_open_child_still_binds() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     outer.close();
@@ -120,9 +133,10 @@ fn close_is_per_scope_open_child_still_binds() {
     let v = region.brand().alloc_scalar(Scalar::Number(2.0));
     inner
         .bind_resident_for_test(
-            "x".to_string(),
+            value_name("x", &registries),
             v,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -184,9 +198,10 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
     let f2 = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
     scope
         .bind_value_direct(
-            "OTHER_NAME".to_string(),
+            value_name("other_name", &registries),
             scope.store_function_cell(&f2),
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("a value bind of a callable is an ordinary bind, not an overload");
@@ -219,17 +234,19 @@ fn bind_value_direct_with_kfunction_pointer_equal_alias_no_op() {
     let obj2 = scope.brand().allocator().value(KObject::KFunction(f));
     scope
         .bind_resident_for_test(
-            "FIRST".to_string(),
+            value_name("first", &registries),
             obj1,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     scope
         .bind_resident_for_test(
-            "ALIAS".to_string(),
+            value_name("alias", &registries),
             obj2,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -285,10 +302,12 @@ fn register_function_allows_overload_with_different_arg_types() {
         .unwrap();
 }
 
-/// `register_function` touches only `functions`, never `data`, so a bare FN may
-/// coexist with a same-name value binding. The two namespaces stay independent.
+/// `register_function` touches only `functions`, never `data`, so a bare FN and a value binding
+/// coexist. The two surfaces stay independent — and they cannot even contend for a name: a
+/// keyworded registration is labelled by a keyword token, which `ValueSymbol` refuses, so nothing
+/// binds a value under it.
 #[test]
-fn register_function_coexists_with_same_name_value() {
+fn register_function_coexists_with_a_value_binding() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let region = run_root_storage();
@@ -296,9 +315,10 @@ fn register_function_coexists_with_same_name_value() {
     let v = region.brand().alloc_scalar(Scalar::Number(1.0));
     scope
         .bind_resident_for_test(
-            "FOO".to_string(),
+            value_name("foo", &registries),
             v,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -311,8 +331,8 @@ fn register_function_coexists_with_same_name_value() {
             &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
-        .expect("bare FN registration must not collide with a same-name value");
-    assert!(matches!(scope.lookup("FOO"), Some(KObject::Number(n)) if *n == 1.0));
+        .expect("bare FN registration must not collide with a value binding");
+    assert!(matches!(scope.lookup("foo"), Some(KObject::Number(n)) if *n == 1.0));
     let key = f.open(|f| f.signature.untyped_key());
     assert!(
         scope
@@ -324,9 +344,9 @@ fn register_function_coexists_with_same_name_value() {
     );
 }
 
-/// The cross-kind exclusion guards the value/type partition, but a bare FN binds
+/// The value/type partition covers the two name-keyed maps, but a bare FN binds
 /// neither `data` nor `types` (it writes only `functions`, `write_data == false`),
-/// so it is exempt: a same-name type and a bare FN coexist.
+/// so it stands outside it: a type binding and a bare FN coexist.
 #[test]
 fn register_function_coexists_with_same_name_type() {
     let registries = RunRegistries::new();
@@ -334,9 +354,10 @@ fn register_function_coexists_with_same_name_type() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let _ = scope.register_type_direct(
-        "Foo".to_string(),
+        type_name("Foo", &registries),
         KType::NUMBER,
         DeclarationSite::BUILTIN,
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
     let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
@@ -349,7 +370,13 @@ fn register_function_coexists_with_same_name_type() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("bare FN registration must not collide with a same-name type");
-    assert!(scope.bindings().types().get("Foo").is_some());
+    assert!(
+        scope
+            .bindings()
+            .types()
+            .get(&type_name("Foo", &registries))
+            .is_some()
+    );
     let key = f.open(|f| f.signature.untyped_key());
     assert!(
         scope
@@ -367,46 +394,54 @@ fn register_function_coexists_with_same_name_type() {
 #[test]
 fn lookup_member_classifies_value_and_type_unambiguously() {
     use crate::machine::core::MemberResolution;
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_scalar(Scalar::Number(1.0));
     scope
         .bind_resident_for_test(
-            "val".to_string(),
+            value_name("val", &registries),
             v,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let _ = scope.register_type_direct(
-        "Ty".to_string(),
+        type_name("Ty", &registries),
         KType::NUMBER,
         DeclarationSite::BUILTIN,
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
     let bindings = scope.bindings();
     assert!(matches!(
-        bindings.lookup_member("val", None),
+        bindings.lookup_member(binder_name("val", &registries), None),
         Some(MemberResolution::Value(sealed))
             if matches!(sealed.open_at().value(), Carried::Object(KObject::Number(n)) if *n == 1.0)
     ));
     assert!(matches!(
-        bindings.lookup_member("Ty", None),
+        bindings.lookup_member(binder_name("Ty", &registries), None),
         Some(MemberResolution::Type { kt, .. }) if kt == KType::NUMBER
     ));
-    assert!(bindings.lookup_member("absent", None).is_none());
+    assert!(
+        bindings
+            .lookup_member(binder_name("absent", &registries), None)
+            .is_none()
+    );
 }
 
 #[test]
 fn resolve_returns_placeholder_when_only_placeholder_exists() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope
         .install_placeholder(
-            "x".to_string(),
+            binder_name("x", &registries),
             ProducerId::for_test(7),
             BindingIndex::BUILTIN,
-            crate::machine::model::BindKind::Value,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -418,24 +453,26 @@ fn resolve_returns_placeholder_when_only_placeholder_exists() {
 
 #[test]
 fn resolve_stops_at_first_hit_does_not_descend_outer() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     let v = region.brand().alloc_scalar(Scalar::Number(1.0));
     outer
         .bind_resident_for_test(
-            "x".to_string(),
+            value_name("x", &registries),
             v,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let inner = outer.alloc_child_under();
     inner
         .install_placeholder(
-            "x".to_string(),
+            binder_name("x", &registries),
             ProducerId::for_test(3),
             BindingIndex::BUILTIN,
-            crate::machine::model::BindKind::Value,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -454,27 +491,34 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
 
 #[test]
 fn bind_value_direct_clears_own_placeholder() {
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope
         .install_placeholder(
-            "x".to_string(),
+            binder_name("x", &registries),
             ProducerId::for_test(2),
             BindingIndex::BUILTIN,
-            crate::machine::model::BindKind::Value,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
     let v = region.brand().alloc_scalar(Scalar::Number(42.0));
     scope
         .bind_resident_for_test(
-            "x".to_string(),
+            value_name("x", &registries),
             v,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    assert!(scope.bindings().pending_value("x").is_none());
+    assert!(
+        scope
+            .bindings()
+            .pending_value(value_name("x", &registries))
+            .is_none()
+    );
     assert!(
         matches!(scope.resolve("x"), Some(NameLookup::Bound(KObject::Number(n))) if *n == 42.0)
     );
@@ -488,14 +532,16 @@ fn bind_value_direct_clears_own_placeholder() {
 fn visibility_chain_none_sees_every_entry() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
-            "late".to_string(),
+            value_name("late", &registries),
             v,
             BindingIndex::value(99),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -513,14 +559,16 @@ fn visibility_chain_none_sees_every_entry() {
 fn visibility_strict_less_than_hides_later_sibling() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
-            "later".to_string(),
+            value_name("later", &registries),
             v,
             BindingIndex::value(5),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -533,14 +581,16 @@ fn visibility_strict_less_than_hides_later_sibling() {
 fn visibility_strict_less_than_admits_earlier_sibling() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
-            "earlier".to_string(),
+            value_name("earlier", &registries),
             v,
             BindingIndex::value(2),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -555,14 +605,16 @@ fn visibility_strict_less_than_admits_earlier_sibling() {
 fn visibility_self_index_hidden_under_strict_less_than() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_scalar(Scalar::Number(7.0));
     scope
         .bind_resident_for_test(
-            "self_idx".to_string(),
+            value_name("self_idx", &registries),
             v,
             BindingIndex::value(3),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -579,14 +631,15 @@ fn visibility_self_index_hidden_under_strict_less_than() {
 fn visibility_placeholder_filtered_same_as_value() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope
         .install_placeholder(
-            "ph".to_string(),
+            binder_name("ph", &registries),
             ProducerId::for_test(2),
             BindingIndex::value(5),
-            crate::machine::model::BindKind::Value,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
@@ -603,12 +656,14 @@ fn visibility_placeholder_filtered_same_as_value() {
 fn visibility_type_side_gate_mirrors_value_side() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
+    let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let _ = scope.register_type_direct(
-        "TyLate".to_string(),
+        type_name("TyLate", &registries),
         KType::NUMBER,
         mock_declaration_site(5),
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
     let consumer_before: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
@@ -625,30 +680,11 @@ fn visibility_type_side_gate_mirrors_value_side() {
     );
 }
 
-/// Partition strictness at a SIG decl scope: `child_under_sig` mints an ordinary `Bindings`
-/// (no slot-table carve-out), so a value-token key written straight to `types` is rejected by
-/// `partition_guard` exactly like on any other scope's bindings.
-#[test]
-fn sig_scope_bindings_reject_value_token_type_write() {
-    let region = run_root_storage();
-    let outer = run_root_bare(&region);
-    let sig_scope = outer.alloc_child_under_sig("S");
-    let kt: KType = KType::NUMBER;
-    let error = match sig_scope.bindings().write_type(
-        "compare",
-        kt,
-        DeclarationSite::BUILTIN,
-        crate::machine::core::bindings::TypeWritePolicy::Insert,
-        &mut crate::machine::WriteGate::for_test(),
-    ) {
-        Err(e) => e,
-        Ok(_) => panic!("a value-token key must never enter `types`, even on a SIG decl scope"),
-    };
-    assert!(
-        matches!(&error.kind, crate::machine::core::KErrorKind::ShapeError(msg) if msg.contains("is a value token")),
-        "expected the token-class partition error, got {error}",
-    );
-}
+// The value/type partition at a SIG decl scope is a compile-time property of the key types:
+// `write_type` takes a `TypeSymbol` and `write_value` a `ValueSymbol`, so a value-token key does
+// not typecheck against the type-side door and a crossing is unwritable rather than rejected.
+// The partition's user-visible disposition is raised where text is classified — the declaration
+// seams — and is covered there.
 
 /// Binding a function **value** publishes no keyworded expression: the `data` entry lands, and
 /// the callable's dispatch bucket stays empty — keyworded dispatch comes only from the `FN` / `OP`
@@ -663,9 +699,10 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
     let sealed = scope.store_function_cell(&f);
     scope
         .bind_value_direct(
-            "f".to_string(),
+            value_name("f", &registries),
             sealed,
             BindingIndex::BUILTIN,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("a fresh callable bind lands");

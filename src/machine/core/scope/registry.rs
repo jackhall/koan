@@ -22,20 +22,24 @@ use crate::machine::DeliveredCarried;
 use crate::machine::ProducerId;
 use crate::machine::core::bindings::powerset_probes;
 use crate::machine::core::bindings::{
-    BindKind, BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
+    BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
 };
 use crate::machine::core::carrier_witness::{DeliveredFunction, GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind};
+#[cfg(test)]
+use crate::machine::model::KeywordSymbol;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{Carried, KObject, KType, ReductionMode};
+use crate::machine::model::{
+    BinderSymbol, Carried, KObject, KType, ReductionMode, TypeSymbol, ValueSymbol, render_label,
+};
 
 impl<'a> Scope<'a> {
     /// Spike guard: a bind after [`Self::close`] means the scope's defining block finished yet a
     /// write still arrived. `debug_assert` so release builds pay nothing.
-    pub(crate) fn assert_open(&self, name: &str) {
+    pub(crate) fn assert_open(&self, name: impl std::fmt::Debug) {
         debug_assert!(
             !self.closed.get(),
-            "bind `{name}` into closed scope {:?}",
+            "bind {name:?} into closed scope {:?}",
             self.id,
         );
     }
@@ -68,9 +72,10 @@ impl<'a> Scope<'a> {
     /// step outcome instead.
     pub(crate) fn bind_value_direct(
         &self,
-        name: String,
+        name: ValueSymbol,
         sealed: SealedValue<'a>,
         index: BindingIndex,
+        registries: &RunRegistries,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         WriteOp::Value {
@@ -78,7 +83,7 @@ impl<'a> Scope<'a> {
             index,
             sealed,
         }
-        .apply(self, gate)
+        .apply(self, registries, gate)
     }
 
     /// [`Self::adopt_for_binding`] + [`Self::bind_value_direct`] — the construction-door spelling
@@ -86,17 +91,18 @@ impl<'a> Scope<'a> {
     /// which the caller lifts its terminal envelope ([`Self::lift_resident`]).
     pub(crate) fn bind_delivered_direct(
         &'a self,
-        name: String,
+        name: ValueSymbol,
         cell: &DeliveredCarried,
         index: BindingIndex,
         project: impl for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
+        registries: &RunRegistries,
         gate: &mut WriteGate,
     ) -> Result<SealedValue<'a>, KError> {
         let sealed = self.adopt_for_binding(cell, project)?;
         // Duplicate the seal: one binds into the entry, the other rides the caller's terminal
         // carrier out of the step. Neither owns pins — the region's union bundle does — so the
         // reach is covered on both the resident and in-transit paths.
-        self.bind_value_direct(name, sealed.duplicate(), index, gate)?;
+        self.bind_value_direct(name, sealed.duplicate(), index, registries, gate)?;
         Ok(sealed)
     }
 
@@ -107,13 +113,14 @@ impl<'a> Scope<'a> {
     #[cfg(test)]
     pub(crate) fn bind_resident_for_test(
         &self,
-        name: String,
+        name: ValueSymbol,
         obj: &'a KObject<'a>,
         index: BindingIndex,
+        registries: &RunRegistries,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let sealed = self.seal_resident(Carried::Object(obj));
-        self.bind_value_direct(name, sealed, index, gate)
+        self.bind_value_direct(name, sealed, index, registries, gate)
     }
 
     /// Construction-time overload registration: seal the callable `cell` carries and add it to this
@@ -135,16 +142,17 @@ impl<'a> Scope<'a> {
             seal: OverloadSeal::of_delivered(self, cell, registries),
             builtin_shadow_guard: true,
         }
-        .apply(self, gate)
+        .apply(self, registries, gate)
     }
 
     /// Construction-time type registration (strict insert-if-absent, no builtin-shadow consult):
     /// a parameter's type annotation binding into a fresh per-call scope, and the builtin seeds.
     pub(crate) fn register_type_direct(
         &self,
-        name: String,
+        name: TypeSymbol,
         ktype: crate::machine::model::KType,
         site: DeclarationSite,
+        registries: &RunRegistries,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         WriteOp::Type {
@@ -154,7 +162,7 @@ impl<'a> Scope<'a> {
             policy: TypeWritePolicy::Insert,
             builtin_shadow_guard: false,
         }
-        .apply(self, gate)
+        .apply(self, registries, gate)
     }
 
     /// Builtin type registration: [`Self::register_type_direct`] at [`DeclarationSite::BUILTIN`].
@@ -162,11 +170,12 @@ impl<'a> Scope<'a> {
     /// [`KError`] is dropped.
     pub(crate) fn register_builtin_type(
         &self,
-        name: String,
+        name: TypeSymbol,
         ktype: crate::machine::model::KType,
+        registries: &RunRegistries,
         gate: &mut WriteGate,
     ) {
-        let _ = self.register_type_direct(name, ktype, DeclarationSite::BUILTIN, gate);
+        let _ = self.register_type_direct(name, ktype, DeclarationSite::BUILTIN, registries, gate);
     }
 
     /// Record a SIG value slot: insert `ktype` into the nearest enclosing SIG decl scope's slot
@@ -176,8 +185,9 @@ impl<'a> Scope<'a> {
     /// would have found in-step.
     pub(crate) fn write_sig_slot(
         &self,
-        name: String,
+        name: ValueSymbol,
         ktype: crate::machine::model::KType,
+        registries: &RunRegistries,
     ) -> Result<(), KError> {
         let outside_sig = || {
             KError::new(KErrorKind::ShapeError(
@@ -188,13 +198,13 @@ impl<'a> Scope<'a> {
         let ScopeKind::Sig { slots, .. } = &target.kind else {
             return Err(outside_sig());
         };
-        target.assert_open(&name);
-        if slots.borrow().contains_key(name.as_str()) {
-            return Err(KError::new(KErrorKind::Rebind { name }));
+        target.assert_open(name);
+        if slots.borrow().contains_key(&name) {
+            return Err(KError::new(KErrorKind::Rebind {
+                name: render_label(name.symbol(), registries),
+            }));
         }
-        slots
-            .borrow_mut()
-            .insert(target.brand().allocator().text(&name), ktype);
+        slots.borrow_mut().insert(name, ktype);
         Ok(())
     }
 
@@ -204,15 +214,15 @@ impl<'a> Scope<'a> {
     /// the op-apply position would let a concurrent sibling see `UnboundName` instead of parking.
     pub fn install_placeholder(
         &self,
-        name: String,
+        name: BinderSymbol,
         producer: ProducerId,
         index: BindingIndex,
-        kind: BindKind,
+        registries: &RunRegistries,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         self.assert_owns_bindings();
         self.bindings()
-            .install_placeholder(&name, producer, index, kind, gate)
+            .install_placeholder(name, producer, index, registries, gate)
     }
 
     /// Size this scope's claim run for a block of `statements` statements fanning out into it. See
@@ -256,9 +266,10 @@ impl<'a> Scope<'a> {
     #[cfg(test)]
     pub(crate) fn register_operator_group_direct(
         &self,
-        probe: String,
+        probe: KeywordSymbol,
         seal: GroupSeal<'a>,
         index: BindingIndex,
+        registries: &RunRegistries,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         WriteOp::Group {
@@ -266,7 +277,7 @@ impl<'a> Scope<'a> {
             seal,
             index,
         }
-        .apply(self, gate)
+        .apply(self, registries, gate)
     }
 
     /// Allocate an ascription view's scope under `outer`, replay `src`'s bindings into it — value
@@ -284,11 +295,15 @@ impl<'a> Scope<'a> {
         outer: &'a Scope<'a>,
         path: String,
         src: &'a crate::machine::core::Bindings<'a>,
-        type_entries: impl FnOnce(crate::machine::core::ScopeId) -> Vec<(String, KType)>,
+        registries: &RunRegistries,
+        type_entries: impl FnOnce(crate::machine::core::ScopeId) -> Vec<(TypeSymbol, KType)>,
     ) -> Result<&'a Scope<'a>, KError> {
         let view = outer.alloc_child_under_module(&path, None);
-        view.bindings()
-            .bulk_install_from(src, &mut WriteGate::for_unpublished_scope())?;
+        view.bindings().bulk_install_from(
+            src,
+            registries,
+            &mut WriteGate::for_unpublished_scope(),
+        )?;
         // A view's type member is installed by the ascription, not by a declaration statement
         // running in the view scope, so it takes the born-with-the-scope site.
         for (name, ktype) in type_entries(view.id) {
@@ -296,6 +311,7 @@ impl<'a> Scope<'a> {
                 name,
                 ktype,
                 DeclarationSite::AT_CONSTRUCTION,
+                registries,
                 &mut WriteGate::for_unpublished_scope(),
             )?;
         }
@@ -321,6 +337,7 @@ impl<'a> Scope<'a> {
         members: &[&str],
         mode: ReductionMode<'_>,
         announced: Option<crate::machine::model::AnnouncedData>,
+        registries: &RunRegistries,
     ) -> Result<&'a Scope<'a>, KError> {
         let cell = outer.birth_operator_group(members, mode);
         let seal = GroupSeal::of_delivered(outer, &cell);
@@ -330,6 +347,7 @@ impl<'a> Scope<'a> {
             members,
             seal,
             BindingIndex::value(0),
+            registries,
             &mut WriteGate::for_unpublished_scope(),
         )?;
         Ok(child)
@@ -344,13 +362,14 @@ impl<'a> Scope<'a> {
         members: &[&str],
         seal: GroupSeal<'a>,
         index: BindingIndex,
+        registries: &RunRegistries,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         WriteOp::Group {
-            probes: powerset_probes(members),
+            probes: powerset_probes(members, &registries.labels),
             seal,
             index,
         }
-        .apply(self, gate)
+        .apply(self, registries, gate)
     }
 }

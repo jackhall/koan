@@ -1,5 +1,5 @@
 use super::*;
-use crate::builtins::test_support::spliced_part;
+use crate::builtins::test_support::{spliced_part, type_name};
 use crate::machine::core::SubstrateDoor;
 use crate::machine::model::Carried;
 use crate::machine::model::ModuleDraft;
@@ -370,7 +370,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     // A module value surfaces its principal signature, interned from its members before the value
     // exists — build it through the same door production does.
     let draft = ModuleDraft::empty();
-    let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
+    let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft, types.registries()));
     let module = Module::alloc_at_child_scope("IntMod", child, draft, self_sig);
     // A module is a value: it reaches a slot on the Object channel, and a `:Type` slot refuses it.
     let module_value = scope.brand().allocator().value(KObject::Module(module));
@@ -379,7 +379,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         types.registries()
     ));
     let sig_scope = scope.alloc_child_under_sig("Ordered");
-    let kt_sig: KType = types.signature(SigSchema::project_decl(sig_scope, &types));
+    let kt_sig: KType = types.signature(SigSchema::project_decl(sig_scope, types.registries()));
     // A signature is a type value: the `:Type` lattice top admits it; the proper tier does not.
     assert!(t.accepts_working_part(
         &spliced_part(&region, Carried::Type(kt_sig)),
@@ -932,8 +932,10 @@ fn module_object_ktype_reports_self_sig() {
     let one_member = |name: &str, elt: KType| {
         let child = scope.alloc_child_under_module(name, None);
         let mut draft = ModuleDraft::empty();
-        draft.type_members.insert("Elt".into(), elt);
-        let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
+        draft
+            .type_members
+            .insert(type_name("Elt", types.registries()), elt);
+        let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft, types.registries()));
         (
             Module::alloc_at_child_scope(name, child, draft, self_sig),
             self_sig,
@@ -975,12 +977,14 @@ fn matches_value_admits_module_object_via_signature_slot() {
 
     // An empty signature (empty decl scope): every module bare-satisfies it, so the pins gate.
     let sig_scope = scope.alloc_child_under_sig("S");
-    let schema = SigSchema::project_decl(sig_scope, &types);
+    let schema = SigSchema::project_decl(sig_scope, types.registries());
 
     let child = scope.alloc_child_under_module("M", None);
     let mut draft = ModuleDraft::empty();
-    draft.type_members.insert("Type".into(), KType::NUMBER);
-    let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));
+    draft
+        .type_members
+        .insert(type_name("Type", types.registries()), KType::NUMBER);
+    let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft, types.registries()));
     let m: &Module = Module::alloc_at_child_scope("M", child, draft, self_sig);
 
     let declared = types.signature(schema.clone());

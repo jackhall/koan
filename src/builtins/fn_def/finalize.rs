@@ -329,7 +329,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // builds of the same source.
     if let Some(bound_name) = bound_name {
         writes.push(WriteOp::Value {
-            name: bound_name.to_string(),
+            name: crate::machine::model::value_binder(bound_name, registries)?,
             index: bind_index,
             sealed: cell.duplicate(),
         });

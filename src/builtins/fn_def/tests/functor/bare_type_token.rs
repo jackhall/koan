@@ -92,7 +92,14 @@ fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
             other.summarize(test_run.registries())
         ),
     };
-    match module.type_members.get(&"ElemType").copied() {
+    match module
+        .type_members
+        .get(&crate::builtins::test_support::type_name(
+            "ElemType",
+            test_run.registries(),
+        ))
+        .copied()
+    {
         Some(KType::NUMBER) => {}
         other => panic!(
             "expected ElemType registered as Number on returned module, got {:?}",

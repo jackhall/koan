@@ -8,12 +8,14 @@ pub(crate) mod values;
 
 pub use labels::{
     BinderSymbol, KeywordSymbol, LabelInterner, Symbol, TypeSymbol, ValueSymbol, is_type_name,
+    wrong_binder_class,
 };
 pub use operators::{
     FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode, binary_key, probe_key,
     unary_key,
 };
 pub use registries::RunRegistries;
+pub(crate) use types::IdentityBuildHasher;
 pub use types::TypeRegistry;
 pub use types::render_label;
 pub use types::{
@@ -39,6 +41,7 @@ pub use binder::{BindKind, BinderBucketFn, BinderNameFn, BinderSurface};
 pub(crate) use binder::{OpArity, op_declaration_arity};
 pub(crate) use binder::{StoredBinderKey, symbol_from_parts, symbol_from_quote_body};
 pub(crate) use binder::{TypeDeclarationSurface, announced_type_declaration};
+pub(crate) use binder::{type_binder, value_binder};
 pub(crate) use types::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
     SealOutcome, SigSchema, TypeResolution, constructor_param_names, declarator_window,

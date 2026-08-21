@@ -5,7 +5,7 @@
 //! bucket would hard-error under strict-only admission instead of parking.
 
 use super::working_one;
-use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::{TestRun, value_name};
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::UntypedElement;
 
@@ -19,10 +19,13 @@ fn combined_form_installs_both_channels_at_submission() {
     let _id = test_run.dispatch_in_scope(expr, scope);
     // Read both tables before any `execute()` — installs must land at submission time.
     assert!(
-        scope.bindings().pending_value("f").is_some(),
+        scope
+            .bindings()
+            .pending_value(value_name("f", test_run.registries()))
+            .is_some(),
         "the combined statement should claim `f`'s value slot at submission; \
          pending = {:?}",
-        scope.bindings().pending_names(),
+        scope.bindings().pending_names(test_run.registries()),
     );
     let helper_bucket = vec![
         UntypedElement::Keyword("HELPER".to_string()),

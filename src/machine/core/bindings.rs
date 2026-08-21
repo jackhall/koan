@@ -8,8 +8,10 @@
 //! `OP` registration installs — binding a function *value* publishes no keyworded expression.
 //! Nominal type declarations (NEWTYPE / UNION / SIG) install their identity into `types` only —
 //! there is no value-side carrier; a module is a value and binds into `data`. The `data` and
-//! `types` maps are a structural partition: a name is committed to one xor the other, never both,
-//! enforced by the cross-kind check the value and type write paths run.
+//! `types` maps are a structural partition, and the key types are what enforce it: `data` is keyed
+//! by [`ValueSymbol`] and `types` by [`TypeSymbol`], newtypes minted only from text of their own
+//! token class, so a name reaching both maps is unrepresentable rather than rejected. A name that
+//! classifies in neither is rejected where the text is classified — the declaration seams.
 //!
 //! Every write verb here takes a [`WriteGate`] — the zero-sized capability whose constructors are
 //! `pub(in crate::machine)`. A builtin body cannot mint one, so it cannot name a write verb: the
@@ -21,11 +23,14 @@
 //! There is no borrow order to keep: every verb takes exactly one borrow of the one cell, and a
 //! cross-map write is atomic under it.
 //!
-//! Every table lives in the scope's own **region bump** — bucket arrays, keys, and the text an
-//! entry carries alike — so dropping a table frees nothing and runs no per-entry glue, and frame
-//! death walks O(scopes) rather than O(entries). [`bump_table`] carries the compile-time proof that
-//! no entry brings drop glue with it; the write verbs re-home what they store through the brand
-//! [`Bindings`] holds. A lookup is an O(1) hash probe either way — bump-backing costs it nothing.
+//! Every table lives in the scope's own **region bump** — bucket arrays and the text an entry
+//! carries alike — so dropping a table frees nothing and runs no per-entry glue, and frame death
+//! walks O(scopes) rather than O(entries). [`bump_table`] carries the compile-time proof that no
+//! entry brings drop glue with it; the write verbs re-home the text they store through the brand
+//! [`Bindings`] holds. The name-keyed tables key by a `Copy` [`Symbol`](crate::machine::model::Symbol)
+//! digest under the identity
+//! hasher, so a name lookup is a `u128` compare rather than a byte-wise one and a key re-homes
+//! nothing at all.
 //!
 //! Every entry carries a [`BindingIndex`] naming its installing statement's lexical
 //! position, gated by the strict cutoff `idx < c`, so a forward reference (a
@@ -53,6 +58,7 @@ use allocator_api2::alloc::{Allocator, Global};
 #[cfg(test)]
 use std::cell::Ref;
 use std::cell::RefCell;
+use std::hash::BuildHasher;
 use std::mem::ManuallyDrop;
 
 use crate::machine::CarrierWitness;
@@ -62,7 +68,13 @@ use crate::machine::core::StatementId;
 use crate::machine::core::carrier_witness::{
     GroupSeal, OverloadSeal, SealedFunction, SealedOperatorGroup,
 };
+#[cfg(test)]
+use crate::machine::model::BindKind;
 use crate::machine::model::CarriedFamily;
+use crate::machine::model::{
+    BinderSymbol, IdentityBuildHasher, KeywordSymbol, RunRegistries, TypeSymbol, ValueSymbol,
+    render_label,
+};
 use crate::machine::model::{KType, UntypedKey};
 use crate::machine::model::{
     StoredDispatchTokenElement, StoredElement, StoredKeyProbe, UntypedKeyProbe, owned_untyped_key,
@@ -88,8 +100,6 @@ pub(crate) use ops::{TypeWritePolicy, WriteOp, powerset_probes};
 /// bit-copy of this seal with no refcount traffic and the value can only be re-anchored under a pin
 /// ([`Sealed::open_at`], the [`Delivered`](crate::machine::DeliveredCarried) lift).
 pub type SealedValue<'home> = Sealed<'home, CarriedFamily, CarrierWitness>;
-
-pub use crate::machine::model::BindKind;
 
 /// Outcome of a single-scope name lookup: the name is `Bound` to a `T`, or `Parked` on the
 /// [`ProducerId`] of an earlier still-finalizing binder for the name — the producer a consumer
@@ -209,8 +219,8 @@ pub(crate) struct OperatorEntry<'a> {
 
 /// The value-or-type a name resolves to in one classified result — for ATTR module/signature
 /// member access. Produced by [`crate::machine::core::Scope::lookup_member`], which checks the
-/// module-own value side then the type side in one call. The `data`/`types` cross-kind exclusion
-/// keeps the two arms from ever both matching within a scope.
+/// module-own value side then the type side in one call. The probe's own class picks the map, so
+/// the two arms are exclusive by construction rather than by a checked order.
 pub enum MemberResolution<'a> {
     /// The member's dormant carrier, duplicated off the module's own `data` entry — so an ATTR read
     /// replays the *stored* claim (value and reach as one unit) rather than re-asserting
@@ -329,13 +339,14 @@ impl DeclarationSite {
 /// in-flight binders. The maps carry committed bindings only; a claim is a store entry, so a name's
 /// two questions — "is it bound?" and "is a binder for it in flight?" — are one probe each of the
 /// structure that answers it. `data` and `types` are claimed by name (value/type forward
-/// references); `functions` by full dispatch bucket key, which keeps `(MAKESET _)` and
-/// `(MAKESET _ USING _)` from colliding.
+/// references) — one claim channel for both, sound because the two key classes name disjoint text;
+/// `functions` by full dispatch bucket key, which keeps `(MAKESET _)` and `(MAKESET _ USING _)`
+/// from colliding.
 ///
-/// Every table is a `hashbrown` map over the scope's own region bump ([`BumpBackedMap`]) with
-/// bumped `&'a str` / `&'a [StoredElement]` keys, so a table's death frees nothing and walks no
-/// entry — which is what lets frame teardown cost O(scopes) rather than O(entries). Lookup is the
-/// same O(1) hash probe a std map would run.
+/// Every table is a `hashbrown` map over the scope's own region bump ([`BumpBackedMap`]), keyed by
+/// a `Copy` classified symbol or a bumped `&'a [StoredElement]` run, so a table's death frees
+/// nothing and walks no entry — which is what lets frame teardown cost O(scopes) rather than
+/// O(entries). Lookup is the same O(1) hash probe a std map would run.
 struct Tables<'a> {
     /// Each bound type slot stores its type and its [`DeclarationSite`] — the installing
     /// [`Installer`] (declaration identity) plus its lexical [`BindingIndex`] (visibility). A
@@ -344,7 +355,7 @@ struct Tables<'a> {
     /// type in every region. A bound identity and a live claim on one name coexist without a
     /// representation for it — a nominal's seal pre-installs the external identity here while its
     /// binder is still in flight, which is this map bound *and* the store claimed.
-    types: BumpBackedMap<'a, &'a str, (KType, DeclarationSite)>,
+    types: BumpBackedMap<'a, TypeSymbol, (KType, DeclarationSite), IdentityBuildHasher>,
     /// Each bound value slot stores its value fused to its exact reach in one dormant
     /// [`SealedValue`], plus its lexical [`BindingIndex`]. Reads hand out a bit-copy of the seal
     /// ([`Bindings::lookup_value`]) and re-anchor the value only under a pin, so a read replays the
@@ -352,7 +363,7 @@ struct Tables<'a> {
     /// `Weak`, and the owning pins live in the region's union bundle rather than here — either a
     /// strong member or a per-entry `Rc` on the scope's own frame would close a
     /// `frame → region → scope → bindings → frame` cycle and leak the region.
-    data: BumpBackedMap<'a, &'a str, DataEntry<'a>>,
+    data: BumpBackedMap<'a, ValueSymbol, DataEntry<'a>, IdentityBuildHasher>,
     /// Each sealed bucket slot stores its callable fused to its reach claim in one dormant
     /// [`SealedFunction`], beside the precomputed data the write path dedupes on
     /// ([`FunctionBucketEntry`]). An `FN` registration binds no value, and a value bind writes no
@@ -372,7 +383,7 @@ struct Tables<'a> {
     /// subset used in one expression resolves in a single hit, a cross-group mix simply misses, and
     /// the whole install allocates nothing past its probe keys. Walked through the scope chain:
     /// innermost visible wins.
-    operators: BumpBackedMap<'a, &'a str, OperatorEntry<'a>>,
+    operators: BumpBackedMap<'a, KeywordSymbol, OperatorEntry<'a>, IdentityBuildHasher>,
     /// The in-flight binders of the one block that binds into this scope — see [`claims`]. Inside
     /// `Tables` rather than beside `Bindings` so it rides the one cell and the one `ManuallyDrop`
     /// with the maps it answers beside.
@@ -404,16 +415,16 @@ const _: () = assert!(!std::mem::needs_drop::<FunctionBucketEntry<'static>>());
 ///
 /// This is where each table's storage choice is stated: all five tables route here, so none has an
 /// unstated exemption.
-pub(in crate::machine::core) fn bump_table<'a, K, V>(
+pub(in crate::machine::core) fn bump_table<'a, K, V, S: BuildHasher + Default>(
     brand: RegionBrand<'a>,
-) -> BumpBackedMap<'a, K, V> {
+) -> BumpBackedMap<'a, K, V, S> {
     const {
         assert!(
             !std::mem::needs_drop::<K>() && !std::mem::needs_drop::<V>(),
             "a bump-backed table's entries must carry no drop glue: the bump runs no destructor",
         )
     };
-    hashbrown::HashMap::with_hasher_in(hashbrown::DefaultHashBuilder::default(), brand.allocator())
+    hashbrown::HashMap::with_hasher_in(S::default(), brand.allocator())
 }
 
 /// An empty dispatch bucket over the same bump — the `functions` table's value constructor.
@@ -428,9 +439,9 @@ fn bump_bucket(brand: RegionBrand<'_>) -> Bucket<'_> {
 /// verb takes exactly one borrow, and a cross-map write — a value insert screened against `types`,
 /// a type insert screened against `data` — is atomic under it.
 ///
-/// The brand rides beside the cell because every write re-homes what it stores: a key's text, an
-/// overload's summary and dispatch token all land in the same region the tables' buckets do, so a
-/// table never points at bytes that can die before it.
+/// The brand rides beside the cell because a write re-homes the text it stores: a dispatch
+/// bucket's key, an overload's summary and dispatch token all land in the same region the tables'
+/// buckets do, so a table never points at bytes that can die before it.
 pub struct Bindings<'a> {
     brand: RegionBrand<'a>,
     /// `ManuallyDrop` for [`Bucket`]'s reason, one level up: a `hashbrown` map has a destructor
@@ -472,17 +483,17 @@ impl<'a> Bindings<'a> {
     /// disposition is materialized on the resolution path, not here).
     pub fn lookup_value(
         &self,
-        name: &str,
+        name: ValueSymbol,
         cutoff: Option<usize>,
     ) -> Option<NameLookup<SealedValue<'a>>> {
         let tables = self.tables.borrow();
-        if let Some(entry) = tables.data.get(name) {
+        if let Some(entry) = tables.data.get(&name) {
             return Self::visible(entry.index, cutoff)
                 .then(|| NameLookup::Bound(entry.sealed.duplicate()));
         }
         tables
             .claims
-            .name_claim(name)
+            .name_claim(name.symbol())
             .filter(|claim| Self::visible(claim.index, cutoff))
             .map(|claim| NameLookup::Parked(claim.producer))
     }
@@ -493,16 +504,20 @@ impl<'a> Bindings<'a> {
     /// bound identity and a live claim both stand — a nominal's seal pre-installing the external
     /// identity while its binder is still in flight — a consumer that can read the identity must
     /// not park.
-    pub fn lookup_type(&self, name: &str, cutoff: Option<usize>) -> Option<NameLookup<KType>> {
+    pub fn lookup_type(
+        &self,
+        name: TypeSymbol,
+        cutoff: Option<usize>,
+    ) -> Option<NameLookup<KType>> {
         let tables = self.tables.borrow();
-        if let Some((kt, site)) = tables.types.get(name)
+        if let Some((kt, site)) = tables.types.get(&name)
             && Self::visible(site.index, cutoff)
         {
             return Some(NameLookup::Bound(*kt));
         }
         tables
             .claims
-            .name_claim(name)
+            .name_claim(name.symbol())
             .filter(|claim| Self::visible(claim.index, cutoff))
             .map(|claim| NameLookup::Parked(claim.producer))
     }
@@ -511,22 +526,26 @@ impl<'a> Bindings<'a> {
     /// `name` resolves to, read from **this scope's own** `data` then `types` in one pass. A
     /// module member is module-own — the lookup deliberately does **not** consult the builtin
     /// root or walk lexical ancestors, so `m.Type` (a builtin type name) or `m.SomeOuterType`
-    /// is "no member", not a fall-through. The cross-kind exclusion keeps the two arms from both
-    /// matching, so the result is unambiguous. The binding maps hold committed bindings only, so a
+    /// is "no member", not a fall-through. `name` carries its own class, so the read probes exactly
+    /// one map and the result is unambiguous. The binding maps hold committed bindings only, so a
     /// claim cannot surface here — and a read module is finalized either way.
-    pub fn lookup_member(&self, name: &str, cutoff: Option<usize>) -> Option<MemberResolution<'a>> {
+    pub fn lookup_member(
+        &self,
+        name: BinderSymbol,
+        cutoff: Option<usize>,
+    ) -> Option<MemberResolution<'a>> {
         let tables = self.tables.borrow();
-        if let Some(entry) = tables.data.get(name)
-            && Self::visible(entry.index, cutoff)
-        {
-            return Some(MemberResolution::Value(entry.sealed.duplicate()));
+        match name {
+            BinderSymbol::Value(name) => {
+                let entry = tables.data.get(&name)?;
+                Self::visible(entry.index, cutoff)
+                    .then(|| MemberResolution::Value(entry.sealed.duplicate()))
+            }
+            BinderSymbol::Type(name) => {
+                let (kt, site) = tables.types.get(&name)?;
+                Self::visible(site.index, cutoff).then_some(MemberResolution::Type { kt: *kt })
+            }
         }
-        if let Some((kt, site)) = tables.types.get(name)
-            && Self::visible(site.index, cutoff)
-        {
-            return Some(MemberResolution::Type { kt: *kt });
-        }
-        None
     }
 
     /// The [`ProducerId`] of a still-finalizing **type** binder named `name`, read straight from the
@@ -535,11 +554,11 @@ impl<'a> Bindings<'a> {
     /// type-identifier memo on an in-flight binder even when the seal has already pre-installed
     /// the name's external identity into `types`. Visibility-unfiltered: this is dependency
     /// tracking, not consumer-visibility enforcement.
-    pub fn type_placeholder_producer(&self, name: &str) -> Option<ProducerId> {
+    pub fn type_placeholder_producer(&self, name: TypeSymbol) -> Option<ProducerId> {
         self.tables
             .borrow()
             .claims
-            .name_claim(name)
+            .name_claim(name.symbol())
             .map(|claim| claim.producer)
     }
 
@@ -626,11 +645,11 @@ impl<'a> Bindings<'a> {
     /// caller keeps walking ancestors.
     pub(in crate::machine::core) fn lookup_operator_group(
         &self,
-        probe: &str,
+        probe: KeywordSymbol,
         cutoff: Option<usize>,
     ) -> Option<SealedOperatorGroup<'a>> {
         let tables = self.tables.borrow();
-        let entry = tables.operators.get(probe)?;
+        let entry = tables.operators.get(&probe)?;
         Self::visible(entry.index, cutoff).then(|| entry.sealed.duplicate())
     }
 
@@ -649,26 +668,29 @@ impl<'a> Bindings<'a> {
     /// follows for the `functions` table.
     pub(crate) fn write_operator_group(
         &self,
-        probe: String,
+        probe: KeywordSymbol,
         seal: &GroupSeal<'a>,
         index: BindingIndex,
+        registries: &RunRegistries,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();
-        if let Some(entry) = tables.operators.get(probe.as_str()) {
+        if let Some(entry) = tables.operators.get(&probe) {
             if entry.address == seal.address || entry.declaration == seal.declaration {
                 return Ok(());
             }
+            let probe = render_label(probe.symbol(), registries);
             return Err(KError::new(KErrorKind::ShapeError(format!(
                 "operator `{probe}` is already declared in this scope with a different \
                  chaining mode or member set; one scope declares one chaining mode per operator",
             ))));
         }
-        // Key and declaration re-home on the insert alone. A powerset install bumps the declaration
-        // once per subset entry; the byte cost is bounded by the group's own powerset, which is
-        // small, and cross-call sharing would cost an intern table to save it.
+        // The key is a `Copy` digest; only the declaration re-homes on the insert. A powerset
+        // install bumps the declaration once per subset entry; the byte cost is bounded by the
+        // group's own powerset, which is small, and cross-call sharing would cost an intern table
+        // to save it.
         tables.operators.insert(
-            self.brand.allocator().text(&probe),
+            probe,
             OperatorEntry {
                 index,
                 address: seal.address,
@@ -683,22 +705,22 @@ impl<'a> Bindings<'a> {
     /// seal is a bit-copy; the caller re-anchors what it needs under its own pin. Claims are
     /// structurally absent — the map holds committed bindings only — so nothing is filtered. For
     /// chain-gated single-name reads use [`Self::lookup_value`].
-    pub fn iter_data(&self) -> Vec<(String, SealedValue<'a>)> {
+    pub fn iter_data(&self) -> Vec<(ValueSymbol, SealedValue<'a>)> {
         self.tables
             .borrow()
             .data
             .iter()
-            .map(|(name, entry)| (name.to_string(), entry.sealed.duplicate()))
+            .map(|(name, entry)| (*name, entry.sealed.duplicate()))
             .collect()
     }
 
     /// Snapshot every `(name, KType)` pair in `types`, ignoring visibility.
-    pub fn iter_types(&self) -> Vec<(String, KType)> {
+    pub fn iter_types(&self) -> Vec<(TypeSymbol, KType)> {
         self.tables
             .borrow()
             .types
             .iter()
-            .map(|(name, (kt, _site))| (name.to_string(), *kt))
+            .map(|(name, (kt, _site))| (*name, *kt))
             .collect()
     }
 
@@ -724,11 +746,11 @@ impl<'a> Bindings<'a> {
     /// True iff `types[name]` is bound at [`BindingIndex::BUILTIN`]. The
     /// no-shadow consult gates on this — a genuine builtin, not a user type that a
     /// synthetic test happens to have placed in a root-position scope.
-    pub fn has_builtin_type(&self, name: &str) -> bool {
+    pub fn has_builtin_type(&self, name: TypeSymbol) -> bool {
         self.tables
             .borrow()
             .types
-            .get(name)
+            .get(&name)
             .is_some_and(|(_, site)| site.index == BindingIndex::BUILTIN)
     }
 
@@ -766,7 +788,9 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) fn data(&self) -> Ref<'_, BumpBackedMap<'a, &'a str, DataEntry<'a>>> {
+    pub(crate) fn data(
+        &self,
+    ) -> Ref<'_, BumpBackedMap<'a, ValueSymbol, DataEntry<'a>, IdentityBuildHasher>> {
         Ref::map(self.tables.borrow(), |t| &t.data)
     }
 
@@ -778,34 +802,35 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) fn types(&self) -> Ref<'_, BumpBackedMap<'a, &'a str, (KType, DeclarationSite)>> {
+    pub(crate) fn types(
+        &self,
+    ) -> Ref<'_, BumpBackedMap<'a, TypeSymbol, (KType, DeclarationSite), IdentityBuildHasher>> {
         Ref::map(self.tables.borrow(), |t| &t.types)
     }
 
     /// The claim standing on `name` in the value channel, if any — the value-side
     /// forward-reference probe.
     #[cfg(test)]
-    pub fn pending_value(&self, name: &str) -> Option<Claim> {
-        self.tables.borrow().claims.name_claim(name)
+    pub fn pending_value(&self, name: ValueSymbol) -> Option<Claim> {
+        self.tables.borrow().claims.name_claim(name.symbol())
     }
 
     /// Every standing name-channel claim, tagged with the language it resolves in — the hygiene
     /// probe for "this declaration left no in-flight producer behind". The store keys both channels
-    /// in one map, and the tag is read back off the name's token class, which is what made that one
-    /// map sound in the first place ([`Self::partition_guard`]).
+    /// in one map, and the tag is read back off the resolved name's token class, which is what
+    /// makes that one map sound: the two bindable classes name disjoint text.
     #[cfg(test)]
-    pub fn pending_names(&self) -> Vec<(String, BindKind, ProducerId)> {
+    pub fn pending_names(&self, registries: &RunRegistries) -> Vec<(String, BindKind, ProducerId)> {
         self.tables
             .borrow()
             .claims
             .name_claims()
             .into_iter()
             .map(|(name, claim)| {
-                let kind = if crate::parse::is_type_name(&name) {
-                    BindKind::Type
-                } else {
-                    BindKind::Value
-                };
+                let name = render_label(name, registries);
+                let kind = BinderSymbol::of(&name)
+                    .expect("only a bindable name is ever claimed")
+                    .bind_kind();
                 (name, kind, claim.producer)
             })
             .collect()
@@ -818,11 +843,11 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn expect_type(&self, name: &str) -> KType {
+    pub fn expect_type(&self, name: TypeSymbol) -> KType {
         self.tables
             .borrow()
             .types
-            .get(name)
+            .get(&name)
             .map(|(kt, _site)| *kt)
             .unwrap_or_else(|| panic!("expected bindings.types[{name:?}] to be bound"))
     }
@@ -835,55 +860,43 @@ impl<'a> Bindings<'a> {
     /// finalize), whose re-elaboration cannot differ, so it overwrites idempotently. Content plays
     /// no part in the same-declaration decision.
     ///
-    /// A committed value at `data[name]` is a `Rebind` under either policy — the value/type
-    /// partition is mutually exclusive. On success the write **retires its own claim**: it already
+    /// No cross-kind probe stands here: a [`TypeSymbol`] and a [`ValueSymbol`] classify disjoint
+    /// text, so a type name cannot collide with a committed value. On success the write
+    /// **retires its own claim**: it already
     /// carries the name and the [`BindingIndex`] it is writing at, through `site`, so removing the
     /// claim is one hash removal and one bit with nothing searched for.
     pub(crate) fn write_type(
         &self,
-        name: &str,
+        name: TypeSymbol,
         kt: KType,
         site: DeclarationSite,
         policy: TypeWritePolicy,
+        registries: &RunRegistries,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        self.partition_guard(name, BindKind::Type)?;
         let mut tables = self.tables.borrow_mut();
-        // Cross-kind exclusion: a type name may not collide with a committed value.
-        if tables.data.contains_key(name) {
-            return Err(KError::new(KErrorKind::Rebind {
-                name: name.to_string(),
-            }));
-        }
+        let rebind = || {
+            KError::new(KErrorKind::Rebind {
+                name: render_label(name.symbol(), registries),
+            })
+        };
         match (
             policy,
-            tables.types.get(name).map(|(_, existing)| *existing),
+            tables.types.get(&name).map(|(_, existing)| *existing),
         ) {
-            (TypeWritePolicy::Insert, Some(_)) => {
-                return Err(KError::new(KErrorKind::Rebind {
-                    name: name.to_string(),
-                }));
-            }
+            (TypeWritePolicy::Insert, Some(_)) => return Err(rebind()),
             (TypeWritePolicy::UpsertEqual, Some(existing))
                 if existing.installer != site.installer =>
             {
-                return Err(KError::new(KErrorKind::Rebind {
-                    name: name.to_string(),
-                }));
+                return Err(rebind());
             }
             // Absent, or the same declaration re-entering: write the identity.
             _ => {}
         }
-        match tables.types.get_mut(name) {
-            // A same-declaration re-entry overwrites where it sits, so the key is never re-keyed.
-            Some(entry) => *entry = (kt, site),
-            None => {
-                tables
-                    .types
-                    .insert(self.brand.allocator().text(name), (kt, site));
-            }
-        }
-        tables.claims.retire_name(name, site.index);
+        // A same-declaration re-entry overwrites where it sits; an absent name inserts its `Copy`
+        // digest key.
+        tables.types.insert(name, (kt, site));
+        tables.claims.retire_name(name.symbol(), site.index);
         Ok(())
     }
 
@@ -907,31 +920,32 @@ impl<'a> Bindings<'a> {
     ///
     /// The eventual [`Self::write_value`] / [`Self::write_type`] call must carry the
     /// same `index` so the consumer's visibility test stays consistent across
-    /// the claimed → committed transition, and so the commit retires this very claim. `kind` picks
-    /// the destination table, so a value bind never satisfies a type claim (or the reverse) — see
+    /// the claimed → committed transition, and so the commit retires this very claim. `name`'s own
+    /// class picks the destination table, so a value bind never satisfies a type claim — see
     /// [`Bindings::lookup_value`] / [`Bindings::lookup_type`], each of which probes only its own
     /// table before the store.
     pub fn install_placeholder(
         &self,
-        name: &str,
+        name: BinderSymbol,
         producer: ProducerId,
         index: BindingIndex,
-        kind: BindKind,
+        registries: &RunRegistries,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();
         let rebind = || {
             KError::new(KErrorKind::Rebind {
-                name: name.to_string(),
+                name: render_label(name.symbol(), registries),
             })
         };
-        if kind == BindKind::Value && tables.data.contains_key(name) {
+        if let BinderSymbol::Value(name) = name
+            && tables.data.contains_key(&name)
+        {
             return Err(rebind());
         }
-        let brand = self.brand;
         match tables
             .claims
-            .claim_name(brand, name, Claim { producer, index })
+            .claim_name(name.symbol(), Claim { producer, index })
         {
             Ok(()) => Ok(()),
             // A same-producer re-entry is the same stamp arriving twice, not a second declaration.
@@ -979,6 +993,7 @@ impl<'a> Bindings<'a> {
     pub(crate) fn bulk_install_from(
         &self,
         src: &Bindings<'a>,
+        registries: &RunRegistries,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         // Duplicate each entry into the snapshot: each seal is a bit-copy naming the source's own
@@ -986,10 +1001,11 @@ impl<'a> Bindings<'a> {
         // stay owned by the *source* scope's region union — the replay target's own region must
         // already outlive it (a bulk install is same-run re-entrant ascription). The snapshot's
         // keys are `Copy` borrows into the source's region and outlive the `Ref` they were read
-        // under, so nothing is cloned to release the borrow.
+        // under, so nothing is cloned to release the borrow. The `data` keys are `Copy` digests
+        // and borrow nothing at all.
         let (data, functions) = {
             let tables = src.tables.borrow();
-            let data: Vec<(&str, DataEntry)> = tables
+            let data: Vec<(ValueSymbol, DataEntry)> = tables
                 .data
                 .iter()
                 .map(|(k, entry)| (*k, entry.duplicate()))
@@ -1006,14 +1022,12 @@ impl<'a> Bindings<'a> {
             (data, functions)
         };
         for (name, entry) in data {
-            self.write_value(name, entry.index, entry.sealed, gate)?;
+            self.write_value(name, entry.index, entry.sealed, registries, gate)?;
         }
         let mut tables = self.tables.borrow_mut();
         for (key, slots) in functions {
-            // The key is re-homed into *this* table's region, matching the value replay above —
-            // `write_value` re-homes its name through the brand, so both tables end up keyed on
-            // bytes the target owns. It buys no independence from the source region and is not
-            // trying to: everything else a replayed entry carries — the sealed carrier, the
+            // The key is re-homed into *this* table's region. It buys no independence from the
+            // source region and is not trying to: everything else a replayed entry carries — the sealed carrier, the
             // dispatch token, the summary — stays a borrow into the source, which is sound for the
             // reason stated at the snapshot above, and is why re-homing the key is symmetry rather
             // than a guard. The relation is held by **retention, not by `'a`**: `'a` covers both
@@ -1036,61 +1050,29 @@ impl<'a> Bindings<'a> {
         Ok(())
     }
 
-    /// The token-class partition: `types` holds Type-token names, `data` holds value-token names, and a
-    /// name may not cross. The two maps are different universes — a Type token names something that can
-    /// type a field, a value token names something a field can hold — so a write whose name classifies
-    /// against the map it is entering is a hard error, not a convention, with no exception: every
-    /// value-token write to `types` and every Type-token write to `data` is rejected. This is the single
-    /// enforcement point: every binder reaches its map through [`Bindings::write_value`] /
-    /// [`Bindings::write_type`], so no caller can bind across the line, and none needs its own check.
-    /// A keyword-class name (all-uppercase, no lowercase) is not a Type token, so a builtin's dispatch
-    /// registration passes the value-side gate. See [design/typing/tokens.md](../../../design/typing/tokens.md).
-    fn partition_guard(&self, name: &str, into: BindKind) -> Result<(), KError> {
-        let is_type_token = crate::parse::is_type_name(name);
-        match into {
-            BindKind::Type if !is_type_token => Err(KError::new(KErrorKind::ShapeError(format!(
-                "`{name}` is a value token, so it names a value — a type binds under a Type token \
-                 (uppercase-leading with at least one lowercase letter)"
-            )))),
-            BindKind::Value if is_type_token => Err(KError::new(KErrorKind::ShapeError(format!(
-                "`{name}` is a Type token, so it names a type — a value binds under a value token \
-                 (snake_case)"
-            )))),
-            _ => Ok(()),
-        }
-    }
-
-    /// The `data` write path: commit `name` → `sealed` as a bind-once value binding. Runs the
-    /// token-class partition guard and the cross-kind probe, writes the entry, and **retires its
-    /// own claim** — it carries the name and the [`BindingIndex`] it is writing at, so the removal
-    /// is one hash removal and one bit with nothing searched for. All under one borrow.
+    /// The `data` write path: commit `name` → `sealed` as a bind-once value binding. Probes for a
+    /// standing binding, writes the entry, and **retires its own claim** — it carries the name and
+    /// the [`BindingIndex`] it is writing at, so the removal is one hash removal and one bit with
+    /// nothing searched for. All under one borrow.
+    ///
+    /// No cross-kind probe: a [`ValueSymbol`] and a [`TypeSymbol`] classify disjoint text, so a
+    /// name committed to `data` cannot name a `types` entry.
     pub(crate) fn write_value(
         &self,
-        name: &str,
+        name: ValueSymbol,
         index: BindingIndex,
         sealed: SealedValue<'a>,
+        registries: &RunRegistries,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        self.partition_guard(name, BindKind::Value)?;
-        let rebind = || {
-            KError::new(KErrorKind::Rebind {
-                name: name.to_string(),
-            })
-        };
         let mut tables = self.tables.borrow_mut();
-        // Cross-kind exclusion: a value name may not collide with a committed type — the
-        // `data`/`types` partition is structural, not convention.
-        if tables.types.contains_key(name) {
-            return Err(rebind());
+        if tables.data.contains_key(&name) {
+            return Err(KError::new(KErrorKind::Rebind {
+                name: render_label(name.symbol(), registries),
+            }));
         }
-        if tables.data.contains_key(name) {
-            return Err(rebind());
-        }
-        tables.data.insert(
-            self.brand.allocator().text(name),
-            DataEntry { index, sealed },
-        );
-        tables.claims.retire_name(name, index);
+        tables.data.insert(name, DataEntry { index, sealed });
+        tables.claims.retire_name(name.symbol(), index);
         Ok(())
     }
 
@@ -1155,9 +1137,9 @@ impl<'a> Bindings<'a> {
     /// zero test on the success path, and at most three direct removals otherwise — nothing is
     /// searched in either direction, not the binding tables by producer and not the store by name.
     ///
-    /// Strands bump bytes: a removed key's text is abandoned rather than freed. Bounded by the
-    /// binders that fail, so a scope's peak occupancy stays its final binding count plus that error
-    /// tail.
+    /// Strands bump bytes: a removed bucket key's stored run is abandoned rather than freed. Name
+    /// claims key by a `Copy` digest and strand nothing. Bounded by the binders that fail, so a
+    /// scope's peak occupancy stays its final binding count plus that error tail.
     pub fn retire_claims(&self, index: BindingIndex, _gate: &mut WriteGate) {
         self.tables.borrow_mut().claims.retire_statement(index);
     }

@@ -15,7 +15,9 @@ use crate::machine::model::Scalar;
 use crate::machine::model::values::Carried;
 use workgraph::witnessed::Sealed;
 
-use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
+use crate::builtins::test_support::{
+    binder_name, keyword_name, mock_declaration_site, run_root_bare, type_name, value_name,
+};
 use crate::machine::core::GroupSeal;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::tests::{body_no_op, unit_signature};
@@ -63,6 +65,7 @@ fn sole_reach_member(sealed: &SealedValue<'_>) -> Rc<FrameStorage> {
 fn data_binding_round_trips_sealed_reach() {
     let storage = run_root_storage();
     let region = storage.brand();
+    let registries = RunRegistries::new();
     let bindings = Bindings::new(region);
     let obj: &KObject = region.alloc_scalar(Scalar::Number(1.0));
     // A synthetic foreign frame the value "reaches" — carried on the seal as its reach.
@@ -70,13 +73,14 @@ fn data_binding_round_trips_sealed_reach() {
     let (sealed, _) = sealed_reaching(region, obj, &foreign);
     bindings
         .write_value(
-            "x",
+            value_name("x", &registries),
             BindingIndex::BUILTIN,
             sealed,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("value bind should succeed");
-    match bindings.lookup_value("x", None) {
+    match bindings.lookup_value(value_name("x", &registries), None) {
         Some(NameLookup::Bound(hit)) => assert!(
             Rc::ptr_eq(&sole_reach_member(&hit), &foreign),
             "the sealed reach should round-trip the foreign frame",
@@ -92,20 +96,22 @@ fn data_binding_round_trips_sealed_reach() {
 fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
     let storage = run_root_storage();
     let region = storage.brand();
+    let registries = RunRegistries::new();
     let bindings = Bindings::new(region);
     let obj: &KObject = region.alloc_scalar(Scalar::Number(1.0));
     let foreign = run_root_storage();
     let (sealed, reach_set) = sealed_reaching(region, obj, &foreign);
     bindings
         .write_value(
-            "x",
+            value_name("x", &registries),
             BindingIndex::BUILTIN,
             sealed,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("value bind should succeed");
 
-    let read = |label: &str| match bindings.lookup_value("x", None) {
+    let read = |label: &str| match bindings.lookup_value(value_name("x", &registries), None) {
         Some(NameLookup::Bound(hit)) => {
             hit.open_at().with_reach_for_test(|reach| reach as *const _)
         }
@@ -126,46 +132,53 @@ fn value_binding_read_copies_the_reach_pointer_not_a_clone() {
 #[test]
 fn write_type_inserts_into_types_map() {
     let storage = run_root_storage();
+    let registries = RunRegistries::new();
     let bindings = Bindings::new(storage.brand());
     let kt: KType = KType::NUMBER;
     bindings
         .write_type(
-            "Foo",
+            type_name("Foo", &registries),
             kt,
             DeclarationSite::BUILTIN,
             TypeWritePolicy::Insert,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("write_type should succeed on fresh bindings");
     let stored = bindings
         .types()
-        .get("Foo")
+        .get(&type_name("Foo", &registries))
         .expect("Foo should be bound in the types map")
         .0;
     assert_eq!(stored, kt);
-    assert!(bindings.data().get("Foo").is_none());
+    // `Foo` is a Type token, so `data` — keyed by `ValueSymbol` — has no key that spells it; the
+    // fact left to check is that the type write touched the value table not at all.
+    assert!(bindings.data().is_empty());
 }
 
 #[test]
 fn write_type_rejects_collision_with_rebind() {
     let storage = run_root_storage();
+    let registries = RunRegistries::new();
     let bindings = Bindings::new(storage.brand());
     let kt1: KType = KType::NUMBER;
     let kt2: KType = KType::STR;
     bindings
         .write_type(
-            "Foo",
+            type_name("Foo", &registries),
             kt1,
             DeclarationSite::BUILTIN,
             TypeWritePolicy::Insert,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("first register should succeed");
     let err = match bindings.write_type(
-        "Foo",
+        type_name("Foo", &registries),
         kt2,
         DeclarationSite::BUILTIN,
         TypeWritePolicy::Insert,
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,
@@ -174,7 +187,7 @@ fn write_type_rejects_collision_with_rebind() {
     assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "Foo"));
     let stored = bindings
         .types()
-        .get("Foo")
+        .get(&type_name("Foo", &registries))
         .expect("Foo should still be bound")
         .0;
     assert_eq!(stored, kt1);
@@ -183,45 +196,49 @@ fn write_type_rejects_collision_with_rebind() {
 #[test]
 fn write_type_finalizes_pending_arm_in_place() {
     let storage = run_root_storage();
+    let registries = RunRegistries::new();
     let bindings = Bindings::new(storage.brand());
     let kt: KType = KType::NUMBER;
     bindings
         .install_placeholder(
-            "Bar",
+            binder_name("Bar", &registries),
             ProducerId::for_test(7),
             BindingIndex::BUILTIN,
-            BindKind::Type,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("placeholder install should succeed on fresh bindings");
     assert_eq!(
-        bindings.pending_names(),
+        bindings.pending_names(&registries),
         vec![("Bar".to_string(), BindKind::Type, ProducerId::for_test(7))],
     );
     bindings
         .write_type(
-            "Bar",
+            type_name("Bar", &registries),
             kt,
             DeclarationSite::BUILTIN,
             TypeWritePolicy::Insert,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("type register should succeed and retire the claim");
-    assert!(bindings.pending_names().is_empty());
-    assert_eq!(bindings.expect_type("Bar"), kt);
+    assert!(bindings.pending_names(&registries).is_empty());
+    assert_eq!(bindings.expect_type(type_name("Bar", &registries)), kt);
 }
 
 #[test]
 fn write_type_does_not_touch_data_or_functions() {
     let storage = run_root_storage();
+    let registries = RunRegistries::new();
     let bindings = Bindings::new(storage.brand());
     let kt: KType = KType::NUMBER;
     bindings
         .write_type(
-            "Foo",
+            type_name("Foo", &registries),
             kt,
             DeclarationSite::BUILTIN,
             TypeWritePolicy::Insert,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("register should succeed");
@@ -239,6 +256,7 @@ fn write_type_does_not_touch_data_or_functions() {
 #[test]
 fn distinct_statement_redeclare_rebinds() {
     let storage = run_root_storage();
+    let registries = RunRegistries::new();
     let bindings = Bindings::new(storage.brand());
     let first = StatementId::next();
     let second = StatementId::next();
@@ -257,10 +275,11 @@ fn distinct_statement_redeclare_rebinds() {
 
     bindings
         .write_type(
-            "Maybe",
+            type_name("Maybe", &registries),
             KType::NUMBER,
             site(first),
             TypeWritePolicy::UpsertEqual,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("the first declaration should install");
@@ -268,20 +287,22 @@ fn distinct_statement_redeclare_rebinds() {
     // The same statement re-entering (a parallel finalize of it): idempotent overwrite.
     bindings
         .write_type(
-            "Maybe",
+            type_name("Maybe", &registries),
             KType::NUMBER,
             site(first),
             TypeWritePolicy::UpsertEqual,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("a same-statement parallel finalize should overwrite idempotently");
 
     // A second statement declaring the same name — a redeclaration, whatever its content: Rebind.
     let error = match bindings.write_type(
-        "Maybe",
+        type_name("Maybe", &registries),
         KType::STR,
         site(second),
         TypeWritePolicy::UpsertEqual,
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     ) {
         Err(e) => e,
@@ -295,68 +316,20 @@ fn distinct_statement_redeclare_rebinds() {
     assert_eq!(
         bindings
             .types()
-            .get("Maybe")
+            .get(&type_name("Maybe", &registries))
             .expect("Maybe should still be bound")
             .0,
         KType::NUMBER,
     );
 }
 
-// --- Cross-kind exclusion (AC1/AC4) -----------------------------------------
-// `partition_guard` classifies a name by its token class alone (`parse::is_type_name`): a value
-// token may not bind type-side, a type token may not bind value-side, so the same name never lands
-// in both maps. `value_token_may_not_bind_type_side` / `type_token_may_not_bind_value_side` below
-// drive the write primitives against a plain `Bindings::new()`. A bare `FN` binds neither `data`
-// nor `types`, so it has nothing to partition.
-
-/// The token-class partition: `types` and `data` are different universes, and a name's token class
-/// decides which one it belongs to. A value token may not name a type…
-#[test]
-fn value_token_may_not_bind_type_side() {
-    let storage = run_root_storage();
-    let bindings = Bindings::new(storage.brand());
-    let kt: KType = KType::NUMBER;
-    let error = match bindings.write_type(
-        "int_ord",
-        kt,
-        DeclarationSite::BUILTIN,
-        TypeWritePolicy::Insert,
-        &mut crate::machine::WriteGate::for_test(),
-    ) {
-        Err(e) => e,
-        Ok(_) => panic!("a value token names a value, not a type"),
-    };
-    assert!(
-        matches!(&error.kind, KErrorKind::ShapeError(msg) if msg.contains("is a value token")),
-        "expected the token-class partition error, got {error}",
-    );
-    assert!(bindings.types().get("int_ord").is_none());
-}
-
-/// …and a Type token may not name a value. Together these commit every name to exactly one
-/// universe: the partition admits no exception, so a cross-kind collision — the same name
-/// landing in both maps — is unconstructible.
-#[test]
-fn type_token_may_not_bind_value_side() {
-    let storage = run_root_storage();
-    let region = storage.brand();
-    let bindings = Bindings::new(region);
-    let val: &KObject = region.alloc_scalar(Scalar::Number(7.0));
-    let error = match bindings.write_value(
-        "IntOrd",
-        BindingIndex::BUILTIN,
-        Sealed::seal(region.seal_resident(Carried::Object(val)), region.handle()),
-        &mut crate::machine::WriteGate::for_test(),
-    ) {
-        Err(e) => e,
-        Ok(_) => panic!("a Type token names a type, not a value"),
-    };
-    assert!(
-        matches!(&error.kind, KErrorKind::ShapeError(msg) if msg.contains("is a Type token")),
-        "expected the token-class partition error, got {error}",
-    );
-    assert!(bindings.data().get("IntOrd").is_none());
-}
+// --- The value/type partition is a type, not a check -------------------------
+// `types` keys by `TypeSymbol` and `data` by `ValueSymbol`, newtypes minted only from text of
+// their own token class, so the same name cannot reach both maps and no write-door probe stands
+// between them. There is no runtime rejection here to drive: a fixture that tried to write a value
+// token type-side would not compile. The partition's user-visible disposition is raised where text
+// is classified — the declaration seams — and is covered there
+// (`crate::builtins::let_binding::tests`).
 
 // --- Claims live in the store, and a commit retires its own -------------------
 // A still-finalizing binder claims the name it will resolve into; the binding maps hold committed
@@ -369,38 +342,46 @@ fn type_token_may_not_bind_value_side() {
 fn value_write_commits_and_retires_its_own_claim() {
     let storage = run_root_storage();
     let region = storage.brand();
+    let registries = RunRegistries::new();
     let bindings = Bindings::new(region);
     bindings
         .install_placeholder(
-            "x",
+            binder_name("x", &registries),
             ProducerId::for_test(11),
             BindingIndex::value(2),
-            BindKind::Value,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("value claim should succeed on fresh bindings");
     assert_eq!(
-        bindings.pending_value("x").map(|p| p.producer),
+        bindings
+            .pending_value(value_name("x", &registries))
+            .map(|p| p.producer),
         Some(ProducerId::for_test(11)),
     );
     assert!(matches!(
-        bindings.lookup_value("x", None),
+        bindings.lookup_value(value_name("x", &registries), None),
         Some(NameLookup::Parked(id)) if id == ProducerId::for_test(11),
     ));
 
     let val: &KObject = region.alloc_scalar(Scalar::Number(5.0));
     bindings
         .write_value(
-            "x",
+            value_name("x", &registries),
             BindingIndex::value(2),
             Sealed::seal(region.seal_resident(Carried::Object(val)), region.handle()),
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("the finalize write should commit and retire the claim");
-    assert!(bindings.pending_value("x").is_none());
-    assert!(bindings.pending_names().is_empty());
+    assert!(
+        bindings
+            .pending_value(value_name("x", &registries))
+            .is_none()
+    );
+    assert!(bindings.pending_names(&registries).is_empty());
     assert!(matches!(
-        bindings.lookup_value("x", None),
+        bindings.lookup_value(value_name("x", &registries), None),
         Some(NameLookup::Bound(_)),
     ));
     assert_eq!(bindings.data().len(), 1, "the key is stored once");
@@ -411,7 +392,7 @@ fn value_write_commits_and_retires_its_own_claim() {
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(matches!(
-        bindings.lookup_value("x", None),
+        bindings.lookup_value(value_name("x", &registries), None),
         Some(NameLookup::Bound(_)),
     ));
 }
@@ -488,6 +469,7 @@ fn a_two_bucket_binder_retires_the_key_it_did_not_seal() {
 fn bulk_install_copies_committed_bindings_past_a_live_claim() {
     let storage = run_root_storage();
     let region = storage.brand();
+    let registries = RunRegistries::new();
     let source = Bindings::new(region);
     let target = Bindings::new(region);
     let mut gate = crate::machine::WriteGate::for_test();
@@ -495,37 +477,42 @@ fn bulk_install_copies_committed_bindings_past_a_live_claim() {
     let val: &KObject = region.alloc_scalar(Scalar::Number(7.0));
     source
         .write_value(
-            "settled",
+            value_name("settled", &registries),
             BindingIndex::value(1),
             Sealed::seal(region.seal_resident(Carried::Object(val)), region.handle()),
+            &registries,
             &mut gate,
         )
         .expect("the committed binding lands");
     source
         .install_placeholder(
-            "in_flight",
+            binder_name("in_flight", &registries),
             ProducerId::for_test(3),
             BindingIndex::value(2),
-            BindKind::Value,
+            &registries,
             &mut gate,
         )
         .expect("the second statement is still running");
 
     target
-        .bulk_install_from(&source, &mut gate)
+        .bulk_install_from(&source, &registries, &mut gate)
         .expect("the view replays the source's committed surface");
     assert!(matches!(
-        target.lookup_value("settled", None),
+        target.lookup_value(value_name("settled", &registries), None),
         Some(NameLookup::Bound(_)),
     ));
     assert!(
-        target.lookup_value("in_flight", None).is_none(),
+        target
+            .lookup_value(value_name("in_flight", &registries), None)
+            .is_none(),
         "a claim never crosses into a view",
     );
-    assert!(target.pending_names().is_empty());
+    assert!(target.pending_names(&registries).is_empty());
     // The source keeps its own claim: the copy read past it, it did not consume it.
     assert_eq!(
-        source.pending_value("in_flight").map(|c| c.producer),
+        source
+            .pending_value(value_name("in_flight", &registries))
+            .map(|c| c.producer),
         Some(ProducerId::for_test(3)),
     );
 }
@@ -538,32 +525,34 @@ fn bulk_install_copies_committed_bindings_past_a_live_claim() {
 #[test]
 fn a_bound_identity_and_a_live_claim_stand_on_one_name_at_once() {
     let storage = run_root_storage();
+    let registries = RunRegistries::new();
     let bindings = Bindings::new(storage.brand());
     bindings
         .write_type(
-            "Wrapper",
+            type_name("Wrapper", &registries),
             KType::NUMBER,
             DeclarationSite::BUILTIN,
             TypeWritePolicy::Insert,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("the seal pre-installs the external identity");
     bindings
         .install_placeholder(
-            "Wrapper",
+            binder_name("Wrapper", &registries),
             ProducerId::for_test(9),
             BindingIndex::BUILTIN,
-            BindKind::Type,
+            &registries,
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("the in-flight binder claims the same name");
 
     assert!(matches!(
-        bindings.lookup_type("Wrapper", None),
+        bindings.lookup_type(type_name("Wrapper", &registries), None),
         Some(NameLookup::Bound(kt)) if kt == KType::NUMBER,
     ));
     assert_eq!(
-        bindings.type_placeholder_producer("Wrapper"),
+        bindings.type_placeholder_producer(type_name("Wrapper", &registries)),
         Some(ProducerId::for_test(9)),
     );
 
@@ -571,8 +560,11 @@ fn a_bound_identity_and_a_live_claim_stand_on_one_name_at_once() {
         BindingIndex::BUILTIN,
         &mut crate::machine::WriteGate::for_test(),
     );
-    assert!(bindings.pending_names().is_empty());
-    assert_eq!(bindings.expect_type("Wrapper"), KType::NUMBER);
+    assert!(bindings.pending_names(&registries).is_empty());
+    assert_eq!(
+        bindings.expect_type(type_name("Wrapper", &registries)),
+        KType::NUMBER
+    );
 }
 
 /// **All five tables past their resize thresholds, in one scope.** Binding a handful of names
@@ -599,29 +591,41 @@ fn bump_backed_tables_full_churn() {
             let value = scope.brand().alloc_scalar(Scalar::Number(i as f64));
             scope
                 .bind_resident_for_test(
-                    format!("value_{i}"),
+                    value_name(&format!("value_{i}"), &registries),
                     value,
                     BindingIndex::value(i as usize),
+                    &registries,
                     &mut gate,
                 )
                 .expect("a fresh value bind lands");
         }
-        assert!(scope.bindings().lookup_value("value_95", None).is_some());
+        assert!(
+            scope
+                .bindings()
+                .lookup_value(value_name("value_95", &registries), None)
+                .is_some()
+        );
 
         // Type binds resize the second table against the same bump.
         for i in 0..64 {
             scope
                 .bindings()
                 .write_type(
-                    &format!("Ty{i}"),
+                    type_name(&format!("Ty{i}"), &registries),
                     KType::NUMBER,
                     mock_declaration_site(i),
                     TypeWritePolicy::Insert,
+                    &registries,
                     &mut gate,
                 )
                 .expect("a fresh type bind lands");
         }
-        assert!(scope.bindings().lookup_type("Ty63", None).is_some());
+        assert!(
+            scope
+                .bindings()
+                .lookup_type(type_name("Ty63", &registries), None)
+                .is_some()
+        );
 
         // A dispatch bucket claimed by two sibling binders, one of which finalizes and retires its
         // own claim while the sibling's stands.
@@ -685,12 +689,13 @@ fn bump_backed_tables_full_churn() {
 
         // A per-group powerset install: every subset key's text bumped, all pointing at one record.
         let record = scope.birth_operator_group(&["+", "-", "*"], ReductionMode::FoldLeft);
-        for probe in powerset_probes(&["+", "-", "*"]) {
+        for probe in powerset_probes(&["+", "-", "*"], &registries.labels) {
             scope
                 .register_operator_group_direct(
                     probe,
                     GroupSeal::of_delivered(scope, &record),
                     BindingIndex::value(3),
+                    &registries,
                     &mut gate,
                 )
                 .expect("every subset of one declaration upserts to the same record");
@@ -698,15 +703,19 @@ fn bump_backed_tables_full_churn() {
         assert!(
             scope
                 .bindings()
-                .lookup_operator_group(&probe_key(&["*", "+"]), None)
+                .lookup_operator_group(keyword_name(&probe_key(&["*", "+"]), &registries), None)
                 .is_some()
         );
 
         // SIG slot records through a real scope: the fifth table, over the same bump.
         let sig = scope.alloc_child_under_sig("Shape");
         for i in 0..48 {
-            sig.write_sig_slot(format!("slot_{i}"), KType::NUMBER)
-                .expect("a fresh VAL slot records");
+            sig.write_sig_slot(
+                value_name(&format!("slot_{i}"), &registries),
+                KType::NUMBER,
+                &registries,
+            )
+            .expect("a fresh VAL slot records");
         }
         assert_eq!(sig.sig_value_slots().len(), 48);
     }

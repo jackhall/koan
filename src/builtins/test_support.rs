@@ -52,6 +52,48 @@ pub(crate) fn mock_declaration_site(index: usize) -> DeclarationSite {
     }
 }
 
+/// A fixture's value-token name as the [`ValueSymbol`] a binding door takes, interned so a
+/// diagnostic naming it renders the text back. Panics on a name of the wrong token class — a
+/// fixture binding a value under a Type token was always ill-formed.
+#[cfg(test)]
+pub(crate) fn value_name(
+    text: &str,
+    registries: &crate::machine::model::RunRegistries,
+) -> crate::machine::model::ValueSymbol {
+    crate::machine::model::ValueSymbol::declared(text, &registries.labels)
+        .unwrap_or_else(|| panic!("test fixture name `{text}` is not a value token"))
+}
+
+/// [`value_name`] for the type channel.
+#[cfg(test)]
+pub(crate) fn type_name(
+    text: &str,
+    registries: &crate::machine::model::RunRegistries,
+) -> crate::machine::model::TypeSymbol {
+    crate::machine::model::TypeSymbol::declared(text, &registries.labels)
+        .unwrap_or_else(|| panic!("test fixture name `{text}` is not a Type token"))
+}
+
+/// [`value_name`] for the operator registry's keyword-class probe keys.
+#[cfg(test)]
+pub(crate) fn keyword_name(
+    text: &str,
+    registries: &crate::machine::model::RunRegistries,
+) -> crate::machine::model::KeywordSymbol {
+    crate::machine::model::KeywordSymbol::declared(text, &registries.labels)
+        .unwrap_or_else(|| panic!("test fixture name `{text}` is not a keyword-class token"))
+}
+
+/// [`value_name`] for a seam that takes either bindable class.
+#[cfg(test)]
+pub(crate) fn binder_name(
+    text: &str,
+    registries: &crate::machine::model::RunRegistries,
+) -> crate::machine::model::BinderSymbol {
+    crate::machine::model::BinderSymbol::declared(text, &registries.labels)
+        .unwrap_or_else(|| panic!("test fixture name `{text}` is not a bindable token"))
+}
+
 /// A seeded test run: the run-root child `Scope`, the runtime that owns the run frame, and that
 /// frame's [`TypeRegistry`].
 ///

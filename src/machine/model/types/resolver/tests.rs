@@ -1,13 +1,11 @@
 use super::*;
-use crate::builtins::test_support::{TestRun, mock_declaration_site};
-use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
+use crate::builtins::test_support::{TestRun, mock_declaration_site, type_name};
+use crate::machine::DeclarationSite;
+use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::Record;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::Scalar;
 use crate::machine::model::ast::TypeIdentifier;
-use crate::machine::model::values::Carried;
 use crate::machine::model::{AnnouncedData, RelativeSchema};
-use crate::machine::{BindingIndex, DeclarationSite};
 
 fn leaf(n: &str) -> TypeIdentifier<'_> {
     TypeIdentifier::leaf(n)
@@ -26,30 +24,16 @@ fn announced_module<'a>(
     parent.alloc_child_under_module("m", Some(announced))
 }
 
-/// A Type token cannot name a value — the binding maps enforce the token-class partition — so a
-/// Type-class leaf that names no type is an ordinary unknown-name miss, with no value side to
-/// consult. The bind that would set up the old "value-language only" layering is itself rejected.
+/// A Type token cannot name a value: `bind_value_direct` takes a `ValueSymbol`, and Type-class
+/// text mints none, so the value side of the partition is closed to it at the type level rather
+/// than by a check a write verb runs. What this pins is the consequence for resolution — a
+/// Type-class leaf naming no type is an ordinary unknown-name miss, with no value side to consult.
 #[test]
 fn type_token_cannot_bind_value_side() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let error = scope
-        .bind_value_direct(
-            "Gee".into(),
-            scope.seal_resident(Carried::Object(
-                region.brand().alloc_scalar(Scalar::Number(7.0)),
-            )),
-            BindingIndex::BUILTIN,
-            &mut crate::machine::WriteGate::for_test(),
-        )
-        .expect_err("a Type token names a type; it may not bind a value");
-    assert!(
-        matches!(&error.kind, crate::machine::KErrorKind::ShapeError(msg)
-            if msg.contains("`Gee` is a Type token")),
-        "expected the token-class partition error, got {error}",
-    );
     let types = test_run.registry_handle();
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &leaf("Gee"), &types) {
@@ -155,7 +139,14 @@ fn announced_member_defers_until_the_window_seals() {
     let types = test_run.registry_handle();
     let window = DeclWindow::Ambient(scope.own_declaration_window().expect("announced"));
     let fill = |name: &str, repr: KType, site: DeclarationSite| {
-        finalize_nominal_member(&window, name, |_| repr, site, scope.brand(), &types)
+        finalize_nominal_member(
+            &window,
+            name,
+            |_| repr,
+            site,
+            scope.brand(),
+            types.registries(),
+        )
     };
     match fill("Node", KType::NUMBER, mock_declaration_site(2)) {
         SealOutcome::Deferred => {}
@@ -183,10 +174,20 @@ fn announced_member_defers_until_the_window_seals() {
         2,
         "the sealing statement installs every member"
     );
-    assert!(scope.bindings().types().get("Leaf").is_none());
+    assert!(
+        scope
+            .bindings()
+            .types()
+            .get(&type_name("Leaf", types.registries()))
+            .is_none()
+    );
     for write in writes {
         write
-            .apply(scope, &mut crate::machine::WriteGate::for_test())
+            .apply(
+                scope,
+                types.registries(),
+                &mut crate::machine::WriteGate::for_test(),
+            )
             .expect("the first install lands");
     }
 
@@ -202,13 +203,17 @@ fn announced_member_defers_until_the_window_seals() {
         |_| KType::BOOL,
         mock_declaration_site(4),
         scope.brand(),
-        &types,
+        types.registries(),
     ) {
         SealOutcome::Sealed { writes, .. } => writes.into_iter().next().expect("one write"),
         other => panic!("the singleton window seals, got {}", outcome_tag(&other)),
     };
     let error = redeclare
-        .apply(scope, &mut crate::machine::WriteGate::for_test())
+        .apply(
+            scope,
+            types.registries(),
+            &mut crate::machine::WriteGate::for_test(),
+        )
         .expect_err("a redeclaration of Leaf must Rebind at apply");
     assert!(
         matches!(&error.kind, crate::machine::KErrorKind::Rebind { name } if name == "Leaf"),

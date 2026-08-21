@@ -42,7 +42,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         None,
         BlockBody::Single(inner),
         None,
-        ctx.types(),
+        ctx.registries,
     )
 }
 

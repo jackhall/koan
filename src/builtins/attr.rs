@@ -17,7 +17,7 @@ use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeResolution;
-use crate::machine::model::{Carried, Module};
+use crate::machine::model::{BinderSymbol, Carried, Module};
 use crate::machine::model::{CarriedFamily, Held, KObject, KType, PartedCell, TypeNode};
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
@@ -362,11 +362,25 @@ fn access_field<'a>(
 /// constraint.)
 fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarried<'a>, KError> {
     let module_scope = m.child_scope();
-    if let Some(minted) = m.type_members.get(&field).copied() {
+    // Classify the field text once; the arms below probe the map that keys by that class, and a
+    // field naming neither class (a keyword-class token) is `no member` by the same route a
+    // wrong-class name is.
+    let no_member = || {
+        KError::new(KErrorKind::ShapeError(format!(
+            "module `{}` has no member `{}`",
+            m.path, field
+        )))
+    };
+    let Some(binder) = BinderSymbol::of(field) else {
+        return Err(no_member());
+    };
+    if let BinderSymbol::Type(name) = binder
+        && let Some(minted) = m.type_members.get(&name).copied()
+    {
         // Prefer the child scope's own binding; a member present only in the mirror is an
         // `:|`-minted abstract type.
         return Ok(StepCarried::born(
-            match module_scope.bindings().lookup_type(field, None) {
+            match module_scope.bindings().lookup_type(name, None) {
                 Some(NameLookup::Bound(kt)) => module_scope.resident(Carried::Type(kt)),
                 _ => module_scope.resident(Carried::Type(minted)),
             },
@@ -378,9 +392,13 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
     // scope's home frame, which transitively pins the module's reach-set — so the read value
     // (or its re-tag carrier) names the full reach without an embedded lhs to fold (the module
     // identity is the lhs).
-    match module_scope.bindings().lookup_member(field, None) {
+    match module_scope.bindings().lookup_member(binder, None) {
         Some(MemberResolution::Value(sealed)) => {
-            if let Some(tag) = m.slot_type_tags.get(&field).copied() {
+            let tag = match binder {
+                BinderSymbol::Value(name) => m.slot_type_tags.get(&name).copied(),
+                BinderSymbol::Type(_) => None,
+            };
+            if let Some(tag) = tag {
                 // The re-tag allocates in the module region (not the read site's): both the value
                 // member and the re-tag identity `tag` cross as declared fold operands. The member
                 // is a binding seal lifted into an envelope pinned by the module scope's own region
@@ -416,10 +434,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
         Some(MemberResolution::Type { kt }) => {
             Ok(StepCarried::born(module_scope.resident(Carried::Type(kt))))
         }
-        None => Err(KError::new(KErrorKind::ShapeError(format!(
-            "module `{}` has no member `{}`",
-            m.path, field
-        )))),
+        None => Err(no_member()),
     }
 }
 

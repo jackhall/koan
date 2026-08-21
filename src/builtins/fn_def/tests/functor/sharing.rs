@@ -20,7 +20,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     // An empty signature: every module bare-satisfies it, so the pins alone gate. Declared
     // directly rather than through `SIG`, which has no empty-body surface form.
     let sig_scope = scope.alloc_child_under_sig("Ordered");
-    let schema = SigSchema::project_decl(sig_scope, &types);
+    let schema = SigSchema::project_decl(sig_scope, types.registries());
 
     // `no_elem_pin` binds no `Elem` member, so the `{Elem = Number}` pin finds nothing to agree
     // with. `num_bare` is a second `Elem = Number` module, ascribed to nothing: admission is
@@ -293,7 +293,10 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
     let view = lookup_module(scope, "view", types.registries());
     let carrier_abstract = view
         .type_members
-        .get(&"Carrier")
+        .get(&crate::builtins::test_support::type_name(
+            "Carrier",
+            types.registries(),
+        ))
         .copied()
         .expect("opaque view mints an abstract `Carrier`");
     let slot =

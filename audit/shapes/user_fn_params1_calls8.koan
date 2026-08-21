@@ -1,0 +1,10 @@
+FN (CALL a :Number) -> Number = (a)
+CALL 1
+CALL 1
+CALL 1
+CALL 1
+CALL 1
+CALL 1
+CALL 1
+CALL 1
+PRINT 1

@@ -78,7 +78,10 @@ fn finalize_union<'a>(
     // The union type is a `Copy` handle: cross it as a declared operand and fold the variant
     // carriers' reach onto the placement's witness, rather than capturing it into a fold closure.
     // The `types` writes installing every name the seal settles ride the outcome.
-    Ok((seal_type_identity(scope, union_ty), seal_writes(view, site)))
+    Ok((
+        seal_type_identity(scope, union_ty),
+        seal_writes(view, site, fctx.registries),
+    ))
 }
 
 /// Elaborate the variant schema, folding synchronously via [`finalize_union`] or deferring through
@@ -155,7 +158,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{TestRun, mock_declaration_site, parse_one};
+    use crate::builtins::test_support::{TestRun, mock_declaration_site, parse_one, type_name};
     use crate::machine::model::Carried;
     use crate::machine::model::KType;
     use crate::machine::model::{KKind, NodeSchema, RecursiveGroupWindow, TypeNode, TypeRegistry};
@@ -232,8 +235,10 @@ mod tests {
             variant_repr(scope, "Maybe", "None", test_run.types()),
             KType::NULL
         );
+        // `Maybe` is a Type token and `data` is keyed by `ValueSymbol`, so there is no key to
+        // probe under; the containing fact is that the value table stayed empty.
         assert!(
-            scope.bindings().data().get("Maybe").is_none(),
+            scope.bindings().data().is_empty(),
             "UNION must not write a value-side carrier into data",
         );
     }
@@ -348,10 +353,20 @@ mod tests {
         let (_, writes) =
             super::finalize_union(&fctx, "Maybe".into(), &make_window(), fields(), site)
                 .expect("the first finalize seals");
-        assert!(scope.bindings().types().get("Maybe").is_none());
+        assert!(
+            scope
+                .bindings()
+                .types()
+                .get(&type_name("Maybe", test_run.registries()))
+                .is_none()
+        );
         for write in writes {
             write
-                .apply(scope, &mut crate::machine::WriteGate::for_test())
+                .apply(
+                    scope,
+                    test_run.registries(),
+                    &mut crate::machine::WriteGate::for_test(),
+                )
                 .expect("the first install lands");
         }
         assert_eq!(
@@ -368,7 +383,11 @@ mod tests {
         let is_union = second.map(|(carrier, writes)| {
             for write in writes {
                 write
-                    .apply(scope, &mut crate::machine::WriteGate::for_test())
+                    .apply(
+                        scope,
+                        test_run.registries(),
+                        &mut crate::machine::WriteGate::for_test(),
+                    )
                     .expect("a same-handle re-install overwrites idempotently");
             }
             carrier.inspect_at(std::rc::Rc::clone(&region), |c| {
@@ -382,7 +401,7 @@ mod tests {
             "expected short-circuit Ok(Type(Union)) from finalize_union",
         );
         assert!(
-            scope.bindings().data().get("Maybe").is_none(),
+            scope.bindings().data().is_empty(),
             "type-only finalize must not write a value-side carrier",
         );
     }

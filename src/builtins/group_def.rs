@@ -89,6 +89,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
         &member_refs,
         mode,
         announced,
+        ctx.registries,
     ));
 
     super::module_def::await_module_body(child_scope, name, body_expr, ctx.bind_index())

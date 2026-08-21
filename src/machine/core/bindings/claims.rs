@@ -5,9 +5,9 @@
 //! Three parts, each answering exactly one question:
 //!
 //! - [`ClaimStore::name_claim`] reads `by_name` — the name channel's read path, one hash probe on
-//!   the miss that would otherwise raise `UnboundName`. One map covers value and type claims alike:
-//!   [`partition_guard`](super::Bindings::partition_guard) decides Value from Type by token class,
-//!   so the two are disjoint by construction.
+//!   the miss that would otherwise raise `UnboundName`. One map covers value and type claims alike,
+//!   keyed by the raw [`Symbol`]: the two bindable classes — value tokens and Type tokens —
+//!   classify disjoint text, so the two channels cannot collide on a key.
 //! - [`ClaimStore::bucket_claim`] reads `by_bucket` — the bucket channel's read path, keyed on the
 //!   same full stored run `functions` is, so one key reaches both. A key admits several sibling
 //!   binders, each at its own [`BindingIndex`], so the value is a run and the read returns the
@@ -34,6 +34,7 @@ use std::mem::ManuallyDrop;
 use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::store_untyped_key;
+use crate::machine::model::{IdentityBuildHasher, Symbol};
 use crate::machine::model::{StoredElement, StoredKeyProbe, UntypedKey, UntypedKeyProbe};
 use crate::witnessed::{BumpBackedMap, BumpVec};
 
@@ -65,7 +66,7 @@ const BUCKET_BITS: [u8; 2] = [1 << 1, 1 << 2];
 /// commit clears its own bit as it writes, so a zero mask is the whole of the success path.
 #[derive(Clone, Copy)]
 struct ClaimRecord<'a> {
-    name: Option<&'a str>,
+    name: Option<Symbol>,
     buckets: [Option<&'a [StoredElement<'a>]>; 2],
     live: u8,
 }
@@ -89,7 +90,7 @@ impl<'a> ClaimRecord<'a> {
 type BucketClaims<'a> = ManuallyDrop<BumpVec<'a, Claim>>;
 
 pub(crate) struct ClaimStore<'a> {
-    by_name: BumpBackedMap<'a, &'a str, Claim>,
+    by_name: BumpBackedMap<'a, Symbol, Claim, IdentityBuildHasher>,
     by_bucket: BumpBackedMap<'a, &'a [StoredElement<'a>], BucketClaims<'a>>,
     /// Indexed by [`BindingIndex::idx`]. Sized once at the block fan-out; a statement-at-a-time
     /// door builds no store, so a claim arriving through one grows the run to reach its own index.
@@ -140,8 +141,8 @@ impl<'a> ClaimStore<'a> {
 
     /// The claim standing on `name`, whatever channel it resolves in. Visibility is the caller's:
     /// the resolution walk filters, and the finalize gate's dependency tracking does not.
-    pub(super) fn name_claim(&self, name: &str) -> Option<Claim> {
-        self.by_name.get(name).copied()
+    pub(super) fn name_claim(&self, name: Symbol) -> Option<Claim> {
+        self.by_name.get(&name).copied()
     }
 
     /// The earliest-index visible claim on a bucket key — the sibling most likely to finalize
@@ -159,22 +160,16 @@ impl<'a> ClaimStore<'a> {
             .map(|claim| claim.producer)
     }
 
-    /// Stamp `claim` on `name`. The key re-homes through `brand` on the insert, like every other
-    /// table key here. Returns the standing claim if one already holds the name — the caller rules
-    /// on whether that is a re-entry of the same producer or a collision.
-    pub(super) fn claim_name(
-        &mut self,
-        brand: RegionBrand<'a>,
-        name: &str,
-        claim: Claim,
-    ) -> Result<(), Claim> {
-        if let Some(standing) = self.by_name.get(name).copied() {
+    /// Stamp `claim` on `name`. The key is a `Copy` digest, so nothing re-homes. Returns the
+    /// standing claim if one already holds the name — the caller rules on whether that is a
+    /// re-entry of the same producer or a collision.
+    pub(super) fn claim_name(&mut self, name: Symbol, claim: Claim) -> Result<(), Claim> {
+        if let Some(standing) = self.by_name.get(&name).copied() {
             return Err(standing);
         }
-        let key = brand.allocator().text(name);
-        self.by_name.insert(key, claim);
+        self.by_name.insert(name, claim);
         let record = self.record_mut(claim.index);
-        record.name = Some(key);
+        record.name = Some(name);
         record.live |= NAME_BIT;
         Ok(())
     }
@@ -214,7 +209,7 @@ impl<'a> ClaimStore<'a> {
 
     /// Retire the name claim `index` stamped, if it is still standing — the name channel's half of
     /// "a commit retires its own claim". One hash removal and one bit, with nothing searched.
-    pub(super) fn retire_name(&mut self, name: &str, index: BindingIndex) {
+    pub(super) fn retire_name(&mut self, name: Symbol, index: BindingIndex) {
         let standing = match self.by_statement.get_mut(index.idx) {
             Some(record)
                 if record.live & NAME_BIT != 0 && record.name.is_some_and(|held| held == name) =>
@@ -225,7 +220,7 @@ impl<'a> ClaimStore<'a> {
             _ => false,
         };
         if standing {
-            self.by_name.remove(name);
+            self.by_name.remove(&name);
         }
     }
 
@@ -262,9 +257,9 @@ impl<'a> ClaimStore<'a> {
         }
         if record.live & NAME_BIT != 0
             && let Some(name) = record.name
-            && self.by_name.get(name).is_some_and(|c| c.index == index)
+            && self.by_name.get(&name).is_some_and(|c| c.index == index)
         {
-            self.by_name.remove(name);
+            self.by_name.remove(&name);
         }
         for (slot, bit) in BUCKET_BITS.iter().enumerate() {
             if record.live & bit != 0
@@ -288,10 +283,10 @@ impl<'a> ClaimStore<'a> {
     /// Every standing name claim, as `(name, producer)` — the hygiene probe behind
     /// [`Bindings::pending_names`].
     #[cfg(test)]
-    pub(super) fn name_claims(&self) -> Vec<(String, Claim)> {
+    pub(super) fn name_claims(&self) -> Vec<(Symbol, Claim)> {
         self.by_name
             .iter()
-            .map(|(name, claim)| (name.to_string(), *claim))
+            .map(|(name, claim)| (*name, *claim))
             .collect()
     }
 

@@ -3,7 +3,7 @@
 //! view records per-call abstract identities and re-expresses SIG-declared value slots against
 //! them; a transparent view records the source's concrete types.
 
-use crate::builtins::test_support::{TestRun, binds_module, lookup_module, parse_one};
+use crate::builtins::test_support::{TestRun, binds_module, lookup_module, parse_one, type_name};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Module;
@@ -58,7 +58,7 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
     // The view's manifest `Elem` is the per-call abstract identity it minted.
     let elem_abstract = view
         .type_members
-        .get(&"Elem")
+        .get(&type_name("Elem", test_run.registries()))
         .copied()
         .expect("opaque view mints an abstract `Elem`");
     assert!(matches!(

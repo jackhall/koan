@@ -65,7 +65,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             }
             Err(msg) => return Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         };
-        arm_tail(fctx.scope, it_carrier, body_expr, contract, fctx.types())
+        arm_tail(fctx.scope, it_carrier, body_expr, contract, fctx.registries)
     });
     Action::catch(
         DepRequest::Dispatch {

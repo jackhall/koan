@@ -2,9 +2,9 @@ use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
 use std::rc::{Rc, Weak};
 
-use crate::machine::model::KType;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::{AnnouncedData, AnnouncedWindow};
+use crate::machine::model::{IdentityBuildHasher, KType, ValueSymbol};
 use crate::witnessed::{And, RegionHandle, SealedExtern};
 
 use super::arena::{FrameStorage, KoanRegion, RegionBrand};
@@ -118,8 +118,9 @@ pub enum ScopeKind<'a> {
     /// stored `SigSchema`, and ATTR over the signature reads a slot's declared type back out of it.
     /// Plain `borrow_mut` inside the single write door is fine: the cell is never held across calls.
     ///
-    /// The collector is bump-backed like the four durable tables, with its slot names re-homed at
-    /// record time, so its death frees nothing and walks no entry (a `KType` is a `Copy` handle).
+    /// The collector is bump-backed like the four durable tables and keyed by the same classified
+    /// vocabulary — a slot binds a value name, so [`ValueSymbol`] — with a `Copy` digest key and a
+    /// `Copy` `KType` value, so its death frees nothing and walks no entry.
     /// It is wrapped exactly as [`Bindings`]' tables are: `ManuallyDrop` suppresses the map's own
     /// destructor, whose only act would be handing a bump-owned bucket array back to an allocator
     /// that frees nothing — and suppressing it is what makes this variant, and with it `Scope`,
@@ -127,7 +128,7 @@ pub enum ScopeKind<'a> {
     /// stated below.
     Sig {
         name: &'a str,
-        slots: RefCell<ManuallyDrop<BumpBackedMap<'a, &'a str, KType>>>,
+        slots: RefCell<ManuallyDrop<BumpBackedMap<'a, ValueSymbol, KType, IdentityBuildHasher>>>,
     },
     /// A MODULE body (also the per-ascription view minted by `:|`). `group` is `Some` for a `GROUP`
     /// body — a group *is* a module — naming the one [`OperatorGroup`] record its member `OP`
@@ -557,12 +558,12 @@ impl<'a> Scope<'a> {
 
     /// Snapshot of every `(name, declared type)` slot pair — the schema projection's read. Empty
     /// for any scope that is not a SIG decl_scope.
-    pub(crate) fn sig_value_slots(&self) -> Vec<(String, KType)> {
+    pub(crate) fn sig_value_slots(&self) -> Vec<(ValueSymbol, KType)> {
         match &self.kind {
             ScopeKind::Sig { slots, .. } => slots
                 .borrow()
                 .iter()
-                .map(|(name, kt)| (name.to_string(), *kt))
+                .map(|(name, kt)| (*name, *kt))
                 .collect(),
             ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::Module { .. } => Vec::new(),
         }

@@ -12,7 +12,7 @@ use crate::machine::core::LexicalFrame;
 use crate::machine::core::bindings::NameLookup;
 #[cfg(test)]
 use crate::machine::model::KObject;
-use crate::machine::model::KType;
+use crate::machine::model::{KType, KeywordSymbol, TypeSymbol, ValueSymbol};
 use crate::machine::{DeliveredCarried, DeliveredOperatorGroup};
 
 impl<'a> Scope<'a> {
@@ -21,7 +21,7 @@ impl<'a> Scope<'a> {
     /// any depth — the consult hits the root directly rather than each layer of the
     /// `outer` chain. TraceFrame-local bindings (FN parameters, MATCH/TRY `it`) live below
     /// the root, so ordinary user-vs-user cross-scope shadowing is unaffected.
-    pub(crate) fn shadows_builtin_type(&self, name: &str) -> bool {
+    pub(crate) fn shadows_builtin_type(&self, name: TypeSymbol) -> bool {
         self.root_scope().bindings().has_builtin_type(name)
     }
 
@@ -119,6 +119,10 @@ impl<'a> Scope<'a> {
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<DeliveredCarried>> {
+        // The one text→symbol conversion on the ladder: classify at the seam, then walk on symbol
+        // bits. A name that is not a value token classifies to `None` and misses here — the
+        // `data` map has never held one.
+        let name = ValueSymbol::of(name)?;
         self.walk_chain(|scope| {
             scope
                 .bindings()
@@ -152,6 +156,7 @@ impl<'a> Scope<'a> {
         name: &str,
         cutoff: Option<usize>,
     ) -> Option<NameLookup<&'a KObject<'a>>> {
+        let name = ValueSymbol::of(name)?;
         self.bindings().lookup_value(name, cutoff).map(|hit| {
             hit.map(|sealed| {
                 let delivered = self.lift_resident(sealed);
@@ -181,6 +186,9 @@ impl<'a> Scope<'a> {
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<KType>> {
+        // Classify once at the seam, as [`Self::resolve_value_delivered`] does; a non-Type token
+        // misses, which is the disposition the `types` map would have given it anyway.
+        let name = TypeSymbol::of(name)?;
         // Builtin-first: a builtin type is unshadowable and authoritative, so the immutable
         // run-global root answers in one hop; a non-builtin name finds nothing there and falls
         // through to the innermost-wins walk. The gate is the `idx == 0`
@@ -216,6 +224,7 @@ impl<'a> Scope<'a> {
         probe: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<DeliveredOperatorGroup> {
+        let probe = KeywordSymbol::of(probe)?;
         self.walk_chain(|scope| {
             scope
                 .bindings()

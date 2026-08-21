@@ -3,7 +3,7 @@
 //! description a registered callable carries, plus the operator-group half, whose yoked birth
 //! composes a different (member-less) description for the same structural reason.
 
-use crate::builtins::test_support::{TestRun, run_root_bare};
+use crate::builtins::test_support::{TestRun, keyword_name, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{BindingIndex, program_storage, run_root_storage};
 use crate::machine::model::{
@@ -139,7 +139,10 @@ fn operator_group_birth_composes_a_member_less_description_at_the_declaring_regi
     let scope = test_run.scope;
     let sealed = scope
         .bindings()
-        .lookup_operator_group(&probe_key(&["MINUS"]), None)
+        .lookup_operator_group(
+            keyword_name(&probe_key(&["MINUS"]), test_run.registries()),
+            None,
+        )
         .expect("a standalone OP declares its own operator group");
     let delivered = scope.lift_resident(sealed);
     let opened = delivered.open_at();

@@ -1,7 +1,7 @@
 //! Functor integration: module-typed parameters, signature-bound dispatch,
 //! per-call generativity.
 
-use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one, type_name, value_name};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
@@ -118,8 +118,9 @@ fn functor_application_mints_distinct_abstract_types() {
 
     let one = lookup_module(scope, "set_one", test_run.registries());
     let two = lookup_module(scope, "set_two", test_run.registries());
-    let one_carrier = one.type_members.get(&"Carrier").copied();
-    let two_carrier = two.type_members.get(&"Carrier").copied();
+    let carrier = type_name("Carrier", test_run.registries());
+    let one_carrier = one.type_members.get(&carrier).copied();
+    let two_carrier = two.type_members.get(&carrier).copied();
     assert!(
         matches!(one_carrier.map(|h| test_run.types().node(h)), Some(TypeNode::AbstractType { name, .. }) if name == "Carrier"),
         "the first application must mint an abstract Carrier, got {one_carrier:?}",
@@ -134,13 +135,14 @@ fn functor_application_mints_distinct_abstract_types() {
     );
 
     // The second map and the bumped path, read out of the same dead call regions.
+    let zero = value_name("zero", test_run.registries());
     assert_eq!(
-        one.slot_type_tags.get(&"zero").copied(),
+        one.slot_type_tags.get(&zero).copied(),
         one_carrier,
         "the abstract-typed VAL slot is tagged with that application's own minted Carrier",
     );
     assert_eq!(
-        two.slot_type_tags.get(&"zero").copied(),
+        two.slot_type_tags.get(&zero).copied(),
         two_carrier,
         "and the second application's tag names its own mint, not the first's",
     );
@@ -305,7 +307,12 @@ fn hk_value_slot_satisfies_after_substitution() {
     assert!(
         matches!(
             lookup_module(scope, "view", test_run.registries()),
-            m if m.child_scope().bindings().data().get("pure").is_some()
+            m if m
+                .child_scope()
+                .bindings()
+                .data()
+                .get(&value_name("pure", test_run.registries()))
+                .is_some()
         ),
         "id_monad must satisfy Monad and bind a view module carrying `pure`",
     );
@@ -395,8 +402,9 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     }
     let a = lookup_module(scope, "first", test_run.registries());
     let b = lookup_module(scope, "second", test_run.registries());
-    let a_wrap = a.type_members.get(&"Wrap").copied();
-    let b_wrap = b.type_members.get(&"Wrap").copied();
+    let wrap = type_name("Wrap", test_run.registries());
+    let a_wrap = a.type_members.get(&wrap).copied();
+    let b_wrap = b.type_members.get(&wrap).copied();
     let is_type_constructor = |kt: Option<KType>| {
         matches!(
             kt.map(|h| test_run.types().node(h)),

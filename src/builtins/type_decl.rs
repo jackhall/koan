@@ -46,6 +46,10 @@ fn bind_abstract_member<'a>(
     kt: KType,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
+    let name = match crate::machine::model::type_binder(&name, ctx.registries) {
+        Ok(name) => name,
+        Err(e) => return Action::done(Err(e)),
+    };
     let carrier = ctx.scope.resident(Carried::Type(kt));
     Action::done(Ok(StepCarried::born(carrier))).with_effect(
         crate::machine::core::bindings::WriteOp::Type {

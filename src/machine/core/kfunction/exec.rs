@@ -21,7 +21,9 @@ use crate::machine::model::{DeferredReturn, KType, ReturnType, TypeResolution};
 
 use super::KFunction;
 use super::body::{Body, body_statement_refs};
-use crate::machine::model::{RunRegistries, render_label};
+use crate::machine::model::{
+    BindKind, BinderSymbol, RunRegistries, render_label, wrong_binder_class,
+};
 
 /// A body's execution context: the per-call `region` it runs in. Owned (an `Rc`), so it carries no
 /// lifetime; the body re-projects its scope from the region on demand.
@@ -101,23 +103,21 @@ pub fn run_user_fn<'ast>(
         let gate = &mut crate::machine::core::bindings::WriteGate::for_unpublished_scope();
         // The signature's own parameter schema names each slot; the slice supplies its value.
         // Nothing was re-keyed for this call — the pair is zipped in declaration order.
-        for ((symbol, _), delivered) in func.signature.params().iter().zip(args) {
-            let symbol = *symbol;
-            // The scope tables key by text, so a parameter's symbol resolves back through the
-            // interner that recorded it at definition. See
-            // [symbol-keyed-scope-tables.md](../../../../roadmap/reduce_allocs/symbol-keyed-scope-tables.md)
-            // — once the tables key by `Symbol`, this resolve and the `String` it builds both go away.
-            let name = render_label(symbol.symbol(), registries);
-            match arg_channel(delivered) {
+        // The schema's names are classified where the signature was built, and the binding tables
+        // key by that same vocabulary, so a bind reads the symbol straight off the schema: no
+        // interner reach, and nothing allocated per parameter.
+        for ((binder, _), delivered) in func.signature.params().iter().zip(args) {
+            match (binder, arg_channel(delivered)) {
                 // The projection is identity — the whole delivered value binds. The copy is a deep
                 // clone into the frame region, so the carrier's residence-only host is not part of
                 // its reach (a tail call's retiring frame must not ride this binding).
-                ArgChannel::Value => {
+                (BinderSymbol::Value(name), ArgChannel::Value) => {
                     child.bind_delivered_direct(
-                        name,
+                        *name,
                         delivered,
                         BindingIndex::value(0),
                         |c| Ok(c.object()),
+                        registries,
                         gate,
                     )?;
                 }
@@ -128,13 +128,36 @@ pub fn run_user_fn<'ast>(
                 // A type-denoting FN parameter is a per-call frame-scope binding, not a declaration
                 // statement subject to same-declaration checks, so it takes the born-with-the-scope
                 // site.
-                ArgChannel::Type(kt) => {
-                    child.register_type_direct(name, kt, DeclarationSite::AT_CONSTRUCTION, gate)?;
+                (BinderSymbol::Type(name), ArgChannel::Type(kt)) => {
+                    child.register_type_direct(
+                        *name,
+                        kt,
+                        DeclarationSite::AT_CONSTRUCTION,
+                        registries,
+                        gate,
+                    )?;
                 }
                 // Dispatch resolves every type-denoting argument before the call, so a name that
                 // is still unlowered here names nothing bindable.
-                ArgChannel::Unresolved(rendered) => {
+                (_, ArgChannel::Unresolved(rendered)) => {
                     return Err(KError::new(KErrorKind::UnboundName(rendered)));
+                }
+                // The parameter's token class and the argument's channel disagree: a Type token
+                // names a type and a value token names a value, so neither can take the other's
+                // delivery.
+                (BinderSymbol::Value(name), ArgChannel::Type(_)) => {
+                    let name = render_label(name.symbol(), registries);
+                    return Err(KError::new(KErrorKind::ShapeError(wrong_binder_class(
+                        &name,
+                        BindKind::Type,
+                    ))));
+                }
+                (BinderSymbol::Type(name), ArgChannel::Value) => {
+                    let name = render_label(name.symbol(), registries);
+                    return Err(KError::new(KErrorKind::ShapeError(wrong_binder_class(
+                        &name,
+                        BindKind::Value,
+                    ))));
                 }
             }
         }

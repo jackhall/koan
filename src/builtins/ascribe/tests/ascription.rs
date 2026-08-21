@@ -1,8 +1,10 @@
 //! Primitive ascription behaviors: transparent passthrough, missing-member errors, opaque type-minting.
 
-use crate::builtins::test_support::{TestRun, binds_module, lookup_module, parse_one};
+use crate::builtins::test_support::{
+    TestRun, binds_module, lookup_module, parse_one, type_name, value_name,
+};
 use crate::machine::KErrorKind;
-use crate::machine::model::{KObject, KType, TypeNode};
+use crate::machine::model::{KObject, KType, TypeNode, render_label};
 use crate::machine::{program_storage, run_root_storage};
 use crate::parse::parse;
 
@@ -69,8 +71,9 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     }
     let a = lookup_module(scope, "first_abstract", test_run.registries());
     let b = lookup_module(scope, "second_abstract", test_run.registries());
-    let a_t = a.type_members.get(&"Carrier").copied();
-    let b_t = b.type_members.get(&"Carrier").copied();
+    let carrier = type_name("Carrier", test_run.registries());
+    let a_t = a.type_members.get(&carrier).copied();
+    let b_t = b.type_members.get(&carrier).copied();
     // An opaque-ascription abstract-type member mints as
     // `KType::AbstractType { name, nonce: Some(<view module's scope id>), .. }`.
     assert!(matches!(
@@ -118,7 +121,7 @@ fn roadmap_example_int_ord_with_ordered_sig() {
     let abstract_mod = lookup_module(scope, "int_ord_abstract", test_run.registries());
     let minted = abstract_mod
         .type_members
-        .get(&"Carrier")
+        .get(&type_name("Carrier", test_run.registries()))
         .copied()
         .expect("opaque ascription should mint a Carrier member");
     match test_run.types().node(minted) {
@@ -153,7 +156,10 @@ fn opaque_view_reads_manifest_type_member_concretely() {
          LET view = (implementation :| Tagged)",
     );
     let view = lookup_module(scope, "view", test_run.registries());
-    let tag = view.type_members.get(&"Tag").copied();
+    let tag = view
+        .type_members
+        .get(&type_name("Tag", test_run.registries()))
+        .copied();
     assert_eq!(
         tag,
         Some(KType::NUMBER),
@@ -178,7 +184,9 @@ fn opaque_view_manifest_typed_val_slot_reads_concrete() {
     );
     let view = lookup_module(scope, "view", test_run.registries());
     assert!(
-        view.slot_type_tags.get(&"x").is_none(),
+        view.slot_type_tags
+            .get(&value_name("x", test_run.registries()))
+            .is_none(),
         "a manifest-typed VAL slot must not be re-tagged in slot_type_tags",
     );
     let result = test_run.run_one(parse_one(&program, "view.x"));
@@ -334,7 +342,13 @@ fn opaque_view_scope_holds_exactly_the_views_type_members() {
          LET sealed = (int_ord :| Boxed)",
     );
     let view = lookup_module(scope, "sealed", test_run.registries());
-    let mut seeded: Vec<(String, KType)> = view.child_scope().bindings().iter_types();
+    let mut seeded: Vec<(String, KType)> = view
+        .child_scope()
+        .bindings()
+        .iter_types()
+        .into_iter()
+        .map(|(n, kt)| (render_label(n.symbol(), test_run.registries()), kt))
+        .collect();
     seeded.sort_by(|a, b| a.0.cmp(&b.0));
     let names: Vec<&str> = seeded.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(
@@ -356,7 +370,9 @@ fn opaque_view_scope_holds_exactly_the_views_type_members() {
     );
     for (name, kt) in &seeded {
         assert_eq!(
-            view.type_members.get(&name.as_str()).copied(),
+            view.type_members
+                .get(&type_name(name, test_run.registries()))
+                .copied(),
             Some(*kt),
             "`type_members` mirrors the seeded scope entry for `{name}`",
         );
@@ -381,7 +397,7 @@ fn two_opaque_ascriptions_seed_distinct_mints() {
         lookup_module(scope, name, test_run.registries())
             .child_scope()
             .bindings()
-            .lookup_type("Elem", None)
+            .lookup_type(type_name("Elem", test_run.registries()), None)
             .and_then(|hit| hit.bound())
             .expect("each view scope is seeded with its own `Elem`")
     };

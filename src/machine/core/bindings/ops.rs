@@ -22,14 +22,17 @@
 use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, Scope};
-use crate::machine::model::{KType, probe_key};
+use crate::machine::model::{
+    KType, KeywordSymbol, LabelInterner, RunRegistries, TypeSymbol, ValueSymbol, probe_key,
+    render_label,
+};
 
 /// How a [`WriteOp::Type`] meets an existing `types[name]`: `Insert` is strict insert-if-absent (a
 /// present name is a `Rebind`), `UpsertEqual` admits a re-entry of the *same* declaration — the
 /// nominal finalizes, which overwrite an announced group's pre-installed identity and
 /// tolerate a parallel finalize of their own slot. Folding the two type writers into one
-/// description site keeps the shared skeleton — cross-kind probe, partition guard, and the retire
-/// of the write's own claim — in one place.
+/// description site keeps the shared skeleton — the standing-entry probe and the retire of the
+/// write's own claim — in one place.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) enum TypeWritePolicy {
     Insert,
@@ -41,7 +44,7 @@ pub(crate) enum WriteOp<'a> {
     /// LET binding a value. A value binding is callable by name alone — a function value binds
     /// here like any other value and publishes no keyworded expression.
     Value {
-        name: String,
+        name: ValueSymbol,
         index: BindingIndex,
         sealed: SealedValue<'a>,
     },
@@ -59,7 +62,7 @@ pub(crate) enum WriteOp<'a> {
     /// `NEWTYPE`, `TYPE`, the nominal finalizes): builtins are immutable and unshadowable at any
     /// depth.
     Type {
-        name: String,
+        name: TypeSymbol,
         kt: KType,
         site: DeclarationSite,
         policy: TypeWritePolicy,
@@ -71,19 +74,24 @@ pub(crate) enum WriteOp<'a> {
     /// the whole install, not cloned per subset. The group rides as its seal-time bundle, which is
     /// lifetime-free, so a `WriteOp` still names no region borrow.
     Group {
-        probes: Vec<String>,
+        probes: Vec<KeywordSymbol>,
         seal: GroupSeal<'a>,
         index: BindingIndex,
     },
     /// A `VAL` slot into the nearest enclosing SIG decl scope's slot collector. A slot is a schema
     /// entry, not a binding — it takes no [`BindingIndex`] and touches no binding map.
-    SigSlot { name: String, kt: KType },
+    SigSlot { name: ValueSymbol, kt: KType },
 }
 
 impl<'a> WriteOp<'a> {
     /// Apply this write against `scope` — the step scope the op was returned from, which is always
     /// the scope the entry lands in. Runs the door's guards before the table verb.
-    pub(crate) fn apply(self, scope: &Scope<'a>, gate: &mut WriteGate) -> Result<(), KError> {
+    pub(crate) fn apply(
+        self,
+        scope: &Scope<'a>,
+        registries: &RunRegistries,
+        gate: &mut WriteGate,
+    ) -> Result<(), KError> {
         scope.assert_owns_bindings();
         match self {
             WriteOp::Value {
@@ -91,8 +99,10 @@ impl<'a> WriteOp<'a> {
                 index,
                 sealed,
             } => {
-                scope.assert_open(&name);
-                scope.bindings().write_value(&name, index, sealed, gate)
+                scope.assert_open(name);
+                scope
+                    .bindings()
+                    .write_value(name, index, sealed, registries, gate)
             }
             WriteOp::Overload {
                 name,
@@ -119,11 +129,15 @@ impl<'a> WriteOp<'a> {
                 policy,
                 builtin_shadow_guard,
             } => {
-                if builtin_shadow_guard && scope.shadows_builtin_type(&name) {
-                    return Err(KError::new(KErrorKind::Rebind { name }));
+                if builtin_shadow_guard && scope.shadows_builtin_type(name) {
+                    return Err(KError::new(KErrorKind::Rebind {
+                        name: render_label(name.symbol(), registries),
+                    }));
                 }
-                scope.assert_open(&name);
-                scope.bindings().write_type(&name, kt, site, policy, gate)
+                scope.assert_open(name);
+                scope
+                    .bindings()
+                    .write_type(name, kt, site, policy, registries, gate)
             }
             WriteOp::Group {
                 probes,
@@ -132,11 +146,11 @@ impl<'a> WriteOp<'a> {
             } => {
                 let bindings = scope.bindings();
                 for probe in probes {
-                    bindings.write_operator_group(probe, &seal, index, gate)?;
+                    bindings.write_operator_group(probe, &seal, index, registries, gate)?;
                 }
                 Ok(())
             }
-            WriteOp::SigSlot { name, kt } => scope.write_sig_slot(name, kt),
+            WriteOp::SigSlot { name, kt } => scope.write_sig_slot(name, kt, registries),
         }
     }
 }
@@ -147,9 +161,10 @@ impl<'a> WriteOp<'a> {
 /// each subset's key is derived through [`probe_key`] rather than hand-enumerated, so a
 /// registration key always agrees with a real chain's probe.
 ///
-/// One region-hosted record backs every key, so past these strings the whole install allocates
-/// nothing.
-pub(crate) fn powerset_probes(members: &[&str]) -> Vec<String> {
+/// Each probe key is interned as it is built, so an operator-conflict diagnostic can render the
+/// probe it names. One region-hosted record backs every key, so past the interning the whole
+/// install allocates nothing.
+pub(crate) fn powerset_probes(members: &[&str], labels: &LabelInterner) -> Vec<KeywordSymbol> {
     let subset_count = 1usize << members.len();
     (1..subset_count)
         .map(|mask| {
@@ -159,7 +174,8 @@ pub(crate) fn powerset_probes(members: &[&str]) -> Vec<String> {
                 .filter(|(bit, _)| mask & (1 << bit) != 0)
                 .map(|(_, op)| *op)
                 .collect();
-            probe_key(&subset)
+            KeywordSymbol::declared(&probe_key(&subset), labels)
+                .expect("a joined run of operator tokens is keyword-class")
         })
         .collect()
 }

@@ -1,4 +1,4 @@
-use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
+use crate::builtins::test_support::{TestRun, lookup_module, parse_one, type_name};
 use crate::machine::ScopeId;
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::KObject;
@@ -198,7 +198,10 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
          LET view = (implementation :| Container)",
     );
     let view = lookup_module(scope, "view", test_run.registries());
-    let elt = view.type_members.get(&"Elt").copied();
+    let elt = view
+        .type_members
+        .get(&type_name("Elt", test_run.registries()))
+        .copied();
     let declared = member_type(scope, test_run.types(), "Container", "Elt");
     match elt {
         Some(minted) => {
@@ -240,7 +243,7 @@ fn two_ascriptions_of_one_sig_mint_distinct_slot_types() {
     let elt = |view_name: &str| {
         lookup_module(scope, view_name, test_run.registries())
             .type_members
-            .get(&"Elt")
+            .get(&type_name("Elt", test_run.registries()))
             .copied()
             .expect("each view mints Elt")
     };
@@ -297,8 +300,9 @@ fn fn_return_type_constructor_apply_root_scope() {
     let scope = test_run.scope;
     let wrap = wrap_type_constructor(test_run.types());
     scope.register_builtin_type(
-        "Wrap".into(),
+        type_name("Wrap", test_run.registries()),
         wrap,
+        test_run.registries(),
         &mut crate::machine::WriteGate::for_test(),
     );
     let id = test_run.dispatch_in_scope(
@@ -440,7 +444,10 @@ fn module_attr_access_returns_type_constructor() {
          LET mo = (int_list :| Monad)",
     );
     let mo = lookup_module(scope, "mo", test_run.registries());
-    let wrap_t = mo.type_members.get(&"Wrap").copied();
+    let wrap_t = mo
+        .type_members
+        .get(&type_name("Wrap", test_run.registries()))
+        .copied();
     match wrap_t {
         Some(kt) => {
             let name = assert_type_constructor(kt, &["Type"], test_run.types());

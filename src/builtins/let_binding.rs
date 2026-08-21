@@ -9,6 +9,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::{BindKind, TypeSymbol, ValueSymbol, wrong_binder_class};
 
 /// `LET <name> = <value:Any>` — deep-clones the bound value into the region and inserts it
 /// under `name`. Two overloads share this body, differing only in the `name` slot's `KType`:
@@ -120,6 +121,15 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         ))));
     }
     if let Some(kt) = type_for_types_map {
+        // The text→symbol seam for the type channel: a name that will not classify as a Type token
+        // names the wrong side of the partition, which past this point the key types make
+        // unrepresentable.
+        let Some(name) = TypeSymbol::declared(&name, &ctx.registries.labels) else {
+            return done_err(KError::new(KErrorKind::ShapeError(wrong_binder_class(
+                &name,
+                BindKind::Type,
+            ))));
+        };
         // The handle names the same interned type in every region — `kt` is already this binder's
         // copy out of the RHS envelope — so the terminal witnesses it directly and the `types`
         // write rides the outcome.
@@ -132,6 +142,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             builtin_shadow_guard: true,
         })
     } else {
+        // The value channel's half of the same seam.
+        let Some(binder) = ValueSymbol::declared(&name, &ctx.registries.labels) else {
+            return done_err(KError::new(KErrorKind::ShapeError(wrong_binder_class(
+                &name,
+                BindKind::Value,
+            ))));
+        };
         let value = rhs
             .as_object()
             .expect("value-route LET RHS is the Object arm");
@@ -169,7 +186,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         // transit (the delivery envelope) rather than being re-derived at the seal. The write takes
         // its own duplicate of the seal, so the finish never reads its own write back out.
         let write = WriteOp::Value {
-            name,
+            name: binder,
             index: bind_index,
             sealed: sealed.duplicate(),
         };

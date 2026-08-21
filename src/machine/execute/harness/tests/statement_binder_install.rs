@@ -450,8 +450,15 @@ fn a_binder_that_errors_installs_nothing_and_leaves_no_claim() {
         "a failed binder must leave no binding behind",
     );
     assert!(
-        test_run.scope.bindings().pending_names().is_empty(),
+        test_run
+            .scope
+            .bindings()
+            .pending_names(test_run.registries())
+            .is_empty(),
         "a failed binder must leave no claim behind, got {:?}",
-        test_run.scope.bindings().pending_names(),
+        test_run
+            .scope
+            .bindings()
+            .pending_names(test_run.registries()),
     );
 }

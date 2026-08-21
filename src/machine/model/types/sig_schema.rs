@@ -22,6 +22,7 @@ use super::ktype::KType;
 use super::node::{NodeSchema, TypeNode};
 use super::registry::TypeRegistry;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::render_label;
 use crate::machine::model::values::ModuleDraft;
 
 /// Normalized signature schema — the carrier the subtyping relation is defined over.
@@ -66,15 +67,22 @@ impl SigSchema {
     }
 
     /// Project a SIG decl scope into its schema, at SIG finish. Every type-table entry is a
-    /// genuine type member (the token-class partition holds — value slots live in the scope's
-    /// slot collector, not in `types`), classified abstract/manifest by representation; the
-    /// value slots come from the scope's own slot collector. Runs once per SIG.
-    pub(crate) fn project_decl(decl_scope: &Scope<'_>, types: &TypeRegistry) -> SigSchema {
+    /// genuine type member (the token-class partition holds — a value slot's name is a value
+    /// token and lives in the scope's slot collector, not in `types`), classified
+    /// abstract/manifest by representation; the value slots come from the scope's own slot
+    /// collector. Runs once per SIG.
+    ///
+    /// The schema names its members by text while the scope tables key by symbol, so each name
+    /// resolves through the run's label interner here. That is a declaration-time reach — one pass
+    /// per SIG, not per lookup.
+    pub(crate) fn project_decl(decl_scope: &Scope<'_>, registries: &RunRegistries) -> SigSchema {
+        let types = &registries.types;
         let declared = decl_scope.id;
         let mut abstract_members = HashMap::new();
         let mut manifest_members = HashMap::new();
         for (name, kt) in decl_scope.bindings().iter_types() {
             let canonical = canonicalize_binder(kt, declared, types);
+            let name = render_label(name.symbol(), registries);
             if is_abstract_sig_member(canonical, types) {
                 abstract_members.insert(name, canonical);
             } else {
@@ -83,7 +91,10 @@ impl SigSchema {
         }
         let mut value_slots = HashMap::new();
         for (name, kt) in decl_scope.sig_value_slots() {
-            value_slots.insert(name, canonicalize_binder(kt, declared, types));
+            value_slots.insert(
+                render_label(name.symbol(), registries),
+                canonicalize_binder(kt, declared, types),
+            );
         }
         SigSchema {
             sig_id: Some(ScopeId::SENTINEL),
@@ -137,22 +148,31 @@ impl SigSchema {
     /// `slot_type_tags` map overriding by name (an opaque view's abstract slot identities).
     ///
     /// [`KObject::ktype`]: crate::machine::model::values::KObject::ktype
-    pub fn raw_self_sig(child: &Scope<'_>, draft: &ModuleDraft) -> SigSchema {
+    pub fn raw_self_sig(
+        child: &Scope<'_>,
+        draft: &ModuleDraft,
+        registries: &RunRegistries,
+    ) -> SigSchema {
+        // The schema names members by text; scope tables and draft maps key by symbol, so each
+        // name resolves through the run's label interner. One pass per module build.
         let mut manifest_members: HashMap<String, KType> = HashMap::new();
         for (name, kt) in child.bindings().iter_types() {
-            manifest_members.insert(name, kt);
+            manifest_members.insert(render_label(name.symbol(), registries), kt);
         }
         for (name, kt) in draft.type_members.iter() {
-            manifest_members.insert(name.clone(), *kt);
+            manifest_members.insert(render_label(name.symbol(), registries), *kt);
         }
         let mut value_slots: HashMap<String, KType> = HashMap::new();
         // A value member's slot type: the seal's own `'home` brand covers the re-anchor, and only
         // the `Copy` `KType` leaves the open.
         for (name, sealed) in child.bindings().iter_data() {
-            value_slots.insert(name, sealed.open_at().value().object().ktype());
+            value_slots.insert(
+                render_label(name.symbol(), registries),
+                sealed.open_at().value().object().ktype(),
+            );
         }
         for (name, tag) in draft.slot_type_tags.iter() {
-            value_slots.insert(name.clone(), *tag);
+            value_slots.insert(render_label(name.symbol(), registries), *tag);
         }
         SigSchema {
             sig_id: None,

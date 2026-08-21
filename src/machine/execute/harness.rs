@@ -419,10 +419,11 @@ impl<'run> Host<'run> {
                         // an errored step would strand. See [the step's binding
                         // writes](../../../design/execution/classify-and-apply.md#the-steps-binding-writes).
                         let mut gate = WriteGate::for_run_loop();
+                        let registries = host.ambient.registries();
                         let outcome = match step_effects
                             .borrow_mut()
                             .drain(..)
-                            .try_for_each(|op| op.apply(scope, &mut gate))
+                            .try_for_each(|op| op.apply(scope, registries, &mut gate))
                         {
                             Ok(()) => outcome,
                             Err(error) => Outcome::Done(Err(error)),

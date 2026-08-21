@@ -246,7 +246,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::builtins::test_support::{TestRun, parse_one, type_name};
     use crate::machine::KErrorKind;
     use crate::machine::model::{KKind, KType, Record, TypeNode};
     use crate::machine::program_storage;
@@ -285,8 +285,9 @@ mod tests {
             )
             .expect("a singleton window seals on its sole fill");
         scope.register_builtin_type(
-            "Wrap".into(),
+            type_name("Wrap", test_run.registries()),
             sealed.members[0],
+            test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         );
         let result = test_run.run_one_type(parse_one(&program, ":(Number AS Wrap)"));

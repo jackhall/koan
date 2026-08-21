@@ -29,6 +29,7 @@ pub use record::{Record, slice_get as record_field};
 pub use recursive_group_window::{
     PendingMember, RecursiveGroupWindow, RelativeSchema, SealedGroup,
 };
+pub(crate) use registry::IdentityBuildHasher;
 pub(crate) use registry::Relation;
 pub use registry::TypeRegistry;
 pub use resolver::{
