@@ -14,8 +14,6 @@
 //! context for free — so the body reads `(name, Held::Type)` entries directly: no lazy
 //! binding slot, no `AwaitDeps`.
 
-use std::collections::HashSet;
-
 use crate::machine::model::render_label;
 use crate::machine::model::{Held, KObject, KType, TypeNode, TypeSymbol};
 use crate::machine::{KError, KErrorKind};
@@ -55,33 +53,37 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             )));
         }
     };
-    // Validation only: every pin must name a known slot and hold a type. A slot already fixed —
-    // a manifest member, which is also what an earlier WITH's fold left behind — admits only an
-    // equal re-pin, which normalizes away (added to `dropped`, never folded), so
-    // `S WITH {Tag = Number}` and `(S WITH {A = Number}) WITH {A = Number}` keep their source's
-    // signature identity; an unequal re-pin is a type error.
-    let mut dropped: HashSet<TypeSymbol> = HashSet::new();
+    // Every pin must name a known slot and hold a type. A slot already fixed — a manifest
+    // member, which is also what an earlier WITH's fold left behind — admits only an equal
+    // re-pin, which normalizes away (never folded), so `S WITH {Tag = Number}` and
+    // `(S WITH {A = Number}) WITH {A = Number}` keep their source's signature identity; an
+    // unequal re-pin is a type error.
+    let mut pins: Vec<(TypeSymbol, KType)> = Vec::new();
     for (symbol, value) in bindings.fields() {
         // A pin arrives as a raw record-field symbol, which carries no evidence of its token
-        // class, and the classified newtypes admit no raw `Symbol`. So the text resolves through
-        // the interner that recorded it and classifies here — one resolve per pin, at
-        // declaration time. A pin that is not a Type token names no slot and falls to the
-        // no-such-slot error below, the same disposition an unknown Type name gets.
-        let name = render_label(symbol, ctx.registries);
-        let slot = TypeSymbol::of(&name);
-        let is_abstract = slot.is_some_and(|slot| schema.abstract_members.contains_key(&slot));
-        let manifest = slot.and_then(|slot| schema.manifest_members.get(&slot));
-        if !is_abstract && manifest.is_none() {
-            return done_err(KError::new(KErrorKind::ShapeError(format!(
-                "{} has no abstract type slot `{name}`",
-                sig_handle.name(ctx.registries),
-            ))));
-        }
+        // class. The schema's member maps are keyed by classified `TypeSymbol`s and admit a
+        // probe by bare symbol bits, so a hit hands back the classification the declaration
+        // witnessed — no text resolve, no re-derivation. A pin that is not a Type token was
+        // never declared as a member, so it misses both maps and falls to the no-such-slot
+        // error, the same disposition an unknown Type name gets. Only that error path — and
+        // the two below it — resolves the pin's text.
+        let manifest = schema.manifest_members.get_key_value(&symbol);
+        let slot = match manifest.or_else(|| schema.abstract_members.get_key_value(&symbol)) {
+            Some((slot, _)) => *slot,
+            None => {
+                return done_err(KError::new(KErrorKind::ShapeError(format!(
+                    "{} has no abstract type slot `{}`",
+                    sig_handle.name(ctx.registries),
+                    render_label(symbol, ctx.registries),
+                ))));
+            }
+        };
         let pin_type = match value {
-            Held::Type(kt) => kt,
+            Held::Type(kt) => *kt,
             Held::Object(other) => {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
-                    "WITH binding `{name}` value must be a type, got `{}`",
+                    "WITH binding `{}` value must be a type, got `{}`",
+                    render_label(symbol, ctx.registries),
                     other.ktype().name(ctx.registries),
                 ))));
             }
@@ -89,35 +91,23 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 return done_err(KError::new(KErrorKind::UnboundName(ti.render())));
             }
         };
-        if let Some(fixed) = manifest {
-            if pin_type == fixed {
-                dropped.insert(slot.expect("a manifest member is keyed by a Type token"));
-            } else {
+        match manifest {
+            // An equal re-pin of a fixed member normalizes away: not an error, and not a pin.
+            Some((_, fixed)) if pin_type == *fixed => {}
+            Some((_, fixed)) => {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
-                    "`{}.{name}` is a manifest type member fixed to `{}`; \
+                    "`{}.{}` is a manifest type member fixed to `{}`; \
                      WITH cannot re-pin it to `{}`",
                     sig_handle.name(ctx.registries),
+                    render_label(symbol, ctx.registries),
                     fixed.render(ctx.registries),
                     pin_type.render(ctx.registries),
                 ))));
             }
+            None => pins.push((slot, pin_type)),
         }
     }
 
-    let pins: Vec<(TypeSymbol, KType)> = bindings
-        .fields()
-        .filter_map(|(symbol, value)| {
-            let name = render_label(symbol, ctx.registries);
-            let slot = TypeSymbol::of(&name)
-                .expect("validated above: every pin names a schema member, keyed by a Type token");
-            (!dropped.contains(&slot)).then(|| match value {
-                Held::Type(kt) => (slot, *kt),
-                Held::Object(_) | Held::UnresolvedType(_) => {
-                    unreachable!("validated above: every pin value is a type")
-                }
-            })
-        })
-        .collect();
     let folded = schema.fold_pins(&pins, ctx.types());
     Action::done(Ok(ctx.ctx.type_carried(ctx.types().signature(folded))))
 }
