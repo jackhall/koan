@@ -158,10 +158,11 @@ fn per_dispatch_cost_does_not_grow_with_scope_walk_depth() {
 /// view replaces with a slice on the step scratch arena. The remaining 33 is the one name copy
 /// per call a symbol-keyed scope binding table no longer makes.
 ///
-/// The bound is the measurement plus 32, so one re-introduced per-call allocation fails it.
+/// The bound is the measurement plus 31, so one re-introduced per-call allocation — 32 across
+/// the repetition gap the shapes difference by — fails it.
 #[test]
 fn the_builtin_call_shape_stays_within_its_per_call_bound() {
-    const BOUND: u64 = 2_102;
+    const BOUND: u64 = 2_101;
     let marginal = allocations_for(
         include_str!("../audit/shapes/builtin_call_calls40.koan"),
         "audit/shapes/builtin_call_calls40.koan",
@@ -197,12 +198,13 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 /// at n = 1. Both sit just under one allocation apiece, and the shapes do not isolate the
 /// remainder finely enough to say what the shortfall is.
 ///
-/// Both bounds are the measurement plus 32, so one re-introduced per-call allocation fails the
-/// first and a re-introduced per-parameter one fails the second by ≈224.
+/// Both bounds are the measurement plus 31, so one re-introduced per-call allocation — 32 across
+/// the repetition gap — fails the first, and a re-introduced per-parameter one fails the second
+/// by ≈224.
 #[test]
 fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
-    const PER_CALL_BOUND: u64 = 1_207;
-    const PER_PARAMETER_BOUND: u64 = 863;
+    const PER_CALL_BOUND: u64 = 1_206;
+    const PER_PARAMETER_BOUND: u64 = 862;
     let arity1 = allocations_for(
         include_str!("../audit/shapes/user_fn_params1_calls40.koan"),
         "audit/shapes/user_fn_params1_calls40.koan",
@@ -251,11 +253,11 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
 /// by the classified symbol the declaration already interned
 /// ([label-interning.md](../design/label-interning.md)).
 ///
-/// The bound is the measurement plus 32, so one re-introduced per-construction allocation fails
-/// it.
+/// The bound is the measurement plus 31, so one re-introduced per-construction allocation — 32
+/// across the repetition gap — fails it.
 #[test]
 fn the_tagged_construct_shape_stays_within_its_per_construction_bound() {
-    const BOUND: u64 = 2_998;
+    const BOUND: u64 = 2_997;
     let marginal = allocations_for(
         include_str!("../audit/shapes/tagged_construct_calls40.koan"),
         "audit/shapes/tagged_construct_calls40.koan",

@@ -104,8 +104,8 @@ cross-link this section rather than restating its slice.
   [`ast.rs`](../../src/machine/model/ast.rs).
   `ExpressionPart::resolve_for` lowers a bare `Type` token against the
   builtin table via
-  [`KType::from_type_expr`](../../src/machine/model/types/ktype_resolution.rs)
-  (a match over the ~10-entry builtin map, re-run per call). A hit lowers to a resolved
+  [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)
+  (a match over the eleven-entry builtin map, re-run per call). A hit lowers to a resolved
   `KType` handle in the value channel's `Type` arm; a miss — a user-bound leaf — defers to the
   [`Carried::UnresolvedType`](../../src/machine/model/values/carried.rs) carrier over the
   surface `TypeIdentifier`, which
@@ -130,7 +130,7 @@ cross-link this section rather than restating its slice.
   then takes the member's absolute handle. Otherwise an *earlier still-finalizing* binder parks via
   `TypeResolution::Park(producers)`, a later-than-the-consumer binding is a position
   error, and a builtin name falls back to the builtin table through
-  [`KType::from_type_identifier`](../../src/machine/model/types/ktype_resolution.rs) —
+  [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs) —
   the single owner of that fallback on the resolution path. Parameterized shapes
   (`:(LIST OF X)`, `:(MAP K -> V)`) sub-Dispatch through the standalone dispatcher
   rather than recursing here, so the only recursion is the sibling-result reduce.
@@ -295,7 +295,7 @@ uniformly under one model.
 ## Bare-leaf type-name carrier
 
 Bare-leaf type names that aren't in
-[`KType::from_name`](../../src/machine/model/types/ktype.rs)'s builtin
+[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)'s builtin
 table (`Point`, `Ordered`, `MyList`) are lowered by
 [`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) onto the dedicated
 [`Carried::UnresolvedType`](../../src/machine/model/values/carried.rs) carrier — holding
@@ -404,8 +404,8 @@ type-side carrier downstream. The same shape-only-on-binder-slot rule covers
 
 Elaboration carries no cache tier. Bind-time builtin lowering
 ([`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) →
-[`KType::from_type_expr`](../../src/machine/model/types/ktype_resolution.rs))
-re-runs the ~10-entry builtin match per call — the match is cheap, and a shared
+[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs))
+re-runs the eleven-entry builtin match per call — the match is cheap, and a shared
 table would be added back only if profiling shows it hot. Scope-bound resolution
 is the same: interning in the [`TypeRegistry`](../../src/machine/model/types.rs)
 already makes a re-elaborated form yield the *same* handle, so a per-scope memo

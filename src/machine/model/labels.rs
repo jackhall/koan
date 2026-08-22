@@ -103,9 +103,10 @@ pub fn is_type_name(tok: &str) -> bool {
 /// minted only through [`of`](ValueSymbol::of) / [`declared`](ValueSymbol::declared), which run the
 /// class predicate on the text. There is no raw-`Symbol` constructor: a `Symbol` alone carries no
 /// evidence of what its text looked like, so admitting one would let a caller assert a class the
-/// digest cannot witness. A seam holding a bare `Symbol` that needs a class either classifies where
-/// the text still existed, or resolves the text through the run's [`LabelInterner`] and classifies
-/// that.
+/// digest cannot witness. A seam holding a bare `Symbol` that needs a class classifies where the
+/// text still existed, resolves the text through the run's [`LabelInterner`] and classifies that,
+/// or recovers the class from a table already keyed by a classified symbol — the recovery door
+/// the `Borrow<Symbol>` impl below opens.
 ///
 /// The classes partition by construction: [`is_keyword_token`] and [`is_type_name`] are disjoint
 /// (a Type token has a lowercase letter, a keyword-class alphabetic token has none), and

@@ -57,8 +57,9 @@ model.
 
 A member's identity is `(SCC digest, index)` — the content digest of the member's
 own strongly-connected component plus its index in that component's canonical
-presentation — bare-name order, with the owning binder (a `UNION`'s name, for a
-variant) as a tiebreak the digest never sees, so a module-hosted variant digests
+presentation — the numeric order of the members' name symbols
+([label-interning.md](../label-interning.md)), with the owning binder (a `UNION`'s name,
+for a variant) as a tiebreak the digest never sees, so a module-hosted variant digests
 identically to its standalone twin and two same-tag variants of different binders
 take stable distinct positions. The digest is minted at seal from finished content, never
 a live walk of the schema, which may be cyclic
@@ -168,7 +169,7 @@ recursive union variant nesting another variant (`Succ (Zero null)`) keeps every
 
 **`MATCH` selects by type** ([match_case.rs](../../src/builtins/match_case.rs) via
 [`find_branch_body_by_type`](../../src/builtins/branch_walk.rs)). A user-union variant
-value and a `Result` are both `Tagged`, so a variant head admits by **tag-name
+value and a `Result` are both `Tagged`, so a variant head admits by **tag-symbol
 equality** against the value's own tag and binds the wrapped payload to `it` — a union's
 sibling variants need no resolution, since the value carries its own tag. A general type
 head resolves through the scope and binds the scrutinee
@@ -187,7 +188,7 @@ payload) copied once at bind time, with no MATCH-specific bind site. See
 
 A `Result` value (`KKind::TypeConstructor`) carries the bare/applied ctor identity
 (member handle / `ConstructorApply`) as its `Tagged` `identity`, so `TRY` selects arms
-by error-tag string
+by error-tag symbol
 ([try_with.rs](../../src/builtins/try_with.rs) via `find_branch_body_by_tag`) — the same
 tag-name dispatch a user union uses. See [error-handling.md](../error-handling.md).
 
@@ -280,7 +281,7 @@ At **seal** the window turns the relative schemas into interned member nodes:
 
 - It extracts each member's sibling references, partitions the members into
   strongly-connected components, and digests each component's condensation bottom-up —
-  members in bare-name order (owner as a non-digested tiebreak), intra-component
+  members in name-symbol order (owner as a non-digested tiebreak), intra-component
   references as relative indices, references
   outside the component folding the referent's finished digest as external content.
 - It then interns each member as a

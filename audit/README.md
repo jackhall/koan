@@ -149,8 +149,8 @@ symbol the declaration already interned.
 
 `tests/allocation_baseline.rs` asserts the two absolute shapes' bracketed counts against a
 stated bound — 12 493 for the loop, 5 898 for the chain, carrying 37 and 36 allocations of
-headroom — and each differencing pair's marginal count against its measurement plus 32: 2 102
-for the builtin call, 1 207 for the one-parameter user call, 2 998 for the tagged construction.
+headroom — and each differencing pair's marginal count against its measurement plus 31: 2 101
+for the builtin call, 1 206 for the one-parameter user call, 2 997 for the tagged construction.
 The bounds are tight by design: the margin is smaller than the 100 (loop), 127 (chain) or 32
 (every differencing pair, which is how many repetitions they differ by) a single new allocation
 on the scaling path would add, so one added allocation fails a test. Rebaselining is meant to be

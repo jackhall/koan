@@ -174,17 +174,26 @@ Every name-keyed table keys by this vocabulary, identity-hashed, so a lookup is 
 | a `Module`'s `type_members` / `slot_type_tags` | `TypeSymbol` / `ValueSymbol` |
 | a `SigSchema`'s `abstract_members` / `manifest_members` | `TypeSymbol` |
 | a `SigSchema`'s `value_slots` | `ValueSymbol` |
+| a `NodeSchema::TypeConstructor`'s variant `schema` | `TypeSymbol` |
 
 The claim store's name channel keys by the raw `Symbol`: a claim is stamped before its
 producer's kind has settled and spans both bindable classes, and one map stays sound
 because the two classes name disjoint text.
 
 Interned [type nodes](typing/type-registry.md) carry the same currency wherever they carry
-a binding name: an `AbstractType`'s `name` and `param_names`, and a `TypeConstructor`
-schema's `param_names`, are `TypeSymbol`s. So a schema's member table and the nodes it
-holds compare without touching text, and the digest feeds those names as fixed-width symbol
-bits sorted by those bits — a canonical order over the member set, distinct from the
-alphabetical-by-rendered-text order a schema *renders* in.
+a binding name: an `AbstractType`'s `name` and `param_names`, a sealed `SetMember`'s
+`name`, and a `TypeConstructor` schema's keys and `param_names` are all `TypeSymbol`s. So a
+schema's member table and the nodes it holds compare without touching text, cloning a node
+copies no name bytes, and the digest feeds those names as fixed-width symbol bits sorted by
+those bits — a canonical order over the member set, distinct from the
+alphabetical-by-rendered-text order a schema *renders* in. That order is also the canonical
+presentation a recursive group's members are indexed in, so a member handle's index and the
+digest feed agree by construction.
+
+The currency reaches the value side at the one place a value carries a declared name: a
+`KObject::Tagged`'s `tag` is the variant's `TypeSymbol`, so constructing a tagged value
+bumps no discriminant bytes into its region and a `MATCH` arm head selects by symbol
+compare ([value-substrates.md](value-substrates.md)).
 
 The `data`/`types` partition is therefore a property of the **key types** — a
 `ValueSymbol` and a `TypeSymbol` can never wrap the same text, so a name reaching both

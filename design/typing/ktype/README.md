@@ -115,7 +115,7 @@ concrete `KObject` has a `TypeNode` variant:
   ("any module satisfying this signature"). `name()` is content-derived — `"Module"`
   when the schema is empty, else the structural `SIG (member: Type, …)` in member-name
   order — so no per-declaration path is stored to go stale.
-  `AbstractType { source: ScopeId, name: String, param_names: Vec<String>, nonce: Option<ScopeId> }`
+  `AbstractType { source: ScopeId, name: TypeSymbol, param_names: Vec<TypeSymbol>, nonce: Option<ScopeId> }`
   is the per-abstract-type-member node — owned data, id-keyed. `param_names` carries the
   member's order: empty is a first-order proper type (`TYPE Elt`), non-empty a type
   constructor over those named parameters (`TYPE (Elem AS Wrap)`), and `kind_of` reads

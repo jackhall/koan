@@ -112,7 +112,7 @@ against an ambient set — so window elaboration is ordinary interning, building
 composites over relative children. At **seal**, the record extracts each member's
 sibling references, partitions the members into strongly-connected components, and
 digests the condensation bottom-up: each component is presented canonically — members
-in name order, intra-component references as relative indices (which is what makes
+in name-symbol order, intra-component references as relative indices (which is what makes
 digesting a cycle terminate), references outside the component folding the referent's
 finished digest. Each member's handle derives from `(SCC digest, index)`, and the
 member nodes intern with every relative reference rebuilt to the absolute member

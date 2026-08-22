@@ -72,7 +72,9 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
   into their defining regions.
 - Scalars (`Number`, `Bool`, `Null`) are owned leaves. `KString` rides a
   bump-hosted `&'a str` ([§ String residence](#string-residence)), as does a
-  `Tagged` discriminant and a `KKey::String` dict key.
+  `KKey::String` dict key. A `Tagged` discriminant is not a string at all: it is the
+  variant's classified name symbol, fixed-width `Copy` data pointing into no region
+  ([label-interning.md](label-interning.md)).
   [`KExpression`](../src/machine/model/ast.rs) is a `Copy` handle whose parts run
   is a bumped slice of `Copy` parts
   ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)).
@@ -241,8 +243,8 @@ needs both).
 
 ## String residence
 
-Every string a value-family slot holds — a `KObject::KString`, a `Tagged`
-discriminant, a `KKey::String` dict key — is a `&'a str` bumped into the
+Every string a value-family slot holds — a `KObject::KString`, a
+`KKey::String` dict key — is a `&'a str` bumped into the
 region the value lives in
 ([`RegionBrand::allocator`](../src/machine/core/arena.rs), over workgraph's
 [`BumpAllocator::text`](../workgraph/src/witnessed/bump.rs)). The slot
@@ -265,9 +267,10 @@ Re-bumping is what makes the empty-reach verdict above honest: a string cell
 that named no region while still pointing into a retiring one would dangle with
 no fold able to rescue it, and nothing downstream able to catch it. So every
 substrate door re-homes a top-node string cell and every string dict key before
-the verdict is read, the tagged door re-homes its discriminant into the same
-region as its payload substrate, and the copy verb re-bumps at the destination —
-which is what keeps the relocation's release-exact answer exact. Pinning paths
+the verdict is read, and the copy verb re-bumps at the destination —
+which is what keeps the relocation's release-exact answer exact. A tagged value's
+discriminant needs none of this: a symbol names no region, so a `Tagged` carrier's
+only region-resident part is its payload substrate. Pinning paths
 (a retaining adoption, a projection's `deep_clone`) share the pointer, covered
 by the reach that already names the producer region.
 

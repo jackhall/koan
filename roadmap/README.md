@@ -48,7 +48,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Deferred signature summaries](reduce_allocs/deferred-signature-summaries.md)
 - [Symbol-keyed dispatch buckets](reduce_allocs/symbol-keyed-dispatch-buckets.md)
-- [Symbol-keyed nominal member names](reduce_allocs/symbol-keyed-nominal-members.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
@@ -56,6 +55,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)
 - [Record-typed parameter list in the FN type constructor](type_language/fn-type-record-parameter-list.md)
 - [Module element-type join](type_language/module-element-type-join.md)
+- [Name-token slots for binder positions](type_language/name-token-slots.md)
 - [Union-typed carrier slots for builtin signatures](type_language/union-carrier-slots.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
 

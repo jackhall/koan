@@ -11,7 +11,7 @@ companion; [type-registry.md](type-registry.md) is the storage story.
 Every `KType` carries a wide digest, computed bottom-up when the type is
 constructed — children carry theirs, so each node's digest is shallow work at
 build time. A recursive member digests at seal, over the canonical presentation
-of its own strongly-connected component — members in name order, intra-component
+of its own strongly-connected component — members in name-symbol order, intra-component
 sibling references as index literals, references outside the component folding
 the referent's finished digest; a member's identity is `(SCC digest, index)`.
 Identity follows the reference structure, not the declaration boundary: types
