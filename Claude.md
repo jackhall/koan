@@ -14,6 +14,7 @@
 # Rust Conventions
 - When refactoring types/lifetimes, verify with `cargo build` after each step rather than batching multiple type changes.
 - Prefer the simplest design; avoid OnceLock or complex synchronization unless explicitly needed.
+- Find joy in deleting unused or unnecessary code.
 
 ## Design Discussions
 - When the user asks a conceptual or 'should we?' question, answer it first — do NOT immediately start implementing.
