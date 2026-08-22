@@ -16,12 +16,19 @@ consulted only when a label is rendered. No per-record, per-call, or per-node ow
   in every registry, on every thread, in every run.
 - **Label interner** — the digest → text side table (`LabelInterner`), written at
   syntactic-label construction sites and read only by rendering. It is *not* a
-  lookup authority: probes and comparisons never consult it.
+  lookup authority: probes and comparisons never consult it. One table serves a
+  whole run: it is created **before parse**, handed to the parser, and adopted by
+  the run frame, so the entries the parse boundary wrote are the ones a diagnostic
+  later resolves through.
 - **`RunRegistries`** — the run frame's owned bundle of run-lifetime lookup state:
   the [type registry](typing/type-registry.md) and the label interner. A plain
   field on the scheduler-owned run `CallFrame` — no `Rc`, no process-global, no
   `thread_local!` — reached by reference through the execution context and dropped
-  with the run frame. The bundle lives on the ordinary heap, not in region
+  with the run frame. It is minted by `RunRegistries::with_labels` when the run
+  frame is established, adopting the interner the parse filled rather than opening
+  an empty one beside it
+  ([interpret.rs](../src/machine/execute/interpret.rs) is the ladder that threads
+  it). The bundle lives on the ordinary heap, not in region
   storage: both registries own growing maps that need `Drop`, and regions are
   Drop-free by design.
 
@@ -170,6 +177,7 @@ Every name-keyed table keys by this vocabulary, identity-hashed, so a lookup is 
 | `Bindings::data` (values) | `ValueSymbol` |
 | `Bindings::types` | `TypeSymbol` |
 | `Bindings::operators` (probe → group) | `KeywordSymbol` |
+| `Bindings::functions` and the claim store's bucket channel | `&[KeyElement]`, a run of `Keyword(KeywordSymbol)` / `Slot` |
 | the SIG decl scope's `VAL`-slot collector | `ValueSymbol` |
 | a `Module`'s `type_members` / `slot_type_tags` | `TypeSymbol` / `ValueSymbol` |
 | a `SigSchema`'s `abstract_members` / `manifest_members` | `TypeSymbol` |
@@ -179,6 +187,14 @@ Every name-keyed table keys by this vocabulary, identity-hashed, so a lookup is 
 The claim store's name channel keys by the raw `Symbol`: a claim is stamped before its
 producer's kind has settled and spans both bindable classes, and one map stays sound
 because the two classes name disjoint text.
+
+A dispatch bucket key is the one composite in that table: not a single label but a run of
+positions, a keyword's `KeywordSymbol` where the shape fixes a token and `Slot` where it
+takes an argument ([`KeyElement`](../src/machine/model/types/signature.rs)). The element is
+`Copy` and lifetime-free, so the run a caller owns and the run a scope bumped into its region
+are the same type — one derived `Hash`, and a key re-homes by copying `u128`s rather than
+keyword bytes. Rendering such a key names each keyword by resolving its symbol, on the same
+miss-renders-a-placeholder rule as any other label.
 
 Interned [type nodes](typing/type-registry.md) carry the same currency wherever they carry
 a binding name: an `AbstractType`'s `name` and `param_names`, a sealed `SetMember`'s
@@ -202,10 +218,27 @@ user-visible disposition is raised at the text→symbol declaration seam
 ([typing/elaboration.md § Binding-map partition](typing/elaboration.md#binding-map-partition)),
 which is the one place the rule is a runtime answer rather than a type.
 
-Conversion sits at the **lookup seam**, not the parse boundary: a resolve ladder takes
-`&str`, classifies once at the top with `of`, and compares symbol bits from there down.
-A wrong-class probe misses at that conversion — against a map that could never have held
-such a key.
+## Where text becomes a symbol
+
+The conversion seam is per vocabulary, and the two answers differ because the vocabularies
+are reached differently.
+
+The **keyword** vocabulary converts at the **parse boundary**. Where the parser classifies a
+token as keyword-class ([tokens.rs](../src/parse/tokens.rs)) it mints the token's
+`KeywordSymbol` and interns it in the same step, and the part carries a `KeywordToken` —
+program-storage text beside that symbol ([ast.rs](../src/machine/model/ast.rs)) — from then
+on. Nothing downstream re-hashes: a node's bucket key, a signature element, an operator
+chain's cached registry probe and every keyword comparison read the symbol the parse already
+minted. Registration re-interns at `ExpressionSignature::mint`, because a draft may spell a
+token lowercase and the bucket it keys is the normalized spelling. That placement is not
+convenience — `Symbol::of` is a BLAKE3 hash, and a keyword sits on the hot dispatch probe
+path, where paying one per keyword per call is exactly the cost a parse-time cache exists to
+remove.
+
+The **value** and **type** vocabularies convert at the **lookup seam** instead: a resolve
+ladder takes `&str`, classifies once at the top with `of`, and compares symbol bits from
+there down. A wrong-class probe misses at that conversion — against a map that could never
+have held such a key.
 
 ## Probes never intern
 
@@ -222,3 +255,9 @@ resolves text through the label interner reached from the execution context via
 continue to take the type registry alone; anything that renders text takes the
 bundle. A resolve miss renders a stable placeholder rather than failing: error
 paths stay total.
+
+## Open work
+
+- [roadmap/reduce_allocs/parse-interned-identifiers.md](../roadmap/reduce_allocs/parse-interned-identifiers.md)
+  — extend the parse-boundary mint-and-intern to `Identifier` and `Type` tokens, so the
+  value and type vocabularies stop re-deriving a digest the parser could have carried.

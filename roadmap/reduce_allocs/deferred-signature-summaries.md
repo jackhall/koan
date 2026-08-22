@@ -25,7 +25,8 @@ allocations (dhat, 2026-08-18), and every user `FN`/`OP` registration pays it ag
 
 - *Collision-time render source — open.* Where the diagnostic's text comes from once
   nothing is pre-rendered: render from the bucket entry's stored dispatch token (the
-  `StoredDispatchTokenElement` run already encodes keywords and argument shape) versus
+  `DispatchTokenElement` run already encodes each keyword's `KeywordSymbol`, which the
+  run's interner resolves back to text, beside the argument shape) versus
   opening the colliding sibling's `SealedFunction` on the error path to call `summarize`
   there. Recommended: the stored token, keeping the "no write verb ever opens a carrier"
   seal discipline intact even on the collision arm.

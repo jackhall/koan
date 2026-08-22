@@ -29,9 +29,7 @@ parts carry their `KeywordSymbol`, minted and interned at the parse boundary.
 
 ## Dependencies
 
-**Requires:**
-
-- [symbol-keyed-dispatch-buckets.md](symbol-keyed-dispatch-buckets.md) — the parse-time
-  interner plumbing and the carried-symbol part shape this item extends.
+**Requires:** none — the parse-time interner plumbing and the carried-symbol part shape
+this item extends are shipped substrate ([design/label-interning.md](../../design/label-interning.md)).
 
 **Unblocks:** none.

@@ -96,13 +96,6 @@ impl std::fmt::Display for KeywordToken<'_> {
     }
 }
 
-impl std::ops::Deref for KeywordToken<'_> {
-    type Target = str;
-    fn deref(&self) -> &str {
-        self.text
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum KLiteral<'a> {
     Number(f64),

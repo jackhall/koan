@@ -70,7 +70,10 @@ nested `Expression`, `SigiledTypeExpr`, `ListLiteral`, `DictLiteral`, or typed
 The `Keyword`-vs-slot split is the parser's contract with dispatch:
 
 - `Keyword` parts contribute fixed tokens to a signature's bucket key (the part
-  that has to match exactly).
+  that has to match exactly). A keyword part carries a `KeywordToken`: its
+  program-storage text beside the `KeywordSymbol` the classifier minted and
+  interned for it, and the symbol is what the key holds and every keyword
+  comparison reads ([label-interning.md](label-interning.md)).
 - `Identifier`, `Type`, literals, and sub-expressions become slots that compete
   on type specificity (see [typing/ktype/README.md](typing/ktype/README.md)).
 
@@ -169,8 +172,11 @@ convention:
 The chain shape is a refinement of `Keyworded`: a slot-led `Slot (Keyword Slot)+`
 run with two or more keyword positions, which nothing else produces (no builtin
 reaches two keywords behind a leading argument). It carves the track for chainable
-user operators — the operator probe caches the sorted-joined unique operators that
-the per-scope operator registry is looked up by.
+user operators — the operator probe caches the `KeywordSymbol` of the sorted,
+deduped unique operators the per-scope operator registry is keyed by. The sorted
+run streams through one hasher, so the joined spelling the key stands for is never
+materialized; a registry probe compares symbol bits, and only the cold
+diagnostic paths re-derive the spelling from the chain's own parts.
 
 A recognized chain reduces in
 [`decide/operator_chain.rs`](../src/machine/execute/decide/operator_chain.rs)
