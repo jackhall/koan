@@ -12,7 +12,7 @@
 
 use std::rc::Rc;
 
-use crate::builtins::test_support::{TestRun, keyword_name, run_root_bare};
+use crate::builtins::test_support::{TestRun, keyword_name, probe_symbol, run_root_bare};
 use crate::machine::DeliveredOperatorGroup;
 use crate::machine::core::{
     BindingIndex, CallFrame, GroupSeal, Scope, program_storage, run_root_storage,
@@ -56,7 +56,7 @@ fn register_then_resolve_group_by_probe() {
         )
         .unwrap();
     let resolved = scope
-        .resolve_operator_group_delivered(&key, None)
+        .resolve_operator_group_delivered(probe_symbol(&key), None)
         .expect("registered probe resolves");
     assert!(resolved.open(|group| {
         group.covers(&["+"])
@@ -81,7 +81,11 @@ fn undeclared_probe_misses() {
         )
         .unwrap();
     // `*` was never registered.
-    assert!(scope.resolve_operator_group_delivered("*", None).is_none());
+    assert!(
+        scope
+            .resolve_operator_group_delivered(probe_symbol("*"), None)
+            .is_none()
+    );
 }
 
 #[test]
@@ -122,7 +126,7 @@ fn cross_group_probe_misses() {
     // produces the probe "+ |", which nothing registered — a clean miss.
     assert!(
         scope
-            .resolve_operator_group_delivered("+ |", None)
+            .resolve_operator_group_delivered(probe_symbol("+ |"), None)
             .is_none()
     );
 }
@@ -158,13 +162,13 @@ fn innermost_scope_shadows_outer() {
 
     // The inner registration wins the chain walk.
     let resolved = inner
-        .resolve_operator_group_delivered("+", None)
+        .resolve_operator_group_delivered(probe_symbol("+"), None)
         .expect("inner registration resolves");
     assert!(resolved.open(|group| matches!(group.mode(), ReductionMode::FoldRight)));
 
     // From the outer scope, only the outer registration is visible.
     let outer_resolved = outer
-        .resolve_operator_group_delivered("+", None)
+        .resolve_operator_group_delivered(probe_symbol("+"), None)
         .expect("outer registration resolves");
     assert!(outer_resolved.open(|group| matches!(group.mode(), ReductionMode::FoldLeft)));
 }
@@ -246,12 +250,12 @@ fn inner_registration_of_a_builtin_probe_wins_inside_and_not_outside() {
         .expect("a builtin probe is shadowable, not a rebind");
 
     let inside = inner
-        .resolve_operator_group_delivered("+", None)
+        .resolve_operator_group_delivered(probe_symbol("+"), None)
         .expect("the inner registration resolves");
     assert!(inside.open(|group| matches!(group.mode(), ReductionMode::FoldRight)));
 
     let outside = root
-        .resolve_operator_group_delivered("+", None)
+        .resolve_operator_group_delivered(probe_symbol("+"), None)
         .expect("the root's builtin additive group resolves");
     assert!(outside.open(|group| {
         matches!(group.mode(), ReductionMode::FoldLeft) && group.covers(&["+", "-"])
@@ -368,12 +372,15 @@ fn using_window_surfaces_the_modules_operator_group() {
         .unwrap();
 
     // Outside the module the probe is undeclared.
-    assert!(root.resolve_operator_group_delivered("+", None).is_none());
+    assert!(
+        root.resolve_operator_group_delivered(probe_symbol("+"), None)
+            .is_none()
+    );
 
     // `USING vec_ops SCOPE (…)`: the window borrows the module's façade over the call site.
     let window = root.alloc_transparent_window_for_test(module.bindings());
     let resolved = window
-        .resolve_operator_group_delivered("+", None)
+        .resolve_operator_group_delivered(probe_symbol("+"), None)
         .expect("the window surfaces the module's registry entry");
     assert!(resolved.open(|group| matches!(group.mode(), ReductionMode::FoldRight)));
 }
@@ -400,7 +407,7 @@ fn subset_registration_covers_every_probe_of_the_member_set() {
     let mut addresses = Vec::new();
     for probe in ["+", "-", "+ -"] {
         let resolved = scope
-            .resolve_operator_group_delivered(probe, None)
+            .resolve_operator_group_delivered(probe_symbol(probe), None)
             .unwrap_or_else(|| panic!("the probe `{probe}` must resolve the registered group"));
         addresses.push(record_address(&resolved));
     }
@@ -447,7 +454,7 @@ fn resolved_group_survives_the_declaring_frames_shell_drop() {
         let reader: Rc<CallFrame> = CallFrame::new(scope);
         reader.with_scope(|chain_scope| {
             chain_scope
-                .resolve_operator_group_delivered("≺", None)
+                .resolve_operator_group_delivered(probe_symbol("≺"), None)
                 .expect("the declaring frame's registration resolves one region down")
         })
     });
@@ -491,7 +498,7 @@ fn resolved_carrier_reaches_the_declaring_ancestors_region() {
             "the frame child must open its own region for the assertion to say anything",
         );
         let resolved = inner
-            .resolve_operator_group_delivered("~", None)
+            .resolve_operator_group_delivered(probe_symbol("~"), None)
             .expect("the ancestor's registration resolves from the frame child");
         assert!(
             resolved

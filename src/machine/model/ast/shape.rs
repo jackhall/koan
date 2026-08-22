@@ -11,6 +11,7 @@ use crate::machine::SplicedCell;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::KeyElement;
 use crate::machine::model::ast::KeywordToken;
+use crate::machine::model::labels::KeywordSymbol;
 use crate::source::Spanned;
 
 use super::working::WorkingExpression;
@@ -210,14 +211,15 @@ fn is_operator_chain_shape<'a, P: Part<'a>>(parts: &[Spanned<P>]) -> bool {
     })
 }
 
-/// The unique operator keywords of an `OperatorChain`, sorted and joined into the probe key the
-/// per-scope operator registry is looked up by, bumped into `brand`'s region. `None` for any other
-/// shape.
+/// The symbol of the probe key an `OperatorChain` looks the per-scope operator registry up by:
+/// its unique operator keywords, sorted and space-joined. `None` for any other shape.
+///
+/// The sorted run streams through [`KeywordSymbol::of_parts`], so the join itself is never built
+/// and nothing is bumped — the node carries `u128` bits, and a registry probe compares them.
 pub fn operator_probe_for<'a, P: Part<'a>>(
-    brand: RegionBrand<'a>,
     parts: &[Spanned<P>],
     shape: DispatchShape,
-) -> Option<&'a str> {
+) -> Option<KeywordSymbol> {
     if shape != DispatchShape::OperatorChain {
         return None;
     }
@@ -230,7 +232,7 @@ pub fn operator_probe_for<'a, P: Part<'a>>(
         .collect();
     operators.sort_unstable();
     operators.dedup();
-    Some(brand.allocator().text(&operators.join(" ")))
+    KeywordSymbol::of_parts(&operators)
 }
 
 /// The stored bucket key: `Keyword` parts contribute the symbol they carry, every other part a

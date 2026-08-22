@@ -602,6 +602,13 @@ pub(crate) fn kw_part<'a>(text: &'a str) -> ExpressionPart<'a> {
     )
 }
 
+/// The operator-probe symbol for a probe key a test spells out (`"+"`, `"* +"`).
+#[cfg(test)]
+pub(crate) fn probe_symbol(text: &str) -> crate::machine::model::labels::KeywordSymbol {
+    crate::machine::model::labels::KeywordSymbol::of(text)
+        .expect("a test fixture operator probe is keyword-class")
+}
+
 /// A keyword bucket-key element from its spelling, for a key a test spells out by hand.
 #[cfg(test)]
 pub(crate) fn key_keyword(text: &str) -> crate::machine::model::KeyElement {

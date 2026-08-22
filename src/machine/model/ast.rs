@@ -431,7 +431,7 @@ pub struct KExpression<'a> {
     pub file: Option<FileId>,
     untyped_key: &'a [KeyElement],
     shape: DispatchShape,
-    operator_probe: Option<&'a str>,
+    operator_probe: Option<KeywordSymbol>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
     binder_name_slot: Option<usize>,
 }
@@ -498,7 +498,7 @@ impl<'a> KExpression<'a> {
             file,
             untyped_key,
             shape,
-            operator_probe: operator_probe_for(brand, parts, shape),
+            operator_probe: operator_probe_for(parts, shape),
             binder_plan: None,
             binder_name_slot: None,
         };
@@ -570,9 +570,9 @@ impl<'a> KExpression<'a> {
         self.shape
     }
 
-    /// Cached operator-registry probe key: `Some` only for an `OperatorChain`, holding
-    /// the sorted-joined unique operator keywords.
-    pub fn operator_probe(&self) -> Option<&'a str> {
+    /// Cached operator-registry probe key: `Some` only for an `OperatorChain`, holding the symbol
+    /// of its sorted-joined unique operator keywords.
+    pub fn operator_probe(&self) -> Option<KeywordSymbol> {
         self.operator_probe
     }
 

@@ -175,9 +175,11 @@ impl<'a> OperatorGroup<'a> {
     }
 }
 
-/// Sorts (byte order), dedups, and joins `operators` with `" "`. This is the same key
-/// `operator_probe_for` (`src/machine/model/ast.rs`) computes from a real parse, so a
-/// group's registration keys and a chain's probe always agree on one key shape.
+/// Sorts (byte order), dedups, and joins `operators` with `" "` — the probe key's **spelling**,
+/// for the registration that interns it and the diagnostic that renders it. A chain's own probe
+/// (`operator_probe_for`, `src/machine/model/ast/shape.rs`) mints the symbol of this exact run
+/// without building the join, so a group's registration keys and a chain's probe are the same
+/// symbol.
 pub fn probe_key(operators: &[&str]) -> String {
     let mut sorted: Vec<&str> = operators.to_vec();
     sorted.sort_unstable();

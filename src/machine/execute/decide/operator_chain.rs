@@ -23,7 +23,7 @@ use crate::machine::model::labels::KeywordSymbol;
 use crate::machine::model::{
     ExpressionPart, KeywordToken, PartClass, WorkingExpression, WorkingPart,
 };
-use crate::machine::model::{FoldDirection, KeyElement, OperatorGroup, ReductionMode};
+use crate::machine::model::{FoldDirection, KeyElement, OperatorGroup, ReductionMode, probe_key};
 use crate::machine::{KError, KErrorKind, ProducerId};
 use crate::scheduler::Deps;
 use crate::source::{Span, Spanned};
@@ -45,7 +45,7 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
         .expect("OperatorChain shape guarantees a cached operator probe");
     let chain = ctx.chain_deref();
     match s.resolve_operator_group_delivered(probe, chain) {
-        None => park_on_pending_operators(ctx, s, expr, probe),
+        None => park_on_pending_operators(ctx, s, expr),
         Some(delivered) => {
             let operators = chain_operators(expr);
             match delivered.open(|group| ChainPlan::of(group, &operators)) {
@@ -53,7 +53,7 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
                 // registry-build bug — surface it as a clean non-match rather than a wrong fold.
                 None => Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                     expr: expr.summarize(),
-                    reason: cross_group_reason(probe),
+                    reason: cross_group_reason(&probe_key(&operators)),
                 }))),
                 Some(ChainPlan::FoldLeft) => reduce_fold_left(ctx, expr),
                 Some(ChainPlan::FoldRight) => reduce_fold_right(ctx, expr),
@@ -434,13 +434,14 @@ fn park_on_pending_operators<'step, 'b>(
     ctx: &DecideCtx<'_, 'step, '_>,
     s: &'b Scope<'b>,
     expr: &WorkingExpression<'step>,
-    probe: &str,
 ) -> Outcome<'step> {
     let to_wait = pending_operator_sources(ctx, s, expr);
     if to_wait.is_empty() {
+        // The spelling the diagnostic names is re-derived here rather than cached on the node: the
+        // probe travels as symbol bits, and this is the one path that has to render it.
         return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),
-            reason: undeclared_operator_reason(probe),
+            reason: undeclared_operator_reason(&probe_key(&chain_operators(expr))),
         })));
     }
     let parked_expr = *expr;

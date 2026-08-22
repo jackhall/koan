@@ -12,7 +12,7 @@ fn pipe_is_a_unary_operator_group() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let group = scope
-        .resolve_operator_group_delivered("|", None)
+        .resolve_operator_group_delivered(crate::builtins::test_support::probe_symbol("|"), None)
         .expect("`|` must resolve to a registered operator group");
     let mode = group.open(|group| format!("{:?}", group.mode()));
     assert!(

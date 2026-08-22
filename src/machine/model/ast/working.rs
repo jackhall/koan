@@ -12,6 +12,7 @@
 //! reach the value channel at all — not by audit, but because no constructor takes one.
 
 use crate::machine::core::{RegionBrand, read_resting};
+use crate::machine::model::labels::KeywordSymbol;
 use crate::machine::model::{Carried, Held, KObject};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::machine::{AdoptSeam, SplicedCell};
@@ -221,7 +222,7 @@ pub struct WorkingExpression<'a> {
     pub file: Option<FileId>,
     untyped_key: &'a [KeyElement],
     shape: DispatchShape,
-    operator_probe: Option<&'a str>,
+    operator_probe: Option<KeywordSymbol>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
     binder_name_slot: Option<usize>,
 }
@@ -302,7 +303,8 @@ impl<'a> WorkingExpression<'a> {
 
     /// Construction chokepoint, over a parts run **already resident** in `brand`'s region: fills the
     /// structural cache from it and does nothing else. Every door above lands here, differing only
-    /// in how the run reached the region.
+    /// in how the run reached the region; [`respliced`](Self::respliced) is the one door that does
+    /// not, since it inherits the cache it would otherwise rebuild.
     fn from_run(
         brand: RegionBrand<'a>,
         parts: &'a [Spanned<WorkingPart<'a>>],
@@ -316,7 +318,7 @@ impl<'a> WorkingExpression<'a> {
             file,
             untyped_key: stored_untyped_key(brand, parts),
             shape,
-            operator_probe: operator_probe_for(brand, parts, shape),
+            operator_probe: operator_probe_for(parts, shape),
             binder_plan: None,
             binder_name_slot: None,
         }
@@ -346,7 +348,12 @@ impl<'a> WorkingExpression<'a> {
     /// Rebuild this node with a new parts run — the splice path: a part walk replaces each wrap slot
     /// with its resolved cell and each eager slot with a staging hole, and `install_eager_subs`'s
     /// finish replaces each hole with the cell the dep delivered. `span`, `file` and the binder
-    /// caches ride through, and the structural cache refills from the new run.
+    /// caches ride through.
+    ///
+    /// The one door that does not land in [`from_run`](Self::from_run): a splice substitutes slots
+    /// one for one and writes no keyword position, so the bucket key and the operator probe are
+    /// invariant under it and ride through as the handles they already are. Re-deriving them would
+    /// bump a second identical key run per splice, and a chain splices once per reduction step.
     ///
     /// Every caller's run is computed slot by slot, so this door only takes the iterator form —
     /// see [`RunIter`].
@@ -355,10 +362,17 @@ impl<'a> WorkingExpression<'a> {
         I: IntoIterator<Item = Spanned<WorkingPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        let mut rebuilt = Self::build_from_iter(brand, parts, self.span, self.file);
-        rebuilt.binder_plan = self.binder_plan;
-        rebuilt.binder_name_slot = self.binder_name_slot;
-        rebuilt
+        let parts = brand.allocator().slice_from_iter(parts);
+        WorkingExpression {
+            parts,
+            span: self.span,
+            file: self.file,
+            untyped_key: self.untyped_key,
+            shape: classify_dispatch_shape(parts),
+            operator_probe: self.operator_probe,
+            binder_plan: self.binder_plan,
+            binder_name_slot: self.binder_name_slot,
+        }
     }
 
     /// Cached dispatch shape (see [`classify_dispatch_shape`]).
@@ -367,7 +381,7 @@ impl<'a> WorkingExpression<'a> {
     }
 
     /// Cached operator-registry probe key: `Some` only for an `OperatorChain`.
-    pub fn operator_probe(&self) -> Option<&'a str> {
+    pub fn operator_probe(&self) -> Option<KeywordSymbol> {
         self.operator_probe
     }
 

@@ -30,7 +30,26 @@ pub struct Symbol(pub u128);
 impl Symbol {
     /// The label's digest. Pure — no interner, no allocation, no ambient state.
     pub fn of(text: &str) -> Symbol {
-        let hash = blake3::hash(text.as_bytes());
+        Symbol::of_hash(blake3::hash(text.as_bytes()))
+    }
+
+    /// The digest of `fragments` joined by single spaces, taken without materializing the join:
+    /// one hasher streams each fragment and the separator between them, so the bytes fed are
+    /// exactly the bytes [`of`](Self::of) sees over the joined string and the two agree bit for
+    /// bit. The joined form is what a caller renders; nothing here builds it.
+    pub fn of_parts(fragments: &[&str]) -> Symbol {
+        let mut hasher = blake3::Hasher::new();
+        for (index, fragment) in fragments.iter().enumerate() {
+            if index > 0 {
+                hasher.update(b" ");
+            }
+            hasher.update(fragment.as_bytes());
+        }
+        Symbol::of_hash(hasher.finalize())
+    }
+
+    /// The low 128 bits of a finished BLAKE3 hash.
+    fn of_hash(hash: blake3::Hash) -> Symbol {
         let low: [u8; 16] = hash.as_bytes()[..16]
             .try_into()
             .expect("BLAKE3 output is 32 bytes");
@@ -180,6 +199,22 @@ classified_symbol!(
     crate::machine::model::is_keyword_token,
     "a keyword-class token"
 );
+
+impl KeywordSymbol {
+    /// The probe key `fragments` joined by single spaces stands for, minted without building the
+    /// join — how an operator chain reaches its group registration, whose powerset keys are minted
+    /// from the joined spelling (`crate::machine::core::bindings::ops::powerset_probes`).
+    ///
+    /// Every fragment must classify keyword-class on its own, and the joined run then does too: a
+    /// separator adds no lowercase letter, and a fragment carrying letters already clears the
+    /// two-uppercase bar for the whole.
+    pub fn of_parts(fragments: &[&str]) -> Option<Self> {
+        fragments
+            .iter()
+            .all(|fragment| crate::machine::model::is_keyword_token(fragment))
+            .then(|| KeywordSymbol(Symbol::of_parts(fragments)))
+    }
+}
 
 /// The **recovery door**: a table keyed by [`TypeSymbol`] admits a probe by bare symbol bits, and a
 /// hit hands back the *stored* key — a classified symbol minted where its text existed. Symbol

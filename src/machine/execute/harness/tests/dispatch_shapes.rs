@@ -827,7 +827,10 @@ fn classifier_operator_chain_routes_to_operator_chain() {
         DispatchShape::OperatorChain,
         "`a + b + c` must classify as OperatorChain",
     );
-    assert_eq!(expr.operator_probe(), Some("+"));
+    assert_eq!(
+        expr.operator_probe(),
+        Some(crate::builtins::test_support::probe_symbol("+"))
+    );
 }
 
 /// `a + b` — a single operator is one keyword position, so ordinary binary

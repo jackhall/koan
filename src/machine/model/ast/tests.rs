@@ -1,4 +1,4 @@
-use crate::builtins::test_support::kw_part;
+use crate::builtins::test_support::{kw_part, probe_symbol};
 use crate::machine::core::{ProgramBrand, program_storage};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{
@@ -276,7 +276,7 @@ fn operator_chain_three_operand_classifies_and_probes() {
         vec![ident("a"), kw("+"), ident("b"), kw("+"), ident("c")],
     );
     assert_eq!(e.shape(), DispatchShape::OperatorChain);
-    assert_eq!(e.operator_probe(), Some("+"));
+    assert_eq!(e.operator_probe(), Some(probe_symbol("+")));
 }
 
 #[test]
@@ -289,7 +289,7 @@ fn operator_chain_mixed_operators_probe_is_sorted_unique() {
         vec![ident("a"), kw("+"), ident("b"), kw("*"), ident("c")],
     );
     assert_eq!(e.shape(), DispatchShape::OperatorChain);
-    assert_eq!(e.operator_probe(), Some("* +"));
+    assert_eq!(e.operator_probe(), Some(probe_symbol("* +")));
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn union_pipe_chain_over_types_is_operator_chain() {
     // `A | B | C` — type operands, two `|` positions.
     let e = build(brand, vec![ty("A"), kw("|"), ty("B"), kw("|"), ty("C")]);
     assert_eq!(e.shape(), DispatchShape::OperatorChain);
-    assert_eq!(e.operator_probe(), Some("|"));
+    assert_eq!(e.operator_probe(), Some(probe_symbol("|")));
 }
 
 #[test]
@@ -371,7 +371,7 @@ fn cache_rides_a_copy() {
     );
     let c = e;
     assert_eq!(c.shape(), DispatchShape::OperatorChain);
-    assert_eq!(c.operator_probe(), Some("|"));
+    assert_eq!(c.operator_probe(), Some(probe_symbol("|")));
     assert_eq!(c.untyped_key(), e.untyped_key());
     assert_eq!(c.stored_key(), e.stored_key());
 }

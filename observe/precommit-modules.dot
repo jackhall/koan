@@ -712,12 +712,14 @@ digraph {
     "koan::machine::model::ast::shape" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::machine::model::ast::working" [label="uses", style="dashed"];
+    "koan::machine::model::ast::shape" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::ast::shape" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::ast::working" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::ast::working" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::ast::working" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::ast::working" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::ast::working" -> "koan::machine::model::ast::shape" [label="uses", style="dashed"];
+    "koan::machine::model::ast::working" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::ast::working" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::model" [label="uses", style="dashed"];

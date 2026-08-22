@@ -107,6 +107,34 @@ fn keyword_symbols_cover_joined_operator_probes() {
     assert!(KeywordSymbol::of("IntOrd").is_none());
 }
 
+/// The streamed mint and the joined mint are the same symbol. This is what lets an operator chain
+/// carry `u128` bits while its group registration keys off the joined spelling
+/// (`powerset_probes`) — a divergence here would make every chain miss its own registration.
+#[test]
+fn a_streamed_probe_key_mints_what_the_joined_one_does() {
+    for fragments in [
+        vec!["+"],
+        vec!["*", "+"],
+        vec!["AND", "OR"],
+        vec!["<=", "==", ">="],
+        vec!["+", "AND", "≺"],
+    ] {
+        assert_eq!(
+            KeywordSymbol::of_parts(&fragments),
+            KeywordSymbol::of(&fragments.join(" ")),
+            "streamed and joined mints must agree for {fragments:?}",
+        );
+    }
+}
+
+/// `of_parts` classifies every fragment, so a run carrying a non-keyword token mints nothing —
+/// the same seam miss `of` gives on the joined spelling.
+#[test]
+fn a_probe_key_with_a_value_token_mints_nothing() {
+    assert!(KeywordSymbol::of_parts(&["+", "xs"]).is_none());
+    assert!(KeywordSymbol::of(&["+", "xs"].join(" ")).is_none());
+}
+
 #[test]
 fn binder_symbols_carry_the_bind_kind_and_reject_keywords() {
     assert_eq!(

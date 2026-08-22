@@ -219,12 +219,15 @@ impl<'a> Scope<'a> {
     /// the root's `+` still wins for `Number` operands through the strict bucket gate,
     /// while a scope that declares `+` over its own operand type reduces its own runs.
     /// `chain = None` is the test/builtin-registration unfiltered mode.
+    ///
+    /// `probe` is the chain's cached probe symbol
+    /// ([`KExpression::operator_probe`](crate::machine::model::ast::KExpression::operator_probe)),
+    /// minted once at construction — the walk compares symbol bits and hashes no text per call.
     pub fn resolve_operator_group_delivered(
         &self,
-        probe: &str,
+        probe: KeywordSymbol,
         chain: Option<&LexicalFrame>,
     ) -> Option<DeliveredOperatorGroup> {
-        let probe = KeywordSymbol::of(probe)?;
         self.walk_chain(|scope| {
             scope
                 .bindings()
