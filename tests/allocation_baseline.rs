@@ -62,15 +62,16 @@ fn allocations_for(source: &str, path: &str) -> u64 {
     delta
 }
 
-/// 100 tail-recursive steps, 98.9 allocations each — exactly linear, measured flat at
-/// 10/50/100/200. Measured 2026-08-22 at 12 532, down from 14 917 when a call re-keyed its
-/// arguments onto parameter names: the schema-keyed argument view pays no per-parameter name
-/// and no per-call container on either lane. The bound is that plus 37, less than the 100 a
-/// single new per-step allocation would add. Tight on purpose: a looser bound cannot see one
-/// allocation, and rebaselining is meant to be a deliberate edit.
+/// 100 tail-recursive steps, 92.0 allocations each — exactly linear, measured flat at
+/// 10/50/100/200. Measured 2026-08-22 at 11 910, down from 12 493 when a dispatch bucket was
+/// keyed by keyword text: 481 of the drop is interpreter startup, which no longer copies a
+/// keyword's bytes per registered bucket key, and the remaining 102 is ≈1 per step — the key run
+/// a splice re-bumped before the splice door began inheriting it. The bound is that plus 37, less
+/// than the 100 a single new per-step allocation would add. Tight on purpose: a looser bound cannot
+/// see one allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
-    const BOUND: u64 = 12_569;
+    const BOUND: u64 = 11_947;
     let delta = allocations_for(
         include_str!("../audit/shapes/tail_loop.koan"),
         "audit/shapes/tail_loop.koan",
@@ -83,14 +84,16 @@ fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
     );
 }
 
-/// A 128-operand `+` chain, so 127 dispatches at ≈26 allocations each — mildly superlinear,
+/// A 128-operand `+` chain, so 127 dispatches at ≈23 allocations each — mildly superlinear,
 /// with marginal cost rising across the 16→32 … 128→256 operand doublings. Measured 2026-08-22
-/// at 5 935, down from 6 689 for the same reason the loop shape dropped. The bound is that plus
-/// 36, under the 127 a single new per-dispatch allocation would add. Same headroom rule as the
+/// at 5 416, down from 5 898 when a dispatch bucket was keyed by keyword text. The per-dispatch
+/// term is unmoved — the drop is the startup the loop shape's drop also carries, plus the joined
+/// probe string the chain's one node no longer builds. The bound is the measurement plus 36,
+/// under the 127 a single new per-dispatch allocation would add. Same headroom rule as the
 /// loop.
 #[test]
 fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
-    const BOUND: u64 = 5_971;
+    const BOUND: u64 = 5_452;
     let delta = allocations_for(
         include_str!("../audit/shapes/operator_chain.koan"),
         "audit/shapes/operator_chain.koan",
@@ -113,7 +116,7 @@ fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
 /// dispatches' marginal cost; differencing *those* leaves what 8 extra scopes cost per
 /// dispatch. Before the walk's buffers moved onto the step scratch arena that difference
 /// measured 509 — ≈2 heap allocations per extra scope walked, per dispatch. Measured
-/// 2026-08-21 it is **−3**: 1 595 allocations for 32 dispatches at depth 10 against 1 598 at
+/// 2026-08-22 it is **−3**: 1 594 allocations for 32 dispatches at depth 10 against 1 597 at
 /// depth 2, the two depths indistinguishable and the deeper walk marginally the cheaper.
 ///
 /// The bound is one allocation per extra dispatch, far under the ≥256 that a single
@@ -190,8 +193,8 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 /// builds no string. What remains in the slope is per-*argument* cost the bind does not own: the
 /// extra source the call site parses, and the delivery carrier each argument travels in.
 ///
-/// Measured 2026-08-21: **1 175** for 32 one-parameter calls (36.7 each) and **2 006** for 32
-/// eight-parameter calls (62.7 each), a slope of 831 — 3.71 per parameter per call. Down from
+/// Measured 2026-08-22: **1 174** for 32 one-parameter calls (36.7 each) and **2 006** for 32
+/// eight-parameter calls (62.7 each), a slope of 832 — 3.71 per parameter per call. Down from
 /// 1 206 / 2 231 (slope 1 025, 4.58 per parameter) when the frame bind resolved each parameter's
 /// symbol back to text through the run's label interner. That resolve built one `String` per
 /// parameter per call, and the drop tracks it: 0.87 per parameter, and 31 of the 32 calls' worth
@@ -203,8 +206,8 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 /// by ≈224.
 #[test]
 fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
-    const PER_CALL_BOUND: u64 = 1_206;
-    const PER_PARAMETER_BOUND: u64 = 862;
+    const PER_CALL_BOUND: u64 = 1_205;
+    const PER_PARAMETER_BOUND: u64 = 863;
     let arity1 = allocations_for(
         include_str!("../audit/shapes/user_fn_params1_calls40.koan"),
         "audit/shapes/user_fn_params1_calls40.koan",

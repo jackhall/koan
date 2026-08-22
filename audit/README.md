@@ -77,21 +77,21 @@ moved it.
 
 | shape | what it exercises | allocations | scaling term |
 |---|---|---|---|
-| `shapes/tail_loop.koan` | 100 tail-recursive steps | 12 502 | 98.9 per step, linear |
-| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 5 907 | ≈26 per dispatch, mildly superlinear |
-| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 828 | — |
-| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 5 426 | 49.9 per dispatch |
-| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 5 289 | — |
-| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 884 | 49.8 per dispatch |
-| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 552 | — |
-| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 622 | 64.7 per call |
-| `shapes/user_fn_params1_calls8.koan` | 8 one-parameter user-function calls | 3 385 | — |
-| `shapes/user_fn_params1_calls40.koan` | 40 one-parameter user-function calls | 4 560 | 36.7 per call |
-| `shapes/user_fn_params8_calls8.koan` | 8 eight-parameter user-function calls | 3 682 | — |
-| `shapes/user_fn_params8_calls40.koan` | 40 eight-parameter user-function calls | 5 688 | 62.7 per call, 3.71 per parameter |
-| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 3 867 | — |
-| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 6 833 | 92.7 per cycle |
-| *(empty program)* | interpreter startup and builtin seeding | 2 973 | — |
+| `shapes/tail_loop.koan` | 100 tail-recursive steps | 11 919 | 92.0 per step, linear |
+| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 5 425 | ≈23 per dispatch, mildly superlinear |
+| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 336 | — |
+| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 4 933 | 49.9 per dispatch |
+| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 4 758 | — |
+| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 352 | 49.8 per dispatch |
+| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 072 | — |
+| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 142 | 64.7 per call |
+| `shapes/user_fn_params1_calls8.koan` | 8 one-parameter user-function calls | 2 903 | — |
+| `shapes/user_fn_params1_calls40.koan` | 40 one-parameter user-function calls | 4 077 | 36.7 per call |
+| `shapes/user_fn_params8_calls8.koan` | 8 eight-parameter user-function calls | 3 200 | — |
+| `shapes/user_fn_params8_calls40.koan` | 40 eight-parameter user-function calls | 5 206 | 62.7 per call, 3.71 per parameter |
+| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 3 387 | — |
+| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 6 353 | 92.7 per cycle |
+| *(empty program)* | interpreter startup and builtin seeding | 2 492 | — |
 
 No shape can use comments: koan has none, and `#` is reserved for quoting. The prose
 that would have headed each file is here instead.
@@ -110,15 +110,15 @@ three-parameter builtin call (`MATCH … -> … WITH …`, bound as `expr` / `re
 `branches`), an arity the binary operator chain does not reach. Between them the four axes
 cover where the execute path's allocation traffic scales.
 
-The step term is exactly linear — 98.9 flat at 10, 50, 100 and 200 steps. The dispatch term
+The step term is exactly linear — 92.0 flat at 10, 50, 100 and 200 steps. The dispatch term
 is not: marginal cost rises across the 16→32, 32→64, 64→128 and 128→256 operand doublings,
 so a chain pays slightly more per operator the longer it gets. Below 16 operands the fixed
 cost swamps the term, so the rise is only readable over the larger sizes. Whatever drives it
 is unmeasured; the shapes are sized to the linear-enough middle rather than to the tail.
 
 The walk term is **flat in depth**. Differencing the two call counts at one depth cancels
-parse and setup and leaves 32 dispatches' marginal cost: 1 598 allocations at depth 2 against
-1 595 at depth 10 — 49.9 and 49.8 per dispatch, the two depths indistinguishable. The walk's
+parse and setup and leaves 32 dispatches' marginal cost: 1 597 allocations at depth 2 against
+1 594 at depth 10 — 49.9 and 49.8 per dispatch, the two depths indistinguishable. The walk's
 per-scope buffers are hosted on the drain's step scratch arena
 ([dag-scheduler.md § The drain protocol](../workgraph/design/dag-scheduler.md#the-drain-protocol)),
 so a deeper walk bumps more scratch bytes and takes no heap allocation for them. The grid's
@@ -145,12 +145,24 @@ when the variant schema was keyed by the tag's rendered text. The 6-per-cycle dr
 variant selection made on the way in and out of the registry, both replaced by the classified
 symbol the declaration already interned.
 
+The **fixed** figure the four axes are read against is the empty program's own: interpreter
+startup and builtin seeding, at **2 492**, down from 2 973 when a bucket key spelled its
+keywords out. Seeding registers every builtin overload, and each registration writes a bucket
+key and a dispatch token; both now hold a keyword's symbol where they held its text, so the
+seeding pass copies no keyword bytes and mints no per-element string. Every absolute figure in
+the table carries that drop, and a shape that declares overloads of its own carries a little more
+of the same saving on top — the 10-deep scope-walk grid's shadowing definitions are the widest,
+at 531. None of it reaches a differencing pair, which cancels registration along with the rest of
+setup; the one marginal term that did move is the step term, 93.0 to 92.0, and that one is the
+splice door's doing — a splice inherits the bucket key its node was constructed with instead of
+bumping a second identical run.
+
 ## The regression test
 
 `tests/allocation_baseline.rs` asserts the two absolute shapes' bracketed counts against a
-stated bound — 12 493 for the loop, 5 898 for the chain, carrying 37 and 36 allocations of
+stated bound — 11 947 for the loop, 5 452 for the chain, carrying 37 and 36 allocations of
 headroom — and each differencing pair's marginal count against its measurement plus 31: 2 101
-for the builtin call, 1 206 for the one-parameter user call, 2 997 for the tagged construction.
+for the builtin call, 1 205 for the one-parameter user call, 2 997 for the tagged construction.
 The bounds are tight by design: the margin is smaller than the 100 (loop), 127 (chain) or 32
 (every differencing pair, which is how many repetitions they differ by) a single new allocation
 on the scaling path would add, so one added allocation fails a test. Rebaselining is meant to be
