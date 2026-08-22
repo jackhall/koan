@@ -5,6 +5,7 @@
 //! `ExpressionPart` tree as compact `t(...)` / `T(...)` notation.
 
 mod basics;
+mod interning;
 mod list_dict;
 mod literals;
 mod spans;

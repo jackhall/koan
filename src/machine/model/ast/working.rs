@@ -25,6 +25,9 @@ use super::shape::{
 use super::{ExpressionPart, KExpression, RunIter};
 use crate::machine::model::StoredBinderKey;
 
+#[cfg(test)]
+mod tests;
+
 /// One slot of a working expression.
 #[derive(Clone, Copy)]
 pub enum WorkingPart<'a> {
