@@ -139,7 +139,7 @@ fn scan_members(body: &KExpression<'_>, name: &str) -> Result<Vec<String>, KErro
                 ))));
             }
             Some(OpArity::Binary) => {
-                let symbol = symbol_from_parts(statement)?;
+                let symbol = symbol_from_parts(statement)?.text();
                 if !members.iter().any(|m| m == symbol) {
                     members.push(symbol.to_string());
                 }

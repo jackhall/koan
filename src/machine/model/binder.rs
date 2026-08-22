@@ -10,11 +10,10 @@
 use smallvec::SmallVec;
 
 use crate::machine::core::{KError, KErrorKind, RegionBrand};
-#[cfg(test)]
-use crate::machine::model::UntypedElement;
-use crate::machine::model::UntypedKey;
-use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{StoredElement, owned_untyped_key};
+use crate::machine::model::ast::{Part, PartClass};
+use crate::machine::model::labels::KeywordSymbol;
+use crate::machine::model::{ExpressionPart, KExpression, KeywordToken};
+use crate::machine::model::{KeyElement, UntypedKey};
 use crate::source::Spanned;
 
 /// Whether a binding — committed or an in-flight placeholder — lives in the value
@@ -86,13 +85,13 @@ pub type BinderBucketFn = for<'a> fn(RegionBrand<'a>, &KExpression<'a>) -> Optio
 /// node's own region.
 #[derive(Clone, Copy, Debug)]
 pub struct BucketKeys<'a> {
-    pub first: &'a [StoredElement<'a>],
-    pub second: Option<&'a [StoredElement<'a>]>,
+    pub first: &'a [KeyElement],
+    pub second: Option<&'a [KeyElement]>,
 }
 
 impl<'a> BucketKeys<'a> {
     /// One key, the `FN` / binary-`OP` shape.
-    pub(crate) fn one(first: &'a [StoredElement<'a>]) -> Self {
+    pub(crate) fn one(first: &'a [KeyElement]) -> Self {
         BucketKeys {
             first,
             second: None,
@@ -100,7 +99,7 @@ impl<'a> BucketKeys<'a> {
     }
 
     /// Both keys in declaration order.
-    pub fn iter(&self) -> impl Iterator<Item = &'a [StoredElement<'a>]> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = &'a [KeyElement]> + '_ {
         std::iter::once(self.first).chain(self.second)
     }
 
@@ -137,7 +136,7 @@ impl<'a> StoredBinderKey<'a> {
             buckets: self
                 .buckets
                 .into_iter()
-                .flat_map(|keys| keys.iter().map(owned_untyped_key).collect::<Vec<_>>())
+                .flat_map(|keys| keys.iter().map(|key| key.to_vec()).collect::<Vec<_>>())
                 .collect(),
         }
     }
@@ -188,8 +187,8 @@ pub(crate) fn type_decl_binder_name<'a>(expr: &KExpression<'a>) -> Option<&'a st
 }
 
 /// Bucket-key extractor for FN. The key must match what a future call would compute via
-/// `KExpression::stored_key`: each Keyword maps to `StoredElement::Keyword`, and each
-/// `<name> :<Type>` pair collapses to one `StoredElement::Slot`.
+/// `KExpression::stored_key`: each Keyword maps to `KeyElement::Keyword`, and each
+/// `<name> :<Type>` pair collapses to one `KeyElement::Slot`.
 ///
 /// Unknown shapes advance silently — the body's full parse surfaces `ShapeError` on real
 /// malformations, so we err toward producing the bucket key for well-formed signatures. An FN
@@ -205,18 +204,18 @@ pub(crate) fn fn_def_binder_bucket<'a>(
     // `<name> :<Type>` pair), so no exact-length iterator spells the run and the fill needs a length
     // before its first element. A signature longer than the inline capacity spills, which is the one
     // case that allocates.
-    let mut key: SmallVec<[StoredElement<'a>; 8]> = SmallVec::new();
+    let mut key: SmallVec<[KeyElement; 8]> = SmallVec::new();
     let mut i = 0;
     while i < parts.len() {
         match parts[i].value {
             ExpressionPart::Keyword(kw) => {
-                key.push(StoredElement::Keyword(kw.text()));
+                key.push(KeyElement::Keyword(kw.symbol()));
                 i += 1;
             }
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
                 if next_is_type_slot(parts, i + 1) =>
             {
-                key.push(StoredElement::Slot);
+                key.push(KeyElement::Slot);
                 i += 2;
             }
             _ => {
@@ -269,15 +268,16 @@ const RESERVED_SYMBOLS: [&str; 12] = [
 /// typed `:KExpression`, so a `QuotedExpression` part arrives raw and un-dispatched (it makes the
 /// declaration a lazy candidate) and its body is read here as data. A multi-part body, a
 /// non-keyword token, or a reserved symbol is a shape error.
-pub(crate) fn symbol_from_quote_body<'a>(inner: &KExpression<'a>) -> Result<&'a str, KError> {
+pub(crate) fn symbol_from_quote_body<'a>(
+    inner: &KExpression<'a>,
+) -> Result<KeywordToken<'a>, KError> {
     let [part] = inner.parts else {
         return Err(symbol_shape_error());
     };
     let ExpressionPart::Keyword(sym) = part.value else {
         return Err(symbol_shape_error());
     };
-    let sym = sym.text();
-    if RESERVED_SYMBOLS.contains(&sym) {
+    if RESERVED_SYMBOLS.contains(&sym.text()) {
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "`{sym}` is reserved by the operator-declaration surface and cannot name an operator",
         ))));
@@ -295,7 +295,7 @@ fn symbol_shape_error() -> KError {
 /// unevaluated body block with this to collect its members; the binder hook uses it to decide
 /// whether to install park edges (discarding the diagnostic — the body's own extraction surfaces
 /// it).
-pub(crate) fn symbol_from_parts<'a>(expr: &KExpression<'a>) -> Result<&'a str, KError> {
+pub(crate) fn symbol_from_parts<'a>(expr: &KExpression<'a>) -> Result<KeywordToken<'a>, KError> {
     let quoted = expr
         .parts
         .iter()
@@ -323,7 +323,8 @@ pub(crate) fn op_def_binder_bucket<'a>(
     brand: RegionBrand<'a>,
     expr: &KExpression<'a>,
 ) -> Option<BucketKeys<'a>> {
-    let sym = symbol_from_parts(expr).ok()?;
+    // The glyph's symbol is already minted on the quoted part, so the park keys are read off it.
+    let sym = symbol_from_parts(expr).ok()?.symbol();
     if is_unary_form(expr) {
         Some(BucketKeys {
             first: stored_unary_key(brand, sym),
@@ -334,50 +335,56 @@ pub(crate) fn op_def_binder_bucket<'a>(
     }
 }
 
-/// Stored twin of [`binary_key`](crate::machine::model::binary_key): the `[Slot, Keyword(sym),
-/// Slot]` run a reduced binary call computes, bumped into `brand`'s region. Byte-for-byte agreement
-/// with the owned builder is what lets a park edge installed here be found by a later call's key.
-fn stored_binary_key<'a>(brand: RegionBrand<'a>, symbol: &'a str) -> &'a [StoredElement<'a>] {
+/// Region-bumped twin of [`binary_key`](crate::machine::model::binary_key): the `[Slot,
+/// Keyword(sym), Slot]` run a reduced binary call computes. Agreeing with the owned builder on the
+/// symbol is what lets a park edge installed here be found by a later call's key.
+fn stored_binary_key<'a>(brand: RegionBrand<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
     brand.allocator().slice(&[
-        StoredElement::Slot,
-        StoredElement::Keyword(symbol),
-        StoredElement::Slot,
+        KeyElement::Slot,
+        KeyElement::Keyword(symbol),
+        KeyElement::Slot,
     ])
 }
 
-/// Stored twin of [`unary_key`](crate::machine::model::unary_key): the `[Keyword(sym), Slot]` run a
-/// reduced unary run computes.
-fn stored_unary_key<'a>(brand: RegionBrand<'a>, symbol: &'a str) -> &'a [StoredElement<'a>] {
+/// Region-bumped twin of [`unary_key`](crate::machine::model::unary_key): the `[Keyword(sym),
+/// Slot]` run a reduced unary run computes.
+fn stored_unary_key<'a>(brand: RegionBrand<'a>, symbol: KeywordSymbol) -> &'a [KeyElement] {
     brand
         .allocator()
-        .slice(&[StoredElement::Keyword(symbol), StoredElement::Slot])
+        .slice(&[KeyElement::Keyword(symbol), KeyElement::Slot])
 }
 
 // ---------- the spec table ----------
 
-/// One element of a [`BinderSpec`] bucket key: a fixed keyword token or a slot. The static-friendly
-/// twin of [`UntypedElement`] (whose `Keyword` owns a `String`).
-pub enum UntypedElementSpec {
+/// One element of a [`BinderSpec`] bucket key: a fixed keyword token or a slot. The spec table is
+/// `static`, so a keyword rests as its spelling and matching compares against the spelling a part
+/// carries — a spec probe is a table walk over short runs, not a place to mint symbols.
+pub enum KeyElementSpec {
     Keyword(&'static str),
     Slot,
 }
 
-impl UntypedElementSpec {
-    #[cfg(test)]
-    fn matches(&self, element: &UntypedElement) -> bool {
-        match (self, element) {
-            (UntypedElementSpec::Keyword(a), UntypedElement::Keyword(b)) => *a == b.as_str(),
-            (UntypedElementSpec::Slot, UntypedElement::Slot) => true,
-            _ => false,
+impl KeyElementSpec {
+    /// True iff `part` fills this position: a spec keyword against the part's own token text, a
+    /// spec slot against any non-keyword part — the same classification
+    /// [`stored_untyped_key`](crate::machine::model::ast::stored_untyped_key) reads.
+    fn matches_part<'a, P: Part<'a>>(&self, part: &P) -> bool {
+        match (self, part.class()) {
+            (KeyElementSpec::Keyword(spelling), PartClass::Keyword(kw)) => *spelling == kw.text(),
+            (KeyElementSpec::Keyword(_), _) | (_, PartClass::Keyword(_)) => false,
+            (KeyElementSpec::Slot, _) => true,
         }
     }
 
-    /// Stored-key peer of [`Self::matches`], so spec matching reads a node's bucket key straight
-    /// off the run bumped at construction.
-    fn matches_stored(&self, element: &StoredElement<'_>) -> bool {
+    /// Owned-key peer of [`Self::matches_part`], for the consistency test that pins the spec table
+    /// against the live registration keys.
+    #[cfg(test)]
+    fn matches(&self, element: &KeyElement) -> bool {
         match (self, element) {
-            (UntypedElementSpec::Keyword(a), StoredElement::Keyword(b)) => a == b,
-            (UntypedElementSpec::Slot, StoredElement::Slot) => true,
+            (KeyElementSpec::Keyword(spelling), KeyElement::Keyword(symbol)) => {
+                crate::machine::model::labels::KeywordSymbol::of(spelling) == Some(*symbol)
+            }
+            (KeyElementSpec::Slot, KeyElement::Slot) => true,
             _ => false,
         }
     }
@@ -402,7 +409,7 @@ pub enum BinderSurface {
 /// (`LET <name> = FN …`) fills both at once — a name *and* the bucket keys its body registers.
 pub struct BinderSpec {
     /// Full untyped bucket key — ALL keywords in position, never just the lead keyword.
-    pub key: &'static [UntypedElementSpec],
+    pub key: &'static [KeyElementSpec],
     /// Name extractors tried in order; first `Some` wins. Empty for the bucket-only and
     /// declaration forms (`FN`, `OP`, `VAL`).
     pub names: &'static [(BinderNameFn, BindKind)],
@@ -441,18 +448,19 @@ impl BinderSpec {
                 .all(|(spec, element)| spec.matches(element))
     }
 
-    /// [`Self::matches_key`] against a node's stored bucket key, with no owned key materialized.
-    pub fn matches_stored_key(&self, key: &[StoredElement<'_>]) -> bool {
-        self.key.len() == key.len()
+    /// [`Self::matches_key`] read straight off an expression's parts, materializing no key at all —
+    /// the parts already carry every token this compares.
+    pub fn matches_parts<'a, P: Part<'a>>(&self, parts: &[Spanned<P>]) -> bool {
+        self.key.len() == parts.len()
             && self
                 .key
                 .iter()
-                .zip(key.iter())
-                .all(|(spec, element)| spec.matches_stored(element))
+                .zip(parts.iter())
+                .all(|(spec, part)| spec.matches_part(&part.value))
     }
 }
 
-use UntypedElementSpec::{Keyword as Kw, Slot};
+use KeyElementSpec::{Keyword as Kw, Slot};
 
 /// The single source of truth for the binder-introducing forms. One entry per distinct untyped
 /// bucket key; the keys are pinned against the live builtin registration table by the
@@ -771,7 +779,7 @@ pub enum OpArity {
 pub(crate) fn binder_spec_for(expression: &KExpression<'_>) -> Option<&'static BinderSpec> {
     BINDER_SPECS
         .iter()
-        .find(|spec| spec.matches_stored_key(expression.stored_key()))
+        .find(|spec| spec.matches_parts(expression.parts))
 }
 
 /// What `expression` installs under its matched `spec`. Both channels are read — a combined form

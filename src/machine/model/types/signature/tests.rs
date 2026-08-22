@@ -1,5 +1,3 @@
-use std::hash::BuildHasher;
-
 use super::*;
 use crate::builtins::test_support::kw_part;
 use crate::machine::core::{RegionBrand, program_storage};
@@ -313,75 +311,39 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
     }
 }
 
-/// **The tripwire for the two key forms.** The `functions` table is keyed on stored runs and probed
-/// with owned ones, so if the two hashing schemes ever drift a probe lands in the wrong bucket and
-/// every lookup silently misses — no type error, no panic, just a language that forgets its
-/// functions. Assert the hashes agree directly, under the very hasher the tables use.
+/// The probe round-trip through a real table: a map keyed on runs bumped into a region answers an
+/// owned probe through the standard `Borrow` blanket, and a same-shape-but-different-content key
+/// misses rather than aliasing.
 #[test]
-fn owned_and_stored_key_forms_hash_identically() {
+fn an_owned_key_probes_a_bumped_run_keyed_table() {
     let program = program_storage();
     let brand = program.brand().region();
-    let build = hashbrown::DefaultHashBuilder::default();
-
-    for owned in [
-        vec![],
-        vec![UntypedElement::Slot],
-        vec![UntypedElement::Keyword("TAKE".to_string())],
-        vec![
-            UntypedElement::Keyword("MAKESET".to_string()),
-            UntypedElement::Slot,
-            UntypedElement::Keyword("USING".to_string()),
-            UntypedElement::Slot,
-        ],
-        // Prefix-of-another and empty-keyword cases, where a missing length prefix or a missing
-        // arm tag would collide.
-        vec![
-            UntypedElement::Keyword("MAKESET".to_string()),
-            UntypedElement::Slot,
-        ],
-        vec![UntypedElement::Keyword(String::new())],
-    ] {
-        let stored = store_untyped_key(brand, &owned);
-        assert_eq!(
-            build.hash_one(UntypedKeyProbe(&owned)),
-            build.hash_one(stored),
-            "key {owned:?} hashes differently in its owned and stored forms",
-        );
-    }
-}
-
-/// The probe round-trip through a real table: a stored-run-keyed map answers an owned probe, and a
-/// same-shape-but-different-content key misses rather than aliasing.
-#[test]
-fn an_owned_key_probes_a_stored_run_keyed_table() {
-    let program = program_storage();
-    let brand = program.brand().region();
-    let mut table: hashbrown::HashMap<&[StoredElement<'_>], u32> = hashbrown::HashMap::new();
+    let mut table: hashbrown::HashMap<&[KeyElement], u32> = hashbrown::HashMap::new();
 
     let take: UntypedKey = vec![
-        UntypedElement::Keyword("TAKE".to_string()),
-        UntypedElement::Slot,
+        crate::builtins::test_support::key_keyword("TAKE"),
+        KeyElement::Slot,
     ];
     let drop_key: UntypedKey = vec![
-        UntypedElement::Keyword("DROP".to_string()),
-        UntypedElement::Slot,
+        crate::builtins::test_support::key_keyword("DROP"),
+        KeyElement::Slot,
     ];
-    table.insert(store_untyped_key(brand, &take), 7);
+    table.insert(brand.allocator().slice(&take), 7);
 
-    assert_eq!(table.get(&UntypedKeyProbe(&take)), Some(&7));
-    assert_eq!(table.get(&UntypedKeyProbe(&drop_key)), None);
-    // A run stored in another region probes the same entry: the blanket `Equivalent` compares
-    // element-wise, so key identity is content, not address.
+    assert_eq!(table.get(take.as_slice()), Some(&7));
+    assert_eq!(table.get(drop_key.as_slice()), None);
+    // A run bumped into another region probes the same entry: equality is content — a tag and a
+    // `u128` per element — not an address.
     let elsewhere = program_storage();
-    let restored = restore_stored_key(elsewhere.brand().region(), store_untyped_key(brand, &take));
-    assert_eq!(table.get(&restored), Some(&7));
-    assert_eq!(owned_untyped_key(restored), take);
+    let restored: &[KeyElement] = elsewhere.brand().region().allocator().slice(&take);
+    assert_eq!(table.get(restored), Some(&7));
+    assert_eq!(restored.to_vec(), take);
 }
 
-/// A stored dispatch token decides the duplicate-overload predicate exactly as the owned token
-/// does — the write path compares against the stored run and allocates nothing to do it.
+/// A dispatch token bumped into a region decides the duplicate-overload predicate exactly as the
+/// owned token does — the write path compares against the bumped run and allocates nothing to do it.
 #[test]
-fn a_stored_dispatch_token_matches_what_its_owned_form_does() {
+fn a_bumped_dispatch_token_matches_what_its_owned_form_does() {
     let program = program_storage();
     let brand = program.brand().region();
     fn keyworded<'a>(
@@ -419,7 +381,7 @@ fn a_stored_dispatch_token_matches_what_its_owned_form_does() {
     for (i, a) in tokens.iter().enumerate() {
         for (j, b) in tokens.iter().enumerate() {
             assert_eq!(
-                a.matches_stored(b.store_in(brand)),
+                a.elements() == b.store_in(brand),
                 a == b,
                 "tokens {i} and {j} disagree between owned equality and the stored predicate",
             );

@@ -33,9 +33,8 @@ use std::mem::ManuallyDrop;
 
 use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
-use crate::machine::model::store_untyped_key;
 use crate::machine::model::{IdentityBuildHasher, Symbol};
-use crate::machine::model::{StoredElement, StoredKeyProbe, UntypedKey, UntypedKeyProbe};
+use crate::machine::model::{KeyElement, UntypedKey};
 use crate::witnessed::{BumpBackedMap, BumpVec};
 
 use super::{BindingIndex, Bindings, bump_table};
@@ -67,7 +66,7 @@ const BUCKET_BITS: [u8; 2] = [1 << 1, 1 << 2];
 #[derive(Clone, Copy)]
 struct ClaimRecord<'a> {
     name: Option<Symbol>,
-    buckets: [Option<&'a [StoredElement<'a>]>; 2],
+    buckets: [Option<&'a [KeyElement]>; 2],
     live: u8,
 }
 
@@ -91,7 +90,7 @@ type BucketClaims<'a> = ManuallyDrop<BumpVec<'a, Claim>>;
 
 pub(crate) struct ClaimStore<'a> {
     by_name: BumpBackedMap<'a, Symbol, Claim, IdentityBuildHasher>,
-    by_bucket: BumpBackedMap<'a, &'a [StoredElement<'a>], BucketClaims<'a>>,
+    by_bucket: BumpBackedMap<'a, &'a [KeyElement], BucketClaims<'a>>,
     /// Indexed by [`BindingIndex::idx`]. Sized once at the block fan-out; a statement-at-a-time
     /// door builds no store, so a claim arriving through one grows the run to reach its own index.
     by_statement: BumpVec<'a, ClaimRecord<'a>>,
@@ -148,10 +147,11 @@ impl<'a> ClaimStore<'a> {
     /// The earliest-index visible claim on a bucket key — the sibling most likely to finalize
     /// first, and so the one a consumer parks on. One hash probe; the run it lands in holds one
     /// entry per sibling binder declaring the key.
-    pub(super) fn bucket_claim<Q>(&self, key: &Q, cutoff: Option<usize>) -> Option<ProducerId>
-    where
-        Q: std::hash::Hash + hashbrown::Equivalent<&'a [StoredElement<'a>]> + ?Sized,
-    {
+    pub(super) fn bucket_claim(
+        &self,
+        key: &[KeyElement],
+        cutoff: Option<usize>,
+    ) -> Option<ProducerId> {
         self.by_bucket
             .get(key)?
             .iter()
@@ -186,14 +186,14 @@ impl<'a> ClaimStore<'a> {
         // Probe-then-insert rather than an `entry` call: the key a miss inserts has to be re-homed
         // through the brand, which the entry API has no way to defer. The second hash is paid only
         // on the first claim of a shape.
-        if !self.by_bucket.contains_key(&UntypedKeyProbe(bucket)) {
-            let key = store_untyped_key(brand, bucket);
+        if !self.by_bucket.contains_key(bucket.as_slice()) {
+            let key: &'a [KeyElement] = brand.allocator().slice(bucket);
             self.by_bucket
                 .insert(key, ManuallyDrop::new(BumpVec::new_in(brand.allocator())));
         }
         let (key, claims) = self
             .by_bucket
-            .get_key_value_mut(&UntypedKeyProbe(bucket))
+            .get_key_value_mut(bucket.as_slice())
             .expect("the claim run was just seeded if it was missing");
         claims.push(claim);
         let stored = *key;
@@ -226,17 +226,14 @@ impl<'a> ClaimStore<'a> {
 
     /// Retire the bucket claim `index` stamped on `key`, if it is still standing — the bucket
     /// channel's half of the same rule. Sibling claims on the key stand.
-    pub(super) fn retire_bucket<Q>(&mut self, key: &Q, index: BindingIndex)
-    where
-        Q: std::hash::Hash + hashbrown::Equivalent<&'a [StoredElement<'a>]> + ?Sized,
-    {
+    pub(super) fn retire_bucket(&mut self, key: &[KeyElement], index: BindingIndex) {
         let Some(record) = self.by_statement.get_mut(index.idx) else {
             return;
         };
         let held = record
             .buckets
             .iter()
-            .position(|bucket| bucket.is_some_and(|stored| key.equivalent(&stored)));
+            .position(|bucket| bucket.is_some_and(|stored| key == stored));
         let Some(slot) = held.filter(|slot| record.live & BUCKET_BITS[*slot] != 0) else {
             return;
         };
@@ -274,8 +271,8 @@ impl<'a> ClaimStore<'a> {
     /// Drop `index`'s entry from `stored`'s claim run. The emptied run stays keyed: a reader takes
     /// it for a miss, and a later sibling claim of the same shape reuses it rather than re-homing
     /// the key.
-    fn drop_bucket_claim(&mut self, stored: &'a [StoredElement<'a>], index: BindingIndex) {
-        if let Some(claims) = self.by_bucket.get_mut(&StoredKeyProbe(stored)) {
+    fn drop_bucket_claim(&mut self, stored: &'a [KeyElement], index: BindingIndex) {
+        if let Some(claims) = self.by_bucket.get_mut(stored) {
             claims.retain(|claim| claim.index != index);
         }
     }
@@ -294,7 +291,7 @@ impl<'a> ClaimStore<'a> {
     #[cfg(test)]
     pub(super) fn bucket_claims(&self, bucket: &UntypedKey) -> Vec<Claim> {
         self.by_bucket
-            .get(&UntypedKeyProbe(bucket))
+            .get(bucket.as_slice())
             .map(|claims| claims.to_vec())
             .unwrap_or_default()
     }

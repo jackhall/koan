@@ -6,8 +6,8 @@ use std::collections::HashSet;
 use super::{BINDER_SPECS, BinderSpec, StoredBinderKey};
 use crate::builtins::test_support::kw_part;
 use crate::machine::core::{ProgramBrand, RegionBrand, program_storage};
+use crate::machine::model::UntypedKey;
 use crate::machine::model::ast::{DispatchShape, ExpressionPart, KExpression};
-use crate::machine::model::{UntypedKey, owned_untyped_key};
 use crate::parse::parse;
 use crate::source::Spanned;
 
@@ -25,18 +25,18 @@ fn live_buckets() -> HashSet<UntypedKey> {
                 .bindings()
                 .functions()
                 .iter()
-                .map(|(key, _)| owned_untyped_key(key))
+                .map(|(key, _)| key.to_vec())
                 .collect::<Vec<_>>()
         })
         .collect()
 }
 
 /// A spec key rendered for a failure message: keywords verbatim, slots as `_`.
-fn render_key(key: &[super::UntypedElementSpec]) -> Vec<String> {
+fn render_key(key: &[super::KeyElementSpec]) -> Vec<String> {
     key.iter()
         .map(|element| match element {
-            super::UntypedElementSpec::Keyword(k) => (*k).to_string(),
-            super::UntypedElementSpec::Slot => "_".to_string(),
+            super::KeyElementSpec::Keyword(k) => (*k).to_string(),
+            super::KeyElementSpec::Slot => "_".to_string(),
         })
         .collect()
 }
@@ -47,8 +47,8 @@ fn expression_for_key<'a>(brand: RegionBrand<'a>, spec: &BinderSpec) -> KExpress
     KExpression::new_from_iter(
         brand,
         spec.key.iter().map(|element| match element {
-            super::UntypedElementSpec::Keyword(k) => Spanned::bare(kw_part(k)),
-            super::UntypedElementSpec::Slot => Spanned::bare(ExpressionPart::Identifier("x")),
+            super::KeyElementSpec::Keyword(k) => Spanned::bare(kw_part(k)),
+            super::KeyElementSpec::Slot => Spanned::bare(ExpressionPart::Identifier("x")),
         }),
     )
 }
@@ -83,7 +83,7 @@ fn spec_table_matches_live_registration() {
 /// the only routes into an install.
 #[test]
 fn spec_channels_cover_every_installing_entry() {
-    let silent: Vec<&[super::UntypedElementSpec]> = BINDER_SPECS
+    let silent: Vec<&[super::KeyElementSpec]> = BINDER_SPECS
         .iter()
         .filter(|spec| spec.installs_nothing())
         .map(|spec| spec.key)
@@ -97,7 +97,7 @@ fn spec_channels_cover_every_installing_entry() {
     assert!(
         silent[0]
             .first()
-            .is_some_and(|element| matches!(element, super::UntypedElementSpec::Keyword("VAL"))),
+            .is_some_and(|element| matches!(element, super::KeyElementSpec::Keyword("VAL"))),
         "the silent entry must be `VAL`",
     );
 }
@@ -112,7 +112,7 @@ fn operator_def_marker_agrees_with_the_keys_it_labels() {
         let names_op = spec
             .key
             .iter()
-            .any(|element| matches!(element, super::UntypedElementSpec::Keyword("OP")));
+            .any(|element| matches!(element, super::KeyElementSpec::Keyword("OP")));
         assert_eq!(
             spec.surface == super::BinderSurface::OperatorDef,
             names_op,

@@ -19,10 +19,11 @@
 use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
 use crate::machine::model::Part;
+use crate::machine::model::labels::KeywordSymbol;
 use crate::machine::model::{
     ExpressionPart, KeywordToken, PartClass, WorkingExpression, WorkingPart,
 };
-use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode, StoredElement};
+use crate::machine::model::{FoldDirection, KeyElement, OperatorGroup, ReductionMode};
 use crate::machine::{KError, KErrorKind, ProducerId};
 use crate::scheduler::Deps;
 use crate::source::{Span, Spanned};
@@ -101,6 +102,18 @@ impl ChainPlan {
 }
 
 /// The operator keywords of the chain, in source order (with repeats).
+fn chain_operator_symbols(expr: &WorkingExpression<'_>) -> Vec<KeywordSymbol> {
+    expr.parts
+        .iter()
+        .filter_map(|part| match part.value.class() {
+            PartClass::Keyword(kw) => Some(kw.symbol()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The chain's operator glyphs in source order, for the readers that need the spelling: the
+/// reduction plan, which matches a group's declared glyphs, and the diagnostics.
 fn chain_operators<'a>(expr: &WorkingExpression<'a>) -> Vec<&'a str> {
     expr.parts
         .iter()
@@ -453,21 +466,21 @@ fn pending_operator_sources<'b>(
     expr: &WorkingExpression<'_>,
 ) -> Vec<ProducerId> {
     let chain = ctx.chain_deref();
-    let mut operators = chain_operators(expr);
+    let mut operators = chain_operator_symbols(expr);
     operators.sort_unstable();
     operators.dedup();
     let mut sources: Vec<ProducerId> = Vec::new();
     for operator in operators {
-        // Stack runs over the operator's own borrowed text: a stored probe allocates nothing,
-        // where an owned key would clone the symbol twice per scope walk.
+        // Stack runs over the symbols the parts already carry: a probe allocates nothing, where an
+        // owned key would heap-allocate twice per scope walk.
         for key in [
             [
-                StoredElement::Slot,
-                StoredElement::Keyword(operator),
-                StoredElement::Slot,
+                KeyElement::Slot,
+                KeyElement::Keyword(operator),
+                KeyElement::Slot,
             ]
             .as_slice(),
-            [StoredElement::Keyword(operator), StoredElement::Slot].as_slice(),
+            [KeyElement::Keyword(operator), KeyElement::Slot].as_slice(),
         ] {
             for scope in s.ancestors() {
                 let cutoff = scope.binding_cutoff(chain);

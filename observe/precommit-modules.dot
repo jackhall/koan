@@ -621,6 +621,7 @@ digraph {
     "koan::machine::execute::decide::operator_chain" -> "koan::machine::execute::decide" [label="uses", style="dashed"];
     "koan::machine::execute::decide::operator_chain" -> "koan::machine::execute::decide::ctx" [label="uses", style="dashed"];
     "koan::machine::execute::decide::operator_chain" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::operator_chain" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::execute::decide::operator_chain" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -720,9 +721,12 @@ digraph {
     "koan::machine::model::ast::working" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::binder" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::model::binder" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::labels" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::operators" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::operators" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::operators" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::registries" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::registries" -> "koan::machine::model::types" [label="uses", style="dashed"];

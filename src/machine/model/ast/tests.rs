@@ -350,10 +350,10 @@ fn cached_fields_equal_on_demand_recompute() {
         .parts
         .iter()
         .map(|p| match &p.value {
-            ExpressionPart::Keyword(s) => {
-                crate::machine::model::types::UntypedElement::Keyword((*s).to_string())
+            ExpressionPart::Keyword(kw) => {
+                crate::machine::model::types::KeyElement::Keyword(kw.symbol())
             }
-            _ => crate::machine::model::types::UntypedElement::Slot,
+            _ => crate::machine::model::types::KeyElement::Slot,
         })
         .collect();
     assert_eq!(e.untyped_key(), recomputed_key);

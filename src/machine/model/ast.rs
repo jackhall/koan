@@ -13,7 +13,7 @@ use crate::source::{FileId, Span, Spanned};
 use crate::machine::core::{ProgramBrand, RegionBrand};
 use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
 use crate::machine::model::{Held, KObject, Parseable, StoredBinderKey};
-use crate::machine::model::{StoredElement, UntypedElement, UntypedKey};
+use crate::machine::model::{KeyElement, UntypedKey};
 use crate::witnessed::reattachable;
 
 pub mod program;
@@ -429,7 +429,7 @@ pub struct KExpression<'a> {
     pub parts: &'a [Spanned<ExpressionPart<'a>>],
     pub span: Option<Span>,
     pub file: Option<FileId>,
-    untyped_key: &'a [StoredElement<'a>],
+    untyped_key: &'a [KeyElement],
     shape: DispatchShape,
     operator_probe: Option<&'a str>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
@@ -577,21 +577,15 @@ impl<'a> KExpression<'a> {
     }
 
     /// The stored bucket key, as a borrow of the run bumped at construction.
-    pub fn stored_key(&self) -> &'a [StoredElement<'a>] {
+    pub fn stored_key(&self) -> &'a [KeyElement] {
         self.untyped_key
     }
 
-    /// Bucket key: `Keyword` parts contribute `Keyword(s)`; every other variant contributes
+    /// Bucket key: `Keyword` parts contribute `Keyword(symbol)`; every other variant contributes
     /// `Slot`. Must agree with `ExpressionSignature::untyped_key` for any signature that
-    /// should match. Materializes the owned key the bucket tables are keyed by from the stored run.
+    /// should match. Copies the stored run into the owned key a caller passes onward as plain data.
     pub fn untyped_key(&self) -> UntypedKey {
-        self.untyped_key
-            .iter()
-            .map(|element| match element {
-                StoredElement::Keyword(s) => UntypedElement::Keyword((*s).to_string()),
-                StoredElement::Slot => UntypedElement::Slot,
-            })
-            .collect()
+        self.untyped_key.to_vec()
     }
 
     /// Binder-name extractor for typed-binder builtins (`SIG <Name> = …`, `UNION <Name> = …`):

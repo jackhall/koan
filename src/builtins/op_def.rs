@@ -96,7 +96,7 @@ pub(super) fn symbol_from_slot<'a>(
     slot: &str,
 ) -> Result<&'a str, KError> {
     let quoted = require_kexpression(args, builtin, slot)?;
-    symbol_from_quote_body(&quoted)
+    symbol_from_quote_body(&quoted).map(|sym| sym.text())
 }
 
 // ---------- type slots ----------

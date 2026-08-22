@@ -261,14 +261,12 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
 #[test]
 fn pending_overload_parks_only_on_exact_bucket_match() {
     let registries = RunRegistries::new();
+    use crate::builtins::test_support::key_keyword;
     use crate::machine::ProducerId;
-    use crate::machine::model::{UntypedElement, UntypedKey};
+    use crate::machine::model::{KeyElement, UntypedKey};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let bucket_single: UntypedKey = vec![
-        UntypedElement::Keyword("MAKESET".into()),
-        UntypedElement::Slot,
-    ];
+    let bucket_single: UntypedKey = vec![key_keyword("MAKESET"), KeyElement::Slot];
     scope
         .install_pending_overload(
             bucket_single,
@@ -628,11 +626,12 @@ fn scope_install_pending<'a>(
 #[test]
 fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     let registries = RunRegistries::new();
+    use crate::builtins::test_support::key_keyword;
     use crate::machine::ProducerId;
-    use crate::machine::model::{UntypedElement, UntypedKey};
+    use crate::machine::model::{KeyElement, UntypedKey};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let bucket: UntypedKey = vec![UntypedElement::Keyword("PICK".into()), UntypedElement::Slot];
+    let bucket: UntypedKey = vec![key_keyword("PICK"), KeyElement::Slot];
     scope
         .install_pending_overload(
             bucket.clone(),

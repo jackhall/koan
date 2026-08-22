@@ -75,11 +75,8 @@ use crate::machine::model::{
     BinderSymbol, IdentityBuildHasher, KeywordSymbol, RunRegistries, TypeSymbol, ValueSymbol,
     render_label,
 };
+use crate::machine::model::{DispatchTokenElement, KeyElement};
 use crate::machine::model::{KType, UntypedKey};
-use crate::machine::model::{
-    StoredDispatchTokenElement, StoredElement, StoredKeyProbe, UntypedKeyProbe, owned_untyped_key,
-    restore_stored_key, store_untyped_key,
-};
 use crate::witnessed::BumpBackedMap;
 use crate::witnessed::{BumpAllocator, Sealed};
 
@@ -177,7 +174,7 @@ pub(crate) struct FunctionBucketEntry<'a> {
     /// The stored form of the duplicate-overload predicate: an incoming callable whose token
     /// matches this run is `DuplicateOverload`. A bumped run rather than the owned
     /// [`DispatchToken`], so the entry carries no `Drop` and a bucket's death frees nothing.
-    token: &'a [StoredDispatchTokenElement<'a>],
+    token: &'a [DispatchTokenElement],
     /// The overload's rendered signature, for the `DuplicateOverload` diagnostic — bumped for
     /// [`Self::token`]'s reason.
     summary: &'a str,
@@ -344,7 +341,7 @@ impl DeclarationSite {
 /// from colliding.
 ///
 /// Every table is a `hashbrown` map over the scope's own region bump ([`BumpBackedMap`]), keyed by
-/// a `Copy` classified symbol or a bumped `&'a [StoredElement]` run, so a table's death frees
+/// a `Copy` classified symbol or a bumped `&'a [KeyElement]` run, so a table's death frees
 /// nothing and walks no entry — which is what lets frame teardown cost O(scopes) rather than
 /// O(entries). Lookup is the same O(1) hash probe a std map would run.
 struct Tables<'a> {
@@ -371,10 +368,11 @@ struct Tables<'a> {
     /// union bundle, and a read hands out a bit-copy the caller re-anchors under a pin. A bucket
     /// holds sealed overloads and nothing else — the sibling binders still finalizing under the same
     /// key are claims in the store, read through the same key.
-    /// Keyed on the **stored** run rather than an owned [`UntypedKey`] so a node dispatching
-    /// through its own bumped key probes without materializing one; an owned key probes the same
-    /// bucket through [`UntypedKeyProbe`].
-    functions: BumpBackedMap<'a, &'a [StoredElement<'a>], Bucket<'a>>,
+    /// Keyed on a run bumped into the region rather than an owned [`UntypedKey`], so a node
+    /// dispatching through its own bumped key probes without materializing one. A [`KeyElement`] is
+    /// `Copy` and lifetime-free, so the owned and bumped forms are runs of the same type and either
+    /// probes through the standard `Borrow` blanket.
+    functions: BumpBackedMap<'a, &'a [KeyElement], Bucket<'a>>,
     /// Per-scope operator registry: a chain's sorted-joined operator probe key → the dormant
     /// [`SealedOperatorGroup`] carrier of the group it resolves to, beside its lexical
     /// [`BindingIndex`] ([`OperatorEntry`] — the `data`/`functions` entry shape). A module installs
@@ -566,10 +564,10 @@ impl<'a> Bindings<'a> {
     /// overloads AND the earliest-index visible pending sibling together, so the scope walk decides
     /// pending-vs-finalized precedence with both in hand.
     ///
-    /// The untyped-key door, off the dispatch path: its buffer goes to the global heap, since a
+    /// The owned-key door, off the dispatch path: its buffer goes to the global heap, since a
     /// caller holding an owned key has no step scratch in reach.
     pub fn lookup_function(&self, key: &UntypedKey, cutoff: Option<usize>) -> FunctionLookup<'a> {
-        self.lookup_function_probe(&UntypedKeyProbe(key), cutoff, Global)
+        self.lookup_function_probe(key.as_slice(), cutoff, Global)
     }
 
     /// [`Self::lookup_function`] from a node's **own** bumped key — the dispatch hot path, which
@@ -578,11 +576,11 @@ impl<'a> Bindings<'a> {
     /// the step's scratch arena.
     pub fn lookup_function_stored<A: Allocator>(
         &self,
-        key: &[StoredElement<'_>],
+        key: &[KeyElement],
         cutoff: Option<usize>,
         alloc: A,
     ) -> FunctionLookup<'a, A> {
-        self.lookup_function_probe(&StoredKeyProbe(key), cutoff, alloc)
+        self.lookup_function_probe(key, cutoff, alloc)
     }
 
     /// The bucket channel's **claim** read: the earliest-index visible in-flight binder declaring
@@ -594,33 +592,28 @@ impl<'a> Bindings<'a> {
     /// directly.
     pub fn claimed_bucket_producer(
         &self,
-        key: &[StoredElement<'_>],
+        key: &[KeyElement],
         cutoff: Option<usize>,
     ) -> Option<ProducerId> {
-        self.tables
-            .borrow()
-            .claims
-            .bucket_claim(&StoredKeyProbe(key), cutoff)
+        self.tables.borrow().claims.bucket_claim(key, cutoff)
     }
 
-    /// The one bucket read, over whichever key form the caller holds: hashbrown resolves both
-    /// through `Equivalent`, and the two forms hash identically by construction (see
-    /// [`UntypedKeyProbe`]). The same key reaches the sealed overloads and the claims on the shape,
-    /// which is what lets the scope walk decide the pair's precedence at the scope that raised it.
+    /// The one bucket read. Owned and bumped keys are runs of the same `Copy` element, so both
+    /// arrive here as a plain slice and hashbrown resolves them through the standard `Borrow`
+    /// blanket — one derived `Hash`, nothing to keep in agreement. The same key reaches the sealed
+    /// overloads and the claims on the shape, which is what lets the scope walk decide the pair's
+    /// precedence at the scope that raised it.
     ///
     /// The buffer is sized to `bucket.len()` — an upper bound on the visible finalized overloads —
     /// and filled by a push loop rather than collected, so it never reallocates. Over a bump
     /// allocator that matters twice over: a grown buffer would abandon its old bytes as dead
     /// scratch until the next reset.
-    fn lookup_function_probe<Q, A: Allocator>(
+    fn lookup_function_probe<A: Allocator>(
         &self,
-        key: &Q,
+        key: &[KeyElement],
         cutoff: Option<usize>,
         alloc: A,
-    ) -> FunctionLookup<'a, A>
-    where
-        Q: std::hash::Hash + hashbrown::Equivalent<&'a [StoredElement<'a>]> + ?Sized,
-    {
+    ) -> FunctionLookup<'a, A> {
         let tables = self.tables.borrow();
         let pending = tables.claims.bucket_claim(key, cutoff);
         let Some(bucket) = tables.functions.get(key) else {
@@ -738,7 +731,7 @@ impl<'a> Bindings<'a> {
                     .iter()
                     .map(|entry| entry.sealed.duplicate())
                     .collect();
-                (!sealed.is_empty()).then(|| (owned_untyped_key(key), sealed))
+                (!sealed.is_empty()).then(|| (key.to_vec(), sealed))
             })
             .collect()
     }
@@ -758,19 +751,16 @@ impl<'a> Bindings<'a> {
     /// [`BindingIndex::BUILTIN`] — a genuine builtin dispatch bucket, distinct from a
     /// user bucket the no-shadow consult must not gate.
     pub fn has_builtin_function(&self, key: &UntypedKey) -> bool {
-        self.has_builtin_function_probe(&UntypedKeyProbe(key))
+        self.has_builtin_function_probe(key.as_slice())
     }
 
     /// [`Self::has_builtin_function`] from a node's own bumped key — the no-shadow consult's hot
     /// path, paired with [`Self::lookup_function_stored`].
-    pub fn has_builtin_function_stored(&self, key: &[StoredElement<'_>]) -> bool {
-        self.has_builtin_function_probe(&StoredKeyProbe(key))
+    pub fn has_builtin_function_stored(&self, key: &[KeyElement]) -> bool {
+        self.has_builtin_function_probe(key)
     }
 
-    fn has_builtin_function_probe<Q>(&self, key: &Q) -> bool
-    where
-        Q: std::hash::Hash + hashbrown::Equivalent<&'a [StoredElement<'a>]> + ?Sized,
-    {
+    fn has_builtin_function_probe(&self, key: &[KeyElement]) -> bool {
         self.tables
             .borrow()
             .functions
@@ -795,9 +785,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) fn functions(
-        &self,
-    ) -> Ref<'_, BumpBackedMap<'a, &'a [StoredElement<'a>], Bucket<'a>>> {
+    pub(crate) fn functions(&self) -> Ref<'_, BumpBackedMap<'a, &'a [KeyElement], Bucket<'a>>> {
         Ref::map(self.tables.borrow(), |t| &t.functions)
     }
 
@@ -1010,7 +998,7 @@ impl<'a> Bindings<'a> {
                 .iter()
                 .map(|(k, entry)| (*k, entry.duplicate()))
                 .collect();
-            let functions: Vec<(&[StoredElement<'_>], Vec<FunctionBucketEntry<'a>>)> = tables
+            let functions: Vec<(&[KeyElement], Vec<FunctionBucketEntry<'a>>)> = tables
                 .functions
                 .iter()
                 .filter_map(|(key, bucket)| {
@@ -1034,7 +1022,7 @@ impl<'a> Bindings<'a> {
             // regions and orders neither, but the view module escaping
             // [`Scope::alloc_module_view`](crate::machine::core::Scope) composes the source
             // module's reach into its own region, so the source is pinned for as long as the view
-            // is reachable at all. A read of these bytes past the source's death is therefore
+            // is reachable at all. A read of the source's bytes past its death is therefore
             // unrepresentable rather than merely unobserved.
             match tables.functions.get_mut(key) {
                 Some(bucket) => bucket.extend(slots),
@@ -1043,7 +1031,7 @@ impl<'a> Bindings<'a> {
                     bucket.extend(slots);
                     tables
                         .functions
-                        .insert(restore_stored_key(self.brand, key), bucket);
+                        .insert(self.brand.allocator().slice(key), bucket);
                 }
             }
         }
@@ -1094,19 +1082,19 @@ impl<'a> Bindings<'a> {
         let mut tables = self.tables.borrow_mut();
         // Probe-then-insert rather than an `entry` call: the key a miss inserts has to be re-homed
         // through the brand, which the entry API has no way to defer.
-        if !tables.functions.contains_key(&UntypedKeyProbe(&seal.key)) {
-            let key = store_untyped_key(self.brand, &seal.key);
+        if !tables.functions.contains_key(seal.key.as_slice()) {
+            let key = self.brand.allocator().slice(&seal.key);
             tables.functions.insert(key, bump_bucket(self.brand));
         }
         let bucket = tables
             .functions
-            .get_mut(&UntypedKeyProbe(&seal.key))
+            .get_mut(seal.key.as_slice())
             .expect("the bucket was just seeded if it was missing");
         // Dedupe against the stored runs where they sit — no allocation to decide it, and the
         // incoming token is re-homed only once it has passed.
         if let Some(existing) = bucket
             .iter()
-            .find(|existing| seal.token.matches_stored(existing.token))
+            .find(|existing| seal.token.elements() == existing.token)
         {
             return Err(KError::new(KErrorKind::DuplicateOverload {
                 name: name.to_string(),
@@ -1121,9 +1109,7 @@ impl<'a> Bindings<'a> {
         });
         // A builtin seed, a direct registration or a bulk install claimed nothing, so this is a
         // no-op for them.
-        tables
-            .claims
-            .retire_bucket(&UntypedKeyProbe(&seal.key), index);
+        tables.claims.retire_bucket(seal.key.as_slice(), index);
         Ok(())
     }
 

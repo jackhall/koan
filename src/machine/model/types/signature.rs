@@ -17,169 +17,24 @@ use crate::machine::model::ast::{
 use super::ktype::KType;
 use super::registry::TypeRegistry;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::{BinderSymbol, LabelInterner};
+use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner};
 
-#[derive(Eq, PartialEq, Clone, Debug)]
-pub enum UntypedElement {
-    Keyword(String),
+/// One position of a bucket key: a fixed token as its [`KeywordSymbol`], or an argument slot.
+/// `Copy` and lifetime-free, so a key run is the same type whether it sits in a `Vec` a caller
+/// hands around or in a slice bumped into a region — one type, one derived `Hash`, and equality is
+/// a tag plus a `u128` compare with no text to walk.
+#[derive(Eq, PartialEq, Clone, Copy, Hash, Debug)]
+pub enum KeyElement {
+    Keyword(KeywordSymbol),
     Slot,
-}
-
-/// The stored form of an [`UntypedElement`]: a keyword's text as a borrow at the node's own
-/// lifetime. An expression's bucket key is a run of these, bumped once at construction, so reading
-/// it costs a slice borrow; the owned [`UntypedKey`] is materialized only where a caller needs to
-/// hand a key onward as plain data.
-#[derive(Eq, PartialEq, Clone, Copy, Debug)]
-pub enum StoredElement<'a> {
-    Keyword(&'a str),
-    Slot,
-}
-
-/// **The one hashing scheme both key forms write**, spelled out rather than derived on each: the
-/// `functions` table is keyed on stored runs and probed with owned ones, and hashbrown finds
-/// nothing at all if the two disagree by so much as a discriminant width. A derive would tie the
-/// agreement to two independently-derived impls that nothing holds together.
-///
-/// The tag distinguishes the arms; `String` and `&str` hash identically through the same `str`
-/// impl. No length prefix is written here — the slice `Hash` impl both runs route through already
-/// writes one, so the framing is at the run level where it belongs.
-macro_rules! hash_key_element {
-    ($element:ty, $keyword:path, $slot:path) => {
-        impl std::hash::Hash for $element {
-            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-                match self {
-                    $keyword(text) => {
-                        state.write_u8(0);
-                        std::hash::Hash::hash(text.as_ref() as &str, state);
-                    }
-                    $slot => state.write_u8(1),
-                }
-            }
-        }
-    };
-}
-
-hash_key_element!(
-    UntypedElement,
-    UntypedElement::Keyword,
-    UntypedElement::Slot
-);
-hash_key_element!(
-    StoredElement<'_>,
-    StoredElement::Keyword,
-    StoredElement::Slot
-);
-
-/// An owned [`UntypedKey`] borrowed for one probe of a **stored**-run-keyed table.
-///
-/// A wrapper rather than a bare `[UntypedElement]` because the orphan rule forbids implementing a
-/// foreign trait for a slice; the newtype is the local type that carries the impl. It hashes by
-/// delegating straight to the slice, so it writes byte-for-byte what the stored key writes —
-/// same length prefix, same per-element scheme — which is the whole reason the two forms can share
-/// one bucket table.
-pub struct UntypedKeyProbe<'k>(pub &'k [UntypedElement]);
-
-impl std::hash::Hash for UntypedKeyProbe<'_> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-    }
-}
-
-impl<'a> hashbrown::Equivalent<&'a [StoredElement<'a>]> for UntypedKeyProbe<'_> {
-    fn equivalent(&self, key: &&'a [StoredElement<'a>]) -> bool {
-        self.0.len() == key.len()
-            && self
-                .0
-                .iter()
-                .zip(key.iter())
-                .all(|(owned, stored)| match (owned, stored) {
-                    (UntypedElement::Keyword(a), StoredElement::Keyword(b)) => a == b,
-                    (UntypedElement::Slot, StoredElement::Slot) => true,
-                    _ => false,
-                })
-    }
-}
-
-/// A key already stored **somewhere else** — a dispatching node's own bumped run — borrowed for one
-/// probe of a table keyed in another region.
-///
-/// Wrapped for [`UntypedKeyProbe`]'s reason and one more: hashbrown's blanket `Equivalent` would
-/// cover a bare `&[StoredElement]` probe only when its element lifetime is *the table's own*, which
-/// would tie every dispatching node's key to the region of whichever scope it happens to probe.
-/// Key identity is content, not region, and this impl is what says so.
-pub struct StoredKeyProbe<'k, 'e>(pub &'k [StoredElement<'e>]);
-
-impl std::hash::Hash for StoredKeyProbe<'_, '_> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-    }
-}
-
-impl<'a> hashbrown::Equivalent<&'a [StoredElement<'a>]> for StoredKeyProbe<'_, '_> {
-    fn equivalent(&self, key: &&'a [StoredElement<'a>]) -> bool {
-        self.0.len() == key.len()
-            && self
-                .0
-                .iter()
-                .zip(key.iter())
-                .all(|(probe, stored)| match (probe, stored) {
-                    (StoredElement::Keyword(a), StoredElement::Keyword(b)) => a == b,
-                    (StoredElement::Slot, StoredElement::Slot) => true,
-                    _ => false,
-                })
-    }
-}
-
-impl<'a> StoredElement<'a> {
-    /// The owned element this stands for.
-    pub fn to_owned_element(self) -> UntypedElement {
-        match self {
-            StoredElement::Keyword(s) => UntypedElement::Keyword(s.to_string()),
-            StoredElement::Slot => UntypedElement::Slot,
-        }
-    }
-}
-
-/// The owned [`UntypedKey`] a stored run stands for.
-pub fn owned_untyped_key(stored: &[StoredElement<'_>]) -> UntypedKey {
-    stored
-        .iter()
-        .map(|element| element.to_owned_element())
-        .collect()
-}
-
-/// Re-home an owned key into `brand`'s region as the stored run a bucket table is keyed on. Each
-/// keyword's bytes are copied, so the key outlives the owned form it was built from and lives
-/// exactly as long as the table holding it.
-pub fn store_untyped_key<'a>(brand: RegionBrand<'a>, key: &UntypedKey) -> &'a [StoredElement<'a>] {
-    brand
-        .allocator()
-        .slice_from_iter(key.iter().map(|element| match element {
-            UntypedElement::Keyword(text) => StoredElement::Keyword(brand.allocator().text(text)),
-            UntypedElement::Slot => StoredElement::Slot,
-        }))
-}
-
-/// [`store_untyped_key`] from a run already stored **somewhere else** — a bulk install replaying a
-/// source scope's dispatch surface, where the target's table must key on the target's own bytes so
-/// it never points into a region that can die first.
-pub fn restore_stored_key<'a>(
-    brand: RegionBrand<'a>,
-    key: &[StoredElement<'_>],
-) -> &'a [StoredElement<'a>] {
-    brand
-        .allocator()
-        .slice_from_iter(key.iter().map(|element| match element {
-            StoredElement::Keyword(text) => StoredElement::Keyword(brand.allocator().text(text)),
-            StoredElement::Slot => StoredElement::Slot,
-        }))
 }
 
 /// Bucket key produced by both `ExpressionSignature::untyped_key` and
 /// `KExpression::untyped_key`; they MUST agree for any pair that should match. The parser
-/// classifies source tokens via `is_keyword_token`; [`ExpressionSignature::mint`]
-/// uppercases lowercase registered tokens so the two sides agree on spelling.
-pub type UntypedKey = Vec<UntypedElement>;
+/// classifies source tokens via `is_keyword_token` and mints each one's symbol there;
+/// [`ExpressionSignature::mint`] uppercases lowercase registered tokens before minting, so a
+/// registration and a call arrive at the same symbol for the same token.
+pub type UntypedKey = Vec<KeyElement>;
 
 /// The definition-time identity of a signature for bucket dedupe: element shape plus the
 /// per-slot argument type. Two signatures are indistinguishable at dispatch iff their tokens
@@ -193,52 +48,27 @@ pub type UntypedKey = Vec<UntypedElement>;
 #[derive(Clone, PartialEq, Debug)]
 pub struct DispatchToken(Vec<DispatchTokenElement>);
 
-/// One position of a [`DispatchToken`]: a fixed token, or an argument slot carrying its declared
-/// type. `KType` is a `Copy` handle interned in the run registry, so slot equality is meaningful
-/// across regions.
-#[derive(Clone, PartialEq, Debug)]
-pub enum DispatchTokenElement {
-    Keyword(String),
-    Slot(KType),
-}
-
-/// The **stored** form of a [`DispatchTokenElement`]: the same two arms with the keyword's text
-/// re-homed into a region. A bucket entry rests on a run of these rather than the owned token, so
-/// the entry carries no drop glue and dropping a table frees nothing.
+/// One position of a [`DispatchToken`]: a fixed token as its [`KeywordSymbol`], or an argument
+/// slot carrying its declared type. Both arms are `Copy` handles — a symbol is `u128` bits, a
+/// `KType` is interned in the run registry — so an element compares meaningfully across regions
+/// and a stored run is a bump of the owned one with nothing copied but the elements themselves.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum StoredDispatchTokenElement<'a> {
-    Keyword(&'a str),
+pub enum DispatchTokenElement {
+    Keyword(KeywordSymbol),
     Slot(KType),
 }
 
 impl DispatchToken {
-    /// Re-home this token into `brand`'s region as the run a bucket entry stores.
-    pub fn store_in<'a>(&self, brand: RegionBrand<'a>) -> &'a [StoredDispatchTokenElement<'a>] {
-        brand
-            .allocator()
-            .slice_from_iter(self.0.iter().map(|element| match element {
-                DispatchTokenElement::Keyword(text) => {
-                    StoredDispatchTokenElement::Keyword(brand.allocator().text(text))
-                }
-                DispatchTokenElement::Slot(kt) => StoredDispatchTokenElement::Slot(*kt),
-            }))
+    /// Re-home this token into `brand`'s region as the run a bucket entry stores. The entry carries
+    /// no drop glue, so dropping a table frees nothing.
+    pub fn store_in<'a>(&self, brand: RegionBrand<'a>) -> &'a [DispatchTokenElement] {
+        brand.allocator().slice(&self.0)
     }
 
-    /// The duplicate-overload predicate against a stored run — element-wise, so the incoming owned
-    /// token is compared where it stands and the write path allocates nothing to decide it.
-    pub fn matches_stored(&self, stored: &[StoredDispatchTokenElement<'_>]) -> bool {
-        self.0.len() == stored.len()
-            && self
-                .0
-                .iter()
-                .zip(stored.iter())
-                .all(|(owned, stored)| match (owned, stored) {
-                    (DispatchTokenElement::Keyword(a), StoredDispatchTokenElement::Keyword(b)) => {
-                        a == b
-                    }
-                    (DispatchTokenElement::Slot(a), StoredDispatchTokenElement::Slot(b)) => a == b,
-                    _ => false,
-                })
+    /// The elements this token stands for — the duplicate-overload predicate is a slice `==`
+    /// against a stored run, deciding without allocating.
+    pub fn elements(&self) -> &[DispatchTokenElement] {
+        &self.0
     }
 }
 
@@ -288,15 +118,14 @@ fn normalized_keyword(token: &str) -> std::borrow::Cow<'_, str> {
 
 impl SignatureDraft<'_> {
     /// The bucket key this draft will key once minted — [`ExpressionSignature::untyped_key`] read off
-    /// the pre-mint buffer, with the same token normalization applied.
+    /// the pre-mint buffer. A draft keyword already carries the symbol of its **normalized**
+    /// spelling ([`SignatureElement::keyword`]), so the key is read straight off the elements.
     pub fn untyped_key(&self) -> UntypedKey {
         self.elements
             .iter()
             .map(|el| match el {
-                SignatureElement::Keyword(kw) => {
-                    UntypedElement::Keyword(normalized_keyword(kw.text()).into_owned())
-                }
-                SignatureElement::Argument(_) => UntypedElement::Slot,
+                SignatureElement::Keyword(kw) => KeyElement::Keyword(kw.symbol()),
+                SignatureElement::Argument(_) => KeyElement::Slot,
             })
             .collect()
     }
@@ -558,8 +387,8 @@ impl<'a> ExpressionSignature<'a> {
         self.elements()
             .iter()
             .map(|el| match el {
-                SignatureElement::Keyword(kw) => UntypedElement::Keyword(kw.text().to_string()),
-                SignatureElement::Argument(_) => UntypedElement::Slot,
+                SignatureElement::Keyword(kw) => KeyElement::Keyword(kw.symbol()),
+                SignatureElement::Argument(_) => KeyElement::Slot,
             })
             .collect()
     }
@@ -573,9 +402,7 @@ impl<'a> ExpressionSignature<'a> {
             self.elements()
                 .iter()
                 .map(|el| match el {
-                    SignatureElement::Keyword(kw) => {
-                        DispatchTokenElement::Keyword(kw.text().to_string())
-                    }
+                    SignatureElement::Keyword(kw) => DispatchTokenElement::Keyword(kw.symbol()),
                     SignatureElement::Argument(a) => DispatchTokenElement::Slot(a.ktype),
                 })
                 .collect(),

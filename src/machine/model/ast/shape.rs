@@ -9,7 +9,7 @@
 
 use crate::machine::SplicedCell;
 use crate::machine::core::RegionBrand;
-use crate::machine::model::StoredElement;
+use crate::machine::model::KeyElement;
 use crate::machine::model::ast::KeywordToken;
 use crate::source::Spanned;
 
@@ -233,19 +233,17 @@ pub fn operator_probe_for<'a, P: Part<'a>>(
     Some(brand.allocator().text(&operators.join(" ")))
 }
 
-/// The stored bucket key: `Keyword` parts contribute their text, every other part a `Slot`. Bumped
-/// once at construction, so reading it is a slice borrow and the owned [`UntypedKey`] the bucket
-/// tables are keyed by is materialized only where a lookup needs one.
-///
-/// [`UntypedKey`]: crate::machine::model::types::signature::UntypedKey
+/// The stored bucket key: `Keyword` parts contribute the symbol they carry, every other part a
+/// `Slot`. Bumped once at construction, so reading it is a slice borrow and nothing is hashed —
+/// the parse already minted every symbol in the run.
 pub fn stored_untyped_key<'a, P: Part<'a>>(
     brand: RegionBrand<'a>,
     parts: &[Spanned<P>],
-) -> &'a [StoredElement<'a>] {
+) -> &'a [KeyElement] {
     brand
         .allocator()
         .slice_from_iter(parts.iter().map(|part| match part.value.class() {
-            PartClass::Keyword(kw) => StoredElement::Keyword(kw.text()),
-            _ => StoredElement::Slot,
+            PartClass::Keyword(kw) => KeyElement::Keyword(kw.symbol()),
+            _ => KeyElement::Slot,
         }))
 }

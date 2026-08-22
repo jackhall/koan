@@ -5,9 +5,10 @@
 //! bucket would hard-error under strict-only admission instead of parking.
 
 use super::working_one;
+use crate::builtins::test_support::key_keyword;
 use crate::builtins::test_support::{TestRun, value_name};
 use crate::machine::core::{program_storage, run_root_storage};
-use crate::machine::model::UntypedElement;
+use crate::machine::model::KeyElement;
 
 #[test]
 fn combined_form_installs_both_channels_at_submission() {
@@ -27,10 +28,7 @@ fn combined_form_installs_both_channels_at_submission() {
          pending = {:?}",
         scope.bindings().pending_names(test_run.registries()),
     );
-    let helper_bucket = vec![
-        UntypedElement::Keyword("HELPER".to_string()),
-        UntypedElement::Slot,
-    ];
+    let helper_bucket = vec![key_keyword("HELPER"), KeyElement::Slot];
     assert!(
         !scope
             .bindings()

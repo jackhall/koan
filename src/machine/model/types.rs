@@ -42,14 +42,11 @@ pub use sig_schema::{
 };
 #[allow(unused_imports)]
 pub use signature::Specificity;
+pub use signature::most_specific_ktype;
 pub use signature::{
     Argument, DeferredReturn, DeferredReturnSurface, DispatchToken, DispatchTokenElement,
-    ExpressionSignature, ReturnType, SignatureDraft, SignatureElement, UntypedElement, UntypedKey,
+    ExpressionSignature, KeyElement, ReturnType, SignatureDraft, SignatureElement, UntypedKey,
     is_keyword_token,
-};
-pub use signature::{
-    StoredDispatchTokenElement, StoredElement, StoredKeyProbe, UntypedKeyProbe,
-    most_specific_ktype, owned_untyped_key, restore_stored_key, store_untyped_key,
 };
 pub(crate) use type_digest::{TypeDigest, empty_schema_digest};
 pub use typed_field_list::{

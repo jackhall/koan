@@ -9,7 +9,6 @@ use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
-use crate::machine::model::UntypedKeyProbe;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 
 use super::{body_no_op, unit_signature};
@@ -358,7 +357,7 @@ fn register_function_coexists_with_a_value_binding() {
         scope
             .bindings()
             .functions()
-            .get(&UntypedKeyProbe(&key))
+            .get(key.as_slice())
             .map(|b| !b.is_empty())
             .unwrap_or(false)
     );
@@ -406,7 +405,7 @@ fn register_function_coexists_with_same_name_type() {
         scope
             .bindings()
             .functions()
-            .get(&UntypedKeyProbe(&key))
+            .get(key.as_slice())
             .map(|b| !b.is_empty())
             .unwrap_or(false)
     );

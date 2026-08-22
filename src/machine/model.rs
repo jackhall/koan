@@ -17,17 +17,14 @@ pub use operators::{
 pub use registries::RunRegistries;
 pub(crate) use types::IdentityBuildHasher;
 pub use types::TypeRegistry;
+pub use types::most_specific_ktype;
 pub use types::render_label;
 pub use types::{
     AnnouncedData, AnnouncedMember, AnnouncedWindow, Argument, DeclWindow, DeferredReturn,
     DeferredReturnSurface, DispatchToken, DispatchTokenElement, ExpressionSignature, KKind, KType,
-    NodeSchema, Parseable, PendingMember, Record, RecursiveGroupWindow, RelativeSchema, ReturnType,
-    SealedAnnounced, SealedGroup, SignatureDraft, SignatureElement, TypeNode, UntypedElement,
+    KeyElement, NodeSchema, Parseable, PendingMember, Record, RecursiveGroupWindow, RelativeSchema,
+    ReturnType, SealedAnnounced, SealedGroup, SignatureDraft, SignatureElement, TypeNode,
     UntypedKey, WindowView, is_keyword_token,
-};
-pub use types::{
-    StoredDispatchTokenElement, StoredElement, StoredKeyProbe, UntypedKeyProbe,
-    most_specific_ktype, owned_untyped_key, restore_stored_key, store_untyped_key,
 };
 pub use values::{
     Carried, ContainerSubstrate, Held, KKey, KObject, PartedCell, Scalar, ValueEqualityError,

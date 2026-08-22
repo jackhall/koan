@@ -28,7 +28,8 @@
 
 use crate::machine::core::RegionBrand;
 
-use super::types::{UntypedElement, UntypedKey};
+use super::labels::KeywordSymbol;
+use super::types::{KeyElement, UntypedKey};
 
 /// Which way a fold nests a run of more than two operands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,23 +186,26 @@ pub fn probe_key(operators: &[&str]) -> String {
 }
 
 /// The function-bucket key a binary use of `sym` computes — `[Slot, Keyword(sym), Slot]` — and the
-/// key every declaration of `sym` registers its binary overload under. The two must agree
-/// byte-for-byte: an overload registered under any other key sits in a bucket no koan expression
-/// ever computes, so the operator silently never dispatches.
+/// key every declaration of `sym` registers its binary overload under. The two must agree on the
+/// symbol: an overload registered under any other key sits in a bucket no koan expression ever
+/// computes, so the operator silently never dispatches.
 pub fn binary_key(sym: &str) -> UntypedKey {
     vec![
-        UntypedElement::Slot,
-        UntypedElement::Keyword(sym.to_string()),
-        UntypedElement::Slot,
+        KeyElement::Slot,
+        KeyElement::Keyword(keyword_symbol(sym)),
+        KeyElement::Slot,
     ]
 }
 
 /// The function-bucket key a reduced unary run of `sym` computes — `[Keyword(sym), Slot]`, the same
 /// shape as the prefix form `sym [a b c]` — and the key every declaration of `sym` registers its
-/// list-form overload under. Same byte-for-byte agreement contract as [`binary_key`].
+/// list-form overload under. Same symbol-agreement contract as [`binary_key`].
 pub fn unary_key(sym: &str) -> UntypedKey {
-    vec![
-        UntypedElement::Keyword(sym.to_string()),
-        UntypedElement::Slot,
-    ]
+    vec![KeyElement::Keyword(keyword_symbol(sym)), KeyElement::Slot]
+}
+
+/// The symbol an operator glyph keys under. An operator glyph is pure-symbol text, so it always
+/// classifies keyword-class; a caller that reached here with anything else built the glyph wrong.
+fn keyword_symbol(sym: &str) -> KeywordSymbol {
+    KeywordSymbol::of(sym).expect("an operator glyph is keyword-class")
 }

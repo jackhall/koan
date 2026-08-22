@@ -13,7 +13,7 @@
 
 use crate::machine::core::{RegionBrand, read_resting};
 use crate::machine::model::{Carried, Held, KObject};
-use crate::machine::model::{StoredElement, UntypedElement, UntypedKey};
+use crate::machine::model::{KeyElement, UntypedKey};
 use crate::machine::{AdoptSeam, SplicedCell};
 use crate::source::{FileId, Span, Spanned};
 
@@ -219,7 +219,7 @@ pub struct WorkingExpression<'a> {
     pub parts: &'a [Spanned<WorkingPart<'a>>],
     pub span: Option<Span>,
     pub file: Option<FileId>,
-    untyped_key: &'a [StoredElement<'a>],
+    untyped_key: &'a [KeyElement],
     shape: DispatchShape,
     operator_probe: Option<&'a str>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
@@ -385,20 +385,14 @@ impl<'a> WorkingExpression<'a> {
     }
 
     /// The stored bucket key, as a borrow of the run bumped at construction.
-    pub fn stored_key(&self) -> &'a [StoredElement<'a>] {
+    pub fn stored_key(&self) -> &'a [KeyElement] {
         self.untyped_key
     }
 
     /// Bucket key, materialized owned for a bucket-table lookup. See
     /// [`KExpression::untyped_key`].
     pub fn untyped_key(&self) -> UntypedKey {
-        self.untyped_key
-            .iter()
-            .map(|element| match element {
-                StoredElement::Keyword(s) => UntypedElement::Keyword((*s).to_string()),
-                StoredElement::Slot => UntypedElement::Slot,
-            })
-            .collect()
+        self.untyped_key.to_vec()
     }
 
     /// Surface rendering of the whole expression — parts only, so no registry is needed.

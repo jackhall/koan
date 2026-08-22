@@ -4,7 +4,6 @@ use crate::builtins::test_support::kw_part;
 use crate::builtins::test_support::{TestRun, marker, run_root_bare};
 use crate::machine::core::{FrameStorageExt, Scope, program_storage, run_root_storage};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::UntypedKeyProbe;
 use crate::machine::model::{Argument, KExpression, KType, ReturnType, SignatureDraft};
 use crate::machine::model::{KKind, KObject};
 use crate::machine::model::{KLiteral, TypeIdentifier};
@@ -27,7 +26,7 @@ fn find_match<'a>(
     let key = expr.untyped_key();
     let mut current: Option<&Scope<'a>> = Some(scope);
     while let Some(s) = current {
-        let bucket: Vec<_> = match s.bindings().functions().get(&UntypedKeyProbe(&key)) {
+        let bucket: Vec<_> = match s.bindings().functions().get(key.as_slice()) {
             Some(bucket) => bucket
                 .iter()
                 .map(|entry| entry.sealed.duplicate())

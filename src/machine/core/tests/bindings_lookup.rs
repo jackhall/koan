@@ -10,7 +10,6 @@ use crate::machine::ProducerId;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{BindingIndex, FrameStorageExt, NameLookup, run_root_storage};
 use crate::machine::model::KObject;
-use crate::machine::model::UntypedKeyProbe;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 
 use super::{body_no_op, unit_signature};
@@ -416,14 +415,6 @@ fn retirement_drops_every_bucket_the_statement_claimed() {
         &mut crate::machine::WriteGate::for_test(),
     );
     assert!(bindings.pending_overload_entries(&other_key).is_empty());
-    assert!(
-        !bindings
-            .functions()
-            .contains_key(&UntypedKeyProbe(&other_key))
-    );
-    assert!(
-        bindings
-            .functions()
-            .contains_key(&UntypedKeyProbe(&sealed_key))
-    );
+    assert!(!bindings.functions().contains_key(other_key.as_slice()));
+    assert!(bindings.functions().contains_key(sealed_key.as_slice()));
 }
