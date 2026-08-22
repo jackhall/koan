@@ -77,15 +77,21 @@ moved it.
 
 | shape | what it exercises | allocations | scaling term |
 |---|---|---|---|
-| `shapes/tail_loop.koan` | 100 tail-recursive steps | 12 498 | 98.9 per step, linear |
-| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 5 902 | ≈26 per dispatch, mildly superlinear |
-| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 823 | — |
-| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 5 421 | 49.9 per dispatch |
-| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 5 284 | — |
-| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 879 | 49.8 per dispatch |
-| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 553 | — |
-| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 656 | 65.7 per call |
-| *(empty program)* | interpreter startup and builtin seeding | 2 972 | — |
+| `shapes/tail_loop.koan` | 100 tail-recursive steps | 12 502 | 98.9 per step, linear |
+| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 5 907 | ≈26 per dispatch, mildly superlinear |
+| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 828 | — |
+| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 5 426 | 49.9 per dispatch |
+| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 5 289 | — |
+| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 884 | 49.8 per dispatch |
+| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 552 | — |
+| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 622 | 64.7 per call |
+| `shapes/user_fn_params1_calls8.koan` | 8 one-parameter user-function calls | 3 385 | — |
+| `shapes/user_fn_params1_calls40.koan` | 40 one-parameter user-function calls | 4 560 | 36.7 per call |
+| `shapes/user_fn_params8_calls8.koan` | 8 eight-parameter user-function calls | 3 682 | — |
+| `shapes/user_fn_params8_calls40.koan` | 40 eight-parameter user-function calls | 5 688 | 62.7 per call, 3.71 per parameter |
+| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 3 867 | — |
+| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 6 833 | 92.7 per cycle |
+| *(empty program)* | interpreter startup and builtin seeding | 2 973 | — |
 
 No shape can use comments: koan has none, and `#` is reserved for quoting. The prose
 that would have headed each file is here instead.
@@ -120,21 +126,35 @@ absolute per-dispatch figure is higher than the operator chain's because each `P
 whole statement — its own node, frame and working expression — where a chain operand is one
 dispatch inside a single statement's fold.
 
-The arity term is **65.7 per call**, from 2 103 allocations for the 32 calls the two
+The arity term is **64.7 per call**, from 2 070 allocations for the 32 calls the two
 `builtin_call` shapes differ by. It was 73.7 while a call re-keyed its arguments onto
-parameter names; the 8-allocation-per-call drop is exactly what the schema-keyed argument
-view removes at this arity — the 2n = 6 parameter-name copies, plus the argument map and the
-carrier map, both replaced by a values-only slice on the step scratch arena
-([label-interning.md](../design/label-interning.md)).
+parameter names; 8 per call of the drop is exactly what the schema-keyed argument view removes
+at this arity — the 2n = 6 parameter-name copies, plus the argument map and the carrier map,
+both replaced by a values-only slice on the step scratch arena
+([label-interning.md](../design/label-interning.md)). The last 1 per call is the name copy a
+symbol-keyed scope binding table no longer makes.
+
+The **nominal-member** axis is the two `tagged_construct` shapes, 8 and 40 repetitions of one
+`MATCH (Maybe (Some 1)) -> :Number WITH (…)` over a two-variant `UNION`. Each cycle reads the
+union's `SetMember` node out of the registry, selects a variant out of the constructor's schema,
+builds the tagged value and matches on its tag — so it is the shape that prices a *name that was
+declared*, where the four axes above price names that are bound, looked up or passed. It costs
+**92.7 per cycle**, from 2 966 allocations for the 32 cycles the shapes differ by, down from 98.7
+when the variant schema was keyed by the tag's rendered text. The 6-per-cycle drop is the tag
+`String` a construction used to bump into the tagged value plus the schema-key text clones a
+variant selection made on the way in and out of the registry, both replaced by the classified
+symbol the declaration already interned.
 
 ## The regression test
 
 `tests/allocation_baseline.rs` asserts the two absolute shapes' bracketed counts against a
-stated bound — 12 489 for the loop, 5 893 for the chain, each carrying 41 allocations of
-headroom — and the builtin-call pair's differenced count against 2 135, its 2 103 plus 32.
+stated bound — 12 493 for the loop, 5 898 for the chain, carrying 37 and 36 allocations of
+headroom — and each differencing pair's marginal count against its measurement plus 32: 2 102
+for the builtin call, 1 207 for the one-parameter user call, 2 998 for the tagged construction.
 The bounds are tight by design: the margin is smaller than the 100 (loop), 127 (chain) or 32
-(builtin call) a single new allocation on the scaling path would add, so one added allocation
-fails a test. Rebaselining is meant to be a deliberate edit, and the failure message says so.
+(every differencing pair, which is how many repetitions they differ by) a single new allocation
+on the scaling path would add, so one added allocation fails a test. Rebaselining is meant to be
+a deliberate edit, and the failure message says so.
 
 Those figures sit 9 under the whole-program table above — the same gap for both shapes, and
 essentially all of it process startup. The interpreter holds almost no lazy one-time state, so

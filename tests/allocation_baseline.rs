@@ -63,9 +63,9 @@ fn allocations_for(source: &str, path: &str) -> u64 {
 }
 
 /// 100 tail-recursive steps, 98.9 allocations each — exactly linear, measured flat at
-/// 10/50/100/200. Measured 2026-08-21 at 12 489, down from 14 917 when a call re-keyed its
+/// 10/50/100/200. Measured 2026-08-22 at 12 493, down from 14 917 when a call re-keyed its
 /// arguments onto parameter names: the schema-keyed argument view pays no per-parameter name
-/// and no per-call container on either lane. The bound is that plus 41, less than the 100 a
+/// and no per-call container on either lane. The bound is that plus 37, less than the 100 a
 /// single new per-step allocation would add. Tight on purpose: a looser bound cannot see one
 /// allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
@@ -84,9 +84,9 @@ fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
 }
 
 /// A 128-operand `+` chain, so 127 dispatches at ≈26 allocations each — mildly superlinear,
-/// with marginal cost rising across the 16→32 … 128→256 operand doublings. Measured 2026-08-21
-/// at 5 893, down from 6 689 for the same reason the loop shape dropped. The bound is that plus
-/// 41, under the 127 a single new per-dispatch allocation would add. Same headroom rule as the
+/// with marginal cost rising across the 16→32 … 128→256 operand doublings. Measured 2026-08-22
+/// at 5 898, down from 6 689 for the same reason the loop shape dropped. The bound is that plus
+/// 36, under the 127 a single new per-dispatch allocation would add. Same headroom rule as the
 /// loop.
 #[test]
 fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
@@ -151,16 +151,17 @@ fn per_dispatch_cost_does_not_grow_with_scope_walk_depth() {
 /// `branches`). Differencing them cancels interpreter startup and leaves 32 calls' marginal
 /// cost — the parse of the 32 extra statements included, since that is how the shapes differ.
 ///
-/// Measured 2026-08-21 at **2 103** for the 32 calls (65.7 each), down from 2 359 (73.7 each)
-/// when a call re-keyed its arguments onto parameter names. The 256-allocation drop is exactly
-/// 8 per call: the 2n = 6 parameter-name copies a three-parameter bind used to make, plus the
-/// two per-call containers — the argument map and the carrier map — that the schema-keyed
-/// argument view replaces with a slice on the step scratch arena.
+/// Measured 2026-08-22 at **2 070** for the 32 calls (64.7 each), down from 2 359 (73.7 each)
+/// when a call re-keyed its arguments onto parameter names. 256 of that drop is exactly 8 per
+/// call: the 2n = 6 parameter-name copies a three-parameter bind used to make, plus the two
+/// per-call containers — the argument map and the carrier map — that the schema-keyed argument
+/// view replaces with a slice on the step scratch arena. The remaining 33 is the one name copy
+/// per call a symbol-keyed scope binding table no longer makes.
 ///
 /// The bound is the measurement plus 32, so one re-introduced per-call allocation fails it.
 #[test]
 fn the_builtin_call_shape_stays_within_its_per_call_bound() {
-    const BOUND: u64 = 2_135;
+    const BOUND: u64 = 2_102;
     let marginal = allocations_for(
         include_str!("../audit/shapes/builtin_call_calls40.koan"),
         "audit/shapes/builtin_call_calls40.koan",
@@ -243,11 +244,18 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
 /// registry (a clone per read), selects a variant out of the constructor's schema, builds the
 /// tagged value, and matches on its tag.
 ///
-/// Measured 2026-08-21 at **3 158** for the 32 cycles (98.7 each). The bound is that plus 32,
-/// so one re-introduced per-construction allocation fails it.
+/// Measured 2026-08-22 at **2 966** for the 32 cycles (92.7 each), down from 3 158 (98.7 each)
+/// when the variant schema was keyed by the tag's text. The 192-allocation drop is 6 per cycle:
+/// the tag `String` a construction used to bump into the tagged value, and the schema-key text
+/// clones a variant selection used to make on the way in and out of the registry, both replaced
+/// by the classified symbol the declaration already interned
+/// ([label-interning.md](../design/label-interning.md)).
+///
+/// The bound is the measurement plus 32, so one re-introduced per-construction allocation fails
+/// it.
 #[test]
 fn the_tagged_construct_shape_stays_within_its_per_construction_bound() {
-    const BOUND: u64 = 3_190;
+    const BOUND: u64 = 2_998;
     let marginal = allocations_for(
         include_str!("../audit/shapes/tagged_construct_calls40.koan"),
         "audit/shapes/tagged_construct_calls40.koan",
@@ -262,3 +270,4 @@ fn the_tagged_construct_shape_stays_within_its_per_construction_bound() {
          `audit/measure.sh` and rebaseline deliberately if the cost is intended"
     );
 }
+
