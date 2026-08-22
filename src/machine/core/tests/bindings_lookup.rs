@@ -158,10 +158,14 @@ fn lookup_type_strict_less_than_hides_later_sibling() {
 #[test]
 fn lookup_function_chain_cutoff_none_returns_full_bucket() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let cell = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
+    let cell = KFunction::alloc_captured(
+        scope,
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        &registries,
+    );
     let f = cell.adopt_into(scope.brand().handle());
     scope
         .register_function_direct(
@@ -185,7 +189,6 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
 #[test]
 fn lookup_function_filters_per_overload_visibility() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     // Two overloads sharing the same bucket key but differing on a value-side
@@ -193,7 +196,7 @@ fn lookup_function_filters_per_overload_visibility() {
     let sig_num = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("BAR"),
+            SignatureElement::keyword("BAR"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v")
                     .expect("a test fixture parameter is a value token"),
@@ -204,7 +207,7 @@ fn lookup_function_filters_per_overload_visibility() {
     let sig_str = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("BAR"),
+            SignatureElement::keyword("BAR"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v")
                     .expect("a test fixture parameter is a value token"),
@@ -214,8 +217,8 @@ fn lookup_function_filters_per_overload_visibility() {
     };
     let key = sig_num.untyped_key();
     debug_assert_eq!(key, sig_str.untyped_key(), "untyped keys must collide");
-    let early = KFunction::alloc_captured(scope, sig_num, Body::Builtin(body_no_op), types);
-    let late = KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), types);
+    let early = KFunction::alloc_captured(scope, sig_num, Body::Builtin(body_no_op), &registries);
+    let late = KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), &registries);
     let f_early = early.adopt_into(scope.brand().handle());
     scope
         .register_function_direct(
@@ -277,10 +280,14 @@ fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
 #[test]
 fn lookup_function_surfaces_pending_overload_alongside_bucket() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
+    let f = KFunction::alloc_captured(
+        scope,
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        &registries,
+    );
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -309,10 +316,14 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
 #[test]
 fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
+    let f = KFunction::alloc_captured(
+        scope,
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        &registries,
+    );
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -336,10 +347,14 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
 #[test]
 fn retirement_drops_every_bucket_the_statement_claimed() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
+    let f = KFunction::alloc_captured(
+        scope,
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        &registries,
+    );
     scope
         .register_function_direct(
             "FOO".to_string(),
@@ -352,7 +367,7 @@ fn retirement_drops_every_bucket_the_statement_claimed() {
     let sealed_key = f.open(|f| f.signature.untyped_key());
     let other_key = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::Keyword("BAR")],
+        elements: vec![SignatureElement::keyword("BAR")],
     }
     .untyped_key();
 

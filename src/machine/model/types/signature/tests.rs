@@ -1,6 +1,7 @@
 use std::hash::BuildHasher;
 
 use super::*;
+use crate::builtins::test_support::kw_part;
 use crate::machine::core::{RegionBrand, program_storage};
 use crate::machine::model::RunRegistries;
 use crate::source::Spanned;
@@ -20,11 +21,12 @@ fn one_slot(brand: RegionBrand<'_>, kt: KType) -> ExpressionSignature<'_> {
                 ktype: kt,
             })],
         },
+        &crate::machine::model::LabelInterner::new(),
     )
 }
 
 fn expr_with_keyword<'a>(brand: RegionBrand<'a>, kw: &'a str) -> KExpression<'a> {
-    KExpression::new(brand, &[Spanned::bare(ExpressionPart::Keyword(kw))])
+    KExpression::new(brand, &[Spanned::bare(kw_part(kw))])
 }
 
 #[test]
@@ -100,8 +102,9 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
         brand,
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::ANY),
-            elements: vec![SignatureElement::Keyword("FOO")],
+            elements: vec![SignatureElement::keyword("FOO")],
         },
+        &crate::machine::model::LabelInterner::new(),
     );
     let empty: KExpression<'_> = KExpression::new(brand, &[]);
     assert!(!sig.matches(&empty, types));
@@ -114,7 +117,7 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
     );
     assert!(!sig.matches(&mismatched, types));
 
-    let matching = KExpression::new(brand, &[Spanned::bare(ExpressionPart::Keyword("FOO"))]);
+    let matching = KExpression::new(brand, &[Spanned::bare(kw_part("FOO"))]);
     assert!(sig.matches(&matching, types));
 }
 
@@ -164,6 +167,7 @@ fn sig_with<'a>(
                 ktype: slot,
             })],
         },
+        &crate::machine::model::LabelInterner::new(),
     )
 }
 
@@ -204,8 +208,9 @@ fn indistinguishable_splits_on_argument_type_and_keywords() {
             brand,
             SignatureDraft {
                 return_type: ReturnType::Resolved(KType::ANY),
-                elements: vec![SignatureElement::Keyword(token)],
+                elements: vec![SignatureElement::keyword(token)],
             },
+            &crate::machine::model::LabelInterner::new(),
         )
     };
     let empty = ExpressionSignature::mint(
@@ -214,6 +219,7 @@ fn indistinguishable_splits_on_argument_type_and_keywords() {
             return_type: ReturnType::Resolved(KType::ANY),
             elements: vec![],
         },
+        &crate::machine::model::LabelInterner::new(),
     );
     assert!(kw("FOO").indistinguishable_from(&kw("FOO")));
     assert!(!kw("FOO").indistinguishable_from(&kw("BAR")));
@@ -248,7 +254,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
         keyword: &'a str,
         slots: &[KType],
     ) -> ExpressionSignature<'a> {
-        let mut elements = vec![SignatureElement::Keyword(keyword)];
+        let mut elements = vec![SignatureElement::keyword(keyword)];
         elements.extend(slots.iter().map(|kt| {
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v").expect("value token"),
@@ -261,6 +267,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
                 return_type: ReturnType::Resolved(KType::ANY),
                 elements,
             },
+            &crate::machine::model::LabelInterner::new(),
         )
     }
 
@@ -280,6 +287,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
                     ktype: KType::NUMBER,
                 })],
             },
+            &crate::machine::model::LabelInterner::new(),
         ),
         keyworded(brand, "TAKE", &[KType::NUMBER]),
         keyworded(brand, "TAKE", &[KType::ANY]),
@@ -291,6 +299,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
                 return_type: ReturnType::Resolved(KType::ANY),
                 elements: vec![],
             },
+            &crate::machine::model::LabelInterner::new(),
         ),
     ];
     for (i, a) in signatures.iter().enumerate() {
@@ -380,7 +389,7 @@ fn a_stored_dispatch_token_matches_what_its_owned_form_does() {
         keyword: &'a str,
         slots: &[KType],
     ) -> ExpressionSignature<'a> {
-        let mut elements = vec![SignatureElement::Keyword(keyword)];
+        let mut elements = vec![SignatureElement::keyword(keyword)];
         elements.extend(slots.iter().map(|kt| {
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v").expect("value token"),
@@ -393,6 +402,7 @@ fn a_stored_dispatch_token_matches_what_its_owned_form_does() {
                 return_type: ReturnType::Resolved(KType::ANY),
                 elements,
             },
+            &crate::machine::model::LabelInterner::new(),
         )
     }
 

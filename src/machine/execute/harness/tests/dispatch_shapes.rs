@@ -19,7 +19,7 @@ use crate::machine::execute::decide::{
 use crate::machine::model::Held;
 use crate::machine::model::Scalar;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
-use crate::machine::model::{Carried, KObject, TypeNode, TypeRegistry};
+use crate::machine::model::{Carried, KObject, TypeNode};
 use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::{BindingIndex, KFunction, Scope};
 
@@ -82,7 +82,6 @@ fn body_identity<'run>(ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
 /// Identifier head that resolves to a function value without going through FN/LET.
 fn bind_identity_fn<'run>(
     scope: &'run Scope<'run>,
-    types: &TypeRegistry,
     registries: &crate::machine::model::RunRegistries,
 ) {
     let sig = SignatureDraft {
@@ -97,7 +96,7 @@ fn bind_identity_fn<'run>(
         scope,
         sig,
         crate::machine::core::Body::Builtin(body_identity),
-        types,
+        registries,
     );
     let obj = scope.brand().allocator().value(KObject::KFunction(f));
     scope
@@ -715,7 +714,7 @@ fn keyworded_unchanged_with_keyword_in_body() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    bind_identity_fn(scope, test_run.types(), test_run.registries());
+    bind_identity_fn(scope, test_run.registries());
 
     let expr_a = parse_one(&program, "(List MAYBE Number)");
     reset_resolve_dispatch_entry_count();
@@ -754,8 +753,12 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("FN (FIRST xs :(LIST OF Number)) -> Number = (1)");
-    let exprs = crate::parse::parse(test_run.program_brand(), "LET y = (FIRST [1 2 3])")
-        .expect("parse succeeds");
+    let exprs = crate::parse::parse(
+        test_run.program_brand(),
+        &test_run.registries().labels,
+        "LET y = (FIRST [1 2 3])",
+    )
+    .expect("parse succeeds");
     for e in exprs {
         test_run.dispatch_watched_in(scope, working(scope, e));
     }
@@ -782,8 +785,12 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
     let scope = test_run.scope;
     test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
     test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
-    let exprs = crate::parse::parse(test_run.program_brand(), "LET out = (DESCRIBE [1 2 3])")
-        .expect("parse succeeds");
+    let exprs = crate::parse::parse(
+        test_run.program_brand(),
+        &test_run.registries().labels,
+        "LET out = (DESCRIBE [1 2 3])",
+    )
+    .expect("parse succeeds");
     for e in exprs {
         test_run.dispatch_watched_in(scope, working(scope, e));
     }

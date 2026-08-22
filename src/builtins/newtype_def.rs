@@ -568,6 +568,7 @@ mod tests {
         let scope = test_run.scope;
         let exprs = crate::parse::parse(
             program.brand(),
+            &crate::machine::model::LabelInterner::new(),
             "NEWTYPE Foo = :{x :Number}\nNEWTYPE Foo = :{x :Str}",
         )
         .expect("parse should succeed")
@@ -613,6 +614,7 @@ mod tests {
         let scope = test_run.scope;
         let exprs = crate::parse::parse(
             program.brand(),
+            &crate::machine::model::LabelInterner::new(),
             "NEWTYPE Foo = Number\nNEWTYPE Foo = Number",
         )
         .expect("parse should succeed")
@@ -1094,7 +1096,12 @@ mod tests {
         let src = "SIG Monad = ((TYPE (Type AS Wrap)))\n\
                    MODULE int_list = ((NEWTYPE (Type AS Wrap)))\n\
                    LET view = (int_list :| Monad)";
-        let exprs = crate::parse::parse(program.brand(), src).expect("parse should succeed");
+        let exprs = crate::parse::parse(
+            program.brand(),
+            &crate::machine::model::LabelInterner::new(),
+            src,
+        )
+        .expect("parse should succeed");
         let mut edges = Vec::new();
         for expr in exprs {
             let id = test_run.dispatch_in_scope(

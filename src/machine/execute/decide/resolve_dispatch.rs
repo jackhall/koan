@@ -463,7 +463,9 @@ fn slot_admits_strict<'e>(
 ) -> bool {
     let types = &registries.types;
     match (el, slot.as_ast()) {
-        (SignatureElement::Keyword(s), Some(ExpressionPart::Keyword(t))) => *s == t,
+        (SignatureElement::Keyword(s), Some(ExpressionPart::Keyword(t))) => {
+            s.symbol() == t.symbol()
+        }
         (SignatureElement::Keyword(_), _) => false,
         // A slot the scheduler filled classifies by its carried value, never by a part shape: a
         // resolved cell opens at its own brand, and a synthesized node / staging hole names no value

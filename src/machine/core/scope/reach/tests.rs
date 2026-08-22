@@ -23,12 +23,11 @@ use crate::witnessed::{Delivered, FoldedPlacement, Sealed};
 /// borrow leaf pointing at `home`, the shape a closure capturing its own defining frame takes.
 fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KFunction<'run> {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     CallFrame::alloc_capturing_scope(
         home,
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::NULL),
-            elements: vec![SignatureElement::Keyword("__INNER__")],
+            elements: vec![SignatureElement::keyword("__INNER__")],
         },
         Body::Builtin(|ctx| {
             crate::machine::core::Action::done_resident(
@@ -36,7 +35,7 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KFunction<'run> 
                 Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
             )
         }),
-        types,
+        &registries,
     )
 }
 

@@ -98,7 +98,12 @@ fn functor_application_mints_distinct_abstract_types() {
                FN (MAKESET er :Ordered) -> Module = (er :| Ordered)\n\
                LET set_one = (MAKESET int_ord)\n\
                LET set_two = (MAKESET int_ord)";
-    let exprs = parse(program.brand(), src).expect("parse should succeed");
+    let exprs = parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        src,
+    )
+    .expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
         ids.push(test_run.dispatch_watched_in(
@@ -383,7 +388,12 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
                MODULE int_list = ((LET Wrap = Wrapper))\n\
                LET first = (int_list :| Monad)\n\
                LET second = (int_list :| Monad)";
-    let exprs = parse(program.brand(), src).expect("parse should succeed");
+    let exprs = parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        src,
+    )
+    .expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
         ids.push(test_run.dispatch_watched_in(

@@ -30,8 +30,12 @@ fn fn_without_return_type_annotation_does_not_register() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let exprs = parse(program.brand(), "FN (DOUBLE x :Number) = (PRINT \"x\")")
-        .expect("parse should succeed");
+    let exprs = parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        "FN (DOUBLE x :Number) = (PRINT \"x\")",
+    )
+    .expect("parse should succeed");
     for expr in exprs {
         test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
@@ -174,6 +178,7 @@ fn fn_return_type_forward_user_bound_name_is_a_resolution_error() {
     let scope = test_run.scope;
     let edges: Vec<_> = parse(
         program.brand(),
+        &crate::machine::model::LabelInterner::new(),
         "FN (DOIT xs :MyT) -> MyT = (xs)\nLET MyT = Number",
     )
     .expect("parse succeeds")
@@ -314,6 +319,7 @@ fn spliced_bare_name_tail_checks_declared_return() {
     let scope = test_run.scope;
     let bad_edges: Vec<_> = parse(
         program.brand(),
+        &crate::machine::model::LabelInterner::new(),
         "LET x = \"nope\"\nFN (WRAP) -> Number = (x)\nLET out = (WRAP)",
     )
     .expect("parse succeeds")
@@ -355,6 +361,7 @@ fn spliced_bare_name_tail_checks_declared_return() {
     let scope = test_run.scope;
     let ok_edges: Vec<_> = parse(
         program.brand(),
+        &crate::machine::model::LabelInterner::new(),
         "LET x = 7\nFN (WRAP) -> Number = (x)\nLET out = (WRAP)",
     )
     .expect("parse succeeds")

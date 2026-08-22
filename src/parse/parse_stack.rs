@@ -7,6 +7,7 @@
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::labels::LabelInterner;
 use crate::parse::tokens::classify_token;
 use crate::source::Spanned;
 
@@ -17,16 +18,18 @@ use super::frame::BracketFrame;
 /// no parse site reaches for storage of its own. It is a [`ProgramBrand`] rather than a plain
 /// region brand because the nested-node arms the frames fold into are value-channel conduits. The root run stays a plain `Vec` until
 /// [`ParseStack::finish`] freezes it — a node is built only once its parts are final.
-pub(super) struct ParseStack<'a> {
+pub(super) struct ParseStack<'a, 'l> {
     brand: ProgramBrand<'a>,
+    labels: &'l LabelInterner,
     root: Vec<Spanned<ExpressionPart<'a>>>,
     rest: Vec<BracketFrame<'a>>,
 }
 
-impl<'a> ParseStack<'a> {
-    pub(super) fn new(brand: ProgramBrand<'a>) -> Self {
+impl<'a, 'l> ParseStack<'a, 'l> {
+    pub(super) fn new(brand: ProgramBrand<'a>, labels: &'l LabelInterner) -> Self {
         Self {
             brand,
+            labels,
             root: Vec::new(),
             rest: Vec::new(),
         }
@@ -35,6 +38,11 @@ impl<'a> ParseStack<'a> {
     /// The program storage every part this stack collects is bumped into.
     pub(super) fn brand(&self) -> ProgramBrand<'a> {
         self.brand
+    }
+
+    /// The run's label table, which every keyword this stack classifies is recorded in.
+    pub(super) fn labels(&self) -> &LabelInterner {
+        self.labels
     }
 
     pub(super) fn push_frame(&mut self, f: BracketFrame<'a>) {
@@ -82,7 +90,7 @@ impl<'a> ParseStack<'a> {
 }
 
 pub(super) fn flush_token<'a>(
-    stack: &mut ParseStack<'a>,
+    stack: &mut ParseStack<'a, '_>,
     buf: &mut String,
     token_start: &mut Option<u32>,
 ) -> Result<(), KError> {
@@ -91,7 +99,7 @@ pub(super) fn flush_token<'a>(
         let start = token_start
             .take()
             .expect("token_start must be set whenever buf is non-empty");
-        let part = classify_token(stack.brand(), &tok, start)?;
+        let part = classify_token(stack.brand(), stack.labels(), &tok, start)?;
         stack.push_part(part);
     } else {
         *token_start = None;
@@ -102,7 +110,7 @@ pub(super) fn flush_token<'a>(
 /// Open shape shared by `[` and `{`: reject a glued opener, flush any
 /// pending token into the parent, then push the new frame.
 pub(super) fn open_collection<'a>(
-    stack: &mut ParseStack<'a>,
+    stack: &mut ParseStack<'a, '_>,
     buf: &mut String,
     opener: char,
     prev: Option<char>,
@@ -119,7 +127,7 @@ pub(super) fn open_collection<'a>(
 /// `closer`, run adjacency, flush any pending token, then pop and fold the
 /// frame into the part it produces.
 pub(super) fn close_collection<'a>(
-    stack: &mut ParseStack<'a>,
+    stack: &mut ParseStack<'a, '_>,
     buf: &mut String,
     closer: char,
     next: Option<char>,

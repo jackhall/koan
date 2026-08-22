@@ -8,7 +8,7 @@
 
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
-use crate::machine::model::ast::ExpressionPart;
+use crate::machine::model::ast::{ExpressionPart, KeywordToken};
 use crate::source::{self, Span, Spanned};
 
 use super::dict_literal::{BraceContents, DictFrame};
@@ -22,7 +22,7 @@ pub(super) enum BracketFrame<'a> {
     /// (set iff `head` is) anchors the outer span at the sigil.
     Expression {
         parts: Vec<Spanned<ExpressionPart<'a>>>,
-        head: Option<&'static str>,
+        head: Option<KeywordToken<'static>>,
         span_start: u32,
         sigil_cursor: Option<u32>,
     },

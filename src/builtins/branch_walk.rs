@@ -169,7 +169,7 @@ pub(crate) fn find_branch_body_by_tag<'a>(
                 Some(Symbol::of(if b { "true" } else { "false" }))
             }
             // `_` is a pure-symbol token classified as `Keyword`, not a type name.
-            ExpressionPart::Keyword("_") if allow_wildcard => None,
+            ExpressionPart::Keyword(kw) if allow_wildcard && kw.text() == "_" => None,
             other => {
                 return Err(format!(
                     "branch tag must be a capitalized variant tag or boolean literal, got {}",
@@ -178,7 +178,7 @@ pub(crate) fn find_branch_body_by_tag<'a>(
             }
         };
         match arrow_part.value {
-            ExpressionPart::Keyword("->") => {}
+            ExpressionPart::Keyword(kw) if kw.text() == "->" => {}
             other => {
                 return Err(format!(
                     "branch separator must be `->`, got {}",
@@ -306,7 +306,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
         let body_part = &parts[i + 2];
 
         match arrow_part.value {
-            ExpressionPart::Keyword("->") => {}
+            ExpressionPart::Keyword(kw) if kw.text() == "->" => {}
             other => {
                 return Err(format!(
                     "branch separator must be `->`, got {}",

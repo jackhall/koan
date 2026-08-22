@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::builtins::test_support::kw_part;
 use crate::builtins::test_support::type_name;
 use crate::builtins::test_support::type_token;
 use crate::machine::core::program_storage;
@@ -367,18 +368,15 @@ fn kexpression_structural_equality() {
     let registries = RunRegistries::new();
     let program = program_storage();
     let brand = program.brand();
-    let a = KObject::KExpression(brand.new_expression(&[
-        part(ExpressionPart::Keyword("LET")),
-        part(ExpressionPart::Identifier("x")),
-    ]));
-    let b = KObject::KExpression(brand.new_expression(&[
-        part(ExpressionPart::Keyword("LET")),
-        part(ExpressionPart::Identifier("x")),
-    ]));
-    let c = KObject::KExpression(brand.new_expression(&[
-        part(ExpressionPart::Keyword("LET")),
-        part(ExpressionPart::Identifier("y")),
-    ]));
+    let a = KObject::KExpression(
+        brand.new_expression(&[part(kw_part("LET")), part(ExpressionPart::Identifier("x"))]),
+    );
+    let b = KObject::KExpression(
+        brand.new_expression(&[part(kw_part("LET")), part(ExpressionPart::Identifier("x"))]),
+    );
+    let c = KObject::KExpression(
+        brand.new_expression(&[part(kw_part("LET")), part(ExpressionPart::Identifier("y"))]),
+    );
     assert_eq!(a.value_equal(&b, &registries), Ok(true));
     assert_eq!(a.value_equal(&c, &registries), Ok(false));
 }
@@ -406,11 +404,10 @@ fn kexpression_length_and_variant_mismatch() {
     let registries = RunRegistries::new();
     let program = program_storage();
     let brand = program.brand();
-    let a = KObject::KExpression(brand.new_expression(&[part(ExpressionPart::Keyword("LET"))]));
-    let longer = KObject::KExpression(brand.new_expression(&[
-        part(ExpressionPart::Keyword("LET")),
-        part(ExpressionPart::Identifier("x")),
-    ]));
+    let a = KObject::KExpression(brand.new_expression(&[part(kw_part("LET"))]));
+    let longer = KObject::KExpression(
+        brand.new_expression(&[part(kw_part("LET")), part(ExpressionPart::Identifier("x"))]),
+    );
     // Different part variants at the same position.
     let variant =
         KObject::KExpression(brand.new_expression(&[part(ExpressionPart::Identifier("LET"))]));
@@ -425,7 +422,7 @@ fn kexpression_length_and_variant_mismatch() {
 fn a_function<'a>(
     storage: &'a Rc<crate::machine::core::FrameStorage>,
     scope: &'a crate::machine::Scope<'a>,
-    types: &TypeRegistry,
+    registries: &RunRegistries,
 ) -> KObject<'a> {
     use crate::machine::KFunction;
     use crate::machine::core::{Body, FrameStorageExt};
@@ -438,7 +435,7 @@ fn a_function<'a>(
         scope,
         sig,
         Body::UserDefined(KExpression::new(storage.brand(), &[])),
-        types,
+        registries,
     );
     KObject::KFunction(f)
 }
@@ -451,7 +448,7 @@ fn function_operand_is_error_at_any_position() {
     let storage = run_root_storage();
     let test_run = TestRun::silent(&program, &storage);
     let types = test_run.registry_handle();
-    let f = a_function(&storage, test_run.scope, &types);
+    let f = a_function(&storage, test_run.scope, types.registries());
     assert_eq!(
         f.value_equal(&num(1.0), types.registries()),
         Err(ValueEqualityError::Function)
@@ -474,14 +471,14 @@ fn function_operand_is_error_at_any_position() {
     let list_f = KObject::list_of_held(
         door,
         &[Held::Object(
-            a_function(&storage2, second_run.scope, second_run.types()).deep_clone(),
+            a_function(&storage2, second_run.scope, second_run.registries()).deep_clone(),
         )],
         &types,
     );
     let list_g = KObject::list_of_held(
         door,
         &[Held::Object(
-            a_function(&storage2, second_run.scope, second_run.types()).deep_clone(),
+            a_function(&storage2, second_run.scope, second_run.registries()).deep_clone(),
         )],
         &types,
     );
@@ -511,7 +508,7 @@ fn length_mismatch_short_circuits_before_banned_cell() {
     let list_f = KObject::list_of_held(
         door,
         &[Held::Object(
-            a_function(&storage, test_run.scope, &types).deep_clone(),
+            a_function(&storage, test_run.scope, types.registries()).deep_clone(),
         )],
         &types,
     );

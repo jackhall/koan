@@ -50,7 +50,7 @@ impl<'a> KFunction<'a> {
         for (i, (el, part)) in sig.elements().iter().zip(expr.parts.iter()).enumerate() {
             match (el, &part.value) {
                 (SignatureElement::Keyword(s), WorkingPart::Ast(ExpressionPart::Keyword(t)))
-                    if *s == *t => {}
+                    if s.symbol() == t.symbol() => {}
                 (SignatureElement::Keyword(_), _) => return None,
                 (SignatureElement::Argument(arg), part_value) => match (arg.ktype, part_value) {
                     (KType::KEXPRESSION, WorkingPart::Ast(ExpressionPart::Expression(_))) => {

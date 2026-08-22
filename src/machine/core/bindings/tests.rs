@@ -404,15 +404,19 @@ fn value_write_commits_and_retires_its_own_claim() {
 #[test]
 fn a_two_bucket_binder_retires_the_key_it_did_not_seal() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let mut gate = crate::machine::WriteGate::for_test();
-    let f = KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
+    let f = KFunction::alloc_captured(
+        scope,
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        &registries,
+    );
     let sealed_key = f.open(|f| f.signature.untyped_key());
     let bridge_key: UntypedKey = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::Keyword("BRIDGE")],
+        elements: vec![SignatureElement::keyword("BRIDGE")],
     }
     .untyped_key();
 
@@ -579,7 +583,6 @@ fn a_bound_identity_and_a_live_claim_stand_on_one_name_at_once() {
 #[test]
 fn bump_backed_tables_full_churn() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     {
         let scope = run_root_bare(&region);
@@ -629,8 +632,12 @@ fn bump_backed_tables_full_churn() {
 
         // A dispatch bucket claimed by two sibling binders, one of which finalizes and retires its
         // own claim while the sibling's stands.
-        let f =
-            KFunction::alloc_captured(scope, unit_signature(), Body::Builtin(body_no_op), types);
+        let f = KFunction::alloc_captured(
+            scope,
+            unit_signature(),
+            Body::Builtin(body_no_op),
+            &registries,
+        );
         let sealed_key = f.open(|f| f.signature.untyped_key());
         for claim in [ProducerId::for_test(7), ProducerId::for_test(8)] {
             scope
@@ -656,7 +663,7 @@ fn bump_backed_tables_full_churn() {
         // path, which strands the claim's bump bytes, exercised so the leak check sees it.
         let purged_key: UntypedKey = SignatureDraft {
             return_type: ReturnType::Resolved(KType::ANY),
-            elements: vec![SignatureElement::Keyword("BAR")],
+            elements: vec![SignatureElement::keyword("BAR")],
         }
         .untyped_key();
         scope

@@ -15,6 +15,7 @@ mod reclaim;
 mod splice_walk;
 mod statement_binder_install;
 
+use crate::builtins::test_support::kw_part;
 use crate::machine::core::ProgramStorage;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::{WorkingExpression, WorkingPart};
@@ -29,7 +30,7 @@ pub(super) fn working_all<'a>(
     src: &str,
 ) -> Vec<WorkingExpression<'a>> {
     let brand = program.brand();
-    parse(brand, src)
+    parse(brand, &crate::machine::model::LabelInterner::new(), src)
         .expect("parse should succeed")
         .into_iter()
         .map(|expr| WorkingExpression::from_ast(brand.region(), expr))
@@ -67,7 +68,7 @@ pub(super) fn keyword_expr<'a>(program: &'a ProgramStorage, name: &str) -> Worki
     let brand = program.brand().region();
     WorkingExpression::new(
         brand,
-        &[Spanned::bare(WorkingPart::Ast(ExpressionPart::Keyword(
+        &[Spanned::bare(WorkingPart::Ast(kw_part(
             brand.allocator().text(name),
         )))],
     )
@@ -80,9 +81,9 @@ pub(super) fn let_ast<'a>(program: &'a ProgramStorage, name: &str, value: f64) -
     KExpression::new(
         brand,
         &[
-            Spanned::bare(ExpressionPart::Keyword(brand.allocator().text("LET"))),
+            Spanned::bare(kw_part("LET")),
             Spanned::bare(ExpressionPart::Identifier(brand.allocator().text(name))),
-            Spanned::bare(ExpressionPart::Keyword(brand.allocator().text("="))),
+            Spanned::bare(kw_part("=")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(value))),
         ],
     )

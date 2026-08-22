@@ -11,6 +11,7 @@
 use crate::source::{FileId, Span, Spanned};
 
 use crate::machine::core::{ProgramBrand, RegionBrand};
+use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
 use crate::machine::model::{Held, KObject, Parseable, StoredBinderKey};
 use crate::machine::model::{StoredElement, UntypedElement, UntypedKey};
 use crate::witnessed::reattachable;
@@ -28,6 +29,79 @@ pub use working::{WorkingExpression, WorkingPart};
 
 #[cfg(test)]
 mod tests;
+
+/// A keyword occurrence: the token's program-storage text beside the [`KeywordSymbol`] minted for
+/// it. Keyword identity travels as the symbol — every key, probe and comparison reads
+/// [`symbol`](Self::symbol) — and the text rides along for rendering, diagnostics, and the
+/// operator-probe join.
+///
+/// The two constructors mirror the classified-symbol pair: [`declared`](Self::declared) at a site
+/// whose text should be resolvable later (the parser, signature mint), [`of`](Self::of) at a probe
+/// or a hand-built node. Both return `None` for text that is not keyword-class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeywordToken<'a> {
+    text: &'a str,
+    symbol: KeywordSymbol,
+}
+
+impl<'a> KeywordToken<'a> {
+    /// Classify, mint, and intern — the declaration door. The interner is what lets a diagnostic
+    /// naming a bucket render the keyword back out of a symbol-only key.
+    pub fn declared(text: &'a str, labels: &LabelInterner) -> Option<Self> {
+        KeywordSymbol::declared(text, labels).map(|symbol| KeywordToken { text, symbol })
+    }
+
+    /// Classify and mint, recording nothing — the probe door, for a lookup key or a hand-built node
+    /// whose text no diagnostic resolves through the interner.
+    pub fn of(text: &'a str) -> Option<Self> {
+        KeywordSymbol::of(text).map(|symbol| KeywordToken { text, symbol })
+    }
+
+    /// A draft keyword whose symbol is that of `normalized` rather than of `text` — the one door
+    /// where the pairing is not text-for-text.
+    ///
+    /// A signature draft may spell a fixed token lowercase, and the bucket such a shape keys is the
+    /// uppercased spelling [`ExpressionSignature::mint`] re-homes. `text` stays as drafted so a
+    /// pre-mint render shows what the caller wrote; mint replaces the whole token with the
+    /// normalized pairing, so the split lives only inside an unminted draft.
+    ///
+    /// [`ExpressionSignature::mint`]: crate::machine::model::ExpressionSignature::mint
+    pub(crate) fn drafted(text: &'a str, normalized: &str) -> Option<Self> {
+        KeywordSymbol::of(normalized).map(|symbol| KeywordToken { text, symbol })
+    }
+
+    /// The token's identity. Comparisons and keys read this.
+    pub fn symbol(self) -> KeywordSymbol {
+        self.symbol
+    }
+
+    /// The spelling, as the borrow of program storage it arrived as.
+    pub fn text(self) -> &'a str {
+        self.text
+    }
+
+    /// The same token with its text re-homed into `brand`'s region. A text move only — the symbol
+    /// rides through, so nothing is re-classified and nothing is re-hashed.
+    pub fn rehomed<'b>(self, brand: RegionBrand<'b>) -> KeywordToken<'b> {
+        KeywordToken {
+            text: brand.allocator().text(self.text),
+            symbol: self.symbol,
+        }
+    }
+}
+
+impl std::fmt::Display for KeywordToken<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.text)
+    }
+}
+
+impl std::ops::Deref for KeywordToken<'_> {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.text
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum KLiteral<'a> {
@@ -96,7 +170,7 @@ impl<'a> TypeIdentifier<'a> {
 /// literal run is a bumped slice.
 #[derive(Debug, Clone, Copy)]
 pub enum ExpressionPart<'a> {
-    Keyword(&'a str),
+    Keyword(KeywordToken<'a>),
     Identifier(&'a str),
     Type(TypeIdentifier<'a>),
     Expression(ProgramNode<'a>),
@@ -131,7 +205,7 @@ pub enum ExpressionPart<'a> {
 impl<'a> Part<'a> for ExpressionPart<'a> {
     fn class(&self) -> PartClass<'a> {
         match self {
-            ExpressionPart::Keyword(s) => PartClass::Keyword(s),
+            ExpressionPart::Keyword(kw) => PartClass::Keyword(*kw),
             ExpressionPart::Identifier(_) => PartClass::Identifier,
             ExpressionPart::Type(_) => PartClass::Type,
             ExpressionPart::Expression(_) => PartClass::Expression,
@@ -194,7 +268,7 @@ impl<'a> ExpressionPart<'a> {
     /// Per-part subset of [`KExpression::summarize`].
     pub fn summarize(&self) -> String {
         match self {
-            ExpressionPart::Keyword(s) => (*s).to_string(),
+            ExpressionPart::Keyword(kw) => kw.text().to_string(),
             ExpressionPart::Identifier(s) => (*s).to_string(),
             ExpressionPart::Type(t) => t.render(),
             ExpressionPart::Expression(e) => e.summarize(),
@@ -262,7 +336,7 @@ impl<'a> ExpressionPart<'a> {
     /// bytes there, so the product is dest-resident and holds no allocation of its own.
     pub fn resolve(&self, brand: RegionBrand<'a>) -> KObject<'a> {
         match self {
-            ExpressionPart::Keyword(s) => KObject::KString(brand.allocator().text(s)),
+            ExpressionPart::Keyword(kw) => KObject::KString(brand.allocator().text(kw.text())),
             ExpressionPart::Identifier(s) => KObject::KString(brand.allocator().text(s)),
             ExpressionPart::Type(t) => KObject::KString(brand.allocator().text(t.as_str())),
             ExpressionPart::Literal(KLiteral::Number(n)) => KObject::Number(*n),
@@ -310,9 +384,8 @@ impl<'a> ExpressionPart<'a> {
     /// sub-dispatches before any static cell, so they never reach here.
     pub fn resolve_region_pure<'b>(&self, brand: RegionBrand<'b>) -> KObject<'b> {
         match self {
-            ExpressionPart::Keyword(s) | ExpressionPart::Identifier(s) => {
-                KObject::KString(brand.allocator().text(s))
-            }
+            ExpressionPart::Keyword(kw) => KObject::KString(brand.allocator().text(kw.text())),
+            ExpressionPart::Identifier(s) => KObject::KString(brand.allocator().text(s)),
             ExpressionPart::Type(t) => KObject::KString(brand.allocator().text(t.as_str())),
             ExpressionPart::Literal(lit) => lit.to_kobject(brand),
             // A quote's `KObject::KExpression` is invariant in `'a` with no `'static` rebuild, so it

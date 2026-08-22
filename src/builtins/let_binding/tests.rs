@@ -22,7 +22,12 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let exprs = parse(program.brand(), "LET hello = 1").unwrap();
+    let exprs = parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        "LET hello = 1",
+    )
+    .unwrap();
     for e in exprs {
         test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(scope.brand(), e),
@@ -55,7 +60,12 @@ fn let_t_cycle_errors() {
     let scope = test_run.scope;
     let types = test_run.registry_handle();
     let runtime = &mut test_run.runtime;
-    let exprs = parse(program.brand(), "LET Ty = Ty").unwrap();
+    let exprs = parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        "LET Ty = Ty",
+    )
+    .unwrap();
     let exprs = exprs
         .into_iter()
         .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
@@ -93,7 +103,12 @@ fn let_type_class_with_non_type_value_errors() {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        let exprs = parse(program.brand(), src).unwrap();
+        let exprs = parse(
+            program.brand(),
+            &crate::machine::model::LabelInterner::new(),
+            src,
+        )
+        .unwrap();
         let id = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
@@ -133,7 +148,12 @@ fn let_type_class_with_type_value_still_binds() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let exprs = parse(program.brand(), "LET Foo = Number").unwrap();
+    let exprs = parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        "LET Foo = Number",
+    )
+    .unwrap();
     let mut ids = Vec::new();
     for e in exprs {
         ids.push(test_run.dispatch_in_scope(
@@ -168,7 +188,12 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let exprs = parse(program.brand(), "LET foo = 1").unwrap();
+    let exprs = parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        "LET foo = 1",
+    )
+    .unwrap();
     let mut ids = Vec::new();
     for e in exprs {
         ids.push(test_run.dispatch_in_scope(
@@ -206,7 +231,12 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let exprs = parse(program.brand(), "LET :(LIST OF Number) = 1").unwrap();
+    let exprs = parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        "LET :(LIST OF Number) = 1",
+    )
+    .unwrap();
     let mut ids = Vec::new();
     for e in exprs {
         ids.push(test_run.dispatch_in_scope(

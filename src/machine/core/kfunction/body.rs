@@ -125,7 +125,7 @@ mod tests {
             "FOO (a)",
             "FOO ((a) (b) (c))",
         ] {
-            let body = parse(brand, src)
+            let body = parse(brand, &crate::machine::model::LabelInterner::new(), src)
                 .expect("parse")
                 .into_iter()
                 .next()

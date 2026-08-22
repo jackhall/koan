@@ -7,13 +7,19 @@
 //! span so diagnostics can point at the exact operator character.
 
 use crate::machine::core::ProgramBrand;
-use crate::machine::model::ast::ExpressionPart;
+use crate::machine::model::ast::{ExpressionPart, KeywordToken};
+use crate::machine::model::labels::LabelInterner;
 use crate::source::{self, Span, Spanned};
 
-pub type UnaryBuild =
-    for<'a> fn(ProgramBrand<'a>, Spanned<ExpressionPart<'a>>, Span) -> Spanned<ExpressionPart<'a>>;
+pub type UnaryBuild = for<'a> fn(
+    ProgramBrand<'a>,
+    &LabelInterner,
+    Spanned<ExpressionPart<'a>>,
+    Span,
+) -> Spanned<ExpressionPart<'a>>;
 pub type BinaryBuild = for<'a> fn(
     ProgramBrand<'a>,
+    &LabelInterner,
     Spanned<ExpressionPart<'a>>,
     Spanned<ExpressionPart<'a>>,
     Span,
@@ -46,6 +52,7 @@ const OPERATORS: &[Operator] = &[
 
 fn build_attr<'a>(
     brand: ProgramBrand<'a>,
+    labels: &LabelInterner,
     lhs: Spanned<ExpressionPart<'a>>,
     rhs: Spanned<ExpressionPart<'a>>,
     trigger: Span,
@@ -57,7 +64,12 @@ fn build_attr<'a>(
     // wrap it `SigiledTypeExpr` so its result flows into a `ProperType` / `Type` slot. A
     // value field (lowercase `Identifier`, e.g. `M.x`) stays the value-context `Expression`.
     let type_context = matches!(rhs.value, ExpressionPart::Type(_));
-    let kw = Spanned::at(ExpressionPart::Keyword("ATTR"), trigger);
+    let kw = Spanned::at(
+        ExpressionPart::Keyword(
+            KeywordToken::declared("ATTR", labels).expect("`ATTR` is keyword-class"),
+        ),
+        trigger,
+    );
     let kexp = brand.build_expression(&[kw, lhs, rhs], Some(outer), source::current());
     let part = if type_context {
         ExpressionPart::SigiledTypeExpr(brand.alloc_node(kexp))
@@ -69,6 +81,7 @@ fn build_attr<'a>(
 
 fn build_try<'a>(
     brand: ProgramBrand<'a>,
+    labels: &LabelInterner,
     lhs: Spanned<ExpressionPart<'a>>,
     trigger: Span,
 ) -> Spanned<ExpressionPart<'a>> {
@@ -77,7 +90,12 @@ fn build_try<'a>(
         start,
         end: trigger.end,
     };
-    let kw = Spanned::at(ExpressionPart::Keyword("TRY"), trigger);
+    let kw = Spanned::at(
+        ExpressionPart::Keyword(
+            KeywordToken::declared("TRY", labels).expect("`TRY` is keyword-class"),
+        ),
+        trigger,
+    );
     let kexp = brand.build_expression(&[kw, lhs], Some(outer), source::current());
     Spanned::at(ExpressionPart::Expression(brand.alloc_node(kexp)), outer)
 }

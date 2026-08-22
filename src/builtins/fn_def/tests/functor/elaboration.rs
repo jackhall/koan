@@ -67,7 +67,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
             SignatureElement::Keyword(kw),
             SignatureElement::Argument(Argument { name, ktype }),
         ] => {
-            assert_eq!(*kw, "USE_ORD");
+            assert_eq!(kw.text(), "USE_ORD");
             assert_eq!(name.symbol(), crate::machine::model::Symbol::of("er"));
             match test_run.types().node(*ktype) {
                 TypeNode::Signature { schema, .. } => {
@@ -98,6 +98,7 @@ fn let_then_fn_in_same_batch_works() {
     let scope = test_run.scope;
     let exprs = parse(
         test_run.program_brand(),
+        &test_run.registries().labels,
         "LET MyList = :(LIST OF Number)\n\
          FN (USE xs :MyList) -> Number = (1)",
     )

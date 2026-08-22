@@ -1156,7 +1156,7 @@ fn region_death_frees_every_drop_free_family() {
             let draft = SignatureDraft {
                 return_type: ReturnType::Resolved(KType::NULL),
                 elements: vec![
-                    SignatureElement::Keyword(brand.allocator().text(&format!("TAKE_{i}"))),
+                    SignatureElement::keyword(brand.allocator().text(&format!("TAKE_{i}"))),
                     SignatureElement::Argument(Argument {
                         name: crate::machine::model::BinderSymbol::of(&format!("operand_{i}"))
                             .expect("a test fixture parameter is a value token"),
@@ -1173,7 +1173,7 @@ fn region_death_frees_every_drop_free_family() {
                         Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
                     )
                 }),
-                &types,
+                types.registries(),
             )
         })
         .collect();

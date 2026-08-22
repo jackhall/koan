@@ -34,8 +34,8 @@ pub use values::{
 };
 
 pub(crate) use ast::{
-    DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass, ProgramExpression,
-    TypeIdentifier, WorkingExpression, WorkingPart, classify_dispatch_shape,
+    DispatchShape, ExpressionPart, KExpression, KLiteral, KeywordToken, Part, PartClass,
+    ProgramExpression, TypeIdentifier, WorkingExpression, WorkingPart, classify_dispatch_shape,
 };
 pub use binder::{BindKind, BinderBucketFn, BinderNameFn, BinderSurface};
 pub(crate) use binder::{OpArity, op_declaration_arity};

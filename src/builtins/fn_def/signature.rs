@@ -104,8 +104,8 @@ pub(crate) fn parse_fn_param_list<'a>(
             _ => None,
         };
         match (param_name, parts[i].value) {
-            (_, ExpressionPart::Keyword(s)) => {
-                elements.push(SignatureElement::Keyword(s));
+            (_, ExpressionPart::Keyword(kw)) => {
+                elements.push(SignatureElement::Keyword(kw));
                 i += 1;
             }
             (Some((name, symbol)), _) => {

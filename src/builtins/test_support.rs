@@ -30,6 +30,8 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 #[cfg(test)]
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
+#[cfg(test)]
+use crate::machine::model::{ExpressionPart, KeywordToken};
 use crate::machine::{AdoptSeam, FrameStorage, KError, NameLookup, Scope};
 #[cfg(test)]
 use crate::machine::{BindingIndex, DeclarationSite, Installer};
@@ -263,7 +265,12 @@ pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<
 /// which the caller declares ahead of its run storage so the node outlives every reader.
 #[cfg(test)]
 pub(crate) fn parse_one<'a>(program: &'a ProgramStorage, src: &str) -> KExpression<'a> {
-    let mut exprs = parse(program.brand(), src).expect("parse should succeed");
+    let mut exprs = parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        src,
+    )
+    .expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test helper expects a single expression");
     exprs.remove(0)
 }
@@ -311,7 +318,8 @@ impl<'a> TestRun<'a> {
     /// individually, so chained calls compose. Tests asserting top-level statement *ordering*
     /// (e.g. forward-ref-fails behavior) call `enter_block` on `runtime` directly instead.
     pub fn run_in(&mut self, scope: &'a Scope<'a>, source: &str) {
-        let exprs = parse(self.program_brand(), source).expect("parse should succeed");
+        let exprs = parse(self.program_brand(), &self.registries().labels, source)
+            .expect("parse should succeed");
         for expr in exprs {
             self.dispatch_in_scope(
                 crate::machine::model::WorkingExpression::from_ast(scope.brand(), expr),
@@ -332,7 +340,7 @@ impl<'a> TestRun<'a> {
     /// Returns the top-level node ids; the caller drives `execute` itself.
     pub fn enter_source_in(&mut self, scope: &'a Scope<'a>, source: &str) -> Vec<NodeId> {
         let statements: Vec<crate::machine::model::WorkingExpression<'a>> =
-            parse(self.program_brand(), source)
+            parse(self.program_brand(), &self.registries().labels, source)
                 .expect("parse should succeed")
                 .into_iter()
                 .map(|statement| {
@@ -369,7 +377,7 @@ impl<'a> TestRun<'a> {
     /// back to back — a claim a later statement installs is in place by the time an earlier one
     /// steps, which is the ordering the visibility rule is written against.
     pub fn dispatch_source_in(&mut self, scope: &'a Scope<'a>, source: &str) -> Vec<EdgeId> {
-        let slots: Vec<NodeId> = parse(self.program_brand(), source)
+        let slots: Vec<NodeId> = parse(self.program_brand(), &self.registries().labels, source)
             .expect("parse should succeed")
             .into_iter()
             .map(|statement| {
@@ -564,7 +572,7 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
 fn first_keyword_of(scope: &Scope<'_>, sealed: &SealedFunction) -> Option<String> {
     scope.read_function(sealed, |f| {
         f.signature.elements().iter().find_map(|e| match e {
-            SignatureElement::Keyword(s) => Some((*s).to_string()),
+            SignatureElement::Keyword(kw) => Some(kw.text().to_string()),
             _ => None,
         })
     })
@@ -583,6 +591,15 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
                 .iter()
                 .any(|sealed| first_keyword_of(scope, sealed).as_deref() == Some(keyword))
         })
+}
+
+/// A keyword part for a hand-built AST: classify and mint, recording nothing. A test node is not a
+/// declaration, so nothing resolves its keywords through the run's interner.
+#[cfg(test)]
+pub(crate) fn kw_part<'a>(text: &'a str) -> ExpressionPart<'a> {
+    ExpressionPart::Keyword(
+        KeywordToken::of(text).expect("a test fixture keyword is keyword-class"),
+    )
 }
 
 /// Allocate a labeled marker object on `scope`'s region. Dispatch tests register builtins

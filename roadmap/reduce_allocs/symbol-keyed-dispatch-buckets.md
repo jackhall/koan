@@ -39,13 +39,15 @@ bucket keys.
 - `DispatchTokenElement` / `StoredDispatchTokenElement` collapse the same way
   (`Slot(KType)` is already `Copy`), taking `DispatchToken::store_in`'s text bumps
   with them.
-- FN / OP registration interns each signature keyword in the run's label interner;
-  everywhere a bucket key's text is rendered (`iter_functions`, `DuplicateOverload` and
-  other diagnostics naming a bucket) resolves through the interner, with a resolve miss
-  rendering the standard stable placeholder.
+- The run's label interner is created before parse and populated by it: the parser interns
+  each keyword token at classification, and FN / OP registration re-interns each normalized
+  signature keyword at mint. Everywhere a bucket key's text is rendered (`iter_functions`,
+  `DuplicateOverload` and other diagnostics naming a bucket) resolves through the interner,
+  with a resolve miss rendering the standard stable placeholder.
 - A call's dispatch probe does not hash keyword text per call: the keyword symbols a probe
-  compares are computed once at parse and carried by the expression, the way the cached
-  operator probe already is.
+  compares are computed once at parse and carried by the expression, and the cached
+  operator-chain probe carries its `KeywordSymbol` the same way, so group resolution stops
+  minting one per dispatch.
 - The recorded allocation baselines do not regress: the dispatch-heavy audit shapes
   (`operator_chain`, `builtin_call` differencing) hold their bounds, and the
   registration-side drop (keyword byte bumps per bucket key) is visible in a measured
@@ -53,13 +55,18 @@ bucket keys.
 
 **Directions.**
 
-- *Where keyword symbols are computed — open. Recommended: the parse boundary.*
+- *Where keyword symbols are computed — decided: the parse boundary, interning included.*
   `ExpressionPart::Keyword` carries the symbol beside its text (text stays for rendering
-  and error paths), so neither registration nor dispatch ever re-hashes. The lookup-seam
+  and error paths), minted **and interned** where the parser classifies the token — the
+  `LabelInterner` is created before parse, populated there, and adopted by the run frame as
+  the run's interner. So neither registration nor dispatch ever re-hashes; the lookup-seam
   alternative the scope binding tables take
   ([src/machine/core/scope/resolve.rs](../../src/machine/core/scope/resolve.rs)) is wrong
-  here: `Symbol::of` is a BLAKE3 hash, and paying it per keyword per dispatch on the hot
-  probe path is a regression risk the parse-time cache removes outright.
+  here, because `Symbol::of` is a BLAKE3 hash and paying it per keyword per dispatch on the
+  hot probe path is a regression the parse-time cache removes outright. A resplice carries
+  the node's key cache forward rather than rebuilding it — the untyped key and operator
+  probe are invariant under resplice, so the per-call path re-derives nothing.
+  See [scratch/symbol-keyed-dispatch-buckets-plan.md](../../scratch/symbol-keyed-dispatch-buckets-plan.md).
 - *Operator keys share the keyword vocabulary — decided per
   [design/label-interning.md](../../design/label-interning.md).* A letterless token
   (`+`, `:!`) satisfies `is_keyword_token`, and the operator table already keys by the
@@ -75,4 +82,7 @@ bucket keys.
 conventions and the identity-hashed table plumbing are shipped substrate
 ([design/label-interning.md](../../design/label-interning.md)).
 
-**Unblocks:** none.
+**Unblocks:**
+
+- [parse-interned-identifiers.md](parse-interned-identifiers.md) — extends the parse-time
+  interning to identifier and type tokens.

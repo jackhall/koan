@@ -38,7 +38,7 @@ use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::bindings::{WriteOp, powerset_probes};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::KType;
-use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::{ExpressionPart, KExpression, KeywordToken, TypeIdentifier};
 use crate::machine::model::{KKind, SignatureDraft, SignatureElement};
 use crate::machine::model::{OperatorGroup, ReductionMode, binary_key, unary_key};
 use crate::machine::{
@@ -52,6 +52,7 @@ use crate::witnessed::Witnessed;
 use super::fn_def::return_type::{ReturnTypeState, classify_return_type, extract_type_slot_raw};
 use super::resolve_or_await::{expect_type_terminal, resolve_at_wake};
 use super::{arg, kw, sig};
+use crate::machine::model::LabelInterner;
 use crate::machine::model::RunRegistries;
 
 /// The two operand names a binary operator body binds. A pairwise group's combiner is itself an
@@ -423,7 +424,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                     },
                     OperatorForm {
                         signature: bridge_signature,
-                        body: Body::UserDefined(bridge_body(program, sym)),
+                        body: Body::UserDefined(bridge_body(program, &registries.labels, sym)),
                     },
                     in_group,
                     bind_index,
@@ -550,7 +551,7 @@ fn register_body<'a>(
     bind_index: BindingIndex,
     registries: &RunRegistries,
 ) -> Result<(SealedValue<'a>, WriteOp<'a>), KError> {
-    let cell = KFunction::alloc_captured(scope, signature, body, &registries.types);
+    let cell = KFunction::alloc_captured(scope, signature, body, registries);
     let write = WriteOp::Overload {
         name: sym.to_string(),
         index: bind_index,
@@ -570,9 +571,14 @@ fn register_body<'a>(
 /// `Expression` arms, so the whole body — texts, operand nodes, and the node the parts reach —
 /// builds in program storage. The single `'a` is the brand's own lifetime, which is what the mint
 /// doors take; `sym` arrives as a plain `&str` and is re-allocated through `brand` to reach it.
-fn bridge_body<'a>(program: ProgramBrand<'a>, sym: &str) -> KExpression<'a> {
+fn bridge_body<'a>(
+    program: ProgramBrand<'a>,
+    labels: &LabelInterner,
+    sym: &str,
+) -> KExpression<'a> {
     let brand = program.region();
     let sym = brand.allocator().text(sym);
+    let sym = KeywordToken::declared(sym, labels).expect("an operator glyph is keyword-class");
     let operand = |name: &'a str| {
         ExpressionPart::expression(program, &[Spanned::bare(ExpressionPart::Identifier(name))])
     };

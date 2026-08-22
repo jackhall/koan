@@ -422,7 +422,6 @@ digraph {
     "koan::machine::core::arena::frame" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::arena::frame" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::arena::frame" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::core::arena::frame" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::arena::step_allocator" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::arena::step_allocator" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::arena::step_allocator" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -701,6 +700,7 @@ digraph {
     "koan::machine::model::ast" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::ast" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::ast" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::ast::program" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -869,6 +869,7 @@ digraph {
     "koan::parse::expression_tree" -> "koan::machine" [label="uses", style="dashed"];
     "koan::parse::expression_tree" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::parse::expression_tree" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::parse::expression_tree" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::parse::expression_tree" -> "koan::parse::dict_literal" [label="uses", style="dashed"];
     "koan::parse::expression_tree" -> "koan::parse::frame" [label="uses", style="dashed"];
     "koan::parse::expression_tree" -> "koan::parse::parse_stack" [label="uses", style="dashed"];
@@ -882,10 +883,12 @@ digraph {
     "koan::parse::frame" -> "koan::source" [label="uses", style="dashed"];
     "koan::parse::operators" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::parse::operators" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::parse::operators" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::parse::operators" -> "koan::source" [label="uses", style="dashed"];
     "koan::parse::parse_stack" -> "koan::machine" [label="uses", style="dashed"];
     "koan::parse::parse_stack" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::parse::parse_stack" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::parse::parse_stack" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::parse::parse_stack" -> "koan::parse::dict_literal" [label="uses", style="dashed"];
     "koan::parse::parse_stack" -> "koan::parse::frame" [label="uses", style="dashed"];
     "koan::parse::parse_stack" -> "koan::parse::tokens" [label="uses", style="dashed"];
@@ -894,6 +897,7 @@ digraph {
     "koan::parse::tokens" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::parse::tokens" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::parse::tokens" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::parse::tokens" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::parse::tokens" -> "koan::parse::operators" [label="uses", style="dashed"];
     "koan::parse::tokens" -> "koan::source" [label="uses", style="dashed"];
     "koan::parse::triple_list" -> "koan::machine::model::ast" [label="uses", style="dashed"];

@@ -427,6 +427,7 @@ mod tests {
         let scope = test_run.scope;
         let exprs = crate::parse::parse(
             program.brand(),
+            &crate::machine::model::LabelInterner::new(),
             "UNION Maybe = (Some :Number None :Null)\nUNION Maybe = (Some :Str None :Null)",
         )
         .expect("parse should succeed")
@@ -526,6 +527,7 @@ mod tests {
         let scope = test_run.scope;
         let exprs = crate::parse::parse(
             program.brand(),
+            &crate::machine::model::LabelInterner::new(),
             "UNION Maybe = (Some :Number None :Null)\nUNION Maybe = (Some :Number None :Null)",
         )
         .expect("parse should succeed")

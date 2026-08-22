@@ -372,7 +372,12 @@ fn monad_signature_smoke() {
     let scope = test_run.scope;
     let src = "SIG Monad = ((TYPE (Type AS Wrap)) \
          (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
-    let exprs = parse(program.brand(), src).expect("parse should succeed");
+    let exprs = parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        src,
+    )
+    .expect("parse should succeed");
     {
         let mut ids = Vec::new();
         for expr in exprs {

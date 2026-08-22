@@ -7,6 +7,7 @@ use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
 use super::{let_expr, working};
+use crate::builtins::test_support::kw_part;
 
 #[test]
 fn dispatches_independent_expressions_in_order() {
@@ -70,9 +71,9 @@ fn later_expression_sees_earlier_binding_via_lookup() {
     let lookup_a = KExpression::new(
         brand,
         &[
-            Spanned::bare(ExpressionPart::Keyword("LET")),
+            Spanned::bare(kw_part("LET")),
             Spanned::bare(ExpressionPart::Identifier("b")),
-            Spanned::bare(ExpressionPart::Keyword("=")),
+            Spanned::bare(kw_part("=")),
             Spanned::bare(ExpressionPart::expression(
                 program.brand(),
                 &[Spanned::bare(ExpressionPart::Identifier("a"))],

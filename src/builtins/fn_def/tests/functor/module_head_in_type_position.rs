@@ -162,8 +162,12 @@ fn type_of_module_slot_rejects_a_non_satisfying_module() {
 #[test]
 fn module_name_in_a_slot_is_a_parse_error() {
     let program = program_storage();
-    let error = crate::parse::parse(program.brand(), "FN (TAKE_ORD x :int_ord) -> Number = (1)")
-        .expect_err("a value token after `:` must not parse");
+    let error = crate::parse::parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        "FN (TAKE_ORD x :int_ord) -> Number = (1)",
+    )
+    .expect_err("a value token after `:` must not parse");
     let message = error.to_string();
     assert!(
         message.contains("must be followed by a type name")

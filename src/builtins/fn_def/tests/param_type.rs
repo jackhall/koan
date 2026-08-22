@@ -22,7 +22,7 @@ fn fn_typed_param_records_ktype_on_signature() {
             SignatureElement::Keyword(kw),
             SignatureElement::Argument(Argument { name, ktype }),
         ] => {
-            assert_eq!(*kw, "DOUBLE");
+            assert_eq!(kw.text(), "DOUBLE");
             assert_eq!(name.symbol(), Symbol::of("x"));
             assert_eq!(*ktype, KType::NUMBER);
         }

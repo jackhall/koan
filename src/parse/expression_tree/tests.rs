@@ -74,14 +74,23 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
 pub(super) fn tree(input: &str) -> Result<String, String> {
     let program = program_storage();
     let (masked, dict) = mask_quotes(input);
-    build_tree(program.brand(), &masked, &dict)
-        .map(|e| describe(&e))
-        .map_err(|e| e.to_string())
+    build_tree(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        &masked,
+        &dict,
+    )
+    .map(|e| describe(&e))
+    .map_err(|e| e.to_string())
 }
 
 pub(super) fn top(input: &str) -> Result<Vec<String>, String> {
     let program = program_storage();
-    parse(program.brand(), input)
-        .map(|exprs| exprs.iter().map(describe).collect())
-        .map_err(|e| e.to_string())
+    parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        input,
+    )
+    .map(|exprs| exprs.iter().map(describe).collect())
+    .map_err(|e| e.to_string())
 }

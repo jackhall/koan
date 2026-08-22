@@ -1,5 +1,6 @@
 use super::*;
 use crate::builtins::register_builtin;
+use crate::builtins::test_support::kw_part;
 use crate::builtins::test_support::{TestRun, marker, run_root_bare};
 use crate::machine::core::{FrameStorageExt, Scope, program_storage, run_root_storage};
 use crate::machine::model::RunRegistries;
@@ -60,7 +61,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("OP"),
+            SignatureElement::keyword("OP"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v")
                     .expect("a test fixture parameter is a value token"),
@@ -80,7 +81,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
     let expr = KExpression::new(
         brand,
         &[
-            Spanned::bare(ExpressionPart::Keyword("OP")),
+            Spanned::bare(kw_part("OP")),
             Spanned::bare(ExpressionPart::Identifier("someName")),
         ],
     );
@@ -127,7 +128,7 @@ fn classify_excludes_literal_name_slots_from_wrap() {
         program.brand(),
         &[
             Spanned::bare(ExpressionPart::Identifier("x")),
-            Spanned::bare(ExpressionPart::Keyword(":")),
+            Spanned::bare(kw_part(":")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
         ],
     );
@@ -157,9 +158,9 @@ fn classify_excludes_binder_name_slot_from_wrap() {
     let expr = KExpression::new(
         brand,
         &[
-            Spanned::bare(ExpressionPart::Keyword("LET")),
+            Spanned::bare(kw_part("LET")),
             Spanned::bare(ExpressionPart::Identifier("x")),
-            Spanned::bare(ExpressionPart::Keyword("=")),
+            Spanned::bare(kw_part("=")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
         ],
     );
@@ -189,7 +190,7 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("OP"),
+            SignatureElement::keyword("OP"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v")
                     .expect("a test fixture parameter is a value token"),
@@ -209,7 +210,7 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
     let expr = KExpression::new(
         brand,
         &[
-            Spanned::bare(ExpressionPart::Keyword("OP")),
+            Spanned::bare(kw_part("OP")),
             Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("IntOrd"))),
         ],
     );
@@ -230,7 +231,7 @@ fn function_value_ktype_projects_kfunction() {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![
-            SignatureElement::Keyword("CALL"),
+            SignatureElement::keyword("CALL"),
             SignatureElement::Argument(crate::machine::model::Argument {
                 name: crate::machine::model::BinderSymbol::of("x")
                     .expect("a test fixture parameter is a value token"),
@@ -238,7 +239,7 @@ fn function_value_ktype_projects_kfunction() {
             }),
         ],
     };
-    let f = KFunction::alloc_captured_for_test(scope, sig, Body::Builtin(body_any), types);
+    let f = KFunction::alloc_captured_for_test(scope, sig, Body::Builtin(body_any), &registries);
     let obj = KObject::KFunction(f);
     match types.node(obj.ktype()) {
         TypeNode::KFunction { params, ret } => {
@@ -262,7 +263,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("OP"),
+            SignatureElement::keyword("OP"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v")
                     .expect("a test fixture parameter is a value token"),
@@ -282,7 +283,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
     let expr = KExpression::new(
         brand,
         &[
-            Spanned::bare(ExpressionPart::Keyword("OP")),
+            Spanned::bare(kw_part("OP")),
             Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Number"))),
         ],
     );

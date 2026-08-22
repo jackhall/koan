@@ -39,12 +39,11 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
     // The captured scope and the function both land in `home`'s region, so the `&KFunction` comes back
     // at `home`'s own lifetime with nothing retyped. Mirrors a closure capturing its defining scope.
     let registries = RunRegistries::new();
-    let types = &registries.types;
     CallFrame::alloc_capturing_scope(
         home,
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::NULL),
-            elements: vec![SignatureElement::Keyword("__INNER__")],
+            elements: vec![SignatureElement::keyword("__INNER__")],
         },
         Body::Builtin(|ctx| {
             crate::machine::core::Action::done_resident(
@@ -52,7 +51,7 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
                 Carried::Object(ctx.scope.brand().alloc_scalar(Scalar::Null)),
             )
         }),
-        types,
+        &registries,
     )
 }
 

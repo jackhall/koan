@@ -1,3 +1,4 @@
+use crate::builtins::test_support::kw_part;
 use crate::machine::core::{ProgramBrand, program_storage};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{
@@ -9,7 +10,7 @@ use crate::machine::model::values::Held;
 use crate::source::Spanned;
 
 fn kw(s: &str) -> ExpressionPart<'_> {
-    ExpressionPart::Keyword(s)
+    kw_part(s)
 }
 fn ident(s: &str) -> ExpressionPart<'_> {
     ExpressionPart::Identifier(s)
@@ -441,13 +442,13 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
                     .expect("a test fixture parameter is a value token"),
                 ktype: KType::ANY,
             }),
-            SignatureElement::Keyword("+"),
+            SignatureElement::keyword("+"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("y")
                     .expect("a test fixture parameter is a value token"),
                 ktype: KType::ANY,
             }),
-            SignatureElement::Keyword("+"),
+            SignatureElement::keyword("+"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("z")
                     .expect("a test fixture parameter is a value token"),

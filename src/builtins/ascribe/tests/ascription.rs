@@ -52,7 +52,12 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
          SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          LET first_abstract = (int_ord :| Ordered)\n\
          LET second_abstract = (int_ord :| Ordered)";
-    let exprs = parse(program.brand(), src).expect("parse should succeed");
+    let exprs = parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        src,
+    )
+    .expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
         ids.push(test_run.dispatch_watched_in(

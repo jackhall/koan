@@ -15,7 +15,7 @@ fn s(start: u32, end: u32) -> Span {
 }
 
 fn top<'a>(brand: ProgramBrand<'a>, src: &str) -> Vec<KExpression<'a>> {
-    parse(brand, src).expect("parse")
+    parse(brand, &crate::machine::model::LabelInterner::new(), src).expect("parse")
 }
 
 #[test]
@@ -68,7 +68,7 @@ fn attr_token_spans_full_token_and_trigger_is_one_byte() {
     let kw = &outer.parts[0];
     let lhs = &outer.parts[1];
     let rhs = &outer.parts[2];
-    assert!(matches!(kw.value, ExpressionPart::Keyword(k) if k == "ATTR"));
+    assert!(matches!(kw.value, ExpressionPart::Keyword(k) if k.text() == "ATTR"));
     assert_eq!(kw.span, Some(s(3, 4)));
     assert_eq!(lhs.span, Some(s(0, 3)));
     assert_eq!(rhs.span, Some(s(4, 7)));
@@ -80,7 +80,7 @@ fn chained_attr_sub_atoms_get_distinct_trigger_spans() {
     let exprs = top(program.brand(), "foo.bar.baz");
     let outer = &exprs[0];
     assert_eq!(span_of(outer), Some(s(0, 11)));
-    assert!(matches!(outer.parts[0].value, ExpressionPart::Keyword(k) if k == "ATTR"));
+    assert!(matches!(outer.parts[0].value, ExpressionPart::Keyword(k) if k.text() == "ATTR"));
     assert_eq!(outer.parts[0].span, Some(s(7, 8)));
     let Spanned {
         value: ExpressionPart::Expression(inner),
@@ -189,7 +189,7 @@ fn ascription_compound_keyword_spans_two_bytes() {
     let outer = &exprs[0];
     assert_eq!(outer.parts[0].span, Some(s(0, 4)));
     let kw = &outer.parts[1];
-    assert!(matches!(kw.value, ExpressionPart::Keyword(k) if k == ":|"));
+    assert!(matches!(kw.value, ExpressionPart::Keyword(k) if k.text() == ":|"));
     assert_eq!(kw.span, Some(s(5, 7)));
 }
 
@@ -224,7 +224,13 @@ fn parse_with_path_stamps_file_on_expression_and_resolves_line_col() {
     //   line 3:  `    (qux))`             byte 14..23  (inner `(qux)` at byte 18, col 5)
     let src = "foo (\n  bar\n    (qux))";
     let program = program_storage();
-    let exprs = parse_with_path(program.brand(), src, "lib.koan").expect("parse");
+    let exprs = parse_with_path(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        src,
+        "lib.koan",
+    )
+    .expect("parse");
     let outer = &exprs[0];
     let inner = match &outer.parts.last().expect("outer has parts").value {
         ExpressionPart::Expression(e) => &**e,

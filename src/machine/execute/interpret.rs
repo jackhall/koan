@@ -6,7 +6,7 @@
 use super::KoanRuntime;
 use crate::builtins::{seed_builtins, unseeded_scopes};
 use crate::machine::core::{program_storage, run_root_storage};
-use crate::machine::model::RunRegistries;
+use crate::machine::model::{LabelInterner, RunRegistries};
 use crate::machine::{KError, Scope, WriteGate};
 use crate::parse::{parse, parse_with_path};
 
@@ -40,16 +40,19 @@ pub fn interpret_with_writer_path(
     // Declared before the run region so it is created first and released last — the whole run
     // reads AST nodes out of it.
     let program = program_storage();
+    // The run's interner, created before parse so the parser is the site that populates it, and
+    // handed to the runtime below to become the run frame's own.
+    let labels = LabelInterner::new();
     let exprs = match path {
-        Some(p) => parse_with_path(program.brand(), source, p)?,
-        None => parse(program.brand(), source)?,
+        Some(p) => parse_with_path(program.brand(), &labels, source, p)?,
+        None => parse(program.brand(), &labels, source)?,
     };
     // The run region lives inside an `Rc<FrameStorage>` so the run-root scope has an owning handle:
     // both root-edge wiring and a top-level-defined FN's captured region upgrade
     // `Scope::region_owner` and expect it to be live.
     let run_storage = run_root_storage();
     let (root, top) = unseeded_scopes(&run_storage);
-    let mut runtime = KoanRuntime::new(program.brand(), out);
+    let mut runtime = KoanRuntime::with_labels(program.brand(), out, labels);
     // The run frame adopts `top`, the same scope `run_program` dispatches top-level statements
     // against. Establishing it before seeding puts the builtins in the run's own type registry.
     runtime.ensure_run_frame(top);

@@ -44,7 +44,12 @@ pub(super) fn run<'run>(
     let root = test_run.scope;
     // The test parses into the run's own storage and crosses each statement into the scheduler,
     // exactly as `run_program` does with program storage.
-    let exprs = parse(program.brand(), source).expect("parse should succeed");
+    let exprs = parse(
+        program.brand(),
+        &crate::machine::model::LabelInterner::new(),
+        source,
+    )
+    .expect("parse should succeed");
     for expr in exprs {
         test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(root.brand(), expr),

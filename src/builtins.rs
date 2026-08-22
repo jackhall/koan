@@ -45,7 +45,7 @@ pub mod test_support;
 /// lifetime the caller has — a `&'static` literal for a builtin, an operator symbol at the defining
 /// scope's — since the mint door re-homes every signature name at the function's own region.
 pub(crate) fn kw(s: &str) -> SignatureElement<'_> {
-    SignatureElement::Keyword(s)
+    SignatureElement::keyword(s)
 }
 
 /// Signature-element constructor for an argument slot. The name is syntactic, so it classifies and
@@ -92,7 +92,7 @@ pub(crate) fn register_builtin<'a>(
     registries: &RunRegistries,
     gate: &mut WriteGate,
 ) {
-    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), &registries.types);
+    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), registries);
     let _ =
         scope.register_function_direct(name.into(), &cell, BindingIndex::BUILTIN, registries, gate);
 }
@@ -111,7 +111,7 @@ pub(crate) fn register_overload_at<'a>(
     registries: &RunRegistries,
     gate: &mut WriteGate,
 ) {
-    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), &registries.types);
+    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), registries);
     scope
         .register_function_direct(name.into(), &cell, index, registries, gate)
         .expect("register_overload_at: user-index overload should not collide with a builtin");

@@ -13,6 +13,7 @@ use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, Signatu
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 
 use super::working;
+use crate::builtins::test_support::kw_part;
 use crate::machine::model::RunRegistries;
 use crate::machine::{program_storage, run_root_storage};
 use crate::source::Spanned;
@@ -57,7 +58,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     let outer_sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("MARK"),
+            SignatureElement::keyword("MARK"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v")
                     .expect("a test fixture parameter is a value token"),
@@ -81,7 +82,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     let inner_sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("MARK"),
+            SignatureElement::keyword("MARK"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v")
                     .expect("a test fixture parameter is a value token"),
@@ -101,7 +102,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     let expr = KExpression::new(
         program.brand().region(),
         &[
-            Spanned::bare(ExpressionPart::Keyword("MARK")),
+            Spanned::bare(kw_part("MARK")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
         ],
     );
@@ -185,7 +186,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("foo"),
+            SignatureElement::keyword("foo"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v")
                     .expect("a test fixture parameter is a value token"),
@@ -205,7 +206,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let expr = KExpression::new(
         program.brand().region(),
         &[
-            Spanned::bare(ExpressionPart::Keyword("FOO")),
+            Spanned::bare(kw_part("FOO")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
         ],
     );

@@ -11,9 +11,8 @@ use std::rc::Rc;
 use super::{KoanRegion, KoanStorageProfile, RegionBrand};
 use crate::machine::CarrierWitness;
 use crate::machine::core::{Scope, ScopeId, ScopeRefFamily, scope_frame};
+use crate::machine::model::LabelInterner;
 use crate::machine::model::RunRegistries;
-#[cfg(test)]
-use crate::machine::model::types::TypeRegistry;
 use crate::witnessed::{
     Delivered, ReachDescription, RegionHandle, RegionHost, SealedExtern, StepCoverage,
 };
@@ -303,10 +302,15 @@ impl CallFrame {
     /// scope's borrow is erased into the envelope exactly as every per-call child scope's is — the
     /// fabrication hazard is deferred to the witness-bounded re-attach.
     ///
-    /// `out` is the run's output sink, taken here for the same reason the registries are minted
-    /// here: both are run-lifetime state with exactly one home, and this constructor is the only one
-    /// that fills the two fields ([`Self::new`] leaves them `None`).
-    pub fn adopting<'a>(scope: &'a Scope<'a>, out: Box<dyn std::io::Write>) -> Rc<CallFrame> {
+    /// `out` is the run's output sink and `labels` the interner parse populated, both taken here
+    /// for the same reason the registries are built here: all are run-lifetime state with exactly
+    /// one home, and this constructor is the only one that fills the two fields ([`Self::new`]
+    /// leaves them `None`).
+    pub fn adopting<'a>(
+        scope: &'a Scope<'a>,
+        out: Box<dyn std::io::Write>,
+        labels: LabelInterner,
+    ) -> Rc<CallFrame> {
         // The run scope lives in the run region and reaches nothing beyond it, so the envelope
         // covers that one region — read off the scope's own handle, which is also where the
         // adopted storage comes from.
@@ -315,7 +319,7 @@ impl CallFrame {
             envelope,
             storage: scope_frame(scope),
             non_dying: true,
-            run_registries: Some(RunRegistries::new()),
+            run_registries: Some(RunRegistries::with_labels(labels)),
             writer: Some(RunWriter::new(out)),
         })
     }
@@ -455,9 +459,11 @@ impl CallFrame {
         frame: &'f Rc<CallFrame>,
         signature: crate::machine::model::SignatureDraft<'f>,
         body: crate::machine::core::Body<'f>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> &'f crate::machine::core::KFunction<'f> {
         let captured = Scope::alloc_run_root(frame.storage());
-        crate::machine::core::KFunction::alloc_captured_for_test(captured, signature, body, types)
+        crate::machine::core::KFunction::alloc_captured_for_test(
+            captured, signature, body, registries,
+        )
     }
 }

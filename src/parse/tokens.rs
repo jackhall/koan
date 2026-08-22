@@ -18,7 +18,9 @@ use std::str::CharIndices;
 
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
+use crate::machine::model::ast::KeywordToken;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeIdentifier};
+use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::{is_keyword_token, is_type_name};
 use crate::parse::operators::{SuffixOp, find_suffix, is_atom_terminator};
 use crate::source::{Span, Spanned};
@@ -30,6 +32,7 @@ use crate::source::{Span, Spanned};
 /// `tok`.
 pub fn classify_token<'a>(
     brand: ProgramBrand<'a>,
+    labels: &LabelInterner,
     tok: &str,
     start: u32,
 ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
@@ -41,7 +44,7 @@ pub fn classify_token<'a>(
         return Ok(Spanned::at(part, token_span));
     }
     let mut chars = tok.char_indices().peekable();
-    let part = parse_compound(brand, &mut chars, start, token_span)?;
+    let part = parse_compound(brand, labels, &mut chars, start, token_span)?;
     if let Some(&(_, c)) = chars.peek() {
         return Err(KError::parse(
             format!("unexpected {:?} in token {:?}", c, tok),
@@ -118,6 +121,7 @@ fn take_digits(bytes: &[u8], at: &mut usize) -> usize {
 /// exempt because `=` / `->` / `+` are legitimate keyword shapes.
 fn classify_atom<'a>(
     brand: ProgramBrand<'a>,
+    labels: &LabelInterner,
     tok: &str,
     token_span: Span,
 ) -> Result<ExpressionPart<'a>, KError> {
@@ -125,8 +129,10 @@ fn classify_atom<'a>(
         return Ok(part);
     }
     if is_keyword_token(tok) {
+        let text = brand.region().allocator().text(tok);
         return Ok(ExpressionPart::Keyword(
-            brand.region().allocator().text(tok),
+            KeywordToken::declared(text, labels)
+                .expect("is_keyword_token just classified this token as keyword-class"),
         ));
     }
     if is_type_name(tok) {
@@ -175,11 +181,12 @@ fn classify_atom<'a>(
 /// 1-codepoint span at their position so error messages can point at the trigger char.
 fn parse_compound<'a>(
     brand: ProgramBrand<'a>,
+    labels: &LabelInterner,
     chars: &mut Peekable<CharIndices>,
     start: u32,
     token_span: Span,
 ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
-    let mut expr = read_atom(brand, chars, start, token_span)?;
+    let mut expr = read_atom(brand, labels, chars, start, token_span)?;
 
     while let Some(&(ci, c)) = chars.peek() {
         let Some(op) = find_suffix(c) else { break };
@@ -187,10 +194,10 @@ fn parse_compound<'a>(
         let trigger = trigger_span(start, ci, c);
         expr = match op {
             SuffixOp::Infix(build) => {
-                let rhs = read_atom(brand, chars, start, token_span)?;
-                build(brand, expr, rhs, trigger)
+                let rhs = read_atom(brand, labels, chars, start, token_span)?;
+                build(brand, labels, expr, rhs, trigger)
             }
-            SuffixOp::Suffix(build) => build(brand, expr, trigger),
+            SuffixOp::Suffix(build) => build(brand, labels, expr, trigger),
         };
     }
 
@@ -208,6 +215,7 @@ fn trigger_span(token_start: u32, ci: usize, c: char) -> Span {
 /// Errors on an empty atom — operators must have an atom between them.
 fn read_atom<'a>(
     brand: ProgramBrand<'a>,
+    labels: &LabelInterner,
     chars: &mut Peekable<CharIndices>,
     token_start: u32,
     token_span: Span,
@@ -242,7 +250,7 @@ fn read_atom<'a>(
         start: token_start + atom_start_ci as u32,
         end: token_start + end_ci as u32,
     };
-    classify_atom(brand, &s, token_span).map(|part| Spanned::at(part, span))
+    classify_atom(brand, labels, &s, token_span).map(|part| Spanned::at(part, span))
 }
 
 #[cfg(test)]
@@ -253,7 +261,7 @@ mod tests {
 
     fn describe(p: &ExpressionPart<'_>) -> String {
         match p {
-            ExpressionPart::Keyword(s) => format!("t({})", s),
+            ExpressionPart::Keyword(kw) => format!("t({})", kw.text()),
             ExpressionPart::Identifier(s) => format!("t({})", s),
             ExpressionPart::Type(t) => format!("T({})", t.render()),
             ExpressionPart::Expression(e) => {
@@ -299,9 +307,14 @@ mod tests {
 
     fn classify(tok: &str) -> Result<String, String> {
         let program = program_storage();
-        classify_token(program.brand(), tok, 0)
-            .map(|s| describe(&s.value))
-            .map_err(|e| e.to_string())
+        classify_token(
+            program.brand(),
+            &crate::machine::model::LabelInterner::new(),
+            tok,
+            0,
+        )
+        .map(|s| describe(&s.value))
+        .map_err(|e| e.to_string())
     }
 
     #[test]

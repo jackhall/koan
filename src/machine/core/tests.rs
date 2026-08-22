@@ -12,7 +12,7 @@ use crate::machine::model::{KType, ReturnType, Scalar, SignatureDraft, Signature
 pub(super) fn unit_signature<'a>() -> SignatureDraft<'a> {
     SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::Keyword("FOO")],
+        elements: vec![SignatureElement::keyword("FOO")],
     }
 }
 

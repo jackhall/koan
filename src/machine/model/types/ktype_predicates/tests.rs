@@ -798,6 +798,7 @@ fn deferred_return_admission_via_function_compat() {
             return_type: ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er"))),
             elements: vec![],
         },
+        &crate::machine::model::LabelInterner::new(),
     );
     let no_params = Record::new();
 

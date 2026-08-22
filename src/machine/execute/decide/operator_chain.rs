@@ -19,7 +19,9 @@
 use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
 use crate::machine::model::Part;
-use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
+use crate::machine::model::{
+    ExpressionPart, KeywordToken, PartClass, WorkingExpression, WorkingPart,
+};
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode, StoredElement};
 use crate::machine::{KError, KErrorKind, ProducerId};
 use crate::scheduler::Deps;
@@ -103,7 +105,7 @@ fn chain_operators<'a>(expr: &WorkingExpression<'a>) -> Vec<&'a str> {
     expr.parts
         .iter()
         .filter_map(|part| match part.value.class() {
-            PartClass::Keyword(s) => Some(s),
+            PartClass::Keyword(kw) => Some(kw.text()),
             _ => None,
         })
         .collect()
@@ -397,7 +399,10 @@ pub(super) fn combine<'step>(
         &[
             wrap_as_operand(brand, left),
             Spanned {
-                value: WorkingPart::Ast(ExpressionPart::Keyword(brand.allocator().text(combiner))),
+                value: WorkingPart::Ast(ExpressionPart::Keyword(
+                    KeywordToken::of(brand.allocator().text(combiner))
+                        .expect("an operator glyph is keyword-class"),
+                )),
                 span: chain.span,
             },
             wrap_as_operand(brand, right),

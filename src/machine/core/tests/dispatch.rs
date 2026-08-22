@@ -1,6 +1,7 @@
 //! `dispatch` arm of `machine::core` tests.
 
 use super::super::{FrameStorageExt, Scope, program_storage, run_root_storage};
+use crate::builtins::test_support::kw_part;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::RegionBrand;
@@ -40,7 +41,7 @@ fn two_slot_sig<'a>(a: KType, b: KType) -> SignatureDraft<'a> {
                     .expect("a test fixture parameter is a value token"),
                 ktype: a,
             }),
-            SignatureElement::Keyword("OP"),
+            SignatureElement::keyword("OP"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("b")
                     .expect("a test fixture parameter is a value token"),
@@ -103,7 +104,7 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
         region.brand(),
         vec![
             ExpressionPart::Literal(KLiteral::Number(5.0)),
-            ExpressionPart::Keyword("OP"),
+            kw_part("OP"),
             ExpressionPart::Literal(KLiteral::Number(7.0)),
         ],
     );
@@ -157,7 +158,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
         region.brand(),
         vec![
             ExpressionPart::Literal(KLiteral::Number(5.0)),
-            ExpressionPart::Keyword("OP"),
+            kw_part("OP"),
             ExpressionPart::Literal(KLiteral::Number(7.0)),
         ],
     );
@@ -235,7 +236,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
         brand,
         vec![
             inner,
-            ExpressionPart::Keyword("OP"),
+            kw_part("OP"),
             ExpressionPart::Literal(KLiteral::Number(1.0)),
         ],
     );
@@ -279,10 +280,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
 
     let bare = working(
         region.brand(),
-        vec![
-            ExpressionPart::Keyword("MAKESET"),
-            ExpressionPart::Identifier("fwd"),
-        ],
+        vec![kw_part("MAKESET"), ExpressionPart::Identifier("fwd")],
     );
     // The pending overload was installed at `scope`'s BUILTIN index (0); root the chain
     // there one past it so it is visible.
@@ -300,9 +298,9 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     let multi = working(
         region.brand(),
         vec![
-            ExpressionPart::Keyword("MAKESET"),
+            kw_part("MAKESET"),
             ExpressionPart::Identifier("fwd"),
-            ExpressionPart::Keyword("USING"),
+            kw_part("USING"),
             ExpressionPart::Identifier("other"),
         ],
     );
@@ -334,7 +332,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     let outer_sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("MARK"),
+            SignatureElement::keyword("MARK"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v")
                     .expect("a test fixture parameter is a value token"),
@@ -358,7 +356,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     let expr = working(
         region.brand(),
         vec![
-            ExpressionPart::Keyword("MARK"),
+            kw_part("MARK"),
             ExpressionPart::Literal(KLiteral::Number(7.0)),
         ],
     );
@@ -420,7 +418,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
         brand,
         vec![
             nested,
-            ExpressionPart::Keyword("OP"),
+            kw_part("OP"),
             ExpressionPart::Literal(KLiteral::Number(1.0)),
         ],
     );
@@ -502,7 +500,6 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
 #[test]
 fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     let registries = RunRegistries::new();
-    let types = &registries.types;
     use crate::machine::ProducerId;
     use crate::machine::core::kfunction::{Body, KFunction};
     let region = run_root_storage();
@@ -513,7 +510,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     let pick_num = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("PICK"),
+            SignatureElement::keyword("PICK"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v")
                     .expect("a test fixture parameter is a value token"),
@@ -521,7 +518,8 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    let pick_num_fn = KFunction::alloc_captured(scope, pick_num, Body::Builtin(body_a), types);
+    let pick_num_fn =
+        KFunction::alloc_captured(scope, pick_num, Body::Builtin(body_a), &registries);
     scope
         .register_function_direct(
             "pick_num".to_string(),
@@ -534,7 +532,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     let expr = working(
         region.brand(),
         vec![
-            ExpressionPart::Keyword("PICK"),
+            kw_part("PICK"),
             ExpressionPart::Literal(KLiteral::Number(7.0)),
         ],
     );
@@ -572,7 +570,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     let pick_str = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Keyword("PICK"),
+            SignatureElement::keyword("PICK"),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::of("v")
                     .expect("a test fixture parameter is a value token"),
@@ -580,8 +578,12 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    let sibling =
-        KFunction::alloc_captured(scope, pick_str, Body::Builtin(super::body_no_op), types);
+    let sibling = KFunction::alloc_captured(
+        scope,
+        pick_str,
+        Body::Builtin(super::body_no_op),
+        &registries,
+    );
     scope
         .register_function_direct(
             "pick_str".to_string(),
@@ -657,10 +659,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
 
     let expr = working(
         region.brand(),
-        vec![
-            ExpressionPart::Keyword("PICK"),
-            ExpressionPart::Identifier("fwd"),
-        ],
+        vec![kw_part("PICK"), ExpressionPart::Identifier("fwd")],
     );
     // The two sibling pending overloads finalize at indices 3 and 4; root the chain on
     // `scope` one past the higher so both stay visible.
@@ -706,17 +705,13 @@ fn parked_bare_name_parks_before_any_pick() {
         program.brand(),
         &[
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
-            Spanned::bare(ExpressionPart::Keyword("OP")),
+            Spanned::bare(kw_part("OP")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(2.0))),
         ],
     );
     let expr = working(
         region.brand(),
-        vec![
-            ExpressionPart::Identifier("z"),
-            ExpressionPart::Keyword("OP"),
-            inner,
-        ],
+        vec![ExpressionPart::Identifier("z"), kw_part("OP"), inner],
     );
     let producer = ProducerId::for_test(7);
     let bare_outcomes = vec![Some(Resolution::Parked(producer)), None, None];
@@ -753,9 +748,9 @@ fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
             KExpression::new(
                 brand,
                 &[
-                    Spanned::bare(ExpressionPart::Keyword("LET")),
+                    Spanned::bare(kw_part("LET")),
                     Spanned::bare(name),
-                    Spanned::bare(ExpressionPart::Keyword("=")),
+                    Spanned::bare(kw_part("=")),
                     Spanned::bare(value),
                 ],
             ),

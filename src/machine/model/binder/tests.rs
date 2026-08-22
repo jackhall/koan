@@ -4,6 +4,7 @@
 use std::collections::HashSet;
 
 use super::{BINDER_SPECS, BinderSpec, StoredBinderKey};
+use crate::builtins::test_support::kw_part;
 use crate::machine::core::{ProgramBrand, RegionBrand, program_storage};
 use crate::machine::model::ast::{DispatchShape, ExpressionPart, KExpression};
 use crate::machine::model::{UntypedKey, owned_untyped_key};
@@ -46,7 +47,7 @@ fn expression_for_key<'a>(brand: RegionBrand<'a>, spec: &BinderSpec) -> KExpress
     KExpression::new_from_iter(
         brand,
         spec.key.iter().map(|element| match element {
-            super::UntypedElementSpec::Keyword(k) => Spanned::bare(ExpressionPart::Keyword(k)),
+            super::UntypedElementSpec::Keyword(k) => Spanned::bare(kw_part(k)),
             super::UntypedElementSpec::Slot => Spanned::bare(ExpressionPart::Identifier("x")),
         }),
     )
@@ -126,7 +127,7 @@ fn operator_def_marker_agrees_with_the_keys_it_labels() {
 /// The lone top-level statement `src` parses to, with its cache filled, built into `brand`'s
 /// region.
 fn parse_one<'a>(brand: ProgramBrand<'a>, src: &str) -> KExpression<'a> {
-    parse(brand, src)
+    parse(brand, &crate::machine::model::LabelInterner::new(), src)
         .expect("parse")
         .into_iter()
         .next()

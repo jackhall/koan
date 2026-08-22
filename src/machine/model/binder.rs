@@ -209,8 +209,8 @@ pub(crate) fn fn_def_binder_bucket<'a>(
     let mut i = 0;
     while i < parts.len() {
         match parts[i].value {
-            ExpressionPart::Keyword(s) => {
-                key.push(StoredElement::Keyword(s));
+            ExpressionPart::Keyword(kw) => {
+                key.push(StoredElement::Keyword(kw.text()));
                 i += 1;
             }
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
@@ -250,7 +250,7 @@ fn signature_expr_part<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>
     let fn_index = expr
         .parts
         .iter()
-        .position(|part| matches!(part.value, ExpressionPart::Keyword("FN")))?;
+        .position(|part| matches!(part.value, ExpressionPart::Keyword(kw) if kw.text() == "FN"))?;
     match expr.parts.get(fn_index + 1)?.value {
         ExpressionPart::Expression(inner) => Some(inner.reference()),
         _ => None,
@@ -276,6 +276,7 @@ pub(crate) fn symbol_from_quote_body<'a>(inner: &KExpression<'a>) -> Result<&'a 
     let ExpressionPart::Keyword(sym) = part.value else {
         return Err(symbol_shape_error());
     };
+    let sym = sym.text();
     if RESERVED_SYMBOLS.contains(&sym) {
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "`{sym}` is reserved by the operator-declaration surface and cannot name an operator",
@@ -312,7 +313,7 @@ pub(crate) fn symbol_from_parts<'a>(expr: &KExpression<'a>) -> Result<&'a str, K
 fn is_unary_form(expr: &KExpression<'_>) -> bool {
     expr.parts
         .iter()
-        .any(|part| matches!(part.value, ExpressionPart::Keyword("UNARY")))
+        .any(|part| matches!(part.value, ExpressionPart::Keyword(kw) if kw.text() == "UNARY"))
 }
 
 /// Park keys: every bucket this declaration's body registers an overload under, so a later sibling

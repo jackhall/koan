@@ -10,12 +10,14 @@
 //! sub-dispatching against the outer scope.
 
 use crate::machine::core::RegionBrand;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier, WorkingPart};
+use crate::machine::model::ast::{
+    ExpressionPart, KExpression, KeywordToken, TypeIdentifier, WorkingPart,
+};
 
 use super::ktype::KType;
 use super::registry::TypeRegistry;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::BinderSymbol;
+use crate::machine::model::labels::{BinderSymbol, LabelInterner};
 
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum UntypedElement {
@@ -291,8 +293,8 @@ impl SignatureDraft<'_> {
         self.elements
             .iter()
             .map(|el| match el {
-                SignatureElement::Keyword(s) => {
-                    UntypedElement::Keyword(normalized_keyword(s).into_owned())
+                SignatureElement::Keyword(kw) => {
+                    UntypedElement::Keyword(normalized_keyword(kw.text()).into_owned())
                 }
                 SignatureElement::Argument(_) => UntypedElement::Slot,
             })
@@ -464,13 +466,21 @@ impl<'a> ExpressionSignature<'a> {
     /// And every name is **re-homed** through [`RegionBrand::allocator`], including a `&'static`
     /// builtin literal, so "a signature's text lives in the signature's own region" holds with no
     /// exceptions and a draft is free to name text borrowed from anywhere at `'a`.
-    pub fn mint(brand: RegionBrand<'a>, draft: SignatureDraft<'a>) -> Self {
+    pub fn mint(brand: RegionBrand<'a>, draft: SignatureDraft<'a>, labels: &LabelInterner) -> Self {
         let elements: &'a [SignatureElement<'a>] =
             brand
                 .allocator()
                 .slice_from_iter(draft.elements.into_iter().map(|element| match element {
-                    SignatureElement::Keyword(s) => {
-                        SignatureElement::Keyword(brand.allocator().text(&normalized_keyword(s)))
+                    // Registration is a declaration site: the normalized spelling is interned here
+                    // so a diagnostic naming this shape's bucket resolves the keyword back out of a
+                    // symbol-only key.
+                    SignatureElement::Keyword(kw) => {
+                        let text = brand.allocator().text(&normalized_keyword(kw.text()));
+                        SignatureElement::Keyword(
+                            KeywordToken::declared(text, labels).expect(
+                                "a signature keyword classifies keyword-class once normalized",
+                            ),
+                        )
                     }
                     // An argument's name is already its symbol — fixed-width, region-free — so
                     // only the keyword text above needs re-homing.
@@ -534,7 +544,9 @@ impl<'a> ExpressionSignature<'a> {
             .iter()
             .zip(expr.parts)
             .all(|(el, part)| match (el, &part.value) {
-                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
+                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => {
+                    s.symbol() == t.symbol()
+                }
                 (SignatureElement::Keyword(_), _) => false,
                 (SignatureElement::Argument(arg), part_value) => arg.matches(part_value, types),
             })
@@ -546,7 +558,7 @@ impl<'a> ExpressionSignature<'a> {
         self.elements()
             .iter()
             .map(|el| match el {
-                SignatureElement::Keyword(s) => UntypedElement::Keyword(s.to_string()),
+                SignatureElement::Keyword(kw) => UntypedElement::Keyword(kw.text().to_string()),
                 SignatureElement::Argument(_) => UntypedElement::Slot,
             })
             .collect()
@@ -561,7 +573,9 @@ impl<'a> ExpressionSignature<'a> {
             self.elements()
                 .iter()
                 .map(|el| match el {
-                    SignatureElement::Keyword(s) => DispatchTokenElement::Keyword(s.to_string()),
+                    SignatureElement::Keyword(kw) => {
+                        DispatchTokenElement::Keyword(kw.text().to_string())
+                    }
                     SignatureElement::Argument(a) => DispatchTokenElement::Slot(a.ktype),
                 })
                 .collect(),
@@ -631,7 +645,9 @@ impl<'a> ExpressionSignature<'a> {
             .iter()
             .zip(other.elements().iter())
             .all(|(x, y)| match (x, y) {
-                (SignatureElement::Keyword(s), SignatureElement::Keyword(t)) => s == t,
+                (SignatureElement::Keyword(s), SignatureElement::Keyword(t)) => {
+                    s.symbol() == t.symbol()
+                }
                 (SignatureElement::Argument(ax), SignatureElement::Argument(ay)) => {
                     ax.ktype == ay.ktype
                 }
@@ -640,13 +656,30 @@ impl<'a> ExpressionSignature<'a> {
     }
 }
 
-/// One position of a call shape: a fixed token, or a parameter slot. Both spellings are `&'a str`
-/// borrows — bumped into the signature's own region once [`ExpressionSignature::mint`] has run, and
-/// free to borrow from anywhere at `'a` before that.
+/// One position of a call shape: a fixed token, or a parameter slot. A keyword's text is an `&'a
+/// str` borrow — bumped into the signature's own region once [`ExpressionSignature::mint`] has run,
+/// and free to borrow from anywhere at `'a` before that — beside the [`KeywordSymbol`] the shape's
+/// bucket key and every keyword comparison read.
 #[derive(Clone, Copy, Debug)]
 pub enum SignatureElement<'a> {
-    Keyword(&'a str),
+    Keyword(KeywordToken<'a>),
     Argument(Argument),
+}
+
+impl<'a> SignatureElement<'a> {
+    /// A draft keyword from bare text: the symbol is minted from the **normalized** spelling
+    /// [`ExpressionSignature::mint`] will store, so a draft that spells a token lowercase keys the
+    /// same bucket as the uppercased form the mint re-homes. The text rides through as written.
+    ///
+    /// Panics on text that cannot classify post-normalization — unreachable from source (a
+    /// lowercase token parses as an Identifier, never a Keyword), and a builtin draft spelling one
+    /// could never dispatch.
+    pub fn keyword(text: &'a str) -> SignatureElement<'a> {
+        SignatureElement::Keyword(
+            KeywordToken::drafted(text, &normalized_keyword(text))
+                .expect("a signature keyword classifies keyword-class once normalized"),
+        )
+    }
 }
 
 /// `name` keys the slot in the signature's parameter schema; `ktype` gates what `ExpressionPart`s

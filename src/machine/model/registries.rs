@@ -22,10 +22,20 @@ pub struct RunRegistries {
 }
 
 impl RunRegistries {
+    /// A run's registries with an empty interner — a test fixture standing in for the run frame.
+    /// Production enters through [`Self::with_labels`], which adopts the table parse filled.
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        RunRegistries::with_labels(LabelInterner::new())
+    }
+
+    /// Adopt an interner the parse boundary already populated. The parser is the run's primary
+    /// label-construction site, so the run frame takes over the table parse filled rather than
+    /// starting an empty one beside it.
+    pub(crate) fn with_labels(labels: LabelInterner) -> Self {
         RunRegistries {
             types: TypeRegistry::new(),
-            labels: LabelInterner::new(),
+            labels,
         }
     }
 }

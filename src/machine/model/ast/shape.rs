@@ -10,6 +10,7 @@
 use crate::machine::SplicedCell;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::StoredElement;
+use crate::machine::model::ast::KeywordToken;
 use crate::source::Spanned;
 
 use super::working::WorkingExpression;
@@ -19,7 +20,7 @@ use super::{KExpression, TypeIdentifier};
 /// operator probe read. A keyword carries its text because those readers need it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PartClass<'a> {
-    Keyword(&'a str),
+    Keyword(KeywordToken<'a>),
     Identifier,
     Type,
     Expression,
@@ -223,7 +224,7 @@ pub fn operator_probe_for<'a, P: Part<'a>>(
     let mut operators: Vec<&str> = parts
         .iter()
         .filter_map(|part| match part.value.class() {
-            PartClass::Keyword(s) => Some(s),
+            PartClass::Keyword(kw) => Some(kw.text()),
             _ => None,
         })
         .collect();
@@ -244,7 +245,7 @@ pub fn stored_untyped_key<'a, P: Part<'a>>(
     brand
         .allocator()
         .slice_from_iter(parts.iter().map(|part| match part.value.class() {
-            PartClass::Keyword(s) => StoredElement::Keyword(s),
+            PartClass::Keyword(kw) => StoredElement::Keyword(kw.text()),
             _ => StoredElement::Slot,
         }))
 }

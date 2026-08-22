@@ -18,7 +18,10 @@ use std::rc::Rc;
 
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
+use crate::machine::model::ast::{
+    ExpressionPart, KExpression, KLiteral, KeywordToken, ProgramExpression,
+};
+use crate::machine::model::labels::LabelInterner;
 use crate::parse::quotes::{JUMP_MARK, LEN_SEP, LITERAL_MARK, mask_quotes};
 use crate::parse::whitespace::collapse_whitespace;
 use crate::source::{self, CurrentFileGuard, FileId, SourceFile, Span, Spanned};
@@ -207,10 +210,11 @@ impl<'a> Reader<'a> {
 
 pub fn build_tree<'a>(
     program: ProgramBrand<'a>,
+    labels: &LabelInterner,
     masked: &[u8],
     quotes: &HashMap<usize, String>,
 ) -> Result<KExpression<'a>, KError> {
-    let mut stack = ParseStack::new(program);
+    let mut stack = ParseStack::new(program, labels);
     let mut buf = String::new();
     let mut token_start: Option<u32> = None;
     let mut reader = Reader::new(masked);
@@ -276,7 +280,13 @@ pub fn build_tree<'a>(
                     });
                 } else {
                     let (head, sigil_cursor) = match pending_sigil.take() {
-                        Some(('$', sc)) => (Some("EVAL"), Some(sc)),
+                        Some(('$', sc)) => (
+                            Some(
+                                KeywordToken::declared("EVAL", labels)
+                                    .expect("`EVAL` is keyword-class"),
+                            ),
+                            Some(sc),
+                        ),
                         _ => (None, None),
                     };
                     stack.push_frame(BracketFrame::Expression {
@@ -396,7 +406,13 @@ pub fn build_tree<'a>(
                                 start: colon_cursor,
                                 end: reader.cursor,
                             };
-                            stack.push_part(Spanned::at(ExpressionPart::Keyword(":|"), span));
+                            stack.push_part(Spanned::at(
+                                ExpressionPart::Keyword(
+                                    KeywordToken::declared(":|", labels)
+                                        .expect("`:|` is keyword-class"),
+                                ),
+                                span,
+                            ));
                             prev = Some('|');
                             continue;
                         }
@@ -406,7 +422,13 @@ pub fn build_tree<'a>(
                                 start: colon_cursor,
                                 end: reader.cursor,
                             };
-                            stack.push_part(Spanned::at(ExpressionPart::Keyword(":!"), span));
+                            stack.push_part(Spanned::at(
+                                ExpressionPart::Keyword(
+                                    KeywordToken::declared(":!", labels)
+                                        .expect("`:!` is keyword-class"),
+                                ),
+                                span,
+                            ));
                             prev = Some('!');
                             continue;
                         }
@@ -511,7 +533,13 @@ pub fn build_tree<'a>(
                     start,
                     end: reader.cursor,
                 };
-                stack.push_part(Spanned::at(ExpressionPart::Keyword(text), span));
+                stack.push_part(Spanned::at(
+                    ExpressionPart::Keyword(
+                        KeywordToken::declared(text, labels)
+                            .expect("comparison glyphs are keyword-class"),
+                    ),
+                    span,
+                ));
             }
             // `mask_quotes` rewrote the body as either an empty pair or
             // `LITERAL_MARK <idx> LEN_SEP <len>` + closing quote + trailing JUMP.
@@ -674,19 +702,24 @@ fn peel_part<'a>(brand: ProgramBrand<'a>, part: ExpressionPart<'a>) -> Expressio
 
 /// Returns one `KExpression` per top-level line, built into `program`'s region and registering the
 /// input under the synthetic path `<input>`. Use [`parse_with_path`] to supply a real path.
-pub fn parse<'a>(program: ProgramBrand<'a>, input: &str) -> Result<Vec<KExpression<'a>>, KError> {
-    parse_with_path(program, input, "<input>")
+pub fn parse<'a>(
+    program: ProgramBrand<'a>,
+    labels: &LabelInterner,
+    input: &str,
+) -> Result<Vec<KExpression<'a>>, KError> {
+    parse_with_path(program, labels, input, "<input>")
 }
 
 /// [`parse`] variant that registers the source under a caller-supplied `path`
 /// so error frames render real filenames.
 pub fn parse_with_path<'a>(
     program: ProgramBrand<'a>,
+    labels: &LabelInterner,
     input: &str,
     path: impl Into<Rc<str>>,
 ) -> Result<Vec<KExpression<'a>>, KError> {
     let id = source::register(SourceFile::new(path, input.to_string()));
-    parse_with_source(program, id)
+    parse_with_source(program, labels, id)
 }
 
 /// Parse against a pre-registered `SourceFile`. Installs `id` as the active
@@ -695,12 +728,13 @@ pub fn parse_with_path<'a>(
 /// region, so the caller owns the storage the whole AST lives in.
 pub fn parse_with_source<'a>(
     program: ProgramBrand<'a>,
+    labels: &LabelInterner,
     id: FileId,
 ) -> Result<Vec<KExpression<'a>>, KError> {
     let _guard = CurrentFileGuard::push(id);
     let (masked, quotes) = source::with(id, |f| mask_quotes(&f.text));
     let collapsed = collapse_whitespace(&masked)?;
-    let root = build_tree(program, &collapsed, &quotes)?;
+    let root = build_tree(program, labels, &collapsed, &quotes)?;
     root.parts
         .iter()
         .map(|part| match part.value {

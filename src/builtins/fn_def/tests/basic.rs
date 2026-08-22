@@ -16,7 +16,7 @@ fn fn_registers_user_function_under_keyword_signature() {
 
     let f = lookup_fn(scope, "GREET");
     match f.signature.elements() {
-        [SignatureElement::Keyword(s)] => assert_eq!(*s, "GREET"),
+        [SignatureElement::Keyword(kw)] => assert_eq!(kw.text(), "GREET"),
         _ => panic!("expected single-Keyword signature [Keyword(\"GREET\")]"),
     }
 }

@@ -27,7 +27,7 @@ use crate::machine::core::{BlockEntry, BlockRequest, DepPlacement, FramePlacemen
 use crate::machine::core::{ProgramBrand, RegionBrand, ScopeRefFamily};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::{
-    ExpressionPart, KExpression, Part, PartClass, WorkingExpression, WorkingPart,
+    ExpressionPart, KExpression, LabelInterner, Part, PartClass, WorkingExpression, WorkingPart,
 };
 use crate::machine::{
     BindingIndex, CallFrame, DeliveredCarried, FrameCoverage, Installer, KError, KErrorKind,
@@ -108,6 +108,9 @@ pub(in crate::machine::execute) struct Host<'run> {
     /// mint because the mint is lazy: a dispatch into the run scope establishes the frame if
     /// nothing has yet, and that call site has no writer to supply.
     out: Option<Box<dyn std::io::Write>>,
+    /// The interner the parse boundary populated, held until the run frame adopts it. `None` once
+    /// taken, or from the start for an entry point that parsed against a table of its own.
+    labels: Option<LabelInterner>,
 }
 
 /// The embedder handle: the scheduler and the host, owned side by side. The embedder API is the
@@ -122,12 +125,24 @@ impl<'run> KoanRuntime<'run> {
     /// `out` is where this run's `PRINT` output goes; it lands on the run frame the first
     /// submission establishes.
     pub fn new(program: ProgramBrand<'run>, out: Box<dyn std::io::Write>) -> Self {
+        Self::with_labels(program, out, LabelInterner::new())
+    }
+
+    /// [`Self::new`] adopting the interner a caller's parse already populated, so every keyword and
+    /// label the source spelled resolves for the whole run. The [`interpret`](super::interpret)
+    /// ladder enters here; [`Self::new`] is the door for a caller that parsed elsewhere.
+    pub fn with_labels(
+        program: ProgramBrand<'run>,
+        out: Box<dyn std::io::Write>,
+        labels: LabelInterner,
+    ) -> Self {
         Self {
             sched: Scheduler::new(),
             host: Host {
                 ambient: AmbientContext::default(),
                 program,
                 out: Some(out),
+                labels: Some(labels),
             },
         }
     }
@@ -968,7 +983,9 @@ impl<'run> Host<'run> {
             // A lazily-established run frame — one reached before any entry-point mint — gets the
             // sink, which is what a run with no caller-supplied writer already meant.
             let out = self.out.take().unwrap_or_else(|| Box::new(std::io::sink()));
-            self.ambient.set_run_frame(CallFrame::adopting(scope, out));
+            let labels = self.labels.take().unwrap_or_default();
+            self.ambient
+                .set_run_frame(CallFrame::adopting(scope, out, labels));
         }
     }
 

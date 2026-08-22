@@ -198,7 +198,7 @@ fn probe_body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>, registries: &RunRegistries) {
     let signature = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
-        elements: vec![SignatureElement::Keyword("PROBE")],
+        elements: vec![SignatureElement::keyword("PROBE")],
     };
     crate::builtins::register_builtin(
         scope,

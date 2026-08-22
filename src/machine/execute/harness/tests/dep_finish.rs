@@ -132,7 +132,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
         "DEFERTEST",
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::STR),
-            elements: vec![SignatureElement::Keyword("DEFERTEST")],
+            elements: vec![SignatureElement::keyword("DEFERTEST")],
         },
         body,
         test_run.registries(),

@@ -129,11 +129,11 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
         draft: SignatureDraft<'a>,
         body: Body<'a>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> DeliveredFunction {
         let brand = captured.brand();
-        let signature = ExpressionSignature::mint(brand, draft);
-        let value_ktype = function_value_ktype(&signature, types);
+        let signature = ExpressionSignature::mint(brand, draft, &registries.labels);
+        let value_ktype = function_value_ktype(&signature, &registries.types);
         let seed = FunctionBirth {
             captured,
             signature,
@@ -165,9 +165,9 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
         draft: SignatureDraft<'a>,
         body: Body<'a>,
-        types: &TypeRegistry,
+        registries: &RunRegistries,
     ) -> &'a KFunction<'a> {
-        let cell = Self::alloc_captured(captured, draft, body, types);
+        let cell = Self::alloc_captured(captured, draft, body, registries);
         let sealed = cell.rest_into(captured.brand().handle());
         captured.open_function(&sealed).value()
     }
@@ -190,7 +190,7 @@ impl<'a> KFunction<'a> {
             .elements()
             .iter()
             .map(|el| match el {
-                SignatureElement::Keyword(s) => (*s).to_string(),
+                SignatureElement::Keyword(kw) => kw.text().to_string(),
                 SignatureElement::Argument(arg) => {
                     format!("<{}>", render_label(arg.name.symbol(), registries))
                 }
@@ -220,7 +220,7 @@ impl<'a> KFunction<'a> {
         for (el, part) in self.signature.elements().iter().zip(parts.iter()) {
             match el {
                 SignatureElement::Keyword(s) => match part.value.as_ast() {
-                    Some(ExpressionPart::Keyword(t)) if s == &t => {}
+                    Some(ExpressionPart::Keyword(t)) if s.symbol() == t.symbol() => {}
                     Some(ExpressionPart::Keyword(t)) => {
                         return Err(KError::new(KErrorKind::DispatchFailed {
                             expr: summarize_parts(parts),
@@ -326,9 +326,7 @@ impl<'a> KFunction<'a> {
             brand,
             self.signature.elements().iter().map(|el| {
                 Spanned::bare(WorkingPart::Ast(match el {
-                    SignatureElement::Keyword(s) => {
-                        ExpressionPart::Keyword(brand.allocator().text(s))
-                    }
+                    SignatureElement::Keyword(kw) => ExpressionPart::Keyword(kw.rehomed(brand)),
                     SignatureElement::Argument(a) => pairs
                         .take(a.name.symbol())
                         .expect("every named slot checked satisfiable above"),

@@ -37,14 +37,13 @@ fn slot(name: &str) -> SignatureElement<'_> {
 #[test]
 fn builtin_seed_registers_a_callable_reaching_exactly_its_home_region() {
     let registries = crate::machine::model::RunRegistries::new();
-    let types = &registries.types;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let cell = KFunction::alloc_captured(
         scope,
         super::unit_signature(),
         Body::Builtin(body_no_op),
-        types,
+        &registries,
     );
     scope
         .register_function_direct(
@@ -59,7 +58,7 @@ fn builtin_seed_registers_a_callable_reaching_exactly_its_home_region() {
     let foreign = run_root_storage();
     let lookup = scope
         .bindings()
-        .lookup_function(&key(vec![SignatureElement::Keyword("FOO")]), None);
+        .lookup_function(&key(vec![SignatureElement::keyword("FOO")]), None);
     assert_eq!(lookup.overloads.len(), 1);
     let opened = scope.open_function(&lookup.overloads[0]);
     assert!(
@@ -88,7 +87,7 @@ fn fn_declaration_registers_a_callable_reaching_exactly_its_home_region() {
     let foreign = run_root_storage();
     let scope = test_run.scope;
     let lookup = scope.bindings().lookup_function(
-        &key(vec![SignatureElement::Keyword("DOUBLE"), slot("x")]),
+        &key(vec![SignatureElement::keyword("DOUBLE"), slot("x")]),
         None,
     );
     assert_eq!(lookup.overloads.len(), 1, "the FN registered its overload");
@@ -112,7 +111,7 @@ fn op_declaration_registers_a_callable_reaching_exactly_its_home_region() {
     let lookup = scope.bindings().lookup_function(
         &key(vec![
             slot("left"),
-            SignatureElement::Keyword("MINUS"),
+            SignatureElement::keyword("MINUS"),
             slot("right"),
         ]),
         None,
