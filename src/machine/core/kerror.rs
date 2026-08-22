@@ -224,7 +224,7 @@ impl KError {
         );
         KObject::tagged(
             door,
-            &name,
+            variant,
             &payload,
             synthetic_singleton(
                 error_label("KError", registries),

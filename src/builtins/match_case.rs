@@ -320,7 +320,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 1))");
-        // A user-union value is a `Tagged` matched by tag string, so a head that is not the
+        // A user-union value is a `Tagged` matched by tag symbol, so a head that is not the
         // scrutinee's own tag is a silent non-match — leaving the match with no admitting arm.
         // The error names the scrutinee's runtime variant type, `Some`.
         let err = test_run.run_one_err(parse_one(

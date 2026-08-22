@@ -231,7 +231,7 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
             .with_holder(&owned_cells);
     let tagged: &KObject = source_door.alloc_object_folded(KObject::tagged(
         source_door,
-        "Just",
+        type_token("Just"),
         &KObject::Number(42.0),
         identity,
     ));
@@ -255,7 +255,7 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
                 !std::ptr::eq(r, tagged),
                 "the top tagged node is a fresh allocation, not the source"
             );
-            assert_eq!(*tag, "Just");
+            assert_eq!(*tag, type_token("Just"));
             assert!(
                 out.homed_in(dest.region()),
                 "the rebuilt payload substrate lives in dest"

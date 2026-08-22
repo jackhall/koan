@@ -8,8 +8,8 @@
 //! (ruling F1). [`resolve_arm_contract`] builds the `-> :T` return contract both arms
 //! enforce on their result.
 
-use crate::machine::model::ValueSymbol;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
+use crate::machine::model::{Symbol, TypeSymbol, ValueSymbol};
 use crate::machine::model::{TypeResolution, most_specific_ktype};
 
 use crate::machine::DeliveredCarried;
@@ -137,9 +137,13 @@ pub(crate) fn arm_tail<'a>(
 /// `TRY`'s arm selector: returns the body for the first triple whose tag matches
 /// `target_tag`, or — when `allow_wildcard` is true and no exact match was found — the
 /// first `_` body. Exact-tag matches always win over `_`, regardless of source order.
+///
+/// `target_tag` is the scrutinee's classified tag; an arm head is a reference, so it probes by
+/// bare symbol bits — the recovery door. A boolean-literal head classifies the same way and simply
+/// never carries a Type token's bits, so it can only match a boolean target.
 pub(crate) fn find_branch_body_by_tag<'a>(
     branches: &KExpression<'a>,
-    target_tag: &str,
+    target_tag: Symbol,
     allow_wildcard: bool,
 ) -> Result<Option<KExpression<'a>>, String> {
     let parts = &branches.parts;
@@ -155,20 +159,17 @@ pub(crate) fn find_branch_body_by_tag<'a>(
         let tag_part = &parts[i];
         let arrow_part = &parts[i + 1];
         let body_part = &parts[i + 2];
-        let tag_name = match tag_part.value {
+        // `None` is the wildcard arm, which matches nothing by name and is remembered instead.
+        let arm_tag: Option<Symbol> = match tag_part.value {
             // Variant tags are capitalized type names (`Some`, `Ok`, `TypeMismatch`).
-            ExpressionPart::Type(t) => t.render(),
+            ExpressionPart::Type(t) => Some(Symbol::of(t.as_str())),
             // Booleans parse as `KLiteral::Boolean`, not type tokens; accept them so
             // `MATCH` on a `Bool` can spell its arms `true ->` / `false ->`.
             ExpressionPart::Literal(KLiteral::Boolean(b)) => {
-                if b {
-                    "true".to_string()
-                } else {
-                    "false".to_string()
-                }
+                Some(Symbol::of(if b { "true" } else { "false" }))
             }
             // `_` is a pure-symbol token classified as `Keyword`, not a type name.
-            ExpressionPart::Keyword(s) if allow_wildcard && s == "_" => s.to_string(),
+            ExpressionPart::Keyword("_") if allow_wildcard => None,
             other => {
                 return Err(format!(
                     "branch tag must be a capitalized variant tag or boolean literal, got {}",
@@ -194,11 +195,11 @@ pub(crate) fn find_branch_body_by_tag<'a>(
                 ));
             }
         };
-        if tag_name == target_tag {
-            return Ok(Some(body_expr));
-        }
-        if allow_wildcard && tag_name == "_" && wildcard_body.is_none() {
-            wildcard_body = Some(body_expr);
+        match arm_tag {
+            Some(tag) if tag == target_tag => return Ok(Some(body_expr)),
+            Some(_) => {}
+            None if wildcard_body.is_none() => wildcard_body = Some(body_expr),
+            None => {}
         }
         i += 3;
     }
@@ -216,10 +217,10 @@ pub(crate) struct SelectedArm<'a> {
 /// How a `MATCH` scrutinee resolves its type-name arm heads.
 enum HeadMode {
     /// A tagged value (a user-`UNION` variant or a builtin `Result`, both `KObject::Tagged`): a
-    /// head admits by tag-name equality against the value's own tag, and `it` binds the wrapped
+    /// head admits by symbol equality against the value's own tag, and `it` binds the wrapped
     /// payload (F3). A union's sibling variants need no resolution — the value carries its own tag,
     /// so a non-matching head is a silent non-match, and the arm slate settles exhaustiveness.
-    TaggedByTag { value_tag: String },
+    TaggedByTag { value_tag: TypeSymbol },
     /// Any other value: a head resolves through the scope and admits via
     /// [`KType::matches_value`]; `it` binds the scrutinee unchanged (F3).
     Scope,
@@ -249,7 +250,7 @@ fn resolve_head_type<'a>(
 /// Head classification depends on the scrutinee ([`HeadMode`]):
 /// - `true` / `false` literal heads admit a `Bool` scrutinee of that value.
 /// - `Type(token)` heads over a tagged value (a user-`UNION` variant or a builtin `Result`, both
-///   `KObject::Tagged`) admit by tag-name equality against the value's own tag and bind the payload;
+///   `KObject::Tagged`) admit by symbol equality against the value's own tag and bind the payload;
 ///   a non-matching head is a silent non-match (the value carries its own tag).
 /// - `Type(token)` heads over any other value resolve through `scope` and admit via
 ///   [`KType::matches_value`].
@@ -272,12 +273,10 @@ pub(crate) fn find_branch_body_by_type<'a>(
         ));
     }
     // A tagged value (a user-`UNION` variant or a builtin `Result`, both `Tagged`) resolves
-    // member-name heads by its own tag string; any other value — including a `NEWTYPE (T AS W)`
+    // member-name heads by its own tag symbol; any other value — including a `NEWTYPE (T AS W)`
     // identity wrapper or a standalone newtype — resolves heads against the scope.
     let mode = match scrutinee {
-        KObject::Tagged { tag, .. } => HeadMode::TaggedByTag {
-            value_tag: tag.to_string(),
-        },
+        KObject::Tagged { tag, .. } => HeadMode::TaggedByTag { value_tag: *tag },
         _ => HeadMode::Scope,
     };
 
@@ -346,7 +345,9 @@ pub(crate) fn find_branch_body_by_type<'a>(
                     // payload; a non-tag head is a silent non-match (no scope resolution for a
                     // `Tagged` scrutinee).
                     HeadMode::TaggedByTag { value_tag } => {
-                        if &label == value_tag {
+                        // The head is a reference, not a declaration, so it probes the
+                        // scrutinee's classified tag by bare symbol bits — the recovery door.
+                        if Symbol::of(token.as_str()) == value_tag.symbol() {
                             exact_arms.push(ExactArm {
                                 head_label: label,
                                 body: body_expr,

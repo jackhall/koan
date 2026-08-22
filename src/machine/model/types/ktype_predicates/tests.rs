@@ -5,6 +5,7 @@ use crate::machine::model::Carried;
 use crate::machine::model::ModuleDraft;
 use crate::machine::model::Record;
 use crate::machine::model::Scalar;
+use crate::machine::model::Symbol;
 use crate::machine::model::TypeMemberMap;
 use crate::machine::model::ast::{ExpressionPart, WorkingPart};
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
@@ -621,12 +622,14 @@ fn result_value<'a>(
     tag: &str,
     payload: &KObject<'a>,
 ) -> KObject<'a> {
-    KObject::tagged(door, tag, payload, member)
+    KObject::tagged(door, type_token(tag), payload, member)
 }
 
 /// A bare error carrier (`Tagged` identified by `member`) standing in for a caught error value.
+/// The tag is never read on this path — every predicate here matches on `member` — so it is any
+/// well-formed variant name.
 fn error_carrier<'a>(door: SubstrateDoor<'a, '_>, member: KType) -> KObject<'a> {
-    KObject::tagged(door, "_", &KObject::Number(0.0), member)
+    KObject::tagged(door, type_token("Opaque"), &KObject::Number(0.0), member)
 }
 
 /// A singleton `TypeConstructor`-kind member named `name`, for an error-type identity.
@@ -698,7 +701,7 @@ fn constructor_apply_covariant_admission_and_specificity() {
     let my_error = error_type_member("MyError", types);
     let stamped = KObject::tagged(
         door,
-        "Ok",
+        type_token("Ok"),
         &KObject::Number(1.0),
         types.constructor_apply(r_member, result_args(KType::NUMBER, my_error)),
     );
@@ -720,7 +723,7 @@ fn constructor_apply_stamped_type_args_checked_structurally() {
     let r_member = result_member(&registries);
     let stamped = KObject::tagged(
         door,
-        "Ok",
+        type_token("Ok"),
         &KObject::Number(1.0),
         types.constructor_apply(r_member, result_args(KType::NUMBER, KType::STR)),
     );

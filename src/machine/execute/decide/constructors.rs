@@ -28,7 +28,7 @@ use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::Symbol;
+use crate::machine::model::{Symbol, TypeSymbol};
 use crate::scheduler::Deps;
 
 /// Which construction shape the resolved value subs feed. The carried `KType` is the sealed
@@ -46,7 +46,7 @@ pub(in crate::machine::execute) enum CtorKind {
     Tagged {
         schema: Rc<TypeMemberMap>,
         member: KType,
-        tag: String,
+        tag: TypeSymbol,
     },
     /// Identity-wrapper construction over a `NEWTYPE (Type AS Wrapper)`-declared constructor
     /// family (empty-schema `TypeConstructor` member). The value's own full type becomes the sole
@@ -74,25 +74,33 @@ reattachable!(KObjectFamily => KObject<'r>);
 /// Validate a tagged-union call site's args shape: exactly two parts, the first a `Type`-token tag
 /// (tags are capitalized variant types). The value part rides through unchanged — the tag/value
 /// type checks and the witnessed build wait for its resolved value in [`finish_witnessed`].
+///
+/// The tag classifies **and interns** here: a construction site is a syntactic site, so interner
+/// growth stays source-bounded, and a tag that names no variant is rendered back through the
+/// interner at the miss. Its source text rides back beside the symbol so an error site names what
+/// the expression spelled without a lookup.
 pub(in crate::machine::execute) fn prepare_args<'step>(
     args_parts: &[Spanned<ExpressionPart<'step>>],
-) -> Result<(String, ExpressionPart<'step>), KError> {
+    registries: &RunRegistries,
+) -> Result<(TypeSymbol, &'step str, ExpressionPart<'step>), KError> {
     let [tag_part, value_part] = args_parts else {
         return Err(KError::new(KErrorKind::ArityMismatch {
             expected: 2,
             got: args_parts.len(),
         }));
     };
-    let tag = match tag_part.value {
-        ExpressionPart::Type(t) => t.render(),
-        other => {
-            return Err(KError::new(KErrorKind::ShapeError(format!(
-                "tagged-union construction = first arg must be a capitalized variant tag, got {}",
-                other.summarize()
-            ))));
-        }
+    let shape_error = || {
+        KError::new(KErrorKind::ShapeError(format!(
+            "tagged-union construction = first arg must be a capitalized variant tag, got {}",
+            tag_part.value.summarize()
+        )))
     };
-    Ok((tag, value_part.value))
+    let ExpressionPart::Type(t) = tag_part.value else {
+        return Err(shape_error());
+    };
+    let text = t.as_str();
+    let tag = TypeSymbol::declared(text, &registries.labels).ok_or_else(shape_error)?;
+    Ok((tag, text, value_part.value))
 }
 
 #[cfg(test)]
@@ -314,9 +322,10 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
     member: KType,
     schema: Rc<TypeMemberMap>,
     args_parts: &[Spanned<ExpressionPart<'step>>],
+    registries: &RunRegistries,
     scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
-    let (tag, value_part) = match prepare_args(args_parts) {
+    let (tag, _text, value_part) = match prepare_args(args_parts, registries) {
         Ok(v) => v,
         Err(e) => return Outcome::Done(Err(e)),
     };
@@ -329,7 +338,7 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
     brand: RegionBrand<'step>,
     member: KType,
     schema: Rc<TypeMemberMap>,
-    tag: String,
+    tag: TypeSymbol,
     value_part: ExpressionPart<'step>,
     scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
@@ -529,17 +538,17 @@ fn finish_witnessed<'step>(
             tag,
         } => {
             debug_assert_eq!(terminals.len(), 1);
-            // The tag probes the member table by bare symbol bits — the recovery door. `tag` is
-            // the source text the construction site spelled, so the miss names what was written
-            // even when nothing interned it; the known keys were interned at their declaration.
-            let expected = schema.get(&Symbol::of(tag)).ok_or_else(|| {
+            // Both sides are classified symbols, so the lookup is a bits compare. The probed tag
+            // interned at the construction site and the known keys at their declarations, so the
+            // miss renders every name it prints.
+            let expected = schema.get(tag).ok_or_else(|| {
                 let known: Vec<String> = schema
                     .keys()
                     .map(|key| render_label(key.symbol(), view.registries()))
                     .collect();
                 KError::new(KErrorKind::ShapeError(format!(
                     "tag `{}` not in union (known: {})",
-                    tag,
+                    render_label(tag.symbol(), view.registries()),
                     known.join(", ")
                 )))
             })?;
@@ -562,7 +571,7 @@ fn finish_witnessed<'step>(
                 }
             }
             let home = build_type_operand(view.dest_frame(), *member);
-            let tag = tag.clone();
+            let tag = *tag;
             // The tag keeps the value verbatim — see the `NewType` arm's holder.
             let delivered = view.current_scope().lift_spliced(&terminals[0].cell);
             let holder = delivered.coverage().clone();
@@ -575,7 +584,7 @@ fn finish_witnessed<'step>(
                         let region = FoldingBrand::in_fold_closure(placement);
                         Carried::Object(region.alloc_object_folded(KObject::tagged(
                             region.with_holder(&holder),
-                            &tag,
+                            tag,
                             value.object(),
                             identity_ty,
                         )))

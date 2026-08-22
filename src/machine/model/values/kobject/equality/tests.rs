@@ -283,9 +283,9 @@ fn tagged_same_nominal_compares_payload() {
     let types = &registries.types;
     container_door!(_storage, door);
     let identity = newtype_singleton("Distance", KType::NUMBER, types);
-    let a = KObject::tagged(door, "Distance", &num(3.0), identity);
-    let b = KObject::tagged(door, "Distance", &num(3.0), identity);
-    let c = KObject::tagged(door, "Distance", &num(4.0), identity);
+    let a = KObject::tagged(door, type_token("Distance"), &num(3.0), identity);
+    let b = KObject::tagged(door, type_token("Distance"), &num(3.0), identity);
+    let c = KObject::tagged(door, type_token("Distance"), &num(4.0), identity);
     assert_eq!(a.value_equal(&b, &registries), Ok(true));
     assert_eq!(a.value_equal(&c, &registries), Ok(false));
 }
@@ -307,10 +307,10 @@ fn tagged_erased_and_stamped_are_distinct_identities() {
         None,
         types,
     );
-    let erased = KObject::tagged(door, "Box", &num(1.0), ctor);
+    let erased = KObject::tagged(door, type_token("Box"), &num(1.0), ctor);
     let stamped = KObject::tagged(
         door,
-        "Box",
+        type_token("Box"),
         &num(1.0),
         types.constructor_apply(
             ctor,
@@ -326,8 +326,8 @@ fn tagged_distinct_index_is_unequal() {
     let types = &registries.types;
     container_door!(_storage, door);
     let members = two_member(types);
-    let none = KObject::tagged(door, "None", &KObject::Null, members[0]);
-    let some = KObject::tagged(door, "Some", &num(1.0), members[1]);
+    let none = KObject::tagged(door, type_token("None"), &KObject::Null, members[0]);
+    let some = KObject::tagged(door, type_token("Some"), &num(1.0), members[1]);
     assert_eq!(none.value_equal(&some, &registries), Ok(false));
 }
 

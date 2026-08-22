@@ -1,4 +1,4 @@
-use crate::builtins::test_support::{TestRun, parse_one, type_name};
+use crate::builtins::test_support::{TestRun, parse_one, type_name, type_token};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KKind, NodeSchema, TypeNode};
 use crate::machine::model::{KObject, KType};
@@ -79,7 +79,7 @@ fn result_constructs_ok_variant() {
             value,
             identity,
         } => {
-            assert_eq!(*tag, "Ok");
+            assert_eq!(*tag, type_token("Ok"));
             assert_member_named(test_run.registries(), *identity, "Result");
             assert!(matches!(value.payload(), KObject::Number(n) if *n == 1.0));
         }
@@ -99,7 +99,7 @@ fn result_constructs_error_variant() {
             value,
             identity,
         } => {
-            assert_eq!(*tag, "Error");
+            assert_eq!(*tag, type_token("Error"));
             assert_member_named(test_run.registries(), *identity, "Result");
             assert!(matches!(value.payload(), KObject::KString(s) if *s == "x"));
         }

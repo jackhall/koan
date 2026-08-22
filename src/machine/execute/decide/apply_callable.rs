@@ -199,6 +199,7 @@ fn apply_constructor<'step>(
                 identity,
                 Rc::new(variant_schema),
                 parts,
+                ctx.registries(),
                 ctx.scratch(),
             ),
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
@@ -224,6 +225,11 @@ fn apply_constructor<'step>(
     }
 }
 
+/// One supplied type argument on its way to [`build_apply_args`]: the name as classified at its
+/// call site (`None` when the text is no Type token, so it names no declared parameter), that same
+/// source text for the miss diagnostic, and the resolved argument.
+type SuppliedTypeArgument<'a> = (Option<TypeSymbol>, &'a str, KType);
+
 /// Apply a type constructor to a record of named type arguments — `:(Result {Ok = Number, Error =
 /// MyError})`. Each field value rides its own sub-Dispatch, so a compound argument like
 /// `{Elem = (LIST OF Number)}` elaborates through the ordinary type-expression lanes and the slot
@@ -245,9 +251,15 @@ fn apply_named_type_args<'step>(
         );
     }
     let brand = ctx.current_scope().brand();
-    let (names, value_parts): (Vec<String>, Vec<ExpressionPart<'step>>) = fields
+    // Argument names are source text; they classify once here and match by symbol bits from then
+    // on. A reference is not a declaration, so this is a pure probe — a name that will not classify
+    // as a Type token names no declared parameter, and its text is what the miss prints.
+    let (names, value_parts): (
+        Vec<(Option<TypeSymbol>, &'step str)>,
+        Vec<ExpressionPart<'step>>,
+    ) = fields
         .iter()
-        .map(|(name, part)| ((*name).to_string(), *part))
+        .map(|(name, part)| ((TypeSymbol::of(name), *name), *part))
         .unzip();
     let deps: Vec<DepRequest<'step>> = value_parts
         .into_iter()
@@ -259,20 +271,22 @@ fn apply_named_type_args<'step>(
     let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
         // Each argument is a type value cloned out as owned data, so the applied type embeds no
         // borrow of a producer's region and needs no carrier fold.
-        let supplied: Result<Vec<(String, KType)>, KError> = terminals
+        let supplied: Result<Vec<SuppliedTypeArgument<'step>>, KError> = terminals
             .iter()
             .zip(&names)
-            .map(|(terminal, name)| match terminal.cell.open_at().value() {
-                Carried::Type(kt) => Ok((name.clone(), kt)),
-                Carried::Object(object) => Err(KError::new(KErrorKind::TypeMismatch {
-                    arg: name.clone(),
-                    expected: "Type".to_string(),
-                    got: object.ktype().name(view.registries()),
-                })),
-                Carried::UnresolvedType(ti) => {
-                    Err(KError::new(KErrorKind::UnboundName(ti.render())))
-                }
-            })
+            .map(
+                |(terminal, (symbol, text))| match terminal.cell.open_at().value() {
+                    Carried::Type(kt) => Ok((*symbol, *text, kt)),
+                    Carried::Object(object) => Err(KError::new(KErrorKind::TypeMismatch {
+                        arg: (*text).to_string(),
+                        expected: "Type".to_string(),
+                        got: object.ktype().name(view.registries()),
+                    })),
+                    Carried::UnresolvedType(ti) => {
+                        Err(KError::new(KErrorKind::UnboundName(ti.render())))
+                    }
+                },
+            )
             .collect();
         Outcome::Done(supplied.and_then(|supplied| {
             let args = build_apply_args(identity, &param_names, supplied, view.registries())?;
@@ -292,46 +306,53 @@ fn apply_named_type_args<'step>(
 fn build_apply_args(
     identity: KType,
     param_names: &[TypeSymbol],
-    supplied: Vec<(String, KType)>,
+    supplied: Vec<SuppliedTypeArgument<'_>>,
     registries: &RunRegistries,
 ) -> Result<Record<KType>, KError> {
-    // Argument names arrive as source text, so they classify once here and match by symbol bits.
-    // A name that will not classify as a Type token names no declared parameter, so it joins the
-    // misspellings in `unknown`.
+    // The names classified at their call site; a name that would not classify as a Type token
+    // names no declared parameter, so it joins the misspellings in `unknown` under its own text.
     let mut matched = TypeMemberMap::default();
     let mut unknown: Vec<&str> = Vec::new();
-    for (name, kt) in &supplied {
-        match TypeSymbol::of(name) {
-            Some(symbol) if param_names.contains(&symbol) => {
-                matched.insert(symbol, *kt);
+    for (symbol, text, kt) in &supplied {
+        match symbol {
+            Some(symbol) if param_names.contains(symbol) => {
+                matched.insert(*symbol, *kt);
             }
-            _ => unknown.push(name.as_str()),
+            _ => unknown.push(text),
         }
     }
-    let declared: Vec<String> = param_names
+    let missing: Vec<TypeSymbol> = param_names
         .iter()
-        .map(|name| render_label(name.symbol(), registries))
-        .collect();
-    let missing: Vec<&str> = param_names
-        .iter()
-        .zip(&declared)
-        .filter(|(name, _)| !matched.contains_key(*name))
-        .map(|(_, text)| text.as_str())
+        .copied()
+        .filter(|name| !matched.contains_key(name))
         .collect();
     unknown.sort_unstable();
     if !missing.is_empty() || !unknown.is_empty() {
+        // The declared names resolve through the interner, which recorded them at the
+        // constructor's declaration — on the miss path only, so a satisfied key check renders
+        // nothing at all.
+        let render = |names: &[TypeSymbol]| -> Vec<String> {
+            names
+                .iter()
+                .map(|name| render_label(name.symbol(), registries))
+                .collect()
+        };
+        fn borrow(names: &[String]) -> Vec<&str> {
+            names.iter().map(String::as_str).collect()
+        }
+        let missing = render(&missing);
+        let declared = render(param_names);
         let mut problems = Vec::new();
         if !missing.is_empty() {
-            problems.push(format!("missing {}", quoted_list(&missing)));
+            problems.push(format!("missing {}", quoted_list(&borrow(&missing))));
         }
         if !unknown.is_empty() {
             problems.push(format!("unknown {}", quoted_list(&unknown)));
         }
-        let declared: Vec<&str> = declared.iter().map(String::as_str).collect();
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "`{}` takes type parameters {} — {}",
             identity.name(registries),
-            quoted_list(&declared),
+            quoted_list(&borrow(&declared)),
             problems.join(", "),
         ))));
     }
@@ -358,7 +379,7 @@ fn quoted_list(names: &[&str]) -> String {
 /// (a bare `Type` token body) yields the variant member's type value, reached through its union;
 /// `Maybe (Some v)` (a paren-group body) constructs the named member as a `KObject::Tagged` —
 /// the same value shape builtin `Result` produces — so `MATCH` dispatches user unions by tag
-/// string through the shared `TaggedByTag` path.
+/// symbol through the shared `TaggedByTag` path.
 fn apply_union_construct<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     members: Vec<KType>,
@@ -371,24 +392,24 @@ fn apply_union_construct<'step>(
         },
     ] = &expr.parts[1..]
     {
-        let name = t.render();
-        return match union_member(&members, Symbol::of(&name), ctx.types()) {
+        // The token names a variant, so it probes the members by bare symbol bits — the
+        // recovery door. Nothing is interned: a bare-token reference is a lookup, not a
+        // declaration, and the miss names the token's own source text.
+        let name = t.as_str();
+        return match union_member(&members, Symbol::of(name), ctx.types()) {
             Some(member) => Outcome::Done(Ok(ctx.step_ctx().type_carried(member))),
-            None => Outcome::Done(Err(unknown_variant_error(
-                &members,
-                &name,
-                ctx.registries(),
-            ))),
+            None => Outcome::Done(Err(unknown_variant_error(&members, name, ctx.registries()))),
         };
     }
     // The tag names which member; the built value's `identity` is that member's own sealed handle.
     match extract_call_body(expr) {
         Ok(CallBody::Positional(parts)) => {
-            let (tag, value_part) = match constructors::prepare_args(parts) {
-                Ok(v) => v,
-                Err(e) => return Outcome::Done(Err(e)),
-            };
-            match union_member(&members, Symbol::of(&tag), ctx.types()) {
+            let (tag, tag_text, value_part) =
+                match constructors::prepare_args(parts, ctx.registries()) {
+                    Ok(v) => v,
+                    Err(e) => return Outcome::Done(Err(e)),
+                };
+            match union_member(&members, tag.symbol(), ctx.types()) {
                 Some(member) => constructors::construct_tagged(
                     ctx.current_scope().brand(),
                     member,
@@ -397,7 +418,11 @@ fn apply_union_construct<'step>(
                     value_part,
                     ctx.scratch(),
                 ),
-                None => Outcome::Done(Err(unknown_variant_error(&members, &tag, ctx.registries()))),
+                None => Outcome::Done(Err(unknown_variant_error(
+                    &members,
+                    tag_text,
+                    ctx.registries(),
+                ))),
             }
         }
         Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),

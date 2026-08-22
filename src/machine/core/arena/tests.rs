@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::builtins::test_support::{
-    TestRun, per_call_storage, run_root_bare, type_name, value_name,
+    TestRun, per_call_storage, run_root_bare, type_name, type_token, value_name,
 };
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
@@ -1132,7 +1132,7 @@ fn region_death_frees_every_drop_free_family() {
         scope.fold_resident_object(|brand| {
             let door = brand.with_holder(&owned_cells);
             let inner = KObject::KString(door.allocator().text("tagged"));
-            KObject::tagged(door, "Tag", &inner, KType::NULL)
+            KObject::tagged(door, type_token("Tag"), &inner, KType::NULL)
         }),
         scope.fold_resident_object(|brand| {
             let door = brand.with_holder(&owned_cells);

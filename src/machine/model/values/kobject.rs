@@ -6,7 +6,7 @@ use crate::machine::core::{
     FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
 };
 use crate::machine::model::ast::{KExpression, ProgramExpression};
-use crate::machine::model::labels::Symbol;
+use crate::machine::model::labels::{Symbol, TypeSymbol};
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::types::render_label;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
@@ -115,11 +115,13 @@ pub enum KObject<'a> {
     /// `ConstructorApply` over that member when an ascription stamped a parameterized union's
     /// arguments in. One handle carries what the member reference and the runtime type
     /// arguments used to carry separately, so `ktype()` is a copy and identity comparison is
-    /// one `u128`. Construct via [`KObject::tagged`] — never the struct literal directly outside this
+    /// one `u128`. The tag is the variant's classified name symbol — a fixed-width `Copy` key, so a
+    /// construction stores no discriminant bytes and a tag comparison is a symbol compare. Construct
+    /// via [`KObject::tagged`] — never the struct literal directly outside this
     /// module, and never `Rc::new`: the substrate is born only through
     /// [`FoldingBrand::alloc_substrate_folded`].
     Tagged {
-        tag: &'a str,
+        tag: TypeSymbol,
         value: &'a PayloadSubstrate<'a>,
         identity: KType,
     },
@@ -355,18 +357,18 @@ impl<'a> KObject<'a> {
     /// copy for a substrate-carrier payload, whose own stored reach then becomes the payload run's);
     /// the caller keeps its borrow.
     ///
-    /// The discriminant's bytes are re-bumped into `door`'s region, so the tag is home-resident like
-    /// every other string a substrate door stores — a carrier whose tag still borrowed the caller's
-    /// region would reach a region its own run never names.
+    /// The discriminant is the variant's name symbol, which points into no region: it rides the
+    /// carrier as fixed-width `Copy` data, so a construction bumps the payload cell and nothing
+    /// else, and the tag can never reach a region the carrier's own run does not name.
     pub fn tagged(
         door: SubstrateDoor<'a, '_>,
-        tag: &str,
+        tag: TypeSymbol,
         value: &KObject<'a>,
         identity: KType,
     ) -> KObject<'a> {
         let substrate = alloc_payload(door, value.deep_clone());
         KObject::Tagged {
-            tag: door.allocator().text(tag),
+            tag,
             value: substrate,
             identity,
         }
@@ -530,7 +532,7 @@ impl<'a> KObject<'a> {
                 value,
                 identity,
             } => KObject::Tagged {
-                tag,
+                tag: *tag,
                 value,
                 identity: *identity,
             },
@@ -863,7 +865,7 @@ pub(crate) fn copy_object_into<'b>(
             value,
             identity,
         } => KObject::Tagged {
-            tag: dest.allocator().text(tag),
+            tag: *tag,
             value: alloc_payload(dest, copy_object_into(value.payload(), dest)),
             identity: *identity,
         },
@@ -1050,7 +1052,11 @@ impl<'a> KObject<'a> {
             KObject::KExpression(e) => e.summarize(),
             KObject::KFunction(f) => f.summarize(registries),
             KObject::Tagged { tag, value, .. } => {
-                format!("{}({})", tag, value.payload().summarize(registries))
+                format!(
+                    "{}({})",
+                    render_label(tag.symbol(), registries),
+                    value.payload().summarize(registries)
+                )
             }
             KObject::Record(substrate, _) => {
                 // The substrate lays cells out in symbol order, which carries no meaning to a

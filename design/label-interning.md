@@ -131,8 +131,18 @@ type of its symbol, not re-derived from text at each door. Three newtypes over `
 Each is minted **only** by a constructor that runs its class predicate on the text.
 There is no raw-`Symbol` constructor: a digest alone carries no evidence of what its text
 looked like, so admitting one would let a caller assert a class the digest cannot witness.
-A seam holding a bare `Symbol` that needs a class either classifies where the text still
-existed, or resolves the text through the interner and classifies that.
+A seam holding a bare `Symbol` that needs a class has three doors: it classifies where the
+text still exists, it resolves the text through the interner and classifies that, or it
+**recovers the class from a classified table**. Recovery is the read-only door: a map keyed
+by a classified symbol admits a probe by bare symbol bits (the classified key types
+implement `Borrow<Symbol>`), and a hit hands back the *stored* key — a classified symbol
+minted where its text existed. Symbol equality is text equality on the shared collision
+footing, so the probe's originating text is the key's text and the recovered class is
+witnessed, not asserted. Nothing is minted on this path and insertion still requires a
+classified key, so a wrong-class probe misses against a map that could never have held it —
+the same disposition a wrong-class `of` conversion gets. `WITH` is the canonical user: a
+pin arrives as a bare record-field symbol and recovers its `TypeSymbol` from the schema
+member table the SIG declaration keyed.
 
 Two constructors, and the split is the interning rule stated above:
 

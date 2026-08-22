@@ -121,7 +121,7 @@ impl<'a> RegionBrand<'a> {
     }
 
     /// **This brand's region bump as a [`BumpAllocator`]** — the door every byte a value family slot
-    /// holds is born through: a string's characters ([`KObject::KString`], a `Tagged` discriminant, a
+    /// holds is born through: a string's characters ([`KObject::KString`], a
     /// [`KKey::String`](crate::machine::model::KKey) dict key) through `text`, an expression's parts
     /// or a node's stored bucket key through `slice`, a node a part arm points at through `value`.
     /// The verbs and their `Copy` guard live on [`BumpAllocator`] itself, so this brand restates

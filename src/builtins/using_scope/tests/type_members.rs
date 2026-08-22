@@ -40,7 +40,7 @@ fn plain_module_type_member_types_a_return_slot() {
          (PAINT (Color (Blue null))))",
     ));
     assert!(
-        matches!(result, KObject::Tagged { tag, .. } if *tag == "Blue"),
+        matches!(result, KObject::Tagged { tag, .. } if *tag == crate::builtins::test_support::type_token("Blue")),
         "the module's `Color` must type both the slot and the return, got {:?}",
         result.ktype(),
     );

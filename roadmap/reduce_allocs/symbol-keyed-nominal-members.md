@@ -58,9 +58,9 @@ declared Type-class label, so it is a `TypeSymbol` interned at the declaration t
 the member, and the text lives only in the run's label interner. A variant tag
 (`Ok`, `Error`, `Some`, `None`) and a NEWTYPE name are Type tokens by the same predicate
 the rest of the vocabulary uses, so the classified newtype fits without widening it.
-Equally settled: a token class established at parse is not re-derived downstream. What is
-*not* settled is the canonical member order a component's indices are assigned from, and
-which hop of the record-literal pipeline carries the class — see Directions.
+Equally settled: a class is never re-derived by a predicate over rendered text. The
+canonical member order and the currency `WITH` reads its pins in are settled in
+Directions.
 
 **Acceptance criteria.**
 
@@ -84,10 +84,12 @@ which hop of the record-literal pipeline carries the class — see Directions.
 - Every site that renders a member name — `KType::name`, the unknown-variant diagnostic,
   the ill-kinded-constructor diagnostic, module summaries — resolves through the run's
   label interner, with a resolve miss rendering the standard placeholder.
-- A record literal's field-name class survives from the parse that established it to the
-  seams that consume it: `WITH` validates and folds its pins with **no** symbol→text→symbol
-  round-trip and no re-classification, in either pass. Which hop carries the class is the
-  open fork below; the criterion is that no consumer re-derives it.
+- `WITH` validates and folds its pins with **no** symbol→text→symbol round-trip and no
+  class predicate, in either pass: each pin's bare record-field `Symbol` probes the
+  schema's classified member tables by bits, and a hit recovers the stored `TypeSymbol` —
+  the witness the SIG declaration minted
+  ([design/label-interning.md](../../design/label-interning.md)). The record literal's AST
+  arm and the record substrate keep their bare `&str` / `Symbol` currencies.
 - `read_field_name` returns the field as a classified `BinderSymbol`, taken from the
   channel it arrived on rather than from a predicate over rendered text, and
   `access_type_member` selects its map by matching that variant — running neither class
@@ -98,35 +100,30 @@ which hop of the record-literal pipeline carries the class — see Directions.
 
 **Directions.**
 
-- *Canonical member order — open, and the registry side's one real fork.* A sealed
-  member's identity is its component digest plus **its index in that component's canonical
-  (name) order** ([node.rs](../../src/machine/model/types/node.rs)), and that order is text
-  today. Switching the sort key to symbol bits permutes index assignment within a
-  multi-member component, so the same content interns to the same *set* of handles but a
-  different member-to-index mapping — the component digest is unchanged, the per-member
-  handles are not. Options: (a) sort by symbol, accepting the permutation and re-pinning
-  the affected goldens, matching how the schema feeds already order; (b) keep the text sort
-  by resolving through the interner at seal only, paying one resolve per member per group
-  declaration to hold the current mapping. (a) is the consistent choice and a group's
-  members are anonymous to a reader either way, but it is a digest-visible decision.
-- *Which hop carries the record-literal class — open, and the record side's fork.* Three
-  candidates, and they are not equivalent:
-  (a) `ExpressionPart::RecordLiteral` carries `BinderSymbol` instead of `&str`, so the
-  parser keeps what it already validated. Fixes every AST consumer; does **not** reach
-  `WITH`, which reads an evaluated value.
-  (b) `RecordSubstrate` keys by `BinderSymbol`. Reaches `WITH`, but widens every record
-  value's key slice and puts a class into the one structure whose whole design rests on
-  bare symbol bits — the symbol-sorted cell layout and its binary search.
-  (c) `WITH` consumes the record-literal AST part, evaluating pin *values* while pin
-  *names* stay syntax. Most faithful to what a `WITH` pin means — a slot name is not a
-  runtime label — and it leaves the substrate alone, but it is the largest surface change
-  and must preserve the value-context dispatch that makes `er.Carrier` work today.
-  (a) and (c) compose; (b) stands alone.
-- *`Rc<HashMap<…>>` in `CtorKind::Tagged` — likely deletable, but out of this item's
-  claim.* Re-keying removes the text from the clone, not the clone. Whether the ctor kind
-  can hold the member handle and re-read the schema at finish instead is a separate
-  question about `node()`'s clone-on-read contract, which is the same question the
-  registry-wide read path raises.
+- *Canonical member order — decided.* A sealed member's identity is its component digest
+  plus **its index in that component's canonical order**
+  ([node.rs](../../src/machine/model/types/node.rs)); the sort key is the **symbol bits**
+  (owner symbol as tiebreak), matching the composition the schema feeds already use. The
+  digest feed and index assignment share one order — `member_ref_digest(scc_digest, index)`
+  is keyed by fold position, so a text-sorted index beside a symbol-sorted feed is
+  incoherent. The permutation within a multi-member component is accepted and the affected
+  goldens re-pin; a group's members are anonymous to a reader either way.
+- *`WITH` pin currency — decided: recover the class from the schema.* Each pin's bare
+  record-field `Symbol` probes `abstract_members` / `manifest_members` by bits and a hit
+  hands back the stored `TypeSymbol` — the recovery door
+  ([design/label-interning.md](../../design/label-interning.md)). No hop of the
+  record-literal pipeline carries a class, because a pin's class authority is the SIG
+  member it pins, not the literal. Rejected: carrying `BinderSymbol` in
+  `ExpressionPart::RecordLiteral` (the AST renders registry-free — `summarize` and the
+  parser's `describe` — and every AST consumer already classifies at its own seam with
+  text in hand); keying `RecordSubstrate` by class (the substrate's design rests on bare
+  symbol bits); `WITH` consuming the AST part (forfeits the eager-evaluated record that
+  makes a dotted `er.Carrier` pin value work for free).
+- *`Rc<HashMap<…>>` in `CtorKind::Tagged` — deferred, out of this item's claim.* Re-keying
+  removes the text from the clone, not the clone. Whether the ctor kind can hold the
+  member handle and re-read the schema at finish instead is a separate question about
+  `node()`'s clone-on-read contract, which is the same question the registry-wide read
+  path raises.
 
 ## Dependencies
 

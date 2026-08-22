@@ -180,7 +180,7 @@ fn type_constructor_ktype_erased_vs_applied() {
         None,
         types,
     );
-    let erased = KObject::tagged(door, "Ok", &KObject::Number(1.0), ctor);
+    let erased = KObject::tagged(door, type_token("Ok"), &KObject::Number(1.0), ctor);
     let erased_handle = erased.ktype();
     match types.node(erased_handle) {
         TypeNode::SetMember { name, .. } => assert_eq!(name, type_token("Result")),
@@ -192,7 +192,7 @@ fn type_constructor_ktype_erased_vs_applied() {
     ]);
     let applied = KObject::tagged(
         door,
-        "Ok",
+        type_token("Ok"),
         &KObject::Number(1.0),
         types.constructor_apply(ctor, arguments.clone()),
     );

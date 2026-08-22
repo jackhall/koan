@@ -746,7 +746,6 @@ digraph {
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::ast" [label="uses", style="dashed"];
-    "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::ktraits" [label="uses", style="dashed"];

@@ -10,7 +10,7 @@ use std::rc::Rc;
 use crate::machine::Scope;
 use crate::machine::StepCarried;
 use crate::machine::kerror_ktype;
-use crate::machine::model::{KObject, KType, Record};
+use crate::machine::model::{KObject, KType, Record, TypeSymbol};
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
@@ -63,7 +63,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         // `transfer_into` brand closures can call it.
         fn build_result<'x>(
             door: SubstrateDoor<'x, '_>,
-            tag: &str,
+            tag: TypeSymbol,
             identity: KType,
             payload: &KObject<'x>,
         ) -> KObject<'x> {
@@ -87,7 +87,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 &tagged_envelope
             }
         };
-        let tag = if result.is_ok() { "Ok" } else { "Error" };
+        // `Ok` / `Error` are fixed literals of the `Result` shape, Type tokens by construction;
+        // they intern here so a rendered tag resolves back.
+        let tag = result_tag(if result.is_ok() { "Ok" } else { "Error" }, fctx.registries);
         // The payload rides into the `Tagged` verbatim, so a payload substrate that stays foreign
         // keeps its own stored reach as the payload cell's run; the carrier's coverage is the
         // holder-rule proof for reading it, captured before the fold closure.
@@ -127,3 +129,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 
 #[cfg(test)]
 mod tests;
+
+/// A fixed literal of the `Result` shape as the Type token it is, interned so a rendered tag
+/// resolves back.
+fn result_tag(text: &str, registries: &RunRegistries) -> TypeSymbol {
+    TypeSymbol::declared(text, &registries.labels).expect("a `Result` tag is a Type token")
+}

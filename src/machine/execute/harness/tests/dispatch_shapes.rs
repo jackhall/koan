@@ -8,6 +8,7 @@
 //! thread-local so tests run independently under `cargo test`'s default thread
 //! pool.
 
+use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{TestRun, parse_one, type_name};
 use crate::machine::ProducerId;
 use crate::machine::core::{Action, BodyCtx};
@@ -400,7 +401,7 @@ fn fast_lane_on_tagged_union_constructs() {
             value,
             identity,
         } => {
-            assert_eq!(*tag, "Some");
+            assert_eq!(*tag, type_token("Some"));
             assert!(matches!(value.payload(), KObject::Number(n) if *n == 42.0));
             match test_run.types().node(*identity) {
                 TypeNode::SetMember { name, .. } => {
@@ -1150,7 +1151,7 @@ fn type_head_deferred_constructs_union_variant() {
     let result = test_run.run_one(parse_one(&program, ":(Maybe) (Some 42)"));
     match result {
         KObject::Tagged { tag, value, .. } => {
-            assert_eq!(*tag, "Some");
+            assert_eq!(*tag, type_token("Some"));
             assert!(matches!(value.payload(), KObject::Number(n) if *n == 42.0));
         }
         other => panic!("expected Tagged, got {:?}", other.ktype()),

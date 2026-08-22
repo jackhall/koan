@@ -19,7 +19,6 @@ use crate::machine::SplicedCell;
 use crate::machine::core::read_resting;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, WorkingPart};
-use crate::machine::model::labels::Symbol;
 use crate::machine::model::values::{Carried, Held, KObject};
 
 /// Whether a value reporting a `ConstructorApply` `ktype()` satisfies a `ConstructorApply`
@@ -296,7 +295,7 @@ impl KType {
                             if identity != constructor {
                                 return false;
                             }
-                            match arguments.get(Symbol::of(tag)) {
+                            match arguments.get(tag.symbol()) {
                                 Some(argument) => {
                                     argument.matches_value(value.payload(), registries)
                                 }

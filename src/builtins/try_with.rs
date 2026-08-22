@@ -14,7 +14,7 @@ use crate::machine::WriteGate;
 
 use crate::machine::model::KKind;
 
-use crate::machine::model::{Carried, KObject, KType};
+use crate::machine::model::{Carried, KObject, KType, Symbol};
 use crate::machine::{DeliveredCarried, KError, KErrorKind, Scope};
 
 use super::branch_walk::find_branch_body_by_tag;
@@ -39,19 +39,21 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         // now carries a fresh `Record` substrate (born through a fold door), so it travels as a
         // delivered carrier and adopts through the same copied-adoption tier the success arm's
         // watched value already uses.
-        let (tag, it_carrier, original_error): (String, DeliveredCarried, Option<KError>) =
+        // The arm walk matches by bare symbol bits, so the success tag is a probe: `Ok` is a
+        // fixed literal of the `Result` shape and needs no intern to be compared.
+        let (tag, it_carrier, original_error): (Symbol, DeliveredCarried, Option<KError>) =
             match result {
-                Ok(carrier) => ("Ok".to_string(), carrier, None),
+                Ok(carrier) => (Symbol::of("Ok"), carrier, None),
                 Err(e) => {
                     let envelope = e.to_tagged_delivered(fctx.scope, fctx.registries);
                     let tag = envelope.open(|carried| match carried {
-                        Carried::Object(KObject::Tagged { tag, .. }) => tag.to_string(),
+                        Carried::Object(KObject::Tagged { tag, .. }) => tag.symbol(),
                         _ => unreachable!("KError::to_tagged always returns Tagged"),
                     });
                     (tag, payload_envelope(&envelope), Some(e))
                 }
             };
-        let body_expr = match find_branch_body_by_tag(&branches_expr, &tag, true) {
+        let body_expr = match find_branch_body_by_tag(&branches_expr, tag, true) {
             Ok(Some(body)) => body,
             // On no match: re-raise the original `KError`, or `ShapeError` on the success path
             // without an `Ok` or `_` arm.
