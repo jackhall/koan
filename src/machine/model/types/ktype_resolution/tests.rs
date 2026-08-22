@@ -4,35 +4,14 @@ use crate::machine::model::Symbol;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::types::Record;
 
-fn leaf(n: &str) -> TypeIdentifier<'_> {
-    TypeIdentifier::leaf(n)
+#[test]
+fn from_name_leaf_number() {
+    assert_eq!(KType::from_name("Number"), Some(KType::NUMBER));
 }
 
 #[test]
-fn from_type_expr_leaf_number() {
-    let registries = RunRegistries::new();
-    let types = &registries.types;
-    assert_eq!(
-        KType::from_type_identifier(&leaf("Number"), types).unwrap(),
-        KType::NUMBER
-    );
-}
-
-#[test]
-fn from_type_expr_unknown_paramless_name_errors() {
-    let registries = RunRegistries::new();
-    let types = &registries.types;
-    assert!(KType::from_type_identifier(&leaf("Banana"), types).is_err());
-}
-
-#[test]
-fn from_type_expr_leaf_falls_through_to_builtin() {
-    let registries = RunRegistries::new();
-    let types = &registries.types;
-    assert_eq!(
-        KType::from_type_identifier(&leaf("Number"), types).unwrap(),
-        KType::NUMBER,
-    );
+fn from_name_unknown_paramless_name_is_none() {
+    assert_eq!(KType::from_name("Banana"), None);
 }
 
 #[test]

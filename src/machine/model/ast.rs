@@ -230,25 +230,23 @@ impl<'a> ExpressionPart<'a> {
 
     /// Slot-aware resolve producing an owned [`Held`] cell, run at [`KFunction::bind_args`] time. A
     /// type rides the `Type` arm; a runtime value rides the `Object` arm. A `Type`-name token in a
-    /// proper-type slot lowers via [`KType::from_type_identifier`], falling back to the
-    /// [`Held::UnresolvedType`] carrier for a bare user name — no type handle ever denotes an
+    /// proper-type slot lowers through the builtin table ([`KType::from_name`]), falling back to
+    /// the [`Held::UnresolvedType`] carrier for every other name — no type handle ever denotes an
     /// unresolved name, so the surface [`TypeIdentifier`] rides through verbatim and scope-aware
     /// elaboration defers to
     /// [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).
     ///
     /// [`KFunction::bind_args`]: crate::machine::KFunction::bind_args
-    /// [`KType::from_type_identifier`]: crate::machine::model::KType::from_type_identifier
     pub fn resolve_for(
         &self,
         slot: &crate::machine::model::KType,
         scope: &'a crate::machine::core::Scope<'a>,
-        types: &crate::machine::model::types::TypeRegistry,
     ) -> Held<'a> {
         use crate::machine::model::types::KType;
         if let (ExpressionPart::Type(t), KType::PROPER_TYPE | KType::ANY_TYPE) = (self, *slot) {
-            return match KType::from_type_identifier(t, types) {
-                Ok(kt) => Held::Type(kt),
-                Err(_) => Held::UnresolvedType(*t),
+            return match KType::from_name(t.as_str()) {
+                Some(kt) => Held::Type(kt),
+                None => Held::UnresolvedType(*t),
             };
         }
         if let (ExpressionPart::SigiledTypeExpr(inner), KType::SIGILED_TYPE_EXPR) = (self, *slot) {

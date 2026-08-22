@@ -5,8 +5,6 @@
 
 use super::kkind::KKind;
 use super::ktype::KType;
-use super::registry::TypeRegistry;
-use crate::machine::model::ast::TypeIdentifier;
 
 impl KType {
     /// Look up a `KType` by the textual name a user can write in source (e.g. `Number`, `List`).
@@ -27,16 +25,6 @@ impl KType {
             "Any" => Some(KType::ANY),
             _ => None,
         }
-    }
-
-    /// Lower a parser `TypeIdentifier` into a `KType` against the builtin table only — no
-    /// scope-aware resolver. Wraps the [`KType::from_name`] builtin-table fallback; unknown
-    /// names surface as `Err(_)`.
-    pub fn from_type_identifier(
-        t: &TypeIdentifier,
-        _types: &TypeRegistry,
-    ) -> Result<KType, String> {
-        KType::from_name(t.as_str()).ok_or_else(|| format!("unknown type name `{}`", t.as_str()))
     }
 }
 

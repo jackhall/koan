@@ -273,14 +273,13 @@ impl<'a> KFunction<'a> {
         slots: &mut BumpVec<'_, BoundArg<'a, 'c>>,
     ) -> Result<(), KError> {
         self.validate_call_args(parts, registries)?;
-        let types = &registries.types;
         for slot in self.signature.part_slots() {
             let at = *slot as usize;
             let SignatureElement::Argument(arg) = self.signature.elements()[at] else {
                 unreachable!("part_slots indexes exactly the signature's argument elements");
             };
             slots.push(BoundArg {
-                value: parts[at].value.resolve_for(&arg.ktype, scope, types),
+                value: parts[at].value.resolve_for(&arg.ktype, scope),
                 carrier: carriers.get(at).and_then(Option::as_ref),
             });
         }

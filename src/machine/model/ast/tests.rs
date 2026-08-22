@@ -53,15 +53,13 @@ fn build<'a>(brand: ProgramBrand<'a>, items: Vec<ExpressionPart<'a>>) -> KExpres
 
 #[test]
 fn resolve_for_lowers_builtin_leaf_to_type_arm() {
-    let registries = RunRegistries::new();
-    let types = &registries.types;
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let part = ExpressionPart::Type(TypeIdentifier::leaf("Number"));
     let slot = KType::of_kind(KKind::ProperType);
     // Consume the scope-tied `Held` inside `matches!` so no borrow outlives `storage`.
     assert!(matches!(
-        part.resolve_for(&slot, scope, types),
+        part.resolve_for(&slot, scope),
         Held::Type(t) if t == KType::NUMBER
     ));
 }
@@ -74,10 +72,9 @@ fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let registries = RunRegistries::new();
-    let types = &registries.types;
     let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType"));
     let slot = KType::of_kind(KKind::ProperType);
-    match part.resolve_for(&slot, scope, types) {
+    match part.resolve_for(&slot, scope) {
         Held::UnresolvedType(te) => assert_eq!(te.render(), "MyType"),
         other => panic!(
             "expected the unlowered-name carrier, got {}",
@@ -96,7 +93,7 @@ fn unresolved_carrier_classifies_as_a_proper_type() {
     let types = &registries.types;
     let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType"));
     let slot = KType::of_kind(KKind::ProperType);
-    let held = part.resolve_for(&slot, scope, types);
+    let held = part.resolve_for(&slot, scope);
     assert_eq!(held.ktype(types), KType::of_kind(KKind::ProperType));
     assert!(held.as_type().is_none(), "it carries no type handle");
     assert!(held.as_object().is_none(), "and it is not a value");

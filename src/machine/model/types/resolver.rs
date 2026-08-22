@@ -12,7 +12,7 @@
 //! [`TypeResolution::Park`] so the caller re-runs the elaboration on wake.
 //!
 //! Type-name bindings live in [`Scope::bindings`]'s `types` map; consumers go through
-//! [`elaborate_type_identifier`] when scope-aware lookup is needed or [`KType::from_type_identifier`]
+//! [`elaborate_type_identifier`] when scope-aware lookup is needed or [`KType::from_name`]
 //! when only the builtin table matters.
 
 use std::collections::HashSet;
@@ -182,7 +182,7 @@ fn park_until_seal(
 /// Walk a `TypeIdentifier` against the elaborator's scope. Bare leaves route through the ambient
 /// declaration window first (the co-declared back-edge), then `resolve_type_with_chain` for bound
 /// names and the placeholder path, and finally the builtin-table fallback via
-/// [`KType::from_type_identifier`] so fixture scopes that skip builtin registration still
+/// [`KType::from_name`] so fixture scopes that skip builtin registration still
 /// resolve builtin names. Parameterized shapes sub-Dispatch through the standalone dispatcher,
 /// not this walk.
 ///
@@ -253,9 +253,9 @@ pub fn elaborate_type_identifier(
     // — so a name reaching here can hold no value to layer a sharper miss over. What
     // remains is the builtin table — tried last so a fixture scope that skips builtin registration
     // still resolves builtin names — and then an unknown-name failure.
-    match KType::from_type_identifier(t, types) {
-        Ok(kt) => TypeResolution::Done(kt),
-        Err(msg) => TypeResolution::Unbound(msg),
+    match KType::from_name(t.as_str()) {
+        Some(kt) => TypeResolution::Done(kt),
+        None => TypeResolution::Unbound(format!("unknown type name `{}`", t.as_str())),
     }
 }
 
