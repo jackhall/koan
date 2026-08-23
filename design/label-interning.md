@@ -258,6 +258,14 @@ paths stay total.
 
 ## Open work
 
-- [roadmap/reduce_allocs/parse-interned-identifiers.md](../roadmap/reduce_allocs/parse-interned-identifiers.md)
-  — extend the parse-boundary mint-and-intern to `Identifier` and `Type` tokens, so the
-  value and type vocabularies stop re-deriving a digest the parser could have carried.
+- [roadmap/reduce_allocs/symbol-mint-figure-and-static-names.md](../roadmap/reduce_allocs/symbol-mint-figure-and-static-names.md)
+  — a mint counter for the audit shapes, and Rust-side fixed names (builtin slot names, the
+  builtin type table) declared once as static symbols instead of hashed per read.
+- [roadmap/reduce_allocs/parse-interned-type-tokens.md](../roadmap/reduce_allocs/parse-interned-type-tokens.md)
+  and [roadmap/reduce_allocs/parse-interned-identifiers.md](../roadmap/reduce_allocs/parse-interned-identifiers.md)
+  — `Type` and `Identifier` parts carry their classified symbol alone from the parse boundary, so
+  the type and value vocabularies stop re-deriving a digest the parser could have carried.
+- [roadmap/reduce_allocs/symbol-keyed-field-lists.md](../roadmap/reduce_allocs/symbol-keyed-field-lists.md)
+  — record-literal keys, field lists and FN parameter names as symbols.
+- [roadmap/reduce_allocs/symbol-only-keyword-tokens.md](../roadmap/reduce_allocs/symbol-only-keyword-tokens.md)
+  — keyword parts drop their carried spelling.
