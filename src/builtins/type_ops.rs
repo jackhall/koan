@@ -16,12 +16,8 @@ use crate::machine::model::Record;
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 
-use crate::machine::model::{StaticName, ValueSymbol};
-
-/// This builtin's slot spellings, minted once and read back by symbol.
-static BINDINGS: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "bindings");
-static SIG: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "sig");
-static VALUE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "value");
+// This builtin's slot spellings, minted once and read back by symbol.
+crate::slots! { SLOTS { bindings, sig, value } }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let types = &registries.types;
@@ -33,15 +29,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::of_kind(KKind::ProperType),
             vec![
-                arg(registries, &SIG, KType::of_kind(KKind::Signature)),
+                arg(registries, &SLOTS.sig, KType::of_kind(KKind::Signature)),
                 kw("WITH"),
-                arg(registries, &BINDINGS, types.record(Record::new())),
+                arg(registries, &SLOTS.bindings, types.record(Record::new())),
             ],
         )
     };
     crate::builtins::register_builtin(scope, "WITH", with_sig(), with::body, registries, gate);
     // `TYPE OF <value>`. Keys on the full `[TYPE, OF]` bucket, so it shares no candidate bucket
-    // with the SIG-body `TYPE <name>` declarator ([`super::type_decl`]). The `value` slot is
+    // with the SLOTS.sig-body `TYPE <name>` declarator ([`super::type_decl`]). The `value` slot is
     // `Any` because a module and a container are both ordinary values here; the body rejects a
     // type-channel argument, which `Any` also admits.
     crate::builtins::register_builtin(
@@ -49,7 +45,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         "TYPE",
         sig(
             KType::of_kind(KKind::AnyType),
-            vec![kw("TYPE"), kw("OF"), arg(registries, &VALUE, KType::ANY)],
+            vec![
+                kw("TYPE"),
+                kw("OF"),
+                arg(registries, &SLOTS.value, KType::ANY),
+            ],
         ),
         type_of::body,
         registries,

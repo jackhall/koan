@@ -81,18 +81,11 @@ use crate::machine::model::symbol_from_quote_body;
 use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{GroupSeal, OverloadSeal};
 
-/// This builtin's slot spellings, minted once and read back by symbol. A pairwise group's
-/// combiner is itself an `OP`, so it binds the same `left` / `right` pair — but positionally, by
-/// the infix shape the reducer synthesizes, not by name. `operands` is the unary form's single
-/// parameter: the whole run as one list.
-static BODY: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "body");
-static LEFT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "left");
-static NAME: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "name");
-static OPERAND: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "operand");
-static OPERANDS: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "operands");
-static RETURN_TYPE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "return_type");
-static RIGHT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "right");
-static SYMBOL: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "symbol");
+// This builtin's slot spellings, minted once and read back by symbol. A pairwise group's
+// combiner is itself an `OP`, so it binds the same `left` / `right` pair — but positionally, by
+// the infix shape the reducer synthesizes, not by name. `operands` is the unary form's single
+// parameter: the whole run as one list.
+crate::slots! { SLOTS { body, left, name, operand, operands, return_type, right, symbol } }
 
 /// Body-side symbol read: a quoted slot's raw `KObject::KExpression` is the quote body. Shared with
 /// `GROUP`, whose pairwise `combiner` slot names an operator the same way (`super::group_def`).
@@ -205,13 +198,17 @@ fn resolve_capture<'a>(
 /// type slot naming a still-finalizing type binder — or spelled as a `:(…)` expression that has to
 /// sub-dispatch — defers the whole build to a dep-finish.
 fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str>) -> Action<'a> {
-    let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", &SYMBOL));
-    let body_expr = crate::try_action!(require_kexpression(ctx.args, "OP", &BODY));
-    let has_result = ctx.args.held(&RETURN_TYPE).is_some();
+    let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", &SLOTS.symbol));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "OP", &SLOTS.body));
+    let has_result = ctx.args.held(&SLOTS.return_type).is_some();
     let group = ctx.scope.nearest_group_context();
     crate::try_action!(check_group_context(kind, has_result, group, sym));
 
-    let operand_raw = crate::try_action!(extract_type_slot_raw(ctx.args, &OPERAND, OPERAND_SLOT));
+    let operand_raw = crate::try_action!(extract_type_slot_raw(
+        ctx.args,
+        &SLOTS.operand,
+        OPERAND_SLOT
+    ));
     let operand_state = crate::try_action!(classify_return_type(
         operand_raw,
         &[],
@@ -221,7 +218,11 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str
         ctx.registries,
     ));
     let result_state = if has_result {
-        let raw = crate::try_action!(extract_type_slot_raw(ctx.args, &RETURN_TYPE, RESULT_SLOT));
+        let raw = crate::try_action!(extract_type_slot_raw(
+            ctx.args,
+            &SLOTS.return_type,
+            RESULT_SLOT
+        ));
         Some(crate::try_action!(classify_return_type(
             raw,
             &[],
@@ -372,9 +373,9 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
         let cell = match kind {
             OpKind::Binary => {
                 let elements = vec![
-                    arg(registries, &LEFT, operand),
+                    arg(registries, &SLOTS.left, operand),
                     kw(sym),
-                    arg(registries, &RIGHT, operand),
+                    arg(registries, &SLOTS.right, operand),
                 ];
                 let result_type = result.unwrap_or(operand);
                 let (cell, overload) = register_body(
@@ -404,7 +405,10 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                 })?;
                 let list_signature = sig(
                     result_type,
-                    vec![kw(sym), arg(registries, &OPERANDS, types.list(operand))],
+                    vec![
+                        kw(sym),
+                        arg(registries, &SLOTS.operands, types.list(operand)),
+                    ],
                 );
                 // The binary bridge: `a ~ b` names one keyword, so it dispatches as a plain
                 // keyworded call, not an operator chain — without a two-operand body it would
@@ -413,9 +417,9 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                 let bridge_signature = sig(
                     result_type,
                     vec![
-                        arg(registries, &LEFT, operand),
+                        arg(registries, &SLOTS.left, operand),
                         kw(sym),
-                        arg(registries, &RIGHT, operand),
+                        arg(registries, &SLOTS.right, operand),
                     ],
                 );
                 // `check_group_context` rejects `UNARY OP` inside a `GROUP` before the plan is
@@ -595,7 +599,7 @@ fn bridge_body<'a>(
             Spanned::bare(ExpressionPart::ListLiteral(
                 brand
                     .allocator()
-                    .slice(&[operand(LEFT.text()), operand(RIGHT.text())]),
+                    .slice(&[operand(SLOTS.left.text()), operand(SLOTS.right.text())]),
             )),
         ],
     )
@@ -642,7 +646,7 @@ fn body_unary_combined<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 /// nothing to default it to. This overload exists only to say so; without it the shape is a bare
 /// dispatch miss.
 fn body_unary_missing_result<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", &SYMBOL));
+    let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", &SLOTS.symbol));
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "`UNARY OP #({sym})` must declare its result type: \
          `UNARY OP #({sym}) OVER <Operand> -> <Result> = (…)`",
@@ -651,7 +655,7 @@ fn body_unary_missing_result<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 
 /// The combined twin of [`body_unary_missing_result`], naming the flat spelling in its suggestion.
 fn body_unary_missing_result_combined<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", &SYMBOL));
+    let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", &SLOTS.symbol));
     let name = crate::builtins::fn_def::combined_bound_name(ctx.args).unwrap_or("op");
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "`UNARY OP #({sym})` must declare its result type: \
@@ -678,7 +682,7 @@ fn combined<'a>(
 ) -> SignatureDraft<'a> {
     let mut prefixed = vec![
         kw("LET"),
-        arg(registries, &NAME, KType::IDENTIFIER),
+        arg(registries, &SLOTS.name, KType::IDENTIFIER),
         kw("="),
     ];
     prefixed.append(&mut elements);
@@ -693,47 +697,47 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let binary = |operand: KType| {
         vec![
             kw("OP"),
-            arg(registries, &SYMBOL, KType::KEXPRESSION),
+            arg(registries, &SLOTS.symbol, KType::KEXPRESSION),
             kw("OVER"),
-            arg(registries, &OPERAND, operand),
+            arg(registries, &SLOTS.operand, operand),
             kw("="),
-            arg(registries, &BODY, KType::KEXPRESSION),
+            arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ]
     };
     let binary_with_result = |operand: KType, result: KType| {
         vec![
             kw("OP"),
-            arg(registries, &SYMBOL, KType::KEXPRESSION),
+            arg(registries, &SLOTS.symbol, KType::KEXPRESSION),
             kw("OVER"),
-            arg(registries, &OPERAND, operand),
+            arg(registries, &SLOTS.operand, operand),
             kw("->"),
-            arg(registries, &RETURN_TYPE, result),
+            arg(registries, &SLOTS.return_type, result),
             kw("="),
-            arg(registries, &BODY, KType::KEXPRESSION),
+            arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ]
     };
     let unary = |operand: KType, result: KType| {
         vec![
             kw("UNARY"),
             kw("OP"),
-            arg(registries, &SYMBOL, KType::KEXPRESSION),
+            arg(registries, &SLOTS.symbol, KType::KEXPRESSION),
             kw("OVER"),
-            arg(registries, &OPERAND, operand),
+            arg(registries, &SLOTS.operand, operand),
             kw("->"),
-            arg(registries, &RETURN_TYPE, result),
+            arg(registries, &SLOTS.return_type, result),
             kw("="),
-            arg(registries, &BODY, KType::KEXPRESSION),
+            arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ]
     };
     let unary_missing_result = |operand: KType| {
         vec![
             kw("UNARY"),
             kw("OP"),
-            arg(registries, &SYMBOL, KType::KEXPRESSION),
+            arg(registries, &SLOTS.symbol, KType::KEXPRESSION),
             kw("OVER"),
-            arg(registries, &OPERAND, operand),
+            arg(registries, &SLOTS.operand, operand),
             kw("="),
-            arg(registries, &BODY, KType::KEXPRESSION),
+            arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ]
     };
 

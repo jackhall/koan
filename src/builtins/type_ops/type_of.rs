@@ -10,7 +10,7 @@ use crate::machine::{Action, BodyCtx};
 use crate::machine::{KError, KErrorKind};
 
 pub(super) fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let value = match ctx.args.held(&super::VALUE) {
+    let value = match ctx.args.held(&super::SLOTS.value) {
         Some(Held::Object(o)) => o,
         // The `Any` slot admits both channels, so a type argument reaches the body rather than
         // falling through dispatch; a type's own type is not a question this language asks.

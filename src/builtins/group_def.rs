@@ -51,12 +51,8 @@ use super::op_def::{symbol_from_parts, symbol_from_slot};
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 
-use crate::machine::model::{StaticName, ValueSymbol};
-
-/// This builtin's slot spellings, minted once and read back by symbol.
-static BODY: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "body");
-static COMBINER: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "combiner");
-static NAME: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "name");
+// This builtin's slot spellings, minted once and read back by symbol.
+crate::slots! { SLOTS { body, combiner, name } }
 
 /// The reduction a `GROUP` overload declares, before the combiner symbol is read out of the args.
 #[derive(Clone, Copy)]
@@ -77,11 +73,11 @@ enum GroupMode {
 fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
     let name = crate::try_action!(require_identifier_name(
         ctx.args,
-        &NAME,
+        &SLOTS.name,
         "GROUP",
         ctx.registries
     ));
-    let body_expr = crate::try_action!(require_kexpression(ctx.args, "GROUP", &BODY));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "GROUP", &SLOTS.body));
     let mode = crate::try_action!(reduction_mode(ctx, group_mode));
     let members = crate::try_action!(scan_members(&body_expr, &name));
     // A group *is* a module, so its body announces its top-level type declarations the same way.
@@ -120,7 +116,7 @@ fn reduction_mode<'a>(
         GroupMode::Fold(FoldDirection::Left) => ReductionMode::FoldLeft,
         GroupMode::Fold(FoldDirection::Right) => ReductionMode::FoldRight,
         GroupMode::Pairwise(direction) => ReductionMode::Pairwise {
-            combiner: symbol_from_slot(ctx.args, "GROUP", &COMBINER)?,
+            combiner: symbol_from_slot(ctx.args, "GROUP", &SLOTS.combiner)?,
             direction,
         },
     })
@@ -189,11 +185,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::EMPTY_SIGNATURE,
             vec![
                 kw("GROUP"),
-                arg(registries, &NAME, name_kt),
+                arg(registries, &SLOTS.name, name_kt),
                 kw("FOLD"),
                 kw(direction),
                 kw("="),
-                arg(registries, &BODY, KType::KEXPRESSION),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
     };
@@ -202,13 +198,13 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::EMPTY_SIGNATURE,
             vec![
                 kw("GROUP"),
-                arg(registries, &NAME, name_kt),
+                arg(registries, &SLOTS.name, name_kt),
                 kw("PAIRWISE"),
                 kw("FOLD"),
-                arg(registries, &COMBINER, KType::KEXPRESSION),
+                arg(registries, &SLOTS.combiner, KType::KEXPRESSION),
                 kw(direction),
                 kw("="),
-                arg(registries, &BODY, KType::KEXPRESSION),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
     };

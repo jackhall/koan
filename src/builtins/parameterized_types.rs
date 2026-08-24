@@ -25,14 +25,8 @@ use crate::machine::model::Symbol;
 use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{BrandCompose, FieldListDeferral};
 
-/// This builtin's slot spellings, minted once and read back by symbol.
-static APPLIED: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "applied");
-static CTOR: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "ctor");
-static ELEM: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "elem");
-static K: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "k");
-static RET: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "ret");
-static SIG: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "sig");
-static V: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "v");
+// This builtin's slot spellings, minted once and read back by symbol.
+crate::slots! { SLOTS { applied, ctor, elem, k, ret, sig, v } }
 
 /// Diagnostic nouns for the shared field-list parser when it walks an `:(FN …)` parameter list.
 const FN_PARAMS_CONTEXT: FieldListContext = FieldListContext::FN_TYPE_PARAMETERS;
@@ -66,7 +60,7 @@ fn require_proper_type(
 /// args directly (`Done`); FN routes the parameter list through [`build_carrier`], which either
 /// resolves synchronously or defers via a `FieldListDeferral` finished through `action_composed`.
 mod action_bodies {
-    use super::{APPLIED, CTOR, ELEM, K, RET, SIG, V};
+    use super::SLOTS;
     use super::{build_carrier, require_proper_type};
     use crate::machine::model::constructor_param_names;
     use crate::machine::{Action, BodyCtx, require_ktype};
@@ -78,7 +72,7 @@ mod action_bodies {
     /// owned `KType` and assemble the composite from those values, then allocate it into the
     /// step's own region through the single type door.
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-        let elem = crate::try_action!(require_ktype(ctx.args, &ELEM, ctx.registries));
+        let elem = crate::try_action!(require_ktype(ctx.args, &SLOTS.elem, ctx.registries));
         crate::try_action!(require_proper_type(
             elem,
             "the element type of `LIST OF`",
@@ -89,8 +83,8 @@ mod action_bodies {
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-        let k = crate::try_action!(require_ktype(ctx.args, &K, ctx.registries));
-        let v = crate::try_action!(require_ktype(ctx.args, &V, ctx.registries));
+        let k = crate::try_action!(require_ktype(ctx.args, &SLOTS.k, ctx.registries));
+        let v = crate::try_action!(require_ktype(ctx.args, &SLOTS.v, ctx.registries));
         crate::try_action!(require_proper_type(
             k,
             "the key type of `MAP`",
@@ -106,9 +100,9 @@ mod action_bodies {
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-        let applied = crate::try_action!(require_ktype(ctx.args, &APPLIED, ctx.registries));
-        let ctor = crate::try_action!(require_ktype(ctx.args, &CTOR, ctx.registries));
-        // A declared family and a SIG's abstract constructor slot both name their parameters.
+        let applied = crate::try_action!(require_ktype(ctx.args, &SLOTS.applied, ctx.registries));
+        let ctor = crate::try_action!(require_ktype(ctx.args, &SLOTS.ctor, ctx.registries));
+        // A declared family and a SLOTS.sig's abstract constructor slot both name their parameters.
         let Some(param_names) = constructor_param_names(ctor, ctx.types()) else {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "right-hand side of `AS` must be a type constructor, got `{}`",
@@ -132,7 +126,7 @@ mod action_bodies {
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-        build_carrier(ctx, &SIG, &RET)
+        build_carrier(ctx, &SLOTS.sig, &SLOTS.ret)
     }
 }
 
@@ -198,7 +192,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             vec![
                 kw("LIST"),
                 kw("OF"),
-                arg(registries, &ELEM, KType::of_kind(KKind::AnyType)),
+                arg(registries, &SLOTS.elem, KType::of_kind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_list_of,
@@ -212,9 +206,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw("MAP"),
-                arg(registries, &K, KType::of_kind(KKind::AnyType)),
+                arg(registries, &SLOTS.k, KType::of_kind(KKind::AnyType)),
                 kw("->"),
-                arg(registries, &V, KType::of_kind(KKind::AnyType)),
+                arg(registries, &SLOTS.v, KType::of_kind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_map,
@@ -227,9 +221,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::of_kind(KKind::AnyType),
             vec![
-                arg(registries, &APPLIED, KType::of_kind(KKind::AnyType)),
+                arg(registries, &SLOTS.applied, KType::of_kind(KKind::AnyType)),
                 kw("AS"),
-                arg(registries, &CTOR, KType::of_kind(KKind::AnyType)),
+                arg(registries, &SLOTS.ctor, KType::of_kind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_apply_as,
@@ -243,11 +237,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw("FN"),
-                arg(registries, &SIG, KType::KEXPRESSION),
+                arg(registries, &SLOTS.sig, KType::KEXPRESSION),
                 kw("->"),
                 // `OfKind(AnyType)` admits every type value — a `-> Ordered` signature return
                 // and `-> Module` (which lowers to the empty signature) included.
-                arg(registries, &RET, KType::of_kind(KKind::AnyType)),
+                arg(registries, &SLOTS.ret, KType::of_kind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_fn,

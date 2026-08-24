@@ -27,11 +27,8 @@ use super::{arg, kw, sig};
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
 
-use crate::machine::model::{StaticName, ValueSymbol};
-
-/// This builtin's slot spellings, minted once and read back by symbol.
-static NAME: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "name");
-static TY: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "ty");
+// This builtin's slot spellings, minted once and read back by symbol.
+crate::slots! { SLOTS { name, ty } }
 
 fn typeexpr_from_carrier<'a>(
     brand: RegionBrand<'a>,
@@ -91,7 +88,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         )));
     }
 
-    let name = match ctx.args.object(&NAME) {
+    let name = match ctx.args.object(&SLOTS.name) {
         Some(KObject::KString(s)) => (*s).to_string(),
         Some(other) => {
             return done_err(KError::new(KErrorKind::TypeMismatch {
@@ -115,12 +112,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         ))));
     };
 
-    let carrier = match ctx.args.unresolved_type(&TY) {
+    let carrier = match ctx.args.unresolved_type(&SLOTS.ty) {
         Some(te) => CarrierForm::Raw(*te),
-        None => match ctx.args.ktype(&TY) {
+        None => match ctx.args.ktype(&SLOTS.ty) {
             Some(kt) => typeexpr_from_carrier(ctx.scope.brand(), kt, ctx.registries),
             None => {
-                return done_err(match ctx.args.object(&TY) {
+                return done_err(match ctx.args.object(&SLOTS.ty) {
                     Some(other) => KError::new(KErrorKind::TypeMismatch {
                         arg: "ty".to_string(),
                         expected: "ProperType".to_string(),
@@ -191,8 +188,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::ANY,
         vec![
             kw("VAL"),
-            arg(registries, &NAME, KType::IDENTIFIER),
-            arg(registries, &TY, KType::of_kind(KKind::ProperType)),
+            arg(registries, &SLOTS.name, KType::IDENTIFIER),
+            arg(registries, &SLOTS.ty, KType::of_kind(KKind::ProperType)),
         ],
     );
     // VAL installs nothing: it records into the decl scope's slot collector, not into a binding map

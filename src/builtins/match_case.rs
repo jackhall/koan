@@ -9,12 +9,8 @@ use super::branch_walk::find_branch_body_by_type;
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 
-use crate::machine::model::{StaticName, ValueSymbol};
-
-/// This builtin's slot spellings, minted once and read back by symbol.
-static BRANCHES: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "branches");
-static RETURN_TYPE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "return_type");
-static VALUE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "value");
+// This builtin's slot spellings, minted once and read back by symbol.
+crate::slots! { SLOTS { branches, return_type, value } }
 
 /// `MATCH <value:Any> -> :<T> WITH <branches:KExpression>` — branch by type.
 ///
@@ -36,7 +32,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 
     // Selection needs only a borrow of the scrutinee — it never stores the reference — so no
     // upfront copy is made.
-    let value = match ctx.args.object(&VALUE) {
+    let value = match ctx.args.object(&SLOTS.value) {
         Some(v) => v,
         None => {
             return Action::done(Err(KError::new(KErrorKind::MissingArg(
@@ -45,7 +41,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         }
     };
     let contract = crate::try_action!(resolve_arm_contract(ctx, "MATCH"));
-    let branches_expr = crate::try_action!(require_kexpression(ctx.args, "MATCH", &BRANCHES));
+    let branches_expr = crate::try_action!(require_kexpression(ctx.args, "MATCH", &SLOTS.branches));
     let selected = match find_branch_body_by_type(
         &branches_expr,
         value,
@@ -75,7 +71,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                     .deliver_pure_value(&crate::machine::model::KObject::Null)
             )
         } else {
-            match ctx.args.carrier(&VALUE) {
+            match ctx.args.carrier(&SLOTS.value) {
                 Some(carrier) => carrier.duplicate(),
                 None => crate::try_action!(ctx.scope.deliver_pure_value(value)),
             }
@@ -100,11 +96,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::ANY,
         vec![
             kw("MATCH"),
-            arg(registries, &VALUE, KType::ANY),
+            arg(registries, &SLOTS.value, KType::ANY),
             kw("->"),
-            arg(registries, &RETURN_TYPE, KType::of_kind(KKind::ProperType)),
+            arg(
+                registries,
+                &SLOTS.return_type,
+                KType::of_kind(KKind::ProperType),
+            ),
             kw("WITH"),
-            arg(registries, &BRANCHES, KType::KEXPRESSION),
+            arg(registries, &SLOTS.branches, KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "MATCH", signature, body, registries, gate);

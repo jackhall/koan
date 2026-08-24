@@ -33,9 +33,8 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::model::{StaticName, ValueSymbol};
 
-/// This builtin's slot spellings, minted once and read back by symbol.
-static LEFT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "left");
-static RIGHT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "right");
+// This builtin's slot spellings, minted once and read back by symbol.
+crate::slots! { SLOTS { left, right } }
 
 /// Read a `:Number` operand named `name`, or the canonical missing/mismatch diagnostic.
 fn number_arg(
@@ -60,8 +59,8 @@ fn number_operands(
     registries: &RunRegistries,
 ) -> Result<(f64, f64), KError> {
     Ok((
-        number_arg(args, &LEFT, registries)?,
-        number_arg(args, &RIGHT, registries)?,
+        number_arg(args, &SLOTS.left, registries)?,
+        number_arg(args, &SLOTS.right, registries)?,
     ))
 }
 
@@ -88,8 +87,8 @@ fn bool_operands(
     registries: &RunRegistries,
 ) -> Result<(bool, bool), KError> {
     Ok((
-        bool_arg(args, &LEFT, registries)?,
-        bool_arg(args, &RIGHT, registries)?,
+        bool_arg(args, &SLOTS.left, registries)?,
+        bool_arg(args, &SLOTS.right, registries)?,
     ))
 }
 
@@ -179,9 +178,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::NUMBER,
             vec![
-                arg(registries, &LEFT, KType::NUMBER),
+                arg(registries, &SLOTS.left, KType::NUMBER),
                 kw(op),
-                arg(registries, &RIGHT, KType::NUMBER),
+                arg(registries, &SLOTS.right, KType::NUMBER),
             ],
         )
     };
@@ -189,9 +188,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::BOOL,
             vec![
-                arg(registries, &LEFT, KType::NUMBER),
+                arg(registries, &SLOTS.left, KType::NUMBER),
                 kw(op),
-                arg(registries, &RIGHT, KType::NUMBER),
+                arg(registries, &SLOTS.right, KType::NUMBER),
             ],
         )
     };
@@ -209,9 +208,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let and_sig = sig(
         KType::BOOL,
         vec![
-            arg(registries, &LEFT, KType::BOOL),
+            arg(registries, &SLOTS.left, KType::BOOL),
             kw("AND"),
-            arg(registries, &RIGHT, KType::BOOL),
+            arg(registries, &SLOTS.right, KType::BOOL),
         ],
     );
     crate::builtins::register_builtin(scope, "AND", and_sig, body_and, registries, gate);

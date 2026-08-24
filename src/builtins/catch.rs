@@ -15,10 +15,8 @@ use crate::machine::model::{KObject, KType, Record, TypeSymbol};
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 
-use crate::machine::model::{StaticName, ValueSymbol};
-
-/// This builtin's slot spellings, minted once and read back by symbol.
-static EXPR: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "expr");
+// This builtin's slot spellings, minted once and read back by symbol.
+crate::slots! { SLOTS { expr } }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let types = &registries.types;
@@ -46,7 +44,10 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     );
     let signature = sig(
         return_type,
-        vec![kw("CATCH"), arg(registries, &EXPR, KType::KEXPRESSION)],
+        vec![
+            kw("CATCH"),
+            arg(registries, &SLOTS.expr, KType::KEXPRESSION),
+        ],
     );
     crate::builtins::register_builtin(scope, "CATCH", signature, body, registries, gate);
 }
@@ -61,7 +62,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     use crate::machine::model::Carried;
     use crate::machine::model::CarriedFamily;
     use crate::machine::{Action, CatchContinue, DepPlacement, DepRequest, require_kexpression};
-    let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", &EXPR));
+    let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", &SLOTS.expr));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
     // nominal identity of a `Result (...)`-constructed one.
     let result_member: KType = match ctx.scope.resolve_type("Result") {

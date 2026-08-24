@@ -25,11 +25,8 @@ use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::render_label;
 
-use crate::machine::model::{StaticName, ValueSymbol};
-
-/// This builtin's slot spellings, minted once and read back by symbol.
-static BODY: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "body");
-static NAME: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "name");
+// This builtin's slot spellings, minted once and read back by symbol.
+crate::slots! { SLOTS { body, name } }
 
 /// The MODULE body: pre-announces the body's top-level type declarations, mints the child scope
 /// carrying that window, and hands it to [`await_module_body`], which dispatches the body block
@@ -39,11 +36,11 @@ pub fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 
     let name = crate::try_action!(require_identifier_name(
         ctx.args,
-        &NAME,
+        &SLOTS.name,
         "MODULE",
         ctx.registries
     ));
-    let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", &BODY));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", &SLOTS.body));
     let announced = crate::try_action!(announce_type_members(&body_expr, &name, ctx.registries));
     let child_scope = ctx.scope.alloc_child_under_module(&name, announced);
     await_module_body(child_scope, name, body_expr, ctx.bind_index())
@@ -228,7 +225,7 @@ pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 
     let name = crate::try_action!(require_bare_type_name(
         ctx.args,
-        &NAME,
+        &SLOTS.name,
         "MODULE",
         ctx.registries
     ));
@@ -245,9 +242,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::EMPTY_SIGNATURE,
             vec![
                 kw("MODULE"),
-                arg(registries, &NAME, name_kt),
+                arg(registries, &SLOTS.name, name_kt),
                 kw("="),
-                arg(registries, &BODY, KType::KEXPRESSION),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
     };

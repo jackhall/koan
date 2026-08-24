@@ -7,10 +7,8 @@ use crate::machine::{CallFrame, Scope};
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 
-use crate::machine::model::{StaticName, ValueSymbol};
-
-/// This builtin's slot spellings, minted once and read back by symbol.
-static EXPR: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "expr");
+// This builtin's slot spellings, minted once and read back by symbol.
+crate::slots! { SLOTS { expr } }
 
 /// `EVAL <expr:Any>` — surface form `$(expr)`. Reads the evaluated `expr` (must be a
 /// `KExpression`) and tail-replaces into it in a fresh call-site frame (`FreshChild` — the UAF
@@ -24,7 +22,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     use crate::machine::{Action, FramePlacement};
     use crate::machine::{BlockBody, BlockScope, block_tail};
     use crate::machine::{KError, KErrorKind};
-    let inner = match ctx.args.object(&EXPR) {
+    let inner = match ctx.args.object(&SLOTS.expr) {
         Some(KObject::KExpression(e)) => e.node(),
         Some(other) => {
             return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
@@ -54,7 +52,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let signature = sig(
         KType::ANY,
-        vec![kw("EVAL"), arg(registries, &EXPR, KType::ANY)],
+        vec![kw("EVAL"), arg(registries, &SLOTS.expr, KType::ANY)],
     );
     crate::builtins::register_builtin(scope, "EVAL", signature, body, registries, gate);
 }

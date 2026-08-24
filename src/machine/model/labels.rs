@@ -423,5 +423,42 @@ macro_rules! static_name {
     };
 }
 
+/// Declare a builtin's parameter slots as one group:
+/// `slots! { SLOTS { left, right } }`, read as `&SLOTS.left`.
+///
+/// Each slot is written once, as the ident that names it: the spelling the signature registers and
+/// the body reads back is [`stringify!`]-ed out of that ident, so the two cannot disagree. Grouping
+/// is a matter of where the declarations sit and nothing else — every field is its own
+/// [`StaticName`], forced independently at its first read, so a group of *n* slots mints exactly
+/// the *n* symbols the same slots declared one at a time would.
+///
+/// Value class is the whole vocabulary here: a parameter slot binds a value name, so the group is
+/// [`StaticName<ValueSymbol>`] throughout and a spelling that will not classify panics at its first
+/// read. A name the machine fixes in Rust source that is *not* a slot — a type or a variant tag —
+/// declares through [`static_name!`](crate::static_name) instead, which names its class.
+#[macro_export]
+macro_rules! slots {
+    ($group:ident { $($slot:ident),+ $(,)? }) => {
+        /// One builtin's parameter slots, each a name fixed in Rust source.
+        struct SlotNames {
+            $(
+                $slot: $crate::machine::model::StaticName<$crate::machine::model::ValueSymbol>,
+            )+
+        }
+
+        static $group: SlotNames = SlotNames {
+            $(
+                $slot: $crate::machine::model::StaticName::new(stringify!($slot), || {
+                    <$crate::machine::model::ValueSymbol>::of(stringify!($slot)).expect(concat!(
+                        "`",
+                        stringify!($slot),
+                        "` classifies as a value-class parameter slot"
+                    ))
+                }),
+            )+
+        };
+    };
+}
+
 #[cfg(test)]
 mod tests;

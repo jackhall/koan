@@ -55,7 +55,7 @@ pub(crate) enum ReturnTypeCapture<'a> {
 pub(crate) fn extract_return_type_raw<'a>(
     args: BoundArgs<'a, '_>,
 ) -> Result<ReturnTypeRaw<'a>, KError> {
-    extract_type_slot_raw(args, &super::RETURN_TYPE, "FN return-type slot")
+    extract_type_slot_raw(args, &super::SLOTS.return_type, "FN return-type slot")
 }
 
 /// Read any type-denoting slot from a `BodyCtx::args` record into a [`ReturnTypeRaw`]. The two

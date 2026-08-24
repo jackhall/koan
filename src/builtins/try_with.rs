@@ -21,12 +21,8 @@ use super::branch_walk::find_branch_body_by_tag;
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 
-use crate::machine::model::{StaticName, ValueSymbol};
-
-/// This builtin's slot spellings, minted once and read back by symbol.
-static BRANCHES: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "branches");
-static EXPR: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "expr");
-static RETURN_TYPE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "return_type");
+// This builtin's slot spellings, minted once and read back by symbol.
+crate::slots! { SLOTS { branches, expr, return_type } }
 
 /// Watches `expr`, then a `Catch` finish walks the arms against the `Result`, tail-replacing
 /// into the matched arm under the `-> :T` contract and re-raising on no match.
@@ -34,9 +30,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     use super::branch_walk::{arm_tail, payload_envelope, resolve_arm_contract};
     use crate::machine::{Action, CatchContinue, DepPlacement, DepRequest, require_kexpression};
 
-    let expr_inner = crate::try_action!(require_kexpression(ctx.args, "TRY", &EXPR));
+    let expr_inner = crate::try_action!(require_kexpression(ctx.args, "TRY", &SLOTS.expr));
     let contract = crate::try_action!(resolve_arm_contract(ctx, "TRY"));
-    let branches_expr = crate::try_action!(require_kexpression(ctx.args, "TRY", &BRANCHES));
+    let branches_expr = crate::try_action!(require_kexpression(ctx.args, "TRY", &SLOTS.branches));
     // Body runs in a fresh `child_under` scope so a `LET` inside it stays local and reads still
     // chain out to the call-site scope.
     let body_scope: &'a Scope<'a> = ctx.scope.alloc_child_under();
@@ -93,11 +89,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::ANY,
         vec![
             kw("TRY"),
-            arg(registries, &EXPR, KType::KEXPRESSION),
+            arg(registries, &SLOTS.expr, KType::KEXPRESSION),
             kw("->"),
-            arg(registries, &RETURN_TYPE, KType::of_kind(KKind::ProperType)),
+            arg(
+                registries,
+                &SLOTS.return_type,
+                KType::of_kind(KKind::ProperType),
+            ),
             kw("WITH"),
-            arg(registries, &BRANCHES, KType::KEXPRESSION),
+            arg(registries, &SLOTS.branches, KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "TRY", signature, body, registries, gate);

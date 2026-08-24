@@ -216,12 +216,15 @@ fn classified_symbols_hash_through_the_identity_hasher() {
     );
 }
 
-/// A [`StaticName`]'s memo is exactly what its class's `of` would have minted — the whole basis for
-/// reading a slot by static instead of by spelling.
 /// A name of this module's own, so the tests below pin [`StaticName`] itself rather than whatever
 /// spelling a builtin happens to declare.
 static SLOT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "slot");
 
+// A group of this module's own, pinning `slots!` the same way.
+crate::slots! { GROUP { width, height } }
+
+/// A [`StaticName`]'s memo is exactly what its class's `of` would have minted — the whole basis for
+/// reading a slot by static instead of by spelling.
 #[test]
 fn a_static_name_mints_what_of_mints() {
     assert_eq!(
@@ -244,4 +247,39 @@ fn record_interns_the_spelling_under_the_memoized_symbol() {
     assert_eq!(labels.len(), before + 1);
     labels.record(&SLOT);
     assert_eq!(labels.len(), before + 1);
+}
+
+/// A grouped slot is the same declaration a lone [`StaticName`] is: the ident supplies the
+/// spelling, and each field carries its own memo rather than sharing one.
+#[test]
+fn a_slot_group_declares_each_field_independently() {
+    assert_eq!(GROUP.width.text(), "width");
+    assert_eq!(GROUP.height.text(), "height");
+    assert_eq!(
+        GROUP.width.symbol(),
+        ValueSymbol::of("width").expect("`width` is a value token")
+    );
+    assert_eq!(
+        GROUP.height.symbol(),
+        ValueSymbol::of("height").expect("`height` is a value token")
+    );
+    assert_ne!(GROUP.width.symbol(), GROUP.height.symbol());
+}
+
+/// Each field records on its own, so a group interns one entry per slot — the count a diagnostic
+/// resolving any one of them depends on.
+#[test]
+fn record_interns_each_grouped_slot_separately() {
+    let labels = LabelInterner::new();
+    labels.record(&GROUP.width);
+    labels.record(&GROUP.height);
+    assert_eq!(labels.len(), 2);
+    assert_eq!(
+        labels.resolve(GROUP.width.symbol().symbol()),
+        Some("width".to_string())
+    );
+    assert_eq!(
+        labels.resolve(GROUP.height.symbol().symbol()),
+        Some("height".to_string())
+    );
 }

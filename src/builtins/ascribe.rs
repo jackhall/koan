@@ -24,9 +24,8 @@ use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::StaticName;
 
-/// This builtin's slot spellings, minted once and read back by symbol.
-static M: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "m");
-static S: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "s");
+// This builtin's slot spellings, minted once and read back by symbol.
+crate::slots! { SLOTS { m, s } }
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
 /// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as a
@@ -271,16 +270,23 @@ fn resolve_module_and_signature<'a>(
         }
     }
 
-    let m = match args.object(&M) {
+    let m = match args.object(&SLOTS.m) {
         Some(KObject::Module(module)) => *module,
         _ => {
-            return Err(type_mismatch_or_missing(args, &M, "Module", registries));
+            return Err(type_mismatch_or_missing(
+                args, &SLOTS.m, "Module", registries,
+            ));
         }
     };
-    let s = match args.ktype(&S) {
+    let s = match args.ktype(&SLOTS.s) {
         Some(kt) if matches!(types.node(kt), TypeNode::Signature { .. }) => kt,
         _ => {
-            return Err(type_mismatch_or_missing(args, &S, "Signature", registries));
+            return Err(type_mismatch_or_missing(
+                args,
+                &SLOTS.s,
+                "Signature",
+                registries,
+            ));
         }
     };
     Ok((m, s))
@@ -321,17 +327,17 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let opaque_sig = sig(
         KType::EMPTY_SIGNATURE,
         vec![
-            arg(registries, &M, KType::EMPTY_SIGNATURE),
+            arg(registries, &SLOTS.m, KType::EMPTY_SIGNATURE),
             kw(":|"),
-            arg(registries, &S, KType::of_kind(KKind::Signature)),
+            arg(registries, &SLOTS.s, KType::of_kind(KKind::Signature)),
         ],
     );
     let transparent_sig = sig(
         KType::EMPTY_SIGNATURE,
         vec![
-            arg(registries, &M, KType::EMPTY_SIGNATURE),
+            arg(registries, &SLOTS.m, KType::EMPTY_SIGNATURE),
             kw(":!"),
-            arg(registries, &S, KType::of_kind(KKind::Signature)),
+            arg(registries, &SLOTS.s, KType::of_kind(KKind::Signature)),
         ],
     );
     crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque, registries, gate);

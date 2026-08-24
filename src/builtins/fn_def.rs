@@ -18,13 +18,8 @@ use finalize::{FnKind, FnPlan, ParamListResult, classify, finalize_fn_with_kind,
 use return_type::classify_return_type;
 use signature::ParamListOutcome;
 
-use crate::machine::model::{StaticName, ValueSymbol};
-
-/// This builtin's slot spellings, minted once and read back by symbol.
-static BODY: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "body");
-static NAME: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "name");
-static RETURN_TYPE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "return_type");
-static SIGNATURE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "signature");
+// This builtin's slot spellings, minted once and read back by symbol.
+crate::slots! { SLOTS { body, name, return_type, signature } }
 
 /// Shared FN elaboration: extract the `signature` / return / `body` slots from
 /// `BodyCtx::args`, collect param names, classify the return type, parse the param
@@ -53,9 +48,10 @@ pub(crate) fn build_fn_like<'a>(
                  instead of binding a function",
         )))));
     }
-    let signature_expr = crate::try_action!(require_kexpression(ctx.args, builtin, &SIGNATURE));
+    let signature_expr =
+        crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.signature));
     let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
-    let body_expr = crate::try_action!(require_kexpression(ctx.args, builtin, &BODY));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.body));
     let param_names = signature::collect_param_names_from_signature(&signature_expr);
     let mut elaborator = Elaborator::new(ctx.scope).with_chain(ctx.chain.clone());
     let return_type_state = crate::try_action!(classify_return_type(
@@ -126,7 +122,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 /// rather than this read.
 pub(super) fn combined_bound_name<'a>(args: BoundArgs<'a, '_>) -> Result<&'a str, KError> {
     use crate::machine::model::KObject;
-    match args.object(&NAME) {
+    match args.object(&SLOTS.name) {
         Some(KObject::KString(s)) => Ok(s),
         Some(_) => Err(KError::new(KErrorKind::ShapeError(
             "LET name must be a bare identifier".to_string(),
@@ -158,9 +154,9 @@ pub fn body_let_combined_type_named<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    let name = match ctx.args.unresolved_type(&NAME) {
+    let name = match ctx.args.unresolved_type(&SLOTS.name) {
         Some(te) => te.render(),
-        None => match ctx.args.ktype(&NAME) {
+        None => match ctx.args.ktype(&SLOTS.name) {
             Some(kt) => kt.name(ctx.registries),
             None => return Action::done(Err(KError::new(KErrorKind::MissingArg("name".into())))),
         },
@@ -181,7 +177,7 @@ pub fn body_value_named_return<'a>(
 
     let name = crate::try_action!(require_identifier_name(
         ctx.args,
-        &RETURN_TYPE,
+        &SLOTS.return_type,
         "FN",
         ctx.registries
     ));
@@ -207,7 +203,7 @@ pub fn body_record_schema<'a>(
     use finalize::defer;
     use return_type::extract_return_type_raw;
 
-    let schema = match ctx.args.ktype(&SIGNATURE) {
+    let schema = match ctx.args.ktype(&SLOTS.signature) {
         Some(kt) => match ctx.types().node(kt) {
             TypeNode::Record { fields } => fields,
             _ => {
@@ -247,7 +243,7 @@ pub fn body_record_schema<'a>(
         param_names.push(text);
     }
     let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
-    let body_expr = crate::try_action!(require_kexpression(ctx.args, "FN", &BODY));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "FN", &SLOTS.body));
     let return_type_state = crate::try_action!(classify_return_type(
         return_type_raw,
         &param_names,
@@ -311,11 +307,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("FN"),
-                arg(registries, &SIGNATURE, KType::KEXPRESSION),
+                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
                 kw("->"),
-                arg(registries, &RETURN_TYPE, KType::of_kind(KKind::ProperType)),
+                arg(
+                    registries,
+                    &SLOTS.return_type,
+                    KType::of_kind(KKind::ProperType),
+                ),
                 kw("="),
-                arg(registries, &BODY, KType::KEXPRESSION),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
     };
@@ -328,11 +328,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("FN"),
-                arg(registries, &SIGNATURE, KType::KEXPRESSION),
+                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
                 kw("->"),
-                arg(registries, &RETURN_TYPE, KType::SIGILED_TYPE_EXPR),
+                arg(registries, &SLOTS.return_type, KType::SIGILED_TYPE_EXPR),
                 kw("="),
-                arg(registries, &BODY, KType::KEXPRESSION),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
     };
@@ -346,11 +346,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("FN"),
-                arg(registries, &SIGNATURE, KType::KEXPRESSION),
+                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
                 kw("->"),
-                arg(registries, &RETURN_TYPE, KType::IDENTIFIER),
+                arg(registries, &SLOTS.return_type, KType::IDENTIFIER),
                 kw("="),
-                arg(registries, &BODY, KType::KEXPRESSION),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
     };
@@ -363,11 +363,19 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("FN"),
-                arg(registries, &SIGNATURE, KType::of_kind(KKind::ProperType)),
+                arg(
+                    registries,
+                    &SLOTS.signature,
+                    KType::of_kind(KKind::ProperType),
+                ),
                 kw("->"),
-                arg(registries, &RETURN_TYPE, KType::of_kind(KKind::ProperType)),
+                arg(
+                    registries,
+                    &SLOTS.return_type,
+                    KType::of_kind(KKind::ProperType),
+                ),
                 kw("="),
-                arg(registries, &BODY, KType::KEXPRESSION),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
     };
@@ -381,14 +389,14 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("LET"),
-                arg(registries, &NAME, name),
+                arg(registries, &SLOTS.name, name),
                 kw("="),
                 kw("FN"),
-                arg(registries, &SIGNATURE, signature),
+                arg(registries, &SLOTS.signature, signature),
                 kw("->"),
-                arg(registries, &RETURN_TYPE, return_type),
+                arg(registries, &SLOTS.return_type, return_type),
                 kw("="),
-                arg(registries, &BODY, KType::KEXPRESSION),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
     };
