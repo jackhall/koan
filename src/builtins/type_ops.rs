@@ -16,6 +16,13 @@ use crate::machine::model::Record;
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static BINDINGS: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "bindings");
+static SIG: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "sig");
+static VALUE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "value");
+
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let types = &registries.types;
     // Infix `<sig> WITH {Slot = Type, …}`. A lone binary
@@ -26,9 +33,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::of_kind(KKind::ProperType),
             vec![
-                arg(registries, "sig", KType::of_kind(KKind::Signature)),
+                arg(registries, &SIG, KType::of_kind(KKind::Signature)),
                 kw("WITH"),
-                arg(registries, "bindings", types.record(Record::new())),
+                arg(registries, &BINDINGS, types.record(Record::new())),
             ],
         )
     };
@@ -42,7 +49,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         "TYPE",
         sig(
             KType::of_kind(KKind::AnyType),
-            vec![kw("TYPE"), kw("OF"), arg(registries, "value", KType::ANY)],
+            vec![kw("TYPE"), kw("OF"), arg(registries, &VALUE, KType::ANY)],
         ),
         type_of::body,
         registries,

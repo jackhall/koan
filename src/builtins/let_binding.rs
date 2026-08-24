@@ -11,6 +11,12 @@ use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{BindKind, TypeSymbol, ValueSymbol, wrong_binder_class};
 
+use crate::machine::model::StaticName;
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static NAME: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "name");
+static VALUE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "value");
+
 /// `LET <name> = <value:Any>` — deep-clones the bound value into the region and inserts it
 /// under `name`. Two overloads share this body, differing only in the `name` slot's `KType`:
 /// `Identifier` and `ProperType`. Same partition logic across both: reads its args from the
@@ -22,7 +28,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 
     let done_err = |e: KError| Action::done(Err(e));
     let bind_index = ctx.bind_index();
-    let rhs = match ctx.args.held("value") {
+    let rhs = match ctx.args.held(&VALUE) {
         Some(v) => v,
         None => return done_err(KError::new(KErrorKind::MissingArg("value".to_string()))),
     };
@@ -32,9 +38,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let mut type_classified_name = false;
     // The Type-classified `name` slot arrives either lowered (a builtin leaf name) or as the
     // unlowered surface name the bind seam leaves for the binder to own; both denote the binder.
-    let type_name: Option<String> = match ctx.args.unresolved_type("name") {
+    let type_name: Option<String> = match ctx.args.unresolved_type(&NAME) {
         Some(te) => Some(te.render()),
-        None => match ctx.args.ktype("name") {
+        None => match ctx.args.ktype(&NAME) {
             Some(name_kt)
                 if matches!(
                     ctx.types().node(name_kt),
@@ -53,7 +59,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             None => None,
         },
     };
-    let name = match (ctx.args.object("name"), type_name) {
+    let name = match (ctx.args.object(&NAME), type_name) {
         (Some(KObject::KString(s)), _) => {
             // A type-language carrier under a value-classified name is a cross-kind error. A module
             // is *not* one: it is a value, and a value-classified name is exactly where it belongs.
@@ -171,7 +177,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         // returns the sealed value, from which the
         // terminal witnesses the bound value in place — the same reach-aware wrapper a later read
         // uses — while the table write rides the outcome.
-        let sealed = match ctx.args.carrier("value") {
+        let sealed = match ctx.args.carrier(&VALUE) {
             Some(carrier) => ctx
                 .scope
                 .adopt_for_binding(carrier, |carried| Ok(carried.object())),
@@ -238,9 +244,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("LET"),
-                arg(registries, "name", KType::IDENTIFIER),
+                arg(registries, &NAME, KType::IDENTIFIER),
                 kw("="),
-                arg(registries, "value", KType::ANY),
+                arg(registries, &VALUE, KType::ANY),
             ],
         )
     };
@@ -249,9 +255,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::ANY,
             vec![
                 kw("LET"),
-                arg(registries, "name", KType::of_kind(KKind::ProperType)),
+                arg(registries, &NAME, KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg(registries, "value", KType::ANY),
+                arg(registries, &VALUE, KType::ANY),
             ],
         )
     };

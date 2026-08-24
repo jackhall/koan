@@ -15,6 +15,12 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::render_label;
 use crate::machine::model::{Symbol, TypeSymbol, type_binder};
 
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static NAME: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "name");
+static SCHEMA: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "schema");
+
 /// Fill the elaborated variant payloads into the declaration window's owned members and bind the
 /// union name to the anonymous union of the sealed variants. Every variant is one member of the
 /// window (name = tag, [`KKind::NewType`], owner = this binder); the binder's own name already
@@ -93,11 +99,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 
     let name = crate::try_action!(require_bare_type_name(
         ctx.args,
-        "name",
+        &NAME,
         "UNION",
         ctx.registries
     ));
-    let schema_expr = match ctx.args.object("schema") {
+    let schema_expr = match ctx.args.object(&SCHEMA) {
         Some(KObject::KExpression(e)) => e.node(),
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
@@ -155,9 +161,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::of_kind(KKind::AnyType),
         vec![
             kw("UNION"),
-            arg(registries, "name", KType::of_kind(KKind::ProperType)),
+            arg(registries, &NAME, KType::of_kind(KKind::ProperType)),
             kw("="),
-            arg(registries, "schema", KType::KEXPRESSION),
+            arg(registries, &SCHEMA, KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "UNION", signature, body, registries, gate);

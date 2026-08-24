@@ -38,6 +38,13 @@ use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Symbol;
 
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static DECL: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "decl");
+static NAME: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "name");
+static REPR: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "repr");
+
 /// Seal a resolved `repr` into the NEWTYPE's identity and register it. Fills the declaration
 /// window's member with `repr`; the window is a fresh singleton for a standalone declaration, or
 /// the enclosing module body's announced window when this NEWTYPE is one of its members. A standalone declaration's window seals immediately, so identity is the
@@ -136,13 +143,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 
     let name = crate::try_action!(require_bare_type_name(
         ctx.args,
-        "name",
+        &NAME,
         "NEWTYPE",
         ctx.registries
     ));
     let chain = ctx.chain.clone();
     let site = ctx.declaration_site();
-    if let Some(te) = ctx.args.unresolved_type("repr") {
+    if let Some(te) = ctx.args.unresolved_type(&REPR) {
         let te = *te;
         resolve_or_await(
             ctx.scope,
@@ -157,9 +164,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             move |fctx, kt| Action::done_writing(finalize_newtype(fctx, name, kt, site)),
             ctx.registries,
         )
-    } else if let Some(repr_kt) = ctx.args.ktype("repr") {
+    } else if let Some(repr_kt) = ctx.args.ktype(&REPR) {
         Action::done_writing(finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site))
-    } else if let Some(KObject::KExpression(inner)) = ctx.args.object("repr") {
+    } else if let Some(KObject::KExpression(inner)) = ctx.args.object(&REPR) {
         let binder = crate::try_action!(type_binder(&name, ctx.registries));
         defer_resolved_sigil(ctx.scope, name, binder, *inner, site, ctx.types())
     } else {
@@ -213,11 +220,11 @@ pub fn body_record_repr<'a>(
 
     let name = crate::try_action!(require_bare_type_name(
         ctx.args,
-        "name",
+        &NAME,
         "NEWTYPE",
         ctx.registries
     ));
-    let fields = match ctx.args.object("repr") {
+    let fields = match ctx.args.object(&REPR) {
         Some(KObject::KExpression(e)) => e.node(),
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
@@ -274,7 +281,7 @@ pub fn body_constructor_family<'a>(
 ) -> crate::machine::Action<'a> {
     use crate::machine::{Action, require_kexpression};
 
-    let decl = match require_kexpression(ctx.args, "NEWTYPE", "decl") {
+    let decl = match require_kexpression(ctx.args, "NEWTYPE", &DECL) {
         Ok(decl) => decl,
         Err(e) => return Action::done(Err(e)),
     };
@@ -317,9 +324,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg(registries, "name", KType::of_kind(KKind::ProperType)),
+                arg(registries, &NAME, KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg(registries, "repr", KType::of_kind(KKind::ProperType)),
+                arg(registries, &REPR, KType::of_kind(KKind::ProperType)),
             ],
         )
     };
@@ -328,9 +335,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg(registries, "name", KType::of_kind(KKind::ProperType)),
+                arg(registries, &NAME, KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg(registries, "repr", KType::SIGILED_TYPE_EXPR),
+                arg(registries, &REPR, KType::SIGILED_TYPE_EXPR),
             ],
         )
     };
@@ -339,9 +346,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg(registries, "name", KType::of_kind(KKind::ProperType)),
+                arg(registries, &NAME, KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg(registries, "repr", KType::RECORD_TYPE),
+                arg(registries, &REPR, KType::RECORD_TYPE),
             ],
         )
     };
@@ -364,7 +371,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // is not sub-dispatched (same as TYPE's higher-kinded overload).
     let constructor_family_sig = sig(
         KType::of_kind(KKind::AnyType),
-        vec![kw("NEWTYPE"), arg(registries, "decl", KType::KEXPRESSION)],
+        vec![kw("NEWTYPE"), arg(registries, &DECL, KType::KEXPRESSION)],
     );
     register_builtin(
         scope,

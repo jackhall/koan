@@ -113,6 +113,19 @@ impl LabelInterner {
         self.texts.borrow().len()
     }
 
+    /// Record a [`StaticName`]'s spelling under its memoized symbol and hand the classified symbol
+    /// back — the declaration door for a name fixed in Rust source. The symbol is read off the
+    /// memo, so registering the same builtin parameter in a second run costs one map lookup and no
+    /// hash.
+    pub fn record<S: ClassifiedSymbol>(&self, name: &StaticName<S>) -> S {
+        let classified = name.symbol();
+        let mut texts = self.texts.borrow_mut();
+        texts
+            .entry(classified.symbol())
+            .or_insert_with(|| name.text().into());
+        classified
+    }
+
     pub fn is_empty(&self) -> bool {
         self.texts.borrow().is_empty()
     }
@@ -184,6 +197,14 @@ macro_rules! classified_symbol {
             /// The raw digest — for digest feeds, schema scans and
             /// [`render_label`](crate::machine::model::render_label).
             pub fn symbol(self) -> Symbol {
+                self.0
+            }
+        }
+
+        impl sealed::Sealed for $name {}
+
+        impl ClassifiedSymbol for $name {
+            fn symbol(self) -> Symbol {
                 self.0
             }
         }
@@ -315,6 +336,90 @@ pub fn wrong_binder_class(name: &str, wanted: super::BindKind) -> String {
              (snake_case)"
         ),
     }
+}
+
+/// The classified-symbol classes as one bound: what [`StaticName`] is parameterized over and what
+/// [`LabelInterner::record`] accepts. Sealed — the four newtypes above are the whole partition, and
+/// a fifth implementor would be a class the token grammar does not have.
+pub trait ClassifiedSymbol: Copy + sealed::Sealed {
+    /// The raw digest, so a generic seam can compare and intern without knowing the class.
+    fn symbol(self) -> Symbol;
+}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+impl sealed::Sealed for BinderSymbol {}
+
+impl ClassifiedSymbol for BinderSymbol {
+    fn symbol(self) -> Symbol {
+        BinderSymbol::symbol(self)
+    }
+}
+
+/// A label whose spelling is fixed in Rust source — a builtin's parameter name, a tag a builtin
+/// raises under — declared once and minted once.
+///
+/// The text is `&'static`, so its symbol is the same bits for the whole process and there is no
+/// reason to re-derive it. The memo is a [`LazyLock`](std::sync::LazyLock) over the class's own
+/// `of`, which makes the first read a mint and every read after it a load: a builtin body that
+/// reads a slot on every call hashes nothing, and the class predicate still runs, at first touch,
+/// on the same text the spelling would have been classified from.
+///
+/// A `LazyLock` memo of a pure function is not run state: [`Symbol::of`] answers the same bits in
+/// every run and every process, so the cached value cannot carry anything from one run into the
+/// next. Build one with [`static_name!`](crate::static_name), which supplies the mint closure and
+/// names the class in the panic message.
+pub struct StaticName<S: 'static> {
+    text: &'static str,
+    symbol: std::sync::LazyLock<S>,
+}
+
+impl<S: 'static> StaticName<S> {
+    /// Declare a name from its spelling and the mint that classifies it. `const`, so a `static`
+    /// can hold one; nothing runs until the first [`symbol`](Self::symbol).
+    pub const fn new(text: &'static str, mint: fn() -> S) -> Self {
+        StaticName {
+            text,
+            symbol: std::sync::LazyLock::new(mint),
+        }
+    }
+
+    /// The spelling as written — what a diagnostic naming this slot renders.
+    pub fn text(&self) -> &'static str {
+        self.text
+    }
+}
+
+impl<S: Copy> StaticName<S> {
+    /// The classified symbol, minted on first read and loaded thereafter.
+    pub fn symbol(&self) -> S {
+        *self.symbol
+    }
+}
+
+/// Declare a [`StaticName`] of a given class from a literal spelling:
+/// `static NAME: StaticName<ValueSymbol> = static_name!(ValueSymbol, "name");`.
+///
+/// The class predicate runs at first read, and a spelling that will not classify panics there
+/// naming itself and the class it failed — a build-time mistake in programmer-written text, not a
+/// runtime disposition. Every builtin slot reaches [`arg`](crate::builtins::arg) at registration
+/// and every tag reaches its own registration, so building a prelude forces each declared name
+/// once: a spelling that will not classify fails every test that runs a program, not only the one
+/// that exercises its builtin.
+#[macro_export]
+macro_rules! static_name {
+    ($class:ty, $text:literal) => {
+        $crate::machine::model::StaticName::<$class>::new($text, || {
+            <$class>::of($text).expect(concat!(
+                "`",
+                $text,
+                "` classifies as a ",
+                stringify!($class)
+            ))
+        })
+    };
 }
 
 #[cfg(test)]

@@ -20,6 +20,11 @@ use crate::machine::model::{Carried, CarriedFamily, KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 use std::rc::Rc;
 
+use crate::machine::model::StaticName;
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static RETURN_TYPE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "return_type");
+
 /// Read the MATCH / TRY `-> :T` slot from `ctx.args` (resolving a forward-referenced bare name
 /// against the call-site scope/chain) into the [`ReturnContract::Arm`] both `MATCH` and `TRY`
 /// arms are checked against.
@@ -27,7 +32,7 @@ pub(crate) fn resolve_arm_contract<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
     kind: &'static str,
 ) -> Result<ReturnContract<'a>, KError> {
-    let ret_kt = if let Some(te) = ctx.args.unresolved_type("return_type") {
+    let ret_kt = if let Some(te) = ctx.args.unresolved_type(&RETURN_TYPE) {
         match ctx
             .scope
             .resolve_type_identifier(te, ctx.chain.clone(), ctx.registries)
@@ -43,7 +48,7 @@ pub(crate) fn resolve_arm_contract<'a>(
             }
         }
     } else {
-        match ctx.args.ktype("return_type") {
+        match ctx.args.ktype(&RETURN_TYPE) {
             Some(other) => other,
             None => {
                 return Err(KError::new(KErrorKind::MissingArg(

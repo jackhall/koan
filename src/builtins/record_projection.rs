@@ -23,6 +23,12 @@ use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Symbol;
 
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static FIELDS: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "fields");
+static RECORD: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "record");
+
 /// `(x y) FROM <record:{}>` — re-tag the record's carried type to the named fields.
 ///
 /// The `fields` operand arrives unevaluated through a `KExpression` slot: each part
@@ -32,7 +38,7 @@ use crate::machine::model::Symbol;
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{Action, require_kexpression};
 
-    let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", "fields"));
+    let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", &FIELDS));
 
     // A computed field list is out of scope: each part must be a bare identifier.
     // Each name is syntactic, so it interns: the narrowed record type it lands in renders through
@@ -57,7 +63,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         }
     }
 
-    let record_obj = match ctx.args.object("record") {
+    let record_obj = match ctx.args.object(&RECORD) {
         Some(obj @ KObject::Record(_, _)) => obj,
         // The `:{}` slot shape-gates to records, so a non-record argument is a
         // dispatch non-match that never reaches the body. Defensive arm only.
@@ -109,7 +115,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // shape-split pure door and enveloped there — coverage-equivalent to an empty-reach seal. No region-pure
     // shape is a `Record`, so that arm's diagnostic is what a construction bug would surface here.
     let resident;
-    let lhs: &crate::machine::DeliveredCarried = match ctx.args.carrier("record") {
+    let lhs: &crate::machine::DeliveredCarried = match ctx.args.carrier(&RECORD) {
         Some(c) => c,
         None => {
             resident = match ctx.scope.deliver_pure_value(record_obj) {
@@ -148,9 +154,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let signature = sig(
         types.record(Record::new()),
         vec![
-            arg(registries, "fields", KType::KEXPRESSION),
+            arg(registries, &FIELDS, KType::KEXPRESSION),
             kw("FROM"),
-            arg(registries, "record", types.record(Record::new())),
+            arg(registries, &RECORD, types.record(Record::new())),
         ],
     );
     crate::builtins::register_builtin(scope, "FROM", signature, body, registries, gate);

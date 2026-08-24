@@ -1,7 +1,8 @@
 use crate::machine::model::KKind;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{
-    Argument, BinderSymbol, KType, ReturnType, SignatureDraft, SignatureElement,
+    Argument, BinderSymbol, KType, ReturnType, SignatureDraft, SignatureElement, StaticName,
+    ValueSymbol,
 };
 use crate::machine::{BindingIndex, Scope, WriteGate};
 use crate::machine::{Body, KFunction};
@@ -48,18 +49,19 @@ pub(crate) fn kw(s: &str) -> SignatureElement<'_> {
     SignatureElement::keyword(s)
 }
 
-/// Signature-element constructor for an argument slot. The name is syntactic, so it classifies and
-/// interns here: the classified symbol it becomes is the whole argument, and diagnostics resolve
-/// the text back through the same interner. A builtin's parameter spelling is programmer-controlled
-/// literal text, so a keyword-class name is a build-time mistake, not a runtime disposition.
+/// Signature-element constructor for an argument slot. The name arrives as a [`StaticName`] the
+/// builtin declares beside its own body, so its symbol is already minted and registration only
+/// records the spelling: the classified symbol is the whole argument, and diagnostics resolve the
+/// text back through the same interner. Slots are value-class by declaration —
+/// [`StaticName<ValueSymbol>`] is what the static carries — so the class is settled where the
+/// spelling is written rather than probed here.
 pub(crate) fn arg<'a>(
     registries: &RunRegistries,
-    name: &str,
+    name: &StaticName<ValueSymbol>,
     ktype: KType,
 ) -> SignatureElement<'a> {
     SignatureElement::Argument(Argument {
-        name: BinderSymbol::declared(name, &registries.labels)
-            .expect("a builtin parameter name is a value or Type token"),
+        name: BinderSymbol::Value(registries.labels.record(name)),
         ktype,
     })
 }

@@ -15,6 +15,7 @@ use std::rc::Rc;
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
 use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::{StaticName, ValueSymbol};
 
 /// `ExprCarrier` is captured raw rather than sub-dispatched in the outer scope because a
 /// `:(…)` / dotted return's inner expression may reference a parameter unbound there.
@@ -54,7 +55,7 @@ pub(crate) enum ReturnTypeCapture<'a> {
 pub(crate) fn extract_return_type_raw<'a>(
     args: BoundArgs<'a, '_>,
 ) -> Result<ReturnTypeRaw<'a>, KError> {
-    extract_type_slot_raw(args, "return_type", "FN return-type slot")
+    extract_type_slot_raw(args, &super::RETURN_TYPE, "FN return-type slot")
 }
 
 /// Read any type-denoting slot from a `BodyCtx::args` record into a [`ReturnTypeRaw`]. The two
@@ -64,7 +65,7 @@ pub(crate) fn extract_return_type_raw<'a>(
 /// `FN`'s return slot and `OP`'s operand / return slots.
 pub(crate) fn extract_type_slot_raw<'a>(
     args: BoundArgs<'a, '_>,
-    slot: &str,
+    slot: &StaticName<ValueSymbol>,
     label: &str,
 ) -> Result<ReturnTypeRaw<'a>, KError> {
     if let Some(te) = args.unresolved_type(slot) {

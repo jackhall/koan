@@ -22,6 +22,12 @@ use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static LEFT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "left");
+static RIGHT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "right");
+
 /// Render a banned-operand error for operator `op`.
 fn ban_error(op: &str, error: ValueEqualityError) -> KError {
     let message = match error {
@@ -57,11 +63,11 @@ fn cells_equal(
 fn compare(ctx: &BodyCtx<'_, '_, '_>, op: &str) -> Result<bool, KError> {
     let left = ctx
         .args
-        .held("left")
+        .held(&LEFT)
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("left".to_string())))?;
     let right = ctx
         .args
-        .held("right")
+        .held(&RIGHT)
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("right".to_string())))?;
     cells_equal(left, right, op, ctx.registries)
 }
@@ -89,9 +95,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::BOOL,
             vec![
-                arg(registries, "left", KType::ANY),
+                arg(registries, &LEFT, KType::ANY),
                 kw(op),
-                arg(registries, "right", KType::ANY),
+                arg(registries, &RIGHT, KType::ANY),
             ],
         )
     };

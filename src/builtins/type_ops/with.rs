@@ -32,9 +32,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             got,
         })
     };
-    let sig_handle = match ctx.args.ktype("sig") {
+    let sig_handle = match ctx.args.ktype(&super::SIG) {
         Some(kt) => kt,
-        None => match ctx.args.held("sig") {
+        None => match ctx.args.held(&super::SIG) {
             Some(Held::Object(object)) => {
                 return done_err(mismatch(object.ktype().name(ctx.registries)));
             }
@@ -45,7 +45,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         TypeNode::Signature { schema, .. } => schema,
         _ => return done_err(mismatch(sig_handle.name(ctx.registries))),
     };
-    let bindings = match ctx.args.object("bindings") {
+    let bindings = match ctx.args.object(&super::BINDINGS) {
         Some(KObject::Record(substrate, _types)) => substrate,
         _ => {
             return done_err(KError::new(KErrorKind::ShapeError(

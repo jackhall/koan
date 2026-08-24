@@ -29,6 +29,12 @@ use super::{arg, kw, sig};
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
 
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static DECL: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "decl");
+static NAME: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "name");
+
 fn not_in_sig_body() -> KError {
     KError::new(KErrorKind::ShapeError(
         "TYPE declares an abstract type slot and is only valid inside a SIG body; \
@@ -65,7 +71,7 @@ pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machin
     if !ctx.scope.is_in_sig_body() {
         return Action::done(Err(not_in_sig_body()));
     }
-    let name = match require_bare_type_name(ctx.args, "name", "TYPE", ctx.registries) {
+    let name = match require_bare_type_name(ctx.args, &NAME, "TYPE", ctx.registries) {
         Ok(name) => name,
         Err(e) => return Action::done(Err(e)),
     };
@@ -93,7 +99,7 @@ pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine:
     if !ctx.scope.is_in_sig_body() {
         return Action::done(Err(not_in_sig_body()));
     }
-    let decl = match require_kexpression(ctx.args, "TYPE", "decl") {
+    let decl = match require_kexpression(ctx.args, "TYPE", &DECL) {
         Ok(decl) => decl,
         Err(e) => return Action::done(Err(e)),
     };
@@ -167,13 +173,13 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::ANY,
         vec![
             kw("TYPE"),
-            arg(registries, "name", KType::of_kind(KKind::ProperType)),
+            arg(registries, &NAME, KType::of_kind(KKind::ProperType)),
         ],
     );
     crate::builtins::register_builtin(scope, "TYPE", bare_signature, body_bare, registries, gate);
     let hk_signature = sig(
         KType::ANY,
-        vec![kw("TYPE"), arg(registries, "decl", KType::KEXPRESSION)],
+        vec![kw("TYPE"), arg(registries, &DECL, KType::KEXPRESSION)],
     );
     crate::builtins::register_builtin(scope, "TYPE", hk_signature, body_hk, registries, gate);
 }

@@ -38,6 +38,12 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static BODY: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "body");
+static M: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "m");
+
 /// USING's result is the body's tail — the block's last statement's own witnessed terminal via the
 /// ordinary `DoneWitnessed` path, not a forwarded dep. The block runs in the owned scope
 /// `open_module_window` returns; the window it is stacked in is named by no chain frame, so its
@@ -46,11 +52,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     use crate::machine::{Action, FramePlacement, require_kexpression};
     use crate::machine::{BlockBody, BlockScope, block_tail};
 
-    let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", "body"));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", &BODY));
     // `m` is a value slot of a non-name-literal type, so its part is spliced before the call on
     // every shape that can carry a module — the absent arm is unreachable by construction and takes
     // a diagnostic rather than a panic.
-    let Some(delivered) = ctx.args.carrier("m") else {
+    let Some(delivered) = ctx.args.carrier(&M) else {
         return Action::done(Err(KError::new(KErrorKind::ShapeError(
             "internal: USING's module argument reached the window door with no delivery envelope"
                 .to_string(),
@@ -81,7 +87,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 fn non_module_argument(ctx: &crate::machine::BodyCtx<'_, '_, '_>) -> KError {
     use crate::machine::model::Held;
 
-    let got = match ctx.args.held("m") {
+    let got = match ctx.args.held(&M) {
         Some(Held::Type(other)) => other.name(ctx.registries),
         Some(Held::UnresolvedType(ti)) => ti.render(),
         Some(Held::Object(other)) => other.ktype().name(ctx.registries).to_string(),
@@ -99,9 +105,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::ANY,
         vec![
             kw("USING"),
-            arg(registries, "m", KType::EMPTY_SIGNATURE),
+            arg(registries, &M, KType::EMPTY_SIGNATURE),
             kw("SCOPE"),
-            arg(registries, "body", KType::KEXPRESSION),
+            arg(registries, &BODY, KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "USING", signature, body, registries, gate);

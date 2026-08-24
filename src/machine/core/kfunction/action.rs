@@ -26,6 +26,7 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KType, TypeNode};
+use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{
     BindingIndex, DeclarationSite, DeliveredCarried, Installer, KError, KErrorKind,
 };
@@ -106,8 +107,8 @@ impl<'a, 'c> BoundArgs<'a, 'c> {
         }
     }
 
-    fn slot(&self, name: &str) -> Option<&'c BoundArg<'a, 'c>> {
-        let symbol = Symbol::of(name);
+    fn slot(&self, name: &StaticName<ValueSymbol>) -> Option<&'c BoundArg<'a, 'c>> {
+        let symbol = name.symbol().symbol();
         self.schema
             .iter()
             .position(|(candidate, _)| candidate.symbol() == symbol)
@@ -116,24 +117,27 @@ impl<'a, 'c> BoundArgs<'a, 'c> {
 
     /// The argument's raw cell ([`Held::Object`] / [`Held::Type`] / [`Held::UnresolvedType`]) — for
     /// a builtin that branches on the value vs type channel (e.g. LET's name/value slots).
-    pub fn held(&self, name: &str) -> Option<&'c Held<'a>> {
+    pub fn held(&self, name: &StaticName<ValueSymbol>) -> Option<&'c Held<'a>> {
         self.slot(name).map(|slot| &slot.value)
     }
 
     /// The argument's `KObject`. `None` if the named slot is a type cell.
-    pub fn object(&self, name: &str) -> Option<&'c KObject<'a>> {
+    pub fn object(&self, name: &StaticName<ValueSymbol>) -> Option<&'c KObject<'a>> {
         self.held(name).and_then(Held::as_object)
     }
 
     /// The argument's `KType` — a type-cell argument.
-    pub fn ktype(&self, name: &str) -> Option<KType> {
+    pub fn ktype(&self, name: &StaticName<ValueSymbol>) -> Option<KType> {
         self.held(name).and_then(Held::as_type)
     }
 
     /// The argument's unlowered type name. The bind seam parks a bare user type name here rather
     /// than lowering it to a handle, so a type-slot consumer probes this before [`Self::ktype`] and
     /// resolves the name against its own scope chain.
-    pub fn unresolved_type(&self, name: &str) -> Option<&'c TypeIdentifier<'a>> {
+    pub fn unresolved_type(
+        &self,
+        name: &StaticName<ValueSymbol>,
+    ) -> Option<&'c TypeIdentifier<'a>> {
         match self.held(name) {
             Some(Held::UnresolvedType(ti)) => Some(ti),
             _ => None,
@@ -142,7 +146,7 @@ impl<'a, 'c> BoundArgs<'a, 'c> {
 
     /// The argument's reach carrier — `Some` when it arrived as a resolved value (so a
     /// value-embedding body can fold / merge it), `None` for a region-pure scalar literal.
-    pub fn carrier(&self, name: &str) -> Option<&'c DeliveredCarried> {
+    pub fn carrier(&self, name: &StaticName<ValueSymbol>) -> Option<&'c DeliveredCarried> {
         self.slot(name).and_then(|slot| slot.carrier)
     }
 
@@ -167,24 +171,24 @@ impl<'a, 'c> BoundArgs<'a, 'c> {
 /// `TypeMismatch{expected: "ProperType"}` for an object cell, `MissingArg` when absent.
 pub fn require_ktype<'a>(
     args: BoundArgs<'a, '_>,
-    name: &str,
+    name: &StaticName<ValueSymbol>,
     registries: &RunRegistries,
 ) -> Result<KType, KError> {
     match args.held(name) {
         Some(Held::Type(kt)) => Ok(*kt),
         Some(Held::Object(o)) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: name.to_string(),
+            arg: name.text().to_string(),
             expected: "ProperType".to_string(),
             got: o.ktype().name(registries),
         })),
         // Every slot reaching here is `OfKind(AnyType)`, which dispatch auto-wraps into a
         // resolved type carrier, so an unlowered name is not a shape this door serves.
         Some(Held::UnresolvedType(ti)) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: name.to_string(),
+            arg: name.text().to_string(),
             expected: "ProperType".to_string(),
             got: ti.render(),
         })),
-        None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
+        None => Err(KError::new(KErrorKind::MissingArg(name.text().to_string()))),
     }
 }
 
@@ -195,17 +199,18 @@ pub fn require_ktype<'a>(
 /// `KObject::KString` cell.
 pub fn require_identifier_name<'a>(
     args: BoundArgs<'a, '_>,
-    slot: &str,
+    slot: &StaticName<ValueSymbol>,
     surface: &str,
     registries: &RunRegistries,
 ) -> Result<String, KError> {
+    let spelling = slot.text();
     match args.object(slot) {
         Some(KObject::KString(s)) => Ok((*s).to_string()),
         Some(other) => Err(KError::new(KErrorKind::ShapeError(format!(
-            "{surface} {slot} must be a bare identifier, got `{}`",
+            "{surface} {spelling} must be a bare identifier, got `{}`",
             other.ktype().name(registries),
         )))),
-        None => Err(KError::new(KErrorKind::MissingArg(slot.to_string()))),
+        None => Err(KError::new(KErrorKind::MissingArg(spelling.to_string()))),
     }
 }
 
@@ -216,7 +221,7 @@ pub fn require_identifier_name<'a>(
 /// [`extract_bare_type_name`](super::argument_bundle::extract_bare_type_name).
 pub fn require_bare_type_name<'a>(
     args: BoundArgs<'a, '_>,
-    slot: &str,
+    slot: &StaticName<ValueSymbol>,
     surface: &str,
     registries: &RunRegistries,
 ) -> Result<String, KError> {
@@ -224,8 +229,10 @@ pub fn require_bare_type_name<'a>(
         // A binder name is exactly the shape the bind seam leaves unlowered: a bare user type
         // name with nothing bound to it yet.
         Some(Held::UnresolvedType(ti)) => Ok(ti.render()),
-        Some(Held::Type(t)) => bare_type_name(*t, slot, surface, registries),
-        Some(Held::Object(_)) | None => Err(KError::new(KErrorKind::MissingArg(slot.to_string()))),
+        Some(Held::Type(t)) => bare_type_name(*t, slot.text(), surface, registries),
+        Some(Held::Object(_)) | None => {
+            Err(KError::new(KErrorKind::MissingArg(slot.text().to_string())))
+        }
     }
 }
 
@@ -274,12 +281,13 @@ fn bare_type_name(
 pub fn require_kexpression<'a>(
     args: BoundArgs<'a, '_>,
     builtin: &str,
-    slot: &str,
+    slot: &StaticName<ValueSymbol>,
 ) -> Result<KExpression<'a>, KError> {
+    let spelling = slot.text();
     match args.object(slot) {
         Some(KObject::KExpression(e)) => Ok(e.node()),
         _ => Err(KError::new(KErrorKind::ShapeError(format!(
-            "{builtin} {slot} slot must be a parenthesized expression"
+            "{builtin} {spelling} slot must be a parenthesized expression"
         )))),
     }
 }

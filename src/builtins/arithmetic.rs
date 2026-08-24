@@ -31,21 +31,26 @@ use super::{arg, kw, sig};
 use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static LEFT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "left");
+static RIGHT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "right");
 
 /// Read a `:Number` operand named `name`, or the canonical missing/mismatch diagnostic.
 fn number_arg(
     args: BoundArgs<'_, '_>,
-    name: &str,
+    name: &StaticName<ValueSymbol>,
     registries: &RunRegistries,
 ) -> Result<f64, KError> {
     match args.object(name) {
         Some(KObject::Number(n)) => Ok(*n),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: name.to_string(),
+            arg: name.text().to_string(),
             expected: "Number".to_string(),
             got: other.ktype().name(registries),
         })),
-        None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
+        None => Err(KError::new(KErrorKind::MissingArg(name.text().to_string()))),
     }
 }
 
@@ -55,25 +60,25 @@ fn number_operands(
     registries: &RunRegistries,
 ) -> Result<(f64, f64), KError> {
     Ok((
-        number_arg(args, "left", registries)?,
-        number_arg(args, "right", registries)?,
+        number_arg(args, &LEFT, registries)?,
+        number_arg(args, &RIGHT, registries)?,
     ))
 }
 
 /// Read a `:Bool` operand named `name`, or the canonical missing/mismatch diagnostic.
 fn bool_arg(
     args: BoundArgs<'_, '_>,
-    name: &str,
+    name: &StaticName<ValueSymbol>,
     registries: &RunRegistries,
 ) -> Result<bool, KError> {
     match args.object(name) {
         Some(KObject::Bool(b)) => Ok(*b),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: name.to_string(),
+            arg: name.text().to_string(),
             expected: "Bool".to_string(),
             got: other.ktype().name(registries),
         })),
-        None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
+        None => Err(KError::new(KErrorKind::MissingArg(name.text().to_string()))),
     }
 }
 
@@ -83,8 +88,8 @@ fn bool_operands(
     registries: &RunRegistries,
 ) -> Result<(bool, bool), KError> {
     Ok((
-        bool_arg(args, "left", registries)?,
-        bool_arg(args, "right", registries)?,
+        bool_arg(args, &LEFT, registries)?,
+        bool_arg(args, &RIGHT, registries)?,
     ))
 }
 
@@ -174,9 +179,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::NUMBER,
             vec![
-                arg(registries, "left", KType::NUMBER),
+                arg(registries, &LEFT, KType::NUMBER),
                 kw(op),
-                arg(registries, "right", KType::NUMBER),
+                arg(registries, &RIGHT, KType::NUMBER),
             ],
         )
     };
@@ -184,9 +189,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::BOOL,
             vec![
-                arg(registries, "left", KType::NUMBER),
+                arg(registries, &LEFT, KType::NUMBER),
                 kw(op),
-                arg(registries, "right", KType::NUMBER),
+                arg(registries, &RIGHT, KType::NUMBER),
             ],
         )
     };
@@ -204,9 +209,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let and_sig = sig(
         KType::BOOL,
         vec![
-            arg(registries, "left", KType::BOOL),
+            arg(registries, &LEFT, KType::BOOL),
             kw("AND"),
-            arg(registries, "right", KType::BOOL),
+            arg(registries, &RIGHT, KType::BOOL),
         ],
     );
     crate::builtins::register_builtin(scope, "AND", and_sig, body_and, registries, gate);

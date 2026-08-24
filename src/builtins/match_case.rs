@@ -9,6 +9,13 @@ use super::branch_walk::find_branch_body_by_type;
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static BRANCHES: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "branches");
+static RETURN_TYPE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "return_type");
+static VALUE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "value");
+
 /// `MATCH <value:Any> -> :<T> WITH <branches:KExpression>` — branch by type.
 ///
 /// Any value can be matched. Each arm head resolves to a `KType`; the arms whose type
@@ -29,7 +36,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 
     // Selection needs only a borrow of the scrutinee — it never stores the reference — so no
     // upfront copy is made.
-    let value = match ctx.args.object("value") {
+    let value = match ctx.args.object(&VALUE) {
         Some(v) => v,
         None => {
             return Action::done(Err(KError::new(KErrorKind::MissingArg(
@@ -38,7 +45,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         }
     };
     let contract = crate::try_action!(resolve_arm_contract(ctx, "MATCH"));
-    let branches_expr = crate::try_action!(require_kexpression(ctx.args, "MATCH", "branches"));
+    let branches_expr = crate::try_action!(require_kexpression(ctx.args, "MATCH", &BRANCHES));
     let selected = match find_branch_body_by_type(
         &branches_expr,
         value,
@@ -68,7 +75,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                     .deliver_pure_value(&crate::machine::model::KObject::Null)
             )
         } else {
-            match ctx.args.carrier("value") {
+            match ctx.args.carrier(&VALUE) {
                 Some(carrier) => carrier.duplicate(),
                 None => crate::try_action!(ctx.scope.deliver_pure_value(value)),
             }
@@ -93,11 +100,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::ANY,
         vec![
             kw("MATCH"),
-            arg(registries, "value", KType::ANY),
+            arg(registries, &VALUE, KType::ANY),
             kw("->"),
-            arg(registries, "return_type", KType::of_kind(KKind::ProperType)),
+            arg(registries, &RETURN_TYPE, KType::of_kind(KKind::ProperType)),
             kw("WITH"),
-            arg(registries, "branches", KType::KEXPRESSION),
+            arg(registries, &BRANCHES, KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "MATCH", signature, body, registries, gate);

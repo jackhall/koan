@@ -98,6 +98,7 @@ digraph {
     "koan::machine::model::ast::working" [label="koan::machine::model::ast::working"];
     "koan::machine::model::binder" [label="koan::machine::model::binder"];
     "koan::machine::model::labels" [label="koan::machine::model::labels"];
+    "koan::machine::model::labels::sealed" [label="koan::machine::model::labels::sealed"];
     "koan::machine::model::operators" [label="koan::machine::model::operators"];
     "koan::machine::model::registries" [label="koan::machine::model::registries"];
     "koan::machine::model::types" [label="koan::machine::model::types"];
@@ -242,6 +243,7 @@ digraph {
     "koan::machine::model::ast" -> "koan::machine::model::ast::program" [label="owns", style="solid"];
     "koan::machine::model::ast" -> "koan::machine::model::ast::shape" [label="owns", style="solid"];
     "koan::machine::model::ast" -> "koan::machine::model::ast::working" [label="owns", style="solid"];
+    "koan::machine::model::labels" -> "koan::machine::model::labels::sealed" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::declaration_window" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::kkind" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::ktraits" [label="owns", style="solid"];

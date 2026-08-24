@@ -22,6 +22,11 @@ use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 use super::{arg, kw, sig};
 use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::StaticName;
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static M: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "m");
+static S: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "s");
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
 /// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as a
@@ -252,27 +257,31 @@ fn resolve_module_and_signature<'a>(
 
     fn type_mismatch_or_missing(
         args: BoundArgs<'_, '_>,
-        name: &str,
+        name: &StaticName<ValueSymbol>,
         expected: &str,
         registries: &crate::machine::model::RunRegistries,
     ) -> KError {
         match args.held(name) {
             Some(held) => KError::new(KErrorKind::TypeMismatch {
-                arg: name.to_string(),
+                arg: name.text().to_string(),
                 expected: expected.to_string(),
                 got: held.ktype(&registries.types).name(registries),
             }),
-            None => KError::new(KErrorKind::MissingArg(name.to_string())),
+            None => KError::new(KErrorKind::MissingArg(name.text().to_string())),
         }
     }
 
-    let m = match args.object("m") {
+    let m = match args.object(&M) {
         Some(KObject::Module(module)) => *module,
-        _ => return Err(type_mismatch_or_missing(args, "m", "Module", registries)),
+        _ => {
+            return Err(type_mismatch_or_missing(args, &M, "Module", registries));
+        }
     };
-    let s = match args.ktype("s") {
+    let s = match args.ktype(&S) {
         Some(kt) if matches!(types.node(kt), TypeNode::Signature { .. }) => kt,
-        _ => return Err(type_mismatch_or_missing(args, "s", "Signature", registries)),
+        _ => {
+            return Err(type_mismatch_or_missing(args, &S, "Signature", registries));
+        }
     };
     Ok((m, s))
 }
@@ -312,17 +321,17 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let opaque_sig = sig(
         KType::EMPTY_SIGNATURE,
         vec![
-            arg(registries, "m", KType::EMPTY_SIGNATURE),
+            arg(registries, &M, KType::EMPTY_SIGNATURE),
             kw(":|"),
-            arg(registries, "s", KType::of_kind(KKind::Signature)),
+            arg(registries, &S, KType::of_kind(KKind::Signature)),
         ],
     );
     let transparent_sig = sig(
         KType::EMPTY_SIGNATURE,
         vec![
-            arg(registries, "m", KType::EMPTY_SIGNATURE),
+            arg(registries, &M, KType::EMPTY_SIGNATURE),
             kw(":!"),
-            arg(registries, "s", KType::of_kind(KKind::Signature)),
+            arg(registries, &S, KType::of_kind(KKind::Signature)),
         ],
     );
     crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque, registries, gate);

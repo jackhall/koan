@@ -22,6 +22,13 @@ use super::op_def::OperatorForm;
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static LEFT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "left");
+static MEMBERS: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "members");
+static RIGHT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "right");
+
 const MEMBERS_SLOT: &str = "`|` members";
 
 /// The two-member keyworded form `A | B`: both operands ride resolved-type slots (the shared
@@ -29,8 +36,8 @@ const MEMBERS_SLOT: &str = "`|` members";
 /// union directly — mirroring `parameterized_types::body_map`. The composite allocates into this
 /// step's own region through the single type door.
 fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let left = crate::try_action!(require_ktype(ctx.args, "left", ctx.registries));
-    let right = crate::try_action!(require_ktype(ctx.args, "right", ctx.registries));
+    let left = crate::try_action!(require_ktype(ctx.args, &LEFT, ctx.registries));
+    let right = crate::try_action!(require_ktype(ctx.args, &RIGHT, ctx.registries));
     Action::done(Ok(ctx
         .ctx
         .type_carried(ctx.types().union_of(vec![left, right]))))
@@ -43,7 +50,7 @@ fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
 /// sub-dispatch — so every member kind reaches the body already lowered to a `KType` cell, and the
 /// composite union builds through [`TypeRegistry::union_of`].
 fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let substrate = match ctx.args.object("members") {
+    let substrate = match ctx.args.object(&MEMBERS) {
         Some(KObject::List(substrate, _)) => *substrate,
         _ => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
@@ -83,7 +90,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         OperatorForm {
             signature: sig(
                 KType::of_kind(KKind::AnyType),
-                vec![kw("|"), arg(registries, "members", types.list(KType::ANY))],
+                vec![kw("|"), arg(registries, &MEMBERS, types.list(KType::ANY))],
             ),
             body: Body::Builtin(body_nary),
         },
@@ -91,9 +98,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             signature: sig(
                 KType::of_kind(KKind::AnyType),
                 vec![
-                    arg(registries, "left", KType::of_kind(KKind::AnyType)),
+                    arg(registries, &LEFT, KType::of_kind(KKind::AnyType)),
                     kw("|"),
-                    arg(registries, "right", KType::of_kind(KKind::AnyType)),
+                    arg(registries, &RIGHT, KType::of_kind(KKind::AnyType)),
                 ],
             ),
             body: Body::Builtin(body_binary),

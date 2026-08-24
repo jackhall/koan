@@ -215,3 +215,33 @@ fn classified_symbols_hash_through_the_identity_hasher() {
         Some(&3)
     );
 }
+
+/// A [`StaticName`]'s memo is exactly what its class's `of` would have minted — the whole basis for
+/// reading a slot by static instead of by spelling.
+/// A name of this module's own, so the tests below pin [`StaticName`] itself rather than whatever
+/// spelling a builtin happens to declare.
+static SLOT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "slot");
+
+#[test]
+fn a_static_name_mints_what_of_mints() {
+    assert_eq!(
+        SLOT.symbol(),
+        ValueSymbol::of("slot").expect("`slot` is a value token")
+    );
+    assert_eq!(SLOT.text(), "slot");
+}
+
+#[test]
+fn record_interns_the_spelling_under_the_memoized_symbol() {
+    let labels = LabelInterner::new();
+    let before = labels.len();
+    let classified = labels.record(&SLOT);
+    assert_eq!(classified, SLOT.symbol());
+    assert_eq!(
+        labels.resolve(classified.symbol()),
+        Some("slot".to_string())
+    );
+    assert_eq!(labels.len(), before + 1);
+    labels.record(&SLOT);
+    assert_eq!(labels.len(), before + 1);
+}

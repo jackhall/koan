@@ -18,6 +18,12 @@ use crate::machine::model::{KKind, SigSchema};
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static BODY: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "body");
+static NAME: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "name");
+
 /// The SIG body: mints the declaration scope, dispatches the SIG body block against it via
 /// [`await_body_in_scope`](super::await_body::await_body_in_scope), and the finish projects
 /// that scope into a [`SigSchema`], interns it as a `Signature` type, and installs that handle
@@ -28,11 +34,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 
     let name = crate::try_action!(require_bare_type_name(
         ctx.args,
-        "name",
+        &NAME,
         "SIG",
         ctx.registries
     ));
-    let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", "body"));
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", &BODY));
 
     let decl_scope = ctx.scope.alloc_child_under_sig(&name);
 
@@ -59,9 +65,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::of_kind(KKind::Signature),
         vec![
             kw("SIG"),
-            arg(registries, "name", KType::of_kind(KKind::ProperType)),
+            arg(registries, &NAME, KType::of_kind(KKind::ProperType)),
             kw("="),
-            arg(registries, "body", KType::KEXPRESSION),
+            arg(registries, &BODY, KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "SIG", signature, body, registries, gate);

@@ -27,6 +27,12 @@ use super::{arg, kw, sig};
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
 
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static NAME: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "name");
+static TY: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "ty");
+
 fn typeexpr_from_carrier<'a>(
     brand: RegionBrand<'a>,
     kt: KType,
@@ -85,7 +91,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         )));
     }
 
-    let name = match ctx.args.object("name") {
+    let name = match ctx.args.object(&NAME) {
         Some(KObject::KString(s)) => (*s).to_string(),
         Some(other) => {
             return done_err(KError::new(KErrorKind::TypeMismatch {
@@ -109,12 +115,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         ))));
     };
 
-    let carrier = match ctx.args.unresolved_type("ty") {
+    let carrier = match ctx.args.unresolved_type(&TY) {
         Some(te) => CarrierForm::Raw(*te),
-        None => match ctx.args.ktype("ty") {
+        None => match ctx.args.ktype(&TY) {
             Some(kt) => typeexpr_from_carrier(ctx.scope.brand(), kt, ctx.registries),
             None => {
-                return done_err(match ctx.args.object("ty") {
+                return done_err(match ctx.args.object(&TY) {
                     Some(other) => KError::new(KErrorKind::TypeMismatch {
                         arg: "ty".to_string(),
                         expected: "ProperType".to_string(),
@@ -185,8 +191,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::ANY,
         vec![
             kw("VAL"),
-            arg(registries, "name", KType::IDENTIFIER),
-            arg(registries, "ty", KType::of_kind(KKind::ProperType)),
+            arg(registries, &NAME, KType::IDENTIFIER),
+            arg(registries, &TY, KType::of_kind(KKind::ProperType)),
         ],
     );
     // VAL installs nothing: it records into the decl scope's slot collector, not into a binding map

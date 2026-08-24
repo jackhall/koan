@@ -21,6 +21,7 @@ use crate::machine::model::Scalar;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{Carried, KObject, TypeNode};
 use crate::machine::model::{KExpression, WorkingExpression};
+use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{BindingIndex, KFunction, Scope};
 
 /// Cross a parsed node into the scheduler against `scope`'s region.
@@ -59,11 +60,16 @@ fn sched_read_carried<'run>(
     crate::builtins::test_support::extract_terminal(&test_run.runtime, scope, id)
 }
 
+/// The fixture's one parameter. Declared here rather than drawn from `builtins::slots` because no
+/// builtin spells a slot `n` — the fixture registers it and reads it back through this one static,
+/// so the signature and the body cannot drift apart.
+static N: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "n");
+
 /// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`
 /// (no keywords), which means no koan user surface can call it directly — tests
 /// using it only inspect routing, never the call outcome.
 fn body_identity<'run>(ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
-    match ctx.args.object("n") {
+    match ctx.args.object(&N) {
         Some(obj) => Action::done_resident(
             ctx.scope,
             Carried::Object(
@@ -73,7 +79,7 @@ fn body_identity<'run>(ctx: &BodyCtx<'_, 'run, '_>) -> Action<'run> {
             ),
         ),
         None => Action::done(Err(crate::machine::KError::new(
-            crate::machine::KErrorKind::MissingArg("n".to_string()),
+            crate::machine::KErrorKind::MissingArg(N.text().to_string()),
         ))),
     }
 }
@@ -87,8 +93,7 @@ fn bind_identity_fn<'run>(
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![SignatureElement::Argument(Argument {
-            name: crate::machine::model::BinderSymbol::of("n")
-                .expect("a test fixture parameter is a value token"),
+            name: crate::machine::model::BinderSymbol::Value(registries.labels.record(&N)),
             ktype: KType::NUMBER,
         })],
     };

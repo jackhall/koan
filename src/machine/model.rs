@@ -6,12 +6,12 @@ pub(crate) mod registries;
 pub(crate) mod types;
 pub(crate) mod values;
 
-pub use labels::{
-    BinderSymbol, KeywordSymbol, LabelInterner, Symbol, TypeSymbol, ValueSymbol, is_type_name,
-    wrong_binder_class,
-};
 #[cfg(feature = "alloc-count")]
 pub use labels::symbols_minted;
+pub use labels::{
+    BinderSymbol, ClassifiedSymbol, KeywordSymbol, LabelInterner, StaticName, Symbol, TypeSymbol,
+    ValueSymbol, is_type_name, wrong_binder_class,
+};
 pub use operators::{
     FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode, binary_key, probe_key,
     unary_key,

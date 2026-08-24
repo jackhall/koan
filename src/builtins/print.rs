@@ -5,13 +5,18 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 
+use crate::machine::model::{StaticName, ValueSymbol};
+
+/// This builtin's slot spellings, minted once and read back by symbol.
+static MSG: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "msg");
+
 /// `PRINT <msg:Any>` — renders the `msg` object cell, writes it plus a newline to the run's
 /// output sink, and returns the rendered string as a `KObject::KString` value.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
     // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) via
     // `Held::summarize`.
-    let rendered = match ctx.args.held("msg") {
+    let rendered = match ctx.args.held(&MSG) {
         Some(value) => value.summarize(ctx.registries),
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("msg".to_string())))),
     };
@@ -31,7 +36,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let signature = sig(
         KType::STR,
-        vec![kw("PRINT"), arg(registries, "msg", KType::ANY)],
+        vec![kw("PRINT"), arg(registries, &MSG, KType::ANY)],
     );
     crate::builtins::register_builtin(scope, "PRINT", signature, body, registries, gate);
 }
