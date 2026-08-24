@@ -592,8 +592,14 @@ fn bridge_body<'a>(
     let brand = program.region();
     let sym = brand.allocator().text(sym);
     let sym = KeywordToken::declared(sym, labels).expect("an operator glyph is keyword-class");
-    let operand = |name: &'a str| {
-        ExpressionPart::expression(program, &[Spanned::bare(ExpressionPart::Identifier(name))])
+    let operand = |slot: &StaticName<ValueSymbol>| {
+        ExpressionPart::expression(
+            program,
+            &[Spanned::bare(ExpressionPart::Identifier(
+                ValueSymbol::declared(slot.text(), labels)
+                    .expect("an operand slot's spelling is a value token"),
+            ))],
+        )
     };
     KExpression::new(
         brand,
@@ -602,7 +608,7 @@ fn bridge_body<'a>(
             Spanned::bare(ExpressionPart::ListLiteral(
                 brand
                     .allocator()
-                    .slice(&[operand(SLOTS.left.text()), operand(SLOTS.right.text())]),
+                    .slice(&[operand(&SLOTS.left), operand(&SLOTS.right)]),
             )),
         ],
     )

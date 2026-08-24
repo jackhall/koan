@@ -19,7 +19,9 @@ pub(crate) fn collect_param_names_from_signature(
     let mut i = 0;
     while i < parts.len() {
         let param_name: Option<String> = match parts[i].value {
-            ExpressionPart::Identifier(name) => Some(name.to_string()),
+            ExpressionPart::Identifier(v) => {
+                Some(crate::machine::model::render_label(v.symbol(), registries))
+            }
             ExpressionPart::Type(t) => {
                 Some(crate::machine::model::render_label(t.symbol(), registries))
             }
@@ -93,12 +95,11 @@ pub(crate) fn parse_fn_param_list<'a>(
         // parameter-name position denotes a binder, not a type reference.
         // Each part's class *is* the binder's class: the lexer tags an `Identifier` only for a
         // token that classifies as neither keyword nor Type, and a `Type` part only for one that
-        // classifies as a Type token — so the classification cannot fail here.
+        // classifies as a Type token — so each part hands over its own already-minted symbol.
         let param_name: Option<(String, BinderSymbol)> = match parts[i].value {
-            ExpressionPart::Identifier(name) => Some((
-                name.to_string(),
-                BinderSymbol::declared(name, &registries.labels)
-                    .expect("an Identifier part is lexed as a value token"),
+            ExpressionPart::Identifier(v) => Some((
+                crate::machine::model::render_label(v.symbol(), registries),
+                BinderSymbol::Value(v),
             )),
             ExpressionPart::Type(t) => Some((
                 crate::machine::model::render_label(t.symbol(), registries),

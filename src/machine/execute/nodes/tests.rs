@@ -5,13 +5,14 @@
 //! each arm renders.
 
 use super::*;
+use crate::builtins::test_support::identifier_part;
 use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
-use crate::machine::model::{ExpressionPart, WorkingPart};
+use crate::machine::model::WorkingPart;
 use crate::source::{SourceFile, Spanned};
 
 /// A one-part run naming `name`, carrying `span` when given.
 fn identifier_run<'a>(span: Option<Span>) -> Vec<Spanned<WorkingPart<'a>>> {
-    let part = WorkingPart::Ast(ExpressionPart::Identifier("stuck"));
+    let part = WorkingPart::Ast(identifier_part("stuck"));
     vec![match span {
         Some(span) => Spanned::at(part, span),
         None => Spanned::bare(part),

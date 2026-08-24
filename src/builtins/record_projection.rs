@@ -37,19 +37,20 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 
     let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", &SLOTS.fields));
 
-    // A computed field list is out of scope: each part must be a bare identifier.
-    // Each name is syntactic, so it interns: the narrowed record type it lands in renders through
-    // the same interner. The text rides along for the diagnostics below.
-    let mut names: Vec<(&str, Symbol)> = Vec::with_capacity(fields_expr.parts.len());
+    // A computed field list is out of scope: each part must be a bare identifier, which arrives
+    // as the symbol the parse minted for it — the same currency the narrowed record type keys by,
+    // and the interner the diagnostics below render through already holds its spelling.
+    let mut names: Vec<Symbol> = Vec::with_capacity(fields_expr.parts.len());
     for part in fields_expr.parts {
         match part.value {
-            ExpressionPart::Identifier(name) => {
-                if names.iter().any(|(seen, _)| *seen == name) {
+            ExpressionPart::Identifier(v) => {
+                if names.contains(&v.symbol()) {
                     return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-                        "FROM field list has duplicate field `{name}`",
+                        "FROM field list has duplicate field `{}`",
+                        ctx.registries.labels.render(v.symbol()),
                     )))));
                 }
-                names.push((name, ctx.registries.labels.intern(name)));
+                names.push(v.symbol());
             }
             other => {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
@@ -87,10 +88,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         },
         _ => unreachable!("record_obj is shape-gated to a Record above"),
     };
-    for (name, symbol) in &names {
+    for symbol in &names {
         if record_fields.get(*symbol).is_none() {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-                "FROM: record has no field `{name}`",
+                "FROM: record has no field `{}`",
+                ctx.registries.labels.render(*symbol),
             )))));
         }
     }
@@ -98,7 +100,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // into the at-brand rebuild below.
     let narrowed_type = ctx
         .types()
-        .record(Record::from_pairs(names.iter().map(|(_, symbol)| {
+        .record(Record::from_pairs(names.iter().map(|symbol| {
             (
                 *symbol,
                 *record_fields

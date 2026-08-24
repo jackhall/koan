@@ -47,8 +47,8 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
     let mut i = 0;
     while i < parts.len() {
         let name = match (parts[i].value.field_slot(), name_kind) {
-            (FieldSlot::Name(s), FieldNameKind::Identifier | FieldNameKind::IdentifierOrType) => {
-                s.to_string()
+            (FieldSlot::Name(v), FieldNameKind::Identifier | FieldNameKind::IdentifierOrType) => {
+                labels.render(v.symbol())
             }
             // Capitalized names (`Ty`, `Er` params; `Some`, `Ok` variant tags) lex as
             // `Type` tokens; admitted under `IdentifierOrType` (FN) and `Type`

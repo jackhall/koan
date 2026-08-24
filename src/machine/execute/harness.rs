@@ -937,22 +937,12 @@ fn duplicate_declarations(
         let Some(name) = statement_binder_plan(statement).and_then(|plan| plan.name) else {
             continue;
         };
-        // A binder's identity is its symbol bits whichever channel it names, so the two arms key
+        // A binder's identity is its symbol bits whichever channel it names, so both channels key
         // one map; the spelling is read back only to name a duplicate.
-        let symbol = match name {
-            crate::machine::model::BinderName::Value(text) => {
-                crate::machine::model::Symbol::of(text)
-            }
-            crate::machine::model::BinderName::Type(binder) => binder.symbol(),
-        };
+        let symbol = name.symbol();
         match declared.get(&symbol) {
             Some(&first) => {
-                let text = match name {
-                    crate::machine::model::BinderName::Value(text) => text.to_string(),
-                    crate::machine::model::BinderName::Type(binder) => {
-                        crate::machine::model::render_label(binder.symbol(), registries)
-                    }
-                };
+                let text = crate::machine::model::render_label(symbol, registries);
                 rejected.insert(
                     position,
                     KError::new(KErrorKind::DuplicateDeclaration {

@@ -535,7 +535,7 @@ pub fn lookup_type(scope: &Scope<'_>, name: &str) -> Option<crate::machine::mode
 
 pub fn lookup_binding<'a>(scope: &Scope<'a>, name: &str) -> Option<&'a KObject<'a>> {
     scope
-        .resolve_value_delivered(name, None)
+        .resolve_value_delivered(crate::machine::model::ValueSymbol::of(name)?, None)
         .and_then(NameLookup::bound)
         .map(|delivered| {
             scope
@@ -620,6 +620,18 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
 pub(crate) fn kw_part<'a>(text: &'a str) -> ExpressionPart<'a> {
     ExpressionPart::Keyword(
         KeywordToken::of(text).expect("a test fixture keyword is keyword-class"),
+    )
+}
+
+/// [`kw_part`]'s value-channel twin: an identifier part for a hand-built AST, classified and minted
+/// with nothing recorded. A test node is not a declaration, so nothing renders its names through
+/// the run's interner; a fixture that does render one states its name through
+/// [`value_name`] against the run's own registries instead.
+#[cfg(test)]
+pub(crate) fn identifier_part<'a>(text: &str) -> ExpressionPart<'a> {
+    ExpressionPart::Identifier(
+        crate::machine::model::ValueSymbol::classify(text)
+            .expect("a test fixture identifier is a value token"),
     )
 }
 

@@ -1,9 +1,9 @@
 //! The parse side of the run's label table.
 //!
-//! A bucket key holds keyword symbols and nothing else, and a `Type` part holds only its token's
-//! symbol, so the text a diagnostic renders has to come from somewhere: parse classification is the
-//! site that records it. Every keyword and Type token a parse classifies is interned as it is
-//! minted.
+//! A bucket key holds keyword symbols and nothing else, and a name part — value-side or type-side
+//! — holds only its token's symbol, so the text a diagnostic renders has to come from somewhere:
+//! parse classification is the site that records it. Every token a parse classifies is interned as
+//! it is minted.
 
 use super::super::parse;
 use crate::machine::core::program_storage;
@@ -50,21 +50,38 @@ fn a_type_token_part_carries_its_symbol_and_the_parse_records_the_spelling() {
     assert_eq!(labels.resolve(name.symbol()).as_deref(), Some("Foo"));
 }
 
-/// Interning is the keyword and Type classifiers' job: a value token the same parse walks past
-/// leaves no entry, so the table's size tracks the names a program can name a binding by and not
-/// its identifiers.
+/// An identifier token's part carries its symbol the same way, so the parse records value
+/// spellings too — the `Type`-token test's value-channel mirror.
 #[test]
-fn a_parse_records_no_entry_for_a_value_token() {
+fn an_identifier_part_carries_its_symbol_and_the_parse_records_the_spelling() {
+    let program = program_storage();
+    let labels = LabelInterner::new();
+    let exprs = parse(program.brand(), &labels, "flag").expect("parse should succeed");
+    let [statement] = exprs.as_slice() else {
+        panic!("one statement");
+    };
+    let ExpressionPart::Identifier(name) = statement.parts[0].value else {
+        panic!("a value token parses to an `Identifier` part");
+    };
+    assert_eq!(labels.resolve(name.symbol()).as_deref(), Some("flag"));
+}
+
+/// Every class the parse classifies is recorded once, and a token repeated across a statement
+/// records one entry — the table's size tracks distinct spellings, not part positions.
+#[test]
+fn a_parse_records_each_spelling_once() {
     let program = program_storage();
     let labels = LabelInterner::new();
     parse(program.brand(), &labels, "IF flag THEN flag").expect("parse should succeed");
     assert_eq!(
-        labels.resolve(crate::machine::model::labels::Symbol::of("flag")),
-        None
+        labels
+            .resolve(crate::machine::model::labels::Symbol::of("flag"))
+            .as_deref(),
+        Some("flag")
     );
     assert_eq!(
         labels.len(),
-        2,
-        "only `IF` and `THEN` classify as anything the parse records here"
+        3,
+        "`IF`, `THEN`, and the one `flag` spelling the two identifier parts share"
     );
 }

@@ -20,7 +20,7 @@ use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::KeywordToken;
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
-use crate::machine::model::labels::{LabelInterner, TypeSymbol};
+use crate::machine::model::labels::{LabelInterner, TypeSymbol, ValueSymbol};
 use crate::machine::model::{is_keyword_token, is_type_name};
 use crate::parse::operators::{SuffixOp, find_suffix, is_atom_terminator};
 use crate::source::{Span, Spanned};
@@ -173,7 +173,8 @@ fn classify_atom<'a>(
         ));
     }
     Ok(ExpressionPart::Identifier(
-        brand.region().allocator().text(tok),
+        ValueSymbol::declared(tok, labels)
+            .expect("a token that is neither keyword-class nor a type name is a value token"),
     ))
 }
 
@@ -264,7 +265,7 @@ mod tests {
     fn describe(p: &ExpressionPart<'_>, labels: &LabelInterner) -> String {
         match p {
             ExpressionPart::Keyword(kw) => format!("t({})", kw.text()),
-            ExpressionPart::Identifier(s) => format!("t({})", s),
+            ExpressionPart::Identifier(v) => format!("t({})", labels.render(v.symbol())),
             ExpressionPart::Type(t) => format!("T({})", labels.render(t.symbol())),
             ExpressionPart::Expression(e) => {
                 let inner: Vec<String> =

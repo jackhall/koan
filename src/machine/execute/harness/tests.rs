@@ -81,13 +81,21 @@ pub(super) fn keyword_expr<'a>(program: &'a ProgramStorage, name: &str) -> Worki
 
 /// `LET <name> = <value>` at AST level, so the node carries the binder plan a statement
 /// submission installs from.
-pub(super) fn let_ast<'a>(program: &'a ProgramStorage, name: &str, value: f64) -> KExpression<'a> {
+pub(super) fn let_ast<'a>(
+    program: &'a ProgramStorage,
+    labels: &crate::machine::model::LabelInterner,
+    name: &str,
+    value: f64,
+) -> KExpression<'a> {
     let brand = program.brand().region();
     KExpression::new(
         brand,
         &[
             Spanned::bare(kw_part("LET")),
-            Spanned::bare(ExpressionPart::Identifier(brand.allocator().text(name))),
+            Spanned::bare(ExpressionPart::Identifier(
+                crate::machine::model::ValueSymbol::declared(name, labels)
+                    .expect("a test fixture identifier is a value token"),
+            )),
             Spanned::bare(kw_part("=")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(value))),
         ],
@@ -96,8 +104,9 @@ pub(super) fn let_ast<'a>(program: &'a ProgramStorage, name: &str, value: f64) -
 
 pub(super) fn let_expr<'a>(
     program: &'a ProgramStorage,
+    labels: &crate::machine::model::LabelInterner,
     name: &str,
     value: f64,
 ) -> WorkingExpression<'a> {
-    working(program, let_ast(program, name, value))
+    working(program, let_ast(program, labels, name, value))
 }

@@ -22,7 +22,7 @@ pub(super) fn kexpression_references_any(expr: &KExpression<'_>, param_names: &[
 
 fn part_references_any(part: ExpressionPart<'_>, param_names: &[String]) -> bool {
     match part {
-        ExpressionPart::Identifier(name) => param_names.iter().any(|n| n == name),
+        ExpressionPart::Identifier(v) => param_names.iter().any(|n| Symbol::of(n) == v.symbol()),
         ExpressionPart::Type(t) => type_expr_references_any(t, param_names),
         ExpressionPart::Expression(inner) => kexpression_references_any(&inner, param_names),
         ExpressionPart::SigiledTypeExpr(inner) => kexpression_references_any(&inner, param_names),

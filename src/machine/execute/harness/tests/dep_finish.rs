@@ -17,9 +17,11 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
-    let dep_a = runtime.dispatch_in_scope(let_expr(&program, "ca", 7.0), scope, 1);
-    let dep_b = runtime.dispatch_in_scope(let_expr(&program, "cb", 11.0), scope, 2);
+    let dep_a = runtime.dispatch_in_scope(let_expr(&program, labels, "ca", 7.0), scope, 1);
+    let dep_b = runtime.dispatch_in_scope(let_expr(&program, labels, "cb", 11.0), scope, 2);
     let finish: TerminalDepFinish = Box::new(|_sched, terminals| {
         let a = match terminals[0].cell.open_at().value() {
             Carried::Object(KObject::Number(n)) => *n,
@@ -73,7 +75,7 @@ fn dep_finish_short_circuits_on_dep_error() {
 
     // One dep that delivers a value and one that cannot resolve its name — an ordinary erroring
     // dispatch, which is what the consumer's walk fills its edge with.
-    let dep_ok = runtime.dispatch_in_scope(let_expr(&program, "ok", 99.0), scope, 1);
+    let dep_ok = runtime.dispatch_in_scope(let_expr(&program, labels, "ok", 99.0), scope, 1);
     let dep_err = runtime.dispatch_in_scope(
         working_one(&program, labels, "LET bad = (undefined_thing)"),
         scope,

@@ -13,7 +13,7 @@ use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, Signatu
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 
 use super::working;
-use crate::builtins::test_support::kw_part;
+use crate::builtins::test_support::{TestRun, kw_part, value_name};
 use crate::machine::model::RunRegistries;
 use crate::machine::{program_storage, run_root_storage};
 use crate::source::Spanned;
@@ -134,13 +134,16 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     use crate::machine::KErrorKind;
     let program = program_storage();
     let region = run_root_storage();
-    let scope = run_root_bare(&region);
+    // The run's own registries throughout: the name the diagnostic renders is the one the
+    // fixture minted, so the assertion below reads the spelling rather than `<label>`.
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
     register_builtin(
         scope,
         "any_first",
         one_slot_sig("v", KType::ANY),
         body_marker_any,
-        &RunRegistries::new(),
+        test_run.registries(),
         &mut crate::machine::WriteGate::for_test(),
     );
     register_builtin(
@@ -148,20 +151,23 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
         "ident_second",
         one_slot_sig("v", KType::IDENTIFIER),
         body_identifier,
-        &RunRegistries::new(),
+        test_run.registries(),
         &mut crate::machine::WriteGate::for_test(),
     );
 
     let expr = KExpression::new(
         program.brand().region(),
-        &[Spanned::bare(ExpressionPart::Identifier("foo"))],
+        &[Spanned::bare(ExpressionPart::Identifier(value_name(
+            "foo",
+            test_run.registries(),
+        )))],
     );
-    let mut runtime = KoanRuntime::new(program.brand(), Box::new(std::io::sink()));
+    let registry = test_run.registry_handle();
+    let runtime = &mut test_run.runtime;
     let slot = runtime.dispatch_in_scope(working(&program, expr), scope, 1);
     let id = runtime.install_edge_for_test(slot, scope);
     runtime.execute().unwrap();
-    let registries = RunRegistries::new();
-    let err = match runtime.read_edge_result_with(id, |v| v.summarize(&registries)) {
+    let err = match runtime.read_edge_result_with(id, |v| v.summarize(registry.registries())) {
         Err(e) => e.clone(),
         Ok(summary) => panic!(
             "stateful BareIdentifier must surface UnboundName for an unbound name; \

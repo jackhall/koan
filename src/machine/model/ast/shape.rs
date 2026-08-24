@@ -11,7 +11,7 @@ use crate::machine::SplicedCell;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::KeyElement;
 use crate::machine::model::ast::KeywordToken;
-use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol};
+use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
 use crate::source::Spanned;
 
 use super::KExpression;
@@ -47,8 +47,8 @@ pub enum PartClass<'a> {
 /// co-declared references are still bare names, and one whose references the sigil-body rewrite has
 /// already sealed into [`Resolved`](FieldSlot::Resolved) cells.
 pub enum FieldSlot<'a> {
-    /// A bare identifier — a field or parameter name.
-    Name(&'a str),
+    /// A bare identifier — a field or parameter name, minted by the parse that classified it.
+    Name(ValueSymbol),
     /// A type name token: a field's declared type, or a capitalized field / variant name.
     Type(TypeSymbol),
     /// `:(…)` still holding parsed AST — thread its co-declared references, then sub-dispatch it.

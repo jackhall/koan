@@ -1,8 +1,8 @@
 use super::*;
 use crate::builtins::register_builtin;
-use crate::builtins::test_support::kw_part;
 use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{TestRun, marker, run_root_bare};
+use crate::builtins::test_support::{identifier_part, kw_part};
 use crate::machine::core::{FrameStorageExt, Scope, program_storage, run_root_storage};
 use crate::machine::model::KLiteral;
 use crate::machine::model::RunRegistries;
@@ -83,7 +83,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         brand,
         &[
             Spanned::bare(kw_part("OP")),
-            Spanned::bare(ExpressionPart::Identifier("someName")),
+            Spanned::bare(identifier_part("someName")),
         ],
     );
     let f = find_match(scope, &expr, types).expect("OP <Number> should match");
@@ -128,17 +128,14 @@ fn classify_excludes_literal_name_slots_from_wrap() {
     let inner = ExpressionPart::expression(
         program.brand(),
         &[
-            Spanned::bare(ExpressionPart::Identifier("x")),
+            Spanned::bare(identifier_part("x")),
             Spanned::bare(kw_part(":")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
         ],
     );
     let expr = KExpression::new(
         brand,
-        &[
-            Spanned::bare(ExpressionPart::Identifier("myFn")),
-            Spanned::bare(inner),
-        ],
+        &[Spanned::bare(identifier_part("myFn")), Spanned::bare(inner)],
     );
     let f = find_match(scope, &expr, types)
         .expect("test overload should match an Identifier-leading expression");
@@ -160,7 +157,7 @@ fn classify_excludes_binder_name_slot_from_wrap() {
         brand,
         &[
             Spanned::bare(kw_part("LET")),
-            Spanned::bare(ExpressionPart::Identifier("x")),
+            Spanned::bare(identifier_part("x")),
             Spanned::bare(kw_part("=")),
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
         ],

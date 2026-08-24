@@ -17,16 +17,12 @@ use crate::machine::{BindingIndex, KErrorKind};
 #[test]
 fn binder_name_extracts_module_name() {
     let program = program_storage();
-    let expr = parse_one(
-        &program,
-        &crate::machine::model::LabelInterner::new(),
-        "MODULE foo = (LET x = 1)",
-    );
-    let name = crate::machine::model::binder::identifier_part_binder_name(&expr);
-    assert!(matches!(
-        name,
-        Some(crate::machine::model::BinderName::Value("foo"))
-    ));
+    let labels = crate::machine::model::LabelInterner::new();
+    let expr = parse_one(&program, &labels, "MODULE foo = (LET x = 1)");
+    let name = crate::machine::model::binder::identifier_part_binder_name(&expr)
+        .expect("`MODULE foo = …` names a binder");
+    assert_eq!(name.bind_kind(), crate::machine::model::BindKind::Value);
+    assert_eq!(labels.render(name.symbol()), "foo");
 }
 
 /// A Type-token module name is refused by the second overload, whose only job is the

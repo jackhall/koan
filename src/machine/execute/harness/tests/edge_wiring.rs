@@ -34,7 +34,10 @@ fn park_on_errored_producer_propagates_producer_error() {
 
     // Two ordinary producers, run to completion first: their walks deliver into the watch edges
     // below, so by the time the consumer parks, both source edges are filled rather than parked.
-    let edge_ok = test_run.dispatch_watched_in(scope, super::let_expr(&program, "ok", 5.0));
+    let edge_ok = test_run.dispatch_watched_in(
+        scope,
+        super::let_expr(&program, &test_run.registries().labels, "ok", 5.0),
+    );
     let edge_err = test_run.dispatch_watched_in(
         scope,
         super::working_one(

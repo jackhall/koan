@@ -22,7 +22,7 @@ pub(super) fn describe(e: &KExpression<'_>, labels: &LabelInterner) -> String {
     fn describe_part(p: &ExpressionPart<'_>, labels: &LabelInterner) -> String {
         match p {
             ExpressionPart::Keyword(s) => format!("t({})", s),
-            ExpressionPart::Identifier(s) => format!("t({})", s),
+            ExpressionPart::Identifier(v) => format!("t({})", labels.render(v.symbol())),
             ExpressionPart::Type(t) => format!("T({})", labels.render(t.symbol())),
             ExpressionPart::Expression(e) => describe(e, labels),
             // Slice (not trim) to strip exactly one wrapping `[…]` — trim_matches is greedy.

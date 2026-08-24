@@ -33,7 +33,9 @@ pub(super) fn initial<'step>(
         // harness rules on an already-terminal producer when it installs); one that bound the head
         // wakes the resume onto the `Bound` arm above.
         Some(NameLookup::Parked(source)) => install_head_park(source, expr, ctx.scratch()),
-        None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head.to_string())))),
+        None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
+            ctx.registries().labels.render(head.symbol()),
+        )))),
     }
 }
 

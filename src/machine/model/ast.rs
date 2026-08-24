@@ -11,7 +11,7 @@
 use crate::source::{FileId, Span, Spanned};
 
 use crate::machine::core::{ProgramBrand, RegionBrand};
-use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol};
+use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
 use crate::machine::model::{Held, KObject, Parseable, StoredBinderKey};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::witnessed::reattachable;
@@ -123,13 +123,14 @@ impl<'a> KLiteral<'a> {
     }
 }
 
-/// One element of a parsed expression. Every arm borrows at `'a`: a name is a run of bytes in the
-/// storage that parsed it, a nested node is a pointer to a sibling node in the same storage, and a
-/// literal run is a bumped slice.
+/// One element of a parsed expression. A name — value-side or type-side — is a symbol the parse
+/// minted when it classified the token, so it carries no borrow at all. The arms that do borrow do
+/// so at `'a`: a nested node is a pointer to a sibling node in the same storage, and a literal run
+/// is a bumped slice.
 #[derive(Debug, Clone, Copy)]
 pub enum ExpressionPart<'a> {
     Keyword(KeywordToken<'a>),
-    Identifier(&'a str),
+    Identifier(ValueSymbol),
     Type(TypeSymbol),
     Expression(ProgramNode<'a>),
     /// Parse-context marker for a `:(...)` group: the wrapped `KExpression` must dispatch
@@ -179,7 +180,7 @@ impl<'a> Part<'a> for ExpressionPart<'a> {
 
     fn field_slot(&self) -> FieldSlot<'a> {
         match self {
-            ExpressionPart::Identifier(s) => FieldSlot::Name(s),
+            ExpressionPart::Identifier(v) => FieldSlot::Name(*v),
             ExpressionPart::Type(t) => FieldSlot::Type(*t),
             ExpressionPart::SigiledTypeExpr(body) => FieldSlot::AstSigil(body.reference()),
             ExpressionPart::RecordType(body) => FieldSlot::AstRecord(body.reference()),
@@ -227,7 +228,7 @@ impl<'a> ExpressionPart<'a> {
     pub fn summarize(&self, labels: &LabelInterner) -> String {
         match self {
             ExpressionPart::Keyword(kw) => kw.text().to_string(),
-            ExpressionPart::Identifier(s) => (*s).to_string(),
+            ExpressionPart::Identifier(v) => labels.render(v.symbol()),
             ExpressionPart::Type(t) => labels.render(t.symbol()),
             ExpressionPart::Expression(e) => e.summarize(labels),
             ExpressionPart::SigiledTypeExpr(e) => format!(":({})", e.summarize(labels)),
@@ -296,7 +297,9 @@ impl<'a> ExpressionPart<'a> {
     pub fn resolve(&self, brand: RegionBrand<'a>, labels: &LabelInterner) -> KObject<'a> {
         match self {
             ExpressionPart::Keyword(kw) => KObject::KString(brand.allocator().text(kw.text())),
-            ExpressionPart::Identifier(s) => KObject::KString(brand.allocator().text(s)),
+            ExpressionPart::Identifier(v) => {
+                KObject::KString(brand.allocator().text(&labels.render(v.symbol())))
+            }
             ExpressionPart::Type(t) => {
                 KObject::KString(brand.allocator().text(&labels.render(t.symbol())))
             }
@@ -350,7 +353,9 @@ impl<'a> ExpressionPart<'a> {
     ) -> KObject<'b> {
         match self {
             ExpressionPart::Keyword(kw) => KObject::KString(brand.allocator().text(kw.text())),
-            ExpressionPart::Identifier(s) => KObject::KString(brand.allocator().text(s)),
+            ExpressionPart::Identifier(v) => {
+                KObject::KString(brand.allocator().text(&labels.render(v.symbol())))
+            }
             ExpressionPart::Type(t) => {
                 KObject::KString(brand.allocator().text(&labels.render(t.symbol())))
             }

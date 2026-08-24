@@ -73,10 +73,10 @@ pub(in crate::machine::execute) fn resolve_name(
 ) -> Resolution {
     match part {
         ExpressionPart::Identifier(name) => {
-            match scope.resolve_value_delivered(name, chain.map(|c| &**c)) {
+            match scope.resolve_value_delivered(*name, chain.map(|c| &**c)) {
                 Some(NameLookup::Bound(delivered)) => Resolution::Resolved(delivered),
                 Some(NameLookup::Parked(source)) => Resolution::Parked(source),
-                None => Resolution::Unbound((*name).to_string()),
+                None => Resolution::Unbound(registries.labels.render(name.symbol())),
             }
         }
         ExpressionPart::Type(t) => {

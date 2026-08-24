@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use crate::machine::core::{KError, KErrorKind, RegionBrand};
 use crate::machine::model::ast::{Part, PartClass};
-use crate::machine::model::labels::{KeywordSymbol, TypeSymbol};
+use crate::machine::model::labels::{BinderSymbol, KeywordSymbol};
 use crate::machine::model::{ExpressionPart, KExpression, KeywordToken};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::source::Spanned;
@@ -55,32 +55,12 @@ pub fn value_binder(
     })
 }
 
-/// A binder statement's declared name as its spine carries it: value-side text still awaiting
-/// classification at the install seam, or a type token's symbol, already minted by the parser.
-///
-/// The variant *is* the channel — a name reads as `Value` xor `Type` by construction, so the
-/// placeholder a forward reference parks on is tagged by the same read that found the name.
-#[derive(Clone, Copy, Debug)]
-pub enum BinderName<'a> {
-    Value(&'a str),
-    Type(TypeSymbol),
-}
-
-impl<'a> BinderName<'a> {
-    /// Which language this name binds in.
-    pub fn bind_kind(self) -> BindKind {
-        match self {
-            BinderName::Value(_) => BindKind::Value,
-            BinderName::Type(_) => BindKind::Type,
-        }
-    }
-}
-
 /// Structural name extractor for a binder builtin. Returning `Some(name)` names the placeholder a
-/// forward reference parks on while the binder's body is in flight. A value name is a token of the
-/// node's own parts run, already resident at the node's lifetime; a type name is a `Copy` symbol.
-/// Either way the read allocates nothing.
-pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<BinderName<'a>>;
+/// forward reference parks on while the binder's body is in flight. Both channels' names are `Copy`
+/// symbols the parser minted when it classified the token, so the read allocates nothing and the
+/// variant *is* the channel — a name reads as `Value` xor `Type` by construction, so the
+/// placeholder is tagged by the same read that found the name.
+pub type BinderNameFn = fn(&KExpression<'_>) -> Option<BinderSymbol>;
 
 /// Structural bucket-key extractor for a binder that registers a callable
 /// (`FN`, `OP`). Returns every bucket key a *call* to the to-be-registered
@@ -134,25 +114,19 @@ impl<'a> BucketKeys<'a> {
 /// string and key run is a borrow at the node's own lifetime, so the stored form owns no heap.
 #[derive(Clone, Copy, Debug)]
 pub struct StoredBinderKey<'a> {
-    pub name: Option<BinderName<'a>>,
+    pub name: Option<BinderSymbol>,
     pub buckets: Option<BucketKeys<'a>>,
 }
 
 impl<'a> StoredBinderKey<'a> {
     /// The owned [`BinderKey`] this stands for — materialized where an install path needs map keys
-    /// for the bindings tables. A value name is classified into the binding vocabulary here, at the
-    /// one seam where the declaration's source text is still in hand, and interned so a `Rebind`
-    /// naming it can render; a type name arrives already classified and interned from the parser.
-    /// A keyword-class name classifies to `None` — nothing binds to a keyword, so the statement
-    /// claims no name.
-    pub fn to_owned_key(self, labels: &crate::machine::model::LabelInterner) -> BinderKey {
+    /// for the bindings tables. The name copies straight through: both channels arrive already
+    /// classified and interned from the parse that read the token, so nothing is minted here. A
+    /// keyword-class token never classifies as a name in the first place, so a statement whose
+    /// name position holds one claims no name.
+    pub fn to_owned_key(self) -> BinderKey {
         BinderKey {
-            name: self.name.and_then(|name| match name {
-                BinderName::Value(text) => {
-                    crate::machine::model::BinderSymbol::declared(text, labels)
-                }
-                BinderName::Type(symbol) => Some(crate::machine::model::BinderSymbol::Type(symbol)),
-            }),
+            name: self.name,
             buckets: self
                 .buckets
                 .into_iter()
@@ -166,7 +140,7 @@ impl<'a> StoredBinderKey<'a> {
 /// bindings tables, whose keys are owned.
 #[derive(Clone, Debug)]
 pub struct BinderKey {
-    pub name: Option<crate::machine::model::BinderSymbol>,
+    pub name: Option<BinderSymbol>,
     /// 0..=2 entries, in declaration order.
     pub buckets: Vec<UntypedKey>,
 }
@@ -175,19 +149,19 @@ pub struct BinderKey {
 
 /// Shared [`BinderNameFn`] for typed-binder builtins (SIG / UNION / NEWTYPE):
 /// the binder name is `parts[1]`'s `Type(t)` token. A free function (not the
-/// `KExpression::binder_name_from_type_part` method reference) so the signature is higher-ranked
-/// over the expression lifetime, as `BinderNameFn` requires.
-pub(crate) fn type_part_binder_name<'a>(expr: &KExpression<'a>) -> Option<BinderName<'a>> {
-    expr.binder_name_from_type_part().map(BinderName::Type)
+/// `KExpression::binder_name_from_type_part` method reference) so it wraps the symbol in the
+/// channel tag [`BinderNameFn`] hands back.
+pub(crate) fn type_part_binder_name(expr: &KExpression<'_>) -> Option<BinderSymbol> {
+    expr.binder_name_from_type_part().map(BinderSymbol::Type)
 }
 
 /// Shared [`BinderNameFn`] for value-binder builtins (`LET <name> = …`, `MODULE <name> = …`): the
 /// binder name is `parts[1]`'s `Identifier` token. The Identifier-part twin of
 /// [`type_part_binder_name`], so each overload's extractor matches exactly its own name-part kind
 /// and the placeholder is tagged `Value` xor `Type` to match where the bind lands.
-pub(crate) fn identifier_part_binder_name<'a>(expr: &KExpression<'a>) -> Option<BinderName<'a>> {
+pub(crate) fn identifier_part_binder_name(expr: &KExpression<'_>) -> Option<BinderSymbol> {
     match expr.parts.get(1)?.value {
-        ExpressionPart::Identifier(s) => Some(BinderName::Value(s)),
+        ExpressionPart::Identifier(v) => Some(BinderSymbol::Value(v)),
         _ => None,
     }
 }
@@ -195,11 +169,11 @@ pub(crate) fn identifier_part_binder_name<'a>(expr: &KExpression<'a>) -> Option<
 /// Placeholder extractor covering both `TYPE` overloads: the bare form's name is the `Type` part at
 /// `parts[1]`; the higher-kinded form's name is the *last* inner part of the parenthesized
 /// `(Param AS Name)` expression.
-pub(crate) fn type_decl_binder_name<'a>(expr: &KExpression<'a>) -> Option<BinderName<'a>> {
+pub(crate) fn type_decl_binder_name(expr: &KExpression<'_>) -> Option<BinderSymbol> {
     match expr.parts.get(1)?.value {
-        ExpressionPart::Type(t) => Some(BinderName::Type(t)),
+        ExpressionPart::Type(t) => Some(BinderSymbol::Type(t)),
         ExpressionPart::Expression(inner) => match inner.parts.last()?.value {
-            ExpressionPart::Type(t) => Some(BinderName::Type(t)),
+            ExpressionPart::Type(t) => Some(BinderSymbol::Type(t)),
             _ => None,
         },
         _ => None,
@@ -431,7 +405,7 @@ pub struct BinderSpec {
     /// Full untyped bucket key — ALL keywords in position, never just the lead keyword.
     pub key: &'static [KeyElementSpec],
     /// Name extractors tried in order; first `Some` wins. Empty for the bucket-only and
-    /// declaration forms (`FN`, `OP`, `VAL`). Each extractor's [`BinderName`] variant carries the
+    /// declaration forms (`FN`, `OP`, `VAL`). Each extractor's [`BinderSymbol`] variant carries the
     /// channel the name binds in, so the spec states no separate kind.
     pub names: &'static [BinderNameFn],
     /// Bucket-key extractor for a form whose body registers overloads (`FN`, `OP`). `None` for the

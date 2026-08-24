@@ -128,7 +128,9 @@ pub fn body_identifier<'a>(
     // `s` is a bound name: cross the binding's own carrier as the field read's lhs operand, so the
     // projected field folds every region the bound value reaches. The lift is the only read — the
     // field probe runs under the envelope's own pins rather than off a bare reference.
-    if let Some(lhs) = ctx.scope.lookup_value_delivered(s_name) {
+    if let Some(name) = crate::machine::model::ValueSymbol::of(s_name)
+        && let Some(lhs) = ctx.scope.lookup_value_delivered(name)
+    {
         return route(access_field(&ctx.ctx, &field_name, &lhs, ctx.registries));
     }
     // An abstract type's name reaches this overload as a `KString` — the bind seam lowers a

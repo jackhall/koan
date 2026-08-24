@@ -7,16 +7,12 @@ fn binder_name_extracts_let_name() {
     use crate::builtins::test_support::parse_one;
     use crate::machine::program_storage;
     let program = program_storage();
-    let expr = parse_one(
-        &program,
-        &crate::machine::model::LabelInterner::new(),
-        "LET hello = 1",
-    );
-    let name = crate::machine::model::binder::identifier_part_binder_name(&expr);
-    assert!(matches!(
-        name,
-        Some(crate::machine::model::BinderName::Value("hello"))
-    ));
+    let labels = crate::machine::model::LabelInterner::new();
+    let expr = parse_one(&program, &labels, "LET hello = 1");
+    let name = crate::machine::model::binder::identifier_part_binder_name(&expr)
+        .expect("`LET hello = 1` names a binder");
+    assert_eq!(name.bind_kind(), crate::machine::model::BindKind::Value);
+    assert_eq!(labels.render(name.symbol()), "hello");
 }
 
 /// End-to-end claim-then-finalize: statement submission claims the name's slot from the

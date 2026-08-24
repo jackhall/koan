@@ -9,7 +9,7 @@
 use crate::machine::core::{KoanRegion, KoanRegionExt, Scope};
 use crate::machine::model::Carried;
 use crate::machine::model::FieldParts;
-use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::labels::{TypeSymbol, ValueSymbol};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
 
@@ -30,7 +30,7 @@ use crate::witnessed::{BumpAllocator, Delivered};
 pub(super) fn bare_identifier<'step, 'b>(
     ctx: &DecideCtx<'_, 'step, '_>,
     s: &'b Scope<'b>,
-    name: &str,
+    name: ValueSymbol,
 ) -> Outcome<'step> {
     match s.resolve_value_delivered(name, ctx.chain_deref()) {
         // Lifted at its binding scope, so the carrier names the value's reach by construction
@@ -39,7 +39,9 @@ pub(super) fn bare_identifier<'step, 'b>(
             Outcome::Done(Ok(StepCarried::born_delivered(delivered)))
         }
         Some(NameLookup::Parked(source)) => forward_to_producer(source),
-        None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name.to_string())))),
+        None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
+            ctx.registries().labels.render(name.symbol()),
+        )))),
     }
 }
 

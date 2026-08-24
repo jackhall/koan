@@ -7,7 +7,7 @@ use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
 use super::{let_expr, working};
-use crate::builtins::test_support::kw_part;
+use crate::builtins::test_support::{kw_part, value_name};
 
 #[test]
 fn dispatches_independent_expressions_in_order() {
@@ -15,10 +15,15 @@ fn dispatches_independent_expressions_in_order() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(
         root.id,
-        vec![let_expr(&program, "x", 1.0), let_expr(&program, "y", 2.0)],
+        vec![
+            let_expr(&program, labels, "x", 1.0),
+            let_expr(&program, labels, "y", 2.0),
+        ],
         root,
     );
     let edge1 = runtime.install_edge_for_test(ids[0], root);
@@ -65,6 +70,8 @@ fn later_expression_sees_earlier_binding_via_lookup() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
 
     let brand = program.brand().region();
@@ -72,17 +79,26 @@ fn later_expression_sees_earlier_binding_via_lookup() {
         brand,
         &[
             Spanned::bare(kw_part("LET")),
-            Spanned::bare(ExpressionPart::Identifier("b")),
+            Spanned::bare(ExpressionPart::Identifier(value_name(
+                "b",
+                registry.registries(),
+            ))),
             Spanned::bare(kw_part("=")),
             Spanned::bare(ExpressionPart::expression(
                 program.brand(),
-                &[Spanned::bare(ExpressionPart::Identifier("a"))],
+                &[Spanned::bare(ExpressionPart::Identifier(value_name(
+                    "a",
+                    registry.registries(),
+                )))],
             )),
         ],
     );
     runtime.enter_block(
         root.id,
-        vec![let_expr(&program, "a", 10.0), working(&program, lookup_a)],
+        vec![
+            let_expr(&program, labels, "a", 10.0),
+            working(&program, lookup_a),
+        ],
         root,
     );
 

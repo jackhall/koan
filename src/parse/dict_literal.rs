@@ -246,7 +246,11 @@ impl<'a> DictFrame<'a> {
             let mut fields = Vec::with_capacity(self.pairs.len());
             for (key, value) in self.pairs {
                 let name = match key {
-                    ExpressionPart::Identifier(s) => s,
+                    ExpressionPart::Identifier(v) => self
+                        .brand
+                        .region()
+                        .allocator()
+                        .text(&labels.render(v.symbol())),
                     // A capitalized Type token is a valid literal field name (kept verbatim,
                     // never name-resolved) — e.g. abstract type-slot names in `WITH {Elt = T}`.
                     ExpressionPart::Type(t) => self

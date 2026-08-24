@@ -101,12 +101,13 @@ impl<'a> Scope<'a> {
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<&'a KObject<'a>>> {
-        self.resolve_value_delivered(name, chain).map(|hit| {
-            hit.map(|delivered| {
-                self.adopt_carried(&delivered, AdoptSeam::Retaining)
-                    .object()
+        self.resolve_value_delivered(ValueSymbol::of(name)?, chain)
+            .map(|hit| {
+                hit.map(|delivered| {
+                    self.adopt_carried(&delivered, AdoptSeam::Retaining)
+                        .object()
+                })
             })
-        })
     }
 
     /// Resolve `name` down the outer chain and **lift** the hit into a delivery envelope pinned by
@@ -114,15 +115,14 @@ impl<'a> Scope<'a> {
     /// `Weak → Rc` so the value's whole reach travels owned. Walks the shared `walk_chain`
     /// traversal, so shadowing agrees; the lift happens at the **binding** scope, whose arena
     /// hosts the description. The non-`Bound` dispositions mirror the bare resolution.
+    ///
+    /// Takes the classified symbol, not text: a value name arrives minted and interned by the
+    /// parse that read the token, so the ladder walks on symbol bits end to end.
     pub(crate) fn resolve_value_delivered(
         &self,
-        name: &str,
+        name: ValueSymbol,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<DeliveredCarried>> {
-        // The one text→symbol conversion on the ladder: classify at the seam, then walk on symbol
-        // bits. A name that is not a value token classifies to `None` and misses here — the
-        // `data` map has never held one.
-        let name = ValueSymbol::of(name)?;
         self.walk_chain(|scope| {
             scope
                 .bindings()
@@ -133,7 +133,7 @@ impl<'a> Scope<'a> {
 
     /// [`Self::resolve_value_delivered`] unfiltered, with a still-finalizing placeholder collapsed
     /// to `None` — the fold-operand form of a binding read.
-    pub(crate) fn lookup_value_delivered(&self, name: &str) -> Option<DeliveredCarried> {
+    pub(crate) fn lookup_value_delivered(&self, name: ValueSymbol) -> Option<DeliveredCarried> {
         self.resolve_value_delivered(name, None)
             .and_then(NameLookup::bound)
     }

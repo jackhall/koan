@@ -481,7 +481,10 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
     let _window_reach = window.mint_retained(&[&FrameCoverage::of(Rc::clone(&module_storage))]);
 
     let delivered = window
-        .resolve_value_delivered("rec", None)
+        .resolve_value_delivered(
+            crate::machine::model::ValueSymbol::of("rec").expect("`rec` is a value token"),
+            None,
+        )
         .expect("rec is bound in the module scope, surfaced through the transparent window")
         .bound()
         .expect("rec is fully bound, not a placeholder");

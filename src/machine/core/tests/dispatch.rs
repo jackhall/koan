@@ -1,8 +1,8 @@
 //! `dispatch` arm of `machine::core` tests.
 
 use super::super::{FrameStorageExt, Scope, program_storage, run_root_storage};
-use crate::builtins::test_support::kw_part;
 use crate::builtins::test_support::type_token;
+use crate::builtins::test_support::{identifier_part, kw_part};
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::RegionBrand;
@@ -66,7 +66,7 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
         &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let expr = working(region.brand(), vec![ExpressionPart::Identifier("foo")]);
+    let expr = working(region.brand(), vec![identifier_part("foo")]);
     // ONE was registered at `scope`'s BUILTIN index (0); root the chain there one past it
     // so the registration is visible.
     let chain = LexicalFrame::root(scope.id, 1);
@@ -231,7 +231,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     let program = program_storage();
     let inner = ExpressionPart::expression(
         program.brand(),
-        &[Spanned::bare(ExpressionPart::Identifier("deep_call"))],
+        &[Spanned::bare(identifier_part("deep_call"))],
     );
     let expr = working(
         brand,
@@ -279,7 +279,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
 
     let bare = working(
         region.brand(),
-        vec![kw_part("MAKESET"), ExpressionPart::Identifier("fwd")],
+        vec![kw_part("MAKESET"), identifier_part("fwd")],
     );
     // The pending overload was installed at `scope`'s BUILTIN index (0); root the chain
     // there one past it so it is visible.
@@ -298,9 +298,9 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
         region.brand(),
         vec![
             kw_part("MAKESET"),
-            ExpressionPart::Identifier("fwd"),
+            identifier_part("fwd"),
             kw_part("USING"),
-            ExpressionPart::Identifier("other"),
+            identifier_part("other"),
         ],
     );
     assert!(
@@ -411,7 +411,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
     let program = program_storage();
     let nested = ExpressionPart::expression(
         program.brand(),
-        &[Spanned::bare(ExpressionPart::Identifier("deep_call"))],
+        &[Spanned::bare(identifier_part("deep_call"))],
     );
     let expr = working(
         brand,
@@ -469,7 +469,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
         &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let expr = working(region.brand(), vec![ExpressionPart::Identifier("fwd")]);
+    let expr = working(region.brand(), vec![identifier_part("fwd")]);
     let bare_outcomes = vec![Some(Resolution::Unbound("fwd".into()))];
     // inner_num was registered at `inner`'s BUILTIN index (0); root the chain on `inner`
     // one past it. `outer` is never named on this chain, so `outer_id` stays visible
@@ -659,7 +659,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
 
     let expr = working(
         region.brand(),
-        vec![kw_part("PICK"), ExpressionPart::Identifier("fwd")],
+        vec![kw_part("PICK"), identifier_part("fwd")],
     );
     // The two sibling pending overloads finalize at indices 3 and 4; root the chain on
     // `scope` one past the higher so both stay visible.
@@ -711,7 +711,7 @@ fn parked_bare_name_parks_before_any_pick() {
     );
     let expr = working(
         region.brand(),
-        vec![ExpressionPart::Identifier("z"), kw_part("OP"), inner],
+        vec![identifier_part("z"), kw_part("OP"), inner],
     );
     let producer = ProducerId::for_test(7);
     let bare_outcomes = vec![Some(Resolution::Parked(producer)), None, None];
@@ -759,7 +759,7 @@ fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
 
     // Declaration slot: an inner `LET x = 1` shadowing a still-finalizing outer `x` must not wait.
     let decl = let_form(
-        ExpressionPart::Identifier("x"),
+        identifier_part("x"),
         ExpressionPart::Literal(KLiteral::Number(1.0)),
     );
     let outcomes = vec![None, parked(), None, None];
@@ -798,10 +798,7 @@ fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
     );
 
     // A binder's ordinary value slot is a reference: it waits like any other.
-    let reference = let_form(
-        ExpressionPart::Identifier("x"),
-        ExpressionPart::Identifier("y"),
-    );
+    let reference = let_form(identifier_part("x"), identifier_part("y"));
     let producer = ProducerId::for_test(11);
     let outcomes = vec![None, None, None, Some(Resolution::Parked(producer))];
     match drive_scratch(|scratch| {

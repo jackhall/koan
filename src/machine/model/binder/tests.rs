@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use super::{BINDER_SPECS, BinderSpec, StoredBinderKey};
-use crate::builtins::test_support::kw_part;
+use crate::builtins::test_support::{identifier_part, kw_part};
 use crate::machine::core::{ProgramBrand, RegionBrand, program_storage};
 use crate::machine::model::UntypedKey;
 use crate::machine::model::ast::{DispatchShape, ExpressionPart, KExpression};
@@ -48,7 +48,7 @@ fn expression_for_key<'a>(brand: RegionBrand<'a>, spec: &BinderSpec) -> KExpress
         brand,
         spec.key.iter().map(|element| match element {
             super::KeyElementSpec::Keyword(k) => Spanned::bare(kw_part(k)),
-            super::KeyElementSpec::Slot => Spanned::bare(ExpressionPart::Identifier("x")),
+            super::KeyElementSpec::Slot => Spanned::bare(identifier_part("x")),
         }),
     )
 }
@@ -137,10 +137,7 @@ fn parse_one<'a>(brand: ProgramBrand<'a>, src: &str) -> KExpression<'a> {
 /// The declared name's symbol bits, whichever channel carries it — a binder's identity, and the
 /// one currency both arms share.
 fn name_of(key: StoredBinderKey<'_>) -> Option<crate::machine::model::Symbol> {
-    key.name.map(|name| match name {
-        crate::machine::model::BinderName::Value(text) => crate::machine::model::Symbol::of(text),
-        crate::machine::model::BinderName::Type(binder) => binder.symbol(),
-    })
+    key.name.map(|name| name.symbol())
 }
 
 /// A redundant single-`Expression` paren wrapper is the same statement, so it carries the child's
@@ -225,7 +222,7 @@ fn name_slot_agrees_with_the_extractors() {
         let expected = name_of(stmt.binder_plan().expect("each form installs a name"))
             .expect("each form installs a name");
         let token = match stmt.parts[pos].value {
-            ExpressionPart::Identifier(s) => crate::machine::model::Symbol::of(s),
+            ExpressionPart::Identifier(v) => v.symbol(),
             ExpressionPart::Type(t) => t.symbol(),
             other => panic!("name slot holds a bare name token, got {other:?}: {source}"),
         };
@@ -234,10 +231,10 @@ fn name_slot_agrees_with_the_extractors() {
     // `VAL` declares at its slot without installing; the bucket-only forms cache no position.
     let val = parse_one(brand, "VAL x :Number");
     assert_eq!(val.binder_name_slot(), Some(1));
-    assert!(matches!(
-        val.parts[1].value,
-        ExpressionPart::Identifier("x")
-    ));
+    let ExpressionPart::Identifier(val_name) = val.parts[1].value else {
+        panic!("VAL's name slot holds an identifier part");
+    };
+    assert_eq!(val_name.symbol(), crate::machine::model::Symbol::of("x"));
     for source in [
         "FN (TRIPLE n :Number) -> Number = (n * 3)",
         "OP #(⊗) OVER Number = (left * right)",

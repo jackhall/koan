@@ -13,8 +13,11 @@ use crate::source::Spanned;
 fn kw(s: &str) -> ExpressionPart<'_> {
     kw_part(s)
 }
-fn ident(s: &str) -> ExpressionPart<'_> {
-    ExpressionPart::Identifier(s)
+fn ident<'a>(s: &str, labels: &LabelInterner) -> ExpressionPart<'a> {
+    ExpressionPart::Identifier(
+        crate::machine::model::ValueSymbol::declared(s, labels)
+            .expect("a test fixture identifier is a value token"),
+    )
 }
 fn ty(s: &str) -> ExpressionPart<'_> {
     ExpressionPart::Type(type_token(s))
@@ -107,7 +110,10 @@ fn unresolved_carrier_classifies_as_a_proper_type() {
 fn summarize_atomic_variants() {
     let registries = RunRegistries::new();
     assert_eq!(kw("LET").summarize(&registries.labels), "LET");
-    assert_eq!(ident("x").summarize(&registries.labels), "x");
+    assert_eq!(
+        ident("x", &registries.labels).summarize(&registries.labels),
+        "x"
+    );
     // A type token renders through the interner it was declared into.
     assert_eq!(
         ExpressionPart::Type(type_name("Number", &registries)).summarize(&registries.labels),
@@ -151,18 +157,23 @@ fn summarize_list_and_dict_literals() {
 
 #[test]
 fn summarize_nested_expression_part_threads_through() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
-    let inner = expr(brand, vec![kw("ADD"), ident("a"), ident("b")]);
-    assert_eq!(inner.summarize(&LabelInterner::new()), "ADD a b");
+    let inner = expr(
+        brand,
+        vec![kw("ADD"), ident("a", &labels), ident("b", &labels)],
+    );
+    assert_eq!(inner.summarize(&labels), "ADD a b");
 }
 
 #[test]
 fn kexpression_summarize_joins_parts_with_spaces() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
-    let e = build(brand, vec![kw("LET"), ident("x"), ident("=")]);
-    assert_eq!(e.summarize(&LabelInterner::new()), "LET x =");
+    let e = build(brand, vec![kw("LET"), ident("x", &labels), kw("=")]);
+    assert_eq!(e.summarize(&labels), "LET x =");
 }
 
 #[test]
@@ -171,12 +182,15 @@ fn structural_equal_and_ktype_for_kexpression() {
     let brand = program.brand();
     let registries = RunRegistries::new();
     use crate::machine::model::values::KObject;
-    let a =
-        KObject::KExpression(brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("x")])));
-    let b =
-        KObject::KExpression(brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("x")])));
-    let c =
-        KObject::KExpression(brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("y")])));
+    let a = KObject::KExpression(
+        brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("x", &registries.labels)])),
+    );
+    let b = KObject::KExpression(
+        brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("x", &registries.labels)])),
+    );
+    let c = KObject::KExpression(
+        brand.new_expression_from_iter(parts_of(vec![kw("LET"), ident("y", &registries.labels)])),
+    );
     assert_eq!(a.value_equal(&b, &registries), Ok(true));
     assert_eq!(a.value_equal(&c, &registries), Ok(false));
     assert_eq!(a.ktype(), KType::KEXPRESSION);
@@ -184,6 +198,7 @@ fn structural_equal_and_ktype_for_kexpression() {
 
 #[test]
 fn binder_name_from_type_part_extracts_or_none() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     let with_type = build(brand, vec![kw("STRUCT"), ty("Point")]);
@@ -192,7 +207,7 @@ fn binder_name_from_type_part_extracts_or_none() {
         Some(type_token("Point"))
     );
 
-    let with_ident = build(brand, vec![kw("STRUCT"), ident("Point")]);
+    let with_ident = build(brand, vec![kw("STRUCT"), ident("point", &labels)]);
     assert_eq!(with_ident.binder_name_from_type_part(), None);
 
     let too_short = build(brand, vec![kw("STRUCT")]);
@@ -201,20 +216,27 @@ fn binder_name_from_type_part_extracts_or_none() {
 
 #[test]
 fn borrow_inner_expressions_success_and_mismatch() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     let all_exprs = build(
         brand,
-        vec![expr(brand, vec![ident("a")]), expr(brand, vec![ident("b")])],
+        vec![
+            expr(brand, vec![ident("a", &labels)]),
+            expr(brand, vec![ident("b", &labels)]),
+        ],
     );
     let borrowed = all_exprs
         .borrow_inner_expressions()
         .expect("all parts are expressions");
     assert_eq!(borrowed.len(), 2);
-    assert_eq!(borrowed[0].summarize(&LabelInterner::new()), "a");
-    assert_eq!(borrowed[1].summarize(&LabelInterner::new()), "b");
+    assert_eq!(borrowed[0].summarize(&labels), "a");
+    assert_eq!(borrowed[1].summarize(&labels), "b");
 
-    let mixed = build(brand, vec![expr(brand, vec![ident("a")]), ident("b")]);
+    let mixed = build(
+        brand,
+        vec![expr(brand, vec![ident("a", &labels)]), ident("b", &labels)],
+    );
     assert!(mixed.borrow_inner_expressions().is_none());
 }
 
@@ -229,62 +251,75 @@ fn try_split_inner_expressions_empty_returns_err() {
 
 #[test]
 fn try_split_inner_expressions_first_non_expression_returns_err() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
-    let e = build(brand, vec![ident("a"), expr(brand, vec![ident("b")])]);
+    let e = build(
+        brand,
+        vec![ident("a", &labels), expr(brand, vec![ident("b", &labels)])],
+    );
     let err = e
         .try_split_inner_expressions()
         .expect_err("non-expr head must Err");
-    assert_eq!(err.summarize(&LabelInterner::new()), "a b");
+    assert_eq!(err.summarize(&labels), "a b");
 }
 
 #[test]
 fn try_split_inner_expressions_middle_non_expression_returns_err() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     let e = build(
         brand,
         vec![
-            expr(brand, vec![ident("a")]),
-            ident("b"),
-            expr(brand, vec![ident("c")]),
+            expr(brand, vec![ident("a", &labels)]),
+            ident("b", &labels),
+            expr(brand, vec![ident("c", &labels)]),
         ],
     );
     let err = e
         .try_split_inner_expressions()
         .expect_err("non-expr middle must Err");
-    assert_eq!(err.summarize(&LabelInterner::new()), "a b c");
+    assert_eq!(err.summarize(&labels), "a b c");
 }
 
 #[test]
 fn try_split_inner_expressions_all_expressions_returns_ok() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     let e = build(
         brand,
         vec![
-            expr(brand, vec![ident("a")]),
-            expr(brand, vec![ident("b")]),
-            expr(brand, vec![ident("c")]),
+            expr(brand, vec![ident("a", &labels)]),
+            expr(brand, vec![ident("b", &labels)]),
+            expr(brand, vec![ident("c", &labels)]),
         ],
     );
     let (preceding, last) = e.try_split_inner_expressions().expect("all-expr is Ok");
     assert_eq!(preceding.len(), 2);
-    assert_eq!(preceding[0].summarize(&LabelInterner::new()), "a");
-    assert_eq!(preceding[1].summarize(&LabelInterner::new()), "b");
-    assert_eq!(last.summarize(&LabelInterner::new()), "c");
+    assert_eq!(preceding[0].summarize(&labels), "a");
+    assert_eq!(preceding[1].summarize(&labels), "b");
+    assert_eq!(last.summarize(&labels), "c");
 }
 
 // ---------- Structural cache: shape, untyped_key, operator_probe ----------
 
 #[test]
 fn operator_chain_three_operand_classifies_and_probes() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     // `a + b + c` — Slot Keyword Slot Keyword Slot, ≥2 keyword positions.
     let e = build(
         brand,
-        vec![ident("a"), kw("+"), ident("b"), kw("+"), ident("c")],
+        vec![
+            ident("a", &labels),
+            kw("+"),
+            ident("b", &labels),
+            kw("+"),
+            ident("c", &labels),
+        ],
     );
     assert_eq!(e.shape(), DispatchShape::OperatorChain);
     assert_eq!(e.operator_probe(), Some(probe_symbol("+")));
@@ -292,12 +327,19 @@ fn operator_chain_three_operand_classifies_and_probes() {
 
 #[test]
 fn operator_chain_mixed_operators_probe_is_sorted_unique() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     // `a + b * c` — two distinct operators; probe is sorted-joined uniques.
     let e = build(
         brand,
-        vec![ident("a"), kw("+"), ident("b"), kw("*"), ident("c")],
+        vec![
+            ident("a", &labels),
+            kw("+"),
+            ident("b", &labels),
+            kw("*"),
+            ident("c", &labels),
+        ],
     );
     assert_eq!(e.shape(), DispatchShape::OperatorChain);
     assert_eq!(e.operator_probe(), Some(probe_symbol("* +")));
@@ -315,23 +357,34 @@ fn union_pipe_chain_over_types_is_operator_chain() {
 
 #[test]
 fn single_operator_is_keyworded_not_a_chain() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     // `a + b` — one keyword position; ordinary binary dispatch, no chain.
-    let e = build(brand, vec![ident("a"), kw("+"), ident("b")]);
+    let e = build(
+        brand,
+        vec![ident("a", &labels), kw("+"), ident("b", &labels)],
+    );
     assert_eq!(e.shape(), DispatchShape::Keyworded);
     assert_eq!(e.operator_probe(), None);
 }
 
 #[test]
 fn keyword_led_shape_is_not_a_chain() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     // `LET x = a + b` is keyword-led (first part a keyword), so not the
     // slot-led chain shape even though it carries operator-like tokens.
     let e = build(
         brand,
-        vec![kw("LET"), ident("x"), kw("="), ident("a"), kw("+")],
+        vec![
+            kw("LET"),
+            ident("x", &labels),
+            kw("="),
+            ident("a", &labels),
+            kw("+"),
+        ],
     );
     assert_eq!(e.shape(), DispatchShape::Keyworded);
     assert_eq!(e.operator_probe(), None);
@@ -339,21 +392,36 @@ fn keyword_led_shape_is_not_a_chain() {
 
 #[test]
 fn function_value_call_shape_unchanged() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     // `f x y` — lowercase identifier head, no keywords.
-    let e = build(brand, vec![ident("f"), ident("x"), ident("y")]);
+    let e = build(
+        brand,
+        vec![
+            ident("f", &labels),
+            ident("x", &labels),
+            ident("y", &labels),
+        ],
+    );
     assert_eq!(e.shape(), DispatchShape::FunctionValueCall);
     assert_eq!(e.operator_probe(), None);
 }
 
 #[test]
 fn cached_fields_equal_on_demand_recompute() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     let e = build(
         brand,
-        vec![ident("a"), kw("+"), ident("b"), kw("-"), ident("c")],
+        vec![
+            ident("a", &labels),
+            kw("+"),
+            ident("b", &labels),
+            kw("-"),
+            ident("c", &labels),
+        ],
     );
     // Cache must match a fresh structural recompute.
     assert_eq!(e.shape(), classify_dispatch_shape(e.parts));
@@ -374,11 +442,18 @@ fn cached_fields_equal_on_demand_recompute() {
 /// no re-derivation at the destination.
 #[test]
 fn cache_rides_a_copy() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     let e = build(
         brand,
-        vec![ident("a"), kw("|"), ident("b"), kw("|"), ident("c")],
+        vec![
+            ident("a", &labels),
+            kw("|"),
+            ident("b", &labels),
+            kw("|"),
+            ident("c", &labels),
+        ],
     );
     let c = e;
     assert_eq!(c.shape(), DispatchShape::OperatorChain);
@@ -389,6 +464,7 @@ fn cache_rides_a_copy() {
 
 #[test]
 fn key_and_shape_invariant_across_eager_slot_variants() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     // Every eager-part variant contributes `Slot`, so the classification of an
@@ -399,31 +475,31 @@ fn key_and_shape_invariant_across_eager_slot_variants() {
     let with_expr = build(
         brand,
         vec![
-            ident("a"),
+            ident("a", &labels),
             kw("+"),
-            expr(brand, vec![ident("b")]),
+            expr(brand, vec![ident("b", &labels)]),
             kw("+"),
-            ident("c"),
+            ident("c", &labels),
         ],
     );
     let with_list = build(
         brand,
         vec![
-            ident("a"),
+            ident("a", &labels),
             kw("+"),
-            list(brand, vec![ident("b")]),
+            list(brand, vec![ident("b", &labels)]),
             kw("+"),
-            ident("c"),
+            ident("c", &labels),
         ],
     );
     let with_dict = build(
         brand,
         vec![
-            ident("a"),
+            ident("a", &labels),
             kw("+"),
-            dict(brand, vec![(ident("k"), ident("v"))]),
+            dict(brand, vec![(ident("k", &labels), ident("v", &labels))]),
             kw("+"),
-            ident("c"),
+            ident("c", &labels),
         ],
     );
     assert_eq!(with_expr.shape(), DispatchShape::OperatorChain);
@@ -436,6 +512,7 @@ fn key_and_shape_invariant_across_eager_slot_variants() {
 
 #[test]
 fn cached_key_agrees_with_expression_signature_untyped_key() {
+    let labels = LabelInterner::new();
     use crate::machine::model::types::{Argument, ReturnType, SignatureDraft, SignatureElement};
     let program = program_storage();
     let brand = program.brand();
@@ -443,7 +520,13 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
     // `untyped_key`s MUST agree (the invariant at signature.rs:23).
     let e = build(
         brand,
-        vec![ident("a"), kw("+"), ident("b"), kw("+"), ident("c")],
+        vec![
+            ident("a", &labels),
+            kw("+"),
+            ident("b", &labels),
+            kw("+"),
+            ident("c", &labels),
+        ],
     );
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
@@ -474,11 +557,15 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
 /// Classifier routes to `HeadDeferred` so the head is evaluated first.
 #[test]
 fn head_deferred_for_nested_expression_head() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     let e = build(
         brand,
-        vec![expr(brand, vec![ident("f"), ident("x")]), num(1.0)],
+        vec![
+            expr(brand, vec![ident("f", &labels), ident("x", &labels)]),
+            num(1.0),
+        ],
     );
     assert_eq!(e.shape(), DispatchShape::HeadDeferred);
 }
@@ -503,9 +590,10 @@ fn type_head_deferred_for_sigiled_head() {
 /// surface, not a head-deferred call (no body to apply the head to).
 #[test]
 fn single_part_nested_expression_stays_literal_pass_through() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
-    let e = build(brand, vec![expr(brand, vec![ident("inner")])]);
+    let e = build(brand, vec![expr(brand, vec![ident("inner", &labels)])]);
     assert_eq!(e.shape(), DispatchShape::LiteralPassThrough);
 }
 
@@ -525,11 +613,12 @@ fn type_leaf_head_multipart_is_type_call() {
 /// `FunctionValueCall`.
 #[test]
 fn identifier_head_multipart_is_function_value_call() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     let e = build(
         brand,
-        vec![ident("f"), record(brand, vec![("x", num(1.0))])],
+        vec![ident("f", &labels), record(brand, vec![("x", num(1.0))])],
     );
     assert_eq!(e.shape(), DispatchShape::FunctionValueCall);
 }
@@ -538,6 +627,7 @@ fn identifier_head_multipart_is_function_value_call() {
 /// Heads must resolve to something callable; this is the error shape.
 #[test]
 fn non_callable_literal_head_is_error_shape() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     let e = build(brand, vec![num(99.0), num(1.0)]);
@@ -546,7 +636,10 @@ fn non_callable_literal_head_is_error_shape() {
     // `[1 2 3] x` — list head is equally non-callable.
     let with_list = build(
         brand,
-        vec![list(brand, vec![num(1.0), num(2.0), num(3.0)]), ident("x")],
+        vec![
+            list(brand, vec![num(1.0), num(2.0), num(3.0)]),
+            ident("x", &labels),
+        ],
     );
     assert_eq!(with_list.shape(), DispatchShape::NonCallableHead);
 }
@@ -556,6 +649,7 @@ fn non_callable_literal_head_is_error_shape() {
 /// and non-callable-head surface.
 #[test]
 fn keyworded_only_on_real_keyword() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     let cases: Vec<KExpression<'_>> = vec![
@@ -565,9 +659,12 @@ fn keyworded_only_on_real_keyword() {
         ),
         build(
             brand,
-            vec![ident("f"), record(brand, vec![("x", num(1.0))])],
+            vec![ident("f", &labels), record(brand, vec![("x", num(1.0))])],
         ),
-        build(brand, vec![expr(brand, vec![ident("g")]), num(1.0)]),
+        build(
+            brand,
+            vec![expr(brand, vec![ident("g", &labels)]), num(1.0)],
+        ),
         build(brand, vec![sigil(brand, vec![ty("Ff")]), num(1.0)]),
         build(brand, vec![num(99.0), num(1.0)]),
     ];
@@ -582,17 +679,18 @@ fn keyworded_only_on_real_keyword() {
 
 #[test]
 fn debug_for_expression_part_and_kexpression() {
+    let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
     // Exact format isn't load-bearing; just assert non-empty / tagged output.
     let parts: Vec<ExpressionPart<'_>> = vec![
         kw("LET"),
-        ident("x"),
+        ident("x", &labels),
         ty("Number"),
         num(1.0),
-        list(brand, vec![ident("a")]),
-        dict(brand, vec![(ident("k"), ident("v"))]),
-        expr(brand, vec![ident("z")]),
+        list(brand, vec![ident("a", &labels)]),
+        dict(brand, vec![(ident("k", &labels), ident("v", &labels))]),
+        expr(brand, vec![ident("z", &labels)]),
     ];
     for p in &parts {
         let s = format!("{:?}", p);

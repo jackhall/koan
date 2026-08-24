@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::builtins::test_support::kw_part;
 use crate::builtins::test_support::type_name;
 use crate::builtins::test_support::type_token;
+use crate::builtins::test_support::{identifier_part, kw_part};
 use crate::machine::core::program_storage;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeMemberMap;
@@ -369,13 +369,13 @@ fn kexpression_structural_equality() {
     let program = program_storage();
     let brand = program.brand();
     let a = KObject::KExpression(
-        brand.new_expression(&[part(kw_part("LET")), part(ExpressionPart::Identifier("x"))]),
+        brand.new_expression(&[part(kw_part("LET")), part(identifier_part("x"))]),
     );
     let b = KObject::KExpression(
-        brand.new_expression(&[part(kw_part("LET")), part(ExpressionPart::Identifier("x"))]),
+        brand.new_expression(&[part(kw_part("LET")), part(identifier_part("x"))]),
     );
     let c = KObject::KExpression(
-        brand.new_expression(&[part(kw_part("LET")), part(ExpressionPart::Identifier("y"))]),
+        brand.new_expression(&[part(kw_part("LET")), part(identifier_part("y"))]),
     );
     assert_eq!(a.value_equal(&b, &registries), Ok(true));
     assert_eq!(a.value_equal(&c, &registries), Ok(false));
@@ -406,11 +406,10 @@ fn kexpression_length_and_variant_mismatch() {
     let brand = program.brand();
     let a = KObject::KExpression(brand.new_expression(&[part(kw_part("LET"))]));
     let longer = KObject::KExpression(
-        brand.new_expression(&[part(kw_part("LET")), part(ExpressionPart::Identifier("x"))]),
+        brand.new_expression(&[part(kw_part("LET")), part(identifier_part("x"))]),
     );
     // Different part variants at the same position.
-    let variant =
-        KObject::KExpression(brand.new_expression(&[part(ExpressionPart::Identifier("LET"))]));
+    let variant = KObject::KExpression(brand.new_expression(&[part(identifier_part("x"))]));
     assert_eq!(a.value_equal(&longer, &registries), Ok(false));
     assert_eq!(a.value_equal(&variant, &registries), Ok(false));
 }

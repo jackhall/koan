@@ -52,8 +52,7 @@ impl<'run> Host<'run> {
         // form is exempt — an eager sub-dispatch cannot install into the enclosing scope soundly,
         // and a definition whose registration silently vanished would be worse than an error. A
         // value position takes the anonymous `FN :{…} -> <Return> = (…)`, which installs nothing.
-        let installs = statement_binder_plan(&expr)
-            .map(|plan| plan.to_owned_key(&self.ambient.registries().labels));
+        let installs = statement_binder_plan(&expr).map(|plan| plan.to_owned_key());
         if let (SubmitContext::SubDispatch, Some(key)) = (ctx, &installs) {
             let carrier = expr.summarize(&self.ambient.registries().labels);
             // A rejected declaration that registers overloads (an `FN` / `OP` in a `LET`'s value

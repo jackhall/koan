@@ -445,7 +445,7 @@ fn classify_dispatch<'step>(
                      shape but is spliced before its node is classified"
                 )
             };
-            single_poll::bare_identifier(view, view.current_scope(), name)
+            single_poll::bare_identifier(view, view.current_scope(), *name)
         }
         DispatchShape::FunctionValueCall => fn_value::initial(view, expr),
         DispatchShape::TypeCall => single_poll::type_call(view, expr),
