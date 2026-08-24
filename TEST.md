@@ -184,17 +184,22 @@ the same way the allocation column's absolute rows are.
 
 The names fixed in Rust source — builtin parameter slots and the `Result` / `KError`
 tags ([design/label-interning.md § Names fixed in Rust source](design/label-interning.md#names-fixed-in-rust-source))
-— are pinned by two unit tests in
-[`labels/tests.rs`](src/machine/model/labels/tests.rs), over a static of that test
-module's own so they pin the mechanism rather than whatever spelling a builtin happens
-to declare: `a_static_name_mints_what_of_mints` (the memo is exactly what the class's
-`of` would mint, and `text()` is the spelling as written) and
-`record_interns_the_spelling_under_the_memoized_symbol` (`record` hands back the
-memoized symbol, interns the spelling under it, and a second call adds nothing).
+— are pinned by four unit tests in
+[`labels/tests.rs`](src/machine/model/labels/tests.rs), over a static and a slot group of
+that test module's own so they pin the mechanism rather than whatever spelling a builtin
+happens to declare. Two cover a lone declaration: `a_static_name_mints_what_of_mints` (the
+memo is exactly what the class's `of` would mint, and `text()` is the spelling as written)
+and `record_interns_the_spelling_under_the_memoized_symbol` (`record` hands back the
+memoized symbol, interns the spelling under it, and a second call adds nothing). Two more
+cover a group, which is where grouping could quietly merge what it only means to co-locate:
+`a_slot_group_declares_each_field_independently` (each field carries its own spelling and
+its own symbol, and two fields do not collide) and
+`record_interns_each_grouped_slot_separately` (recording a group of two leaves two interner
+entries, both resolvable).
 
 There is deliberately no exhaustive "every declared static classifies" test, because
-every declaration is already forced by every test that runs a program: each slot static
-reaches `arg` at its builtin's registration and each tag static reaches the registration
+every declaration is already forced by every test that runs a program: each slot in a
+builtin's group reaches `arg` at that builtin's registration and each tag static reaches the registration
 that builds its type, so building a prelude forces the whole set of memos. A spelling
 that will not classify panics in *every* such test rather than only in the one
 exercising its builtin.

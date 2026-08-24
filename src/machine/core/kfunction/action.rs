@@ -77,8 +77,8 @@ pub struct BoundArg<'a, 'c> {
 /// Nothing is re-keyed per call. The schema is built once at
 /// [`ExpressionSignature::mint`](crate::machine::model::ExpressionSignature::mint) and shared by
 /// every call to that signature; the slice holds only the bound values and their delivery
-/// envelopes. A named read computes `Symbol::of(name)` and scans the schema — linear over call
-/// arity, no map, no allocation.
+/// envelopes. A named read reads the symbol off the slot's declared name and scans the schema —
+/// linear over call arity, no hash, no map, no allocation.
 ///
 /// See [design/label-interning.md](../../../../design/label-interning.md).
 #[derive(Clone, Copy)]

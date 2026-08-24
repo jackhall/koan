@@ -187,6 +187,16 @@ so the cached value carries nothing from one run into the next. The class predic
 the same text it would have run on, once, at first touch; a spelling that will not classify
 panics there naming itself and the class it failed.
 
+A builtin's parameter slots declare through `slots!` instead, which takes the whole group as
+idents — `slots! { SLOTS { left, right } }`, read as `&SLOTS.left` — and `stringify!`s each ident
+into the literal its mint hashes. The spelling is written once, so the one a signature registers
+and the one its body reads back cannot be spelled differently. Value class is the entire
+vocabulary of a slot, so the group is `StaticName<ValueSymbol>` throughout and names no class of
+its own; `static_name!` stays the door for a name that is not a slot, where the class has to be
+said. Grouping is placement and nothing else — each field is its own `StaticName`, forced
+independently at its first read, so a group of *n* slots mints the same *n* symbols the same
+slots declared one at a time would.
+
 `S` ranges over the **`ClassifiedSymbol`** types — a sealed trait exposing the raw digest, so a
 generic seam can compare and intern without knowing the class. Its implementors are the three
 class newtypes plus `BinderSymbol`, which is the classified vocabulary entire; sealed, because a
@@ -198,9 +208,9 @@ diagnostic naming the slot still renders — at the cost of one map lookup and n
 whole difference from `declared`, which has to classify text it is seeing for the first time.
 
 **Where a name is declared is where it is used.** Each builtin file declares the spellings its own
-bodies and registrations name, beside them; a child module borrows its parent's through `super::`.
-There is no central slot module, and the statics are not a registry: a shared table could only
-deduplicate mint *count*, never identity. Two builtins that spell a slot `name` already share one
+bodies and registrations name as one group, beside them; a child module borrows its parent's
+through `super::`. There is no central slot module, and a group is not a registry: a shared table
+could only deduplicate mint *count*, never identity. Two builtins that spell a slot `name` already share one
 symbol, because `Symbol::of` is a pure function of text and does not know which declaration minted
 first. What the per-file placement does buy is that a slot's spelling sits next to the body it
 parameterizes.
