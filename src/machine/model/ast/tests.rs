@@ -1,8 +1,8 @@
-use crate::builtins::test_support::{kw_part, probe_symbol};
+use crate::builtins::test_support::{kw_part, probe_symbol, type_name, type_token};
 use crate::machine::core::{ProgramBrand, program_storage};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{
-    DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier, classify_dispatch_shape,
+    DispatchShape, ExpressionPart, KExpression, KLiteral, classify_dispatch_shape,
 };
 use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::types::KKind;
@@ -17,7 +17,7 @@ fn ident(s: &str) -> ExpressionPart<'_> {
     ExpressionPart::Identifier(s)
 }
 fn ty(s: &str) -> ExpressionPart<'_> {
-    ExpressionPart::Type(TypeIdentifier::leaf(s))
+    ExpressionPart::Type(type_token(s))
 }
 fn num<'a>(n: f64) -> ExpressionPart<'a> {
     ExpressionPart::Literal(KLiteral::Number(n))
@@ -57,27 +57,29 @@ fn build<'a>(brand: ProgramBrand<'a>, items: Vec<ExpressionPart<'a>>) -> KExpres
 fn resolve_for_lowers_builtin_leaf_to_type_arm() {
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
-    let part = ExpressionPart::Type(TypeIdentifier::leaf("Number"));
+    let part = ExpressionPart::Type(type_token("Number"));
     let slot = KType::of_kind(KKind::ProperType);
     // Consume the scope-tied `Held` inside `matches!` so no borrow outlives `storage`.
     assert!(matches!(
-        part.resolve_for(&slot, scope),
+        part.resolve_for(&slot, scope, &LabelInterner::new()),
         Held::Type(t) if t == KType::NUMBER
     ));
 }
 
 /// A bare user type name has no builtin lowering, so the bind seam hands it on as the
-/// `UnresolvedType` carrier: the surface `TypeIdentifier` survives verbatim and no type handle
-/// is ever minted for an unresolved name.
+/// `UnresolvedType` carrier: the token's symbol survives verbatim and no type handle is ever
+/// minted for an unresolved name.
 #[test]
 fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let registries = RunRegistries::new();
-    let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType"));
+    let part = ExpressionPart::Type(type_name("MyType", &registries));
     let slot = KType::of_kind(KKind::ProperType);
-    match part.resolve_for(&slot, scope) {
-        Held::UnresolvedType(te) => assert_eq!(te.render(), "MyType"),
+    match part.resolve_for(&slot, scope, &registries.labels) {
+        Held::UnresolvedType(te) => {
+            assert_eq!(registries.labels.render(te.symbol()), "MyType")
+        }
         other => panic!(
             "expected the unlowered-name carrier, got {}",
             other.summarize(&registries)
@@ -93,9 +95,9 @@ fn unresolved_carrier_classifies_as_a_proper_type() {
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType"));
+    let part = ExpressionPart::Type(type_token("MyType"));
     let slot = KType::of_kind(KKind::ProperType);
-    let held = part.resolve_for(&slot, scope);
+    let held = part.resolve_for(&slot, scope, &registries.labels);
     assert_eq!(held.ktype(types), KType::of_kind(KKind::ProperType));
     assert!(held.as_type().is_none(), "it carries no type handle");
     assert!(held.as_object().is_none(), "and it is not a value");
@@ -103,10 +105,12 @@ fn unresolved_carrier_classifies_as_a_proper_type() {
 
 #[test]
 fn summarize_atomic_variants() {
-    assert_eq!(kw("LET").summarize(&LabelInterner::new()), "LET");
-    assert_eq!(ident("x").summarize(&LabelInterner::new()), "x");
+    let registries = RunRegistries::new();
+    assert_eq!(kw("LET").summarize(&registries.labels), "LET");
+    assert_eq!(ident("x").summarize(&registries.labels), "x");
+    // A type token renders through the interner it was declared into.
     assert_eq!(
-        ExpressionPart::Type(TypeIdentifier::leaf("Number")).summarize(&LabelInterner::new()),
+        ExpressionPart::Type(type_name("Number", &registries)).summarize(&registries.labels),
         "Number",
     );
 }
@@ -183,7 +187,10 @@ fn binder_name_from_type_part_extracts_or_none() {
     let program = program_storage();
     let brand = program.brand();
     let with_type = build(brand, vec![kw("STRUCT"), ty("Point")]);
-    assert_eq!(with_type.binder_name_from_type_part(), Some("Point"));
+    assert_eq!(
+        with_type.binder_name_from_type_part(),
+        Some(type_token("Point"))
+    );
 
     let with_ident = build(brand, vec![kw("STRUCT"), ident("Point")]);
     assert_eq!(with_ident.binder_name_from_type_part(), None);
@@ -300,8 +307,8 @@ fn operator_chain_mixed_operators_probe_is_sorted_unique() {
 fn union_pipe_chain_over_types_is_operator_chain() {
     let program = program_storage();
     let brand = program.brand();
-    // `A | B | C` — type operands, two `|` positions.
-    let e = build(brand, vec![ty("A"), kw("|"), ty("B"), kw("|"), ty("C")]);
+    // `Aa | Bb | Cc` — type operands, two `|` positions.
+    let e = build(brand, vec![ty("Aa"), kw("|"), ty("Bb"), kw("|"), ty("Cc")]);
     assert_eq!(e.shape(), DispatchShape::OperatorChain);
     assert_eq!(e.operator_probe(), Some(probe_symbol("|")));
 }
@@ -561,7 +568,7 @@ fn keyworded_only_on_real_keyword() {
             vec![ident("f"), record(brand, vec![("x", num(1.0))])],
         ),
         build(brand, vec![expr(brand, vec![ident("g")]), num(1.0)]),
-        build(brand, vec![sigil(brand, vec![ty("F")]), num(1.0)]),
+        build(brand, vec![sigil(brand, vec![ty("Ff")]), num(1.0)]),
         build(brand, vec![num(99.0), num(1.0)]),
     ];
     for e in &cases {

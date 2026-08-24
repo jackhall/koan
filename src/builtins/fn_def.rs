@@ -52,7 +52,8 @@ pub(crate) fn build_fn_like<'a>(
         crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.signature));
     let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.body));
-    let param_names = signature::collect_param_names_from_signature(&signature_expr);
+    let param_names =
+        signature::collect_param_names_from_signature(&signature_expr, ctx.registries);
     let mut elaborator = Elaborator::new(ctx.scope).with_chain(ctx.chain.clone());
     let return_type_state = crate::try_action!(classify_return_type(
         return_type_raw,
@@ -155,7 +156,7 @@ pub fn body_let_combined_type_named<'a>(
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
     let name = match ctx.args.unresolved_type(&SLOTS.name) {
-        Some(te) => te.render(),
+        Some(te) => crate::machine::model::render_label(te.symbol(), ctx.registries),
         None => match ctx.args.ktype(&SLOTS.name) {
             Some(kt) => kt.name(ctx.registries),
             None => return Action::done(Err(KError::new(KErrorKind::MissingArg("name".into())))),

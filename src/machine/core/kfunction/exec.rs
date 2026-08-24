@@ -22,7 +22,7 @@ use crate::machine::model::{DeferredReturn, KType, ReturnType, TypeResolution};
 use super::KFunction;
 use super::body::{Body, body_statement_refs};
 use crate::machine::model::{
-    BindKind, BinderSymbol, RunRegistries, render_label, wrong_binder_class,
+    BindKind, BinderSymbol, RunRegistries, TypeSymbol, render_label, wrong_binder_class,
 };
 
 /// A body's execution context: the per-call `region` it runs in. Owned (an `Rc`), so it carries no
@@ -138,8 +138,11 @@ pub fn run_user_fn<'ast>(
                 }
                 // Dispatch resolves every type-denoting argument before the call, so a name that
                 // is still unlowered here names nothing bindable.
-                (_, ArgChannel::Unresolved(rendered)) => {
-                    return Err(KError::new(KErrorKind::UnboundName(rendered)));
+                (_, ArgChannel::Unresolved(name)) => {
+                    return Err(KError::new(KErrorKind::UnboundName(render_label(
+                        name.symbol(),
+                        registries,
+                    ))));
                 }
                 // The parameter's token class and the argument's channel disagree: a Type token
                 // names a type and a value token names a value, so neither can take the other's
@@ -202,7 +205,7 @@ pub fn run_user_fn<'ast>(
                 DeferredReturn::Type(type_expr) => {
                     let resolved = ctx.region.with_scope(|child| {
                         let resolved: Result<KType, KError> =
-                            match child.resolve_type_identifier(&type_expr, None, registries) {
+                            match child.resolve_type_identifier(type_expr, None, registries) {
                                 TypeResolution::Done(kt) => Ok(kt),
                                 // A park at this point cannot be honored — the body is about to
                                 // run — so fall back to Any and let the body's own dispatch surface
@@ -250,7 +253,7 @@ pub fn run_user_fn<'ast>(
 enum ArgChannel {
     Value,
     Type(KType),
-    Unresolved(String),
+    Unresolved(TypeSymbol),
 }
 
 /// Classify a delivered argument's channel. The value arm carries nothing: the bind reads the object
@@ -260,7 +263,7 @@ fn arg_channel(delivered: &DeliveredCarried) -> ArgChannel {
     delivered.open(|live| match live {
         Carried::Object(_) => ArgChannel::Value,
         Carried::Type(kt) => ArgChannel::Type(kt),
-        Carried::UnresolvedType(ti) => ArgChannel::Unresolved(ti.render()),
+        Carried::UnresolvedType(ti) => ArgChannel::Unresolved(ti),
     })
 }
 

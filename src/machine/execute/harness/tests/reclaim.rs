@@ -19,10 +19,13 @@ fn a_finished_program_reclaims_every_slot() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
 
     let exprs = super::working_all(
         &program,
+        labels,
         "LET x = 1\n\
          LET y = 2\n\
          LET z = (LET a = 3)",
@@ -51,10 +54,13 @@ fn no_notify_list_names_a_released_edge() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
 
     let exprs = super::working_all(
         &program,
+        labels,
         "LET x = 1\n\
          LET y = 2\n\
          LET z = (LET a = 3)",

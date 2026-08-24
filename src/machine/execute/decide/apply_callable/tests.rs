@@ -5,7 +5,7 @@
 //! name and yields a `TypeNode::ConstructorApply`. `AS` is its arity-1 sugar. These run the real
 //! dispatcher, so they cover the sub-dispatch parking path and the key-check diagnostics.
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{KType, Record, TypeNode};
@@ -32,8 +32,7 @@ fn result_applies_named_type_arguments() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let applied =
-        test_run.run_one_type(parse_one(&program, ":(Result {Ok = Number, Error = Str})"));
+    let applied = test_run.run_one_type(test_run.parse_one(":(Result {Ok = Number, Error = Str})"));
     assert_eq!(
         applied_args(applied, test_run.registries()),
         vec![
@@ -50,7 +49,7 @@ fn user_family_applies_named_type_argument() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE (Elem AS Wrap)");
-    let applied = test_run.run_one_type(parse_one(&program, ":(Wrap {Elem = Number})"));
+    let applied = test_run.run_one_type(test_run.parse_one(":(Wrap {Elem = Number})"));
     assert_eq!(
         applied_args(applied, test_run.registries()),
         vec![(crate::machine::model::Symbol::of("Elem"), KType::NUMBER)],
@@ -65,7 +64,7 @@ fn compound_type_argument_sub_dispatches() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE (Elem AS Wrap)");
-    let applied = test_run.run_one_type(parse_one(&program, ":(Wrap {Elem = (LIST OF Number)})"));
+    let applied = test_run.run_one_type(test_run.parse_one(":(Wrap {Elem = (LIST OF Number)})"));
     assert_eq!(
         applied_args(applied, test_run.registries()),
         vec![(
@@ -83,8 +82,8 @@ fn as_sugar_equals_named_application() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE (Elem AS Wrap)");
-    let sugared = test_run.run_one_type(parse_one(&program, ":(Number AS Wrap)"));
-    let named = test_run.run_one_type(parse_one(&program, ":(Wrap {Elem = Number})"));
+    let sugared = test_run.run_one_type(test_run.parse_one(":(Number AS Wrap)"));
+    let named = test_run.run_one_type(test_run.parse_one(":(Wrap {Elem = Number})"));
     assert_eq!(sugared.digest(), named.digest());
     assert_eq!(sugared, named);
 }
@@ -97,9 +96,9 @@ fn named_application_is_order_blind() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let declared =
-        test_run.run_one_type(parse_one(&program, ":(Result {Ok = Number, Error = Str})"));
+        test_run.run_one_type(test_run.parse_one(":(Result {Ok = Number, Error = Str})"));
     let reversed =
-        test_run.run_one_type(parse_one(&program, ":(Result {Error = Str, Ok = Number})"));
+        test_run.run_one_type(test_run.parse_one(":(Result {Error = Str, Ok = Number})"));
     assert_eq!(declared.digest(), reversed.digest());
     assert_eq!(declared, reversed);
 }
@@ -120,9 +119,9 @@ fn constructor_apply_name_round_trips() {
         ":(Wrap {Elem = :(LIST OF Number)})",
         ":(Result {Ok = (LIST OF Number), Error = Str})",
     ] {
-        let applied = test_run.run_one_type(parse_one(&program, source));
+        let applied = test_run.run_one_type(test_run.parse_one(source));
         let rendered = applied.name(test_run.registries());
-        let reparsed = test_run.run_one_type(parse_one(&program, &rendered));
+        let reparsed = test_run.run_one_type(test_run.parse_one(&rendered));
         assert_eq!(
             applied.digest(),
             reparsed.digest(),
@@ -137,7 +136,7 @@ fn missing_type_parameter_is_named() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let error = test_run.run_one_err(parse_one(&program, ":(Result {Ok = Number})"));
+    let error = test_run.run_one_err(test_run.parse_one(":(Result {Ok = Number})"));
     match &error.kind {
         KErrorKind::ShapeError(message) => {
             assert!(
@@ -161,7 +160,7 @@ fn unknown_type_parameter_is_named() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE (Elem AS Wrap)");
-    let error = test_run.run_one_err(parse_one(&program, ":(Wrap {Item = Number})"));
+    let error = test_run.run_one_err(test_run.parse_one(":(Wrap {Item = Number})"));
     match &error.kind {
         KErrorKind::ShapeError(message) => {
             assert!(
@@ -222,7 +221,7 @@ fn multi_parameter_family_rejects_value_construction() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE (One Two AS Pair)");
-    let error = test_run.run_one_err(parse_one(&program, "(Pair 3.0)"));
+    let error = test_run.run_one_err(test_run.parse_one("(Pair 3.0)"));
     match &error.kind {
         KErrorKind::ShapeError(message) => {
             assert!(
@@ -234,7 +233,7 @@ fn multi_parameter_family_rejects_value_construction() {
         _ => panic!("expected a ShapeError"),
     }
     // The type-application surface stays open for the same family.
-    let applied = test_run.run_one_type(parse_one(&program, ":(Pair {One = Number, Two = Str})"));
+    let applied = test_run.run_one_type(test_run.parse_one(":(Pair {One = Number, Two = Str})"));
     assert_eq!(
         applied_args(applied, test_run.registries()),
         vec![
@@ -254,8 +253,8 @@ fn erased_result_carrier_admits_named_application() {
     let scope = test_run.scope;
     test_run.run("LET wrapped = (Result (Ok 3.0))");
     let admitting =
-        test_run.run_one_type(parse_one(&program, ":(Result {Ok = Number, Error = Any})"));
-    let refusing = test_run.run_one_type(parse_one(&program, ":(Result {Ok = Str, Error = Any})"));
+        test_run.run_one_type(test_run.parse_one(":(Result {Ok = Number, Error = Any})"));
+    let refusing = test_run.run_one_type(test_run.parse_one(":(Result {Ok = Str, Error = Any})"));
     let value = scope.expect_value("wrapped");
     let types = test_run.registry_handle();
     assert!(
@@ -277,7 +276,7 @@ fn value_type_argument_is_refused() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE (Elem AS Wrap)");
     test_run.run("LET n = 3.0");
-    let error = test_run.run_one_err(parse_one(&program, ":(Wrap {Elem = (n)})"));
+    let error = test_run.run_one_err(test_run.parse_one(":(Wrap {Elem = (n)})"));
     match &error.kind {
         KErrorKind::TypeMismatch { arg, expected, .. } => {
             assert_eq!(arg, "Elem");

@@ -6,10 +6,12 @@
 //! `ReturnType::Deferred(_)` that re-elaborates per call against the dispatch-boundary
 //! scope.
 
-use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::{ExpressionPart, KExpression, Symbol};
 
-pub(super) fn type_expr_references_any(te: TypeIdentifier<'_>, param_names: &[String]) -> bool {
-    param_names.iter().any(|n| n.as_str() == te.as_str())
+pub(super) fn type_expr_references_any(te: TypeSymbol, param_names: &[String]) -> bool {
+    // A parameter name is a reference, not a declaration, so it probes by bare symbol bits.
+    param_names.iter().any(|n| Symbol::of(n) == te.symbol())
 }
 
 pub(super) fn kexpression_references_any(expr: &KExpression<'_>, param_names: &[String]) -> bool {

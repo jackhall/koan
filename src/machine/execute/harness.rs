@@ -927,27 +927,43 @@ fn block_statement_chain(
 /// The **bucket** channel is deliberately absent: sibling overloads under one head keyword are the
 /// point of that channel, so a shared bucket key is a co-declaration rather than a collision, and
 /// the per-signature `DuplicateOverload` check rules on it at seal time where the signatures exist.
-fn duplicate_declarations(statements: &[WorkingExpression<'_>]) -> HashMap<usize, KError> {
-    let mut declared: HashMap<&str, usize> = HashMap::new();
+fn duplicate_declarations(
+    statements: &[WorkingExpression<'_>],
+    registries: &crate::machine::model::RunRegistries,
+) -> HashMap<usize, KError> {
+    let mut declared: HashMap<crate::machine::model::Symbol, usize> = HashMap::new();
     let mut rejected: HashMap<usize, KError> = HashMap::new();
     for (position, statement) in statements.iter().enumerate() {
-        let Some((name, _kind)) = statement_binder_plan(statement).and_then(|plan| plan.name)
-        else {
+        let Some(name) = statement_binder_plan(statement).and_then(|plan| plan.name) else {
             continue;
         };
-        match declared.get(name) {
+        // A binder's identity is its symbol bits whichever channel it names, so the two arms key
+        // one map; the spelling is read back only to name a duplicate.
+        let symbol = match name {
+            crate::machine::model::BinderName::Value(text) => {
+                crate::machine::model::Symbol::of(text)
+            }
+            crate::machine::model::BinderName::Type(binder) => binder.symbol(),
+        };
+        match declared.get(&symbol) {
             Some(&first) => {
+                let text = match name {
+                    crate::machine::model::BinderName::Value(text) => text.to_string(),
+                    crate::machine::model::BinderName::Type(binder) => {
+                        crate::machine::model::render_label(binder.symbol(), registries)
+                    }
+                };
                 rejected.insert(
                     position,
                     KError::new(KErrorKind::DuplicateDeclaration {
-                        name: name.to_string(),
+                        name: text,
                         first: first + 1,
                         second: position + 1,
                     }),
                 );
             }
             None => {
-                declared.insert(name, position);
+                declared.insert(symbol, position);
             }
         }
     }
@@ -1035,7 +1051,7 @@ impl<'run> Host<'run> {
         alloc: A,
     ) -> AllocVec<NodeId, A> {
         let parent = self.ambient.active_payload().map(|p| p.chain.clone());
-        let mut duplicates = duplicate_declarations(statements);
+        let mut duplicates = duplicate_declarations(statements, self.ambient.registries());
         // The one act that builds a claim store: the block's fan-out sizes the scope's statement
         // run, so every claim a statement below stamps lands at an index the run already reaches.
         scope.begin_block(statements.len(), &mut WriteGate::for_run_loop());

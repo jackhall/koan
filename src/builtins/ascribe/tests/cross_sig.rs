@@ -2,7 +2,7 @@
 //! comparable when one structurally `sig_subtype`s the other. See
 //! [design/typing/modules.md](../../../../design/typing/modules.md).
 
-use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
+use crate::builtins::test_support::{TestRun, lookup_module};
 use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
@@ -87,7 +87,7 @@ fn incomparable_distinct_sigs_are_ambiguous() {
         scope,
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "CHOOSE arg"),
+            test_run.parse_one("CHOOSE arg"),
         ),
     );
     test_run

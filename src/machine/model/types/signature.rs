@@ -10,14 +10,12 @@
 //! sub-dispatching against the outer scope.
 
 use crate::machine::core::RegionBrand;
-use crate::machine::model::ast::{
-    ExpressionPart, KExpression, KeywordToken, TypeIdentifier, WorkingPart,
-};
+use crate::machine::model::ast::{ExpressionPart, KExpression, KeywordToken, WorkingPart};
 
 use super::ktype::KType;
 use super::registry::TypeRegistry;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner};
+use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
 
 /// One position of a bucket key: a fixed token as its [`KeywordSymbol`], or an argument slot.
 /// `Copy` and lifetime-free, so a key run is the same type whether it sits in a `Vec` a caller
@@ -203,34 +201,36 @@ pub enum ReturnType<'a> {
 ///   `Carried::Type`'s inner `KType` is the per-call return type.
 #[derive(Clone, Copy)]
 pub enum DeferredReturn<'a> {
-    Type(TypeIdentifier<'a>),
+    Type(TypeSymbol),
     Expression(KExpression<'a>),
 }
 
 /// Hashable type-language shadow of a [`DeferredReturn`], stored inside
-/// `KType::DeferredReturn`. Both carriers hold owned surface text: the `Type` carrier the bare
-/// name (a [`TypeIdentifier`] borrows the storage that parsed it, and a `KType` outlives every
-/// region), the `Expression` carrier the canonical `summarize()` render — NOT the live
-/// `KExpression`, which impls neither `Eq` nor `Hash`. Identity is syntactic — `Type` by name,
-/// `Expression` by canonical render — so a synthesized `KType::DeferredReturn` ret slot compares,
-/// hashes, and ranks by surface form.
+/// `KType::DeferredReturn`. Neither carrier borrows a region — a `KType` outlives every one: the
+/// `Type` carrier holds the bare name's lifetime-free [`TypeSymbol`], the `Expression` carrier the
+/// canonical `summarize()` render — NOT the live `KExpression`, which impls neither `Eq` nor
+/// `Hash`. Identity is syntactic — `Type` by symbol bits, `Expression` by canonical render — so a
+/// synthesized `KType::DeferredReturn` ret slot compares, hashes, and ranks by surface form.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DeferredReturnSurface {
-    Type(String),
+    Type(TypeSymbol),
     Expression(String),
 }
 
 impl DeferredReturnSurface {
     pub fn from_deferred(d: &DeferredReturn<'_>, labels: &LabelInterner) -> Self {
         match d {
-            DeferredReturn::Type(t) => Self::Type(t.render()),
+            DeferredReturn::Type(t) => Self::Type(*t),
             DeferredReturn::Expression(e) => Self::Expression(e.summarize(labels)),
         }
     }
 
-    pub fn render(&self) -> String {
+    /// Surface form for diagnostics; the `Type` carrier resolves its spelling through the run's
+    /// interner.
+    pub fn render(&self, registries: &RunRegistries) -> String {
         match self {
-            Self::Type(s) | Self::Expression(s) => s.clone(),
+            Self::Type(name) => super::render_label(name.symbol(), registries),
+            Self::Expression(s) => s.clone(),
         }
     }
 }
@@ -258,7 +258,9 @@ impl<'a> ReturnType<'a> {
     pub fn name(&self, registries: &RunRegistries) -> String {
         match self {
             ReturnType::Resolved(kt) => kt.name(registries),
-            ReturnType::Deferred(DeferredReturn::Type(t)) => t.render(),
+            ReturnType::Deferred(DeferredReturn::Type(t)) => {
+                super::render_label(t.symbol(), registries)
+            }
             ReturnType::Deferred(DeferredReturn::Expression(e)) => e.summarize(&registries.labels),
         }
     }

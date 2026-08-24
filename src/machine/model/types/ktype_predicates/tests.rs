@@ -1,4 +1,5 @@
 use super::*;
+use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{spliced_part, type_name, type_token, value_name};
 use crate::machine::core::SubstrateDoor;
 use crate::machine::model::Carried;
@@ -736,7 +737,6 @@ fn constructor_apply_stamped_type_args_checked_structurally() {
 }
 
 use crate::machine::model::RunRegistries;
-use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::types::{DeferredReturn, DeferredReturnSurface, ReturnType};
 
 /// A function whose `ret` slot is a `DeferredReturn` carrier is strictly more specific
@@ -747,7 +747,7 @@ fn deferred_return_more_specific_than_any() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let deferred_ret = types.intern(TypeNode::DeferredReturn(DeferredReturnSurface::Type(
-        "er".to_string(),
+        type_token("Er"),
     )));
     let deferred = types.function_type(Record::new(), deferred_ret);
     let any = types.function_type(Record::new(), KType::ANY);
@@ -763,10 +763,10 @@ fn two_functions_differ_only_in_deferred_return_are_distinct() {
     let types = &registries.types;
     use std::hash::{Hash, Hasher};
     let er_ret = types.intern(TypeNode::DeferredReturn(DeferredReturnSurface::Type(
-        "er".to_string(),
+        type_token("Er"),
     )));
     let ar_ret = types.intern(TypeNode::DeferredReturn(DeferredReturnSurface::Type(
-        "Ar".to_string(),
+        type_token("Ar"),
     )));
     let er = types.function_type(Record::new(), er_ret);
     let ar = types.function_type(Record::new(), ar_ret);
@@ -795,7 +795,7 @@ fn deferred_return_admission_via_function_compat() {
     let candidate = ExpressionSignature::mint(
         program.brand().region(),
         crate::machine::model::SignatureDraft {
-            return_type: ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er"))),
+            return_type: ReturnType::Deferred(DeferredReturn::Type(type_token("Er"))),
             elements: vec![],
         },
         &crate::machine::model::LabelInterner::new(),
@@ -804,7 +804,7 @@ fn deferred_return_admission_via_function_compat() {
 
     // Matching shadow → admit.
     let slot_er = types.intern(TypeNode::DeferredReturn(DeferredReturnSurface::Type(
-        "er".to_string(),
+        type_token("Er"),
     )));
     assert!(function_compat(
         &candidate,
@@ -815,7 +815,7 @@ fn deferred_return_admission_via_function_compat() {
 
     // Differing shadow → reject.
     let slot_ar = types.intern(TypeNode::DeferredReturn(DeferredReturnSurface::Type(
-        "Ar".to_string(),
+        type_token("Ar"),
     )));
     assert!(!function_compat(
         &candidate,
@@ -1049,9 +1049,7 @@ fn specificity_self_sig_refines_declared_and_empty() {
         "SIG Ordered = ((VAL compare :Number))\n\
          MODULE int_ord = ((LET compare = 7) (LET extra = 1))",
     );
-    let declared = scope
-        .resolve_type("Ordered")
-        .expect("Ordered must bind a Signature KType");
+    let declared = lookup_type(scope, "Ordered").expect("Ordered must bind a Signature KType");
     let m = lookup_module(scope, "int_ord", types.registries());
 
     let self_of = KObject::Module(m).ktype();
@@ -1085,9 +1083,7 @@ fn self_sig_type_equals_member_free_declared_sig() {
         "SIG HasLabel = ((VAL label :Str))\n\
          MODULE widget = ((LET label = (\"button\")))",
     );
-    let declared = scope
-        .resolve_type("HasLabel")
-        .expect("HasLabel must bind a type");
+    let declared = lookup_type(scope, "HasLabel").expect("HasLabel must bind a type");
     let m = lookup_module(scope, "widget", types.registries());
     assert_eq!(
         KObject::Module(m).ktype(),
@@ -1116,9 +1112,7 @@ fn self_sig_type_equals_fully_manifest_declared_sig() {
         "SIG Pinned = ((LET Elem = Number) (VAL x :Elem))\n\
          MODULE pinned_mod = ((LET Elem = Number) (LET x = 5))",
     );
-    let declared = scope
-        .resolve_type("Pinned")
-        .expect("Pinned must bind a type");
+    let declared = lookup_type(scope, "Pinned").expect("Pinned must bind a type");
     let m = lookup_module(scope, "pinned_mod", types.registries());
     assert_eq!(
         KObject::Module(m).ktype(),
@@ -1147,9 +1141,7 @@ fn self_sig_stays_distinct_from_and_refines_abstract_sig() {
         "SIG Abstracted = ((TYPE Elem) (VAL x :Elem))\n\
          MODULE concrete = ((LET Elem = Number) (LET x = 5))",
     );
-    let declared = scope
-        .resolve_type("Abstracted")
-        .expect("Abstracted must bind a type");
+    let declared = lookup_type(scope, "Abstracted").expect("Abstracted must bind a type");
     let m = lookup_module(scope, "concrete", types.registries());
     let self_of = KObject::Module(m).ktype();
 

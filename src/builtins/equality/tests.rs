@@ -2,7 +2,7 @@
 //! The comparability gate's intransitivity, nominal identity, the function/module ban, and the
 //! `(TYPE OF m) ==` interface idiom all exercise the real dispatch path here.
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
 use crate::machine::program_storage;
@@ -15,7 +15,7 @@ fn eval_bool(source_setup: &str, probe: &str) -> bool {
     if !source_setup.is_empty() {
         test_run.run(source_setup);
     }
-    let result = test_run.run_one(parse_one(&program, probe));
+    let result = test_run.run_one(test_run.parse_one(probe));
     match result {
         KObject::Bool(b) => *b,
         other => panic!(
@@ -155,7 +155,7 @@ fn err_kind_user(setup: &str, probe: &str) -> String {
     if !setup.is_empty() {
         test_run.run(setup);
     }
-    let err = test_run.run_one_err(parse_one(&program, probe));
+    let err = test_run.run_one_err(test_run.parse_one(probe));
     match &err.kind {
         KErrorKind::User(msg) => msg.clone(),
         _ => panic!("expected a User error, got: {err}"),
@@ -191,7 +191,7 @@ fn equality_does_not_chain() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "1 == 2 == 3"));
+    let err = test_run.run_one_err(test_run.parse_one("1 == 2 == 3"));
     assert!(
         !err.to_string().is_empty(),
         "a chain of `==` should surface a resolution error",

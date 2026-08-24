@@ -1,7 +1,7 @@
 //! `TYPE OF <value>` — the value's own reported type, surfaced as a type value. General over the
 //! value channel (scalar, container, module, view), and the door a module takes to type position.
 
-use crate::builtins::test_support::{TestRun, lookup_module, parse_one, type_name};
+use crate::builtins::test_support::{TestRun, lookup_module, type_name};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
@@ -11,7 +11,7 @@ fn type_of_number_literal_is_number() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one_type(parse_one(&program, "TYPE OF 5"));
+    let result = test_run.run_one_type(test_run.parse_one("TYPE OF 5"));
     assert_eq!(result, KType::NUMBER);
 }
 
@@ -22,7 +22,7 @@ fn type_of_bound_list_is_list_of_element_type() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET xs = [1, 2, 3]");
-    let result = test_run.run_one_type(parse_one(&program, "TYPE OF xs"));
+    let result = test_run.run_one_type(test_run.parse_one("TYPE OF xs"));
     let types = test_run.types();
     assert_eq!(result, types.list(KType::NUMBER));
 }
@@ -37,7 +37,7 @@ fn type_of_module_is_its_self_sig() {
     let scope = test_run.scope;
     test_run.run("MODULE int_ord = ((LET Elt = Number) (LET zero = 7))");
     let module = lookup_module(scope, "int_ord", test_run.registries());
-    let result = test_run.run_one_type(parse_one(&program, "TYPE OF int_ord"));
+    let result = test_run.run_one_type(test_run.parse_one("TYPE OF int_ord"));
     assert!(
         matches!(test_run.types().node(result), TypeNode::Signature { .. }),
         "TYPE OF a module is a signature",
@@ -64,7 +64,7 @@ fn type_of_opaque_view_reports_the_view_not_its_source() {
     );
     let view = lookup_module(scope, "view", test_run.registries());
     let source = lookup_module(scope, "int_ord", test_run.registries());
-    let result = test_run.run_one_type(parse_one(&program, "TYPE OF view"));
+    let result = test_run.run_one_type(test_run.parse_one("TYPE OF view"));
     let types = test_run.types();
     match types.node(result) {
         TypeNode::Signature { schema, .. } => {
@@ -101,7 +101,7 @@ fn type_of_transparent_view_reports_concrete_slots() {
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          LET view = (int_ord :! Ordered)",
     );
-    let result = test_run.run_one_type(parse_one(&program, "TYPE OF view"));
+    let result = test_run.run_one_type(test_run.parse_one("TYPE OF view"));
     let types = test_run.types();
     match types.node(result) {
         TypeNode::Signature { schema, .. } => {
@@ -129,7 +129,7 @@ fn type_of_module_types_a_parameter_slot() {
         "MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          FN (TAKE_ORD m :(TYPE OF int_ord)) -> Number = (m.zero)",
     );
-    let result = test_run.run_one(parse_one(&program, "TAKE_ORD int_ord"));
+    let result = test_run.run_one(test_run.parse_one("TAKE_ORD int_ord"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 7.0),
         "expected the module's `zero`, got {}",
@@ -149,7 +149,7 @@ fn type_of_parameter_defers_a_return_type() {
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
     );
-    let result = test_run.run_one(parse_one(&program, "USE_ORD int_ord"));
+    let result = test_run.run_one(test_run.parse_one("USE_ORD int_ord"));
     assert!(
         matches!(result, KObject::Module(_)),
         "the deferred return must admit the module it was resolved from, got {}",
@@ -175,7 +175,7 @@ fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
          LET SetType = (TYPE OF int_set)\n\
          FN (TAKE m :SetType) -> Number = (m.zero)",
     );
-    let result = test_run.run_one(parse_one(&program, "TAKE int_set"));
+    let result = test_run.run_one(test_run.parse_one("TAKE int_set"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 3.0),
         "the alias must admit the functor-minted module, got {}",
@@ -191,7 +191,7 @@ fn type_of_a_type_errors() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "TYPE OF Number"));
+    let err = test_run.run_one_err(test_run.parse_one("TYPE OF Number"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("is already a type")),
         "expected a value-channel ShapeError, got {err}",
@@ -204,7 +204,7 @@ fn type_of_unstamped_empty_container_errors() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "TYPE OF []"));
+    let err = test_run.run_one_err(test_run.parse_one("TYPE OF []"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("unknowable")),
         "expected an unknowable-element-type ShapeError, got {err}",

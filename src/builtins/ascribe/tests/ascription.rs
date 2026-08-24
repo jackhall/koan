@@ -1,8 +1,6 @@
 //! Primitive ascription behaviors: transparent passthrough, missing-member errors, opaque type-minting.
 
-use crate::builtins::test_support::{
-    TestRun, binds_module, lookup_module, parse_one, type_name, value_name,
-};
+use crate::builtins::test_support::{TestRun, binds_module, lookup_module, type_name, value_name};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KObject, KType, TypeNode, render_label};
 use crate::machine::{program_storage, run_root_storage};
@@ -32,7 +30,7 @@ fn ascription_missing_member_errors() {
         "MODULE empty = (LET unrelated = 0)\n\
          SIG Ordered = (VAL compare :Number)",
     );
-    let err = test_run.run_one_err(parse_one(&program, "empty :| Ordered"));
+    let err = test_run.run_one_err(test_run.parse_one("empty :| Ordered"));
     // Ruling 12: a signature renders structurally, not by declared name — the diagnostic names
     // the interface `SIG (compare: Number)` and the missing member, not "Ordered".
     assert!(
@@ -52,12 +50,8 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
          SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          LET first_abstract = (int_ord :| Ordered)\n\
          LET second_abstract = (int_ord :| Ordered)";
-    let exprs = parse(
-        program.brand(),
-        &crate::machine::model::LabelInterner::new(),
-        src,
-    )
-    .expect("parse should succeed");
+    let exprs =
+        parse(program.brand(), &test_run.registries().labels, src).expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
         ids.push(test_run.dispatch_watched_in(
@@ -196,7 +190,7 @@ fn opaque_view_manifest_typed_val_slot_reads_concrete() {
             .is_none(),
         "a manifest-typed VAL slot must not be re-tagged in slot_type_tags",
     );
-    let result = test_run.run_one(parse_one(&program, "view.x"));
+    let result = test_run.run_one(test_run.parse_one("view.x"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 3.0),
         "view.x on a manifest-typed slot reads the underlying Number(3), got {:?}",
@@ -215,7 +209,7 @@ fn opaque_missing_abstract_member_rejected() {
         "MODULE implementation = (LET item = 0)\n\
          SIG Container = ((TYPE Elt) (VAL item :Number))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "implementation :| Container"));
+    let err = test_run.run_one_err(test_run.parse_one("implementation :| Container"));
     // Ruling 12: the signature is named structurally, not "Container".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
@@ -234,7 +228,7 @@ fn transparent_missing_abstract_member_rejected() {
         "MODULE implementation = (LET item = 0)\n\
          SIG Container = ((TYPE Elt) (VAL item :Number))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "implementation :! Container"));
+    let err = test_run.run_one_err(test_run.parse_one("implementation :! Container"));
     // Ruling 12: the signature is named structurally, not "Container".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
@@ -254,7 +248,7 @@ fn manifest_type_member_mismatch_rejected() {
         "MODULE implementation = ((LET Tag = Str) (LET item = 0))\n\
          SIG Tagged = ((LET Tag = Number) (VAL item :Number))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "implementation :| Tagged"));
+    let err = test_run.run_one_err(test_run.parse_one("implementation :| Tagged"));
     // Ruling 12: the signature is named structurally, not "Tagged".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)

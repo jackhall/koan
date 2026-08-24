@@ -17,8 +17,8 @@
 use crate::machine::FinishCtx;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
-use crate::machine::core::RegionBrand;
-use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KKind, KObject, KType, TypeNode};
 use crate::machine::{KError, KErrorKind, Scope};
 use crate::source::Spanned;
@@ -30,11 +30,7 @@ use crate::machine::model::RunRegistries;
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { name, ty } }
 
-fn typeexpr_from_carrier<'a>(
-    brand: RegionBrand<'a>,
-    kt: KType,
-    registries: &RunRegistries,
-) -> CarrierForm<'a> {
+fn typeexpr_from_carrier(kt: KType, registries: &RunRegistries) -> CarrierForm {
     let types = &registries.types;
     // The builtin leaf type names re-resolve against decl_scope through the same name path so a
     // SIG-local shadow wins over the builtin table. `:Module` lowers to the empty signature —
@@ -53,19 +49,22 @@ fn typeexpr_from_carrier<'a>(
             | TypeNode::OfKind(KKind::AnyType | KKind::Signature | KKind::ProperType)
     );
     if is_leaf_builtin || kt == KType::EMPTY_SIGNATURE {
-        CarrierForm::Leaf(TypeIdentifier::leaf(
-            brand.allocator().text(&kt.name(registries)),
-        ))
+        // A leaf handle reaches its name only as rendered text, so this re-declares it — the one
+        // seam where a builtin's name is minted from a string rather than a token.
+        CarrierForm::Leaf(
+            TypeSymbol::declared(&kt.name(registries), &registries.labels)
+                .expect("a builtin leaf name is a Type token"),
+        )
     } else {
         CarrierForm::Direct(kt)
     }
 }
 
-enum CarrierForm<'a> {
+enum CarrierForm {
     /// Builtin leaf synthesized from `kt.name()`; re-elaborated against decl_scope
     /// so a SIG-local shadow wins over the builtin table.
-    Leaf(TypeIdentifier<'a>),
-    Raw(TypeIdentifier<'a>),
+    Leaf(TypeSymbol),
+    Raw(TypeSymbol),
     /// Structural carrier accepted as-is; inner names are not re-bound.
     Direct(KType),
 }
@@ -113,9 +112,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     };
 
     let carrier = match ctx.args.unresolved_type(&SLOTS.ty) {
-        Some(te) => CarrierForm::Raw(*te),
+        Some(te) => CarrierForm::Raw(te),
         None => match ctx.args.ktype(&SLOTS.ty) {
-            Some(kt) => typeexpr_from_carrier(ctx.scope.brand(), kt, ctx.registries),
+            Some(kt) => typeexpr_from_carrier(kt, ctx.registries),
             None => {
                 return done_err(match ctx.args.object(&SLOTS.ty) {
                     Some(other) => KError::new(KErrorKind::TypeMismatch {
@@ -133,7 +132,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         CarrierForm::Direct(kt) => return finalize_val(&ctx.finish_ctx(), slot_name, kt),
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
         // `LET <name> = ...` shadow wins over the builtin table. A `Raw` carrier always holds a
-        // bare-leaf `TypeIdentifier` (parameterized surface forms sub-Dispatch earlier).
+        // bare-leaf name (parameterized surface forms sub-Dispatch earlier).
         CarrierForm::Leaf(te) => te,
         CarrierForm::Raw(te) => te,
     };

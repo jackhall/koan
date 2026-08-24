@@ -15,7 +15,7 @@
 
 use std::rc::Rc;
 
-use koan::builtins::test_support::{TestRun, lookup_binding};
+use koan::builtins::test_support::{TestRun, lookup_binding, lookup_type};
 use koan::machine::model::{
     KKind, KObject, KType, NodeSchema, Symbol, TypeNode, TypeRegistry, ValueSymbol,
 };
@@ -59,8 +59,7 @@ fn lookup_sig_value_kt(
     sig_name: &str,
     name: &str,
 ) -> KType {
-    let handle = scope
-        .resolve_type(sig_name)
+    let handle = lookup_type(scope, sig_name)
         .unwrap_or_else(|| panic!("`{sig_name}` should bind a Signature KType, got nothing"));
     let schema = match types.node(handle) {
         TypeNode::Signature { schema, .. } => schema,
@@ -232,10 +231,7 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
     let region = run_root_storage();
     let test_run = run(&program, &region, "NEWTYPE Foo = :{xs :(LIST OF Number)}");
     // NEWTYPE is type-only — its record repr rides the sealed `SetMember` in `types`.
-    let foo = test_run
-        .scope
-        .resolve_type("Foo")
-        .expect("Foo must resolve to a type");
+    let foo = lookup_type(test_run.scope, "Foo").expect("Foo must resolve to a type");
     let fields = match test_run.types().node(foo) {
         TypeNode::SetMember {
             schema: NodeSchema::NewType(repr),
@@ -268,10 +264,7 @@ fn union_field_accepts_keyworded_map_sigil() {
     );
     // UNION is type-only — it binds an anonymous union of per-variant newtypes; the `Some`
     // variant's newtype repr is the keyworded `MAP` sigil that sub-Dispatched.
-    let maybe = test_run
-        .scope
-        .resolve_type("Maybe")
-        .expect("Maybe must resolve to a type");
+    let maybe = lookup_type(test_run.scope, "Maybe").expect("Maybe must resolve to a type");
     let some_repr = match test_run.types().node(maybe) {
         TypeNode::Union { members } => members
             .iter()

@@ -8,7 +8,7 @@
 //! - A loop-carried aggregate correctly crosses a tail hop (Lemma 2 — the retiring region
 //!   outlives the adoption that reads it).
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
@@ -52,7 +52,7 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
 
     // Parse before the baseline: the parse bumps into program storage, whose own region mint
     // belongs to no call.
-    let call = parse_one(&program, &format!("COUNTDOWN n{DEPTH}"));
+    let call = test_run.parse_one(&format!("COUNTDOWN n{DEPTH}"));
     // Only the setup's own (no-mint) top-level statements have run so far; the run-root mint is
     // the sole contributor to `peak` at this point.
     let baseline = region_metrics().peak;
@@ -131,7 +131,7 @@ fn tail_recursive_record_thread_stays_o1_in_regions() {
 
     // Parse before the baseline: the parse bumps into program storage, whose own region mint
     // belongs to no call.
-    let call = parse_one(&program, &format!("THREAD n{DEPTH} {{acc = 0}}"));
+    let call = test_run.parse_one(&format!("THREAD n{DEPTH} {{acc = 0}}"));
     let baseline = region_metrics().peak;
 
     let id = test_run.dispatch_in_scope(
@@ -178,7 +178,7 @@ fn no_mint_categories_add_no_region_mints() {
     test_run.run("MODULE mo = ((LET hidden = 99))");
     // Parse the forward's source before the baseline: parsing bumps into program storage, and
     // that storage's own region mint belongs to none of the four categories.
-    let forward = parse_one(&program, "a");
+    let forward = test_run.parse_one("a");
     let baseline = region_metrics().minted_total;
 
     test_run.run(
@@ -234,7 +234,7 @@ fn loop_carried_aggregate_survives_tail_hop_adoption() {
     );
     // Each hop rewraps the previous hop's own list (`[(acc)]`), so unwrapping the wraps back down
     // must reach the original seed `0` unharmed.
-    let result = test_run.run_one(parse_one(&program, "AA [0]"));
+    let result = test_run.run_one(test_run.parse_one("AA [0]"));
     let mut depth = 0;
     let mut current = result;
     loop {

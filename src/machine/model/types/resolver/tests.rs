@@ -4,12 +4,7 @@ use crate::machine::DeclarationSite;
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::Record;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::{AnnouncedData, RelativeSchema};
-
-fn leaf(n: &str) -> TypeIdentifier<'_> {
-    TypeIdentifier::leaf(n)
-}
 
 /// A module-body child announcing `members` as standalone type declarations — the ambient window a
 /// body statement elaborates against.
@@ -36,7 +31,11 @@ fn type_token_cannot_bind_value_side() {
     let scope = test_run.scope;
     let types = test_run.registry_handle();
     let mut el = Elaborator::new(scope);
-    match elaborate_type_identifier(&mut el, &leaf("Gee"), types.registries()) {
+    match elaborate_type_identifier(
+        &mut el,
+        type_name("Gee", types.registries()),
+        types.registries(),
+    ) {
         TypeResolution::Unbound(msg) => assert!(
             msg.contains("Gee"),
             "expected an unknown-name miss naming `Gee`, got: {msg}",
@@ -53,7 +52,11 @@ fn unbound_leaf_names_unknown_type() {
     let scope = test_run.scope;
     let types = test_run.registry_handle();
     let mut el = Elaborator::new(scope);
-    match elaborate_type_identifier(&mut el, &leaf("NopeType"), types.registries()) {
+    match elaborate_type_identifier(
+        &mut el,
+        type_name("NopeType", types.registries()),
+        types.registries(),
+    ) {
         TypeResolution::Unbound(msg) => assert!(
             msg.contains("unknown type name") && msg.contains("NopeType"),
             "expected an unknown-type-name message naming `NopeType`, got: {msg}",
@@ -75,14 +78,14 @@ fn announced_member_lowers_to_sibling_for_a_declarator() {
     let window = child.own_declaration_window().expect("the body announced");
     let types = parent_test_run.registry_handle();
     let mut el = Elaborator::new(child).with_window(WindowView::Announced(window));
-    match elaborate_type_identifier(&mut el, &leaf("Beta"), types.registries()) {
+    match elaborate_type_identifier(&mut el, type_token("Beta"), types.registries()) {
         TypeResolution::Done(kt) => assert_eq!(kt, types.intern(TypeNode::Sibling(1))),
         other => panic!("expected a sibling back-edge for a window member, got {other:?}"),
     }
     let mut el2 = Elaborator::new(child).with_window(WindowView::Announced(window));
     assert!(
         matches!(
-            elaborate_type_identifier(&mut el2, &leaf("Nope"), types.registries()),
+            elaborate_type_identifier(&mut el2, type_token("Nope"), types.registries()),
             TypeResolution::Unbound(_)
         ),
         "a non-member must fall through to ordinary resolution",
@@ -99,7 +102,7 @@ fn announced_member_never_lowers_to_sibling_for_a_consumer() {
     let child = announced_module(parent_test_run.scope, &["Alpha", "Beta"]);
     let types = parent_test_run.registry_handle();
     let mut el = Elaborator::new(child);
-    match elaborate_type_identifier(&mut el, &leaf("Beta"), types.registries()) {
+    match elaborate_type_identifier(&mut el, type_token("Beta"), types.registries()) {
         TypeResolution::Unbound(msg) => assert!(
             msg.contains("co-declared"),
             "expected the dead-declaration miss, got {msg}",
@@ -121,7 +124,7 @@ fn window_binder_resolves_to_the_union_of_its_members() {
         vec![type_token("Leaf"), type_token("Node")],
     );
     let mut el = Elaborator::new(test_run.scope).with_window(WindowView::Local(&window));
-    match elaborate_type_identifier(&mut el, &leaf("Tree"), types.registries()) {
+    match elaborate_type_identifier(&mut el, type_token("Tree"), types.registries()) {
         TypeResolution::Done(kt) => {
             assert_eq!(Some(kt), window.binder_union(type_token("Tree"), &types))
         }

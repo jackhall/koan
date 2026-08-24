@@ -1,4 +1,4 @@
-use crate::builtins::test_support::{TestRun, parse_one, type_name, type_token};
+use crate::builtins::test_support::{TestRun, type_name, type_token};
 use crate::machine::core::{KErrorKind, program_storage, run_root_storage};
 use crate::machine::model::KObject;
 
@@ -10,7 +10,7 @@ fn ctor_fast_lane_rejects_value_of_wrong_type() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("UNION Maybe = (Some :Number None :Null)");
-    let err = test_run.run_one_err(parse_one(&program, "Maybe (Some \"oops\")"));
+    let err = test_run.run_one_err(test_run.parse_one("Maybe (Some \"oops\")"));
     match &err.kind {
         KErrorKind::TypeMismatch { arg, expected, got } => {
             assert_eq!(arg, "value");
@@ -28,7 +28,7 @@ fn ctor_fast_lane_propagates_tag_validation_error() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("UNION Maybe = (Some :Number None :Null)");
-    let err = test_run.run_one_err(parse_one(&program, "Maybe (Other 42)"));
+    let err = test_run.run_one_err(test_run.parse_one("Maybe (Other 42)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`Other`")),
         "expected ShapeError mentioning `Other`, got {err}",
@@ -46,7 +46,7 @@ fn ctor_fast_lane_with_sub_expression_value() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("UNION Maybe = (Some :Number None :Null)\nLET x = 7");
-    let result = test_run.run_one(parse_one(&program, "Maybe (Some (x))"));
+    let result = test_run.run_one(test_run.parse_one("Maybe (Some (x))"));
     match result {
         KObject::Tagged {
             tag,

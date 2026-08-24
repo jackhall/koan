@@ -1,12 +1,13 @@
+use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{TestRun, binder_name, value_name};
 use crate::machine::BindingIndex;
 use crate::machine::ProducerId;
 use crate::machine::core::{FrameStorageExt, program_storage, run_root_storage};
 use crate::machine::execute::Resolution;
-use crate::machine::execute::decide::resolve::{TypeLeafChannels, resolve_name};
+use crate::machine::execute::decide::resolve::resolve_name;
 use crate::machine::model::Scalar;
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::model::{ExpressionPart, TypeIdentifier, WorkingExpression, WorkingPart};
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::source::Spanned;
 
 #[test]
@@ -26,13 +27,7 @@ fn resolve_name_identifier_resolved() {
         )
         .unwrap();
     let part = ExpressionPart::Identifier("x");
-    match resolve_name(
-        scope,
-        &part,
-        None,
-        test_run.registries(),
-        TypeLeafChannels::ValueChannelFirst,
-    ) {
+    match resolve_name(scope, &part, None, test_run.registries()) {
         Resolution::Resolved(delivered) => assert!(
             matches!(delivered.open_at().value(), Carried::Object(KObject::Number(n)) if *n == 7.0),
             "expected Resolution::Resolved(Number(7.0))",
@@ -47,14 +42,8 @@ fn resolve_name_type_resolved() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let part = ExpressionPart::Type(TypeIdentifier::leaf("Number"));
-    match resolve_name(
-        scope,
-        &part,
-        None,
-        test_run.registries(),
-        TypeLeafChannels::ValueChannelFirst,
-    ) {
+    let part = ExpressionPart::Type(type_token("Number"));
+    match resolve_name(scope, &part, None, test_run.registries()) {
         Resolution::Resolved(ref delivered)
             if matches!(delivered.open_at().value(), Carried::Type(KType::NUMBER)) => {}
         other => {
@@ -95,13 +84,7 @@ fn resolve_name_parked() {
         )
         .unwrap();
     let part = ExpressionPart::Identifier("fwd");
-    match resolve_name(
-        scope,
-        &part,
-        None,
-        test_run.registries(),
-        TypeLeafChannels::ValueChannelFirst,
-    ) {
+    match resolve_name(scope, &part, None, test_run.registries()) {
         Resolution::Parked(p) => assert_eq!(p, claim),
         _ => panic!("expected Resolution::Parked(claim)"),
     }
@@ -114,13 +97,7 @@ fn resolve_name_unbound() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let part = ExpressionPart::Identifier("missing");
-    match resolve_name(
-        scope,
-        &part,
-        None,
-        test_run.registries(),
-        TypeLeafChannels::ValueChannelFirst,
-    ) {
+    match resolve_name(scope, &part, None, test_run.registries()) {
         Resolution::Unbound(name) => assert_eq!(name, "missing"),
         _ => panic!("expected Resolution::Unbound"),
     }

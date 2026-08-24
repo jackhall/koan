@@ -86,7 +86,9 @@ fn non_module_argument(ctx: &crate::machine::BodyCtx<'_, '_, '_>) -> KError {
 
     let got = match ctx.args.held(&SLOTS.m) {
         Some(Held::Type(other)) => other.name(ctx.registries),
-        Some(Held::UnresolvedType(ti)) => ti.render(),
+        Some(Held::UnresolvedType(ti)) => {
+            crate::machine::model::render_label(ti.symbol(), ctx.registries)
+        }
         Some(Held::Object(other)) => other.ktype().name(ctx.registries).to_string(),
         None => return KError::new(KErrorKind::MissingArg("m".to_string())),
     };

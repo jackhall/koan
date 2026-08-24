@@ -1,6 +1,7 @@
 //! `WITH` sharing constraints on functor parameters and return types.
 
-use crate::builtins::test_support::{TestRun, lookup_fn, lookup_module, parse_one, spliced_part};
+use crate::builtins::test_support::lookup_type;
+use crate::builtins::test_support::{TestRun, lookup_fn, lookup_module, spliced_part};
 use crate::machine::model::Carried;
 use crate::machine::{program_storage, run_root_storage};
 
@@ -71,10 +72,8 @@ fn functor_with_two_pinned_slots_round_trips() {
         "FN (TWOPIN p :Ordered) -> :(OrderedSet WITH {Elt = Number, Ord = Number}) = \
          (MODULE generated = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0)))",
     );
-    let expected = test_run.run_one_type(parse_one(
-        &program,
-        "OrderedSet WITH {Elt = Number, Ord = Number}",
-    ));
+    let expected =
+        test_run.run_one_type(test_run.parse_one("OrderedSet WITH {Elt = Number, Ord = Number}"));
     let f = lookup_fn(scope, "TWOPIN");
     use crate::machine::model::ReturnType;
     match f.signature.return_type() {
@@ -108,7 +107,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
         "FN (MAKESETN p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
-    let expected = test_run.run_one_type(parse_one(&program, "Set WITH {Elt = Number}"));
+    let expected = test_run.run_one_type(test_run.parse_one("Set WITH {Elt = Number}"));
     let f = lookup_fn(scope, "MAKESETN");
     use crate::machine::model::{ReturnType, TypeNode};
     match f.signature.return_type() {
@@ -159,7 +158,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "MAKEBAD int_ord_view"),
+            test_run.parse_one("MAKEBAD int_ord_view"),
         ),
         scope,
     );
@@ -202,7 +201,7 @@ fn functor_return_with_matching_sharing_constraint_passes() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "MAKEGOOD int_ord_view"),
+            test_run.parse_one("MAKEGOOD int_ord_view"),
         ),
         scope,
     );
@@ -243,9 +242,7 @@ fn transparent_view_pin_agreement_reads_source_types() {
          LET num_view = (num_mod :! Ordered)\n\
          LET str_view = (str_mod :! Ordered)",
     );
-    let ordered = scope
-        .resolve_type("Ordered")
-        .expect("Ordered must bind a Signature KType");
+    let ordered = lookup_type(scope, "Ordered").expect("Ordered must bind a Signature KType");
     let schema = match types.node(ordered) {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("Ordered must bind a Signature KType, got {ordered:?}"),
@@ -287,9 +284,7 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
          SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          LET view = (int_ord :| Ordered)",
     );
-    let ordered = scope
-        .resolve_type("Ordered")
-        .expect("Ordered must bind a Signature KType");
+    let ordered = lookup_type(scope, "Ordered").expect("Ordered must bind a Signature KType");
     let schema = match types.node(ordered) {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("Ordered must bind a Signature KType, got {ordered:?}"),

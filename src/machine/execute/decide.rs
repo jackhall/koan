@@ -572,7 +572,10 @@ pub(in crate::machine::execute) fn run_action<'step>(
                             }
                             Carried::UnresolvedType(ti) => {
                                 return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
-                                    ti.render(),
+                                    crate::machine::model::render_label(
+                                        ti.symbol(),
+                                        view.registries(),
+                                    ),
                                 ))));
                             }
                         };

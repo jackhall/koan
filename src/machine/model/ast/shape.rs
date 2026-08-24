@@ -11,11 +11,11 @@ use crate::machine::SplicedCell;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::KeyElement;
 use crate::machine::model::ast::KeywordToken;
-use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
+use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol};
 use crate::source::Spanned;
 
+use super::KExpression;
 use super::working::WorkingExpression;
-use super::{KExpression, TypeIdentifier};
 
 /// The structural family a part belongs to — the axis shape classification, the bucket key and the
 /// operator probe read. A keyword carries its text because those readers need it.
@@ -50,7 +50,7 @@ pub enum FieldSlot<'a> {
     /// A bare identifier — a field or parameter name.
     Name(&'a str),
     /// A type name token: a field's declared type, or a capitalized field / variant name.
-    Type(TypeIdentifier<'a>),
+    Type(TypeSymbol),
     /// `:(…)` still holding parsed AST — thread its co-declared references, then sub-dispatch it.
     AstSigil(&'a KExpression<'a>),
     /// `:{…}` still holding parsed AST — elaborate its field list inline.

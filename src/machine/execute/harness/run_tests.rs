@@ -3,6 +3,7 @@
 //! [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)).
 use crate::builtins::test_support::TestRun;
 use crate::builtins::test_support::binds_module;
+use crate::builtins::test_support::lookup_type;
 use crate::machine::KErrorKind;
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::{KObject, KType};
@@ -15,12 +16,14 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
-    for e in parse_all(&program, "LET x = 42") {
+    for e in parse_all(&program, labels, "LET x = 42") {
         runtime.dispatch_in_scope(e, scope, 1);
     }
     runtime.execute().unwrap();
-    let id = runtime.dispatch_in_scope(parse_one(&program, "(x)"), scope, 2);
+    let id = runtime.dispatch_in_scope(parse_one(&program, labels, "(x)"), scope, 2);
     let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().unwrap();
     assert!(
@@ -41,10 +44,12 @@ fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(
         scope.id,
-        parse_all(&program, "LET y = (x)\nLET x = 1"),
+        parse_all(&program, labels, "LET y = (x)\nLET x = 1"),
         scope,
     );
     let edge = runtime.install_edge_for_test(ids[0], scope);
@@ -66,8 +71,10 @@ fn single_identifier_short_circuit_falls_through_when_unbound() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
-    let id = runtime.dispatch_in_scope(parse_one(&program, "(missing)"), scope, 1);
+    let id = runtime.dispatch_in_scope(parse_one(&program, labels, "(missing)"), scope, 1);
     let edge = runtime.install_edge_for_test(id, scope);
     runtime.execute().unwrap();
     let err = match runtime.edge_result_error(edge) {
@@ -86,8 +93,10 @@ fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
-    for (i, e) in parse_all(&program, "LET z = 7\nLET y = z")
+    for (i, e) in parse_all(&program, labels, "LET z = 7\nLET y = z")
         .into_iter()
         .enumerate()
     {
@@ -105,8 +114,14 @@ fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
-    let ids = runtime.enter_block(scope.id, parse_all(&program, "LET y = z\nLET z = 9"), scope);
+    let ids = runtime.enter_block(
+        scope.id,
+        parse_all(&program, labels, "LET y = z\nLET z = 9"),
+        scope,
+    );
     let watched = super::tests::watch_all(runtime, &ids, scope);
     runtime.execute().unwrap();
     let err = runtime
@@ -128,9 +143,12 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
     for (i, e) in parse_all(
         &program,
+        labels,
         "FN (ADD a :Number BY b :Number) -> Number = (a)\n\
          LET aa = 3\n\
          LET bb = 4\n\
@@ -153,11 +171,14 @@ fn forward_keyword_function_reference_is_unbound() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(
         scope.id,
         parse_all(
             &program,
+            labels,
             "LET out = (DOUBLE 7)\n\
              FN (DOUBLE x :Number) -> Number = (x)",
         ),
@@ -185,9 +206,12 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
     for (i, e) in parse_all(
         &program,
+        labels,
         "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET aa = 11\n\
          LET bb = 22\n\
@@ -215,9 +239,12 @@ fn park_and_replay_minimal_program_for_miri() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
     for (i, e) in parse_all(
         &program,
+        labels,
         "LET z = 11\n\
          LET y = z\n\
          FN (DOUBLE x :Number) -> Number = (x)\n\
@@ -242,9 +269,12 @@ fn replay_park_propagates_producer_error() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
     let ids: Vec<_> = parse_all(
         &program,
+        labels,
         "LET y = (x)\n\
          LET x = (UNDEFINED_FN)",
     )
@@ -286,9 +316,12 @@ fn bare_type_token_in_typeexprref_slot_parks_while_still_finalizing() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
     for (i, e) in parse_all(
         &program,
+        labels,
         "MODULE int_ord = (LET compare = 0)\n\
          SIG Ordered = (VAL compare :Number)\n\
          LET a_result = (int_ord :| Ordered)",
@@ -317,7 +350,9 @@ fn let_type_to_value_name_rejected() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let watch = test_run.dispatch_watched_in(scope, parse_one(&program, "LET ty = Number"));
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
+    let watch = test_run.dispatch_watched_in(scope, parse_one(&program, labels, "LET ty = Number"));
     test_run.runtime.execute().unwrap();
     let types = test_run.registry_handle();
     match test_run
@@ -333,9 +368,9 @@ fn let_type_to_value_name_rejected() {
     }
 
     // The Type-classified alias is the legal form: it lands type-side.
-    for e in parse_all(&program, "LET Ty = Number") {
+    for e in parse_all(&program, labels, "LET Ty = Number") {
         test_run.dispatch_in_scope(e, scope);
     }
     test_run.runtime.execute().unwrap();
-    assert_eq!(scope.resolve_type("Ty"), Some(KType::NUMBER));
+    assert_eq!(lookup_type(scope, "Ty"), Some(KType::NUMBER));
 }

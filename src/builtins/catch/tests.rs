@@ -2,7 +2,7 @@
 //! non-short-circuiting in a binding position, nesting, and frame-chain preservation in
 //! TCO position.
 
-use crate::builtins::test_support::{TestRun, parse_one, type_name};
+use crate::builtins::test_support::{TestRun, type_name};
 use crate::machine::model::{KObject, TypeNode};
 use crate::machine::program_storage;
 use crate::machine::run_root_storage;
@@ -90,8 +90,8 @@ fn catch_result_shares_identity_with_constructed_result() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let caught = test_run.run_one(parse_one(&program, "CATCH (foo)"));
-    let constructed = test_run.run_one(parse_one(&program, "Result (Ok 1)"));
+    let caught = test_run.run_one(test_run.parse_one("CATCH (foo)"));
+    let constructed = test_run.run_one(test_run.parse_one("Result (Ok 1)"));
     match (caught, constructed) {
         (KObject::Tagged { identity: id1, .. }, KObject::Tagged { identity: id2, .. }) => {
             match test_run.types().node(*id1) {

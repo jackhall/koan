@@ -67,13 +67,15 @@ fn dep_finish_short_circuits_on_dep_error() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let runtime = &mut test_run.runtime;
 
     // One dep that delivers a value and one that cannot resolve its name — an ordinary erroring
     // dispatch, which is what the consumer's walk fills its edge with.
     let dep_ok = runtime.dispatch_in_scope(let_expr(&program, "ok", 99.0), scope, 1);
     let dep_err = runtime.dispatch_in_scope(
-        working_one(&program, "LET bad = (undefined_thing)"),
+        working_one(&program, labels, "LET bad = (undefined_thing)"),
         scope,
         2,
     );
@@ -161,10 +163,13 @@ fn tail_call_reuses_node_slot_in_place() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
+    let registry = test_run.registry_handle();
+    let labels = &registry.registries().labels;
     let watch = test_run.dispatch_watched_in(
         root,
         working_one(
             &program,
+            labels,
             "MATCH true -> :Str WITH (true -> (\"hi\") false -> (\"no\"))",
         ),
     );

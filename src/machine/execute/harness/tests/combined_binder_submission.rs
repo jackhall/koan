@@ -16,7 +16,11 @@ fn combined_form_installs_both_channels_at_submission() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let expr = working_one(&program, "LET f = FN (HELPER x :Number) -> Number = (x)");
+    let expr = working_one(
+        &program,
+        &test_run.registries().labels,
+        "LET f = FN (HELPER x :Number) -> Number = (x)",
+    );
     let _id = test_run.dispatch_in_scope(expr, scope);
     // Read both tables before any `execute()` — installs must land at submission time.
     assert!(

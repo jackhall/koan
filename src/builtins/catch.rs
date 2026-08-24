@@ -25,7 +25,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // the `Result` member resolves here. This is a documentary contract: the catch finish
     // produces an `Outcome::Done(Value)` (never a `ReturnContract`), so the declared return is not
     // validated against the runtime value, and the throwaway `kerror_ktype()` identity is fine.
-    let result_ctor = match scope.resolve_type("Result") {
+    let result_ctor = match scope.resolve_type(crate::builtins::result::RESULT.symbol()) {
         Some(member) => member,
         None => panic!("Result must be registered before CATCH"),
     };
@@ -65,7 +65,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", &SLOTS.expr));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
     // nominal identity of a `Result (...)`-constructed one.
-    let result_member: KType = match ctx.scope.resolve_type("Result") {
+    let result_member: KType = match ctx
+        .scope
+        .resolve_type(crate::builtins::result::RESULT.symbol())
+    {
         Some(member) => member,
         None => panic!("Result must be registered before CATCH"),
     };

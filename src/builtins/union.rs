@@ -30,7 +30,7 @@ crate::slots! { SLOTS { name, schema } }
 /// statement's, and that statement carries the writes.
 fn finalize_union<'a>(
     fctx: &FinishCtx<'a, '_>,
-    name: String,
+    name: TypeSymbol,
     window: &DeclWindow<'a>,
     fields: Vec<(Symbol, KType)>,
     site: DeclarationSite,
@@ -43,7 +43,7 @@ fn finalize_union<'a>(
     let scope = fctx.scope;
     let brand = scope.brand();
 
-    let binder = type_binder(&name, fctx.registries)?;
+    let binder = name;
     let mut sealed = false;
     for (tag, payload) in fields {
         // A variant tag arrives as the record literal's bare field symbol. It probes the window's
@@ -54,7 +54,8 @@ fn finalize_union<'a>(
             None => {
                 let tag = render_label(tag, fctx.registries);
                 return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "UNION `{name}`: variant `{tag}` is not one of the declared variants",
+                    "UNION `{}`: variant `{tag}` is not one of the declared variants",
+                    render_label(name.symbol(), fctx.registries),
                 ))));
             }
         };
@@ -76,7 +77,8 @@ fn finalize_union<'a>(
         Some(kt) => kt,
         None => {
             return Err(KError::new(KErrorKind::ShapeError(format!(
-                "UNION `{name}` did not seal",
+                "UNION `{}` did not seal",
+                render_label(name.symbol(), fctx.registries),
             ))));
         }
     };
@@ -121,8 +123,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         Err(message) => return Action::done(Err(KError::new(KErrorKind::ShapeError(message)))),
     };
     // The tags classify and intern here, at the declaration that mints them, so the window, the
-    // sealed member nodes and every later diagnostic share one classified currency.
-    let binder = crate::try_action!(type_binder(&name, ctx.registries));
+    // sealed member nodes and every later diagnostic share one classified currency. The binder's
+    // own token the parser already minted.
+    let binder = name;
     let tags: Vec<TypeSymbol> = crate::try_action!(
         tags.iter()
             .map(|tag| type_binder(tag, ctx.registries))
@@ -138,14 +141,21 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 .any(|tag| ambient.variant_index(binder, tag.symbol()).is_none())
             {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "UNION `{name}`: its announced variants differ from its declared ones",
+                    "UNION `{}`: its announced variants differ from its declared ones",
+                    render_label(name.symbol(), ctx.registries),
                 )))));
             }
             DeclWindow::Ambient(ambient)
         }
         _ => DeclWindow::Owned(RecursiveGroupWindow::for_binder(binder, tags)),
     };
-    let error_frame = TraceFrame::bare("<union>", format!("UNION {name} schema"));
+    let error_frame = TraceFrame::bare(
+        "<union>",
+        format!(
+            "UNION {} schema",
+            render_label(name.symbol(), ctx.registries),
+        ),
+    );
     nominal_schema_action(
         ctx,
         name,
@@ -174,6 +184,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{TestRun, mock_declaration_site, parse_one, type_name};
+    use crate::builtins::test_support::{lookup_type, type_token};
     use crate::machine::model::Carried;
     use crate::machine::model::KType;
     use crate::machine::model::{KKind, NodeSchema, RecursiveGroupWindow, TypeNode, TypeRegistry};
@@ -183,8 +194,7 @@ mod tests {
     /// The newtype repr of union `name`'s `variant` member — each variant is a per-tag newtype
     /// `SetMember`, and its schema's `NewType` repr is the field type.
     fn variant_repr(scope: &Scope<'_>, name: &str, variant: &str, types: &TypeRegistry) -> KType {
-        let handle = scope
-            .resolve_type(name)
+        let handle = lookup_type(scope, name)
             .unwrap_or_else(|| panic!("expected {name} to be a type in scope"));
         let members = match types.node(handle) {
             TypeNode::Union { members } => members,
@@ -210,9 +220,13 @@ mod tests {
     #[test]
     fn binder_name_extracts_named_union_name() {
         let program = program_storage();
-        let expr = parse_one(&program, "UNION Maybe = (Some :Number, None :Null)");
+        let expr = parse_one(
+            &program,
+            &crate::machine::model::LabelInterner::new(),
+            "UNION Maybe = (Some :Number, None :Null)",
+        );
         let name = expr.binder_name_from_type_part();
-        assert_eq!(name, Some("Maybe"));
+        assert_eq!(name, Some(type_token("Maybe")));
     }
 
     #[test]
@@ -223,10 +237,8 @@ mod tests {
         let scope = test_run.scope;
         // UNION is type-only: the declaration binds an anonymous `Union` node over one
         // per-variant newtype `SetMember` each, registered into `types`.
-        let result = test_run.run_one_type(parse_one(
-            &program,
-            "UNION Maybe = (Some :Number None :Null)",
-        ));
+        let result =
+            test_run.run_one_type(test_run.parse_one("UNION Maybe = (Some :Number None :Null)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::Union { members } => {
@@ -273,7 +285,7 @@ mod tests {
         let root = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
-                parse_one(&program, "UNION (Ok :Number Err :Str)"),
+                test_run.parse_one("UNION (Ok :Number Err :Str)"),
             ),
             scope,
         );
@@ -297,7 +309,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let err = test_run.run_one_err(parse_one(&program, "UNION Bad = (Some :Bogus)"));
+        let err = test_run.run_one_err(test_run.parse_one("UNION Bad = (Some :Bogus)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("Bogus")),
             "expected ShapeError mentioning Bogus, got {err}",
@@ -309,7 +321,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let err = test_run.run_one_err(parse_one(&program, "UNION Empty = ()"));
+        let err = test_run.run_one_err(test_run.parse_one("UNION Empty = ()"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("at least one tag")),
             "expected ShapeError on empty schema, got {err}",
@@ -321,8 +333,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let err =
-            test_run.run_one_err(parse_one(&program, "UNION Dupe = (Some :Number Some :Str)"));
+        let err = test_run.run_one_err(test_run.parse_one("UNION Dupe = (Some :Number Some :Str)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`Some`")),
             "expected ShapeError on duplicate tag, got {err}",
@@ -369,7 +380,7 @@ mod tests {
         // sealed. The finalize writes nothing itself — the ops it hands back are what install the
         // identity, exactly as the run loop applies them after the declaring step returns.
         let (_, writes) =
-            super::finalize_union(&fctx, "Maybe".into(), &make_window(), fields(), site)
+            super::finalize_union(&fctx, type_token("Maybe"), &make_window(), fields(), site)
                 .expect("the first finalize seals");
         assert!(
             scope
@@ -397,7 +408,8 @@ mod tests {
         );
         // Second finalize: the sealed window refills to the same handles and the upsert sees the
         // same installing handle, so it overwrites idempotently and returns the bound union type.
-        let second = super::finalize_union(&fctx, "Maybe".into(), &make_window(), fields(), site);
+        let second =
+            super::finalize_union(&fctx, type_token("Maybe"), &make_window(), fields(), site);
         let is_union = second.map(|(carrier, writes)| {
             for write in writes {
                 write
@@ -435,7 +447,7 @@ mod tests {
         let scope = test_run.scope;
         let exprs = crate::parse::parse(
             program.brand(),
-            &crate::machine::model::LabelInterner::new(),
+            &test_run.registries().labels,
             "UNION Maybe = (Some :Number None :Null)\nUNION Maybe = (Some :Str None :Null)",
         )
         .expect("parse should succeed")
@@ -488,7 +500,7 @@ mod tests {
         let first = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
-                parse_one(&program, "UNION Maybe = (Some :Number None :Null)"),
+                test_run.parse_one("UNION Maybe = (Some :Number None :Null)"),
             ),
             scope,
         );
@@ -505,7 +517,7 @@ mod tests {
         let second = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
-                parse_one(&program, "UNION Maybe = (Some :Str None :Null)"),
+                test_run.parse_one("UNION Maybe = (Some :Str None :Null)"),
             ),
             scope,
         );
@@ -535,7 +547,7 @@ mod tests {
         let scope = test_run.scope;
         let exprs = crate::parse::parse(
             program.brand(),
-            &crate::machine::model::LabelInterner::new(),
+            &test_run.registries().labels,
             "UNION Maybe = (Some :Number None :Null)\nUNION Maybe = (Some :Number None :Null)",
         )
         .expect("parse should succeed")
@@ -576,7 +588,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let err = test_run.run_one_err(parse_one(&program, "UNION Pair = (Some :Number None)"));
+        let err = test_run.run_one_err(test_run.parse_one("UNION Pair = (Some :Number None)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("pair") || msg.contains("multiple of 2")),
             "expected ShapeError on odd part count, got {err}",

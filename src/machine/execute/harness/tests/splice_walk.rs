@@ -18,7 +18,7 @@ fn self_referential_let_surfaces_unbound_name() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let exprs = working_all(&program, "LET Ty = Ty");
+    let exprs = working_all(&program, &test_run.registries().labels, "LET Ty = Ty");
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(scope.id, exprs, scope);
     let watched = super::watch_all(runtime, &ids, scope);
@@ -48,6 +48,7 @@ fn pending_producer_parks_then_resolves_on_wake() {
     // `Fwd`; its claim answers `Parked` rather than reading as Unbound.
     let exprs = working_all(
         &program,
+        &test_run.registries().labels,
         "NEWTYPE Foo = :{x :Number}\n\
          LET Fwd = Foo\n\
          PRINT Fwd",

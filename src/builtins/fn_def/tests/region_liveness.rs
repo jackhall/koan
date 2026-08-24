@@ -8,7 +8,7 @@
 //! run root), and the call's result makes the run root retain the per-call owner — a two-region ring
 //! that only the eternal rule (`PinBundle::without_eternal`) cuts.
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::{region_metrics, reset_region_metrics};
@@ -174,7 +174,7 @@ fn a_spliced_cell_is_adopted_before_its_tail_hop() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(&splicing_countdown(1));
-    let result = test_run.run_one(parse_one(&program, "out"));
+    let result = test_run.run_one(test_run.parse_one("out"));
     assert!(
         matches!(result, KObject::KString(s) if *s == "done"),
         "the spliced tail hop's result reads back intact, got {:?}",

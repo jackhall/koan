@@ -1,8 +1,11 @@
+use crate::builtins::test_support::lookup_type;
+use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{TestRun, lookup_module, parse_one, type_name, value_name};
 use crate::machine::ScopeId;
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::KObject;
 use crate::machine::model::Record;
+use crate::machine::model::RunRegistries;
 use crate::machine::model::{
     KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeNode, constructor_param_names,
 };
@@ -18,9 +21,8 @@ fn member_type(
     member_name: &str,
 ) -> KType {
     let types = &registries.types;
-    let handle = scope
-        .resolve_type(sig_name)
-        .unwrap_or_else(|| panic!("{sig_name} must bind a type"));
+    let handle =
+        lookup_type(scope, sig_name).unwrap_or_else(|| panic!("{sig_name} must bind a type"));
     let schema = match types.node(handle) {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("{sig_name} must bind a Signature, got {handle:?}"),
@@ -115,7 +117,7 @@ fn bare_type_outside_sig_errors() {
     let scope = test_run.scope;
     test_run.run("TYPE Elt");
     assert!(
-        scope.resolve_type("Elt").is_none(),
+        lookup_type(scope, "Elt").is_none(),
         "TYPE outside a SIG body must not bind",
     );
 }
@@ -124,11 +126,12 @@ fn bare_type_outside_sig_errors() {
 #[test]
 fn hk_arity_above_one_declares() {
     let program = program_storage();
-    let inner = hk_decl_body(&program, "TYPE (Key Val AS Dict)");
+    let registries = RunRegistries::new();
+    let inner = hk_decl_body(&program, &registries.labels, "TYPE (Key Val AS Dict)");
     let (param_names, member_name) =
-        super::parse_hk_decl(&inner).expect("arity above 1 must declare");
-    assert_eq!(param_names, vec!["Key".to_string(), "Val".to_string()]);
-    assert_eq!(member_name, "Dict");
+        super::parse_hk_decl(&inner, &registries).expect("arity above 1 must declare");
+    assert_eq!(param_names, vec![type_token("Key"), type_token("Val")]);
+    assert_eq!(member_name, type_token("Dict"));
 }
 
 /// A parameter name repeated in one declaration is a shape error — the names key the
@@ -136,8 +139,10 @@ fn hk_arity_above_one_declares() {
 #[test]
 fn hk_duplicate_parameter_name_errors() {
     let program = program_storage();
-    let inner = hk_decl_body(&program, "TYPE (Key Key AS Dict)");
-    let error = super::parse_hk_decl(&inner).expect_err("a duplicate parameter name must error");
+    let registries = RunRegistries::new();
+    let inner = hk_decl_body(&program, &registries.labels, "TYPE (Key Key AS Dict)");
+    let error = super::parse_hk_decl(&inner, &registries)
+        .expect_err("a duplicate parameter name must error");
     assert!(
         error.to_string().contains("duplicate parameter name `Key`"),
         "expected the duplicate-name message, got {error}",
@@ -147,9 +152,10 @@ fn hk_duplicate_parameter_name_errors() {
 /// The parenthesized `(Param... AS Name)` group inside a parsed `TYPE` declaration.
 fn hk_decl_body<'a>(
     program: &'a ProgramStorage,
+    labels: &crate::machine::model::LabelInterner,
     source: &str,
 ) -> crate::machine::model::KExpression<'a> {
-    let expr = parse_one(program, source);
+    let expr = parse_one(program, labels, source);
     match expr.parts.get(1).expect("TYPE decl part").value {
         ExpressionPart::Expression(inner) => *inner,
         other => panic!("expected a parenthesized decl, got {other:?}"),
@@ -165,9 +171,7 @@ fn val_slot_after_type_records_abstract_member() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("SIG Container = ((TYPE Elt) (VAL item :Elt))");
-    let handle = scope
-        .resolve_type("Container")
-        .expect("Container must bind a type");
+    let handle = lookup_type(scope, "Container").expect("Container must bind a type");
     let item = match test_run.types().node(handle) {
         TypeNode::Signature { schema, .. } => schema
             .value_slots
@@ -323,10 +327,7 @@ fn fn_return_type_constructor_apply_root_scope() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(
-                &program,
-                "LET pure = FN (PURE a :Number) -> :(Number AS Wrap) = (1)",
-            ),
+            test_run.parse_one("LET pure = FN (PURE a :Number) -> :(Number AS Wrap) = (1)"),
         ),
         scope,
     );
@@ -372,12 +373,8 @@ fn monad_signature_smoke() {
     let scope = test_run.scope;
     let src = "SIG Monad = ((TYPE (Type AS Wrap)) \
          (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
-    let exprs = parse(
-        program.brand(),
-        &crate::machine::model::LabelInterner::new(),
-        src,
-    )
-    .expect("parse should succeed");
+    let exprs =
+        parse(program.brand(), &test_run.registries().labels, src).expect("parse should succeed");
     {
         let mut ids = Vec::new();
         for expr in exprs {
@@ -402,7 +399,7 @@ fn monad_signature_smoke() {
     }
     let registries = test_run.registries();
     let types = &registries.types;
-    let handle = scope.resolve_type("Monad").expect("Monad must bind a type");
+    let handle = lookup_type(scope, "Monad").expect("Monad must bind a type");
     let schema = match types.node(handle) {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("Monad must bind a Signature KType, got {:?}", handle),

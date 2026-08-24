@@ -4,7 +4,7 @@
 //! handle without boxing it into a `KObject`, or a surface type name the bind seam could not
 //! lower to a type (the `UnresolvedType` arm).
 //!
-//! `UnresolvedType` carries a [`TypeIdentifier`] verbatim: no type handle ever denotes an
+//! `UnresolvedType` carries the token's [`TypeSymbol`] verbatim: no type handle ever denotes an
 //! unresolved name. [`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for)
 //! mints it for a bare user name, and the park-capable
 //! [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier)
@@ -12,8 +12,8 @@
 //!
 //! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
 
-use crate::machine::model::TypeIdentifier;
-use crate::machine::model::types::{KKind, KType, TypeRegistry};
+use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::types::{KKind, KType, TypeRegistry, render_label};
 use crate::witnessed::reattachable;
 
 use super::KObject;
@@ -26,9 +26,9 @@ pub enum Carried<'a> {
     Object(&'a KObject<'a>),
     Type(KType),
     /// A surface type name the bind seam left unlowered; resolved by scope walk at the consumer.
-    /// Held by value: a [`TypeIdentifier`] is a `Copy` borrow of a name already resident in the
-    /// storage that parsed it, so there is nothing for a reference to add.
-    UnresolvedType(TypeIdentifier<'a>),
+    /// Held by value: a [`TypeSymbol`] is a `Copy` digest, so there is nothing for a reference
+    /// to add and the carrier borrows nothing from the storage that parsed the token.
+    UnresolvedType(TypeSymbol),
 }
 
 /// `Reattachable` family for [`Carried`] — the value channel's erase/reattach owner and the
@@ -64,8 +64,8 @@ impl<'a> Carried<'a> {
             }
             Carried::UnresolvedType(ti) => {
                 panic!(
-                    "expected an Object value, got an unresolved type name: {}",
-                    ti.render()
+                    "expected an Object value, got an unresolved type name: 0x{:032x}",
+                    ti.symbol().0
                 )
             }
         }
@@ -77,7 +77,7 @@ impl<'a> Carried<'a> {
         match self {
             Carried::Object(o) => o.summarize(registries),
             Carried::Type(t) => t.name(registries),
-            Carried::UnresolvedType(ti) => ti.render(),
+            Carried::UnresolvedType(ti) => render_label(ti.symbol(), registries),
         }
     }
 
@@ -106,7 +106,7 @@ pub enum Held<'a> {
     Type(KType),
     /// The owned dual of [`Carried::UnresolvedType`] — the bind seam's carrier for a bare type
     /// name that is not a builtin leaf. Consumers resolve it against their scope chain.
-    UnresolvedType(TypeIdentifier<'a>),
+    UnresolvedType(TypeSymbol),
 }
 
 impl<'a> Held<'a> {
@@ -146,8 +146,8 @@ impl<'a> Held<'a> {
                 t.digest().0
             ),
             Held::UnresolvedType(ti) => panic!(
-                "expected an Object cell, got an unresolved type name: {}",
-                ti.render()
+                "expected an Object cell, got an unresolved type name: 0x{:032x}",
+                ti.symbol().0
             ),
         }
     }
@@ -177,7 +177,7 @@ impl<'a> Held<'a> {
         match self {
             Held::Object(o) => o.summarize(registries),
             Held::Type(t) => t.name(registries),
-            Held::UnresolvedType(ti) => ti.render(),
+            Held::UnresolvedType(ti) => render_label(ti.symbol(), registries),
         }
     }
 }

@@ -1,7 +1,7 @@
 //! Multi-statement FN body behavior — see [design/execution/README.md
 //! § Multi-statement FN body split](../../../../design/execution/calls-and-values.md#multi-statement-fn-body-split).
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
 
@@ -13,7 +13,7 @@ fn multi_statement_fn_body_returns_last_value() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
-    let v = test_run.run_one(parse_one(&program, "FOO"));
+    let v = test_run.run_one(test_run.parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 2.0));
 }
 
@@ -49,6 +49,6 @@ fn backward_reference_across_statements_works() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (FOO) -> Number = ((LET a = 10) (LET b = (a)) (b))");
-    let v = test_run.run_one(parse_one(&program, "FOO"));
+    let v = test_run.run_one(test_run.parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 10.0));
 }

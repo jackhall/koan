@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use super::NodeFinalize;
-use crate::builtins::test_support::{TestRun, parse_one, run_root_bare};
+use crate::builtins::test_support::{TestRun, run_root_bare};
 use crate::machine::AdoptSeam;
 use crate::machine::CallFrame;
 use crate::machine::core::{Action, BodyCtx};
@@ -234,7 +234,7 @@ fn user_fn_call_releases_callee_frame() {
     register_probe(scope, test_run.registries());
     test_run.run("FN (GETONE) -> Number = (PROBE)");
 
-    let result = test_run.run_one(parse_one(&program, "GETONE"));
+    let result = test_run.run_one(test_run.parse_one("GETONE"));
     // The census reads frame *retention*, so release the drained slots that still hold their
     // terminals' producer frames; only a frame outliving the scheduler would survive this.
     test_run.reset_slots();
@@ -270,7 +270,7 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
     test_run.run(&format!("LET results = [{calls}]"));
 
     // The aggregate is live and complete...
-    let results = test_run.run_one(parse_one(&program, "results"));
+    let results = test_run.run_one(test_run.parse_one("results"));
     match results {
         KObject::List(items, _) => {
             assert_eq!(items.elements().len(), 100, "all 100 results retained")
@@ -317,7 +317,7 @@ fn aggregate_of_mixed_call_results_releases_every_producer_frame() {
     const CALLS: usize = 5;
     test_run.run("LET results = [(GETONE) (GETREC) (GETONE) (GETREC) (GETONE)]");
 
-    let results = test_run.run_one(parse_one(&program, "results"));
+    let results = test_run.run_one(test_run.parse_one("results"));
     match results {
         KObject::List(items, _) => {
             assert_eq!(items.elements().len(), CALLS, "all five results retained");
@@ -476,7 +476,10 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
             other.name(test_run.registries())
         ),
         Carried::UnresolvedType(ti) => {
-            panic!("expected the passed-through Number, got {}", ti.render())
+            panic!(
+                "expected the passed-through Number, got {}",
+                crate::machine::model::render_label(ti.symbol(), test_run.registries())
+            )
         }
     });
 }

@@ -35,8 +35,14 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let mut type_classified_name = false;
     // The Type-classified `name` slot arrives either lowered (a builtin leaf name) or as the
     // unlowered surface name the bind seam leaves for the binder to own; both denote the binder.
-    let type_name: Option<String> = match ctx.args.unresolved_type(&SLOTS.name) {
-        Some(te) => Some(te.render()),
+    // An unlowered name is already classified and interned by the parser; a lowered leaf reaches
+    // its name only as rendered text, so its binder symbol is minted from that below.
+    let unlowered_name = ctx.args.unresolved_type(&SLOTS.name);
+    let type_name: Option<String> = match unlowered_name {
+        Some(te) => Some(crate::machine::model::render_label(
+            te.symbol(),
+            ctx.registries,
+        )),
         None => match ctx.args.ktype(&SLOTS.name) {
             Some(name_kt)
                 if matches!(
@@ -86,7 +92,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 // The `Any` RHS slot is auto-wrapped by dispatch into a resolved carrier, so a
                 // name that reaches here unlowered names nothing.
                 Held::UnresolvedType(te) => {
-                    return done_err(KError::new(KErrorKind::UnboundName(te.render())));
+                    return done_err(KError::new(KErrorKind::UnboundName(
+                        crate::machine::model::render_label(te.symbol(), ctx.registries),
+                    )));
                 }
                 // A module is a value, and the Type-token namespace names things that type a field.
                 // `LET view = (m :| S)` is the wrong spelling for a module binding, whatever the RHS
@@ -126,12 +134,18 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     if let Some(kt) = type_for_types_map {
         // The text→symbol seam for the type channel: a name that will not classify as a Type token
         // names the wrong side of the partition, which past this point the key types make
-        // unrepresentable.
-        let Some(name) = TypeSymbol::declared(&name, &ctx.registries.labels) else {
-            return done_err(KError::new(KErrorKind::ShapeError(wrong_binder_class(
-                &name,
-                BindKind::Type,
-            ))));
+        // unrepresentable. An unlowered binder crossed that seam in the parser and rides through.
+        let name = match unlowered_name {
+            Some(binder) => binder,
+            None => {
+                let Some(binder) = TypeSymbol::declared(&name, &ctx.registries.labels) else {
+                    return done_err(KError::new(KErrorKind::ShapeError(wrong_binder_class(
+                        &name,
+                        BindKind::Type,
+                    ))));
+                };
+                binder
+            }
         };
         // The handle names the same interned type in every region — `kt` is already this binder's
         // copy out of the RHS envelope — so the terminal witnesses it directly and the `types`

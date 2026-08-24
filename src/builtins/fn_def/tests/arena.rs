@@ -1,6 +1,6 @@
 //! Run-root region and scheduler-slot reclamation invariants for user FN calls.
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::KoanRegionExt;
 use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::region_metrics;
@@ -21,10 +21,7 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
     // store's length is a high-water mark over the whole scheduler's life.
     test_run.reset_slots();
     test_run.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "AA"),
-        ),
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), test_run.parse_one("AA")),
         scope,
     );
     let runtime = &mut test_run.runtime;
@@ -58,7 +55,7 @@ fn chained_tail_calls_reuse_frames() {
     test_run.reset_slots();
     // Parse before the snapshot: the parse bumps into program storage, and that storage's own
     // region mint is not a call's mint.
-    let call = parse_one(&program, "AA");
+    let call = test_run.parse_one("AA");
     let minted_before = region_metrics().minted_total;
     test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
@@ -133,7 +130,7 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
     test_run.reset_slots();
     // Parse before the snapshot: the parse bumps into program storage, and that storage's own
     // region mint is not a call's mint.
-    let call = parse_one(&program, "AA");
+    let call = test_run.parse_one("AA");
     let minted_before = region_metrics().minted_total;
     test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
@@ -224,10 +221,7 @@ fn tail_call_enforces_first_callers_return_contract() {
          FN (FF) -> Number = (GG)",
     );
     let id = test_run.dispatch_in_scope(
-        crate::machine::model::WorkingExpression::from_ast(
-            scope.brand(),
-            parse_one(&program, "FF"),
-        ),
+        crate::machine::model::WorkingExpression::from_ast(scope.brand(), test_run.parse_one("FF")),
         scope,
     );
     let runtime = &mut test_run.runtime;
@@ -259,7 +253,7 @@ fn tail_call_stamps_result_against_first_callers_return_contract() {
         "FN (GG) -> :(LIST OF Number) = ([1 2 3])\n\
          FN (FF) -> :(LIST OF Any) = (GG)",
     );
-    let result = test_run.run_one(parse_one(&program, "FF"));
+    let result = test_run.run_one(test_run.parse_one("FF"));
     match result {
         KObject::List(_, list_type) => assert_eq!(
             *list_type,
@@ -292,8 +286,7 @@ fn deep_tail_chain_satisfies_arm_return_contract() {
          LET b = (Bit (One null))",
     );
     let types = test_run.registry_handle();
-    let result = test_run.run_one(parse_one(
-        &program,
+    let result = test_run.run_one(test_run.parse_one(
         "MATCH (b) -> :Str WITH (\
                  One -> (AA)\
                  Zero -> (\"unused\")\
@@ -323,8 +316,7 @@ fn deep_tail_chain_violates_arm_return_contract() {
          FN (AA) -> Any = (BB)\n\
          LET b = (Bit (One null))",
     );
-    let err = test_run.run_one_err(parse_one(
-        &program,
+    let err = test_run.run_one_err(test_run.parse_one(
         "MATCH (b) -> :Str WITH (\
                  One -> (AA)\
                  Zero -> (\"unused\")\
@@ -355,11 +347,11 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     const WARMUP: usize = 50;
     const CALLS: u64 = 400;
     for _ in 0..WARMUP {
-        let _ = test_run.run_one(parse_one(&program, "ECHO 7"));
+        let _ = test_run.run_one(test_run.parse_one("ECHO 7"));
     }
     let baseline = region.region().allocated_total();
     for _ in 0..CALLS {
-        let _ = test_run.run_one(parse_one(&program, "ECHO 7"));
+        let _ = test_run.run_one(test_run.parse_one("ECHO 7"));
     }
     let growth = region.region().allocated_total() - baseline;
     // Measured at six `KObject`-sized cells per call over the linear stretch; the bound leaves 3x
@@ -398,7 +390,7 @@ fn body_subexpression_slots_recycle_across_calls() {
     test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "LOOK (Bit (One null))"),
+            test_run.parse_one("LOOK (Bit (One null))"),
         ),
         scope,
     );
@@ -415,7 +407,7 @@ fn body_subexpression_slots_recycle_across_calls() {
         test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
-                parse_one(&program, src),
+                test_run.parse_one(src),
             ),
             scope,
         );
@@ -459,7 +451,7 @@ fn captured_per_call_value_survives_let_bind_and_call() {
          (FN (GET q :Number) -> Number = (base))\n\
          LET hold = (MAKE_HOLDER 99)",
     );
-    let result = test_run.run_one(parse_one(&program, "hold {q = 0}"));
+    let result = test_run.run_one(test_run.parse_one("hold {q = 0}"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 99.0),
         "the let-bound closure must read its captured base=99, got {:?}",
@@ -483,7 +475,7 @@ fn closure_argument_stays_live_through_user_fn_call() {
          FN (CALL_IT f :(FN (q :Number) -> Number)) -> Number = (f {q = 0})\n\
          LET answer = (CALL_IT (MAKE_HOLDER 77))",
     );
-    let result = test_run.run_one(parse_one(&program, "answer"));
+    let result = test_run.run_one(test_run.parse_one("answer"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 77.0),
         "the closure arg invoked inside CALL_IT must read base=77, got {:?}",
@@ -515,7 +507,7 @@ fn let_bound_list_of_call_produced_strings_and_closures_survives_every_producer_
          FN (LABEL n :Number) -> Str = (PRINT n)\n\
          LET mixed = [(LABEL 1) (MAKE_HOLDER 1) (LABEL 2) (MAKE_HOLDER 2)]",
     );
-    let result = test_run.run_one(parse_one(&program, "mixed"));
+    let result = test_run.run_one(test_run.parse_one("mixed"));
     match result {
         KObject::List(items, _) => {
             let cells = items.elements();
@@ -568,7 +560,7 @@ fn let_bound_dict_with_call_produced_string_keys_survives_every_producer_free() 
         "FN (LABEL n :Number) -> Str = (PRINT n)\n\
          LET entries = {(LABEL 1): 10, (LABEL 2): 20}",
     );
-    let result = test_run.run_one(parse_one(&program, "entries"));
+    let result = test_run.run_one(test_run.parse_one("entries"));
     match result {
         KObject::Dict(substrate, _) => {
             for (key, expected) in [("1", 10.0), ("2", 20.0)] {

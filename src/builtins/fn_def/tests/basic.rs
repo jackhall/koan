@@ -1,6 +1,6 @@
 //! Basic FN registration, dispatch, and parameter binding.
 
-use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn, parse_one};
+use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn};
 use crate::machine::model::{KObject, SignatureElement};
 use crate::machine::{program_storage, run_root_storage};
 
@@ -28,7 +28,7 @@ fn fn_call_dispatches_body_at_call_time() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET x = 42\nFN (GETX) -> Number = (x)");
 
-    let result = test_run.run_one(parse_one(&program, "GETX"));
+    let result = test_run.run_one(test_run.parse_one("GETX"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 42.0),
         "GETX should return the value bound to x at call time"
@@ -54,7 +54,7 @@ fn fn_call_runs_body_each_time() {
     test_run.run("LET x = 7\nFN (GETX) -> Number = (x)");
 
     for _ in 0..2 {
-        let result = test_run.run_one(parse_one(&program, "GETX"));
+        let result = test_run.run_one(test_run.parse_one("GETX"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 }
@@ -142,7 +142,7 @@ fn fn_returns_param_value_directly() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (ECHO v :Number) -> Number = (v)");
 
-    let result = test_run.run_one(parse_one(&program, "ECHO 7"));
+    let result = test_run.run_one(test_run.parse_one("ECHO 7"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
 }
 
@@ -163,7 +163,7 @@ fn fn_def_returns_the_registered_kfunction() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "FN (DOUBLE x :Number) -> Number = (x)"));
+    let result = test_run.run_one(test_run.parse_one("FN (DOUBLE x :Number) -> Number = (x)"));
     assert!(
         matches!(result, KObject::KFunction(_)),
         "FN should return its registered KFunction",

@@ -19,8 +19,8 @@ use std::str::CharIndices;
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::KeywordToken;
-use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeIdentifier};
-use crate::machine::model::labels::LabelInterner;
+use crate::machine::model::ast::{ExpressionPart, KLiteral};
+use crate::machine::model::labels::{LabelInterner, TypeSymbol};
 use crate::machine::model::{is_keyword_token, is_type_name};
 use crate::parse::operators::{SuffixOp, find_suffix, is_atom_terminator};
 use crate::source::{Span, Spanned};
@@ -145,9 +145,10 @@ fn classify_atom<'a>(
                 Some(token_span),
             ));
         }
-        return Ok(ExpressionPart::Type(TypeIdentifier::leaf(
-            brand.region().allocator().text(tok),
-        )));
+        return Ok(ExpressionPart::Type(
+            TypeSymbol::declared(tok, labels)
+                .expect("is_type_name just classified this token as type-class"),
+        ));
     }
     if tok.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
         return Err(KError::parse(
@@ -258,26 +259,31 @@ mod tests {
     use super::classify_token;
     use crate::machine::core::program_storage;
     use crate::machine::model::ast::{ExpressionPart, KLiteral};
+    use crate::machine::model::labels::LabelInterner;
 
-    fn describe(p: &ExpressionPart<'_>) -> String {
+    fn describe(p: &ExpressionPart<'_>, labels: &LabelInterner) -> String {
         match p {
             ExpressionPart::Keyword(kw) => format!("t({})", kw.text()),
             ExpressionPart::Identifier(s) => format!("t({})", s),
-            ExpressionPart::Type(t) => format!("T({})", t.render()),
+            ExpressionPart::Type(t) => format!("T({})", labels.render(t.symbol())),
             ExpressionPart::Expression(e) => {
-                let inner: Vec<String> = e.parts.iter().map(|p| describe(&p.value)).collect();
+                let inner: Vec<String> =
+                    e.parts.iter().map(|p| describe(&p.value, labels)).collect();
                 format!("[{}]", inner.join(" "))
             }
             ExpressionPart::SigiledTypeExpr(e) => {
-                let inner: Vec<String> = e.parts.iter().map(|p| describe(&p.value)).collect();
+                let inner: Vec<String> =
+                    e.parts.iter().map(|p| describe(&p.value, labels)).collect();
                 format!(":({})", inner.join(" "))
             }
             ExpressionPart::RecordType(e) => {
-                let inner: Vec<String> = e.parts.iter().map(|p| describe(&p.value)).collect();
+                let inner: Vec<String> =
+                    e.parts.iter().map(|p| describe(&p.value, labels)).collect();
                 format!(":{{{}}}", inner.join(" "))
             }
             ExpressionPart::QuotedExpression(e) => {
-                let inner: Vec<String> = e.parts.iter().map(|p| describe(&p.value)).collect();
+                let inner: Vec<String> =
+                    e.parts.iter().map(|p| describe(&p.value, labels)).collect();
                 format!("#({})", inner.join(" "))
             }
             ExpressionPart::Literal(KLiteral::String(s)) => format!("s({})", s),
@@ -285,20 +291,20 @@ mod tests {
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
             ExpressionPart::Literal(KLiteral::Null) => "null".to_string(),
             ExpressionPart::ListLiteral(items) => {
-                let inner: Vec<String> = items.iter().map(describe).collect();
+                let inner: Vec<String> = items.iter().map(|p| describe(p, labels)).collect();
                 format!("L[{}]", inner.join(" "))
             }
             ExpressionPart::DictLiteral(pairs) => {
                 let inner: Vec<String> = pairs
                     .iter()
-                    .map(|(k, v)| format!("{}: {}", describe(k), describe(v)))
+                    .map(|(k, v)| format!("{}: {}", describe(k, labels), describe(v, labels)))
                     .collect();
                 format!("D{{{}}}", inner.join(", "))
             }
             ExpressionPart::RecordLiteral(fields) => {
                 let inner: Vec<String> = fields
                     .iter()
-                    .map(|(name, v)| format!("{} = {}", name, describe(v)))
+                    .map(|(name, v)| format!("{} = {}", name, describe(v, labels)))
                     .collect();
                 format!("R{{{}}}", inner.join(", "))
             }
@@ -307,14 +313,10 @@ mod tests {
 
     fn classify(tok: &str) -> Result<String, String> {
         let program = program_storage();
-        classify_token(
-            program.brand(),
-            &crate::machine::model::LabelInterner::new(),
-            tok,
-            0,
-        )
-        .map(|s| describe(&s.value))
-        .map_err(|e| e.to_string())
+        let labels = LabelInterner::new();
+        classify_token(program.brand(), &labels, tok, 0)
+            .map(|s| describe(&s.value, &labels))
+            .map_err(|e| e.to_string())
     }
 
     #[test]

@@ -249,7 +249,11 @@ impl<'a> DictFrame<'a> {
                     ExpressionPart::Identifier(s) => s,
                     // A capitalized Type token is a valid literal field name (kept verbatim,
                     // never name-resolved) — e.g. abstract type-slot names in `WITH {Elt = T}`.
-                    ExpressionPart::Type(t) => t.as_str(),
+                    ExpressionPart::Type(t) => self
+                        .brand
+                        .region()
+                        .allocator()
+                        .text(&labels.render(t.symbol())),
                     other => {
                         return Err(KError::parse(
                             format!(

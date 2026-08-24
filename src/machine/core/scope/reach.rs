@@ -19,8 +19,7 @@ use crate::machine::core::{
 };
 use crate::machine::model::{
     Carried, CarriedFamily, KObject, KType, Module, ModuleDraft, OperatorGroup,
-    OperatorGroupFamily, ReductionMode, RegionEscape, TypeIdentifier, copy_or_pin,
-    relocate_object_into,
+    OperatorGroupFamily, ReductionMode, RegionEscape, copy_or_pin, relocate_object_into,
 };
 use crate::machine::{
     CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, KError, SplicedCell,
@@ -432,33 +431,16 @@ impl<'a> Scope<'a> {
             .unwrap_or_else(|| self.adopt_copied(cell))
     }
 
-    /// The type channel's adoption, `None` for an object envelope: a `KType` is a lifetime-free
-    /// handle and a `TypeIdentifier` is a bare surface name, so the envelope is opened and its
-    /// content copied out — the handle by value, the name's bytes bumped into this scope's own
-    /// region. The product borrows only this region, so no reach is minted.
+    /// The type channel's adoption, `None` for an object envelope: both type-channel arms are
+    /// lifetime-free `Copy` handles — an interned `KType` index and a name's `TypeSymbol` digest —
+    /// so the envelope is opened and its content read straight out by value. Nothing is re-bumped
+    /// and the product borrows no region, so no reach is minted.
     fn adopt_type_channel(&self, cell: &DeliveredCarried) -> Option<Carried<'a>> {
-        /// The content copied out of a type-channel envelope: a `Copy` `KType` handle, or an
-        /// unlowered surface name whose bytes are re-bumped into this scope's region.
-        enum AdoptedType<'t> {
-            Lowered(KType),
-            Unlowered(TypeIdentifier<'t>),
-        }
-
-        let brand = self.brand();
-        let copied = cell.open(|live| match live {
-            Carried::Type(kt) => Some(AdoptedType::Lowered(kt)),
-            // The name is read at the envelope's own brand, so it is copied here rather than
-            // carried out: the product names only this region.
-            Carried::UnresolvedType(ti) => Some(AdoptedType::Unlowered(TypeIdentifier::leaf(
-                brand.allocator().text(ti.as_str()),
-            ))),
+        cell.open(|live| match live {
+            Carried::Type(kt) => Some(Carried::Type(kt)),
+            Carried::UnresolvedType(name) => Some(Carried::UnresolvedType(name)),
             Carried::Object(_) => None,
-        });
-        match copied {
-            Some(AdoptedType::Lowered(handle)) => Some(Carried::Type(handle)),
-            Some(AdoptedType::Unlowered(ti)) => Some(Carried::UnresolvedType(ti)),
-            None => None,
-        }
+        })
     }
 
     /// Adopt a delivered value's **projection** into this scope for **binding** — the door whose

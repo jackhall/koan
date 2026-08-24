@@ -21,7 +21,7 @@ fn run_scope<'run>(
 ) -> TestRun<'run> {
     let mut test_run = TestRun::silent(program, region);
     let scope = test_run.scope;
-    let exprs = working_all(program, source);
+    let exprs = working_all(program, &test_run.registries().labels, source);
     test_run.runtime.enter_block(scope.id, exprs, scope);
     let _ = test_run.runtime.execute();
     test_run
@@ -32,7 +32,7 @@ fn run_collect_err(source: &str) -> Option<KError> {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let exprs = working_all(&program, source);
+    let exprs = working_all(&program, &test_run.registries().labels, source);
     let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(scope.id, exprs, scope);
     let watched = super::watch_all(runtime, &ids, scope);
@@ -128,6 +128,7 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
     let scope = test_run.scope;
     let exprs = working_all(
         &program,
+        &test_run.registries().labels,
         "UNION Tick = (More :Null Done :Null)\n\
          FN (PING n :Number c :Any) -> Number = (MATCH (c) -> :Number WITH (\
             More -> (PONG (n) (Tick (Done null)))\

@@ -1,3 +1,4 @@
+use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{TestRun, type_name, value_name};
 use crate::machine::model::{KObject, KType};
 
@@ -6,9 +7,16 @@ fn binder_name_extracts_let_name() {
     use crate::builtins::test_support::parse_one;
     use crate::machine::program_storage;
     let program = program_storage();
-    let expr = parse_one(&program, "LET hello = 1");
+    let expr = parse_one(
+        &program,
+        &crate::machine::model::LabelInterner::new(),
+        "LET hello = 1",
+    );
     let name = crate::machine::model::binder::identifier_part_binder_name(&expr);
-    assert_eq!(name, Some("hello"));
+    assert!(matches!(
+        name,
+        Some(crate::machine::model::BinderName::Value("hello"))
+    ));
 }
 
 /// End-to-end claim-then-finalize: statement submission claims the name's slot from the
@@ -24,7 +32,7 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
     let scope = test_run.scope;
     let exprs = parse(
         program.brand(),
-        &crate::machine::model::LabelInterner::new(),
+        &test_run.registries().labels,
         "LET hello = 1",
     )
     .unwrap();
@@ -59,13 +67,13 @@ fn let_t_cycle_errors() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.registry_handle();
-    let runtime = &mut test_run.runtime;
     let exprs = parse(
         program.brand(),
-        &crate::machine::model::LabelInterner::new(),
+        &test_run.registries().labels,
         "LET Ty = Ty",
     )
     .unwrap();
+    let runtime = &mut test_run.runtime;
     let exprs = exprs
         .into_iter()
         .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
@@ -103,12 +111,7 @@ fn let_type_class_with_non_type_value_errors() {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        let exprs = parse(
-            program.brand(),
-            &crate::machine::model::LabelInterner::new(),
-            src,
-        )
-        .unwrap();
+        let exprs = parse(program.brand(), &test_run.registries().labels, src).unwrap();
         let id = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
@@ -150,7 +153,7 @@ fn let_type_class_with_type_value_still_binds() {
     let scope = test_run.scope;
     let exprs = parse(
         program.brand(),
-        &crate::machine::model::LabelInterner::new(),
+        &test_run.registries().labels,
         "LET Foo = Number",
     )
     .unwrap();
@@ -171,9 +174,7 @@ fn let_type_class_with_type_value_still_binds() {
         .expect("execute does not surface per-slot errors");
     let res = test_run.runtime.edge_result_error(edges[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
-    let kt = scope
-        .resolve_type("Foo")
-        .expect("expected type binding 'Foo' in bindings.types");
+    let kt = lookup_type(scope, "Foo").expect("expected type binding 'Foo' in bindings.types");
     assert_eq!(kt, KType::NUMBER, "expected Number, got {:?}", kt);
 }
 
@@ -190,7 +191,7 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     let scope = test_run.scope;
     let exprs = parse(
         program.brand(),
-        &crate::machine::model::LabelInterner::new(),
+        &test_run.registries().labels,
         "LET foo = 1",
     )
     .unwrap();
@@ -233,7 +234,7 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     let scope = test_run.scope;
     let exprs = parse(
         program.brand(),
-        &crate::machine::model::LabelInterner::new(),
+        &test_run.registries().labels,
         "LET :(LIST OF Number) = 1",
     )
     .unwrap();
@@ -299,7 +300,7 @@ fn let_aliases_struct_preserves_type_identity() {
 /// `LET Carrier = Number` and module-alias forms keep working inside SIG bodies.
 #[test]
 fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
-    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
@@ -307,7 +308,7 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let _err = test_run.run_one_err(parse_one(&program, "SIG Bad = (LET compare = 0)"));
+    let _err = test_run.run_one_err(test_run.parse_one("SIG Bad = (LET compare = 0)"));
     // `Bad` is a Type token and `data` keys by `ValueSymbol`, so no key spells it; what the
     // rejection means for the value table is that it stayed empty.
     assert!(
@@ -319,7 +320,7 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     // the inner diagnostic text.
 
     let sig_scope = scope.alloc_child_under_sig("SyntheticForTest");
-    let err = test_run.run_one_err_in(sig_scope, parse_one(&program, "LET compare = 0"));
+    let err = test_run.run_one_err_in(sig_scope, test_run.parse_one("LET compare = 0"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -336,17 +337,15 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
 /// holds a callable.
 #[test]
 fn let_type_class_with_plain_function_rejects() {
-    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "LET Plain = FN (PP x :Number) -> Number = (x)",
-    ));
+    let err =
+        test_run.run_one_err(test_run.parse_one("LET Plain = FN (PP x :Number) -> Number = (x)"));
     match &err.kind {
         KErrorKind::ShapeError(message) => assert!(
             message.contains("Plain") && message.contains("plain"),
@@ -373,9 +372,7 @@ fn let_type_class_in_sig_body_binds_manifest() {
     let scope = test_run.scope;
     test_run.run("SIG WithTag = ((LET Tag = Number) (VAL zero :Number))");
     use crate::machine::model::TypeNode;
-    let handle = scope
-        .resolve_type("WithTag")
-        .expect("WithTag should bind a type");
+    let handle = lookup_type(scope, "WithTag").expect("WithTag should bind a type");
     let schema = match test_run.types().node(handle) {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("WithTag should be a Signature KType, got {:?}", handle),
@@ -411,8 +408,8 @@ fn let_type_class_signature_alias_preserves_identity() {
     let scope = test_run.scope;
     test_run.run("SIG Ordered = (VAL compare :Number)\nLET Po = Ordered");
     use crate::machine::model::TypeNode;
-    let original = scope.resolve_type("Ordered").expect("Ordered type binding");
-    let aliased = scope.resolve_type("Po").expect("Po type binding");
+    let original = lookup_type(scope, "Ordered").expect("Ordered type binding");
+    let aliased = lookup_type(scope, "Po").expect("Po type binding");
     assert!(
         matches!(test_run.types().node(aliased), TypeNode::Signature { .. }),
         "Po must alias to a Signature KType, got {:?}",
@@ -430,7 +427,7 @@ fn let_type_class_signature_alias_preserves_identity() {
 /// spelling for one — whatever RHS produced it. The diagnostic names the snake_case respelling.
 #[test]
 fn let_type_class_lhs_with_module_rhs_rejects() {
-    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
@@ -441,7 +438,7 @@ fn let_type_class_lhs_with_module_rhs_rejects() {
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = ((LET compare = 7))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "LET IntOrdView = (int_ord :! Ordered)"));
+    let err = test_run.run_one_err(test_run.parse_one("LET IntOrdView = (int_ord :! Ordered)"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -462,7 +459,7 @@ fn let_type_class_lhs_with_module_rhs_rejects() {
 /// `KType::Signature` on separate arms.
 #[test]
 fn let_value_class_lhs_with_signature_rhs_rejects() {
-    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
@@ -470,7 +467,7 @@ fn let_value_class_lhs_with_signature_rhs_rejects() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("SIG Ordered = (VAL compare :Number)");
-    let err = test_run.run_one_err(parse_one(&program, "LET sig_alias = Ordered"));
+    let err = test_run.run_one_err(test_run.parse_one("LET sig_alias = Ordered"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -503,7 +500,7 @@ fn let_value_class_with_module_rhs_binds_value_side() {
         "a module RHS under a value-classified name binds the module value",
     );
     assert!(
-        scope.resolve_type("view").is_none(),
+        lookup_type(scope, "view").is_none(),
         "the name is committed to `data` xor `types` — nothing lands in `types`",
     );
 }

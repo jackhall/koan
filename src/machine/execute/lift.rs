@@ -8,8 +8,7 @@
 use crate::machine::core::{FoldingBrand, SubstrateDoor};
 use crate::machine::core::{KoanRegion, KoanStorageProfile, product_reaches_region};
 use crate::machine::model::{
-    Carried, CarriedFamily, Held, KObject, RegionEscape, TypeIdentifier, copy_or_pin,
-    relocate_object_into,
+    Carried, CarriedFamily, Held, KObject, RegionEscape, copy_or_pin, relocate_object_into,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, FrameStorage};
 use crate::witnessed::{Delivered, RegionHandleFamily, reattachable};
@@ -31,12 +30,10 @@ pub(in crate::machine::execute) fn copy_carried<'b>(
         Carried::Object(v) => {
             Carried::Object(dest.alloc_object_folded(relocate_object_into(v, verb, dest)))
         }
+        // Both type-channel arms are lifetime-free `Copy` handles, so the copy verb's release of
+        // the source region leaves them untouched — there is nothing to rebuild.
         Carried::Type(t) => Carried::Type(t),
-        // The copy verb claims release of the source region, so the rebuilt identifier must not
-        // keep borrowing bytes that region owns.
-        Carried::UnresolvedType(ti) => {
-            Carried::UnresolvedType(TypeIdentifier::leaf(dest.allocator().text(ti.as_str())))
-        }
+        Carried::UnresolvedType(name) => Carried::UnresolvedType(name),
     }
 }
 
@@ -50,9 +47,7 @@ pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
     match carried {
         Carried::Object(o) => Held::Object(relocate_object_into(o, RegionEscape::Copy, dest)),
         Carried::Type(t) => Held::Type(t),
-        Carried::UnresolvedType(ti) => {
-            Held::UnresolvedType(TypeIdentifier::leaf(dest.allocator().text(ti.as_str())))
-        }
+        Carried::UnresolvedType(name) => Held::UnresolvedType(name),
     }
 }
 

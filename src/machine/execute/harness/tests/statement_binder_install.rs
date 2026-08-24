@@ -10,6 +10,7 @@
 //! (`scope.lookup`, `scope.resolve_type`) and observable program results — never
 //! the binder-discovery internals a later refactor rewrites.
 
+use crate::builtins::test_support::lookup_type;
 use std::rc::Rc;
 
 use super::working_all;
@@ -26,7 +27,7 @@ fn run_block<'run>(
 ) -> TestRun<'run> {
     let mut test_run = TestRun::silent(program, region);
     let scope = test_run.scope;
-    let exprs = working_all(program, source);
+    let exprs = working_all(program, &test_run.registries().labels, source);
     test_run.runtime.enter_block(scope.id, exprs, scope);
     test_run
         .runtime
@@ -77,9 +78,9 @@ fn let_type_alias_install_lets_sibling_resolve() {
          LET Echo = MyNum",
     );
     let scope = test_run.scope;
-    assert_eq!(scope.resolve_type("MyNum"), Some(KType::NUMBER));
+    assert_eq!(lookup_type(scope, "MyNum"), Some(KType::NUMBER));
     assert_eq!(
-        scope.resolve_type("Echo"),
+        lookup_type(scope, "Echo"),
         Some(KType::NUMBER),
         "the type-alias placeholder must let `Echo = MyNum` resolve",
     );
@@ -103,7 +104,7 @@ fn type_bare_install_in_sig_body_lets_sibling_val_resolve() {
     );
     let scope = test_run.scope;
     assert!(
-        scope.resolve_type("WithCarrier").is_some(),
+        lookup_type(scope, "WithCarrier").is_some(),
         "the SIG must build, which requires `VAL zero :Carrier` to resolve `Carrier`",
     );
     assert!(
@@ -121,7 +122,7 @@ fn type_higher_kinded_install_in_sig_body_declares() {
     let region = run_root_storage();
     let test_run = run_block(&program, &region, "SIG Mappable = ((TYPE (Elem AS Wrap)))");
     assert!(
-        test_run.scope.resolve_type("Mappable").is_some(),
+        lookup_type(test_run.scope, "Mappable").is_some(),
         "a SIG with a higher-kinded `TYPE (Elem AS Wrap)` member must build",
     );
 }
@@ -168,10 +169,10 @@ fn sig_install_lets_sibling_resolve() {
          LET OrdAlias = Ordered",
     );
     let scope = test_run.scope;
-    let ordered = scope.resolve_type("Ordered");
+    let ordered = lookup_type(scope, "Ordered");
     assert!(ordered.is_some(), "SIG must bind `Ordered`");
     assert_eq!(
-        scope.resolve_type("OrdAlias"),
+        lookup_type(scope, "OrdAlias"),
         ordered,
         "the SIG placeholder must let `OrdAlias = Ordered` resolve to the same type",
     );
@@ -206,10 +207,10 @@ fn newtype_equals_install_lets_sibling_resolve() {
          LET DistAlias = Distance",
     );
     let scope = test_run.scope;
-    let distance = scope.resolve_type("Distance");
+    let distance = lookup_type(scope, "Distance");
     assert!(distance.is_some(), "NEWTYPE must bind `Distance`");
     assert_eq!(
-        scope.resolve_type("DistAlias"),
+        lookup_type(scope, "DistAlias"),
         distance,
         "the newtype placeholder must let `DistAlias = Distance` resolve",
     );
@@ -228,7 +229,7 @@ fn newtype_constructor_family_install_lets_sibling_resolve() {
          LET NumberBox = :(Number AS Boxed)",
     );
     assert!(
-        test_run.scope.resolve_type("NumberBox").is_some(),
+        lookup_type(test_run.scope, "NumberBox").is_some(),
         "applying `:(Number AS Boxed)` in a later sibling must resolve the family `Boxed`",
     );
 }
@@ -251,10 +252,10 @@ fn announced_group_install_lets_sibling_resolve() {
     let module =
         crate::builtins::test_support::lookup_module(test_run.scope, "pair", test_run.registries());
     let members = module.child_scope();
-    let aa = members.resolve_type("Aa");
+    let aa = lookup_type(members, "Aa");
     assert!(aa.is_some(), "the announced group must bind member `Aa`");
     assert_eq!(
-        members.resolve_type("AaAlias"),
+        lookup_type(members, "AaAlias"),
         aa,
         "a consumer of an announced member resolves once the group seals",
     );
@@ -360,7 +361,7 @@ fn val_inside_sig_installs_no_binder() {
     let test_run = run_block(&program, &region, "SIG Ordered = ((VAL zero :Number))");
     let scope = test_run.scope;
     assert!(
-        scope.resolve_type("Ordered").is_some(),
+        lookup_type(scope, "Ordered").is_some(),
         "the SIG carrying the VAL slot must build",
     );
     assert!(
@@ -368,7 +369,7 @@ fn val_inside_sig_installs_no_binder() {
         "VAL installs no value-channel binder for its slot name",
     );
     assert!(
-        scope.resolve_type("zero").is_none(),
+        lookup_type(scope, "zero").is_none(),
         "VAL installs no type binder for its slot name",
     );
 }
@@ -384,10 +385,7 @@ fn val_slot_is_a_real_requirement() {
         "SIG WithCompare = ((VAL compare :Number))\n\
          MODULE empty = (LET unrelated = 0)",
     );
-    let err = test_run.run_one_err(crate::builtins::test_support::parse_one(
-        &program,
-        "empty :| WithCompare",
-    ));
+    let err = test_run.run_one_err(test_run.parse_one("empty :| WithCompare"));
     assert!(
         format!("{err}").contains("compare"),
         "a module missing the VAL slot must fail shape-check naming `compare`, got {err}",
@@ -411,6 +409,7 @@ fn a_rejected_binding_write_is_the_binders_error_terminal() {
     let scope = test_run.scope;
     let exprs = working_all(
         &program,
+        &test_run.registries().labels,
         "OP #(⊛) OVER Number = (left)\nOP #(⊛) OVER Number = (right)",
     );
     let runtime = &mut test_run.runtime;

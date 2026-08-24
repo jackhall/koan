@@ -82,7 +82,7 @@ reattachable!(KObjectFamily => KObject<'r>);
 pub(in crate::machine::execute) fn prepare_args<'step>(
     args_parts: &[Spanned<ExpressionPart<'step>>],
     registries: &RunRegistries,
-) -> Result<(TypeSymbol, &'step str, ExpressionPart<'step>), KError> {
+) -> Result<(TypeSymbol, ExpressionPart<'step>), KError> {
     let [tag_part, value_part] = args_parts else {
         return Err(KError::new(KErrorKind::ArityMismatch {
             expected: 2,
@@ -98,9 +98,9 @@ pub(in crate::machine::execute) fn prepare_args<'step>(
     let ExpressionPart::Type(t) = tag_part.value else {
         return Err(shape_error());
     };
-    let text = t.as_str();
-    let tag = TypeSymbol::declared(text, &registries.labels).ok_or_else(shape_error)?;
-    Ok((tag, text, value_part.value))
+    // The parser classified and interned the tag token, so it is already the currency the member
+    // schema keys by.
+    Ok((t, value_part.value))
 }
 
 #[cfg(test)]
@@ -325,7 +325,7 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
     registries: &RunRegistries,
     scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
-    let (tag, _text, value_part) = match prepare_args(args_parts, registries) {
+    let (tag, value_part) = match prepare_args(args_parts, registries) {
         Ok(v) => v,
         Err(e) => return Outcome::Done(Err(e)),
     };

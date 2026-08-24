@@ -205,7 +205,7 @@ fn part_equal<'a, 'b>(
     match (a, b) {
         (Keyword(x), Keyword(y)) => Ok(x == y),
         (Identifier(x), Identifier(y)) => Ok(x == y),
-        (Type(x), Type(y)) => Ok(x.as_str() == y.as_str()),
+        (Type(x), Type(y)) => Ok(x.symbol() == y.symbol()),
         (Literal(x), Literal(y)) => Ok(literal_equal(x, y)),
         (Expression(x), Expression(y))
         | (SigiledTypeExpr(x), SigiledTypeExpr(y))

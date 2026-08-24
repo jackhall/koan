@@ -67,7 +67,7 @@ fn the_three_classes_partition_token_text() {
     ] {
         let hits = [
             ValueSymbol::of(text).is_some(),
-            TypeSymbol::of(text).is_some(),
+            TypeSymbol::classify(text).is_some(),
             KeywordSymbol::of(text).is_some(),
         ]
         .into_iter()
@@ -89,10 +89,10 @@ fn value_symbols_accept_value_tokens_only() {
 
 #[test]
 fn type_symbols_accept_type_tokens_only() {
-    assert!(TypeSymbol::of("IntOrd").is_some());
-    assert!(TypeSymbol::of("Carrier").is_some());
-    assert!(TypeSymbol::of("xs").is_none());
-    assert!(TypeSymbol::of("FN").is_none());
+    assert!(TypeSymbol::classify("IntOrd").is_some());
+    assert!(TypeSymbol::classify("Carrier").is_some());
+    assert!(TypeSymbol::classify("xs").is_none());
+    assert!(TypeSymbol::classify("FN").is_none());
 }
 
 /// A space-joined operator probe key gains no lowercase letter, so it stays keyword-class — which
@@ -176,7 +176,7 @@ fn classified_symbols_carry_the_bare_digest() {
         Symbol::of("xs")
     );
     assert_eq!(
-        TypeSymbol::of("IntOrd").expect("Type token").symbol(),
+        TypeSymbol::classify("IntOrd").expect("Type token").symbol(),
         Symbol::of("IntOrd")
     );
     assert_eq!(
@@ -202,9 +202,9 @@ fn classified_symbols_hash_through_the_identity_hasher() {
     );
 
     let mut types: HashMap<TypeSymbol, u8, IdentityBuildHasher> = HashMap::default();
-    types.insert(TypeSymbol::of("IntOrd").expect("Type token"), 2);
+    types.insert(TypeSymbol::classify("IntOrd").expect("Type token"), 2);
     assert_eq!(
-        types.get(&TypeSymbol::of("IntOrd").expect("Type token")),
+        types.get(&TypeSymbol::classify("IntOrd").expect("Type token")),
         Some(&2)
     );
 

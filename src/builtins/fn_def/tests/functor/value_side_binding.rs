@@ -2,7 +2,7 @@
 //! snake_case name in `bindings.data`, is applied by the ordinary keyworded call convention, and
 //! its `ktype()` is `KType::KFunction`. `bindings.types` holds no callable value.
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::model::{KObject, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
 
@@ -53,7 +53,7 @@ fn module_returning_fn_applies_by_the_keyworded_call_convention() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(SETUP);
 
-    let result = test_run.run_one(parse_one(&program, "MAKESET int_ord"));
+    let result = test_run.run_one(test_run.parse_one("MAKESET int_ord"));
     let module = match result {
         KObject::Module(module) => module,
         other => panic!(

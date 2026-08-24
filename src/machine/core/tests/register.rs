@@ -1,6 +1,7 @@
 //! `register` arm of `machine::core` tests.
 
 use super::super::{BindingIndex, DeclarationSite, NameLookup};
+use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{
     binder_name, mock_declaration_site, run_root_bare, type_name, value_name,
 };
@@ -692,13 +693,13 @@ fn visibility_type_side_gate_mirrors_value_side() {
     let consumer_before: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
     assert!(
         scope
-            .resolve_type_with_chain("TyLate", Some(&consumer_before))
+            .resolve_type_with_chain(type_token("TyLate"), Some(&consumer_before))
             .is_none()
     );
     let consumer_after: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 9);
     assert!(
         scope
-            .resolve_type_with_chain("TyLate", Some(&consumer_after))
+            .resolve_type_with_chain(type_token("TyLate"), Some(&consumer_after))
             .is_some()
     );
 }

@@ -11,7 +11,7 @@
 use crate::source::{FileId, Span, Spanned};
 
 use crate::machine::core::{ProgramBrand, RegionBrand};
-use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
+use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol};
 use crate::machine::model::{Held, KObject, Parseable, StoredBinderKey};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::witnessed::reattachable;
@@ -123,41 +123,6 @@ impl<'a> KLiteral<'a> {
     }
 }
 
-/// A bare type identifier as written in source (`Number`, `Point`, `Mo.Ty`) — a single name
-/// token, never compound syntax.
-///
-/// A thin borrow of the source name: `Deref`s to `str`, derives eq/hash by string. The
-/// identifier stays a flat name even when it *denotes* a compound type (a `NEWTYPE` / `UNION`
-/// name resolves to a record / tagged type); compound *syntax* (`:(LIST OF …)`, `:(FN … -> …)`)
-/// is a `SigiledTypeExpr`, not a `TypeIdentifier`. The position tag rides on the carrier variant
-/// (`ExpressionPart::Type`), not on this struct.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypeIdentifier<'a>(&'a str);
-
-impl<'a> std::ops::Deref for TypeIdentifier<'a> {
-    type Target = str;
-    fn deref(&self) -> &str {
-        self.0
-    }
-}
-
-impl<'a> TypeIdentifier<'a> {
-    /// Name a leaf type from text already resident at `'a` — a parser token bumped into program
-    /// storage, or a name bumped through [`RegionBrand::allocator`] at a construction site.
-    pub fn leaf(name: &'a str) -> TypeIdentifier<'a> {
-        TypeIdentifier(name)
-    }
-
-    pub fn as_str(&self) -> &'a str {
-        self.0
-    }
-
-    /// Render in surface syntax so the output round-trips through the parser unchanged.
-    pub fn render(&self) -> String {
-        self.0.to_string()
-    }
-}
-
 /// One element of a parsed expression. Every arm borrows at `'a`: a name is a run of bytes in the
 /// storage that parsed it, a nested node is a pointer to a sibling node in the same storage, and a
 /// literal run is a bumped slice.
@@ -165,7 +130,7 @@ impl<'a> TypeIdentifier<'a> {
 pub enum ExpressionPart<'a> {
     Keyword(KeywordToken<'a>),
     Identifier(&'a str),
-    Type(TypeIdentifier<'a>),
+    Type(TypeSymbol),
     Expression(ProgramNode<'a>),
     /// Parse-context marker for a `:(...)` group: the wrapped `KExpression` must dispatch
     /// in type-context, returning a type-side carrier. Shape recognition is the
@@ -263,7 +228,7 @@ impl<'a> ExpressionPart<'a> {
         match self {
             ExpressionPart::Keyword(kw) => kw.text().to_string(),
             ExpressionPart::Identifier(s) => (*s).to_string(),
-            ExpressionPart::Type(t) => t.render(),
+            ExpressionPart::Type(t) => labels.render(t.symbol()),
             ExpressionPart::Expression(e) => e.summarize(labels),
             ExpressionPart::SigiledTypeExpr(e) => format!(":({})", e.summarize(labels)),
             ExpressionPart::RecordType(e) => format!(":{{{}}}", e.summarize(labels)),
@@ -297,9 +262,9 @@ impl<'a> ExpressionPart<'a> {
 
     /// Slot-aware resolve producing an owned [`Held`] cell, run at [`KFunction::bind_args`] time. A
     /// type rides the `Type` arm; a runtime value rides the `Object` arm. A `Type`-name token in a
-    /// proper-type slot lowers through the builtin table ([`KType::from_name`]), falling back to
+    /// proper-type slot lowers through the builtin table ([`KType::from_symbol`]), falling back to
     /// the [`Held::UnresolvedType`] carrier for every other name — no type handle ever denotes an
-    /// unresolved name, so the surface [`TypeIdentifier`] rides through verbatim and scope-aware
+    /// unresolved name, so the token's symbol rides through verbatim and scope-aware
     /// elaboration defers to
     /// [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).
     ///
@@ -308,10 +273,11 @@ impl<'a> ExpressionPart<'a> {
         &self,
         slot: &crate::machine::model::KType,
         scope: &'a crate::machine::core::Scope<'a>,
+        labels: &LabelInterner,
     ) -> Held<'a> {
         use crate::machine::model::types::KType;
         if let (ExpressionPart::Type(t), KType::PROPER_TYPE | KType::ANY_TYPE) = (self, *slot) {
-            return match KType::from_name(t.as_str()) {
+            return match KType::from_symbol(*t) {
                 Some(kt) => Held::Type(kt),
                 None => Held::UnresolvedType(*t),
             };
@@ -322,16 +288,18 @@ impl<'a> ExpressionPart<'a> {
         if let (ExpressionPart::RecordType(inner), KType::RECORD_TYPE) = (self, *slot) {
             return Held::Object(KObject::KExpression(inner.expression()));
         }
-        Held::Object(self.resolve(scope.brand()))
+        Held::Object(self.resolve(scope.brand(), labels))
     }
 
     /// The [`KObject`] this part denotes, built into `brand`'s region — the string arms bump their
     /// bytes there, so the product is dest-resident and holds no allocation of its own.
-    pub fn resolve(&self, brand: RegionBrand<'a>) -> KObject<'a> {
+    pub fn resolve(&self, brand: RegionBrand<'a>, labels: &LabelInterner) -> KObject<'a> {
         match self {
             ExpressionPart::Keyword(kw) => KObject::KString(brand.allocator().text(kw.text())),
             ExpressionPart::Identifier(s) => KObject::KString(brand.allocator().text(s)),
-            ExpressionPart::Type(t) => KObject::KString(brand.allocator().text(t.as_str())),
+            ExpressionPart::Type(t) => {
+                KObject::KString(brand.allocator().text(&labels.render(t.symbol())))
+            }
             ExpressionPart::Literal(KLiteral::Number(n)) => KObject::Number(*n),
             ExpressionPart::Literal(KLiteral::String(s)) => {
                 KObject::KString(brand.allocator().text(s))
@@ -375,11 +343,17 @@ impl<'a> ExpressionPart<'a> {
     /// the value is constructible at the caller's fold brand, where [`resolve`](Self::resolve)'s
     /// invariant `KObject<'a>` cannot go. Borrow-bearing variants are classified to owned
     /// sub-dispatches before any static cell, so they never reach here.
-    pub fn resolve_region_pure<'b>(&self, brand: RegionBrand<'b>) -> KObject<'b> {
+    pub fn resolve_region_pure<'b>(
+        &self,
+        brand: RegionBrand<'b>,
+        labels: &LabelInterner,
+    ) -> KObject<'b> {
         match self {
             ExpressionPart::Keyword(kw) => KObject::KString(brand.allocator().text(kw.text())),
             ExpressionPart::Identifier(s) => KObject::KString(brand.allocator().text(s)),
-            ExpressionPart::Type(t) => KObject::KString(brand.allocator().text(t.as_str())),
+            ExpressionPart::Type(t) => {
+                KObject::KString(brand.allocator().text(&labels.render(t.symbol())))
+            }
             ExpressionPart::Literal(lit) => lit.to_kobject(brand),
             // A quote's `KObject::KExpression` is invariant in `'a` with no `'static` rebuild, so it
             // cannot be constructed at the caller's fold brand — the classifier routes a quote to
@@ -582,11 +556,11 @@ impl<'a> KExpression<'a> {
     }
 
     /// Binder-name extractor for typed-binder builtins (`SIG <Name> = …`, `UNION <Name> = …`):
-    /// if `parts[1]` is a single `Type(t)`, returns its bare name; `None` on shape
+    /// if `parts[1]` is a single `Type(t)`, returns its symbol; `None` on shape
     /// mismatch. The builtin body surfaces the structured error.
-    pub fn binder_name_from_type_part(&self) -> Option<&'a str> {
+    pub fn binder_name_from_type_part(&self) -> Option<TypeSymbol> {
         match &self.parts.get(1)?.value {
-            ExpressionPart::Type(t) => Some(t.as_str()),
+            ExpressionPart::Type(t) => Some(*t),
             _ => None,
         }
     }

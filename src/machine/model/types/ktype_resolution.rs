@@ -1,4 +1,4 @@
-//! Surface-name and `TypeIdentifier` → `KType` elaboration.
+//! Builtin type-name → `KType` elaboration.
 //!
 //! Join (least upper bound) and union canonicalization live on
 //! [`TypeRegistry`](super::registry::TypeRegistry), which is where interning happens.
@@ -19,12 +19,6 @@ impl KType {
             .into_iter()
             .find(|(declared, _)| declared.symbol() == name)
             .map(|(_, ktype)| ktype)
-    }
-
-    /// [`from_symbol`](Self::from_symbol) for a name that arrives as source text. Classifies and
-    /// hashes `name` without interning it; a name that is not a Type token misses the table.
-    pub fn from_name(name: &str) -> Option<KType> {
-        KType::from_symbol(TypeSymbol::of(name)?)
     }
 }
 

@@ -5,9 +5,10 @@ use crate::builtins::resolve_or_await::{expect_type_terminal, resolve_at_wake, u
 use crate::machine::DepTerminal;
 use crate::machine::LexicalFrame;
 use crate::machine::ProducerId;
+use crate::machine::model::KExpression;
 use crate::machine::model::TypeResolution;
+use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{DeferredReturn, ReturnType};
-use crate::machine::model::{KExpression, TypeIdentifier};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 use std::rc::Rc;
@@ -21,7 +22,7 @@ use crate::machine::model::{StaticName, ValueSymbol};
 /// `:(…)` / dotted return's inner expression may reference a parameter unbound there.
 pub(crate) enum ReturnTypeRaw<'a> {
     Resolved(KType),
-    TypeExprCarrier(TypeIdentifier<'a>),
+    TypeExprCarrier(TypeSymbol),
     ExprCarrier(KExpression<'a>),
 }
 
@@ -31,7 +32,7 @@ pub(crate) enum ReturnTypeRaw<'a> {
 pub(crate) enum ReturnTypeState<'a> {
     Done(KType),
     Pending {
-        te: TypeIdentifier<'a>,
+        te: TypeSymbol,
         producers: Vec<ProducerId>,
     },
     Deferred(DeferredReturn<'a>),
@@ -44,7 +45,7 @@ pub(crate) enum ReturnTypeState<'a> {
 
 pub(crate) enum ReturnTypeCapture<'a> {
     Resolved(KType),
-    Unresolved(String),
+    Unresolved(TypeSymbol),
     Deferred(DeferredReturn<'a>),
     /// The return type is a `:(…)` expression the deferral sub-dispatches; its result comes back at
     /// the dep index [`defer`](super::finalize::defer) recorded when it appended the request.
@@ -69,7 +70,7 @@ pub(crate) fn extract_type_slot_raw<'a>(
     label: &str,
 ) -> Result<ReturnTypeRaw<'a>, KError> {
     if let Some(te) = args.unresolved_type(slot) {
-        Ok(ReturnTypeRaw::TypeExprCarrier(*te))
+        Ok(ReturnTypeRaw::TypeExprCarrier(te))
     } else if let Some(kt) = args.ktype(slot) {
         Ok(ReturnTypeRaw::Resolved(kt))
     } else if let Some(KObject::KExpression(e)) = args.object(slot) {
@@ -101,7 +102,7 @@ pub(crate) fn classify_return_type<'a>(
             }
             // Gated to the FN's lexical position — a return type naming a later type is a
             // position error, like any other forward reference.
-            match scope.resolve_type_identifier(&te, chain, registries) {
+            match scope.resolve_type_identifier(te, chain, registries) {
                 TypeResolution::Done(kt) => Ok(ReturnTypeState::Done(kt)),
                 TypeResolution::Park(producers) => Ok(ReturnTypeState::Pending { te, producers }),
                 // `resolve_type_identifier` already tries the builtin fallback internally, so an
@@ -119,8 +120,8 @@ pub(crate) fn classify_return_type<'a>(
     }
 }
 
-pub(super) fn make_capture<'a>(te: TypeIdentifier<'_>) -> ReturnTypeCapture<'a> {
-    ReturnTypeCapture::Unresolved(te.render())
+pub(super) fn make_capture<'a>(te: TypeSymbol) -> ReturnTypeCapture<'a> {
+    ReturnTypeCapture::Unresolved(te)
 }
 
 /// Park-arm outcomes from `Scope::resolve_type_identifier` are protocol errors here: every
@@ -135,10 +136,9 @@ pub(super) fn resolve_capture_at_finish<'a>(
 ) -> Result<ReturnType<'a>, KError> {
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
-        ReturnTypeCapture::Unresolved(name) => {
-            let te = TypeIdentifier::leaf(scope.brand().allocator().text(&name));
-            resolve_at_wake(scope, "FN return-type slot", |s| {
-                s.resolve_type_identifier(&te, None, registries)
+        ReturnTypeCapture::Unresolved(te) => {
+            resolve_at_wake(scope, "FN return-type slot", registries, |s, registries| {
+                s.resolve_type_identifier(te, None, registries)
             })
             .map(ReturnType::Resolved)
         }

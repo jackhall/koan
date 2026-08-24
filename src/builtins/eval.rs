@@ -59,7 +59,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
@@ -94,7 +94,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("LET x = 3");
-        let err = test_run.run_one_err(parse_one(&program, "$(x)"));
+        let err = test_run.run_one_err(test_run.parse_one("$(x)"));
         assert!(
             matches!(&err.kind, KErrorKind::TypeMismatch { arg, expected, .. }
                 if arg == "expr" && expected == "KExpression"),

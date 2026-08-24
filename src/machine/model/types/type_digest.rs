@@ -199,14 +199,15 @@ fn of_kind_digest(kind: KKind) -> TypeDigest {
         .finish()
 }
 
-/// A deferred FN return: a discriminant byte for the surface shape, then its rendering.
+/// A deferred FN return: a discriminant byte for the surface shape, then the shape's own
+/// identity — a bare name's symbol bits, a captured expression's canonical render.
 fn deferred_return_digest(surface: &DeferredReturnSurface) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_DEFERRED_RETURN);
     match surface {
-        DeferredReturnSurface::Type(_) => h.byte(0),
-        DeferredReturnSurface::Expression(_) => h.byte(1),
-    };
-    h.string(&surface.render()).finish()
+        DeferredReturnSurface::Type(name) => h.byte(0).symbol(name.symbol()),
+        DeferredReturnSurface::Expression(text) => h.byte(1).string(text),
+    }
+    .finish()
 }
 
 /// A relative sibling reference: its bare index under `TAG_SET_LOCAL`, so computing an enclosing

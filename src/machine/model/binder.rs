@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use crate::machine::core::{KError, KErrorKind, RegionBrand};
 use crate::machine::model::ast::{Part, PartClass};
-use crate::machine::model::labels::KeywordSymbol;
+use crate::machine::model::labels::{KeywordSymbol, TypeSymbol};
 use crate::machine::model::{ExpressionPart, KExpression, KeywordToken};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::source::Spanned;
@@ -55,11 +55,32 @@ pub fn value_binder(
     })
 }
 
+/// A binder statement's declared name as its spine carries it: value-side text still awaiting
+/// classification at the install seam, or a type token's symbol, already minted by the parser.
+///
+/// The variant *is* the channel — a name reads as `Value` xor `Type` by construction, so the
+/// placeholder a forward reference parks on is tagged by the same read that found the name.
+#[derive(Clone, Copy, Debug)]
+pub enum BinderName<'a> {
+    Value(&'a str),
+    Type(TypeSymbol),
+}
+
+impl<'a> BinderName<'a> {
+    /// Which language this name binds in.
+    pub fn bind_kind(self) -> BindKind {
+        match self {
+            BinderName::Value(_) => BindKind::Value,
+            BinderName::Type(_) => BindKind::Type,
+        }
+    }
+}
+
 /// Structural name extractor for a binder builtin. Returning `Some(name)` names the placeholder a
-/// forward reference parks on while the binder's body is in flight. The name is a token of the
-/// node's own parts run, so it is already resident at the node's lifetime and the read allocates
-/// nothing.
-pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<&'a str>;
+/// forward reference parks on while the binder's body is in flight. A value name is a token of the
+/// node's own parts run, already resident at the node's lifetime; a type name is a `Copy` symbol.
+/// Either way the read allocates nothing.
+pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<BinderName<'a>>;
 
 /// Structural bucket-key extractor for a binder that registers a callable
 /// (`FN`, `OP`). Returns every bucket key a *call* to the to-be-registered
@@ -113,25 +134,24 @@ impl<'a> BucketKeys<'a> {
 /// string and key run is a borrow at the node's own lifetime, so the stored form owns no heap.
 #[derive(Clone, Copy, Debug)]
 pub struct StoredBinderKey<'a> {
-    pub name: Option<(&'a str, BindKind)>,
+    pub name: Option<BinderName<'a>>,
     pub buckets: Option<BucketKeys<'a>>,
 }
 
 impl<'a> StoredBinderKey<'a> {
     /// The owned [`BinderKey`] this stands for — materialized where an install path needs map keys
-    /// for the bindings tables. The name is classified into the binding vocabulary here, at the one
-    /// seam where the declaration's source text is still in hand, and interned so a `Rebind`
-    /// naming it can render. A keyword-class name classifies to `None` — nothing binds to a
-    /// keyword, so the statement claims no name.
+    /// for the bindings tables. A value name is classified into the binding vocabulary here, at the
+    /// one seam where the declaration's source text is still in hand, and interned so a `Rebind`
+    /// naming it can render; a type name arrives already classified and interned from the parser.
+    /// A keyword-class name classifies to `None` — nothing binds to a keyword, so the statement
+    /// claims no name.
     pub fn to_owned_key(self, labels: &crate::machine::model::LabelInterner) -> BinderKey {
         BinderKey {
-            name: self.name.and_then(|(name, kind)| {
-                let binder = crate::machine::model::BinderSymbol::declared(name, labels);
-                debug_assert!(
-                    binder.is_none_or(|binder| binder.bind_kind() == kind),
-                    "a binder spec's declared kind agrees with its name's token class",
-                );
-                binder
+            name: self.name.and_then(|name| match name {
+                BinderName::Value(text) => {
+                    crate::machine::model::BinderSymbol::declared(text, labels)
+                }
+                BinderName::Type(symbol) => Some(crate::machine::model::BinderSymbol::Type(symbol)),
             }),
             buckets: self
                 .buckets
@@ -157,17 +177,17 @@ pub struct BinderKey {
 /// the binder name is `parts[1]`'s `Type(t)` token. A free function (not the
 /// `KExpression::binder_name_from_type_part` method reference) so the signature is higher-ranked
 /// over the expression lifetime, as `BinderNameFn` requires.
-pub(crate) fn type_part_binder_name<'a>(expr: &KExpression<'a>) -> Option<&'a str> {
-    expr.binder_name_from_type_part()
+pub(crate) fn type_part_binder_name<'a>(expr: &KExpression<'a>) -> Option<BinderName<'a>> {
+    expr.binder_name_from_type_part().map(BinderName::Type)
 }
 
 /// Shared [`BinderNameFn`] for value-binder builtins (`LET <name> = …`, `MODULE <name> = …`): the
 /// binder name is `parts[1]`'s `Identifier` token. The Identifier-part twin of
 /// [`type_part_binder_name`], so each overload's extractor matches exactly its own name-part kind
 /// and the placeholder is tagged `Value` xor `Type` to match where the bind lands.
-pub(crate) fn identifier_part_binder_name<'a>(expr: &KExpression<'a>) -> Option<&'a str> {
+pub(crate) fn identifier_part_binder_name<'a>(expr: &KExpression<'a>) -> Option<BinderName<'a>> {
     match expr.parts.get(1)?.value {
-        ExpressionPart::Identifier(s) => Some(s),
+        ExpressionPart::Identifier(s) => Some(BinderName::Value(s)),
         _ => None,
     }
 }
@@ -175,11 +195,11 @@ pub(crate) fn identifier_part_binder_name<'a>(expr: &KExpression<'a>) -> Option<
 /// Placeholder extractor covering both `TYPE` overloads: the bare form's name is the `Type` part at
 /// `parts[1]`; the higher-kinded form's name is the *last* inner part of the parenthesized
 /// `(Param AS Name)` expression.
-pub(crate) fn type_decl_binder_name<'a>(expr: &KExpression<'a>) -> Option<&'a str> {
+pub(crate) fn type_decl_binder_name<'a>(expr: &KExpression<'a>) -> Option<BinderName<'a>> {
     match expr.parts.get(1)?.value {
-        ExpressionPart::Type(t) => Some(t.as_str()),
+        ExpressionPart::Type(t) => Some(BinderName::Type(t)),
         ExpressionPart::Expression(inner) => match inner.parts.last()?.value {
-            ExpressionPart::Type(t) => Some(t.as_str()),
+            ExpressionPart::Type(t) => Some(BinderName::Type(t)),
             _ => None,
         },
         _ => None,
@@ -411,8 +431,9 @@ pub struct BinderSpec {
     /// Full untyped bucket key — ALL keywords in position, never just the lead keyword.
     pub key: &'static [KeyElementSpec],
     /// Name extractors tried in order; first `Some` wins. Empty for the bucket-only and
-    /// declaration forms (`FN`, `OP`, `VAL`).
-    pub names: &'static [(BinderNameFn, BindKind)],
+    /// declaration forms (`FN`, `OP`, `VAL`). Each extractor's [`BinderName`] variant carries the
+    /// channel the name binds in, so the spec states no separate kind.
+    pub names: &'static [BinderNameFn],
     /// Bucket-key extractor for a form whose body registers overloads (`FN`, `OP`). `None` for the
     /// name-only forms.
     pub bucket: Option<BinderBucketFn>,
@@ -469,10 +490,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // LET <name> = <value>: value-name overload then type-alias overload.
     BinderSpec {
         key: &[Kw("LET"), Slot, Kw("="), Slot],
-        names: &[
-            (identifier_part_binder_name, BindKind::Value),
-            (type_part_binder_name, BindKind::Type),
-        ],
+        names: &[identifier_part_binder_name, type_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
@@ -480,7 +498,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // TYPE <name> — SIG-body-only abstract-type declarator (bare and higher-kinded share the key).
     BinderSpec {
         key: &[Kw("TYPE"), Slot],
-        names: &[(type_decl_binder_name, BindKind::Type)],
+        names: &[type_decl_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
@@ -488,7 +506,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // MODULE <name> = <body> (identifier overload; the type-named overload has no hooks).
     BinderSpec {
         key: &[Kw("MODULE"), Slot, Kw("="), Slot],
-        names: &[(identifier_part_binder_name, BindKind::Value)],
+        names: &[identifier_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
@@ -496,7 +514,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // GROUP <name> FOLD LEFT = <body>.
     BinderSpec {
         key: &[Kw("GROUP"), Slot, Kw("FOLD"), Kw("LEFT"), Kw("="), Slot],
-        names: &[(identifier_part_binder_name, BindKind::Value)],
+        names: &[identifier_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
@@ -504,7 +522,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // GROUP <name> FOLD RIGHT = <body>.
     BinderSpec {
         key: &[Kw("GROUP"), Slot, Kw("FOLD"), Kw("RIGHT"), Kw("="), Slot],
-        names: &[(identifier_part_binder_name, BindKind::Value)],
+        names: &[identifier_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
@@ -521,7 +539,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             Kw("="),
             Slot,
         ],
-        names: &[(identifier_part_binder_name, BindKind::Value)],
+        names: &[identifier_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
@@ -538,7 +556,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             Kw("="),
             Slot,
         ],
-        names: &[(identifier_part_binder_name, BindKind::Value)],
+        names: &[identifier_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
@@ -546,7 +564,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // SIG <name> = <body>.
     BinderSpec {
         key: &[Kw("SIG"), Slot, Kw("="), Slot],
-        names: &[(type_part_binder_name, BindKind::Type)],
+        names: &[type_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
@@ -554,7 +572,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // UNION <name> = <schema>.
     BinderSpec {
         key: &[Kw("UNION"), Slot, Kw("="), Slot],
-        names: &[(type_part_binder_name, BindKind::Type)],
+        names: &[type_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
@@ -562,7 +580,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // NEWTYPE <name> = <repr> (scalar / sigil / record reprs share the key).
     BinderSpec {
         key: &[Kw("NEWTYPE"), Slot, Kw("="), Slot],
-        names: &[(type_part_binder_name, BindKind::Type)],
+        names: &[type_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
@@ -570,7 +588,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // NEWTYPE <decl> — constructor family (keyword set {NEWTYPE}, disjoint from the `= _` forms).
     BinderSpec {
         key: &[Kw("NEWTYPE"), Slot],
-        names: &[(type_decl_binder_name, BindKind::Type)],
+        names: &[type_decl_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
@@ -644,7 +662,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             Kw("="),
             Slot,
         ],
-        names: &[(identifier_part_binder_name, BindKind::Value)],
+        names: &[identifier_part_binder_name],
         bucket: Some(fn_def_binder_bucket),
         surface: BinderSurface::Other,
         name_slot: Some(1),
@@ -662,7 +680,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             Kw("="),
             Slot,
         ],
-        names: &[(identifier_part_binder_name, BindKind::Value)],
+        names: &[identifier_part_binder_name],
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
         name_slot: Some(1),
@@ -682,7 +700,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             Kw("="),
             Slot,
         ],
-        names: &[(identifier_part_binder_name, BindKind::Value)],
+        names: &[identifier_part_binder_name],
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
         name_slot: Some(1),
@@ -703,7 +721,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
             Kw("="),
             Slot,
         ],
-        names: &[(identifier_part_binder_name, BindKind::Value)],
+        names: &[identifier_part_binder_name],
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
         name_slot: Some(1),
@@ -792,10 +810,7 @@ pub(crate) fn binder_plan_from_spec<'a>(
     spec: &BinderSpec,
     expression: &KExpression<'a>,
 ) -> Option<StoredBinderKey<'a>> {
-    let name = spec
-        .names
-        .iter()
-        .find_map(|(extract, kind)| extract(expression).map(|name| (name, *kind)));
+    let name = spec.names.iter().find_map(|extract| extract(expression));
     let buckets = spec.bucket.and_then(|extract| extract(brand, expression));
     if name.is_none() && buckets.is_none() {
         return None;

@@ -12,7 +12,14 @@ use crate::source::Spanned;
 fn a_resplice_inherits_the_key_run_and_the_operator_probe() {
     let program = program_storage();
     let brand = program.brand().region();
-    let chain = WorkingExpression::from_ast(brand, parse_one(&program, "a + b * c"));
+    let chain = WorkingExpression::from_ast(
+        brand,
+        parse_one(
+            &program,
+            &crate::machine::model::LabelInterner::new(),
+            "a + b * c",
+        ),
+    );
     assert_eq!(chain.operator_probe(), Some(probe_symbol("* +")));
 
     // The splice shape: every operand slot gives way to a staging hole, every keyword position

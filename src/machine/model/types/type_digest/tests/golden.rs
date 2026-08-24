@@ -24,7 +24,7 @@ use crate::machine::model::types::{
 /// A fixture's Type-class name as the [`TypeSymbol`] the schema and node types key by. The pins
 /// here compare digests and never render, so the pure probe constructor is enough.
 fn type_symbol(text: &str) -> TypeSymbol {
-    TypeSymbol::of(text).expect("a golden fixture names its members with Type tokens")
+    TypeSymbol::classify(text).expect("a golden fixture names its members with Type tokens")
 }
 
 #[track_caller]

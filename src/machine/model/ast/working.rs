@@ -92,17 +92,27 @@ impl<'a> Part<'a> for WorkingPart<'a> {
     }
 }
 
-/// Registry-free rendering of a spliced cell's carried value, for `Debug` and
-/// [`WorkingPart::summarize`]. A type name resolves through the registry, which neither signature
-/// carries, so the type channel renders its content-digest hex — the value's own identity — and an
-/// object renders its type's digest. An unlowered name is already a bare surface string.
+/// Interner-free rendering of a spliced cell's carried value, for `Debug`, which carries no run
+/// state to resolve a name through. Every arm renders a content digest — the value's own identity.
 ///
 /// Reached through [`read_resting`], which states the coverage a pin-less probe stands under.
-fn spliced_summary(carried: Carried<'_>) -> String {
+fn spliced_debug(carried: Carried<'_>) -> String {
     match carried {
         Carried::Type(kt) => format!("0x{:032x}", kt.digest().0),
-        Carried::UnresolvedType(ti) => ti.render(),
+        Carried::UnresolvedType(name) => format!("0x{:032x}", name.symbol().0),
         Carried::Object(object) => format!("0x{:032x}", object.ktype().digest().0),
+    }
+}
+
+/// [`WorkingPart::summarize`]'s rendering of a spliced cell: a type handle names no spelling the
+/// interner holds, so the type channel keeps its content digest, while an unlowered name resolves
+/// to the spelling the parser recorded.
+///
+/// Reached through [`read_resting`], which states the coverage a pin-less probe stands under.
+fn spliced_summary(carried: Carried<'_>, labels: &LabelInterner) -> String {
+    match carried {
+        Carried::UnresolvedType(name) => labels.render(name.symbol()),
+        other => spliced_debug(other),
     }
 }
 
@@ -113,7 +123,7 @@ impl<'a> std::fmt::Debug for WorkingPart<'a> {
             WorkingPart::Expression(e) => f.debug_tuple("Expression").field(e).finish(),
             WorkingPart::RecordType(e) => f.debug_tuple("RecordType").field(e).finish(),
             WorkingPart::Spliced { cell } => {
-                write!(f, "Spliced({})", read_resting(cell, spliced_summary))
+                write!(f, "Spliced({})", read_resting(cell, spliced_debug))
             }
             WorkingPart::StagedSlot => write!(f, "StagedSlot"),
         }
@@ -127,7 +137,9 @@ impl<'a> WorkingPart<'a> {
             WorkingPart::Ast(part) => part.summarize(labels),
             WorkingPart::Expression(e) => e.summarize(labels),
             WorkingPart::RecordType(e) => format!(":{{{}}}", e.summarize(labels)),
-            WorkingPart::Spliced { cell } => read_resting(cell, spliced_summary),
+            WorkingPart::Spliced { cell } => {
+                read_resting(cell, |carried| spliced_summary(carried, labels))
+            }
             WorkingPart::StagedSlot => "<staged>".to_string(),
         }
     }
@@ -149,6 +161,7 @@ impl<'a> WorkingPart<'a> {
         &self,
         slot: &crate::machine::model::KType,
         scope: &'a crate::machine::core::Scope<'a>,
+        labels: &LabelInterner,
     ) -> Held<'a> {
         match self {
             WorkingPart::Spliced { cell } => {
@@ -161,15 +174,15 @@ impl<'a> WorkingPart<'a> {
                     Carried::Object(obj) => Held::Object(obj.deep_clone()),
                 }
             }
-            WorkingPart::Ast(part) => part.resolve_for(slot, scope),
-            _ => Held::Object(self.resolve(scope.brand())),
+            WorkingPart::Ast(part) => part.resolve_for(slot, scope, labels),
+            _ => Held::Object(self.resolve(scope.brand(), labels)),
         }
     }
 
     /// The [`KObject`] this slot denotes, built into `brand`'s region.
-    pub fn resolve(&self, brand: RegionBrand<'a>) -> KObject<'a> {
+    pub fn resolve(&self, brand: RegionBrand<'a>, labels: &LabelInterner) -> KObject<'a> {
         match self {
-            WorkingPart::Ast(part) => part.resolve(brand),
+            WorkingPart::Ast(part) => part.resolve(brand, labels),
             // A value cell holds a `KExpression`, so a node the scheduler synthesized has no way to
             // become one — and never needs to: a synthesized node is always on its way to
             // `become_dispatch`, while every raw capture a `:KExpression` slot makes is of parsed
@@ -197,9 +210,13 @@ impl<'a> WorkingPart<'a> {
     /// of [`resolve`](Self::resolve) for static-cell sites that fold. Only an AST arm is ever
     /// region-pure; the scheduler's own arms are classified to sub-dispatches before any
     /// static cell.
-    pub fn resolve_region_pure<'b>(&self, brand: RegionBrand<'b>) -> KObject<'b> {
+    pub fn resolve_region_pure<'b>(
+        &self,
+        brand: RegionBrand<'b>,
+        labels: &LabelInterner,
+    ) -> KObject<'b> {
         match self {
-            WorkingPart::Ast(part) => part.resolve_region_pure(brand),
+            WorkingPart::Ast(part) => part.resolve_region_pure(brand, labels),
             _ => unreachable!(
                 "resolve_region_pure is only called on a region-pure static-cell part; \
                  synthesized nodes, spliced cells and staging holes are classified to owned \

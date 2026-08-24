@@ -37,11 +37,15 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", &SLOTS.body));
 
-    let decl_scope = ctx.scope.alloc_child_under_sig(&name);
+    let decl_scope = ctx
+        .scope
+        .alloc_child_under_sig(&crate::machine::model::render_label(
+            name.symbol(),
+            ctx.registries,
+        ));
 
     let site = ctx.declaration_site();
-    let name_for_finish =
-        crate::try_action!(crate::machine::model::type_binder(&name, ctx.registries));
+    let name_for_finish = name;
     await_body_in_scope(decl_scope, body_expr, move |fctx| {
         let schema = SigSchema::project_decl(decl_scope, fctx.registries);
         let identity = fctx.types().signature(schema);
@@ -73,6 +77,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{TestRun, parse_one, type_name, value_name};
+    use crate::builtins::test_support::{lookup_type, type_token};
     use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
@@ -80,9 +85,13 @@ mod tests {
     #[test]
     fn binder_name_extracts_sig_name() {
         let program = program_storage();
-        let expr = parse_one(&program, "SIG Ordered = (VAL x :Number)");
+        let expr = parse_one(
+            &program,
+            &crate::machine::model::LabelInterner::new(),
+            "SIG Ordered = (VAL x :Number)",
+        );
         let name = expr.binder_name_from_type_part();
-        assert_eq!(name, Some("Ordered"));
+        assert_eq!(name, Some(type_token("Ordered")));
     }
 
     #[test]
@@ -97,7 +106,7 @@ mod tests {
         // `Ordered` is a Type token, so `data` — keyed by `ValueSymbol` — holds no key that
         // spells it. What stands in place of the probe: the value table is untouched.
         assert!(scope.bindings().data().is_empty());
-        let handle = scope.resolve_type("Ordered").expect("Ordered binds");
+        let handle = lookup_type(scope, "Ordered").expect("Ordered binds");
         assert!(matches!(
             test_run.types().node(handle),
             TypeNode::Signature { .. }
@@ -114,7 +123,7 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run("SIG Ordered = (VAL x :Number)");
-        let handle = scope.resolve_type("Ordered").expect("Ordered binds");
+        let handle = lookup_type(scope, "Ordered").expect("Ordered binds");
         let types = test_run.types();
         assert!(matches!(types.node(handle), TypeNode::Signature { .. }));
         assert_eq!(
@@ -134,7 +143,7 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
         use crate::machine::model::{KType, TypeNode};
-        let handle = scope.resolve_type("Foo").expect("Foo should bind");
+        let handle = lookup_type(scope, "Foo").expect("Foo should bind");
         let schema = match test_run.types().node(handle) {
             TypeNode::Signature { schema, .. } => schema,
             _ => panic!("Foo should be a signature"),
@@ -161,16 +170,14 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
-        let err = test_run.run_one_err(parse_one(
-            &program,
-            "SIG Ordered = ((TYPE Type) (VAL compare :Number))",
-        ));
+        let err = test_run
+            .run_one_err(test_run.parse_one("SIG Ordered = ((TYPE Type) (VAL compare :Number))"));
         assert!(
             matches!(&err.kind, KErrorKind::Rebind { name } if name == "Type"),
             "a SIG member named `Type` must be a Rebind naming `Type`, got {err}",
         );
         assert!(
-            scope.resolve_type("Ordered").is_none(),
+            lookup_type(scope, "Ordered").is_none(),
             "the colliding signature binds nothing",
         );
     }
@@ -185,7 +192,7 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("SIG Foo = (VAL x :NonexistentType)");
         assert!(
-            scope.resolve_type("Foo").is_none(),
+            lookup_type(scope, "Foo").is_none(),
             "Foo must not bind (type side) when its body errors",
         );
     }
@@ -206,10 +213,10 @@ mod tests {
              SIG Gamma = ((VAL x :Number) (VAL y :Bool))\n\
              SIG Delta = ((VAL x :Number) (VAL z :Str))",
         );
-        let alpha = scope.resolve_type("Alpha").expect("Alpha binds");
-        let beta = scope.resolve_type("Beta").expect("Beta binds");
-        let gamma = scope.resolve_type("Gamma").expect("Gamma binds");
-        let delta = scope.resolve_type("Delta").expect("Delta binds");
+        let alpha = lookup_type(scope, "Alpha").expect("Alpha binds");
+        let beta = lookup_type(scope, "Beta").expect("Beta binds");
+        let gamma = lookup_type(scope, "Gamma").expect("Gamma binds");
+        let delta = lookup_type(scope, "Delta").expect("Delta binds");
         assert!(matches!(
             test_run.types().node(alpha),
             TypeNode::Signature { .. }
@@ -234,11 +241,9 @@ mod tests {
              SIG OrdB = ((TYPE Elem) (VAL compare :(FN (a :Elem b :Elem) -> Bool)))\n\
              SIG OrdManifest = ((TYPE Elem) (VAL compare :(FN (a :Number b :Number) -> Bool)))",
         );
-        let a = scope.resolve_type("OrdA").expect("OrdA binds");
-        let b = scope.resolve_type("OrdB").expect("OrdB binds");
-        let manifest = scope
-            .resolve_type("OrdManifest")
-            .expect("OrdManifest binds");
+        let a = lookup_type(scope, "OrdA").expect("OrdA binds");
+        let b = lookup_type(scope, "OrdB").expect("OrdB binds");
+        let manifest = lookup_type(scope, "OrdManifest").expect("OrdManifest binds");
         assert!(matches!(
             test_run.types().node(a),
             TypeNode::Signature { .. }
@@ -265,7 +270,7 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("SIG Container = ((TYPE Elem) (VAL item :Elem))");
         let types = test_run.types();
-        let handle = scope.resolve_type("Container").expect("Container binds");
+        let handle = lookup_type(scope, "Container").expect("Container binds");
         let schema = match types.node(handle) {
             TypeNode::Signature { schema, .. } => schema,
             _ => panic!("Container should be a signature"),

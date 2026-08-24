@@ -25,7 +25,7 @@ use crate::machine::model::{
 /// fixed in Rust source, so each is minted once for the process and recorded into a run's interner
 /// at registration. [`catch`](super::catch) reads the tags back through these same statics, so the
 /// tag a `Result` is built under and the tag registration declared cannot drift apart.
-static RESULT: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Result");
+pub(crate) static RESULT: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Result");
 pub(crate) static OK: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Ok");
 pub(crate) static ERROR: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Error");
 

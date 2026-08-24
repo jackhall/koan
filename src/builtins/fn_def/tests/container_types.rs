@@ -1,7 +1,7 @@
 //! Parameterized container types in FN parameter and return slots:
 //! `List<T>`, `Dict<K, V>`, `Function<…>`, plus specificity tournaments.
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::model::KType;
 use crate::machine::{program_storage, run_root_storage};
@@ -17,7 +17,7 @@ fn fn_return_coarsens_list_carrier_to_declared() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (NUMS) -> :(LIST OF Any) = ([1 2 3])");
-    let result = test_run.run_one(parse_one(&program, "NUMS"));
+    let result = test_run.run_one(test_run.parse_one("NUMS"));
     assert_eq!(result.ktype(), test_run.types().list(KType::ANY));
 }
 
@@ -28,7 +28,7 @@ fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (NUMS) -> :(LIST OF Number) = ([1 2 3])");
-    let result = test_run.run_one(parse_one(&program, "NUMS"));
+    let result = test_run.run_one(test_run.parse_one("NUMS"));
     assert_eq!(result.ktype(), test_run.types().list(KType::NUMBER));
 }
 
@@ -44,7 +44,7 @@ fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "BAD"),
+            test_run.parse_one("BAD"),
         ),
         scope,
     );
@@ -62,7 +62,7 @@ fn fn_return_empty_list_stamps_declared_element_type() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (EMPTY) -> :(LIST OF Number) = ([])");
-    let result = test_run.run_one(parse_one(&program, "EMPTY"));
+    let result = test_run.run_one(test_run.parse_one("EMPTY"));
     assert_eq!(result.ktype(), test_run.types().list(KType::NUMBER));
 }
 
@@ -142,7 +142,7 @@ fn fn_returning_typed_list_rejects_wrong_element_type() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "BAD"),
+            test_run.parse_one("BAD"),
         ),
         scope,
     );
@@ -192,7 +192,7 @@ fn fn_with_typed_function_param_rejects_name_mismatch() {
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "USE g"),
+            test_run.parse_one("USE g"),
         ),
         scope,
     );
@@ -262,7 +262,7 @@ fn fn_with_typed_function_param_rejects_width_extra() {
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "USE g"),
+            test_run.parse_one("USE g"),
         ),
         scope,
     );
@@ -317,7 +317,7 @@ fn fn_typed_function_param_incomparable_is_ambiguous() {
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "USE g"),
+            test_run.parse_one("USE g"),
         ),
         scope,
     );
@@ -431,7 +431,7 @@ fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "DESCRIBE nope"),
+            test_run.parse_one("DESCRIBE nope"),
         ),
         scope,
     );
@@ -463,7 +463,7 @@ fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "DESCRIBE [1 \"a\"]"),
+            test_run.parse_one("DESCRIBE [1 \"a\"]"),
         ),
         scope,
     );
@@ -537,7 +537,7 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "HEAD [\"a\"]"),
+            test_run.parse_one("HEAD [\"a\"]"),
         ),
         scope,
     );
@@ -564,7 +564,7 @@ fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (ECHO xs :(LIST OF Any)) -> :(LIST OF Any) = (xs)");
-    let result = test_run.run_one(parse_one(&program, "ECHO [1]"));
+    let result = test_run.run_one(test_run.parse_one("ECHO [1]"));
     assert_eq!(result.ktype(), test_run.types().list(KType::ANY));
 }
 
@@ -575,6 +575,6 @@ fn fn_typed_list_param_accepts_matching_element_at_call() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (ECHO xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
-    let result = test_run.run_one(parse_one(&program, "ECHO [1]"));
+    let result = test_run.run_one(test_run.parse_one("ECHO [1]"));
     assert_eq!(result.ktype(), test_run.types().list(KType::NUMBER));
 }

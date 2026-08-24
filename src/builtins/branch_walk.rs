@@ -9,7 +9,7 @@
 //! enforce on their result.
 
 use crate::machine::model::labels::LabelInterner;
-use crate::machine::model::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
+use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::{Symbol, TypeSymbol, ValueSymbol};
 use crate::machine::model::{TypeResolution, most_specific_ktype};
 
@@ -42,7 +42,7 @@ pub(crate) fn resolve_arm_contract<'a>(
             _ => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "{kind} return type `{}` is not a known type",
-                    te.render()
+                    crate::machine::model::render_label(te.symbol(), ctx.registries)
                 ))));
             }
         }
@@ -167,7 +167,7 @@ pub(crate) fn find_branch_body_by_tag<'a>(
         // `None` is the wildcard arm, which matches nothing by name and is remembered instead.
         let arm_tag: Option<Symbol> = match tag_part.value {
             // Variant tags are capitalized type names (`Some`, `Ok`, `TypeMismatch`).
-            ExpressionPart::Type(t) => Some(Symbol::of(t.as_str())),
+            ExpressionPart::Type(t) => Some(t.symbol()),
             // Booleans parse as `KLiteral::Boolean`, not type tokens; accept them so
             // `MATCH` on a `Bool` can spell its arms `true ->` / `false ->`.
             ExpressionPart::Literal(KLiteral::Boolean(b)) => {
@@ -236,7 +236,7 @@ enum HeadMode {
 /// resolution (parked or unbound) is not a synchronously-known type.
 fn resolve_head_type<'a>(
     scope: &Scope<'a>,
-    token: &TypeIdentifier<'a>,
+    token: TypeSymbol,
     chain: Option<Rc<LexicalFrame>>,
     registries: &RunRegistries,
 ) -> Result<KType, String> {
@@ -244,7 +244,7 @@ fn resolve_head_type<'a>(
         TypeResolution::Done(kt) => Ok(kt),
         _ => Err(format!(
             "match arm type `{}` is not a known type",
-            token.render()
+            crate::machine::model::render_label(token.symbol(), registries)
         )),
     }
 }
@@ -344,7 +344,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
             // A capitalized type name: a variant/tag match for a union-variant or tagged
             // scrutinee, else scope resolution.
             ExpressionPart::Type(token) => {
-                let label = token.render();
+                let label = crate::machine::model::render_label(token.symbol(), registries);
                 match &mode {
                     // A tag head equal to the scrutinee's own tag is an exact arm binding the
                     // payload; a non-tag head is a silent non-match (no scope resolution for a
@@ -352,7 +352,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
                     HeadMode::TaggedByTag { value_tag } => {
                         // The head is a reference, not a declaration, so it probes the
                         // scrutinee's classified tag by bare symbol bits — the recovery door.
-                        if Symbol::of(token.as_str()) == value_tag.symbol() {
+                        if token.symbol() == value_tag.symbol() {
                             exact_arms.push(ExactArm {
                                 head_label: label,
                                 body: body_expr,
@@ -361,7 +361,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
                         }
                     }
                     HeadMode::Scope => {
-                        let kt = resolve_head_type(scope, &token, chain.clone(), registries)?;
+                        let kt = resolve_head_type(scope, token, chain.clone(), registries)?;
                         typed_arms.push(TypedArm {
                             head_label: label,
                             ktype: kt,

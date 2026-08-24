@@ -134,8 +134,13 @@ fn parse_one<'a>(brand: ProgramBrand<'a>, src: &str) -> KExpression<'a> {
         .expect("one statement")
 }
 
-fn name_of(key: StoredBinderKey<'_>) -> Option<String> {
-    key.name.map(|(name, _)| name.to_string())
+/// The declared name's symbol bits, whichever channel carries it — a binder's identity, and the
+/// one currency both arms share.
+fn name_of(key: StoredBinderKey<'_>) -> Option<crate::machine::model::Symbol> {
+    key.name.map(|name| match name {
+        crate::machine::model::BinderName::Value(text) => crate::machine::model::Symbol::of(text),
+        crate::machine::model::BinderName::Type(binder) => binder.symbol(),
+    })
 }
 
 /// A redundant single-`Expression` paren wrapper is the same statement, so it carries the child's
@@ -157,7 +162,7 @@ fn redundant_parens_pass_through() {
     };
     assert_eq!(
         name_of(child.binder_plan().expect("the child is the binder")),
-        Some("x".to_string()),
+        Some(crate::machine::model::Symbol::of("x")),
     );
     assert!(
         wrapped.binder_plan().is_none(),
@@ -182,7 +187,9 @@ fn a_statements_plan_is_its_own_spine() {
         let key = stmt.binder_plan().expect("a LET is a binder");
         assert_eq!(
             name_of(key),
-            Some(source.split_whitespace().nth(1).unwrap().to_string()),
+            Some(crate::machine::model::Symbol::of(
+                source.split_whitespace().nth(1).unwrap()
+            )),
             "{source}",
         );
         assert_eq!(
@@ -218,8 +225,8 @@ fn name_slot_agrees_with_the_extractors() {
         let expected = name_of(stmt.binder_plan().expect("each form installs a name"))
             .expect("each form installs a name");
         let token = match stmt.parts[pos].value {
-            ExpressionPart::Identifier(s) => s.to_string(),
-            ExpressionPart::Type(t) => t.as_str().to_string(),
+            ExpressionPart::Identifier(s) => crate::machine::model::Symbol::of(s),
+            ExpressionPart::Type(t) => t.symbol(),
             other => panic!("name slot holds a bare name token, got {other:?}: {source}"),
         };
         assert_eq!(token, expected, "{source}");
@@ -272,8 +279,10 @@ fn combined_forms_install_both_channels() {
         let stmt = parse_one(brand, source);
         let key = stmt.binder_plan().expect("a combined form is a binder");
         assert_eq!(
-            key.name.map(|(name, _)| name),
-            Some(source.split_whitespace().nth(1).unwrap()),
+            name_of(key),
+            Some(crate::machine::model::Symbol::of(
+                source.split_whitespace().nth(1).unwrap()
+            )),
             "{source}",
         );
         assert_eq!(

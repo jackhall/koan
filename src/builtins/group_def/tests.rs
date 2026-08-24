@@ -5,7 +5,7 @@
 
 mod functor;
 
-use crate::builtins::test_support::{TestRun, binds_module, parse_one};
+use crate::builtins::test_support::{TestRun, binds_module};
 use crate::machine::KErrorKind;
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
@@ -57,7 +57,7 @@ fn group_mixed_run_reduces_fold_left_inside_the_body_and_through_using() {
     ));
     assert_eq!(
         list_numbers(
-            test_run.run_one(parse_one(&program, "vec_ops.inside")),
+            test_run.run_one(test_run.parse_one("vec_ops.inside")),
             types.registries()
         ),
         vec![3.0],
@@ -65,7 +65,7 @@ fn group_mixed_run_reduces_fold_left_inside_the_body_and_through_using() {
     );
     assert_eq!(
         list_numbers(
-            test_run.run_one(parse_one(&program, "outside")),
+            test_run.run_one(test_run.parse_one("outside")),
             types.registries()
         ),
         vec![3.0],
@@ -91,7 +91,7 @@ fn group_fold_right_nests_right_associated() {
     ));
     assert_eq!(
         list_numbers(
-            test_run.run_one(parse_one(&program, "vec_ops.inside")),
+            test_run.run_one(test_run.parse_one("vec_ops.inside")),
             types.registries()
         ),
         vec![1.0],
@@ -117,11 +117,11 @@ fn pairwise_group_folds_heterogeneous_pairs_through_the_combiner() {
            (LET unordered = (3 ≺ 2 ≼ 3)))",
     );
     assert!(
-        matches!(test_run.run_one(parse_one(&program, "num_compare.ordered")), KObject::Bool(b) if *b),
+        matches!(test_run.run_one(test_run.parse_one( "num_compare.ordered")), KObject::Bool(b) if *b),
         "1 ≺ 2 and 2 ≼ 3 both hold, so the combiner folds them to true",
     );
     assert!(
-        matches!(test_run.run_one(parse_one(&program, "num_compare.unordered")), KObject::Bool(b) if !*b),
+        matches!(test_run.run_one(test_run.parse_one( "num_compare.unordered")), KObject::Bool(b) if !*b),
         "3 ≺ 2 fails, so the combiner folds the pair results to false",
     );
 }
@@ -141,7 +141,7 @@ fn pairwise_group_folds_pair_results_in_the_declared_direction() {
                (OP #(⊖) OVER Number = (left - right))\
                (LET folded = (10 % 4 % 1 % 0)))",
         ));
-        let result = test_run.run_one(parse_one(&program, "tally.folded"));
+        let result = test_run.run_one(test_run.parse_one("tally.folded"));
         assert!(
             matches!(result, KObject::Number(n) if *n == expected),
             "a {direction} fold of the pair results must give {expected}; got {}",
@@ -166,7 +166,7 @@ fn pairwise_group_evaluates_a_shared_operand_once() {
            (LET once = (1 % (LOUD 2) % 3)))",
     );
     assert!(
-        matches!(test_run.run_one(parse_one(&program, "tally.once")), KObject::Number(n) if *n == -2.0),
+        matches!(test_run.run_one(test_run.parse_one( "tally.once")), KObject::Number(n) if *n == -2.0),
         "the pairs are 1 + 2 = 3 and 2 + 3 = 5, folded through `⊖` to 3 - 5 = -2",
     );
     let bytes = captured.borrow().clone();
@@ -192,13 +192,13 @@ fn group_body_holds_ordinary_module_statements() {
            (LET total = (1 ⊕ 2 ⊕ 3)))",
     );
     assert!(
-        matches!(test_run.run_one(parse_one(&program, "shifts.bump")), KObject::Number(n) if *n == 10.0),
+        matches!(test_run.run_one(test_run.parse_one( "shifts.bump")), KObject::Number(n) if *n == 10.0),
         "a LET in a group body binds a member of the group's module value",
     );
     // fold-left: (1 ⊕ 2) = 13, (13 ⊕ 3) = 26 — the body reads its sibling `bump` through the scope
     // it captures, exactly as a module-level `OP` does.
     assert!(
-        matches!(test_run.run_one(parse_one(&program, "shifts.total")), KObject::Number(n) if *n == 26.0),
+        matches!(test_run.run_one(test_run.parse_one( "shifts.total")), KObject::Number(n) if *n == 26.0),
     );
 }
 
@@ -210,8 +210,7 @@ fn unary_op_in_a_group_body_errors() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let error = test_run.run_one_err(parse_one(
-        &program,
+    let error = test_run.run_one_err(test_run.parse_one(
         "GROUP gather FOLD LEFT = (\
            (UNARY OP #(~) OVER Number -> :(LIST OF Number) = (operands)))",
     ));
@@ -234,8 +233,7 @@ fn heterogeneous_member_in_a_fold_group_errors() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let error = test_run.run_one_err(parse_one(
-        &program,
+    let error = test_run.run_one_err(test_run.parse_one(
         "GROUP bad_fold FOLD LEFT = (\
            (OP #(≺) OVER Number -> Bool = (left < right))\
            (OP #(≼) OVER Number -> Bool = (left <= right)))",
@@ -256,7 +254,7 @@ fn empty_group_errors() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let error = test_run.run_one_err(parse_one(&program, "GROUP empty FOLD LEFT = (LET x = 1)"));
+    let error = test_run.run_one_err(test_run.parse_one("GROUP empty FOLD LEFT = (LET x = 1)"));
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg) if msg.contains("at least one")),
         "expected the empty-group diagnostic, got {error}",
@@ -270,10 +268,9 @@ fn type_token_group_name_errors_with_the_snake_case_respelling() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let error = test_run.run_one_err(parse_one(
-        &program,
-        "GROUP VecOps FOLD LEFT = ((OP #(⊕) OVER Number = (left)))",
-    ));
+    let error = test_run.run_one_err(
+        test_run.parse_one("GROUP VecOps FOLD LEFT = ((OP #(⊕) OVER Number = (left)))"),
+    );
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg)
             if msg.contains("a module is a value") && msg.contains("`vec_ops`")),
@@ -299,7 +296,7 @@ fn a_call_naming_the_op_keyword_is_not_a_member() {
            (LET folded = (1 ⊞ 2 ⊞ 3)))",
     );
     assert!(
-        matches!(test_run.run_one(parse_one(&program, "vec_ops.folded")), KObject::Number(n) if *n == 6.0),
+        matches!(test_run.run_one(test_run.parse_one( "vec_ops.folded")), KObject::Number(n) if *n == 6.0),
         "the `OP`-keyword call is ordinary body content, and the real member still reduces its run",
     );
 }

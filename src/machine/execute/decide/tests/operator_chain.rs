@@ -7,7 +7,7 @@
 //! observable: over `10 % 4 % 1 % 0` the three pairs are `14`, `5`, `1`, which fold left to
 //! `(14 - 5) - 1` = 8 and right to `14 - (5 - 1)` = 10.
 
-use crate::builtins::test_support::{TestRun, keyword_name, parse_one};
+use crate::builtins::test_support::{TestRun, keyword_name};
 use crate::machine::BindingIndex;
 use crate::machine::GroupSeal;
 use crate::machine::core::{program_storage, run_root_storage};
@@ -50,7 +50,7 @@ fn pairwise_combiner_folds_left() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     register_pairwise_fixture(&mut test_run, "MINUS", FoldDirection::Left);
-    let result = test_run.run_one(parse_one(&program, "10 % 4 % 1 % 0"));
+    let result = test_run.run_one(test_run.parse_one("10 % 4 % 1 % 0"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 8.0),
         "a left fold nests ((p1 ⊙ p2) ⊙ p3) = (14 - 5) - 1 = 8; got {}",
@@ -66,7 +66,7 @@ fn pairwise_combiner_folds_right() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     register_pairwise_fixture(&mut test_run, "MINUS", FoldDirection::Right);
-    let result = test_run.run_one(parse_one(&program, "10 % 4 % 1 % 0"));
+    let result = test_run.run_one(test_run.parse_one("10 % 4 % 1 % 0"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 10.0),
         "a right fold nests (p1 ⊙ (p2 ⊙ p3)) = 14 - (5 - 1) = 10; got {}",
@@ -84,7 +84,7 @@ fn pairwise_combiner_evaluates_a_shared_operand_once() {
     let (mut test_run, captured) = TestRun::with_buf(&program, &region);
     register_pairwise_fixture(&mut test_run, "MINUS", FoldDirection::Left);
     test_run.run("FN (LOUD x :Number) -> Number = ((PRINT x) (x))");
-    let result = test_run.run_one(parse_one(&program, "1 % (LOUD 2) % 3"));
+    let result = test_run.run_one(test_run.parse_one("1 % (LOUD 2) % 3"));
     assert!(
         matches!(result, KObject::Number(n) if *n == -2.0),
         "the pairs are 1 + 2 = 3 and 2 + 3 = 5, folded through `MINUS` to 3 - 5 = -2; got {}",
@@ -109,7 +109,7 @@ fn pairwise_undeclared_combiner_errors_at_the_use_site() {
     let mut test_run = TestRun::silent(&program, &region);
     register_pairwise_fixture(&mut test_run, "NOWHERE", FoldDirection::Left);
 
-    let error = test_run.run_one_err(parse_one(&program, "1 % 2 % 3"));
+    let error = test_run.run_one_err(test_run.parse_one("1 % 2 % 3"));
     let message = error.to_string();
     assert!(
         message.contains("NOWHERE"),
@@ -128,7 +128,7 @@ fn fold_left_run_over_named_operands_resolves_the_trailing_name() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET x = 1\nLET y = 2\nLET z = 4");
     assert!(
-        matches!(test_run.run_one(parse_one(&program, "x + y + z")), KObject::Number(n) if *n == 7.0),
+        matches!(test_run.run_one(test_run.parse_one( "x + y + z")), KObject::Number(n) if *n == 7.0),
         "every operand of a named run reaches its binding",
     );
 }

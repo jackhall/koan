@@ -49,9 +49,9 @@ pub use step_allocator::StepAllocator;
 /// structurally absent. See
 /// [value-substrates.md § Untyped arenas](../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state).
 ///
-/// A [`TypeIdentifier`](crate::machine::model::TypeIdentifier) and a [`KType`] need no storage at
-/// all: both are `Copy` handles — a borrow of a name already resident where it was parsed, and an
-/// interned registry index — so the type channel's carriers hold them by value.
+/// A [`TypeSymbol`](crate::machine::model::TypeSymbol) and a [`KType`] need no storage at
+/// all: both are lifetime-free `Copy` handles — a name's hash digest and an interned registry
+/// index — so the type channel's carriers hold them by value.
 pub struct KoanStorageProfile;
 
 impl StorageProfile for KoanStorageProfile {

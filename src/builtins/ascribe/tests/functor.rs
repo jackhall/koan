@@ -1,7 +1,7 @@
 //! Functor integration: module-typed parameters, signature-bound dispatch,
 //! per-call generativity.
 
-use crate::builtins::test_support::{TestRun, lookup_module, parse_one, type_name, value_name};
+use crate::builtins::test_support::{TestRun, lookup_module, type_name, value_name};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
@@ -98,12 +98,8 @@ fn functor_application_mints_distinct_abstract_types() {
                FN (MAKESET er :Ordered) -> Module = (er :| Ordered)\n\
                LET set_one = (MAKESET int_ord)\n\
                LET set_two = (MAKESET int_ord)";
-    let exprs = parse(
-        program.brand(),
-        &crate::machine::model::LabelInterner::new(),
-        src,
-    )
-    .expect("parse should succeed");
+    let exprs =
+        parse(program.brand(), &test_run.registries().labels, src).expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
         ids.push(test_run.dispatch_watched_in(
@@ -208,7 +204,7 @@ fn functor_rejects_structurally_unsatisfying_module() {
         scope,
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "MAKESET arg"),
+            test_run.parse_one("MAKESET arg"),
         ),
     );
     test_run
@@ -332,7 +328,7 @@ fn pure_call_passes_return_check() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(monad_program());
-    let result = test_run.run_one(parse_one(&program, "id_monad.pure {x = 3.0}"));
+    let result = test_run.run_one(test_run.parse_one("id_monad.pure {x = 3.0}"));
     match result {
         KObject::Wrapped { inner, type_id } => {
             assert!(
@@ -388,12 +384,8 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
                MODULE int_list = ((LET Wrap = Wrapper))\n\
                LET first = (int_list :| Monad)\n\
                LET second = (int_list :| Monad)";
-    let exprs = parse(
-        program.brand(),
-        &crate::machine::model::LabelInterner::new(),
-        src,
-    )
-    .expect("parse should succeed");
+    let exprs =
+        parse(program.brand(), &test_run.registries().labels, src).expect("parse should succeed");
     let mut ids = Vec::new();
     for expr in exprs {
         ids.push(test_run.dispatch_watched_in(
@@ -472,7 +464,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     // scope. The original `held` must still walk through to its own pair.
     test_run.run("FN (CHURNCALL) -> Number = (1)");
     for _ in 0..20 {
-        test_run.run_one(parse_one(&program, "CHURNCALL"));
+        test_run.run_one(test_run.parse_one("CHURNCALL"));
     }
     test_run.run("LET held2 = (int_ord :| Ordered)");
 

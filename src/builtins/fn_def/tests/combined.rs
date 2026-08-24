@@ -2,7 +2,7 @@
 //! statement whose single binder installs the value name and the signature's dispatch bucket, both
 //! naming the one function it builds.
 
-use crate::builtins::test_support::{TestRun, fn_is_registered, parse_one};
+use crate::builtins::test_support::{TestRun, fn_is_registered};
 use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
 
@@ -16,9 +16,9 @@ fn combined_form_installs_name_and_bucket() {
     test_run.run("LET double = FN (DOUBLE n :Number) -> Number = (n * 2)");
 
     assert!(fn_is_registered(scope, "DOUBLE"));
-    let by_keyword = test_run.run_one(parse_one(&program, "DOUBLE 5"));
+    let by_keyword = test_run.run_one(test_run.parse_one("DOUBLE 5"));
     assert!(matches!(by_keyword, KObject::Number(n) if *n == 10.0));
-    let by_name = test_run.run_one(parse_one(&program, "double {n = 7}"));
+    let by_name = test_run.run_one(test_run.parse_one("double {n = 7}"));
     assert!(
         matches!(by_name, KObject::Number(n) if *n == 14.0),
         "the bound name reaches the same function through the call-by-name lane"
@@ -34,9 +34,9 @@ fn bound_value_and_overload_are_one_function() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET base = 100\nLET offset = FN (OFFSET n :Number) -> Number = (n + base)");
 
-    let by_keyword = test_run.run_one(parse_one(&program, "OFFSET 1"));
+    let by_keyword = test_run.run_one(test_run.parse_one("OFFSET 1"));
     assert!(matches!(by_keyword, KObject::Number(n) if *n == 101.0));
-    let by_name = test_run.run_one(parse_one(&program, "offset {n = 1}"));
+    let by_name = test_run.run_one(test_run.parse_one("offset {n = 1}"));
     assert!(matches!(by_name, KObject::Number(n) if *n == 101.0));
 }
 
@@ -54,7 +54,7 @@ fn sibling_reference_parks_on_both_channels() {
         "LET triple = FN (TRIPLE n :Number) -> Number = (n * 3)\n\
          FN (CALLER) -> Number = (TRIPLE 3)",
     );
-    let via_bucket = test_run.run_one(parse_one(&program, "CALLER"));
+    let via_bucket = test_run.run_one(test_run.parse_one("CALLER"));
     assert!(matches!(via_bucket, KObject::Number(n) if *n == 9.0));
 
     let mut test_run = TestRun::silent(&program, &region);
@@ -62,7 +62,7 @@ fn sibling_reference_parks_on_both_channels() {
         "LET quad = FN (QUAD n :Number) -> Number = (n * 4)\n\
          LET alias = quad",
     );
-    let via_name = test_run.run_one(parse_one(&program, "alias"));
+    let via_name = test_run.run_one(test_run.parse_one("alias"));
     assert!(
         matches!(via_name, KObject::KFunction(..)),
         "the name channel's placeholder resolves to the declared callable"
@@ -77,7 +77,7 @@ fn combined_form_takes_a_sigiled_return_carrier() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET pack = FN (PACK n :Number) -> :(LIST OF Number) = ([n])");
-    let result = test_run.run_one(parse_one(&program, "PACK 3"));
+    let result = test_run.run_one(test_run.parse_one("PACK 3"));
     assert!(matches!(result, KObject::List(..)));
 }
 
@@ -88,10 +88,9 @@ fn combined_form_is_rejected_in_a_sig_body() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "SIG Shape = (LET area = FN (AREA n :Number) -> Number = (n))",
-    ));
+    let err = test_run.run_one_err(
+        test_run.parse_one("SIG Shape = (LET area = FN (AREA n :Number) -> Number = (n))"),
+    );
     assert!(
         format!("{err}").contains("VAL"),
         "expected the VAL suggestion, got {err}",
@@ -106,10 +105,7 @@ fn anonymous_signature_has_no_combined_form() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "LET f = FN :{n :Number} -> Number = (n)",
-    ));
+    let err = test_run.run_one_err(test_run.parse_one("LET f = FN :{n :Number} -> Number = (n)"));
     assert!(
         matches!(err.kind, crate::machine::KErrorKind::UnboundName(ref n) if n == "n"),
         "expected the staged eager sub-dispatch's `n` to be unbound, got {err}",
@@ -117,7 +113,7 @@ fn anonymous_signature_has_no_combined_form() {
 
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET f = (FN :{n :Number} -> Number = (n))");
-    let result = test_run.run_one(parse_one(&program, "f {n = 3}"));
+    let result = test_run.run_one(test_run.parse_one("f {n = 3}"));
     assert!(matches!(result, KObject::Number(n) if *n == 3.0));
 }
 
@@ -128,10 +124,8 @@ fn type_classified_binder_name_is_a_diagnostic() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "LET Doubler = FN (DOUBLER n :Number) -> Number = (n)",
-    ));
+    let err = test_run
+        .run_one_err(test_run.parse_one("LET Doubler = FN (DOUBLER n :Number) -> Number = (n)"));
     let message = format!("{err}");
     assert!(
         message.contains("doubler"),
@@ -146,10 +140,8 @@ fn value_named_return_is_diagnosed_in_the_combined_form() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "LET f = FN (WIDEN n :Number) -> other = (n)",
-    ));
+    let err =
+        test_run.run_one_err(test_run.parse_one("LET f = FN (WIDEN n :Number) -> other = (n)"));
     assert!(
         format!("{err}").contains("TYPE OF"),
         "expected the `-> :(TYPE OF …)` suggestion, got {err}",

@@ -161,7 +161,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::builtins::test_support::TestRun;
     use crate::machine::model::{KObject, KType, TypeNode};
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
@@ -171,7 +171,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let result = test_run.run_one(parse_one(&program, "(x y) FROM {x = 1, y = 2, z = 3}"));
+        let result = test_run.run_one(test_run.parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
         match result {
             KObject::Record(substrate, record_type) => {
                 assert_eq!(substrate.len(), 3);
@@ -215,7 +215,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let result = test_run.run_one(parse_one(&program, "(x) FROM {x = 1, y = 2}"));
+        let result = test_run.run_one(test_run.parse_one("(x) FROM {x = 1, y = 2}"));
         match result {
             KObject::Record(substrate, record_type) => {
                 assert_eq!(substrate.len(), 2);
@@ -245,7 +245,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let result = test_run.run_one(parse_one(&program, "() FROM {x = 1}"));
+        let result = test_run.run_one(test_run.parse_one("() FROM {x = 1}"));
         match result {
             KObject::Record(substrate, record_type) => {
                 assert_eq!(substrate.len(), 1);
@@ -264,7 +264,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let err = test_run.run_one_err(parse_one(&program, "(x w) FROM {x = 1}"));
+        let err = test_run.run_one_err(test_run.parse_one("(x w) FROM {x = 1}"));
         let msg = format!("{err}");
         assert!(
             msg.contains("no field `w`"),
@@ -277,7 +277,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let err = test_run.run_one_err(parse_one(&program, "(x x) FROM {x = 1}"));
+        let err = test_run.run_one_err(test_run.parse_one("(x x) FROM {x = 1}"));
         let msg = format!("{err}");
         assert!(
             msg.contains("duplicate field `x`"),
@@ -301,7 +301,7 @@ mod tests {
         let root = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
-                parse_one(&program, "(x y) FROM 5"),
+                test_run.parse_one("(x y) FROM 5"),
             ),
             scope,
         );
@@ -341,7 +341,7 @@ mod tests {
         let root = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
-                parse_one(&program, "PICK r"),
+                test_run.parse_one("PICK r"),
             ),
             scope,
         );
@@ -360,7 +360,7 @@ mod tests {
         );
 
         // `(x y) FROM r` re-tags the carrier to `{x, y}`; only `:{x,y}` admits.
-        let picked = test_run.run_one(parse_one(&program, "PICK ((x y) FROM r)"));
+        let picked = test_run.run_one(test_run.parse_one("PICK ((x y) FROM r)"));
         match picked {
             KObject::KString(s) => assert_eq!(*s, "xy"),
             other => panic!("expected \"xy\", got {:?}", other.ktype()),

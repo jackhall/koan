@@ -9,7 +9,8 @@
 use crate::machine::core::{KoanRegion, KoanRegionExt, Scope};
 use crate::machine::model::Carried;
 use crate::machine::model::FieldParts;
-use crate::machine::model::{ExpressionPart, TypeIdentifier, WorkingExpression, WorkingPart};
+use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
 
 use super::super::StepCarried;
@@ -45,9 +46,9 @@ pub(super) fn bare_identifier<'step, 'b>(
 pub(super) fn bare_type_leaf<'step, 'b>(
     ctx: &DecideCtx<'_, 'step, '_>,
     s: &'b Scope<'b>,
-    t: TypeIdentifier<'step>,
+    t: TypeSymbol,
 ) -> Outcome<'step> {
-    match type_channel(s, &t, ctx.active_chain(), ctx.registries()) {
+    match type_channel(s, t, ctx.active_chain(), ctx.registries()) {
         // A `KType` is a `Copy` registry handle, so the leaf carries in place under the scope it
         // resolved against — no reach to name and no re-home.
         TypeChannel::Done(kt) => {
@@ -187,7 +188,7 @@ pub(super) fn type_call<'step>(
     // Resolve against the cart scope at `'step`, so the resolved identity rides into the outcome
     // with no re-anchor.
     let scope = ctx.current_scope();
-    let identity = match scope.resolve_type_with_chain(head_t.as_str(), chain) {
+    let identity = match scope.resolve_type_with_chain(head_t, chain) {
         Some(NameLookup::Bound(kt)) => kt,
         Some(NameLookup::Parked(source)) => {
             // A finalized binder has already installed `types[name]`, so the `Bound` arm would
@@ -199,7 +200,9 @@ pub(super) fn type_call<'step>(
             );
         }
         None => {
-            return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head_t.render()))));
+            return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
+                crate::machine::model::render_label(head_t.symbol(), ctx.registries()),
+            ))));
         }
     };
     apply_callable(ctx, ResolvedCallable::Constructor { identity }, &expr)

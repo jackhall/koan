@@ -1,6 +1,7 @@
 //! `register_type` / `resolve_type` tests: type bindings land in `types` (not `data`),
 //! `resolve_type` walks the outer chain, and inner scopes shadow outer type bindings.
 
+use crate::builtins::test_support::lookup_type;
 use std::rc::Rc;
 
 use crate::builtins::test_support::{
@@ -55,9 +56,9 @@ fn resolve_type_walks_outer_chain_and_returns_none_past_root() {
         &mut crate::machine::WriteGate::for_test(),
     );
     let child = root.alloc_child_under();
-    assert!(matches!(child.resolve_type("Foo"), Some(kt) if kt == KType::NUMBER));
+    assert!(matches!(lookup_type(child, "Foo"), Some(kt) if kt == KType::NUMBER));
     assert!(
-        child.resolve_type("Nope").is_none(),
+        lookup_type(child, "Nope").is_none(),
         "unbound name past run-root yields None, not panic",
     );
 }
@@ -84,8 +85,8 @@ fn resolve_type_inner_scope_shadows_outer() {
         &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
-    assert!(matches!(child.resolve_type("Foo"), Some(kt) if kt == KType::STR));
-    assert!(matches!(root.resolve_type("Foo"), Some(kt) if kt == KType::NUMBER));
+    assert!(matches!(lookup_type(child, "Foo"), Some(kt) if kt == KType::STR));
+    assert!(matches!(lookup_type(root, "Foo"), Some(kt) if kt == KType::NUMBER));
 }
 
 /// `adopt_carried` under `AdoptSeam::Retaining` re-anchors a producer's sealed carrier at the consumer scope's brand **without

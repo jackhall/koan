@@ -1,5 +1,7 @@
 //! Scope-aware type elaboration of FN signatures: signature-bound params, LET→FN ordering, type-value bindings.
 
+use crate::builtins::test_support::lookup_type;
+use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn};
 use crate::machine::{program_storage, run_root_storage};
 
@@ -14,9 +16,7 @@ fn list_of_let_binding_is_ktype_value() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("LET MyList = :(LIST OF Number)");
-    let kt = scope
-        .resolve_type("MyList")
-        .expect("MyList should be bound in bindings.types");
+    let kt = lookup_type(scope, "MyList").expect("MyList should be bound in bindings.types");
     assert_eq!(kt, test_run.types().list(KType::NUMBER));
 }
 
@@ -25,7 +25,6 @@ fn list_of_let_binding_is_ktype_value() {
 #[test]
 fn elaborator_lowers_ktype_value_binding() {
     use crate::machine::model::KType;
-    use crate::machine::model::TypeIdentifier;
     use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifier};
     let program = program_storage();
     let region = run_root_storage();
@@ -34,7 +33,7 @@ fn elaborator_lowers_ktype_value_binding() {
     test_run.run("LET MyList = :(LIST OF Number)");
     let types = test_run.registry_handle();
     let mut el = Elaborator::new(scope);
-    match elaborate_type_identifier(&mut el, &TypeIdentifier::leaf("MyList"), types.registries()) {
+    match elaborate_type_identifier(&mut el, type_token("MyList"), types.registries()) {
         TypeResolution::Done(kt) => assert_eq!(kt, types.list(KType::NUMBER)),
         other => panic!("expected Done(:(List Number)), got {:?}", other),
     }
@@ -56,7 +55,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
          FN (USE_ORD er :Ordered) -> Null = (PRINT \"ok\")",
     );
     // SIG installs a single type-side identity; read it from `bindings.types`.
-    let ordered = scope.resolve_type("Ordered");
+    let ordered = lookup_type(scope, "Ordered");
     let sig_id = match ordered.map(|h| test_run.types().node(h)) {
         Some(TypeNode::Signature { schema, .. }) => schema.sig_id,
         _ => panic!("Ordered should be a Signature KType, got {ordered:?}"),
@@ -111,7 +110,7 @@ fn let_then_fn_in_same_batch_works() {
     }
     test_run.runtime.execute().unwrap();
     assert!(
-        scope.resolve_type("MyList").is_some(),
+        lookup_type(scope, "MyList").is_some(),
         "MyList should be bound in bindings.types after the batch executes",
     );
     assert!(

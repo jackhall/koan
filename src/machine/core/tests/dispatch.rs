@@ -2,6 +2,7 @@
 
 use super::super::{FrameStorageExt, Scope, program_storage, run_root_storage};
 use crate::builtins::test_support::kw_part;
+use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::RegionBrand;
@@ -734,7 +735,7 @@ fn parked_bare_name_parks_before_any_pick() {
 fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
     use crate::machine::ProducerId;
     use crate::machine::execute::Resolution;
-    use crate::machine::model::{KExpression, TypeIdentifier};
+    use crate::machine::model::KExpression;
     let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -778,8 +779,8 @@ fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
 
     // Type-token operand of a binder form: the binder body's type machinery owns the wait.
     let alias = let_form(
-        ExpressionPart::Type(TypeIdentifier::leaf("Alias")),
-        ExpressionPart::Type(TypeIdentifier::leaf("OtherT")),
+        ExpressionPart::Type(type_token("Alias")),
+        ExpressionPart::Type(type_token("OtherT")),
     );
     let outcomes = vec![None, parked(), None, parked()];
     assert!(

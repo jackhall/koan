@@ -2,7 +2,7 @@
 //! dispatch time. A module argument binds value-side (`bindings.data`), so the body reads it back
 //! as the Object-arm module value and projects members off it.
 
-use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
+use crate::builtins::test_support::{TestRun, lookup_module};
 use crate::machine::model::{KObject, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
 
@@ -25,7 +25,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
 
     test_run.run("FN (NOOP) -> Number = (1)");
     for _ in 0..20 {
-        test_run.run_one(parse_one(&program, "NOOP"));
+        test_run.run_one(test_run.parse_one("NOOP"));
     }
     test_run.run("LET other_set = (MAKESET (int_ord_a))");
 
@@ -52,7 +52,7 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
          LET int_ord_view = (int_ord :| Ordered)",
     );
     test_run.run("FN (USE_TYPE er :Ordered) -> Any = (er.Carrier)");
-    let result = test_run.run_one_type(parse_one(&program, "USE_TYPE int_ord_view"));
+    let result = test_run.run_one_type(test_run.parse_one("USE_TYPE int_ord_view"));
     // Opaque ascription mints a fresh abstract `Carrier` member; the body must return
     // that identity, not the underlying concrete `Number`.
     match test_run.types().node(result) {
@@ -89,9 +89,9 @@ fn functor_closure_escape_pins_type_class_bind() {
     test_run.run("LET maker = (MAKE_LOOKUP int_ord_view)");
     // Churn the per-call region's drop discipline before invoking the inner FN.
     for _ in 0..5 {
-        test_run.run_one(parse_one(&program, "PRINT 1"));
+        test_run.run_one(test_run.parse_one("PRINT 1"));
     }
-    let result = test_run.run_one_type(parse_one(&program, "maker {x = 1}"));
+    let result = test_run.run_one_type(test_run.parse_one("maker {x = 1}"));
     match test_run.types().node(result) {
         TypeNode::AbstractType { name, .. } => {
             assert_eq!(
@@ -119,7 +119,7 @@ fn functor_returning_bare_signature_typed_param_does_not_panic() {
          LET ord_view = (int_ord :! Ordered)\n\
          FN (MAKESET er :Ordered) -> Ordered = (er)",
     );
-    let result = test_run.run_one(parse_one(&program, "MAKESET ord_view"));
+    let result = test_run.run_one(test_run.parse_one("MAKESET ord_view"));
     match result {
         KObject::Module(module) => {
             // Ruling 12: the ascribed signature renders structurally, so the transparent-view

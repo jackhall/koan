@@ -280,7 +280,9 @@ impl<'a> KFunction<'a> {
                 unreachable!("part_slots indexes exactly the signature's argument elements");
             };
             slots.push(BoundArg {
-                value: parts[at].value.resolve_for(&arg.ktype, scope),
+                value: parts[at]
+                    .value
+                    .resolve_for(&arg.ktype, scope, &registries.labels),
                 carrier: carriers.get(at).and_then(Option::as_ref),
             });
         }

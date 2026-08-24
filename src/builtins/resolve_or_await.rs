@@ -35,12 +35,16 @@ fn non_type_result_error(slot: &str, got_kind: String) -> KError {
 /// Classify a plain type-table lookup (`Scope::resolve_type_with_chain`).
 pub(crate) fn classify_name_lookup(
     lookup: Option<NameLookup<KType>>,
-    name: &str,
+    name: crate::machine::model::TypeSymbol,
+    registries: &crate::machine::model::RunRegistries,
 ) -> TypeResolution<KType> {
     match lookup {
         Some(NameLookup::Bound(kt)) => TypeResolution::Done(kt),
         Some(NameLookup::Parked(producer)) => TypeResolution::Park(vec![producer]),
-        None => TypeResolution::Unbound(format!("unknown type name `{name}`")),
+        None => TypeResolution::Unbound(format!(
+            "unknown type name `{}`",
+            crate::machine::model::render_label(name.symbol(), registries),
+        )),
     }
 }
 
@@ -49,9 +53,10 @@ pub(crate) fn classify_name_lookup(
 pub(crate) fn resolve_at_wake<'a>(
     scope: &Scope<'a>,
     slot: &str,
-    resolve: impl Fn(&Scope<'a>) -> TypeResolution<KType>,
+    registries: &RunRegistries,
+    resolve: impl Fn(&Scope<'a>, &RunRegistries) -> TypeResolution<KType>,
 ) -> Result<KType, KError> {
-    match resolve(scope) {
+    match resolve(scope, registries) {
         TypeResolution::Done(kt) => Ok(kt),
         TypeResolution::Park(_) => Err(parked_after_wake_error(slot)),
         TypeResolution::Unbound(detail) => Err(unbound_error(slot, &detail)),
@@ -65,18 +70,19 @@ pub(crate) fn resolve_at_wake<'a>(
 pub(crate) fn resolve_or_await<'a>(
     scope: &'a Scope<'a>,
     slot: &'static str,
-    resolve: impl Fn(&Scope<'a>) -> TypeResolution<KType> + 'a,
+    resolve: impl Fn(&Scope<'a>, &RunRegistries) -> TypeResolution<KType> + 'a,
     on_resolved: impl for<'r> FnOnce(&FinishCtx<'a, 'r>, KType) -> Action<'a> + 'a,
     registries: &RunRegistries,
 ) -> Action<'a> {
-    match resolve(scope) {
+    match resolve(scope, registries) {
         // The synchronous arm hands the continuation the same `FinishCtx` a wake-time finish
         // receives: `FinishCtx::for_scope` reconstructs the step context over the scope's own frame,
         // matching the wake side's provenance, so both arms allocate in the same region.
         TypeResolution::Done(kt) => on_resolved(&FinishCtx::for_scope(scope, registries), kt),
         TypeResolution::Park(sources) => {
             let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
-                let kt = crate::try_action!(resolve_at_wake(fctx.scope, slot, resolve));
+                let kt =
+                    crate::try_action!(resolve_at_wake(fctx.scope, slot, fctx.registries, resolve));
                 on_resolved(fctx, kt)
             });
             Action::await_deps(deps_on(sources), finish)
@@ -101,7 +107,10 @@ pub(crate) fn expect_type_terminal(
     match opened.value() {
         Carried::Type(kt) => Ok(kt),
         Carried::Object(other) => Err(non_type_result_error(slot, other.ktype().name(registries))),
-        Carried::UnresolvedType(ti) => Err(non_type_result_error(slot, ti.render())),
+        Carried::UnresolvedType(ti) => Err(non_type_result_error(
+            slot,
+            crate::machine::model::render_label(ti.symbol(), registries),
+        )),
     }
 }
 

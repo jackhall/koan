@@ -1,6 +1,6 @@
 //! Return-type expressions that reference earlier parameters (`p.T`, bare param name, `sig WITH {S = p.T}`), resolved per-call.
 
-use crate::builtins::test_support::{TestRun, binds_module, lookup_fn, parse_one};
+use crate::builtins::test_support::{TestRun, binds_module, lookup_fn};
 use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::region_metrics;
@@ -24,7 +24,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
         "USE_ID's return type should be Deferred, got {:?}",
         f.signature.return_type(),
     );
-    let result = test_run.run_one(parse_one(&program, "USE_ID Ordered"));
+    let result = test_run.run_one(test_run.parse_one("USE_ID Ordered"));
     match result {
         KObject::Module(_) => {}
         other => {
@@ -84,7 +84,7 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
          LET int_ord_view = (int_ord :| WithZero)",
     );
     test_run.run("FN (GET_ZERO er :WithZero) -> er.Carrier = (er.zero)");
-    let result = test_run.run_one(parse_one(&program, "GET_ZERO int_ord_view"));
+    let result = test_run.run_one(test_run.parse_one("GET_ZERO int_ord_view"));
     match result {
         KObject::Wrapped { inner, type_id } => {
             assert!(
@@ -160,7 +160,7 @@ fn functor_deferred_return_coarsens_list_carrier() {
          LET ints_view = (ints :! Seq)",
     );
     test_run.run("FN (ITEMS er :Seq) -> er.Carrier = (er.items)");
-    let result = test_run.run_one(parse_one(&program, "ITEMS ints_view"));
+    let result = test_run.run_one(test_run.parse_one("ITEMS ints_view"));
     match result {
         KObject::List(_, list_type) => assert_eq!(
             *list_type,
@@ -202,7 +202,7 @@ fn deferred_return_tail_call_stays_tco_flat() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "AA Seq"),
+            test_run.parse_one("AA Seq"),
         ),
         scope,
     );
@@ -247,7 +247,7 @@ fn deferred_expression_return_tail_chain_stays_flat() {
          FN (AA er :Seq) -> er.Carrier = (BB er)",
     );
     // Parse before the snapshot: program storage's own region mint is not a call's mint.
-    let call = parse_one(&program, "AA view");
+    let call = test_run.parse_one("AA view");
     let minted_before = region_metrics().minted_total;
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(scope.brand(), call),
@@ -298,7 +298,7 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "BAD int_ord_view"),
+            test_run.parse_one("BAD int_ord_view"),
         ),
         scope,
     );

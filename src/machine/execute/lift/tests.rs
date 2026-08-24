@@ -448,7 +448,7 @@ fn type_recursive_member_relocates_and_navigates() {
         Carried::UnresolvedType(ti) => {
             panic!(
                 "expected a member type, got the unlowered name {}",
-                ti.render()
+                crate::machine::model::render_label(ti.symbol(), &registries)
             )
         }
         Carried::Object(_) => panic!("expected a Type carrier"),

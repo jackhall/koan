@@ -9,7 +9,7 @@
 //!
 //! [`unsaturated_constructor_message`]: crate::machine::model::unsaturated_constructor_message
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::program_storage;
 use crate::machine::run_root_storage;
@@ -55,7 +55,7 @@ fn assert_kind_error_after(
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(setup);
-    let error = test_run.run_one_err(parse_one(&program, source));
+    let error = test_run.run_one_err(test_run.parse_one(source));
     let KErrorKind::ShapeError(message) = &error.kind else {
         panic!("expected a ShapeError for `{source}`, got {error}");
     };
@@ -82,7 +82,7 @@ fn assert_accepted(setup: &str, source: &str) {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             test_run.scope.brand(),
-            parse_one(&program, source),
+            test_run.parse_one(source),
         ),
         test_run.scope,
     );

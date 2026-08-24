@@ -2,9 +2,8 @@
 //! mutually-recursive group declared in a plain `MODULE` seals and every member's name is visible
 //! body-wide regardless of order.
 
-use crate::builtins::test_support::{
-    TestRun, lookup_module, parse_one, type_name, type_token, value_name,
-};
+use crate::builtins::test_support::lookup_type;
+use crate::builtins::test_support::{TestRun, lookup_module, type_name, type_token, value_name};
 use crate::machine::model::render_label;
 use crate::machine::model::{AnnouncedData, NodeSchema, TypeDigest, TypeNode, TypeRegistry};
 use crate::machine::model::{KExpression, KObject, KType};
@@ -22,8 +21,7 @@ fn member_scc_and_fields(
     usize,
     Vec<(crate::machine::model::Symbol, KType)>,
 ) {
-    let handle = scope
-        .resolve_type(name)
+    let handle = crate::builtins::test_support::lookup_type(scope, name)
         .unwrap_or_else(|| panic!("expected {name} to be a type in scope"));
     match types.node(handle) {
         TypeNode::SetMember {
@@ -67,8 +65,8 @@ fn module_mutual_newtype_pair_seals_in_either_order() {
         let (b_scc, b_size, b_fields) = member_scc_and_fields(members, types, "Bb");
         assert_eq!(a_scc, b_scc, "Aa and Bb seal into one component");
         assert_eq!((a_size, b_size), (2, 2), "the group is a component of 2");
-        let aa = members.resolve_type("Aa").expect("Aa binds");
-        let bb = members.resolve_type("Bb").expect("Bb binds");
+        let aa = lookup_type(members, "Aa").expect("Aa binds");
+        let bb = lookup_type(members, "Bb").expect("Bb binds");
         assert_eq!(
             a_fields[0],
             (crate::machine::model::Symbol::of("other"), bb)
@@ -153,13 +151,13 @@ fn co_declared_types_unify_with_their_standalone_twins() {
     let module = lookup_module(scope, "t", test_run.registries());
     let inside = module.child_scope();
     assert_eq!(
-        inside.resolve_type("Distance"),
-        scope.resolve_type("Distance"),
+        lookup_type(inside, "Distance"),
+        lookup_type(scope, "Distance"),
         "a co-declared newtype referencing no sibling digests like its standalone twin",
     );
     assert_eq!(
-        inside.resolve_type("Maybe"),
-        scope.resolve_type("Maybe"),
+        lookup_type(inside, "Maybe"),
+        lookup_type(scope, "Maybe"),
         "a module-hosted union digests like its standalone twin — the owner orders, never digests",
     );
 }
@@ -172,10 +170,7 @@ fn only_top_level_statements_announce() {
     let program = program_storage();
     let region = run_root_storage();
     let test_run = TestRun::silent(&program, &region);
-    let top_level = parse_one(
-        &program,
-        "MODULE t = (\n  NEWTYPE Boxed = Number\n  LET n = 1\n)",
-    );
+    let top_level = test_run.parse_one("MODULE t = (\n  NEWTYPE Boxed = Number\n  LET n = 1\n)");
     fn body<'a>(statement: &crate::machine::model::KExpression<'a>) -> KExpression<'a> {
         match statement.parts.last().expect("a body slot").value {
             crate::machine::model::ExpressionPart::Expression(body) => *body,
@@ -194,10 +189,7 @@ fn only_top_level_statements_announce() {
 
     // The same declaration written inside another statement's slot is not the body's own statement,
     // so the scan announces nothing at all.
-    let nested = parse_one(
-        &program,
-        "MODULE t = (\n  LET n = (NEWTYPE Boxed = Number)\n)",
-    );
+    let nested = test_run.parse_one("MODULE t = (\n  LET n = (NEWTYPE Boxed = Number)\n)");
     assert!(
         super::super::announce_type_members(&body(&nested), "t", test_run.registries())
             .expect("the scan succeeds")
@@ -216,12 +208,9 @@ fn an_announced_member_keeps_its_standalone_identity() {
     let scope = test_run.scope;
     test_run.run("MODULE t = (\n  NEWTYPE Boxed = Number\n  LET n = 1\n)");
     let module = lookup_module(scope, "t", test_run.registries());
-    let announced = module
-        .child_scope()
-        .resolve_type("Boxed")
-        .expect("the announced member binds");
+    let announced = lookup_type(module.child_scope(), "Boxed").expect("the announced member binds");
     test_run.run("NEWTYPE Boxed = Number");
-    assert_eq!(scope.resolve_type("Boxed"), Some(announced));
+    assert_eq!(lookup_type(scope, "Boxed"), Some(announced));
 }
 
 /// A consumer of an announced member is visible body-wide and waits for the seal — before *and*
@@ -241,8 +230,8 @@ fn consumer_in_body_waits_for_seal() {
         let module = lookup_module(scope, "t", test_run.registries());
         let members = module.child_scope();
         assert_eq!(
-            members.resolve_type("Alias"),
-            members.resolve_type("Cell"),
+            lookup_type(members, "Alias"),
+            lookup_type(members, "Cell"),
             "the consumer resolves to the member's sealed identity",
         );
     }
@@ -369,14 +358,14 @@ fn top_level_cycle_requires_a_module_wrapper() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let error = test_run.run_one_err(parse_one(&program, "NEWTYPE Cell = :{tail :Rest}"));
+    let error = test_run.run_one_err(test_run.parse_one("NEWTYPE Cell = :{tail :Rest}"));
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg)
             if msg.contains("unknown type name `Rest`")),
         "a top-level forward type reference is an unknown-name miss, got {error}",
     );
     assert!(
-        scope.resolve_type("Cell").is_none(),
+        lookup_type(scope, "Cell").is_none(),
         "so `Cell` never binds"
     );
 }
@@ -387,10 +376,9 @@ fn duplicate_announced_name_is_a_shape_error() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let error = test_run.run_one_err(parse_one(
-        &program,
-        "MODULE t = (\n  NEWTYPE Aa = Number\n  NEWTYPE Aa = Str\n)",
-    ));
+    let error = test_run.run_one_err(
+        test_run.parse_one("MODULE t = (\n  NEWTYPE Aa = Number\n  NEWTYPE Aa = Str\n)"),
+    );
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg)
             if msg.contains("declares type `Aa` twice")),

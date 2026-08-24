@@ -38,7 +38,8 @@ use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::bindings::{WriteOp, powerset_probes};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::KType;
-use crate::machine::model::{ExpressionPart, KExpression, KeywordToken, TypeIdentifier};
+use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::{ExpressionPart, KExpression, KeywordToken};
 use crate::machine::model::{KKind, SignatureDraft, SignatureElement};
 use crate::machine::model::{OperatorGroup, ReductionMode, binary_key, unary_key};
 use crate::machine::{
@@ -103,9 +104,9 @@ pub(super) fn symbol_from_slot<'a>(
 /// A type slot's state across the (possible) dep-finish boundary: resolved outright, re-resolved
 /// against the wake-side scope, or sub-dispatched as a `:(…)` expression whose result comes back at
 /// dep index `dep_index`.
-enum TypeCapture<'a> {
+enum TypeCapture {
     Done(KType),
-    AtWake(TypeIdentifier<'a>),
+    AtWake(TypeSymbol),
     Sub { dep_index: usize },
 }
 
@@ -116,7 +117,7 @@ fn capture_type_slot<'a>(
     state: ReturnTypeState<'a>,
     deps: &mut Deps<SubDispatch<'a>>,
     brand: RegionBrand<'a>,
-) -> Result<TypeCapture<'a>, KError> {
+) -> Result<TypeCapture, KError> {
     match state {
         ReturnTypeState::Done(kt) => Ok(TypeCapture::Done(kt)),
         ReturnTypeState::Pending { te, producers } => {
@@ -158,7 +159,7 @@ fn checked_value_type(kt: KType, label: &str, registries: &RunRegistries) -> Res
 /// The `Done` arm alone — the synchronous path, taken exactly when no slot parked or
 /// sub-dispatched.
 fn done_type(
-    capture: TypeCapture<'_>,
+    capture: TypeCapture,
     label: &str,
     registries: &RunRegistries,
 ) -> Result<KType, KError> {
@@ -174,16 +175,18 @@ fn done_type(
 /// sub-dispatched expression reads its terminal's type. The type is owned data, cloned out of the
 /// terminal, so it crosses into the declaring scope by value.
 fn resolve_capture<'a>(
-    capture: TypeCapture<'a>,
+    capture: TypeCapture,
     fctx: &FinishCtx<'a, '_>,
     results: &[DepTerminal<'_>],
     label: &str,
 ) -> Result<KType, KError> {
     let kt = match capture {
         TypeCapture::Done(kt) => kt,
-        TypeCapture::AtWake(te) => resolve_at_wake(fctx.scope, label, |s| {
-            s.resolve_type_identifier(&te, None, fctx.registries)
-        })?,
+        TypeCapture::AtWake(te) => {
+            resolve_at_wake(fctx.scope, label, fctx.registries, |s, registries| {
+                s.resolve_type_identifier(te, None, registries)
+            })
+        }?,
         TypeCapture::Sub { dep_index } => {
             expect_type_terminal(results, dep_index, label, fctx.registries)?
         }

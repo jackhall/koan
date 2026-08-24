@@ -5,7 +5,7 @@
 //! bound by `LET` or dropped into a function-typed slot, and called by record
 //! (`f {x = 1}`).
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
@@ -20,7 +20,7 @@ fn anonymous_fn_call_by_record_runs_body() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET f = (FN :{x :Number} -> Number = (x))");
-    let result = test_run.run_one(parse_one(&program, "f {x = 7}"));
+    let result = test_run.run_one(test_run.parse_one("f {x = 7}"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 7.0),
         "f {{x = 7}} should run the body and return 7",
@@ -34,7 +34,7 @@ fn anonymous_fn_binds_a_function_value() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET f = (FN :{x :Number} -> Number = (x))");
-    let result = test_run.run_one(parse_one(&program, "f"));
+    let result = test_run.run_one(test_run.parse_one("f"));
     assert!(
         matches!(result, KObject::KFunction(..)),
         "an anonymous FN binds a callable value",
@@ -94,7 +94,7 @@ fn anonymous_fn_rejects_positional_call() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET f = (FN :{x :Number} -> Number = (x))");
-    let error = test_run.run_one_err(parse_one(&program, "f (1)"));
+    let error = test_run.run_one_err(test_run.parse_one("f (1)"));
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "a positional call on an anonymous FN should fail dispatch, got {error:?}",
@@ -108,7 +108,7 @@ fn anonymous_fn_non_record_signature_is_shape_error() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let error = test_run.run_one_err(parse_one(&program, "FN :Number -> Number = (1)"));
+    let error = test_run.run_one_err(test_run.parse_one("FN :Number -> Number = (1)"));
     assert!(
         matches!(error.kind, KErrorKind::ShapeError(_)),
         "a non-record `:T` signature should be a shape error, got {error:?}",

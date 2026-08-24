@@ -76,12 +76,13 @@ pub(crate) fn type_name(
         .unwrap_or_else(|| panic!("test fixture name `{text}` is not a Type token"))
 }
 
-/// [`type_name`] without the interner: pure classification, for a fixture that holds no
-/// [`RunRegistries`](crate::machine::model::RunRegistries) and asserts on identity rather than on
-/// rendered text.
+/// [`type_name`] without the interner: pure classification through the hidden funnel, for a
+/// fixture that holds no [`RunRegistries`](crate::machine::model::RunRegistries) and asserts on
+/// symbol identity rather than on rendered text. Production has no bare `TypeSymbol` probe — a
+/// Type token is minted at the parse that classifies it.
 #[cfg(test)]
 pub(crate) fn type_token(text: &str) -> crate::machine::model::TypeSymbol {
-    crate::machine::model::TypeSymbol::of(text)
+    crate::machine::model::TypeSymbol::classify(text)
         .unwrap_or_else(|| panic!("test fixture name `{text}` is not a Type token"))
 }
 
@@ -181,6 +182,13 @@ impl<'a> TestRun<'a> {
         RegistryHandle(Rc::clone(&self.run_frame))
     }
 
+    /// [`parse_one`] into this bundle's own program storage and interner — what production does,
+    /// so a Type token this run declares is resolvable by every diagnostic it renders.
+    #[cfg(test)]
+    pub(crate) fn parse_one(&self, src: &str) -> KExpression<'a> {
+        parse_one(self.program, &self.registries().labels, src)
+    }
+
     /// The run's lookup state — the currency for anything that renders a label or builds a record.
     pub fn registries(&self) -> &RunRegistries {
         self.run_frame
@@ -263,14 +271,17 @@ pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<
 
 /// Parse a source string expected to contain exactly one top-level expression into `program`,
 /// which the caller declares ahead of its run storage so the node outlives every reader.
+///
+/// `labels` is the interner the parse declares its Type tokens into. A fixture driving a run
+/// passes that run's own — [`TestRun::parse_one`] does it for you — so a diagnostic naming one
+/// resolves its spelling; a fixture asserting only on shape can pass a throwaway.
 #[cfg(test)]
-pub(crate) fn parse_one<'a>(program: &'a ProgramStorage, src: &str) -> KExpression<'a> {
-    let mut exprs = parse(
-        program.brand(),
-        &crate::machine::model::LabelInterner::new(),
-        src,
-    )
-    .expect("parse should succeed");
+pub(crate) fn parse_one<'a>(
+    program: &'a ProgramStorage,
+    labels: &crate::machine::model::LabelInterner,
+    src: &str,
+) -> KExpression<'a> {
+    let mut exprs = parse(program.brand(), labels, src).expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test helper expects a single expression");
     exprs.remove(0)
 }
@@ -445,7 +456,7 @@ impl<'a> TestRun<'a> {
             ),
             Carried::UnresolvedType(ti) => panic!(
                 "expected a resolved type result, got the unlowered name {}",
-                ti.render()
+                crate::machine::model::render_label(ti.symbol(), self.registries())
             ),
         }
     }
@@ -512,6 +523,16 @@ impl<'a> TestRun<'a> {
 /// retains nothing. `Scope`'s own bare ladder is `#[cfg(test)]`, which the integration tests in
 /// `tests/` cannot see, so they reach the shape through this scaffolding module instead — and
 /// production code, which never constructs a [`TestRun`], cannot reach it at all.
+/// The type `name` resolves to in `scope`'s type channel, looked up from surface text.
+///
+/// Production reaches [`Scope::resolve_type`] with a token the parser already classified and
+/// interned; a test states its name as source text, so the classification happens here. A
+/// non-Type-token spelling names nothing on this channel and answers `None`, which is the
+/// disposition the `types` table would have given it anyway.
+pub fn lookup_type(scope: &Scope<'_>, name: &str) -> Option<crate::machine::model::KType> {
+    scope.resolve_type(crate::machine::model::TypeSymbol::classify(name)?)
+}
+
 pub fn lookup_binding<'a>(scope: &Scope<'a>, name: &str) -> Option<&'a KObject<'a>> {
     scope
         .resolve_value_delivered(name, None)

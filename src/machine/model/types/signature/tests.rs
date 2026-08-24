@@ -1,5 +1,6 @@
 use super::*;
 use crate::builtins::test_support::kw_part;
+use crate::builtins::test_support::{type_name, type_token};
 use crate::machine::core::{RegionBrand, program_storage};
 use crate::machine::model::RunRegistries;
 use crate::source::Spanned;
@@ -71,7 +72,7 @@ fn return_type_clone_round_trips_all_arms() {
     let registries = RunRegistries::new();
     let r = ReturnType::Resolved(KType::NUMBER);
     assert_eq!(r.name(&registries), r.clone().name(&registries));
-    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
+    let d = ReturnType::Deferred(DeferredReturn::Type(type_token("Er")));
     assert_eq!(d.name(&registries), d.clone().name(&registries));
     let program = program_storage();
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword(
@@ -83,9 +84,9 @@ fn return_type_clone_round_trips_all_arms() {
 
 #[test]
 fn type_name_eq_compares_leaf_names() {
-    let leaf_a = TypeIdentifier::leaf("A");
-    let leaf_a2 = TypeIdentifier::leaf("A");
-    let leaf_b = TypeIdentifier::leaf("B");
+    let leaf_a = type_token("Aa");
+    let leaf_a2 = type_token("Aa");
+    let leaf_b = type_token("Bb");
     assert_eq!(leaf_a, leaf_a2);
     assert_ne!(leaf_a, leaf_b);
 }
@@ -123,13 +124,13 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
 fn return_type_debug_renders_both_arms() {
     let r = ReturnType::Resolved(KType::NUMBER);
     assert!(format!("{:?}", r).contains("Resolved"));
-    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
+    let d = ReturnType::Deferred(DeferredReturn::Type(type_token("Er")));
     assert!(format!("{:?}", d).contains("Deferred"));
 }
 
 #[test]
 fn deferred_return_debug_renders_both_arms() {
-    let t = DeferredReturn::Type(TypeIdentifier::leaf("er"));
+    let t = DeferredReturn::Type(type_token("Er"));
     assert!(format!("{:?}", t).contains("Type"));
     let program = program_storage();
     let e = DeferredReturn::Expression(expr_with_keyword(program.brand().region(), "FOO"));
@@ -141,8 +142,8 @@ fn return_type_name_covers_all_arms() {
     let registries = RunRegistries::new();
     let r = ReturnType::Resolved(KType::NUMBER);
     assert_eq!(r.name(&registries), KType::NUMBER.name(&registries));
-    let t = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
-    assert_eq!(t.name(&registries), "er");
+    let t = ReturnType::Deferred(DeferredReturn::Type(type_name("Er", &registries)));
+    assert_eq!(t.name(&registries), "Er");
     let program = program_storage();
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword(
         program.brand().region(),
@@ -178,12 +179,12 @@ fn indistinguishable_ignores_return_type() {
     let brand = program.brand().region();
     let er = sig_with(
         brand,
-        ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er"))),
+        ReturnType::Deferred(DeferredReturn::Type(type_token("Er"))),
         KType::NUMBER,
     );
     let ar = sig_with(
         brand,
-        ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Ar"))),
+        ReturnType::Deferred(DeferredReturn::Type(type_token("Ar"))),
         KType::NUMBER,
     );
     assert!(er.indistinguishable_from(&ar));
@@ -231,7 +232,7 @@ fn return_type_matches_value_deferred_always_true_resolved_delegates() {
     use crate::machine::model::values::KObject;
     let obj = KObject::Number(42.0);
     // Deferred always matches — per-call check runs elsewhere.
-    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er")));
+    let d = ReturnType::Deferred(DeferredReturn::Type(type_token("Er")));
     assert!(d.matches_value(&obj, &registries));
     assert!(!d.is_resolved());
     let r_num = ReturnType::Resolved(KType::NUMBER);

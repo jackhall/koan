@@ -10,14 +10,19 @@ use crate::source::Spanned;
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface
 /// `Unbound` against a parameter name.
-pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) -> Vec<String> {
+pub(crate) fn collect_param_names_from_signature(
+    signature: &KExpression<'_>,
+    registries: &RunRegistries,
+) -> Vec<String> {
     let parts = &signature.parts;
     let mut names: Vec<String> = Vec::new();
     let mut i = 0;
     while i < parts.len() {
         let param_name: Option<String> = match parts[i].value {
             ExpressionPart::Identifier(name) => Some(name.to_string()),
-            ExpressionPart::Type(t) => Some(t.render()),
+            ExpressionPart::Type(t) => {
+                Some(crate::machine::model::render_label(t.symbol(), registries))
+            }
             _ => None,
         };
         if let Some(name) = param_name {
@@ -95,12 +100,10 @@ pub(crate) fn parse_fn_param_list<'a>(
                 BinderSymbol::declared(name, &registries.labels)
                     .expect("an Identifier part is lexed as a value token"),
             )),
-            ExpressionPart::Type(t) => {
-                let rendered = t.render();
-                let symbol = BinderSymbol::declared(&rendered, &registries.labels)
-                    .expect("a Type part is lexed as a Type token");
-                Some((rendered, symbol))
-            }
+            ExpressionPart::Type(t) => Some((
+                crate::machine::model::render_label(t.symbol(), registries),
+                BinderSymbol::Type(t),
+            )),
             _ => None,
         };
         match (param_name, parts[i].value) {
@@ -117,7 +120,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                 });
                 match (ty, feed) {
                     (Some(ExpressionPart::Type(t)), _) => {
-                        match elaborate_type_identifier(elaborator, &t, registries) {
+                        match elaborate_type_identifier(elaborator, t, registries) {
                             TypeResolution::Done(kt) => {
                                 elements.push(SignatureElement::Argument(Argument {
                                     name: symbol,
@@ -189,7 +192,7 @@ pub(crate) fn parse_fn_param_list<'a>(
             (None, ExpressionPart::Type(t)) => {
                 return ParamListOutcome::Err(format!(
                     "FN signature has a stray type `{}` outside a `<name> :<Type>` pair",
-                    t.render(),
+                    crate::machine::model::render_label(t.symbol(), registries),
                 ));
             }
             (None, other) => {

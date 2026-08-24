@@ -22,6 +22,7 @@ use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::KType;
 use crate::machine::model::TypeNode;
+use crate::machine::model::TypeSymbol;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -72,12 +73,6 @@ pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machin
         Ok(name) => name,
         Err(e) => return Action::done(Err(e)),
     };
-    // The member name enters both the node and the scope's type table, so it classifies once
-    // here and travels as a symbol from there.
-    let name = match crate::machine::model::type_binder(&name, ctx.registries) {
-        Ok(name) => name,
-        Err(e) => return Action::done(Err(e)),
-    };
     let kt = ctx.types().intern(TypeNode::AbstractType {
         source: ctx.scope.id,
         name,
@@ -100,22 +95,10 @@ pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine:
         Ok(decl) => decl,
         Err(e) => return Action::done(Err(e)),
     };
-    let (param_names, member_name) = match parse_hk_decl(&decl) {
+    // Every name in the declaration is a `Type` token, classified and interned by the parser, so
+    // the parse hands back the currency the node and the scope's type table both key by.
+    let (param_names, member_name) = match parse_hk_decl(&decl, ctx.registries) {
         Ok(pair) => pair,
-        Err(e) => return Action::done(Err(e)),
-    };
-    // `parse_hk_decl` is a pure parse over source text; the declaration seam is here, where the
-    // interner is in reach. Parameter names intern too — diagnostics name them.
-    let param_names = match param_names
-        .iter()
-        .map(|p| crate::machine::model::type_binder(p, ctx.registries))
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(names) => names,
-        Err(e) => return Action::done(Err(e)),
-    };
-    let member_name = match crate::machine::model::type_binder(&member_name, ctx.registries) {
-        Ok(name) => name,
         Err(e) => return Action::done(Err(e)),
     };
     let kt = ctx.types().intern(TypeNode::AbstractType {
@@ -131,7 +114,10 @@ pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine:
 /// identifiers. One or more parameters declare; a repeated parameter name is a shape error, since
 /// the names key the application record. Any other shape is a form error naming the expected
 /// surface.
-pub(crate) fn parse_hk_decl(decl: &KExpression<'_>) -> Result<(Vec<String>, String), KError> {
+pub(crate) fn parse_hk_decl(
+    decl: &KExpression<'_>,
+    registries: &RunRegistries,
+) -> Result<(Vec<TypeSymbol>, TypeSymbol), KError> {
     let shape_error = || {
         KError::new(KErrorKind::ShapeError(
             "TYPE constructor declaration must read `TYPE (<Param>... AS <Name>)`".to_string(),
@@ -148,15 +134,16 @@ pub(crate) fn parse_hk_decl(decl: &KExpression<'_>) -> Result<(Vec<String>, Stri
         return Err(shape_error());
     }
     let bare_type = |part: &ExpressionPart<'_>| match part {
-        ExpressionPart::Type(t) => Some(t.render()),
+        ExpressionPart::Type(t) => Some(*t),
         _ => None,
     };
-    let mut param_names: Vec<String> = Vec::with_capacity(param_parts.len());
+    let mut param_names: Vec<TypeSymbol> = Vec::with_capacity(param_parts.len());
     for part in param_parts {
         let name = bare_type(&part.value).ok_or_else(shape_error)?;
         if param_names.contains(&name) {
             return Err(KError::new(KErrorKind::ShapeError(format!(
-                "duplicate parameter name `{name}`"
+                "duplicate parameter name `{}`",
+                crate::machine::model::render_label(name.symbol(), registries),
             ))));
         }
         param_names.push(name);

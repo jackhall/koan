@@ -170,7 +170,7 @@ impl<'a> Scope<'a> {
     /// [`Self::resolve_type_with_chain`]: an in-flight [`NameLookup::Parked`]
     /// collapses to `None` here, so callers that must park on the producer use
     /// `resolve_type_with_chain` and match its `Parked` arm.
-    pub fn resolve_type(&self, name: &str) -> Option<crate::machine::model::KType> {
+    pub fn resolve_type(&self, name: TypeSymbol) -> Option<crate::machine::model::KType> {
         self.resolve_type_with_chain(name, None)
             .and_then(NameLookup::bound)
     }
@@ -183,12 +183,9 @@ impl<'a> Scope<'a> {
     /// so a type consumer parks on it (rather than bootstrapping off the value-side lookup).
     pub fn resolve_type_with_chain(
         &self,
-        name: &str,
+        name: TypeSymbol,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<KType>> {
-        // Classify once at the seam, as [`Self::resolve_value_delivered`] does; a non-Type token
-        // misses, which is the disposition the `types` map would have given it anyway.
-        let name = TypeSymbol::of(name)?;
         // Builtin-first: a builtin type is unshadowable and authoritative, so the immutable
         // run-global root answers in one hop; a non-builtin name finds nothing there and falls
         // through to the innermost-wins walk. The gate is the `idx == 0`

@@ -10,7 +10,7 @@
 //! registry and reads the [`TypeNode`].
 //!
 //! Container types are always parameterized: bare `List` / `Dict` lower to `List<Any>` /
-//! `Dict<Any, Any>` at `from_name` time. There's no bare `KFunction` — "any function" with no
+//! `Dict<Any, Any>` at `from_symbol` time. There's no bare `KFunction` — "any function" with no
 //! signature has nothing to dispatch on, so users write `Function<(args) -> R>` or `Any`.
 //!
 //! Predicates live in `ktype_predicates.rs`; elaboration lives in `ktype_resolution.rs`.
@@ -124,7 +124,7 @@ impl KType {
                 render_param_record(&params, registries),
                 ret.name(registries)
             ),
-            TypeNode::DeferredReturn(surface) => surface.render(),
+            TypeNode::DeferredReturn(surface) => surface.render(registries),
             // `:(A | B)` — members joined by ` | ` and wrapped in the type sigil. A compound
             // member already opens its own sigil (`:(LIST OF Number)`), which nests fine.
             TypeNode::Union { members } => {

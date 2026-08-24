@@ -187,7 +187,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                 None => Ok(kt),
             };
             match part.field_slot() {
-                FieldSlot::Type(t) => match elaborate_type_identifier(elaborator, &t, registries) {
+                FieldSlot::Type(t) => match elaborate_type_identifier(elaborator, t, registries) {
                     TypeResolution::Done(kt) => checked(kt),
                     TypeResolution::Park(producers) => {
                         awaited.extend(producers);
@@ -273,18 +273,15 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     if let [first, second] = boxed.parts
                         && let (ExpressionPart::Type(head), ExpressionPart::Type(tag)) =
                             (&first.value, &second.value)
-                        && let Some(binder) = TypeSymbol::of(head.as_str())
-                        && let Some(view) = elaborator.window().filter(|v| v.binds(binder))
+                        && let Some(view) = elaborator.window().filter(|v| v.binds(*head))
                     {
-                        let rendered_tag = tag.render();
-                        let index = view
-                            .variant_index(binder, Symbol::of(&rendered_tag))
-                            .ok_or_else(|| {
-                                format!(
-                                    "{context_list}: `{rendered_tag}` is not a variant of `{}`",
-                                    head.as_str(),
-                                )
-                            })?;
+                        let index = view.variant_index(*head, tag.symbol()).ok_or_else(|| {
+                            format!(
+                                "{context_list}: `{}` is not a variant of `{}`",
+                                registries.labels.render(tag.symbol()),
+                                registries.labels.render(head.symbol()),
+                            )
+                        })?;
                         return Ok(match view.sealed_member(index) {
                             Some(kt) => kt,
                             None => types.intern(super::node::TypeNode::Sibling(index)),
@@ -379,9 +376,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
 /// copy that keeps its cached shape.
 fn names_threaded_self_ref(inner: &KExpression<'_>, threaded: &HashSet<TypeSymbol>) -> bool {
     inner.parts.iter().any(|part| match &part.value {
-        ExpressionPart::Type(t) => {
-            TypeSymbol::of(t.as_str()).is_some_and(|name| threaded.contains(&name))
-        }
+        ExpressionPart::Type(t) => threaded.contains(t),
         ExpressionPart::Expression(body)
         | ExpressionPart::SigiledTypeExpr(body)
         | ExpressionPart::RecordType(body)
@@ -415,17 +410,12 @@ fn rewrite_threaded_self_refs<'a>(
         inner.parts.iter().map(|p| {
             let value =
                 match &p.value {
-                    ExpressionPart::Type(t)
-                        if TypeSymbol::of(t.as_str())
-                            .is_some_and(|name| threaded.contains(&name)) =>
-                    {
+                    ExpressionPart::Type(t) if threaded.contains(t) => {
                         // The member's handle is minted against the window here, where the window is in
                         // hand — the sub-dispatch it crosses into cannot reach one. The cell is a
                         // resident seal in this scope's own region: a type carrier reaching nothing
                         // foreign, so it rests with no coverage to lodge anywhere.
-                        match TypeSymbol::of(t.as_str())
-                            .and_then(|name| resolve_threaded(window, name, types))
-                        {
+                        match resolve_threaded(window, *t, types) {
                             Some(handle) => WorkingPart::Spliced {
                                 cell: scope.seal_resident::<crate::machine::model::CarriedFamily>(
                                     Carried::Type(handle),

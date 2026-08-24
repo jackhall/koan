@@ -3,6 +3,7 @@
 //! SIG declarations, pinned via [`SigSchema::fold_pins`].
 
 use super::*;
+use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{type_name, value_name};
 use crate::machine::core::ScopeId;
 use crate::machine::model::types::{Record, RecursiveGroupWindow, RelativeSchema};
@@ -518,7 +519,7 @@ fn pin_converts_abstract_to_manifest_via_parsed_sig() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run("SIG Pinnable = ((TYPE Elt) (VAL v :Number))");
-    let sig_schema = match scope.resolve_type("Pinnable") {
+    let sig_schema = match lookup_type(scope, "Pinnable") {
         Some(kt) => match test_run.types().node(kt) {
             TypeNode::Signature { schema, .. } => schema,
             _ => panic!("Pinnable should resolve to a signature"),
@@ -565,14 +566,14 @@ fn sig_to_sig_entailment_over_shared_abstract() {
         "SIG Alpha = ((TYPE Elem) (VAL compare :(FN (x :Elem) -> Number)))\n\
          SIG Beta = ((TYPE Elem) (VAL compare :(FN (x :Elem) -> Number)))",
     );
-    let a = match scope.resolve_type("Alpha") {
+    let a = match lookup_type(scope, "Alpha") {
         Some(kt) => match test_run.types().node(kt) {
             TypeNode::Signature { schema, .. } => schema,
             _ => panic!("Alpha should resolve to a signature"),
         },
         _ => panic!("Alpha should resolve to a signature"),
     };
-    let b = match scope.resolve_type("Beta") {
+    let b = match lookup_type(scope, "Beta") {
         Some(kt) => match test_run.types().node(kt) {
             TypeNode::Signature { schema, .. } => schema,
             _ => panic!("Beta should resolve to a signature"),

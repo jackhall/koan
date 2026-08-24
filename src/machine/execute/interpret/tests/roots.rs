@@ -38,12 +38,8 @@ fn run_program_in<'run>(
 ) -> (TestRun<'run>, Result<(), crate::machine::KError>) {
     let mut test_run = TestRun::silent(program, region);
     let root = test_run.scope;
-    let exprs = parse(
-        program.brand(),
-        &crate::machine::model::LabelInterner::new(),
-        source,
-    )
-    .expect("parse should succeed");
+    let exprs = parse(program.brand(), &test_run.registries().labels, source)
+        .expect("parse should succeed");
     let outcome = test_run.runtime.run_program(root, exprs);
     (test_run, outcome)
 }

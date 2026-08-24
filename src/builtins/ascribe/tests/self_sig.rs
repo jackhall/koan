@@ -3,9 +3,7 @@
 //! view records per-call abstract identities and re-expresses SIG-declared value slots against
 //! them; a transparent view records the source's concrete types.
 
-use crate::builtins::test_support::{
-    TestRun, binds_module, lookup_module, parse_one, type_name, value_name,
-};
+use crate::builtins::test_support::{TestRun, binds_module, lookup_module, type_name, value_name};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Module;
@@ -180,7 +178,7 @@ fn value_slot_type_mismatch_is_rejected() {
         "SIG Numeric = ((VAL v :Number))\n\
          MODULE str_mod = ((LET v = (\"hi\")))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "str_mod :| Numeric"));
+    let err = test_run.run_one_err(test_run.parse_one("str_mod :| Numeric"));
     // Ruling 12: the signature renders structurally (`SIG (v: Number)`), not as "Numeric".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
@@ -199,7 +197,7 @@ fn higher_kinded_slot_rejects_proper_type_with_kind_message() {
         "SIG Monad = ((TYPE (Type AS Wrap)))\n\
          MODULE int_list = ((LET Wrap = Number))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "int_list :| Monad"));
+    let err = test_run.run_one_err(test_run.parse_one("int_list :| Monad"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("`Wrap`") && msg.contains("type constructor") && msg.contains("parameters {Type}")),
@@ -253,7 +251,7 @@ fn manifest_member_mismatch_names_the_member() {
         "SIG Tagged = ((LET Tag = Number) (VAL item :Number))\n\
          MODULE bad = ((LET Tag = Str) (LET item = 5))",
     );
-    let err = test_run.run_one_err(parse_one(&program, "bad :| Tagged"));
+    let err = test_run.run_one_err(test_run.parse_one("bad :| Tagged"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("`Tag`") && msg.contains("fixes it to")),

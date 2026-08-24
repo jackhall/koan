@@ -23,7 +23,7 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         Some(Held::UnresolvedType(ti)) => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`TYPE OF` takes a value; `{}` is already a type",
-                ti.render(),
+                crate::machine::model::render_label(ti.symbol(), ctx.registries),
             )))));
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("value".into())))),

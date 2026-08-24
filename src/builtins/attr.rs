@@ -85,10 +85,9 @@ fn read_field_name<'a>(
         };
     }
     if let Some(te) = args.unresolved_type(&SLOTS.field) {
-        let text = te.as_str();
         return Ok(FieldName {
-            class: TypeSymbol::of(text).map(BinderSymbol::Type),
-            text: Cow::Borrowed(text),
+            class: Some(BinderSymbol::Type(te)),
+            text: Cow::Owned(crate::machine::model::render_label(te.symbol(), registries)),
         });
     }
     if let Some(kt) = args.ktype(&SLOTS.field) {
@@ -132,7 +131,11 @@ pub fn body_identifier<'a>(
     if let Some(lhs) = ctx.scope.lookup_value_delivered(s_name) {
         return route(access_field(&ctx.ctx, &field_name, &lhs, ctx.registries));
     }
-    if let Some(kt) = ctx.scope.resolve_type(s_name)
+    // An abstract type's name reaches this overload as a `KString` — the bind seam lowers a
+    // `Type` token in an `:Identifier` slot to its rendering — so the type channel is consulted
+    // under the name's own class; an identifier-class spelling classifies to `None` and misses.
+    if let Some(name) = TypeSymbol::declared(s_name, &ctx.registries.labels)
+        && let Some(kt) = ctx.scope.resolve_type(name)
         && let TypeNode::AbstractType { name, .. } = ctx.types().node(kt)
     {
         return Action::done(Err(abstract_type_has_no_members(
@@ -169,7 +172,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
                     "ATTR lhs type `{}` resolved to a still-finalizing type \
                      (parked on {} producer(s)); the type argument should already be sealed \
                      at body entry",
-                    te.render(),
+                    crate::machine::model::render_label(te.symbol(), ctx.registries),
                     producers.len(),
                 )))))
             }
@@ -620,7 +623,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{TestRun, parse_one};
+    use crate::builtins::test_support::TestRun;
     use crate::machine::KErrorKind;
     use crate::machine::model::KObject;
     use crate::machine::model::KType;
@@ -636,7 +639,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
-        let err = test_run.run_one_err(parse_one(&program, "Ordered.Str"));
+        let err = test_run.run_one_err(test_run.parse_one("Ordered.Str"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(m)
                 if m.contains("has no member `Str`")),
@@ -650,7 +653,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})");
-        let result = test_run.run_one(parse_one(&program, "p.x"));
+        let result = test_run.run_one(test_run.parse_one("p.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 3.0));
     }
 
@@ -661,10 +664,10 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})");
         assert!(
-            matches!(test_run.run_one(parse_one(&program, "p.x")), KObject::Number(n) if *n == 3.0)
+            matches!(test_run.run_one(test_run.parse_one( "p.x")), KObject::Number(n) if *n == 3.0)
         );
         assert!(
-            matches!(test_run.run_one(parse_one(&program, "p.y")), KObject::Number(n) if *n == 4.0)
+            matches!(test_run.run_one(test_run.parse_one( "p.y")), KObject::Number(n) if *n == 4.0)
         );
     }
 
@@ -680,7 +683,7 @@ mod tests {
              LET tip = (Point {x = 3, y = 4})\n\
              LET seg = (Line {start = origin, finish = tip})",
         );
-        let result = test_run.run_one(parse_one(&program, "seg.finish.x"));
+        let result = test_run.run_one(test_run.parse_one("seg.finish.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 3.0));
     }
 
@@ -689,7 +692,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let err = test_run.run_one_err(parse_one(&program, "ghost.x"));
+        let err = test_run.run_one_err(test_run.parse_one("ghost.x"));
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(name) if name == "ghost"),
             "expected UnboundName(\"ghost\"), got {err}",
@@ -702,7 +705,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("LET n = 5");
-        let err = test_run.run_one_err(parse_one(&program, "n.x"));
+        let err = test_run.run_one_err(test_run.parse_one("n.x"));
         match &err.kind {
             KErrorKind::TypeMismatch { arg, expected, got } => {
                 assert_eq!(arg, "s");
@@ -719,7 +722,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})");
-        let err = test_run.run_one_err(parse_one(&program, "p.z"));
+        let err = test_run.run_one_err(test_run.parse_one("p.z"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("Point") && msg.contains("`z`")),
@@ -739,7 +742,7 @@ mod tests {
              LET tip = (Point {x = 3, y = 4})\n\
              LET seg = (Line {start = origin, finish = tip})",
         );
-        let err = test_run.run_one_err(parse_one(&program, "seg.start.bogus"));
+        let err = test_run.run_one_err(test_run.parse_one("seg.start.bogus"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("Point") && msg.contains("`bogus`")),
@@ -760,10 +763,10 @@ mod tests {
              LET b = (Boxed (p))",
         );
         assert!(
-            matches!(test_run.run_one(parse_one(&program, "b.x")), KObject::Number(n) if *n == 1.0)
+            matches!(test_run.run_one(test_run.parse_one( "b.x")), KObject::Number(n) if *n == 1.0)
         );
         assert!(
-            matches!(test_run.run_one(parse_one(&program, "b.y")), KObject::Number(n) if *n == 2.0)
+            matches!(test_run.run_one(test_run.parse_one( "b.y")), KObject::Number(n) if *n == 2.0)
         );
     }
 
@@ -777,7 +780,7 @@ mod tests {
             "NEWTYPE Distance = Number\n\
              LET d = (Distance (3.0))",
         );
-        let err = test_run.run_one_err(parse_one(&program, "d.x"));
+        let err = test_run.run_one_err(test_run.parse_one("d.x"));
         match &err.kind {
             KErrorKind::TypeMismatch { arg, expected, got } => {
                 assert_eq!(arg, "s");
@@ -802,7 +805,7 @@ mod tests {
              LET int_ord_view = (int_ord :| WithZero)",
         );
         let types = test_run.registry_handle();
-        let result = test_run.run_one(parse_one(&program, "int_ord_view.zero"));
+        let result = test_run.run_one(test_run.parse_one("int_ord_view.zero"));
         assert_eq!(
             result.ktype().name(types.registries()),
             "Carrier",
@@ -823,7 +826,7 @@ mod tests {
              MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
              LET int_ord_view = (int_ord :! WithZero)",
         );
-        let result = test_run.run_one(parse_one(&program, "int_ord_view.zero"));
+        let result = test_run.run_one(test_run.parse_one("int_ord_view.zero"));
         assert!(
             matches!(result, KObject::Number(n) if *n == 0.0),
             "transparent-view slot read must stay the underlying Number, got {:?}",
@@ -841,7 +844,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("SIG Ordered = (VAL compare :Number)");
-        let kt = test_run.run_one_type(parse_one(&program, "Ordered.compare"));
+        let kt = test_run.run_one_type(test_run.parse_one("Ordered.compare"));
         assert_eq!(kt, KType::NUMBER);
     }
 
@@ -859,7 +862,7 @@ mod tests {
              LET p = (Point {x = 1, y = 2})\n\
              LET b = (Boxed (p))",
         );
-        let err = test_run.run_one_err(parse_one(&program, "b.z"));
+        let err = test_run.run_one_err(test_run.parse_one("b.z"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("Boxed") && msg.contains("`z`")),

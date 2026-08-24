@@ -156,8 +156,8 @@ pub fn is_type_name(tok: &str) -> bool {
 }
 
 /// Every classified label newtype below wraps exactly one [`Symbol`] behind a private field and is
-/// minted only through [`of`](ValueSymbol::of) / [`declared`](ValueSymbol::declared), which run the
-/// class predicate on the text. There is no raw-`Symbol` constructor: a `Symbol` alone carries no
+/// minted only through the hidden `classify` funnel or [`declared`](ValueSymbol::declared), which
+/// run the class predicate on the text. There is no raw-`Symbol` constructor: a `Symbol` alone carries no
 /// evidence of what its text looked like, so admitting one would let a caller assert a class the
 /// digest cannot witness. A seam holding a bare `Symbol` that needs a class classifies where the
 /// text still existed, resolves the text through the run's [`LabelInterner`] and classifies that,
@@ -183,10 +183,11 @@ macro_rules! classified_symbol {
         impl $name {
             #[doc = concat!("The symbol for `text` if it classifies as ", $class, ", else `None`.")]
             ///
-            /// Pure classification — no interning. This is the **probe** constructor: a lookup that
-            /// arrives as source text converts once here and compares symbol bits below, and a
-            /// wrong-class name misses the table by returning `None` at the seam.
-            pub fn of(text: &str) -> Option<Self> {
+            /// Pure classification — no interning. The hidden funnel
+            /// [`declared`](Self::declared) and [`static_name!`](crate::static_name) share; a class
+            /// whose surface still admits a bare probe re-exports it under its own `of`.
+            #[doc(hidden)]
+            pub fn classify(text: &str) -> Option<Self> {
                 let classifies: fn(&str) -> bool = $classifies;
                 classifies(text).then(|| $name(Symbol::of(text)))
             }
@@ -196,7 +197,7 @@ macro_rules! classified_symbol {
             /// The **declaration** constructor: a name that enters a binding table is interned so a
             /// later diagnostic naming it can resolve the text back.
             pub fn declared(text: &str, labels: &LabelInterner) -> Option<Self> {
-                let classified = $name::of(text)?;
+                let classified = $name::classify(text)?;
                 labels.intern(text);
                 Some(classified)
             }
@@ -245,7 +246,23 @@ classified_symbol!(
     "a keyword-class token"
 );
 
+impl ValueSymbol {
+    /// The probe constructor: classify `text` without interning it. A value name is still born from
+    /// source text at the install seam, so the value side admits a bare probe. `TypeSymbol` has no
+    /// peer — a Type token is minted at the parse that classifies it, and every later reader
+    /// carries that symbol.
+    pub fn of(text: &str) -> Option<Self> {
+        ValueSymbol::classify(text)
+    }
+}
+
 impl KeywordSymbol {
+    /// The probe constructor: classify `text` without interning it. The operator and dispatch
+    /// tables key by fixed tokens read back out of source, so the keyword side admits a bare probe.
+    pub fn of(text: &str) -> Option<Self> {
+        KeywordSymbol::classify(text)
+    }
+
     /// The probe key `fragments` joined by single spaces stands for, minted without building the
     /// join — how an operator chain reaches its group registration, whose powerset keys are minted
     /// from the joined spelling (`crate::machine::core::bindings::ops::powerset_probes`).
@@ -297,7 +314,7 @@ pub enum BinderSymbol {
 impl BinderSymbol {
     /// The bindable symbol for `text`, or `None` if it is keyword-class. Pure — no interning.
     pub fn of(text: &str) -> Option<Self> {
-        if let Some(name) = TypeSymbol::of(text) {
+        if let Some(name) = TypeSymbol::classify(text) {
             return Some(BinderSymbol::Type(name));
         }
         ValueSymbol::of(text).map(BinderSymbol::Value)
@@ -420,7 +437,7 @@ impl<S: Copy> StaticName<S> {
 macro_rules! static_name {
     ($class:ty, $text:literal) => {
         $crate::machine::model::StaticName::<$class>::new($text, || {
-            <$class>::of($text).expect(concat!(
+            <$class>::classify($text).expect(concat!(
                 "`",
                 $text,
                 "` classifies as a ",

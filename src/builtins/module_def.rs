@@ -71,12 +71,13 @@ pub(super) fn announce_type_members(
         let Some(name) = statement.binder_name_from_type_part() else {
             continue;
         };
-        // The announcement is a declaration seam: each name classifies and interns here, so the
-        // window, the members it seals and every diagnostic naming one share one currency.
-        let binder = type_binder(name, registries)?;
+        // The parser classified and interned the binder token, so the window, the members it
+        // seals and every diagnostic naming one already share one currency.
+        let binder = name;
         if announced.declares(binder) || announced.binds(binder) {
             return Err(KError::new(KErrorKind::ShapeError(format!(
-                "module `{module}` declares type `{name}` twice",
+                "module `{module}` declares type `{}` twice",
+                crate::machine::model::render_label(binder.symbol(), registries),
             ))));
         }
         match surface {
@@ -234,6 +235,7 @@ pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         "MODULE",
         ctx.registries
     ));
+    let name = crate::machine::model::render_label(name.symbol(), ctx.registries);
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "module `{name}` is named with a Type token, but a module is a value — the Type-token \
          namespace names what can type a field. Name it snake_case, e.g. `{suggestion}`",

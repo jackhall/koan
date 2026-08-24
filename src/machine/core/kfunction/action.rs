@@ -24,7 +24,8 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::Symbol;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::WorkingExpression;
-use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, TypeNode};
 use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{
@@ -134,12 +135,9 @@ impl<'a, 'c> BoundArgs<'a, 'c> {
     /// The argument's unlowered type name. The bind seam parks a bare user type name here rather
     /// than lowering it to a handle, so a type-slot consumer probes this before [`Self::ktype`] and
     /// resolves the name against its own scope chain.
-    pub fn unresolved_type(
-        &self,
-        name: &StaticName<ValueSymbol>,
-    ) -> Option<&'c TypeIdentifier<'a>> {
+    pub fn unresolved_type(&self, name: &StaticName<ValueSymbol>) -> Option<TypeSymbol> {
         match self.held(name) {
-            Some(Held::UnresolvedType(ti)) => Some(ti),
+            Some(Held::UnresolvedType(ti)) => Some(*ti),
             _ => None,
         }
     }
@@ -186,7 +184,7 @@ pub fn require_ktype<'a>(
         Some(Held::UnresolvedType(ti)) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.text().to_string(),
             expected: "ProperType".to_string(),
-            got: ti.render(),
+            got: crate::machine::model::types::render_label(ti.symbol(), registries),
         })),
         None => Err(KError::new(KErrorKind::MissingArg(name.text().to_string()))),
     }
@@ -224,12 +222,21 @@ pub fn require_bare_type_name<'a>(
     slot: &StaticName<ValueSymbol>,
     surface: &str,
     registries: &RunRegistries,
-) -> Result<String, KError> {
+) -> Result<TypeSymbol, KError> {
     match args.held(slot) {
         // A binder name is exactly the shape the bind seam leaves unlowered: a bare user type
-        // name with nothing bound to it yet.
-        Some(Held::UnresolvedType(ti)) => Ok(ti.render()),
-        Some(Held::Type(t)) => bare_type_name(*t, slot.text(), surface, registries),
+        // name with nothing bound to it yet, already classified and interned by the parser.
+        Some(Held::UnresolvedType(ti)) => Ok(*ti),
+        // A resolved leaf handle reaches its name only as rendered text, so this arm re-declares
+        // it — the one seam where a builtin's name is minted from a string rather than a token.
+        Some(Held::Type(t)) => {
+            let name = bare_type_name(*t, slot.text(), surface, registries)?;
+            TypeSymbol::declared(&name, &registries.labels).ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{surface} name must be a bare type name, got `{name}`",
+                )))
+            })
+        }
         Some(Held::Object(_)) | None => {
             Err(KError::new(KErrorKind::MissingArg(slot.text().to_string())))
         }

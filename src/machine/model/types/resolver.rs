@@ -1,5 +1,5 @@
-//! Scheduler-aware type-name elaboration. Walks a [`TypeIdentifier`] against a [`Scope`], gating
-//! each bare leaf against a [`LexicalFrame`] so a type declared lexically later is invisible
+//! Scheduler-aware type-name elaboration. Walks a type token's [`TypeSymbol`] against a [`Scope`],
+//! gating each bare leaf against a [`LexicalFrame`] so a type declared lexically later is invisible
 //! — a forward type reference is a position error, not a silent success.
 //!
 //! A name the ambient declaration window announces is the one exception, and what it resolves to
@@ -12,7 +12,7 @@
 //! [`TypeResolution::Park`] so the caller re-runs the elaboration on wake.
 //!
 //! Type-name bindings live in [`Scope::bindings`]'s `types` map; consumers go through
-//! [`elaborate_type_identifier`] when scope-aware lookup is needed or [`KType::from_name`]
+//! [`elaborate_type_identifier`] when scope-aware lookup is needed or [`KType::from_symbol`]
 //! when only the builtin table matters.
 
 use std::collections::HashSet;
@@ -22,7 +22,6 @@ use crate::machine::ProducerId;
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::core::{DeclarationSite, LexicalFrame, NameLookup, Scope};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::labels::TypeSymbol;
 
 use super::declaration_window::{DeclWindow, WindowView};
@@ -34,7 +33,7 @@ use super::recursive_group_window::RecursiveGroupWindow;
 #[cfg(test)]
 mod tests;
 
-/// Outcome of resolving a `TypeIdentifier` to a `T`, shared across layers: both model and execute
+/// Outcome of resolving a type name to a `T`, shared across layers: both model and execute
 /// use `TypeResolution<KType>` now that `KType` is a `Copy` handle. `Park` carries the binder
 /// [`ProducerId`]s a still-finalizing referent waits on; `Unbound` the miss diagnostic. The
 /// payload-free
@@ -179,10 +178,10 @@ fn park_until_seal(
     TypeResolution::Park(producers)
 }
 
-/// Walk a `TypeIdentifier` against the elaborator's scope. Bare leaves route through the ambient
+/// Walk a type name against the elaborator's scope. Bare leaves route through the ambient
 /// declaration window first (the co-declared back-edge), then `resolve_type_with_chain` for bound
 /// names and the placeholder path, and finally the builtin-table fallback via
-/// [`KType::from_name`] so fixture scopes that skip builtin registration still
+/// [`KType::from_symbol`] so fixture scopes that skip builtin registration still
 /// resolve builtin names. Parameterized shapes sub-Dispatch through the standalone dispatcher,
 /// not this walk.
 ///
@@ -193,14 +192,12 @@ fn park_until_seal(
 /// lexical chain.
 pub fn elaborate_type_identifier(
     el: &mut Elaborator<'_, '_>,
-    t: &TypeIdentifier,
+    name: TypeSymbol,
     registries: &RunRegistries,
 ) -> TypeResolution<KType> {
     let types = &registries.types;
-    let name = t.as_str();
-    // A window's members and binders are Type-class labels, so a name that does not classify names
-    // no member of one; the window is skipped rather than probed.
-    if let (Some(view), Some(classified)) = (el.window(), TypeSymbol::of(name)) {
+    let classified = name;
+    if let Some(view) = el.window() {
         // A bare leaf naming a standalone member of the window is a co-declared sibling (or a
         // self-reference). A `UNION`'s variants are *not* standalone types: a bare `Node :Leaf` is
         // an unknown-type error, and a sibling variant is reached only through its binder
@@ -222,7 +219,7 @@ pub fn elaborate_type_identifier(
                 (None, TypeResolutionMode::Declarator) => {
                     match view.binder_union(classified, types) {
                         Some(kt) => TypeResolution::Done(kt),
-                        None => TypeResolution::Unbound(format!("unknown type name `{name}`")),
+                        None => TypeResolution::Unbound(unknown_type_name(name, registries)),
                     }
                 }
                 (None, TypeResolutionMode::Consumer) => park_until_seal(el, view, registries),
@@ -253,10 +250,19 @@ pub fn elaborate_type_identifier(
     // — so a name reaching here can hold no value to layer a sharper miss over. What
     // remains is the builtin table — tried last so a fixture scope that skips builtin registration
     // still resolves builtin names — and then an unknown-name failure.
-    match KType::from_name(t.as_str()) {
+    match KType::from_symbol(name) {
         Some(kt) => TypeResolution::Done(kt),
-        None => TypeResolution::Unbound(format!("unknown type name `{}`", t.as_str())),
+        None => TypeResolution::Unbound(unknown_type_name(name, registries)),
     }
+}
+
+/// The miss diagnostic every unbound arm of [`elaborate_type_identifier`] surfaces, rendered
+/// through the run's interner.
+fn unknown_type_name(name: TypeSymbol, registries: &RunRegistries) -> String {
+    format!(
+        "unknown type name `{}`",
+        crate::machine::model::types::render_label(name.symbol(), registries)
+    )
 }
 
 /// Outcome of [`finalize_nominal_member`].

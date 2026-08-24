@@ -89,7 +89,9 @@ impl NodeFinalize for Host<'_> {
                     Disposition::Mismatch(t.name(registries))
                 }
             }
-            Carried::UnresolvedType(ti) => Disposition::Mismatch(ti.render()),
+            Carried::UnresolvedType(ti) => {
+                Disposition::Mismatch(crate::machine::model::render_label(ti.symbol(), registries))
+            }
         });
         match disposition {
             Disposition::Mismatch(got) => Err(return_type_mismatch(
@@ -161,7 +163,7 @@ pub(in crate::machine::execute) fn check_spliced_return(
     let got = match carried {
         Carried::Object(object) => object.ktype().name(registries),
         Carried::Type(t) => t.name(registries),
-        Carried::UnresolvedType(ti) => ti.render(),
+        Carried::UnresolvedType(ti) => crate::machine::model::render_label(ti.symbol(), registries),
     };
     Err(return_type_mismatch(
         declared, per_call, label, got, registries,

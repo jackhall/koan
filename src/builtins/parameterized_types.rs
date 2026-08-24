@@ -252,7 +252,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{TestRun, parse_one, type_name};
+    use crate::builtins::test_support::{TestRun, type_name};
     use crate::machine::KErrorKind;
     use crate::machine::model::{KKind, KType, Record, TypeNode};
     use crate::machine::program_storage;
@@ -263,7 +263,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let result = test_run.run_one_type(parse_one(&program, ":(LIST OF Number)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(LIST OF Number)"));
         let types = test_run.types();
         assert_eq!(result, types.list(KType::NUMBER));
     }
@@ -299,7 +299,7 @@ mod tests {
             test_run.registries(),
             &mut crate::machine::WriteGate::for_test(),
         );
-        let result = test_run.run_one_type(parse_one(&program, ":(Number AS Wrap)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(Number AS Wrap)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::ConstructorApply {
@@ -329,7 +329,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let result = test_run.run_one_type(parse_one(&program, ":(MAP Str -> Number)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(MAP Str -> Number)"));
         let types = test_run.types();
         assert_eq!(result, types.dict(KType::STR, KType::NUMBER));
     }
@@ -339,8 +339,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let result =
-            test_run.run_one_type(parse_one(&program, ":(FN (x :Number, y :Str) -> Bool)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(FN (x :Number, y :Str) -> Bool)"));
         let types = test_run.types();
         assert_eq!(
             result,
@@ -359,7 +358,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let result = test_run.run_one_type(parse_one(&program, ":(FN () -> Number)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(FN () -> Number)"));
         let types = test_run.types();
         assert_eq!(result, types.function_type(Record::new(), KType::NUMBER));
     }
@@ -371,7 +370,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let result = test_run.run_one_type(parse_one(&program, ":(FN (Ty :Signature) -> Module)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(FN (Ty :Signature) -> Module)"));
         let types = test_run.types();
         assert_eq!(
             result,
@@ -393,7 +392,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let result =
-            test_run.run_one_type(parse_one(&program, ":(FN (xs :(LIST OF Number)) -> Bool)"));
+            test_run.run_one_type(test_run.parse_one(":(FN (xs :(LIST OF Number)) -> Bool)"));
         let types = test_run.types();
         assert_eq!(
             result,
@@ -419,7 +418,7 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("LET Wrapped = :{a :Number}");
         let result =
-            test_run.run_one_type(parse_one(&program, ":{x :Wrapped, y :(LIST OF Number)}"));
+            test_run.run_one_type(test_run.parse_one(":{x :Wrapped, y :(LIST OF Number)}"));
         let types = test_run.types();
         let inner = types.record(Record::from_pairs(vec![(
             test_run.registries().labels.intern("a"),
@@ -449,10 +448,8 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(
-            &program,
-            ":(FN (xs :(LIST OF Number)) -> Wrapped)",
-        ));
+        let result =
+            test_run.run_one_type(test_run.parse_one(":(FN (xs :(LIST OF Number)) -> Wrapped)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
@@ -481,7 +478,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let err = test_run.run_one_err(parse_one(&program, ":{x :(1)}"));
+        let err = test_run.run_one_err(test_run.parse_one(":{x :(1)}"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("resolved to non-type value")),
             "expected a non-type-value ShapeError through the deferred side-channel, got {err}",
@@ -493,8 +490,8 @@ mod tests {
     /// it shares the scope's lifetime, keeping the comparison off `'static`.
     fn assert_round_trips(test_run: &mut TestRun<'_>, expected: KType) {
         let rendered = expected.name(test_run.registries());
-        let program = test_run.program;
-        let result = test_run.run_one_type(parse_one(program, &rendered));
+        let expr = test_run.parse_one(&rendered);
+        let result = test_run.run_one_type(expr);
         assert_eq!(
             result, expected,
             "round-trip of `{rendered}` did not reproduce the original KType",
@@ -570,7 +567,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(&program, ":(MAP Str -> Wrapped)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(MAP Str -> Wrapped)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::Dict { key, value } => {
@@ -593,7 +590,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(&program, ":(MAP Wrapped -> Str)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(MAP Wrapped -> Str)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::Dict { key, value } => {
@@ -617,7 +614,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(&program, ":{x :Wrapped}"));
+        let result = test_run.run_one_type(test_run.parse_one(":{x :Wrapped}"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::Record { fields: record } => {
@@ -643,7 +640,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(&program, ":(FN (x :Wrapped) -> Bool)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(FN (x :Wrapped) -> Bool)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
@@ -669,7 +666,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(&program, ":(FN (x :Number) -> Wrapped)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(FN (x :Number) -> Wrapped)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
@@ -698,7 +695,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(parse_one(&program, ":(LIST OF Wrapped)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(LIST OF Wrapped)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::List { element } => {

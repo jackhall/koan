@@ -1,4 +1,5 @@
 use super::*;
+use crate::builtins::test_support::type_token;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Symbol;
 use crate::machine::model::TypeRegistry;
@@ -21,38 +22,40 @@ fn from_symbol_resolves_every_declared_builtin() {
 /// A Type token nobody declared as a builtin misses the table.
 #[test]
 fn from_symbol_undeclared_type_name_is_none() {
-    let name = TypeSymbol::of("Banana").expect("`Banana` is a Type token");
+    let name = type_token("Banana");
     assert_eq!(KType::from_symbol(name), None);
 }
 
 #[test]
-fn from_name_leaf_number() {
-    assert_eq!(KType::from_name("Number"), Some(KType::NUMBER));
+fn from_symbol_leaf_number() {
+    assert_eq!(
+        KType::from_symbol(type_token("Number")),
+        Some(KType::NUMBER)
+    );
+}
+
+/// `KFunction` names no builtin: "any function" with no signature has nothing to dispatch on.
+#[test]
+fn from_symbol_kfunction_does_not_resolve() {
+    assert_eq!(KType::from_symbol(type_token("KFunction")), None);
 }
 
 #[test]
-fn from_name_unknown_paramless_name_is_none() {
-    assert_eq!(KType::from_name("Banana"), None);
-}
-
-#[test]
-fn from_name_kfunction_no_longer_resolves() {
-    assert_eq!(KType::from_name("KFunction"), None);
-}
-
-#[test]
-fn from_name_list_lowers_to_list_any() {
-    let registries = RunRegistries::new();
-    let types = &registries.types;
-    assert_eq!(KType::from_name("List"), Some(types.list(KType::ANY)));
-}
-
-#[test]
-fn from_name_dict_lowers_to_dict_any_any() {
+fn from_symbol_list_lowers_to_list_any() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     assert_eq!(
-        KType::from_name("Dict"),
+        KType::from_symbol(type_token("List")),
+        Some(types.list(KType::ANY))
+    );
+}
+
+#[test]
+fn from_symbol_dict_lowers_to_dict_any_any() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    assert_eq!(
+        KType::from_symbol(type_token("Dict")),
         Some(types.dict(KType::ANY, KType::ANY))
     );
 }

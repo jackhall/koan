@@ -1,6 +1,6 @@
 //! Parsing the `-> Type` slot, and the runtime return-type check.
 
-use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn, parse_one};
+use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KObject, KType, ReturnType};
 use crate::machine::{program_storage, run_root_storage};
@@ -32,7 +32,7 @@ fn fn_without_return_type_annotation_does_not_register() {
     let scope = test_run.scope;
     let exprs = parse(
         program.brand(),
-        &crate::machine::model::LabelInterner::new(),
+        &test_run.registries().labels,
         "FN (DOUBLE x :Number) = (PRINT \"x\")",
     )
     .expect("parse should succeed");
@@ -61,14 +61,14 @@ fn return_type_only_difference_is_a_duplicate_overload() {
     test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "FN (DOUBLE x :Number) -> Number = (x)"),
+            test_run.parse_one("FN (DOUBLE x :Number) -> Number = (x)"),
         ),
         scope,
     );
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "FN (DOUBLE x :Number) -> Str = (\"a\")"),
+            test_run.parse_one("FN (DOUBLE x :Number) -> Str = (\"a\")"),
         ),
         scope,
     );
@@ -96,7 +96,7 @@ fn fn_with_unknown_return_type_name_errors() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "FN (DOUBLE x :Number) -> Bogus = (x)"),
+            test_run.parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"),
         ),
         scope,
     );
@@ -125,7 +125,7 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "LIE"),
+            test_run.parse_one("LIE"),
         ),
         scope,
     );
@@ -178,7 +178,7 @@ fn fn_return_type_forward_user_bound_name_is_a_resolution_error() {
     let scope = test_run.scope;
     let edges: Vec<_> = parse(
         program.brand(),
-        &crate::machine::model::LabelInterner::new(),
+        &test_run.registries().labels,
         "FN (DOIT xs :MyT) -> MyT = (xs)\nLET MyT = Number",
     )
     .expect("parse succeeds")
@@ -216,7 +216,7 @@ fn fn_return_type_surface_name_preserved_in_error() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "FN (DOIT) -> SomeWeirdName = (1)"),
+            test_run.parse_one("FN (DOIT) -> SomeWeirdName = (1)"),
         ),
         scope,
     );
@@ -241,7 +241,7 @@ fn user_fn_with_any_return_type_accepts_anything() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (PURE) -> Any = (\"a string\")");
-    let result = test_run.run_one(parse_one(&program, "PURE"));
+    let result = test_run.run_one(test_run.parse_one("PURE"));
     assert!(matches!(result, KObject::KString(s) if *s == "a string"));
 }
 
@@ -265,7 +265,7 @@ fn keep_first_across_tail_chain_errors_against_outer_contract() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "OUTER"),
+            test_run.parse_one("OUTER"),
         ),
         scope,
     );
@@ -319,7 +319,7 @@ fn spliced_bare_name_tail_checks_declared_return() {
     let scope = test_run.scope;
     let bad_edges: Vec<_> = parse(
         program.brand(),
-        &crate::machine::model::LabelInterner::new(),
+        &test_run.registries().labels,
         "LET x = \"nope\"\nFN (WRAP) -> Number = (x)\nLET out = (WRAP)",
     )
     .expect("parse succeeds")
@@ -361,7 +361,7 @@ fn spliced_bare_name_tail_checks_declared_return() {
     let scope = test_run.scope;
     let ok_edges: Vec<_> = parse(
         program.brand(),
-        &crate::machine::model::LabelInterner::new(),
+        &test_run.registries().labels,
         "LET x = 7\nFN (WRAP) -> Number = (x)\nLET out = (WRAP)",
     )
     .expect("parse succeeds")
@@ -386,5 +386,41 @@ fn spliced_bare_name_tail_checks_declared_return() {
     assert!(
         matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0),
         "the matching spliced value forwards through intact to out",
+    );
+}
+
+/// A return type naming a type whose binder is still in flight parks on that producer and
+/// re-resolves at wake off the token's own symbol: the capture carries the parsed name across the
+/// park, so the woken elaboration runs against the wake-side scope with the name it started with.
+#[test]
+fn fn_return_type_parks_on_an_in_flight_binder_and_resolves_at_wake() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    let statements: Vec<_> = parse(
+        program.brand(),
+        &test_run.registries().labels,
+        "NEWTYPE Later = Number\nFN (WRAPIT x :Number) -> Later = (x)",
+    )
+    .expect("parse succeeds")
+    .into_iter()
+    .map(|e| crate::machine::model::WorkingExpression::from_ast(scope.brand(), e))
+    .collect();
+    test_run.runtime.enter_block(scope.id, statements, scope);
+    test_run
+        .runtime
+        .execute()
+        .expect("execute does not surface per-slot errors");
+
+    let f = lookup_fn(scope, "WRAPIT");
+    let ReturnType::Resolved(kt) = f.signature.return_type() else {
+        panic!("the parked return type resolves by the time the FN registers");
+    };
+    assert_eq!(
+        kt,
+        crate::builtins::test_support::lookup_type(scope, "Later")
+            .expect("the NEWTYPE binds its member"),
+        "the woken elaboration lands the same handle the NEWTYPE sealed",
     );
 }

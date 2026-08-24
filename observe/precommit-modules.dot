@@ -315,10 +315,12 @@ digraph {
     "koan::builtins::fn_def::finalize" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::builtins::fn_def::finalize" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::fn_def::param_refs" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::fn_def::param_refs" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan::builtins::fn_def::param_refs" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan::builtins::resolve_or_await" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::fn_def::return_type" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::source" [label="uses", style="dashed"];
@@ -358,6 +360,7 @@ digraph {
     "koan::builtins::op_def" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
     "koan::builtins::op_def" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::builtins::op_def" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::builtins::op_def" -> "koan::source" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::machine" [label="uses", style="dashed"];
@@ -408,8 +411,8 @@ digraph {
     "koan::builtins::val_decl" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::builtins::resolve_or_await" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::machine" [label="uses", style="dashed"];
-    "koan::builtins::val_decl" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::val_decl" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::source" [label="uses", style="dashed"];
     "koan::fold_fixture" -> "koan::machine" [label="uses", style="dashed"];
     "koan::fold_fixture" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -473,6 +476,7 @@ digraph {
     "koan::machine::core::kfunction::action" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::action" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
@@ -633,6 +637,7 @@ digraph {
     "koan::machine::execute::decide::operator_chain" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::resolve" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_dispatch" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_dispatch" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_dispatch" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -642,6 +647,7 @@ digraph {
     "koan::machine::execute::decide::resolve_type_identifier" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_type_identifier" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_type_identifier" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::resolve_type_identifier" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::execute::decide::single_poll" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::single_poll" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::single_poll" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -651,6 +657,7 @@ digraph {
     "koan::machine::execute::decide::single_poll" -> "koan::machine::execute::decide::ctx" [label="uses", style="dashed"];
     "koan::machine::execute::decide::single_poll" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::decide::single_poll" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::single_poll" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::execute::decide::submit" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::submit" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::submit" -> "koan::machine::execute::harness" [label="uses", style="dashed"];
@@ -805,7 +812,6 @@ digraph {
     "koan::machine::model::types::resolver" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::model::types::resolver" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::types::declaration_window" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
@@ -848,6 +854,7 @@ digraph {
     "koan::machine::model::types::typed_field_list" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::values::carried" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan" [label="uses", style="dashed"];

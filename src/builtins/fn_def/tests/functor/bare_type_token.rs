@@ -4,7 +4,7 @@
 //! deferred-return re-elaboration path's agnosticism to builtin-vs-nominal
 //! carriers.
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::model::KExpression;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind};
@@ -42,7 +42,7 @@ fn functor_admits_bare_number_token_at_type_slot() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))");
-    let result = test_run.run_one(parse_one(&program, "MAKETREE Number"));
+    let result = test_run.run_one(test_run.parse_one("MAKETREE Number"));
     match result {
         KObject::Module(_) => {}
         other => {
@@ -62,7 +62,7 @@ fn functor_admits_bare_str_bool_null_tokens_at_type_slot() {
     test_run.run("FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))");
     for token in ["Str", "Bool", "Null"] {
         let src = format!("MAKETREE {token}");
-        let result = test_run.run_one(parse_one(&program, &src));
+        let result = test_run.run_one(test_run.parse_one(&src));
         match result {
             KObject::Module(_) => {}
             other => {
@@ -84,7 +84,7 @@ fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
         "FN (MAKETREE Elt :Type) -> Module = \
          (MODULE generated = ((LET ElemType = Elt) (LET inner = 1)))",
     );
-    let result = test_run.run_one(parse_one(&program, "MAKETREE Number"));
+    let result = test_run.run_one(test_run.parse_one("MAKETREE Number"));
     let module = match result {
         KObject::Module(module) => *module,
         other => panic!(
@@ -117,7 +117,8 @@ fn functor_bare_value_carrier_is_dispatch_no_match_not_typemismatch() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))");
-    let err = run_expecting_dispatch_error(&mut test_run, parse_one(&program, "MAKETREE 7"));
+    let expr = test_run.parse_one("MAKETREE 7");
+    let err = run_expecting_dispatch_error(&mut test_run, expr);
     match &err.kind {
         KErrorKind::DispatchFailed { .. } | KErrorKind::UnboundName(_) => {}
         _ => panic!("expected dispatch no-match (DispatchFailed) for non-type carrier, got {err}",),
@@ -138,7 +139,8 @@ fn functor_module_carrier_does_not_fill_type_slot() {
         "FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))\n\
          MODULE int_mod = (LET inner = 1)",
     );
-    let _ = run_expecting_dispatch_error(&mut test_run, parse_one(&program, "MAKETREE int_mod"));
+    let expr = test_run.parse_one("MAKETREE int_mod");
+    let _ = run_expecting_dispatch_error(&mut test_run, expr);
 }
 
 /// Deferred-return re-elaboration with a builtin-keyed bind — pins that the
@@ -158,7 +160,7 @@ fn deferred_return_resolves_against_builtin_keyed_bind() {
         "BUILD's return type should be Deferred, got {:?}",
         f.signature.return_type(),
     );
-    let result = test_run.run_one(parse_one(&program, "BUILD Number"));
+    let result = test_run.run_one(test_run.parse_one("BUILD Number"));
     match result {
         KObject::Number(n) if *n == 42.0 => {}
         other => panic!(
@@ -181,7 +183,7 @@ fn deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "BUILD Str"),
+            test_run.parse_one("BUILD Str"),
         ),
         scope,
     );

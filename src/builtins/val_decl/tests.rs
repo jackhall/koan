@@ -1,4 +1,5 @@
-use crate::builtins::test_support::{TestRun, binds_module, parse_one, type_name, value_name};
+use crate::builtins::test_support::lookup_type;
+use crate::builtins::test_support::{TestRun, binds_module, type_name, value_name};
 use crate::machine::model::Symbol;
 use crate::machine::model::{KType, SigSchema, TypeNode, TypeRegistry};
 use crate::machine::{KErrorKind, ScopeId};
@@ -6,9 +7,7 @@ use crate::machine::{program_storage, run_root_storage};
 
 /// The stored schema of the signature `name` binds in `scope`.
 fn sig_schema(scope: &crate::machine::Scope<'_>, types: &TypeRegistry, name: &str) -> SigSchema {
-    let handle = scope
-        .resolve_type(name)
-        .unwrap_or_else(|| panic!("{name} must bind a type"));
+    let handle = lookup_type(scope, name).unwrap_or_else(|| panic!("{name} must bind a type"));
     match types.node(handle) {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("{name} must bind a Signature KType"),
@@ -70,16 +69,14 @@ fn duplicate_val_slot_name_is_rebind() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "SIG SigDup = ((VAL x :Number) (VAL x :Str))",
-    ));
+    let err =
+        test_run.run_one_err(test_run.parse_one("SIG SigDup = ((VAL x :Number) (VAL x :Str))"));
     assert!(
         matches!(&err.kind, KErrorKind::Rebind { name } if name == "x"),
         "expected Rebind naming `x`, got {err}",
     );
     assert!(
-        scope.resolve_type("SigDup").is_none(),
+        lookup_type(scope, "SigDup").is_none(),
         "the colliding signature binds nothing",
     );
 }
@@ -90,7 +87,7 @@ fn val_outside_sig_errors() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "VAL x :Number"));
+    let err = test_run.run_one_err(test_run.parse_one("VAL x :Number"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -109,7 +106,7 @@ fn val_inside_module_errors() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "MODULE foo = ((VAL x :Number))"));
+    let err = test_run.run_one_err(test_run.parse_one("MODULE foo = ((VAL x :Number))"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -159,7 +156,7 @@ fn val_slot_required_by_shape_check() {
         "SIG WithCompare = ((VAL compare :Number))\n\
          MODULE empty = (LET unrelated = 0)",
     );
-    let err = test_run.run_one_err(parse_one(&program, "empty :| WithCompare"));
+    let err = test_run.run_one_err(test_run.parse_one("empty :| WithCompare"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(

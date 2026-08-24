@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use crate::builtins::test_support::{TestRun, lookup_module, parse_one};
+use crate::builtins::test_support::{TestRun, lookup_module};
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::{ExpressionPart, KLiteral, WorkingExpression, WorkingPart};
 use crate::source::Spanned;
@@ -78,7 +78,11 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let root = test_run.scope;
-    let module_expr = working_one(&program, "MODULE foo = (LET x = 1)");
+    let module_expr = working_one(
+        &program,
+        &test_run.registries().labels,
+        "MODULE foo = (LET x = 1)",
+    );
     let ids = test_run
         .runtime
         .enter_block(root.id, vec![module_expr], root);
@@ -145,7 +149,7 @@ fn cons_head_subdispatch_inherits_parent_chain() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
     use crate::machine::model::KObject;
-    let v = test_run.run_one(parse_one(&program, "FOO"));
+    let v = test_run.run_one(test_run.parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 2.0));
 }
 

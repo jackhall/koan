@@ -21,7 +21,7 @@ use super::super::outcome::DepTerminal;
 use super::super::{StepCarried, WitnessedDepFinish};
 use super::SubmitContext;
 use super::ctx::{DecideCtx, current_dest_frame, with_current_node_scope};
-use super::resolve::{Resolution, TypeLeafChannels, resolve_name};
+use super::resolve::{Resolution, resolve_name};
 use super::stage_eager_part;
 use crate::machine::Scope;
 use crate::machine::model::RunRegistries;
@@ -413,8 +413,11 @@ impl<'step> Host<'step> {
                 // included — so the cell is built **inside** a zero-dep fold, born co-located with
                 // that frame as its reach.
                 let frame = current_dest_frame(&self.ambient);
+                let labels = &self.ambient.registries().labels;
                 Slot::Static(KoanRegion::fold_witnessed(frame, move |brand| {
-                    Carried::Object(brand.alloc_object_folded(other.resolve_region_pure(*brand)))
+                    Carried::Object(
+                        brand.alloc_object_folded(other.resolve_region_pure(*brand, labels)),
+                    )
                 }))
             }
         }
@@ -436,13 +439,7 @@ impl<'step> Host<'step> {
         // `Resolution` is lifetime-free, so the whole result escapes the branded-scope closure and
         // the `&mut self` fallback runs after the read closes.
         let resolved = with_current_node_scope(&self.ambient, |s| {
-            resolve_name(
-                s,
-                part,
-                active_chain,
-                self.ambient.registries(),
-                TypeLeafChannels::TypeChannel,
-            )
+            resolve_name(s, part, active_chain, self.ambient.registries())
         });
         match resolved {
             Resolution::Resolved(cell) => Slot::Static(cell),

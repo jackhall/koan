@@ -8,7 +8,7 @@ use crate::machine::model::RunRegistries;
 /// A fixture member, binder or parameter name as the Type token the window keys by. Pure
 /// classification — these tests compare identities and never render one.
 fn name(text: &str) -> TypeSymbol {
-    TypeSymbol::of(text).expect("a fixture member name is a Type token")
+    TypeSymbol::classify(text).expect("a fixture member name is a Type token")
 }
 
 /// A record type over `pairs`.

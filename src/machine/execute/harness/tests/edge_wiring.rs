@@ -37,7 +37,11 @@ fn park_on_errored_producer_propagates_producer_error() {
     let edge_ok = test_run.dispatch_watched_in(scope, super::let_expr(&program, "ok", 5.0));
     let edge_err = test_run.dispatch_watched_in(
         scope,
-        super::working_one(&program, "LET bad = (undefined_thing)"),
+        super::working_one(
+            &program,
+            &test_run.registries().labels,
+            "LET bad = (undefined_thing)",
+        ),
     );
     let runtime = &mut test_run.runtime;
     runtime.execute().unwrap();
@@ -112,6 +116,7 @@ fn a_binder_that_fails_after_its_sibling_parked_surfaces_unbound_name() {
         scope.id,
         super::working_all(
             &program,
+            &test_run.registries().labels,
             "FN (BOOM) -> Any = (undefined_thing)\nLET z = (BOOM)\nLET y = (z)",
         ),
         scope,

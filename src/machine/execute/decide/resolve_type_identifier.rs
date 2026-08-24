@@ -1,4 +1,4 @@
-//! Scope-bound resolution of a surface [`TypeIdentifier`] into an interned `KType` handle —
+//! Scope-bound resolution of a surface type name's [`TypeSymbol`] into an interned `KType` handle —
 //! Layer 2 of [design/typing/elaboration.md](../../../../design/typing/elaboration.md).
 //!
 //! Read-only consumer of the bindings façade: writes nothing, and of the tables reads only
@@ -25,7 +25,7 @@
 
 use crate::machine::ProducerId;
 use crate::machine::core::{LexicalFrame, Scope, ScopeId};
-use crate::machine::model::TypeIdentifier;
+use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{KType, RunRegistries, TypeNode, TypeRegistry, TypeResolution};
 
 impl<'step> Scope<'step> {
@@ -34,7 +34,7 @@ impl<'step> Scope<'step> {
     /// observing pre-seal opaque identity.
     pub fn resolve_type_identifier(
         &self,
-        te: &TypeIdentifier,
+        te: TypeSymbol,
         chain: Option<std::rc::Rc<LexicalFrame>>,
         registries: &RunRegistries,
     ) -> TypeResolution<KType> {

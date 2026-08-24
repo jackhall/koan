@@ -1,4 +1,5 @@
-use crate::builtins::test_support::{TestRun, parse_one, type_name, type_token};
+use crate::builtins::test_support::lookup_type;
+use crate::builtins::test_support::{TestRun, type_name, type_token};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KKind, NodeSchema, TypeNode};
 use crate::machine::model::{KObject, KType};
@@ -28,9 +29,7 @@ fn result_registers_type_constructor_with_schema() {
 
     // Type-only: `Result`'s `TypeConstructor` member carries both `param_names` and the
     // variant `schema`; no value-side carrier in `data`.
-    let handle = scope
-        .resolve_type("Result")
-        .expect("Result type registered");
+    let handle = lookup_type(scope, "Result").expect("Result type registered");
     match test_run.types().node(handle) {
         TypeNode::SetMember {
             name,
@@ -72,7 +71,7 @@ fn result_constructs_ok_variant() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "Result (Ok 1)"));
+    let result = test_run.run_one(test_run.parse_one("Result (Ok 1)"));
     match result {
         KObject::Tagged {
             tag,
@@ -92,7 +91,7 @@ fn result_constructs_error_variant() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "Result (Error \"x\")"));
+    let result = test_run.run_one(test_run.parse_one("Result (Error \"x\")"));
     match result {
         KObject::Tagged {
             tag,
@@ -112,7 +111,7 @@ fn result_rejects_unknown_tag() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "Result (Bogus 1)"));
+    let err = test_run.run_one_err(test_run.parse_one("Result (Bogus 1)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`Bogus`")),
         "expected ShapeError mentioning `Bogus`, got {err}",
@@ -136,7 +135,7 @@ fn redeclaring_result_errors() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "UNION Result = (Ok :Str Err :Str)"));
+    let err = test_run.run_one_err(test_run.parse_one("UNION Result = (Ok :Str Err :Str)"));
     assert!(
         matches!(&err.kind, KErrorKind::Rebind { name } if name == "Result"),
         "expected Rebind on Result, got {err}",

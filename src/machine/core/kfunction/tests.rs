@@ -1,13 +1,14 @@
 use super::*;
 use crate::builtins::register_builtin;
 use crate::builtins::test_support::kw_part;
+use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{TestRun, marker, run_root_bare};
 use crate::machine::core::{FrameStorageExt, Scope, program_storage, run_root_storage};
+use crate::machine::model::KLiteral;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KExpression, KType, ReturnType, SignatureDraft};
 use crate::machine::model::{KKind, KObject};
-use crate::machine::model::{KLiteral, TypeIdentifier};
 
 fn body_any<'a>(ctx: &super::action::BodyCtx<'_, 'a, '_>) -> super::action::Action<'a> {
     super::action::Action::done_resident(
@@ -211,7 +212,7 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
         brand,
         &[
             Spanned::bare(kw_part("OP")),
-            Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("IntOrd"))),
+            Spanned::bare(ExpressionPart::Type(type_token("IntOrd"))),
         ],
     );
     let f = find_match(scope, &expr, types).expect("OP <ProperType> should match");
@@ -284,7 +285,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
         brand,
         &[
             Spanned::bare(kw_part("OP")),
-            Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Number"))),
+            Spanned::bare(ExpressionPart::Type(type_token("Number"))),
         ],
     );
     let f = find_match(scope, &expr, types).expect("OP <Any> should match");

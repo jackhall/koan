@@ -140,7 +140,9 @@ fn classify_head<'step>(
             })),
         },
         // A head is resolved before it is classified, so an unlowered name names no callable.
-        Carried::UnresolvedType(ti) => Err(KError::new(KErrorKind::UnboundName(ti.render()))),
+        Carried::UnresolvedType(ti) => Err(KError::new(KErrorKind::UnboundName(
+            crate::machine::model::render_label(ti.symbol(), registries),
+        ))),
         Carried::Type(kt) => Ok(ResolvedCallable::Constructor { identity: kt }),
     }
 }

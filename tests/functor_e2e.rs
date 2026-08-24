@@ -17,7 +17,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::builtins::test_support::{SharedBuf, TestRun, lookup_binding};
+use koan::builtins::test_support::{SharedBuf, TestRun, lookup_binding, lookup_type};
 use koan::machine::model::{KObject, SignatureElement, TypeNode};
 use koan::machine::{
     FrameStorage, KFunction, ProgramStorage, Scope, program_storage, run_root_storage,
@@ -96,7 +96,7 @@ fn functor_e2e_makeset_produces_module() {
     // `int_set` landed as a module value: a module is a value, so LET binds it on the value
     // channel (`bindings.data`) under its Type-token name and nothing lands in `types`.
     assert!(
-        scope.resolve_type("int_set").is_none(),
+        lookup_type(scope, "int_set").is_none(),
         "a module is a value — nothing lands in `types`",
     );
     let m = match lookup_binding(scope, "int_set") {
@@ -145,7 +145,7 @@ fn let_bound_fn_applied_by_named_args_yields_module() {
         "apply_it binds value-side as a KFunction",
     );
     assert!(
-        scope.resolve_type("apply_it").is_none(),
+        lookup_type(scope, "apply_it").is_none(),
         "`bindings.types` holds no callable value",
     );
     // Applying it produced a module that the outer LET bound as `got`.

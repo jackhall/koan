@@ -24,7 +24,7 @@ use crate::machine::{FieldListDeferral, StepCarried};
 /// and the deferred finish without `Clone`.
 pub(crate) type SchemaFinalize<'a> = fn(
     &FinishCtx<'a, '_>,
-    String,
+    TypeSymbol,
     &DeclWindow<'a>,
     Vec<(Symbol, KType)>,
     DeclarationSite,
@@ -40,7 +40,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn nominal_schema_action<'a>(
     ctx: &BodyCtx<'_, 'a, '_>,
-    name: String,
+    name: TypeSymbol,
     window: DeclWindow<'a>,
     schema_expr: crate::machine::model::KExpression<'a>,
     context: FieldListContext,
@@ -54,7 +54,9 @@ pub(crate) fn nominal_schema_action<'a>(
     // a reference to any of them resolves through the window rather than parking on a placeholder
     // — and, for a sigil field whose body sub-dispatches into the window-less standalone
     // dispatcher, is pre-resolved to a sibling cell before it leaves.
-    let binder = crate::try_action!(crate::machine::model::type_binder(&name, ctx.registries));
+    // The parser classified and interned the binder token, so it is already the currency the
+    // window, the sealed member nodes and every diagnostic share.
+    let binder = name;
     let outcome = {
         let mut elaborator = Elaborator::new(ctx.scope)
             .with_threaded(std::iter::once(binder).chain(window.view().threadable_names()))
@@ -78,7 +80,6 @@ pub(crate) fn nominal_schema_action<'a>(
             awaited_producers,
             sub_dispatches,
         } => {
-            let finish_name = name.clone();
             let threaded: Vec<TypeSymbol> = std::iter::once(binder)
                 .chain(window.view().threadable_names())
                 .collect();
@@ -95,7 +96,7 @@ pub(crate) fn nominal_schema_action<'a>(
             .with_error_frame(error_frame)
             .action(Box::new(move |fctx, window, fields| {
                 let window = window.expect("a nominal declarator always carries its window");
-                finalize(fctx, finish_name, window, fields, site)
+                finalize(fctx, name, window, fields, site)
             }))
         }
     }

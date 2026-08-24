@@ -5,7 +5,7 @@
 //! keywords); dispatch keywords (`SHOW`, `PAINT`, `TAKES`, `NAMEOF`) stay all-uppercase, and never
 //! a lone capital — a single uppercase letter classifies as neither keyword nor type name.
 
-use crate::builtins::test_support::{TestRun, extract_terminal, parse_one};
+use crate::builtins::test_support::{TestRun, extract_terminal};
 use crate::machine::KErrorKind;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{program_storage, run_root_storage};
@@ -18,8 +18,7 @@ fn plain_module_type_member_types_a_dispatch_slot() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = ((UNION Color = (Red :Null Blue :Null)))");
-    let result = test_run.run_one(parse_one(
-        &program,
+    let result = test_run.run_one(test_run.parse_one(
         "USING some_module SCOPE ((FN (SHOW c :Color) -> Str = (\"a color\")) \
          (SHOW (Color (Blue null))))",
     ));
@@ -34,8 +33,7 @@ fn plain_module_type_member_types_a_return_slot() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("MODULE some_module = ((UNION Color = (Red :Null Blue :Null)))");
-    let result = test_run.run_one(parse_one(
-        &program,
+    let result = test_run.run_one(test_run.parse_one(
         "USING some_module SCOPE ((FN (PAINT c :Color) -> Color = (c)) \
          (PAINT (Color (Blue null))))",
     ));
@@ -59,8 +57,7 @@ fn opaque_view_surfaces_its_abstract_member() {
          MODULE int_ord = ((LET Elem = Number) (LET zero = 0))\n\
          LET sealed = (int_ord :| Pointed)",
     );
-    let result = test_run.run_one(parse_one(
-        &program,
+    let result = test_run.run_one(test_run.parse_one(
         "USING sealed SCOPE ((FN (TAKES x :Elem) -> Str = (\"ok\")) (TAKES (sealed.zero)))",
     ));
     assert!(matches!(result, KObject::KString(s) if *s == "ok"));
@@ -79,10 +76,11 @@ fn opaque_view_hides_the_representation_inside_the_block() {
          MODULE int_ord = ((LET Elem = Number) (LET zero = 0))\n\
          LET sealed = (int_ord :| Pointed)",
     );
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "USING sealed SCOPE ((FN (TAKES x :Elem) -> Str = (\"ok\")) (TAKES 5))",
-    ));
+    let err =
+        test_run
+            .run_one_err(test_run.parse_one(
+                "USING sealed SCOPE ((FN (TAKES x :Elem) -> Str = (\"ok\")) (TAKES 5))",
+            ));
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "a raw Number must not satisfy the view's abstract `Elem`, got {err}",
@@ -101,10 +99,10 @@ fn opaque_view_surfaces_its_manifest_member_concretely() {
          MODULE int_ord = ((LET Elem = Number) (LET Tag = Str) (LET zero = 0) (LET label = \"n\"))\n\
          LET sealed = (int_ord :| Boxed)",
     );
-    let result = test_run.run_one(parse_one(
-        &program,
-        "USING sealed SCOPE ((FN (NAMEOF t :Tag) -> Str = (t)) (NAMEOF \"plain\"))",
-    ));
+    let result = test_run
+        .run_one(test_run.parse_one(
+            "USING sealed SCOPE ((FN (NAMEOF t :Tag) -> Str = (t)) (NAMEOF \"plain\"))",
+        ));
     assert!(
         matches!(result, KObject::KString(s) if *s == "plain"),
         "a manifest `Tag = Str` admits a bare Str inside the block, got {:?}",
@@ -124,10 +122,11 @@ fn transparent_view_surfaces_the_concrete_type() {
          MODULE int_ord = ((LET Elem = Number) (LET zero = 0))\n\
          LET opened = (int_ord :! Pointed)",
     );
-    let result = test_run.run_one(parse_one(
-        &program,
-        "USING opened SCOPE ((FN (TAKES x :Elem) -> Str = (\"ok\")) (TAKES 5))",
-    ));
+    let result =
+        test_run
+            .run_one(test_run.parse_one(
+                "USING opened SCOPE ((FN (TAKES x :Elem) -> Str = (\"ok\")) (TAKES 5))",
+            ));
     assert!(matches!(result, KObject::KString(s) if *s == "ok"));
 }
 
@@ -145,8 +144,7 @@ fn block_type_declaration_shadows_a_surfaced_member() {
          MODULE int_ord = ((LET Elem = Number) (LET zero = 0))\n\
          LET sealed = (int_ord :| Pointed)",
     );
-    let result = test_run.run_one(parse_one(
-        &program,
+    let result = test_run.run_one(test_run.parse_one(
         "USING sealed SCOPE ((LET Elem = Str) (FN (TAKES x :Elem) -> Str = (x)) \
          (TAKES \"shadowed\"))",
     ));
@@ -208,7 +206,7 @@ fn block_type_declaration_dies_with_the_block() {
          LET sealed = (int_ord :| Pointed)",
     );
     test_run.run("USING sealed SCOPE (LET Other = Str)");
-    let err = test_run.run_one_err(parse_one(&program, "FN (WIDEN s :Other) -> Str = (s)"));
+    let err = test_run.run_one_err(test_run.parse_one("FN (WIDEN s :Other) -> Str = (s)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("unknown type name `Other`")),
@@ -231,7 +229,7 @@ fn announced_group_member_reaches_bare_through_using() {
          )",
     );
     // Outside the window the members are `listy`'s, not this scope's.
-    let err = test_run.run_one_err(parse_one(&program, "FN (WRAP c :Cell) -> Number = (1)"));
+    let err = test_run.run_one_err(test_run.parse_one("FN (WRAP c :Cell) -> Number = (1)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("unknown type name `Cell`")),

@@ -2,7 +2,7 @@
 //! width/depth subtyping, and specificity tournaments. Records subtype the *dual* way to
 //! function params — a wider record value is more specific (fills a narrower slot).
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
@@ -74,7 +74,7 @@ fn record_value_reports_record_ktype() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one(parse_one(&program, "{x = 1, y = \"a\"}"));
+    let result = test_run.run_one(test_run.parse_one("{x = 1, y = \"a\"}"));
     assert_eq!(
         result.ktype(),
         test_run.types().record(Record::from_pairs(vec![
@@ -99,7 +99,7 @@ fn record_field_type_mismatch_is_dispatch_failure() {
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "USE r"),
+            test_run.parse_one("USE r"),
         ),
         scope,
     );
@@ -131,7 +131,7 @@ fn record_missing_field_is_dispatch_failure() {
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "NEED r"),
+            test_run.parse_one("NEED r"),
         ),
         scope,
     );
@@ -165,7 +165,7 @@ fn record_incomparable_overloads_are_ambiguous() {
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "PICK {x = 1, y = \"a\", z = \"b\"}"),
+            test_run.parse_one("PICK {x = 1, y = \"a\", z = \"b\"}"),
         ),
         scope,
     );

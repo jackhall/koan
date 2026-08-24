@@ -1,7 +1,7 @@
 //! Branch coverage for the FN-def `body()` routing matrix and `ReturnTypeCapture`
 //! variants on the dep-finish path, plus the Stage B param-name scan utility arms.
 
-use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn, parse_one};
+use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KType, ReturnType};
 use crate::machine::{program_storage, run_root_storage};
@@ -136,7 +136,7 @@ fn fn_def_parens_param_type_non_type_value_errors() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "FN (USE xs (1)) -> Null = (xs)"),
+            test_run.parse_one("FN (USE xs (1)) -> Null = (xs)"),
         ),
         scope,
     );
@@ -168,7 +168,7 @@ fn fn_def_sigil_return_type_non_type_value_errors() {
     let id = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            parse_one(&program, "FN (NOP) -> :(1) = (1)"),
+            test_run.parse_one("FN (NOP) -> :(1) = (1)"),
         ),
         scope,
     );

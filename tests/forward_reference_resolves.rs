@@ -9,7 +9,7 @@
 
 use std::rc::Rc;
 
-use koan::builtins::test_support::{TestRun, lookup_binding};
+use koan::builtins::test_support::{TestRun, lookup_binding, lookup_type};
 use koan::machine::model::KObject;
 use koan::machine::{FrameStorage, ProgramStorage, program_storage, run_root_storage};
 
@@ -248,9 +248,9 @@ fn backward_let_type_alias_resolves_to_number() {
     let region = run_root_storage();
     let scope = run(&program, &region, "LET Un = Number\nLET Ty = Un").scope;
     assert!(
-        scope.resolve_type("Ty") == Some(KType::NUMBER),
+        lookup_type(scope, "Ty") == Some(KType::NUMBER),
         "expected Ty to resolve to Number, got {:?}",
-        scope.resolve_type("Ty"),
+        lookup_type(scope, "Ty"),
     );
 }
 
@@ -272,11 +272,9 @@ fn let_alias_via_module_qualified_type_resolves() {
     );
     let scope = test_run.scope;
     assert!(
-        scope.resolve_type("MyT") == Some(KType::NUMBER),
+        lookup_type(scope, "MyT") == Some(KType::NUMBER),
         "expected MyT to resolve to Number via mo.Ty, got {:?}",
-        scope
-            .resolve_type("MyT")
-            .map(|t| t.name(test_run.registries())),
+        lookup_type(scope, "MyT").map(|t| t.name(test_run.registries())),
     );
 }
 
@@ -295,7 +293,7 @@ fn type_frame_with_module_qualified_element_resolves() {
     )
     .scope;
     assert!(
-        scope.resolve_type("MyList").is_some(),
+        lookup_type(scope, "MyList").is_some(),
         "expected MyList to bind via :(LIST OF mo.Ty)",
     );
 }
@@ -315,9 +313,9 @@ fn chained_module_qualified_type_resolves() {
     )
     .scope;
     assert!(
-        scope.resolve_type("MyT") == Some(KType::NUMBER),
+        lookup_type(scope, "MyT") == Some(KType::NUMBER),
         "expected MyT to resolve to Number via outer.inner.Ty, got {:?}",
-        scope.resolve_type("MyT"),
+        lookup_type(scope, "MyT"),
     );
 }
 

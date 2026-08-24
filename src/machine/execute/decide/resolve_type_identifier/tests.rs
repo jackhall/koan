@@ -9,13 +9,13 @@ fn resolve_type_expr_builtin_leaf_resolves_stably() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.registry_handle();
-    let te = TypeIdentifier::leaf("Number");
-    let first = match scope.resolve_type_identifier(&te, None, types.registries()) {
+    let te = type_token("Number");
+    let first = match scope.resolve_type_identifier(te, None, types.registries()) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done"),
     };
     assert_eq!(first, KType::NUMBER);
-    let second = match scope.resolve_type_identifier(&te, None, types.registries()) {
+    let second = match scope.resolve_type_identifier(te, None, types.registries()) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on second call"),
     };
@@ -29,8 +29,8 @@ fn resolve_type_expr_unbound_returns_unbound() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.registry_handle();
-    let te = TypeIdentifier::leaf("NotABuiltin");
-    match scope.resolve_type_identifier(&te, None, types.registries()) {
+    let te = type_token("NotABuiltin");
+    match scope.resolve_type_identifier(te, None, types.registries()) {
         TypeResolution::Unbound(_) => {}
         _ => panic!("expected Unbound for unknown leaf"),
     }
@@ -46,8 +46,8 @@ fn resolve_type_expr_user_struct_resolves_after_finalize() {
     let scope = test_run.scope;
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
     let types = test_run.registry_handle();
-    let te = TypeIdentifier::leaf("Point");
-    let kt = match scope.resolve_type_identifier(&te, None, types.registries()) {
+    let te = type_token("Point");
+    let kt = match scope.resolve_type_identifier(te, None, types.registries()) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done after the declaration"),
     };
@@ -57,7 +57,7 @@ fn resolve_type_expr_user_struct_resolves_after_finalize() {
         }
         _ => panic!("expected a sealed member node for Point"),
     }
-    let kt2 = match scope.resolve_type_identifier(&te, None, types.registries()) {
+    let kt2 = match scope.resolve_type_identifier(te, None, types.registries()) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on re-resolve"),
     };
@@ -123,13 +123,12 @@ fn user_type_refs_yields_nothing_for_leaf() {
 
 mod bare_leaf_resolution {
     use crate::builtins::test_support::{
-        binder_name, mock_declaration_site, run_root_bare, type_name,
+        binder_name, mock_declaration_site, run_root_bare, type_name, type_token,
     };
     use crate::machine::core::run_root_storage;
     use crate::machine::core::{BindingIndex, DeclarationSite};
     use crate::machine::model::KType;
     use crate::machine::model::RunRegistries;
-    use crate::machine::model::TypeIdentifier;
     use crate::machine::model::TypeResolution;
 
     #[test]
@@ -144,8 +143,8 @@ mod bare_leaf_resolution {
             &registries,
             &mut crate::machine::WriteGate::for_test(),
         );
-        let leaf = TypeIdentifier::leaf("Number");
-        match scope.resolve_type_identifier(&leaf, None, &registries) {
+        let leaf = type_token("Number");
+        match scope.resolve_type_identifier(leaf, None, &registries) {
             TypeResolution::Done(resolved) if resolved == KType::NUMBER => {}
             other => panic!("expected Done(Number), got {:?}", outcome_tag(&other)),
         }
@@ -156,8 +155,8 @@ mod bare_leaf_resolution {
         let region = run_root_storage();
         let scope = run_root_bare(&region);
         let registries = RunRegistries::new();
-        let leaf = TypeIdentifier::leaf("Missing");
-        match scope.resolve_type_identifier(&leaf, None, &registries) {
+        let leaf = type_name("Missing", &registries);
+        match scope.resolve_type_identifier(leaf, None, &registries) {
             // The bridge surfaces the elaborator's `unknown type name` diagnostic, which
             // names the leaf rather than carrying the bare name.
             TypeResolution::Unbound(message) => assert!(
@@ -197,8 +196,8 @@ mod bare_leaf_resolution {
             .expect("placeholder install");
 
         let types = &registries.types;
-        let leaf = TypeIdentifier::leaf("Node");
-        match scope.resolve_type_identifier(&leaf, None, &registries) {
+        let leaf = type_token("Node");
+        match scope.resolve_type_identifier(leaf, None, &registries) {
             TypeResolution::Park(producers) => {
                 assert_eq!(
                     producers,
@@ -239,7 +238,7 @@ mod bare_leaf_resolution {
         )
         .expect("install the sealed identity");
 
-        match scope.resolve_type_identifier(&leaf, None, &registries) {
+        match scope.resolve_type_identifier(leaf, None, &registries) {
             TypeResolution::Done(resolved) => assert_eq!(resolved, member),
             other => panic!(
                 "expected Done(member) after seal, got {:?}",
@@ -275,8 +274,8 @@ mod bare_leaf_resolution {
         // pending marker of its own.
         let inner = announced_module(outer, &["Node"]);
 
-        let leaf = TypeIdentifier::leaf("Node");
-        match inner.resolve_type_identifier(&leaf, None, &registries) {
+        let leaf = type_token("Node");
+        match inner.resolve_type_identifier(leaf, None, &registries) {
             TypeResolution::Unbound(_) => {}
             other => panic!(
                 "the outer same-named declaration must not capture this reference, got {:?}",

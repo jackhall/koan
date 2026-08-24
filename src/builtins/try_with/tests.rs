@@ -1,7 +1,7 @@
 //! TRY-WITH branch dispatch over success and per-`KErrorKind` arms, plus re-raise on
 //! no-match and wildcard `_` coverage of dispatcher-internal kinds.
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::{program_storage, run_root_storage};
 
@@ -32,10 +32,9 @@ fn arm_violating_declared_return_type_errors() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "TRY (PRINT \"v\") -> :Number WITH (Ok -> (PRINT \"caught\"))",
-    ));
+    let err = test_run.run_one_err(
+        test_run.parse_one("TRY (PRINT \"v\") -> :Number WITH (Ok -> (PRINT \"caught\"))"),
+    );
     assert!(
         matches!(&err.kind, KErrorKind::TypeMismatch { arg, .. } if arg == "<return>"),
         "expected <return> TypeMismatch from the arm result, got {err}",
@@ -102,10 +101,9 @@ fn re_raise_when_no_arm_matches_error_kind() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "TRY (foo) -> :Str WITH (TypeMismatch -> (PRINT \"never\"))",
-    ));
+    let err = test_run.run_one_err(
+        test_run.parse_one("TRY (foo) -> :Str WITH (TypeMismatch -> (PRINT \"never\"))"),
+    );
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(name) if name == "foo"),
         "expected re-raised UnboundName, got {err}",
@@ -117,10 +115,9 @@ fn missing_ok_arm_on_success_raises_shape_error() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "TRY (PRINT \"x\") -> :Str WITH (TypeMismatch -> (PRINT \"never\"))",
-    ));
+    let err = test_run.run_one_err(
+        test_run.parse_one("TRY (PRINT \"x\") -> :Str WITH (TypeMismatch -> (PRINT \"never\"))"),
+    );
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("missing Ok arm")),
         "expected ShapeError about missing Ok arm, got {err}",

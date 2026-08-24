@@ -1,4 +1,4 @@
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::model::ReductionMode;
 use crate::machine::model::{KType, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
@@ -27,7 +27,7 @@ fn two_member_union_lowers_to_union() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one_type(parse_one(&program, ":(Number | Str)"));
+    let result = test_run.run_one_type(test_run.parse_one(":(Number | Str)"));
     let types = test_run.types();
     assert_eq!(
         result,
@@ -43,7 +43,7 @@ fn three_member_run_builds_flat_union() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one_type(parse_one(&program, ":(Number | Str | Bool)"));
+    let result = test_run.run_one_type(test_run.parse_one(":(Number | Str | Bool)"));
     let types = test_run.types();
     assert_eq!(
         result,
@@ -57,7 +57,7 @@ fn duplicate_member_collapses() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one_type(parse_one(&program, ":(Number | Number)"));
+    let result = test_run.run_one_type(test_run.parse_one(":(Number | Number)"));
     assert_eq!(result, KType::NUMBER);
 }
 
@@ -67,8 +67,8 @@ fn member_order_blind() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let forward = test_run.run_one_type(parse_one(&program, ":(Number | Str)"));
-    let backward = test_run.run_one_type(parse_one(&program, ":(Str | Number)"));
+    let forward = test_run.run_one_type(test_run.parse_one(":(Number | Str)"));
+    let backward = test_run.run_one_type(test_run.parse_one(":(Str | Number)"));
     assert_eq!(forward, backward);
 }
 
@@ -79,7 +79,7 @@ fn prefix_form_builds_union() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one_type(parse_one(&program, ":(| [Number Str Bool])"));
+    let result = test_run.run_one_type(test_run.parse_one(":(| [Number Str Bool])"));
     let types = test_run.types();
     assert_eq!(
         result,
@@ -94,7 +94,7 @@ fn parenthesized_compound_member() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let result = test_run.run_one_type(parse_one(&program, ":((LIST OF Number) | Str)"));
+    let result = test_run.run_one_type(test_run.parse_one(":((LIST OF Number) | Str)"));
     let types = test_run.types();
     assert_eq!(
         result,
@@ -111,7 +111,7 @@ fn binary_union_with_reaching_member_correlates() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE Wrapped = :{a :Number}");
-    let result = test_run.run_one_type(parse_one(&program, ":(Wrapped | Number)"));
+    let result = test_run.run_one_type(test_run.parse_one(":(Wrapped | Number)"));
     let types = test_run.types();
     match types.node(result) {
         TypeNode::Union { members } => {
@@ -140,7 +140,7 @@ fn nary_union_with_reaching_member_correlates() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("NEWTYPE Wrapped = :{a :Number}");
-    let result = test_run.run_one_type(parse_one(&program, ":(Wrapped | Number | Str)"));
+    let result = test_run.run_one_type(test_run.parse_one(":(Wrapped | Number | Str)"));
     let types = test_run.types();
     match types.node(result) {
         TypeNode::Union { members } => {
@@ -173,7 +173,7 @@ fn union_with_signature_member_admits_module_and_number() {
          FN (EITHER x :(Number | HasLabel)) -> Str = ((\"admitted\"))",
     );
     for call in ["EITHER widget", "EITHER 5"] {
-        match test_run.run_one(parse_one(&program, call)) {
+        match test_run.run_one(test_run.parse_one(call)) {
             KObject::KString(s) => assert_eq!(*s, "admitted", "for `{call}`"),
             other => panic!(
                 "`{call}` should dispatch, got {}",

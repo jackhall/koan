@@ -27,10 +27,11 @@ use crate::source::Spanned;
 /// [`enter_block`](crate::machine::execute::KoanRuntime::enter_block) take.
 pub(super) fn working_all<'a>(
     program: &'a ProgramStorage,
+    labels: &crate::machine::model::LabelInterner,
     src: &str,
 ) -> Vec<WorkingExpression<'a>> {
     let brand = program.brand();
-    parse(brand, &crate::machine::model::LabelInterner::new(), src)
+    parse(brand, labels, src)
         .expect("parse should succeed")
         .into_iter()
         .map(|expr| WorkingExpression::from_ast(brand.region(), expr))
@@ -50,8 +51,12 @@ pub(super) fn watch_all(
 }
 
 /// [`working_all`] for a source expected to hold exactly one statement.
-pub(super) fn working_one<'a>(program: &'a ProgramStorage, src: &str) -> WorkingExpression<'a> {
-    let mut all = working_all(program, src);
+pub(super) fn working_one<'a>(
+    program: &'a ProgramStorage,
+    labels: &crate::machine::model::LabelInterner,
+    src: &str,
+) -> WorkingExpression<'a> {
+    let mut all = working_all(program, labels, src);
     assert_eq!(all.len(), 1, "test helper expects a single expression");
     all.remove(0)
 }

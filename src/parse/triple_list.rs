@@ -16,7 +16,7 @@ use crate::source::Spanned;
 /// FN parameters may be capitalized (`Ty`, `Er`) when they name a type or a
 /// signature value, which lexes as a `Type` token, so they opt into `IdentifierOrType`. UNION variant tags *are*
 /// types (`Some`, `Ok`) and so require `Type` — a lowercase tag is rejected. In every
-/// type-token case the name string is read via `TypeIdentifier::render()`.
+/// type-token case the name string is resolved through the run's label interner.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FieldNameKind {
     Identifier,
@@ -54,7 +54,7 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
             // `Type` tokens; admitted under `IdentifierOrType` (FN) and `Type`
             // (UNION tags), never for STRUCT / record fields.
             (FieldSlot::Type(t), FieldNameKind::IdentifierOrType | FieldNameKind::Type) => {
-                t.render()
+                labels.render(t.symbol())
             }
             // A lowercase tag under the `Type` policy — tags must be capitalized type names.
             (_, FieldNameKind::Type) => {
@@ -84,32 +84,39 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
 mod tests {
     use super::*;
     use crate::machine::core::{RegionBrand, program_storage};
-    use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
+    use crate::machine::model::ast::{ExpressionPart, KExpression};
+    use crate::machine::model::labels::TypeSymbol;
     use crate::source::Spanned;
 
     /// `[name, slot]` parts where the name rides as a `Type` token (e.g. a capitalized
     /// FN param `Ty`) and the slot is an arbitrary leaf, here a `Type` too.
-    fn type_named_pair<'a>(brand: RegionBrand<'a>) -> KExpression<'a> {
+    fn type_named_pair<'a>(brand: RegionBrand<'a>, labels: &LabelInterner) -> KExpression<'a> {
         KExpression::new(
             brand,
             &[
-                Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Ty"))),
-                Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Signature"))),
+                Spanned::bare(ExpressionPart::Type(declared("Ty", labels))),
+                Spanned::bare(ExpressionPart::Type(declared("Signature", labels))),
             ],
         )
+    }
+
+    /// A Type token declared into `labels`, so the walker's own render resolves its spelling.
+    fn declared(text: &str, labels: &LabelInterner) -> TypeSymbol {
+        TypeSymbol::declared(text, labels).expect("a fixture name is a Type token")
     }
 
     #[test]
     fn identifier_or_type_accepts_type_token_name() {
         let program = program_storage();
-        let expr = type_named_pair(program.brand().region());
+        let labels = LabelInterner::new();
+        let expr = type_named_pair(program.brand().region(), &labels);
         let out = parse_pair_list(
             expr.parts,
             "FN parameters",
             FieldNameKind::IdentifierOrType,
-            &LabelInterner::new(),
+            &labels,
             |p, _| match p {
-                ExpressionPart::Type(t) => Ok(t.render()),
+                ExpressionPart::Type(t) => Ok(labels.render(t.symbol())),
                 _ => Err("unexpected slot".to_string()),
             },
         )
@@ -120,12 +127,13 @@ mod tests {
     #[test]
     fn identifier_only_rejects_type_token_name() {
         let program = program_storage();
-        let expr = type_named_pair(program.brand().region());
+        let labels = LabelInterner::new();
+        let expr = type_named_pair(program.brand().region(), &labels);
         let result = parse_pair_list(
             expr.parts,
             "STRUCT schema",
             FieldNameKind::Identifier,
-            &LabelInterner::new(),
+            &labels,
             |_, _| Ok::<_, String>(()),
         );
         assert!(

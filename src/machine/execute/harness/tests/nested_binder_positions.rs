@@ -6,7 +6,7 @@
 //! the anonymous `FN :{…}` form, which installs nothing; a definition that must also bind a name is
 //! one statement in the combined `LET <name> = FN …` spelling.
 
-use crate::builtins::test_support::{TestRun, parse_one};
+use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::KObject;
@@ -26,7 +26,7 @@ fn let_in_user_call_argument_is_nested_binder() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (CALL n :Number) -> Number = (n)");
-    let err = test_run.run_one_err(parse_one(&program, "CALL (LET x = 1)"));
+    let err = test_run.run_one_err(test_run.parse_one("CALL (LET x = 1)"));
     assert_nested_binder(err, "a user-call argument");
 }
 
@@ -36,7 +36,7 @@ fn let_in_operator_operand_is_nested_binder() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "(LET y = 1) + 2"));
+    let err = test_run.run_one_err(test_run.parse_one("(LET y = 1) + 2"));
     assert_nested_binder(err, "an operator operand");
 }
 
@@ -46,7 +46,7 @@ fn let_in_record_literal_element_is_nested_binder() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "LET r = {a = (LET v = 2)}"));
+    let err = test_run.run_one_err(test_run.parse_one("LET r = {a = (LET v = 2)}"));
     assert_nested_binder(err, "a record-literal element");
 }
 
@@ -56,7 +56,7 @@ fn let_as_deferred_head_is_nested_binder() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "(LET g = 5) (1)"));
+    let err = test_run.run_one_err(test_run.parse_one("(LET g = 5) (1)"));
     assert_nested_binder(err, "a deferred head");
 }
 
@@ -68,10 +68,8 @@ fn named_fn_in_user_call_argument_is_nested_binder() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "USE (FN (SHOW x :Number) -> Str = (\"hi\"))",
-    ));
+    let err =
+        test_run.run_one_err(test_run.parse_one("USE (FN (SHOW x :Number) -> Str = (\"hi\"))"));
     assert_nested_binder(err, "a user-call argument (named FN)");
 }
 
@@ -81,10 +79,8 @@ fn named_fn_in_list_element_is_nested_binder() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "LET xs = [(FN (ECHO x :Number) -> Number = (x))]",
-    ));
+    let err = test_run
+        .run_one_err(test_run.parse_one("LET xs = [(FN (ECHO x :Number) -> Number = (x))]"));
     assert_nested_binder(err, "a list-literal element (named FN)");
 }
 
@@ -94,10 +90,8 @@ fn named_op_in_builtin_argument_is_nested_binder() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "PRINT (OP #(⊕) OVER Number = (left + right))",
-    ));
+    let err =
+        test_run.run_one_err(test_run.parse_one("PRINT (OP #(⊕) OVER Number = (left + right))"));
     assert_nested_binder(err, "a builtin argument (named OP)");
 }
 
@@ -146,10 +140,8 @@ fn definition_in_a_declaration_slot_suggests_the_flat_spelling() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(
-        &program,
-        "LET f = (FN (DOUBLE x :Number) -> Number = (x))",
-    ));
+    let err =
+        test_run.run_one_err(test_run.parse_one("LET f = (FN (DOUBLE x :Number) -> Number = (x))"));
     let message = format!("{err}");
     assert!(
         matches!(&err.kind, KErrorKind::NestedBinder { .. }),
@@ -168,7 +160,7 @@ fn plain_let_in_a_declaration_slot_gets_the_plain_message() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(parse_one(&program, "LET z = (LET a = 3)"));
+    let err = test_run.run_one_err(test_run.parse_one("LET z = (LET a = 3)"));
     let message = format!("{err}");
     assert!(
         matches!(&err.kind, KErrorKind::NestedBinder { .. }),
@@ -188,6 +180,6 @@ fn the_combined_forms_are_legal_at_statement_position() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("LET double = FN (DOUBLE x :Number) -> Number = (x * 2)");
-    let result = test_run.run_one(parse_one(&program, "DOUBLE 4"));
+    let result = test_run.run_one(test_run.parse_one("DOUBLE 4"));
     assert!(matches!(result, KObject::Number(n) if *n == 8.0));
 }

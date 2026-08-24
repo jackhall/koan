@@ -24,7 +24,7 @@ use crate::witnessed::{BumpAllocator, BumpVec};
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
 use super::super::obligation::ReturnObligation;
-use super::resolve::{Resolution, TypeLeafChannels, resolve_name};
+use super::resolve::{Resolution, resolve_name};
 
 /// Run `f` with a [`NodeScope`] handle's scope opened at a `for<'b>` brand. A `Yoked` slot
 /// re-projects from the active cart through [`CallFrame::with_scope`]; a `YokedChild` slot opens its
@@ -231,15 +231,9 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         let mut outcomes = BumpVec::with_capacity_in(parts.len(), self.scratch());
         outcomes.extend(parts.iter().map(|p| match p.value.as_ast() {
-            Some(ast @ (ExpressionPart::Identifier(_) | ExpressionPart::Type(_))) => {
-                Some(resolve_name(
-                    self.current_scope(),
-                    &ast,
-                    active_chain,
-                    self.registries(),
-                    TypeLeafChannels::ValueChannelFirst,
-                ))
-            }
+            Some(ast @ (ExpressionPart::Identifier(_) | ExpressionPart::Type(_))) => Some(
+                resolve_name(self.current_scope(), &ast, active_chain, self.registries()),
+            ),
             _ => None,
         }));
         outcomes
