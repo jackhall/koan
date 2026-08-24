@@ -53,8 +53,8 @@ matching the three lookup kinds:
   — operator-group lookup. Per-ancestor calls
   [`Bindings::lookup_operator_group`](../../src/machine/core/bindings.rs) with
   the chain's operator probe and lifts the first visible hit into a delivery
-  envelope at the scope that declared it. The probe is the
-  sorted-joined unique operators of a `Slot (Keyword Slot)+` chain (parse-cached
+  envelope at the scope that declared it. The probe is the run digest of the
+  distinct operator symbols of a `Slot (Keyword Slot)+` chain (parse-cached
   on the [`KExpression`](../../src/machine/model/ast.rs)); a module installs the
   group under every nonempty subset of its operators, so any subset used in one
   chain resolves in one visible hit and a cross-group mix simply misses.

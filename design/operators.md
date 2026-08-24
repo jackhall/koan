@@ -155,20 +155,42 @@ Type-named overload reports: a group is a module, and a module is a value.
 An [`OperatorGroup`](../src/machine/model/operators.rs) is koan semantic data, so
 it lives where all of it lives: the declaring scope's region bump, through the one
 allocation door `OperatorGroup::alloc`. The record is `Copy` and `Drop`-free — its
-member set is a sorted, deduped slice of bump-hosted keywords, probed by binary
-search, and a pairwise mode's combiner is a bump-hosted symbol beside it — so
+member set is a sorted, deduped slice of `KeywordSymbol`s, probed by binary
+search, and a pairwise mode's combiner is one more symbol beside it — so
 region death frees it with the chunks and nothing refcounts it.
 
 That one allocation backs the whole powerset: each subset key in the scope's
 `operators` table holds a sealed carrier over the *same* pointee
 ([`Bindings`](../src/machine/core/bindings.rs) stores a carrier plus a binding
 index, the entry shape the `data` and `functions` tables take), so sharing is
-address identity and installing `2^n - 1` keys allocates nothing but the probe
-strings. The upsert that admits a re-declaration compares those addresses first
+address identity and installing `2^n - 1` keys allocates nothing but the
+subsets' recorded renderings. The upsert that admits a re-declaration compares
+those addresses first
 and the mode-plus-member-set second. A `GROUP` body's own scope names the same
 record as a plain reference at the scope's lifetime, which is what
 `Scope::nearest_group_context` hands a member `OP` — the record is same-region
 with the scope, so the answer cannot outlive the borrow it came from.
+
+### One constructor mints both sides of the key
+
+A registry key — the one a subset install writes and the one a live chain probes
+with — is a **symbol-run digest**: the run's member `KeywordSymbol`s sorted by
+symbol bits, deduped, and their digests hashed through
+[`KeywordSymbol::of_run`](../src/machine/model/labels.rs). Both sides mint through
+that one constructor — the chain's probe from `operator_probe_for`
+([shape.rs](../src/machine/model/ast/shape.rs)) as the parse freezes the node, the
+powerset from `declared_run` at registration
+([ops.rs](../src/machine/core/bindings/ops.rs)) — so a registered key and a real
+chain's probe agree by construction rather than by two renderings matching, and no
+probe path reads a glyph's text at all
+([label-interning.md](label-interning.md)).
+
+A singleton run's key is therefore *not* the bare member symbol: `{+}` as a
+registered group and `+` as a token are distinct digests, so nothing can confuse a
+group registration with a keyword. `declared_run` additionally records the members'
+interned spellings, joined in the same sorted order, under the digest — that
+recording is what an operator-conflict or cross-group diagnostic renders when it has
+to name the probe.
 
 A resolved group travels as a delivery envelope lifted at the scope that declared
 it, so a chain reducing under an ancestor's group holds that ancestor's region for

@@ -77,7 +77,7 @@ allocation traffic changes. `git log -p audit/README.md` dates each figure to th
 moved it.
 
 The **symbols** column is the run's `symbols_minted` total: every `Symbol::of` and
-`Symbol::of_parts` that reached the BLAKE3 funnel, counted where the two meet
+`KeywordSymbol::of_run` that reached the BLAKE3 funnel, counted where the two meet
 (`machine::model::labels`). It is the second reading of the same run, and it exists because
 hashing takes no allocation — a mint removed from a per-call path moves nothing in the
 allocations column, so without this one the symbol-only program would be unmeasurable. The
@@ -223,8 +223,8 @@ statements.
 
 What the *declaration* side sheds is visible in the scope-walk grid, which is the only pair of
 shapes here that differ in how many overloads they declare. The depth-10 shapes declare eight more
-shadowing overloads than the depth-2 ones and land 16 mints lower for it — the same double hash as
-seeding's, two per overload, now taken once.
+shadowing overloads than the depth-2 ones, and that difference is 136 mints where it was 152 — 16
+shed, two per extra overload, the same double hash as seeding's now taken once.
 
 The **operator chain** is read against the empty program rather than a differencing pair, and its
 131 is exact: 127 for the `+` tokens, one for `PRINT`, one for the chain's probe key, and 2 for the

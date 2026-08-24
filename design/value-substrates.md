@@ -333,7 +333,7 @@ at the seam:
   where a leaf's size varies, a string being the motivating case), nested substrates
   contribute their own memoized cost, borrow leaves contribute zero. An
   expression cell is one of those borrow leaves: it holds its node by value, and
-  the node's parts run, keyword text and structural cache all live in the
+  the node's parts run, its literal text and its structural cache all live in the
   eternal-tier storage that parsed them, so copying the cell copies pointers and
   rebuilds nothing. **Every cell family prices**, so the decision below is never
   taken blind. Because substrates are immutable
@@ -408,8 +408,8 @@ state.
 Everything in the value channel is in the
 bump: the `KObject` and `Held` cells, all four container substrates, their index
 metadata, the strings, the expression parts — the `KFunction` family, whose
-signature is a bumped run of elements with `&str` names re-homed into the
-function's own region by the one signature constructor
+signature is a bumped run of elements, each a fixed-width symbol beside a type, and
+a parameter schema bumped alongside it by the one signature constructor
 ([`ExpressionSignature::mint`](../src/machine/model/types/signature.rs)) — and
 the `Module` family, whose path is a bumped `&str` and whose two member tables
 are build-once frozen bump-backed tables keyed by re-homed `&str`

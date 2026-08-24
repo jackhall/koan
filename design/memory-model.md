@@ -530,7 +530,7 @@ body can name is the placement's own — an ambient region borrow does not coerc
 That is the same no-outlives argument the folded sinks rest on. What leaves the brand is the bumped
 **reference**, re-anchored to the caller's `'a` under the handle's own live region borrow; the value
 itself is never erased. What each must still do is put its *own* bytes where its value
-lands: a `KFunction`'s signature element run and re-homed name text
+lands: a `KFunction`'s signature element run and parameter schema
 ([`ExpressionSignature::mint`](../src/machine/model/types/signature.rs)), a `Module`'s path and both
 member tables ([`Module::assemble`](../src/machine/model/values/module.rs)). Each takes a single
 brand parameter for that re-home, so bumping the parts at one region and the value at another is

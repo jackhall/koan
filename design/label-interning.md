@@ -133,8 +133,9 @@ type of its symbol, not re-derived from text at each door. Three newtypes over `
   Type-class.
 - **`TypeSymbol`** — a Type token per `is_type_name` (`IntOrd`, `Carrier`).
 - **`KeywordSymbol`** — a keyword-class token per `is_keyword_token` (`FN`, `+`, `<=`),
-  including the space-joined operator probe keys built out of them (`"+ *"`), which gain
-  no lowercase letter and so stay keyword-class.
+  including the operator probe keys `KeywordSymbol::of_run` digests out of a run of them:
+  a run of keyword-class tokens names fixed syntax and binds to nothing, which is what the
+  class stands for.
 
 Each is minted **only** by a constructor that runs its class predicate on the text.
 There is no raw-`Symbol` constructor: a digest alone carries no evidence of what its text
@@ -319,15 +320,31 @@ consults a table.
 
 The **keyword** vocabulary converts at the **parse boundary**. Where the parser classifies a
 token as keyword-class ([tokens.rs](../src/parse/tokens.rs)) it mints the token's
-`KeywordSymbol` and interns it in the same step, and the part carries a `KeywordToken` —
-program-storage text beside that symbol ([ast.rs](../src/machine/model/ast.rs)) — from then
-on. Nothing downstream re-hashes: a node's bucket key, a signature element, an operator
-chain's cached registry probe and every keyword comparison read the symbol the parse already
-minted. Registration re-interns at `ExpressionSignature::mint`, because a draft may spell a
-token lowercase and the bucket it keys is the normalized spelling. That placement is not
-convenience — `Symbol::of` is a BLAKE3 hash, and a keyword sits on the hot dispatch probe
-path, where paying one per keyword per call is exactly the cost a parse-time cache exists to
-remove.
+`KeywordSymbol` and interns it in the same step, and the part carries that symbol alone —
+`ExpressionPart::Keyword(KeywordSymbol)`, no spelling beside it
+([ast.rs](../src/machine/model/ast.rs)). Nothing downstream re-hashes: a node's bucket key, a
+signature element, an operator chain's cached registry probe and every keyword comparison read
+the symbol the parse already minted, and the fixed tokens the machine itself compares against
+(`AS`, `->`, `_`, the binder's key specs, the reserved operator names) are `StaticName` memos
+minted once per process. That placement is not convenience — `Symbol::of` is a BLAKE3 hash, and
+a keyword sits on the hot dispatch probe path, where paying one per keyword per call is exactly
+the cost a parse-time cache exists to remove.
+
+A keyword spelled in **Rust** source rather than in koan source — a builtin signature's fixed
+tokens — converts at the draft door, `SignatureElement::keyword`
+([signature.rs](../src/machine/model/types/signature.rs)): it normalizes the spelling (a
+lowercase-bearing token uppercases, so a builtin drafting `let` keys the bucket `LET` computes)
+and then classifies and interns it. `ExpressionSignature::mint` copies the settled element, so a
+keyword element is hashed where it is written and nowhere after, and a signature's elements run
+is a slice copy into the region rather than a text re-home.
+
+An operator chain's registry probe is minted from **symbols too**, never from a join of
+spellings. `KeywordSymbol::of_run` takes the run of operator symbols a chain names, sorts them by
+symbol bits, dedupes, and hashes their digests through the same `Symbol::of_hash` funnel every
+other mint ends in; a `GROUP` registers its powerset of keys through `declared_run`, the same
+constructor plus a recorded rendering of the joined spellings for the diagnostics that name a
+probe. So a registered key and a live chain's probe agree by construction and no probe path
+touches text ([operators.md](operators.md)).
 
 The **type** vocabulary converts there too, on the same reasoning. Where the parser classifies a
 token as Type-class it mints the token's `TypeSymbol` through `declared` and the part carries the
@@ -396,5 +413,3 @@ back out of a part (`parse_pair_list`, the record-literal field-name read).
 
 - [roadmap/reduce_allocs/symbol-keyed-field-lists.md](../roadmap/reduce_allocs/symbol-keyed-field-lists.md)
   — record-literal keys, field lists and FN parameter names as symbols.
-- [roadmap/reduce_allocs/symbol-only-keyword-tokens.md](../roadmap/reduce_allocs/symbol-only-keyword-tokens.md)
-  — keyword parts drop their carried spelling.

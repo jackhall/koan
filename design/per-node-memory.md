@@ -43,7 +43,7 @@ A value embedding an AST — a quoted expression, an FN body — also `yoke`s, b
 the embedded AST reaches no region a holder could outlive. Both are `Copy`
 [`KExpression`](../src/machine/model/ast.rs) handles (the `KObject::KExpression`
 and `Body::UserDefined` payloads) borrowing their whole content — parts run,
-keyword text, structural cache — from the region that built them, and two
+literal text, structural cache — from the region that built them, and two
 separate facts make that borrow harmless:
 
 - **The value channel borrows program storage.** Every `KObject::KExpression` cell

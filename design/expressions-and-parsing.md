@@ -70,16 +70,26 @@ nested `Expression`, `SigiledTypeExpr`, `ListLiteral`, `DictLiteral`, or typed
 The `Keyword`-vs-slot split is the parser's contract with dispatch:
 
 - `Keyword` parts contribute fixed tokens to a signature's bucket key (the part
-  that has to match exactly). A keyword part carries a `KeywordToken`: its
-  program-storage text beside the `KeywordSymbol` the classifier minted and
-  interned for it, and the symbol is what the key holds and every keyword
-  comparison reads ([label-interning.md](label-interning.md)).
+  that has to match exactly). A keyword part is `Keyword(KeywordSymbol)` — the
+  symbol the classifier minted and interned, and nothing else. That symbol is what
+  the key holds, what every keyword comparison reads, and what a diagnostic
+  resolves back through the run's interner to print
+  ([label-interning.md](label-interning.md)).
 - `Identifier`, `Type`, literals, and sub-expressions become slots that compete
   on type specificity (see [typing/ktype/README.md](typing/ktype/README.md)). The
   two name parts carry a symbol and no text at all — `Identifier(ValueSymbol)` and
   `Type(TypeSymbol)`, each minted and interned by the classification that produced
   the part — so a name is hashed once, at the parse, and every later reader carries
   those bits ([label-interning.md](label-interning.md)).
+- A keyword is fixed syntax, so a **list, dict or record literal refuses one**: the
+  only keyword-shaped things such a literal's syntax has are the `,` / `:` / `=`
+  delimiters the frame consumes itself, and everything else in it is a value.
+  `[FOO 1]`, `[1 + 2]`, `{count: FOO}` and `{x = FOO}` are parse errors naming the
+  spelling, raised at the one part-push funnel
+  ([parse_stack.rs](../src/parse/parse_stack.rs)). A keyword inside a *nested*
+  expression is untouched — `[(1 + 2) 3]` is an ordinary two-element list, and
+  `a.b` / `x?` inside a literal are too, because the compound builders wrap their
+  `ATTR` / `TRY` keyword in a nested part before it is pushed.
 
 `KExpression` is itself a first-class `KObject` variant — user code can hold an
 unevaluated expression as a value, pass it around, and evaluate it on demand.
@@ -176,11 +186,12 @@ convention:
 The chain shape is a refinement of `Keyworded`: a slot-led `Slot (Keyword Slot)+`
 run with two or more keyword positions, which nothing else produces (no builtin
 reaches two keywords behind a leading argument). It carves the track for chainable
-user operators — the operator probe caches the `KeywordSymbol` of the sorted,
-deduped unique operators the per-scope operator registry is keyed by. The sorted
-run streams through one hasher, so the joined spelling the key stands for is never
-materialized; a registry probe compares symbol bits, and only the cold
-diagnostic paths re-derive the spelling from the chain's own parts.
+user operators — the operator probe caches the `KeywordSymbol` the per-scope
+operator registry is keyed by, the run digest of the chain's distinct operator
+symbols (`KeywordSymbol::of_run`, sorted by symbol bits and deduped). No spelling
+is read to build it: the members' digests stream through one hasher, a registry
+probe compares symbol bits, and only the cold diagnostic paths resolve the glyphs
+back out of the run's interner.
 
 A recognized chain reduces in
 [`decide/operator_chain.rs`](../src/machine/execute/decide/operator_chain.rs)
