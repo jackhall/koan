@@ -17,26 +17,29 @@ use crate::machine::WriteGate;
 
 use crate::machine::Scope;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{KType, RecursiveGroupWindow, RelativeSchema, TypeMemberMap};
+use crate::machine::model::{
+    KType, RecursiveGroupWindow, RelativeSchema, StaticName, TypeMemberMap, TypeSymbol,
+};
 
-/// Classify and intern one of the family's parameter names. The two literals below are
-/// Type-class by inspection, so a miss is a programming error in this registration.
-fn declared_param(text: &str, registries: &RunRegistries) -> crate::machine::model::TypeSymbol {
-    crate::machine::model::TypeSymbol::declared(text, &registries.labels)
-        .expect("a builtin constructor parameter name is a Type token")
-}
+/// The family's own name and its two variant tags — the three labels of the `Result` shape, each
+/// fixed in Rust source, so each is minted once for the process and recorded into a run's interner
+/// at registration. [`catch`](super::catch) reads the tags back through these same statics, so the
+/// tag a `Result` is built under and the tag registration declared cannot drift apart.
+static RESULT: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Result");
+pub(crate) static OK: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Ok");
+pub(crate) static ERROR: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Error");
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let types = &registries.types;
-    let ok = declared_param("Ok", registries);
-    let error = declared_param("Error", registries);
+    let ok = registries.labels.record(&OK);
+    let error = registries.labels.record(&ERROR);
     let mut schema = TypeMemberMap::default();
     schema.insert(ok, KType::ANY);
     schema.insert(error, KType::ANY);
     // A one-member window sealed in miniature: the sole `TypeConstructor` member's component is a
     // singleton, so its interned handle is `Result`'s identity.
     let identity = RecursiveGroupWindow::seal_singleton(
-        declared_param("Result", registries),
+        registries.labels.record(&RESULT),
         RelativeSchema::TypeConstructor {
             schema,
             param_names: vec![ok, error],
@@ -48,7 +51,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // fresh `types["Result"]` lookup — no value-side carrier. Prelude build runs once; a
     // collision would be a programming error.
     scope.register_builtin_type(
-        super::builtin_type_name("Result", registries),
+        registries.labels.record(&RESULT),
         identity,
         registries,
         gate,

@@ -34,8 +34,14 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let return_type = types.constructor_apply(
         result_ctor,
         Record::from_pairs([
-            (registries.labels.intern("Ok"), KType::ANY),
-            (registries.labels.intern("Error"), kerror_ktype(registries)),
+            (
+                registries.labels.record(&super::result::OK).symbol(),
+                KType::ANY,
+            ),
+            (
+                registries.labels.record(&super::result::ERROR).symbol(),
+                kerror_ktype(registries),
+            ),
         ]),
     );
     let signature = sig(
@@ -92,9 +98,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 &tagged_envelope
             }
         };
-        // `Ok` / `Error` are fixed literals of the `Result` shape, Type tokens by construction;
-        // they intern here so a rendered tag resolves back.
-        let tag = result_tag(if result.is_ok() { "Ok" } else { "Error" }, fctx.registries);
+        // The tags are read off `result`'s own statics, whose spellings the prelude registration
+        // already recorded in this run's interner, so a rendered tag resolves back.
+        let tag = if result.is_ok() {
+            super::result::OK.symbol()
+        } else {
+            super::result::ERROR.symbol()
+        };
         // The payload rides into the `Tagged` verbatim, so a payload substrate that stays foreign
         // keeps its own stored reach as the payload cell's run; the carrier's coverage is the
         // holder-rule proof for reading it, captured before the fold closure.
@@ -134,9 +144,3 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 
 #[cfg(test)]
 mod tests;
-
-/// A fixed literal of the `Result` shape as the Type token it is, interned so a rendered tag
-/// resolves back.
-fn result_tag(text: &str, registries: &RunRegistries) -> TypeSymbol {
-    TypeSymbol::declared(text, &registries.labels).expect("a `Result` tag is a Type token")
-}

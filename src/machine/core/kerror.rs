@@ -3,7 +3,8 @@ use std::fmt;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, CarriedFamily, KObject, Symbol};
 use crate::machine::model::{
-    KKind, KType, RecursiveGroupWindow, RelativeSchema, TypeMemberMap, TypeRegistry, TypeSymbol,
+    KKind, KType, RecursiveGroupWindow, RelativeSchema, StaticName, TypeMemberMap, TypeRegistry,
+    TypeSymbol,
 };
 use crate::source::{self, FileId, SourceLoc, Span};
 use crate::witnessed::RegionHandleFamily;
@@ -214,8 +215,8 @@ impl KError {
             .map(|(name, value)| (registries.labels.intern(&name), value))
             .collect();
         let record = KObject::record(door, &interned, types);
-        // The variant name and `KError` are fixed literals of the error shape, Type tokens by
-        // construction; they intern here so a rendered member name resolves.
+        // The variant name and `KError` are Type tokens of the error shape; both reach the run's
+        // interner here so a rendered member name resolves.
         let variant = error_label(&name, registries);
         let payload = KObject::wrapped_peel(
             door,
@@ -227,7 +228,7 @@ impl KError {
             variant,
             &payload,
             synthetic_singleton(
-                error_label("KError", registries),
+                registries.labels.record(&KERROR),
                 KKind::TypeConstructor,
                 types,
             ),
@@ -265,9 +266,13 @@ impl KError {
     }
 }
 
-/// A fixed literal of the error shape as the Type token it is, interned so a rendered member name
-/// resolves back. Every caller passes a `KErrorKind` variant name or `"KError"`, all Type tokens by
-/// construction.
+/// The name every `to_tagged` value reports its family under — the one label of the error shape
+/// that is fixed in Rust source rather than read off a variant, so it is minted once for the
+/// process and recorded into each run's interner.
+static KERROR: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "KError");
+
+/// A `KErrorKind` variant name as the Type token it is, interned so a rendered member name resolves
+/// back. The name is chosen by the variant in hand, so it is classified here rather than declared.
 fn error_label(text: &str, registries: &RunRegistries) -> TypeSymbol {
     TypeSymbol::declared(text, &registries.labels).expect("a KError variant name is a Type token")
 }
@@ -294,7 +299,7 @@ fn synthetic_singleton(name: TypeSymbol, kind: KKind, types: &TypeRegistry) -> K
 /// is never validated against the runtime value).
 pub(crate) fn kerror_ktype(registries: &RunRegistries) -> KType {
     synthetic_singleton(
-        error_label("KError", registries),
+        registries.labels.record(&KERROR),
         KKind::TypeConstructor,
         &registries.types,
     )
