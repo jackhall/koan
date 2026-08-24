@@ -40,7 +40,8 @@ is stored on the set member (`set.member(index).kind`), payload-free and `Copy`,
 because `OfKind` is **type-channel-only** it admits the *type value* of the family,
 classified by `kind_of`, never a runtime instance. The nominal-family keywords are pinned
 for diagnostic rendering only and are not registered as writable surface names (no entry
-in [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)).
+in [the declared builtin names](../../src/machine/model/types/builtin_names.rs)
+`KType::from_symbol` reads).
 
 Signatures live in their own KType variant —
 [`KType::Signature { schema, .. }`](../../src/machine/model/types/ktype.rs)
@@ -465,7 +466,7 @@ wins its `OfKind` overload, and only a bare runtime value falls through here. Mi
 diagnostics name the inner record (`b: Boxed = Point; b.z` reports the field miss on
 `Point`) — the fall-through is transparent at the diagnostic level too. The nominal-family
 keyword `Newtype` is *not* registered in
-[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs); the `OfKind(Newtype)`
+[`KType::from_symbol`](../../src/machine/model/types/ktype_resolution.rs)'s table; the `OfKind(Newtype)`
 slot is type-channel-only and never matches a runtime value.
 
 ## Constructor families: `NEWTYPE (Type AS Wrapper)`

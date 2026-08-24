@@ -47,10 +47,8 @@ parse boundary; Identifier tokens do not.
 
 ## Dependencies
 
-**Requires:**
-
-- [Parse-interned type tokens](parse-interned-type-tokens.md) — the interner-aware rendering
-  seam and the symbol-taking ladder shape this item mirrors on the value side.
+**Requires:** none — the type-side mirror, whose rendering seam and ladder shape this
+reuses, has shipped.
 
 **Unblocks:**
 

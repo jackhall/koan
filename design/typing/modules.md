@@ -393,7 +393,7 @@ differently are distinct types. The value channel carries a module as `KObject::
 channel never names one directly, only through the self-sig that types it.
 The type-position wildcard `KType::OfKind(KKind::Signature)` admits any
 first-class signature value; the surface keyword `Signature` lowers to it in
-[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs). The
+[`KType::from_symbol`](../../src/machine/model/types/ktype_resolution.rs). The
 `Module` surface keyword lowers to the **empty signature**
 (`KType::EMPTY_SIGNATURE`, a `Signature` over the empty schema) — the lattice top
 every module value satisfies — so an "any module" slot is signature-typed like

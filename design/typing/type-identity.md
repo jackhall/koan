@@ -26,7 +26,7 @@ and joins registries without a lock.
 Every type handle therefore denotes a type. A bare type name the synchronous
 bind seam cannot lower to a concrete type is not one: it rides the value channel
 as its own unlowered-name carrier — a dedicated `Held`/`Carried` arm holding the
-surface `TypeIdentifier` — until the park-capable resolver consumes it. It never
+token's `TypeSymbol` — until the park-capable resolver consumes it. It never
 enters the type layer, so it never digests, never reaches the dispatch
 predicates, and no handle can denote an unresolved name.
 

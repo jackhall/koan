@@ -195,7 +195,7 @@ src/
 └── machine/
     ├── model.rs            re-exports from model::types and model::values
     ├── model/
-    │   ├── ast.rs                 raw parsed AST (KExpression, ExpressionPart, KLiteral, TypeIdentifier) — Copy handles over bumped slices
+    │   ├── ast.rs                 raw parsed AST (KExpression, ExpressionPart, KLiteral) — Copy handles over bumped slices, with a Type part carrying only its TypeSymbol
     │   ├── ast/
     │   │   ├── shape.rs           Part / PartClass / FieldSlot + the structural readers both part families share (classify_dispatch_shape, the bucket key, the operator probe)
     │   │   └── working.rs         WorkingExpression / WorkingPart — the scheduler's own node, the only one that can hold a spliced sub-result
@@ -210,7 +210,8 @@ src/
     │   │   ├── registry.rs        TypeRegistry — the run-frame-owned interning graph and verdict cache
     │   │   ├── record.rs          Record<V> — ordered Symbol-keyed map over a Vec<(Symbol, V)>, backing record-type schemas and FN parameter identity
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
-    │   │   ├── ktype_resolution.rs   surface-name and TypeName elaboration (from_name, from_type_expr, join)
+    │   │   ├── ktype_resolution.rs   builtin type-name elaboration (from_symbol, eleven symbol compares against builtin_names)
+    │   │   ├── builtin_names.rs   the eleven builtin type names as StaticName<TypeSymbol>s, each beside the KType it lowers to
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking (no cache tier; interning already makes a re-elaborated form yield the same handle)
     │   │   ├── recursive_group_window.rs   RecursiveGroupWindow — the pre-seal group window and the SCC seal that interns its members
     │   │   ├── sig_schema.rs      SigSchema + sig_subtype — a signature type's owned schema and the subtyping relation

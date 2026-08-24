@@ -31,9 +31,10 @@ suppressed, and the `reattachable!` declaration in
 [arena.rs](../src/machine/core/arena.rs) states that as a compile-time
 `!needs_drop::<Scope<'static>>()` assert — a field that later brings glue back fails
 the build there.
-A `KType` and a `TypeIdentifier` take neither tier: both are `Copy` handles — an
-interned registry index and a borrow of name bytes already resident where they
-were parsed — so the type channel's carriers hold them by value. Slots have stable
+A `KType` and a `TypeSymbol` take neither tier: both are lifetime-free `Copy`
+handles — an interned registry index and a name's content digest — so the type
+channel's carriers hold them by value, and a type name crossing a region boundary
+is copied rather than re-bumped. Slots have stable
 heap addresses; the runtime carries cross-references between them rather
 than ownership trees. The structural edges:
 

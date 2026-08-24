@@ -36,14 +36,14 @@ same slot type the admission required:
 
 ```rust
 if let (ExpressionPart::Type(t), KType::PROPER_TYPE | KType::ANY_TYPE) = (self, *slot) {
-    return match KType::from_name(t.as_str()) {
-        Some(kt) => Held::Type(kt),        // source text destroyed
-        None => Held::UnresolvedType(*t),  // source text preserved
+    return match KType::from_symbol(*t) {
+        Some(kt) => Held::Type(kt),        // the name is destroyed
+        None => Held::UnresolvedType(*t),  // the token's symbol survives
     };
 }
 ```
 
-`KType::from_name` ([ktype_resolution.rs](../../src/machine/model/types/ktype_resolution.rs)) is
+`KType::from_symbol` ([ktype_resolution.rs](../../src/machine/model/types/ktype_resolution.rs)) is
 a fixed eleven-name table — `Number Str Bool Null List Dict KExpression Type Module Signature
 Any`. There is no name→handle index anywhere; the type registry is content-addressed, so every
 user-declared name misses the table and survives as `Held::UnresolvedType`. But for those eleven
@@ -61,7 +61,7 @@ Some(name_kt) => Some(name_kt.name(ctx.registries)),
 ```
 
 For `LET` the divergence is user-visible. One syntactic form, three outcomes, decided entirely
-by whether the name happens to sit in `from_name`'s table and what its handle renders as:
+by whether the name happens to sit in `from_symbol`'s table and what its handle renders as:
 
 ```
 LET Foo  = Number    → ok
@@ -73,12 +73,13 @@ LET Dict = Number    → error: shape error: LET name must be a bare type name, 
 `List` and `Dict` lower to parameterized nodes, so no name can be recovered from the handle and
 the diagnostic reports a rendering of the lowered type rather than the token the user wrote.
 
-The root cause is that a name has no way to cross the bind seam with its class. A slot is a
-`KType`, and whatever it admits reaches a body as a `Held`
+The root cause is that a name has no way to cross the bind seam with its class *whichever class
+it is*. A slot is a `KType`, and whatever it admits reaches a body as a `Held`
 ([carried.rs](../../src/machine/model/values/carried.rs)), which has three arms — `Object`,
-`Type`, `UnresolvedType`. None carries a [`BinderSymbol`](../../src/machine/model/labels.rs).
-A name arrives either as text a body must re-classify, or as a resolved handle that has thrown
-the name away.
+`Type`, `UnresolvedType`. None carries a [`BinderSymbol`](../../src/machine/model/labels.rs):
+`UnresolvedType` carries a `TypeSymbol`, so a Type token that misses the builtin table does cross
+classified, but an `Identifier` name still arrives on the `Object` arm as text a body must
+re-classify, and a builtin-table hit arrives as a resolved handle that has thrown the name away.
 
 **Ruling (pinned).** A binder position denotes a **name**, never a type reference, so it must
 never resolve — not against the builtin table, not against scope. The class of that name is the
@@ -92,7 +93,7 @@ between spellings that have nothing to do with binding.
 
 - A name-token slot type admits `ExpressionPart::Identifier` and `ExpressionPart::Type` in
   `accepts_part` and no other part shape. It is not an `OfKind(_)`, so `resolve_for`'s
-  `PROPER_TYPE | ANY_TYPE` guard does not fire for it and `KType::from_name` is never consulted
+  `PROPER_TYPE | ANY_TYPE` guard does not fire for it and `KType::from_symbol` is never consulted
   for a binder position.
 - The bind seam delivers a name-token slot's argument **classified**: a `Held` arm carrying a
   `BinderSymbol` beside the token's source text, with the class taken from the part variant.

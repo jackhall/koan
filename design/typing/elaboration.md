@@ -104,11 +104,11 @@ cross-link this section rather than restating its slice.
   [`ast.rs`](../../src/machine/model/ast.rs).
   `ExpressionPart::resolve_for` lowers a bare `Type` token against the
   builtin table via
-  [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)
-  (a match over the eleven-entry builtin map, re-run per call). A hit lowers to a resolved
-  `KType` handle in the value channel's `Type` arm; a miss — a user-bound leaf — defers to the
-  [`Carried::UnresolvedType`](../../src/machine/model/values/carried.rs) carrier over the
-  surface `TypeIdentifier`, which
+  [`KType::from_symbol`](../../src/machine/model/types/ktype_resolution.rs)
+  (eleven symbol compares against the declared builtin names, re-run per call). A hit lowers to a
+  resolved `KType` handle in the value channel's `Type` arm; a miss — a user-bound leaf — defers
+  to the [`Carried::UnresolvedType`](../../src/machine/model/values/carried.rs) carrier over the
+  token's `TypeSymbol`, which
   preserves the parser-side name verbatim until the park-capable
   `Scope::resolve_type_identifier` consumes it. Runs at `KFunction::bind` time, which has no
   `Scope` in hand, so it is builtin-only and scope-independent.
@@ -130,7 +130,7 @@ cross-link this section rather than restating its slice.
   then takes the member's absolute handle. Otherwise an *earlier still-finalizing* binder parks via
   `TypeResolution::Park(producers)`, a later-than-the-consumer binding is a position
   error, and a builtin name falls back to the builtin table through
-  [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs) —
+  [`KType::from_symbol`](../../src/machine/model/types/ktype_resolution.rs) —
   the single owner of that fallback on the resolution path. Parameterized shapes
   (`:(LIST OF X)`, `:(MAP K -> V)`) sub-Dispatch through the standalone dispatcher
   rather than recursing here, so the only recursion is the sibling-result reduce.
@@ -154,9 +154,9 @@ cross-link this section rather than restating its slice.
 - **Layer 5 — surface-form-survives-bind carrier** in
   [`carried.rs`](../../src/machine/model/values/carried.rs).
   [`Carried::UnresolvedType` / `Held::UnresolvedType`](../../src/machine/model/values/carried.rs)
-  preserve the parser-side `TypeIdentifier` verbatim for bare-leaf type names not in the
-  builtin table — so diagnostics quote the user's identifier exactly as written rather than
-  the elaborated canonical form, and no type handle ever denotes an unresolved name. The
+  preserve the parser-side token's `TypeSymbol` verbatim for bare-leaf type names not in the
+  builtin table — so diagnostics resolve the user's identifier exactly as written rather than
+  naming the elaborated canonical form, and no type handle ever denotes an unresolved name. The
   carrier never reaches the dispatch
   predicates: `Scope::resolve_type_identifier` consumes and replaces it. See
   [Bare-leaf type-name carrier](#bare-leaf-type-name-carrier) for the consumers.
@@ -295,12 +295,13 @@ uniformly under one model.
 ## Bare-leaf type-name carrier
 
 Bare-leaf type names that aren't in
-[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)'s builtin
+[`KType::from_symbol`](../../src/machine/model/types/ktype_resolution.rs)'s builtin
 table (`Point`, `Ordered`, `MyList`) are lowered by
 [`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) onto the dedicated
 [`Carried::UnresolvedType`](../../src/machine/model/values/carried.rs) carrier — holding
-the surface `TypeIdentifier` — rather than a resolved `KType` handle in the `Type` arm, so
-no type handle can denote an unresolved name.
+the token's `TypeSymbol` — rather than a resolved `KType` handle in the `Type` arm, so
+no type handle can denote an unresolved name. The carrier is lifetime-free and `Copy`, so a
+name crossing a region boundary is copied rather than re-bumped.
 The carrier preserves the parser-side name for diagnostics and for
 consumers that want the user's surface identifier verbatim. Both the `UnresolvedType`
 carrier and a fully-resolved type report
@@ -314,7 +315,9 @@ a bare user name can still be pending:
 - the shared
   [`require_bare_type_name`](../../src/machine/core/kfunction/action.rs)
   helper (used by the nominal binders that read their name from a `KObject::Record`
-  type cell), which renders either an unresolved name or a resolved type;
+  type cell), which yields the `TypeSymbol` of either an unresolved name or a resolved type —
+  a resolved leaf reaches its name only as rendered text, so that arm is the one seam where a
+  type name is declared from a string rather than carried from the token;
 - [ATTR's `body_type_lhs` and `read_field_name`](../../src/builtins/attr.rs);
 - [`let_binding`'s name slot](../../src/builtins/let_binding.rs), which
   runs a primitive/container blocklist over the `Type` arm and
@@ -404,9 +407,10 @@ type-side carrier downstream. The same shape-only-on-binder-slot rule covers
 
 Elaboration carries no cache tier. Bind-time builtin lowering
 ([`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) →
-[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs))
-re-runs the eleven-entry builtin match per call — the match is cheap, and a shared
-table would be added back only if profiling shows it hot. Scope-bound resolution
+[`KType::from_symbol`](../../src/machine/model/types/ktype_resolution.rs))
+re-runs the eleven-entry builtin scan per call — eleven symbol compares against the
+[declared builtin names](../../src/machine/model/types/builtin_names.rs), with no hashing and
+no allocation, so a shared table would be added back only if profiling shows it hot. Scope-bound resolution
 is the same: interning in the [`TypeRegistry`](../../src/machine/model/types.rs)
 already makes a re-elaborated form yield the *same* handle, so a per-scope memo
 would buy only the elaborator walk while owning an invalidation question.

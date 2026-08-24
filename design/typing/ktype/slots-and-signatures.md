@@ -20,11 +20,11 @@ than at the slot kind.
 
 A type-position value whose surface `TypeName` doesn't resolve at
 `ExpressionPart::resolve_for` time — a bare-leaf name outside
-[`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs)'s
+[`KType::from_symbol`](../../../src/machine/model/types/ktype_resolution.rs)'s
 builtin table (`Point`, `Ordered`, `MyList`, or an unknown name like
 `SomeWeirdName`) — rides through bind on a dedicated
 [`Carried::UnresolvedType` / `Held::UnresolvedType`](../../../src/machine/model/values/carried.rs)
-arm carrying the surface `TypeIdentifier` verbatim, rather than as a resolved
+arm carrying the token's `TypeSymbol` verbatim, rather than as a resolved
 `KType` handle in the `Type` arm — so no type handle ever denotes an unresolved
 name. See
 [elaboration.md § Layers](../elaboration.md#layers) § Layer 5 for where this

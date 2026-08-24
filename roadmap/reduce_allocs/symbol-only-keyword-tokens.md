@@ -34,8 +34,7 @@ structural `:` / `,` / `=` delimiters the parser consumes.
 
 ## Dependencies
 
-**Requires:**
-
-- [Parse-interned type tokens](parse-interned-type-tokens.md) — the interner-aware rendering seam.
+**Requires:** none — the interner-aware rendering seam it renders keywords through has
+shipped.
 
 **Unblocks:** none.

@@ -11,8 +11,9 @@ every field name on every evaluation, and the record-constructor and named-type-
 lists — builds a `String` per name, runs an O(n²) string dedup, and hands the `String`s to
 `typed_field_list`, which interns them ("the one intern site for field labels"), and to the
 tag/member binders, which mint again. The FN definition path collects parameter names as
-`Vec<String>` (`fn_def/signature.rs`) and scans a return surface by string comparison
-(`fn_def/param_refs.rs`); the anonymous-FN path resolves each schema field's text from the
+`Vec<String>` (`fn_def/signature.rs`), rendering a Type-token parameter back out of the interner
+to do it, and scans a return surface by hashing each of those names to compare it against the
+return token's symbol (`fn_def/param_refs.rs`); the anonymous-FN path resolves each schema field's text from the
 interner only to re-classify it. `FROM` (`record_projection.rs`) interns each named field per
 evaluation.
 

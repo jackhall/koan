@@ -86,7 +86,8 @@ concrete `KObject` has a `TypeNode` variant:
   (`access_field`), never matching the value by a kind. The nominal-family surface
   keywords (`Newtype` / `TypeConstructor`) are pinned for diagnostic
   rendering only — none is registered as a writable surface name (no entry in
-  [`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs)).
+  [the declared builtin names](../../../src/machine/model/types/builtin_names.rs)
+  `KType::from_symbol` reads).
 - `Union { members: Vec<KType> }` — an **untagged structural disjunction**, the type `:(A | B)`.
   Not a member reference: it composes any member types, canonicalized by
   [`TypeRegistry::union_of`](../../../src/machine/model/types/registry.rs) —
@@ -134,7 +135,7 @@ concrete `KObject` has a `TypeNode` variant:
   ([`attr.rs`](../../../src/builtins/attr.rs)).
   The companion wildcard `OfKind(Signature)` admits any signature value; the
   surface keyword `Signature` lowers to it in
-  [`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs),
+  [`KType::from_symbol`](../../../src/machine/model/types/ktype_resolution.rs),
   while `Module` lowers to the empty signature, the module-lattice top every module value
   satisfies.
   The single `Signature` node is **disambiguated by position**: a

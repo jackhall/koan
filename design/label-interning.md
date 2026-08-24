@@ -152,16 +152,25 @@ the same disposition a wrong-class `of` conversion gets. `WITH` is the canonical
 pin arrives as a bare record-field symbol and recovers its `TypeSymbol` from the schema
 member table the SIG declaration keyed.
 
-Two constructors, and the split is the interning rule stated above:
+Two text constructors, and the split is the interning rule stated above:
 
-- **`of(text)`** — pure classification, no interning. The *probe* constructor: a lookup
-  arriving as source text converts once here, and a wrong-class name misses by returning
-  `None` at the seam rather than by probing a table.
 - **`declared(text, labels)`** — classify **and** intern. The *declaration* constructor:
   a name entering a binding table is recorded so a later diagnostic naming it renders. Its text
   is chosen at runtime — a name the program spelled, or one the machine picks out of a value in
-  hand. A name the machine fixes in its own source takes the third door instead, below, which
-  reaches the interner without classifying anything.
+  hand. Classification and recording share the digest classification already took, so a
+  declaration hashes its text once. A name the machine fixes in its own source takes the third
+  door instead, below, which reaches the interner without classifying anything.
+- **`of(text)`** — pure classification, no interning. The *probe* constructor: a lookup
+  arriving as source text converts once here, and a wrong-class name misses by returning
+  `None` at the seam rather than by probing a table. `ValueSymbol` and `KeywordSymbol` expose
+  it; **`TypeSymbol` does not** — a Type token is minted at the parse that classifies it and
+  every later reader carries that symbol, so there is no text for a type-side probe to convert.
+  A seam that must probe a type-keyed table from runtime text derives a bare `Symbol` and
+  compares bits.
+
+Both run the class predicate through one hidden `classify` funnel, shared with the
+`static_name!` mint below, so a class has exactly one implementation of "does this text
+classify".
 
 **`BinderSymbol`** is the fourth type: an enum over the two *bindable* classes,
 `Value(ValueSymbol) | Type(TypeSymbol)`, for a seam that accepts either and routes on the
@@ -181,7 +190,7 @@ symbol thereafter**.
 
 The declaration is a `StaticName<S>` ([`labels.rs`](../src/machine/model/labels.rs)): the
 spelling beside a `LazyLock` memo of its classified symbol, built by the `static_name!` macro,
-which supplies the class's own `of` as the mint. A `LazyLock` over a pure function of a literal
+which mints through the class's own `classify` funnel. A `LazyLock` over a pure function of a literal
 is a memo and not run state — `Symbol::of` answers the same bits in every run and every process,
 so the cached value carries nothing from one run into the next. The class predicate still runs on
 the same text it would have run on, once, at first touch; a spelling that will not classify
@@ -232,7 +241,11 @@ The Rust-side tags are the same shape one level up: `Ok`, `Error` and `Result` a
 registration that builds its type. `CATCH` reads the tags back through `result`'s own statics, so
 the tag a `Result` value is built under is the tag its registration declared. A name chosen at
 runtime takes `declared`: a `KError` variant's name is picked by the variant in hand rather than
-fixed at a source site, and the builtin type table matches its eleven names as text.
+fixed at a source site. The builtin type vocabulary is fixed in source like the tags —
+[builtin_names.rs](../src/machine/model/types/builtin_names.rs) declares the eleven spellings as
+`StaticName<TypeSymbol>`s beside the handle each lowers to, and that one table is what both root
+registration and `KType::from_symbol` read, so a builtin type name is matched by eleven symbol
+compares and never classified from text.
 
 The mint count is measured, not bounded, in
 [audit/README.md § Symbol mints](../audit/README.md#symbol-mints).
@@ -290,8 +303,9 @@ which is the one place the rule is a runtime answer rather than a type.
 
 ## Where text becomes a symbol
 
-The conversion seam is per vocabulary, and the two answers differ because the vocabularies
-are reached differently.
+The conversion seam is per vocabulary, and the answers differ because the vocabularies are
+reached differently: two convert where the parser classifies the token, one where a lookup
+consults a table.
 
 The **keyword** vocabulary converts at the **parse boundary**. Where the parser classifies a
 token as keyword-class ([tokens.rs](../src/parse/tokens.rs)) it mints the token's
@@ -305,10 +319,18 @@ convenience — `Symbol::of` is a BLAKE3 hash, and a keyword sits on the hot dis
 path, where paying one per keyword per call is exactly the cost a parse-time cache exists to
 remove.
 
-The **value** and **type** vocabularies convert at the **lookup seam** instead: a resolve
-ladder takes `&str`, classifies once at the top with `of`, and compares symbol bits from
-there down. A wrong-class probe misses at that conversion — against a map that could never
-have held such a key.
+The **type** vocabulary converts there too, on the same reasoning. Where the parser classifies a
+token as Type-class it mints the token's `TypeSymbol` through `declared` and the part carries the
+symbol alone — `ExpressionPart::Type(TypeSymbol)`, no surface text beside it. Every later reader
+carries that symbol through: the bind seam's `UnresolvedType` carrier, the type-side lookup ladder
+(`Scope::resolve_type_with_chain`), `elaborate_type_identifier`, a variant-tag match, and each
+type-declaring builtin's binder name. Because the symbol is lifetime-free and `Copy`, a type name
+crossing a region boundary is copied rather than re-bumped, and a name that must be *printed*
+resolves back through the interner.
+
+The **value** vocabulary converts at the **lookup seam** instead: a resolve ladder takes `&str`,
+classifies once at the top with `of`, and compares symbol bits from there down. A wrong-class
+probe misses at that conversion — against a map that could never have held such a key.
 
 ## Probes never intern
 
@@ -324,14 +346,22 @@ resolves text through the label interner reached from the execution context via
 `RunRegistries`. Pure type-structure questions (subtyping, digests, dispatch)
 continue to take the type registry alone; anything that renders text takes the
 bundle. A resolve miss renders a stable placeholder rather than failing: error
-paths stay total.
+paths stay total — that is `LabelInterner::render`, the total form every render
+path uses. Its `display` twin is the same read as a `Display` view, so a message
+that names a label writes the recorded text straight into the message's own
+buffer with no `String` in between; a diagnostic built on a path that succeeds
+costs no more than one built from a borrowed name.
+
+Because the surface parts of an expression carry symbols rather than text,
+`summarize` — the surface rendering of a part, an expression or a trace frame —
+takes the run's interner, and so do the parse-side walkers that render a name
+back out of a part (`parse_pair_list`, the record-literal field-name read).
 
 ## Open work
 
-- [roadmap/reduce_allocs/parse-interned-type-tokens.md](../roadmap/reduce_allocs/parse-interned-type-tokens.md)
-  and [roadmap/reduce_allocs/parse-interned-identifiers.md](../roadmap/reduce_allocs/parse-interned-identifiers.md)
-  — `Type` and `Identifier` parts carry their classified symbol alone from the parse boundary, so
-  the type and value vocabularies stop re-deriving a digest the parser could have carried.
+- [roadmap/reduce_allocs/parse-interned-identifiers.md](../roadmap/reduce_allocs/parse-interned-identifiers.md)
+  — `Identifier` parts carry their classified symbol alone from the parse boundary, so the value
+  vocabulary stops re-deriving a digest the parser could have carried.
 - [roadmap/reduce_allocs/symbol-keyed-field-lists.md](../roadmap/reduce_allocs/symbol-keyed-field-lists.md)
   — record-literal keys, field lists and FN parameter names as symbols.
 - [roadmap/reduce_allocs/symbol-only-keyword-tokens.md](../roadmap/reduce_allocs/symbol-only-keyword-tokens.md)

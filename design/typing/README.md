@@ -31,7 +31,7 @@ Type-system mechanics:
   `KType`: the scheduler-driven elaborator, recursion via threaded-set
   recognition, module-qualified names, the binding-map partition that
   separates type-name lookups from value-name lookups, the
-  `UnresolvedType` surface-`TypeIdentifier` carrier, and the two-layer
+  `UnresolvedType` unlowered-name carrier, and the two-layer
   resolution memo that amortizes elaboration cost.
 - [user-types.md](user-types.md) — the registry-interned nominal model: a
   member's `SetMember` handle is the per-declaration identity for NEWTYPE, named

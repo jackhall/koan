@@ -124,7 +124,7 @@ Type and module system ([typing/](typing/README.md)):
 - [typing/elaboration.md](typing/elaboration.md) — how a type name
   resolves to a `KType` through the scheduler-driven elaborator: strict
   source-order resolution (a forward type reference is a position error),
-  the binding-map partition, the `UnresolvedType` surface-`TypeIdentifier` carrier,
+  the binding-map partition, the `UnresolvedType` unlowered-name carrier,
   the resolution memo, and the module-body announcement for mutual
   recursion.
 - [typing/user-types.md](typing/user-types.md) — the registry-interned
