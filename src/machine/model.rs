@@ -21,7 +21,6 @@ pub(crate) use types::IdentityBuildHasher;
 pub use types::TypeRegistry;
 pub use types::builtin_types;
 pub use types::most_specific_ktype;
-pub use types::render_label;
 pub use types::{
     AnnouncedData, AnnouncedMember, AnnouncedWindow, Argument, DeclWindow, DeferredReturn,
     DeferredReturnSurface, DispatchToken, DispatchTokenElement, ExpressionSignature, KKind, KType,
@@ -29,6 +28,7 @@ pub use types::{
     ReturnType, SealedAnnounced, SealedGroup, SignatureDraft, SignatureElement, TypeNode,
     UntypedKey, WindowView, is_keyword_token,
 };
+pub use types::{display_label, render_label};
 pub use values::{
     Carried, ContainerSubstrate, Held, KKey, KObject, PartedCell, Scalar, ValueEqualityError,
 };

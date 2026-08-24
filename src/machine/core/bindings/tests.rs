@@ -16,7 +16,8 @@ use crate::machine::model::values::Carried;
 use workgraph::witnessed::Sealed;
 
 use crate::builtins::test_support::{
-    binder_name, keyword_name, mock_declaration_site, run_root_bare, type_name, value_name,
+    binder_name, keyword_name, mock_declaration_site, run_root_bare, type_name, type_token,
+    value_name,
 };
 use crate::machine::core::GroupSeal;
 use crate::machine::core::kfunction::{Body, KFunction};
@@ -715,7 +716,7 @@ fn bump_backed_tables_full_churn() {
         );
 
         // SIG slot records through a real scope: the fifth table, over the same bump.
-        let sig = scope.alloc_child_under_sig("Shape");
+        let sig = scope.alloc_child_under_sig(type_token("Shape"));
         for i in 0..48 {
             sig.write_sig_slot(
                 value_name(&format!("slot_{i}"), &registries),

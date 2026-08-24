@@ -1,7 +1,7 @@
 //! `WITH` sharing constraints on functor parameters and return types.
 
 use crate::builtins::test_support::lookup_type;
-use crate::builtins::test_support::{TestRun, lookup_fn, lookup_module, spliced_part};
+use crate::builtins::test_support::{TestRun, lookup_fn, lookup_module, spliced_part, type_token};
 use crate::machine::model::Carried;
 use crate::machine::{program_storage, run_root_storage};
 
@@ -20,7 +20,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let types = test_run.registry_handle();
     // An empty signature: every module bare-satisfies it, so the pins alone gate. Declared
     // directly rather than through `SIG`, which has no empty-body surface form.
-    let sig_scope = scope.alloc_child_under_sig("Ordered");
+    let sig_scope = scope.alloc_child_under_sig(type_token("Ordered"));
     let schema = SigSchema::project_decl(sig_scope, types.registries());
 
     // `no_elem_pin` binds no `Elem` member, so the `{Elem = Number}` pin finds nothing to agree

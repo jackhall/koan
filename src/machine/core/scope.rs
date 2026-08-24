@@ -4,7 +4,7 @@ use std::rc::{Rc, Weak};
 
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::{AnnouncedData, AnnouncedWindow};
-use crate::machine::model::{IdentityBuildHasher, KType, ValueSymbol};
+use crate::machine::model::{IdentityBuildHasher, KType, TypeSymbol, ValueSymbol};
 use crate::witnessed::{And, RegionHandle, SealedExtern};
 
 use super::arena::{FrameStorage, KoanRegion, RegionBrand};
@@ -127,7 +127,7 @@ pub enum ScopeKind<'a> {
     /// contribute no drop glue at all. The element proof the wrapper would otherwise swallow is
     /// stated below.
     Sig {
-        name: &'a str,
+        name: TypeSymbol,
         slots: RefCell<ManuallyDrop<BumpBackedMap<'a, ValueSymbol, KType, IdentityBuildHasher>>>,
     },
     /// A MODULE body (also the per-ascription view minted by `:|`). `group` is `Some` for a `GROUP`
@@ -287,7 +287,7 @@ impl<'a> Scope<'a> {
     }
 
     /// `child_under`, stamped as a SIG decl_scope with an empty VAL slot collector.
-    fn child_under_sig(outer: &'a Scope<'a>, name: &'a str) -> Scope<'a> {
+    fn child_under_sig(outer: &'a Scope<'a>, name: TypeSymbol) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new(outer.brand)),
@@ -416,9 +416,8 @@ impl<'a> Scope<'a> {
     }
 
     /// Allocate a same-region child stamped as a SIG decl_scope with an empty VAL slot collector.
-    /// `name` is re-homed into this scope's own region, so the kind owns no heap of its own.
-    pub fn alloc_child_under_sig(&'a self, name: &str) -> &'a Scope<'a> {
-        let name = self.brand().allocator().text(name);
+    /// `name` is the declaration's own token, so the kind owns no heap of its own.
+    pub fn alloc_child_under_sig(&'a self, name: TypeSymbol) -> &'a Scope<'a> {
         Self::bump_child(self, Scope::child_under_sig(self, name))
     }
 

@@ -1233,7 +1233,7 @@ fn region_death_frees_every_drop_free_family() {
             .is_some()
     );
 
-    let sig_child = block.alloc_child_under_sig("Shape");
+    let sig_child = block.alloc_child_under_sig(type_token("Shape"));
     for i in 0..64 {
         sig_child
             .write_sig_slot(

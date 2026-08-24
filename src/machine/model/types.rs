@@ -25,7 +25,7 @@ pub use declaration_window::{
 };
 pub use kkind::KKind;
 pub use ktraits::Parseable;
-pub use ktype::{KType, render_label};
+pub use ktype::{KType, display_label, render_label};
 pub use node::{NodeSchema, TypeNode};
 pub use record::{Record, slice_get as record_field};
 pub use recursive_group_window::{

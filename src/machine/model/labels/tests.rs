@@ -283,3 +283,32 @@ fn record_interns_each_grouped_slot_separately() {
         Some("height".to_string())
     );
 }
+
+/// The `Display` view prints what `render` returns, on both the hit and the miss, so a message
+/// that names a label reads the same whichever door built it.
+#[test]
+fn display_matches_render_on_a_hit_and_on_a_miss() {
+    let labels = LabelInterner::new();
+    let recorded = labels.intern("Ordered");
+    let never_seen = Symbol::of("Absent");
+    assert_eq!(
+        labels.display(recorded).to_string(),
+        labels.render(recorded)
+    );
+    assert_eq!(labels.display(recorded).to_string(), "Ordered");
+    assert_eq!(
+        labels.display(never_seen).to_string(),
+        labels.render(never_seen)
+    );
+    assert_eq!(labels.display(never_seen).to_string(), "<label>");
+}
+
+/// `declared` classifies and records with one hash: the symbol it hands back is the one the
+/// interner keyed the text under, so a later `resolve` of that symbol finds the spelling.
+#[test]
+fn declared_records_the_text_under_the_symbol_it_returns() {
+    let labels = LabelInterner::new();
+    let name = TypeSymbol::declared("Ordered", &labels).expect("`Ordered` is a Type token");
+    assert_eq!(labels.resolve(name.symbol()), Some("Ordered".to_string()));
+    assert_eq!(labels.len(), 1);
+}

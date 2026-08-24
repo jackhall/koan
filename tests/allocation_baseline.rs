@@ -62,16 +62,16 @@ fn allocations_for(source: &str, path: &str) -> u64 {
     delta
 }
 
-/// 100 tail-recursive steps, 92.0 allocations each — exactly linear, measured flat at
-/// 10/50/100/200. Measured 2026-08-22 at 11 910, down from 12 493 when a dispatch bucket was
-/// keyed by keyword text: 481 of the drop is interpreter startup, which no longer copies a
-/// keyword's bytes per registered bucket key, and the remaining 102 is ≈1 per step — the key run
-/// a splice re-bumped before the splice door began inheriting it. The bound is that plus 37, less
-/// than the 100 a single new per-step allocation would add. Tight on purpose: a looser bound cannot
-/// see one allocation, and rebaselining is meant to be a deliberate edit.
+/// 100 tail-recursive steps, 91.0 allocations each — exactly linear, measured flat at
+/// 10/50/100/200. Measured 2026-08-24 at 11 809, down from 11 910 when a type token was carried as
+/// text: ≈1 per step, and it is an arena chunk rather than a heap object — the only allocation size
+/// the step sheds is 496 bytes, bumpalo's first chunk. A step's own region holds fewer bytes with
+/// the statement's Type spellings gone, which puts the frame back under one chunk. The bound is the measurement
+/// plus 37, less than the 100 a single new per-step allocation would add. Tight on purpose: a
+/// looser bound cannot see one allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
-    const BOUND: u64 = 11_947;
+    const BOUND: u64 = 11_846;
     let delta = allocations_for(
         include_str!("../audit/shapes/tail_loop.koan"),
         "audit/shapes/tail_loop.koan",
@@ -85,15 +85,14 @@ fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
 }
 
 /// A 128-operand `+` chain, so 127 dispatches at ≈23 allocations each — mildly superlinear,
-/// with marginal cost rising across the 16→32 … 128→256 operand doublings. Measured 2026-08-22
-/// at 5 416, down from 5 898 when a dispatch bucket was keyed by keyword text. The per-dispatch
-/// term is unmoved — the drop is the startup the loop shape's drop also carries, plus the joined
-/// probe string the chain's one node no longer builds. The bound is the measurement plus 36,
-/// under the 127 a single new per-dispatch allocation would add. Same headroom rule as the
-/// loop.
+/// with marginal cost rising across the 16→32 … 128→256 operand doublings. Measured 2026-08-24
+/// at 5 415, down from 5 416 when a type token was carried as text. The per-dispatch term is
+/// unmoved: a `+` chain names no type, so the whole drop is the one startup allocation every shape
+/// here carries. The bound is the measurement plus 36, under the 127 a single new per-dispatch
+/// allocation would add. Same headroom rule as the loop.
 #[test]
 fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
-    const BOUND: u64 = 5_452;
+    const BOUND: u64 = 5_451;
     let delta = allocations_for(
         include_str!("../audit/shapes/operator_chain.koan"),
         "audit/shapes/operator_chain.koan",
@@ -116,7 +115,7 @@ fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
 /// dispatches' marginal cost; differencing *those* leaves what 8 extra scopes cost per
 /// dispatch. Before the walk's buffers moved onto the step scratch arena that difference
 /// measured 509 — ≈2 heap allocations per extra scope walked, per dispatch. Measured
-/// 2026-08-22 it is **−3**: 1 594 allocations for 32 dispatches at depth 10 against 1 597 at
+/// 2026-08-24 it is **−3**: 1 562 allocations for 32 dispatches at depth 10 against 1 565 at
 /// depth 2, the two depths indistinguishable and the deeper walk marginally the cheaper.
 ///
 /// The bound is one allocation per extra dispatch, far under the ≥256 that a single
@@ -193,13 +192,13 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 /// builds no string. What remains in the slope is per-*argument* cost the bind does not own: the
 /// extra source the call site parses, and the delivery carrier each argument travels in.
 ///
-/// Measured 2026-08-22: **1 174** for 32 one-parameter calls (36.7 each) and **2 006** for 32
-/// eight-parameter calls (62.7 each), a slope of 832 — 3.71 per parameter per call. Down from
-/// 1 206 / 2 231 (slope 1 025, 4.58 per parameter) when the frame bind resolved each parameter's
-/// symbol back to text through the run's label interner. That resolve built one `String` per
-/// parameter per call, and the drop tracks it: 0.87 per parameter, and 31 of the 32 calls' worth
-/// at n = 1. Both sit just under one allocation apiece, and the shapes do not isolate the
-/// remainder finely enough to say what the shortfall is.
+/// Measured 2026-08-24: **1 174** for 32 one-parameter calls (36.7 each) and **1 974** for 32
+/// eight-parameter calls (61.7 each), a slope of 800 — 3.57 per parameter per call. The per-call
+/// figure at one parameter is unmoved; the eight-parameter one is 32 lower than the 2 006 measured
+/// while a type token was carried as text. The whole difference is one 496-byte arena chunk per
+/// call — bumpalo's first chunk, the only allocation size that moves — so what changed is how many
+/// bytes the call's own region holds, not what it puts on the heap. At eight parameters the frame
+/// sat just over a chunk and now sits under it; at one it was never near the boundary.
 ///
 /// Both bounds are the measurement plus 31, so one re-introduced per-call allocation — 32 across
 /// the repetition gap — fails the first, and a re-introduced per-parameter one fails the second
@@ -207,7 +206,7 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 #[test]
 fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
     const PER_CALL_BOUND: u64 = 1_205;
-    const PER_PARAMETER_BOUND: u64 = 863;
+    const PER_PARAMETER_BOUND: u64 = 831;
     let arity1 = allocations_for(
         include_str!("../audit/shapes/user_fn_params1_calls40.koan"),
         "audit/shapes/user_fn_params1_calls40.koan",
@@ -249,18 +248,18 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
 /// registry (a clone per read), selects a variant out of the constructor's schema, builds the
 /// tagged value, and matches on its tag.
 ///
-/// Measured 2026-08-22 at **2 966** for the 32 cycles (92.7 each), down from 3 158 (98.7 each)
-/// when the variant schema was keyed by the tag's text. The 192-allocation drop is 6 per cycle:
-/// the tag `String` a construction used to bump into the tagged value, and the schema-key text
-/// clones a variant selection used to make on the way in and out of the registry, both replaced
-/// by the classified symbol the declaration already interned
-/// ([label-interning.md](../design/label-interning.md)).
+/// Measured 2026-08-24 at **2 934** for the 32 cycles (91.7 each), down from 2 966 (92.7 each)
+/// when a type token was carried as text. The 32-allocation drop is one 496-byte arena chunk per
+/// cycle — bumpalo's first chunk, the only allocation size that moves. A cycle's statement names
+/// five Type tokens (the union binder, three variant-tag mentions and the return-type leaf) and
+/// none of their spellings reach the region the cycle opens any more, so the frame falls back
+/// under one chunk ([label-interning.md](../design/label-interning.md)).
 ///
 /// The bound is the measurement plus 31, so one re-introduced per-construction allocation — 32
 /// across the repetition gap — fails it.
 #[test]
 fn the_tagged_construct_shape_stays_within_its_per_construction_bound() {
-    const BOUND: u64 = 2_997;
+    const BOUND: u64 = 2_965;
     let marginal = allocations_for(
         include_str!("../audit/shapes/tagged_construct_calls40.koan"),
         "audit/shapes/tagged_construct_calls40.koan",

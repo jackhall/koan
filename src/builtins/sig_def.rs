@@ -37,12 +37,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", &SLOTS.body));
 
-    let decl_scope = ctx
-        .scope
-        .alloc_child_under_sig(&crate::machine::model::render_label(
-            name.symbol(),
-            ctx.registries,
-        ));
+    let decl_scope = ctx.scope.alloc_child_under_sig(name);
 
     let site = ctx.declaration_site();
     let name_for_finish = name;

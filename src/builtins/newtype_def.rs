@@ -58,7 +58,7 @@ fn finalize_newtype<'a>(
         repr,
         &format!(
             "the representation type of NEWTYPE `{}`",
-            crate::machine::model::render_label(name.symbol(), fctx.registries),
+            crate::machine::model::display_label(name.symbol(), fctx.registries),
         ),
         fctx.registries,
     ) {

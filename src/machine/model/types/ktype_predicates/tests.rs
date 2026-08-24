@@ -391,7 +391,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         &spliced_part(&region, Carried::Object(module_value)),
         types.registries()
     ));
-    let sig_scope = scope.alloc_child_under_sig("Ordered");
+    let sig_scope = scope.alloc_child_under_sig(type_token("Ordered"));
     let kt_sig: KType = types.signature(SigSchema::project_decl(sig_scope, types.registries()));
     // A signature is a type value: the `:Type` lattice top admits it; the proper tier does not.
     assert!(t.accepts_working_part(
@@ -998,7 +998,7 @@ fn matches_value_admits_module_object_via_signature_slot() {
     let types = test_run.registry_handle();
 
     // An empty signature (empty decl scope): every module bare-satisfies it, so the pins gate.
-    let sig_scope = scope.alloc_child_under_sig("S");
+    let sig_scope = scope.alloc_child_under_sig(type_token("Ss"));
     let schema = SigSchema::project_decl(sig_scope, types.registries());
 
     let child = scope.alloc_child_under_module("M", None);

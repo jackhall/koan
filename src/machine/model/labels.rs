@@ -74,6 +74,10 @@ pub fn symbols_minted() -> u64 {
     MINTED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// What a render path prints for a symbol whose text this run never recorded. Rendering is total,
+/// so a miss is this placeholder rather than a panic.
+const MISSING_LABEL: &str = "<label>";
+
 /// The run's digest → text side table for labels.
 ///
 /// Interior mutability by `RefCell`, matching the type registry beside it: construction sites hold
@@ -94,9 +98,16 @@ impl LabelInterner {
     /// already recorded costs one lookup.
     pub fn intern(&self, text: &str) -> Symbol {
         let symbol = Symbol::of(text);
+        self.record_text(symbol, text);
+        symbol
+    }
+
+    /// Record `text` under `symbol`, the digest the caller already holds. The one write door the
+    /// three public ones funnel through: a caller that classified the text has minted its digest
+    /// already, so the recording costs a map lookup and no second hash.
+    fn record_text(&self, symbol: Symbol, text: &str) {
         let mut texts = self.texts.borrow_mut();
         texts.entry(symbol).or_insert_with(|| text.into());
-        symbol
     }
 
     /// The text recorded for `symbol`, or `None` if nothing interned it in this run. Render paths
@@ -112,7 +123,18 @@ impl LabelInterner {
     /// total form of [`resolve`](Self::resolve) every render path uses.
     pub fn render(&self, symbol: Symbol) -> String {
         self.resolve(symbol)
-            .unwrap_or_else(|| "<label>".to_string())
+            .unwrap_or_else(|| MISSING_LABEL.to_string())
+    }
+
+    /// [`render`](Self::render) as a `Display` view rather than a `String`: the recorded text goes
+    /// straight into the caller's formatter. A message that names a label costs the message's own
+    /// buffer and nothing else, so a diagnostic built on the path that succeeds is as cheap as one
+    /// built from a borrowed name.
+    pub fn display(&self, symbol: Symbol) -> LabelDisplay<'_> {
+        LabelDisplay {
+            labels: self,
+            symbol,
+        }
     }
 
     /// How many distinct labels this run has recorded.
@@ -126,15 +148,30 @@ impl LabelInterner {
     /// hash.
     pub fn record<S: ClassifiedSymbol>(&self, name: &StaticName<S>) -> S {
         let classified = name.symbol();
-        let mut texts = self.texts.borrow_mut();
-        texts
-            .entry(classified.symbol())
-            .or_insert_with(|| name.text().into());
+        self.record_text(classified.symbol(), name.text());
         classified
     }
 
     pub fn is_empty(&self) -> bool {
         self.texts.borrow().is_empty()
+    }
+}
+
+/// A [`LabelInterner::display`] view: one symbol plus the interner that may hold its text.
+///
+/// Holds the interner borrow only for the length of the write, so a `Display` chain that names
+/// several labels never nests the `RefCell` borrow.
+pub struct LabelDisplay<'a> {
+    labels: &'a LabelInterner,
+    symbol: Symbol,
+}
+
+impl std::fmt::Display for LabelDisplay<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.labels.texts.borrow().get(&self.symbol) {
+            Some(text) => formatter.write_str(text),
+            None => formatter.write_str(MISSING_LABEL),
+        }
     }
 }
 
@@ -198,7 +235,7 @@ macro_rules! classified_symbol {
             /// later diagnostic naming it can resolve the text back.
             pub fn declared(text: &str, labels: &LabelInterner) -> Option<Self> {
                 let classified = $name::classify(text)?;
-                labels.intern(text);
+                labels.record_text(classified.symbol(), text);
                 Some(classified)
             }
 

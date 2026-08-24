@@ -1,5 +1,5 @@
 use crate::builtins::test_support::lookup_type;
-use crate::builtins::test_support::{TestRun, type_name, value_name};
+use crate::builtins::test_support::{TestRun, type_name, type_token, value_name};
 use crate::machine::model::{KObject, KType};
 
 #[test]
@@ -319,7 +319,7 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     // outer SIG's error is a combine-propagated shape error and doesn't carry
     // the inner diagnostic text.
 
-    let sig_scope = scope.alloc_child_under_sig("SyntheticForTest");
+    let sig_scope = scope.alloc_child_under_sig(type_token("SyntheticForTest"));
     let err = test_run.run_one_err_in(sig_scope, test_run.parse_one("LET compare = 0"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {

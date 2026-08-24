@@ -233,6 +233,15 @@ pub fn render_label(symbol: Symbol, registries: &RunRegistries) -> String {
     registries.labels.render(symbol)
 }
 
+/// [`render_label`] as a `Display` view — what a `format!` argument naming a label uses, so the
+/// text lands in the message's buffer without a `String` of its own on the way.
+pub fn display_label(
+    symbol: Symbol,
+    registries: &RunRegistries,
+) -> crate::machine::model::labels::LabelDisplay<'_> {
+    registries.labels.display(symbol)
+}
+
 /// The structural rendering of a non-empty interface: `SIG (member: Type, …)` over every member
 /// the schema names — abstract, manifest and value slot alike — in member-name order, which is
 /// the only order the schema's unordered maps admit deterministically.

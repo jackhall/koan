@@ -12,8 +12,8 @@ use crate::machine::{StepCarried, seal_type_identity};
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::render_label;
 use crate::machine::model::{Symbol, TypeSymbol, type_binder};
+use crate::machine::model::{display_label, render_label};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { name, schema } }
@@ -153,7 +153,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         "<union>",
         format!(
             "UNION {} schema",
-            render_label(name.symbol(), ctx.registries),
+            display_label(name.symbol(), ctx.registries),
         ),
     );
     nominal_schema_action(
