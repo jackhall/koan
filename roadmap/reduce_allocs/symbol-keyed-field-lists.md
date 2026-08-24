@@ -14,8 +14,8 @@ tag/member binders, which mint again. The FN definition path collects parameter 
 `Vec<String>` (`fn_def/signature.rs`), rendering a Type-token parameter back out of the interner
 to do it, and scans a return surface by hashing each of those names to compare it against the
 return token's symbol (`fn_def/param_refs.rs`); the anonymous-FN path resolves each schema field's text from the
-interner only to re-classify it. `FROM` (`record_projection.rs`) interns each named field per
-evaluation.
+interner only to re-classify it — forced by `Record<KType>` erasing each key's class at the
+intern boundary.
 
 **Acceptance criteria.**
 
@@ -24,9 +24,13 @@ evaluation.
   symbol and mint nothing per evaluation.
 - `parse_pair_list` yields `(BinderSymbol, T)` pairs, dedups by symbol, and builds no `String`;
   `typed_field_list` interns nothing; `pair_list_names` and `parse_hk_decl` yield symbols.
+- `Record<V>` is keyed by `BinderSymbol`, identity still the key's symbol bits, so a schema
+  carries each field's class past the intern boundary.
 - FN parameter names travel as `BinderSymbol`s from signature parse through the return-surface
-  scan; the anonymous-FN schema path pushes the schema's symbols directly.
-- `FROM` reads each field's carried symbol and dedups by symbol.
+  scan (the scan list itself is a bare-`Symbol` probe set); the anonymous-FN schema path pushes
+  the schema's classified keys into its `Argument`s directly — no text resolve, no re-classify.
+- `FROM` reads each field's carried symbol and dedups by symbol (already holds — verify), and
+  its narrowed record type reuses the schema's stored classified keys.
 - `symbols_minted` and the recorded allocation baselines both drop on the user-FN and
   tagged-construct shapes (a `String` per field / parameter per declaration is gone); no baseline
   regresses.
@@ -36,6 +40,15 @@ evaluation.
 - *Record-key class — decided.* `BinderSymbol`: the parser admits Identifier and Type parts as
   keys, `WITH {Elt = …}` probes the Type class, and `.symbol()` gives record construction its bare
   `Symbol`.
+- *Type-side `Record<V>` key currency — decided (2026-08-24).* `Record<V>` keys are
+  `BinderSymbol`s; `Eq`/`Hash`/type-digest read `key.symbol()` bits only (a `BinderSymbol` is a
+  symbol; equal text means equal class), probe doors keep taking a bare `Symbol`, and recovering a
+  stored key's class is witnessed because insertion required a classified key. Value-side record
+  substrates stay `Symbol`-keyed; the construction doors take `(BinderSymbol, _)` pairs and split
+  the currency. `design/label-interning.md` and `design/typing/ktype/records-and-limits.md` say
+  "keyed by `BinderSymbol`" accordingly.
+
+Plan: `scratch/symbol-keyed-field-lists-plan.md` (untracked working copy).
 
 ## Dependencies
 
