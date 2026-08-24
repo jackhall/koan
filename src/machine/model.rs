@@ -19,6 +19,7 @@ pub use operators::{
 pub use registries::RunRegistries;
 pub(crate) use types::IdentityBuildHasher;
 pub use types::TypeRegistry;
+pub use types::builtin_types;
 pub use types::most_specific_ktype;
 pub use types::render_label;
 pub use types::{

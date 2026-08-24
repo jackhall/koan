@@ -4,6 +4,27 @@ use crate::machine::model::Symbol;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::types::Record;
 
+/// Every declared builtin name resolves to the handle the table pairs it with, and does so from
+/// the memoized symbol alone.
+#[test]
+fn from_symbol_resolves_every_declared_builtin() {
+    for (declared, ktype) in builtin_types() {
+        assert_eq!(
+            KType::from_symbol(declared.symbol()),
+            Some(ktype),
+            "`{}` must lower to its table entry",
+            declared.text(),
+        );
+    }
+}
+
+/// A Type token nobody declared as a builtin misses the table.
+#[test]
+fn from_symbol_undeclared_type_name_is_none() {
+    let name = TypeSymbol::of("Banana").expect("`Banana` is a Type token");
+    assert_eq!(KType::from_symbol(name), None);
+}
+
 #[test]
 fn from_name_leaf_number() {
     assert_eq!(KType::from_name("Number"), Some(KType::NUMBER));

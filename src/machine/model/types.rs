@@ -2,6 +2,7 @@
 //! every language object implements. Bottom of the dispatch dependency stack — `values`
 //! and `runtime` build on it.
 
+mod builtin_names;
 mod declaration_window;
 mod kkind;
 mod ktraits;
@@ -18,6 +19,7 @@ mod signature;
 mod type_digest;
 mod typed_field_list;
 
+pub use builtin_names::builtin_types;
 pub use declaration_window::{
     AnnouncedData, AnnouncedMember, AnnouncedWindow, DeclWindow, SealedAnnounced, WindowView,
 };

@@ -102,6 +102,7 @@ digraph {
     "koan::machine::model::operators" [label="koan::machine::model::operators"];
     "koan::machine::model::registries" [label="koan::machine::model::registries"];
     "koan::machine::model::types" [label="koan::machine::model::types"];
+    "koan::machine::model::types::builtin_names" [label="koan::machine::model::types::builtin_names"];
     "koan::machine::model::types::declaration_window" [label="koan::machine::model::types::declaration_window"];
     "koan::machine::model::types::kkind" [label="koan::machine::model::types::kkind"];
     "koan::machine::model::types::ktraits" [label="koan::machine::model::types::ktraits"];
@@ -244,6 +245,7 @@ digraph {
     "koan::machine::model::ast" -> "koan::machine::model::ast::shape" [label="owns", style="solid"];
     "koan::machine::model::ast" -> "koan::machine::model::ast::working" [label="owns", style="solid"];
     "koan::machine::model::labels" -> "koan::machine::model::labels::sealed" [label="owns", style="solid"];
+    "koan::machine::model::types" -> "koan::machine::model::types::builtin_names" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::declaration_window" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::kkind" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::ktraits" [label="owns", style="solid"];
@@ -739,6 +741,9 @@ digraph {
     "koan::machine::model::operators" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::registries" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::registries" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::machine::model::types::builtin_names" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::types::builtin_names" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
+    "koan::machine::model::types::builtin_names" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::declaration_window" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::declaration_window" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::types::declaration_window" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
@@ -770,7 +775,8 @@ digraph {
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::signature" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::type_digest" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::values" [label="uses", style="dashed"];
-    "koan::machine::model::types::ktype_resolution" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
+    "koan::machine::model::types::ktype_resolution" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::types::ktype_resolution" -> "koan::machine::model::types::builtin_names" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_resolution" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::node" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::node" -> "koan::machine::model::labels" [label="uses", style="dashed"];
