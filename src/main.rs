@@ -88,15 +88,17 @@ fn report_region_audits() {
     }
 }
 
-/// Print the run's allocation total to stderr — the reader half of the `alloc-count`
-/// feature, without which wrapping the allocator surfaces nothing. The tally is read
-/// before the print, since the print itself allocates.
+/// Print the run's allocation and symbol-mint totals to stderr — the reader half of the
+/// `alloc-count` feature, without which arming the two counters surfaces nothing. Both tallies
+/// are read before the first print, since the print itself allocates.
 #[cfg(feature = "alloc-count")]
 fn report_allocations() {
     let total = counting_alloc::allocations();
+    let minted = koan::machine::model::symbols_minted();
     eprintln!("allocations: {total}");
+    eprintln!("symbols_minted: {minted}");
 }
 
-/// No-op when the counter is not compiled in, so the call site in `main` needs no cfg.
+/// No-op when the counters are not compiled in, so the call site in `main` needs no cfg.
 #[cfg(not(feature = "alloc-count"))]
 fn report_allocations() {}

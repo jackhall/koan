@@ -30,8 +30,9 @@ seam-force-pin  = []   # escape seam always pins records
 # workgraph's white-box reach readers in, which is what a tightness comparison reads.
 region-audit = ["workgraph/test-hooks"]
 
-# Whole-program allocation counting: wraps the binary's allocator in the delegating
-# counter at `audit/counting_alloc.rs` and reports the run's total on stderr.
+# Whole-program instrument counts: wraps the binary's allocator in the delegating counter
+# at `audit/counting_alloc.rs` and arms the symbol-mint tally in `machine::model::labels`,
+# reporting the run's `allocations:` and `symbols_minted:` totals on stderr.
 # `cargo run --features alloc-count -- audit/shapes/tail_loop.koan` reads one shape;
 # `audit/measure.sh` reads them all. Off by default, so a normal build keeps `mimalloc`
 # unwrapped — and because the counter wraps rather than replaces, the counted build and

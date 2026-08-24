@@ -48,13 +48,30 @@ impl Symbol {
         Symbol::of_hash(hasher.finalize())
     }
 
-    /// The low 128 bits of a finished BLAKE3 hash.
+    /// The low 128 bits of a finished BLAKE3 hash — the single funnel both [`of`](Self::of) and
+    /// [`of_parts`](Self::of_parts) end in, and so the one site the mint tally counts.
     fn of_hash(hash: blake3::Hash) -> Symbol {
+        #[cfg(feature = "alloc-count")]
+        MINTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let low: [u8; 16] = hash.as_bytes()[..16]
             .try_into()
             .expect("BLAKE3 output is 32 bytes");
         Symbol(u128::from_le_bytes(low))
     }
+}
+
+/// How many symbols the process has minted, behind the `alloc-count` audit feature. Hashing takes
+/// no allocation, so the allocation counter cannot see a mint go away and this is the instrument
+/// that can. A process-wide tally, read once by `main` after the run — an audit counter of the
+/// same standing as `audit/counting_alloc.rs`'s, compiled out of every build that does not ask
+/// for it.
+#[cfg(feature = "alloc-count")]
+static MINTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The process's symbol-mint total — every [`Symbol::of`] and [`Symbol::of_parts`] since startup.
+#[cfg(feature = "alloc-count")]
+pub fn symbols_minted() -> u64 {
+    MINTED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The run's digest → text side table for labels.

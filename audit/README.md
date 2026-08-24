@@ -55,8 +55,9 @@ Three targets `#[path]`-include the one file:
 
 - `src/main.rs`, under the `alloc-count` cargo feature. The binary wraps `mimalloc` (or the
   system allocator under Miri, which cannot call mimalloc's FFI) and prints
-  `allocations: N` to stderr after the run, before the region audits so their own pin-ring
-  walk stays out of the count. Off by default, so a normal build is untouched.
+  `allocations: N` to stderr after the run — beside `symbols_minted: N`, the same feature's
+  other reading — before the region audits so their own pin-ring walk stays out of the count.
+  Off by default, so a normal build is untouched.
 - `src/tests.rs`, for the library's unit-test binary. `crate::tests::allocation_count()`
   reads the thread-local tally; the relocation door's fixed-cost test
   (`src/machine/execute/lift/tests.rs`) is its caller.
@@ -75,23 +76,32 @@ for is the *margin over an empty program*, and its movement when the execute pat
 allocation traffic changes. `git log -p audit/README.md` dates each figure to the change that
 moved it.
 
-| shape | what it exercises | allocations | scaling term |
-|---|---|---|---|
-| `shapes/tail_loop.koan` | 100 tail-recursive steps | 11 919 | 92.0 per step, linear |
-| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 5 425 | ≈23 per dispatch, mildly superlinear |
-| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 336 | — |
-| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 4 933 | 49.9 per dispatch |
-| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 4 758 | — |
-| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 352 | 49.8 per dispatch |
-| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 072 | — |
-| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 142 | 64.7 per call |
-| `shapes/user_fn_params1_calls8.koan` | 8 one-parameter user-function calls | 2 903 | — |
-| `shapes/user_fn_params1_calls40.koan` | 40 one-parameter user-function calls | 4 077 | 36.7 per call |
-| `shapes/user_fn_params8_calls8.koan` | 8 eight-parameter user-function calls | 3 200 | — |
-| `shapes/user_fn_params8_calls40.koan` | 40 eight-parameter user-function calls | 5 206 | 62.7 per call, 3.71 per parameter |
-| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 3 387 | — |
-| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 6 353 | 92.7 per cycle |
-| *(empty program)* | interpreter startup and builtin seeding | 2 492 | — |
+The **symbols** column is the run's `symbols_minted` total: every `Symbol::of` and
+`Symbol::of_parts` that reached the BLAKE3 funnel, counted where the two meet
+(`machine::model::labels`). It is the second reading of the same run, and it exists because
+hashing takes no allocation — a mint removed from a per-call path moves nothing in the
+allocations column, so without this one the symbol-only program would be unmeasurable. The
+figure is **recorded, not bounded**: it has no entry in `tests/allocation_baseline.rs`, since
+the counter is a lib-side `cfg` an integration test cannot reach. The *scaling term* column
+reads the allocations column; the symbol terms are quoted in the prose below.
+
+| shape | what it exercises | allocations | symbols | scaling term |
+|---|---|---|---|---|
+| `shapes/tail_loop.koan` | 100 tail-recursive steps | 11 919 | 2 976 | 92.0 per step, linear |
+| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 5 425 | 1 835 | ≈23 per dispatch, mildly superlinear |
+| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 336 | 1 480 | — |
+| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 4 933 | 1 672 | 49.9 per dispatch |
+| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 4 758 | 1 824 | — |
+| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 352 | 2 016 | 49.8 per dispatch |
+| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 072 | 1 485 | — |
+| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 142 | 2 125 | 64.7 per call |
+| `shapes/user_fn_params1_calls8.koan` | 8 one-parameter user-function calls | 2 903 | 1 369 | — |
+| `shapes/user_fn_params1_calls40.koan` | 40 one-parameter user-function calls | 4 077 | 1 465 | 36.7 per call |
+| `shapes/user_fn_params8_calls8.koan` | 8 eight-parameter user-function calls | 3 200 | 1 397 | — |
+| `shapes/user_fn_params8_calls40.koan` | 40 eight-parameter user-function calls | 5 206 | 1 493 | 62.7 per call, 3.71 per parameter |
+| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 3 387 | 1 567 | — |
+| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 6 353 | 2 431 | 92.7 per cycle |
+| *(empty program)* | interpreter startup and builtin seeding | 2 492 | 1 322 | — |
 
 No shape can use comments: koan has none, and `#` is reserved for quoting. The prose
 that would have headed each file is here instead.

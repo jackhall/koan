@@ -10,6 +10,8 @@ pub use labels::{
     BinderSymbol, KeywordSymbol, LabelInterner, Symbol, TypeSymbol, ValueSymbol, is_type_name,
     wrong_binder_class,
 };
+#[cfg(feature = "alloc-count")]
+pub use labels::symbols_minted;
 pub use operators::{
     FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode, binary_key, probe_key,
     unary_key,
