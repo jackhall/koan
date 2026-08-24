@@ -108,13 +108,22 @@ fn read_field_name(
         // a primitive (`Ordered.Str`); every user type name stays unlowered and takes the arm
         // above. A primitive carries no interned name to recover a class from, and names no member
         // either, so this classifies its rendering and misses.
-        let text = kt.name(registries);
-        return Ok(match BinderSymbol::declared(&text, &registries.labels) {
-            Some(class) => FieldName::Token(class),
-            None => FieldName::Rendered(text),
-        });
+        return Ok(classify_derived_field(&kt.name(registries), registries));
     }
     Err(KError::new(KErrorKind::MissingArg("field".to_string())))
+}
+
+/// Classify a member name that reached the read as text rather than as a token the parse minted —
+/// a rendered type handle, or the runtime string [`body_dynamic_field`] reads. This is the value
+/// channel's one derived-symbol door: [`BinderSymbol::declared`] classifies and interns in one
+/// step, so a spelling read off text keys the same symbol a bare token of that spelling would have
+/// minted. Text that classifies as neither channel names no binding, so it rides as a rendering —
+/// a digest-keyed record probe and an immediate module miss.
+fn classify_derived_field(text: &str, registries: &RunRegistries) -> FieldName {
+    match BinderSymbol::declared(text, &registries.labels) {
+        Some(class) => FieldName::Token(class),
+        None => FieldName::Rendered(text.to_string()),
+    }
 }
 
 /// Value-then-type lookup of the `s` identifier against `ctx.scope`, returning the projected
@@ -211,6 +220,62 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mac
     // read-site region through the shape-split pure door and enveloped there —
     // coverage-equivalent to an empty-reach seal. No region-pure shape is a `Wrapped`, so that
     // arm's diagnostic is what a construction bug would surface here.
+    match ctx.args.carrier(&SLOTS.s) {
+        Some(lhs) => route(access_field(&ctx.ctx, &field_name, lhs, ctx.registries)),
+        None => {
+            let resident = match ctx.scope.deliver_pure_value(target) {
+                Ok(resident) => resident,
+                Err(e) => return Action::done(Err(e)),
+            };
+            route(access_field(
+                &ctx.ctx,
+                &field_name,
+                &resident,
+                ctx.registries,
+            ))
+        }
+    }
+}
+
+/// `ATTR <s:Any> <field:Str>` — the dynamic member read, where the name arrives as a runtime
+/// string instead of a token the parse classified. `Any` + `Str` is the least specific shape in the
+/// bucket and `Identifier` outranks `Str`, so a bare field token always picks a sibling and only a
+/// computed or literal string reaches here.
+///
+/// The name is classified and interned at the read ([`classify_derived_field`]), so `s."x"` probes
+/// the same symbol `s.x` does. The lhs is read the way [`body_newtype`] reads its own `s :Any`
+/// slot; a type-channel lhs names no runtime member and errors.
+pub fn body_dynamic_field<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> crate::machine::Action<'a> {
+    use crate::machine::Action;
+    let field_name = match ctx.args.object(&SLOTS.field) {
+        // The slot is `:Str`, so dispatch admits no other object shape.
+        Some(KObject::KString(text)) => classify_derived_field(text, ctx.registries),
+        Some(_) | None => {
+            return Action::done(Err(KError::new(KErrorKind::MissingArg(
+                "field".to_string(),
+            ))));
+        }
+    };
+    let target = match ctx.args.held(&SLOTS.s) {
+        Some(Held::Object(obj)) => obj,
+        Some(Held::Type(_) | Held::UnresolvedType(_)) => {
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "`ATTR <s> <field :Str>` reads a member off a runtime value; a type-channel lhs \
+                 has no member named by a string (`{}`)",
+                field_name.text(ctx.registries),
+            )))));
+        }
+        // The `s` slot is `:Any`, which admits no raw name part.
+        Some(Held::Identifier(_)) => {
+            unreachable!("ATTR's lhs slot never captures an identifier")
+        }
+        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
+    };
+    // Same operand contract as `body_newtype`: a delivered lhs crosses as the read's operand so the
+    // projected member outlives every region the lhs reaches, and a carrier-less region-pure lhs is
+    // placed through the shape-split pure door instead.
     match ctx.args.carrier(&SLOTS.s) {
         Some(lhs) => route(access_field(&ctx.ctx, &field_name, lhs, ctx.registries)),
         None => {
@@ -540,6 +605,19 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
+    // The dynamic member read: a field name computed at runtime rather than spelled as a token.
+    // `Any` + `Str` loses to every sibling for a bare field token (`IDENTIFIER` outranks `STR`), so
+    // this overload fires only when the field position produced a string.
+    let dynamic_field_sig = || {
+        sig(
+            KType::ANY,
+            vec![
+                kw("ATTR"),
+                arg(registries, &SLOTS.s, KType::ANY),
+                arg(registries, &SLOTS.field, KType::STR),
+            ],
+        )
+    };
     let type_identifier_field_sig = || {
         sig(
             KType::ANY,
@@ -593,6 +671,14 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     register_builtin(
         scope,
         "ATTR",
+        dynamic_field_sig(),
+        body_dynamic_field,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
         type_identifier_field_sig(),
         body_type_lhs,
         registries,
@@ -640,6 +726,83 @@ mod tests {
                 if m.contains("has no member `Str`")),
             "expected the miss to name the rendered field, got {err}",
         );
+    }
+
+    /// A string literal in the field position reaches the same member the bare token names: the
+    /// text is classified and interned at the read, so it probes the symbol `p.x` would have.
+    #[test]
+    fn attr_with_a_string_field_reaches_the_member() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})");
+        let result = test_run.run_one(test_run.parse_one("ATTR p \"x\""));
+        assert!(matches!(result, KObject::Number(n) if *n == 3.0));
+    }
+
+    /// The name need not be a literal: a bound string computes the member to read.
+    #[test]
+    fn attr_with_a_computed_string_field_reaches_the_member() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run(
+            "NEWTYPE Point = :{x :Number, y :Number}\n\
+             LET p = (Point {x = 3, y = 4})\n\
+             LET name_var = \"y\"",
+        );
+        let result = test_run.run_one(test_run.parse_one("ATTR p (name_var)"));
+        assert!(matches!(result, KObject::Number(n) if *n == 4.0));
+    }
+
+    /// The specificity flip's behavior pin: a bare field token binds bare whatever else that
+    /// spelling names. `x` is bound to a string here, and `p.x` still reads the member `x` rather
+    /// than dereferencing the binding through the `:Str` overload.
+    #[test]
+    fn a_bare_field_token_outranks_a_string_binding_of_the_same_name() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run(
+            "NEWTYPE Point = :{x :Number, y :Number}\n\
+             LET p = (Point {x = 3, y = 4})\n\
+             LET x = \"y\"",
+        );
+        assert!(
+            matches!(test_run.run_one(test_run.parse_one("p.x")), KObject::Number(n) if *n == 3.0),
+            "`p.x` reads member `x`, not the member named by the binding `x`",
+        );
+        assert!(
+            matches!(test_run.run_one(test_run.parse_one("ATTR p x")), KObject::Number(n) if *n == 3.0),
+            "the spelled-out form routes identically",
+        );
+    }
+
+    /// A dynamic name naming no member misses the same way a bare token does.
+    #[test]
+    fn attr_with_an_unknown_string_field_errors() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("NEWTYPE Point = :{x :Number, y :Number}\nLET p = (Point {x = 3, y = 4})");
+        let err = test_run.run_one_err(test_run.parse_one("ATTR p \"z\""));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(m)
+                if m.contains("`Point` has no field `z`")),
+            "expected the ordinary no-member miss, got {err}",
+        );
+    }
+
+    /// A module lhs with a bare field token still picks the module overload: the empty-signature
+    /// slot outranks the dynamic read's `Any`.
+    #[test]
+    fn a_module_lhs_with_a_bare_field_still_routes_to_the_module_overload() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("MODULE m = ((LET x = 7))");
+        let result = test_run.run_one(test_run.parse_one("m.x"));
+        assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 
     #[test]
