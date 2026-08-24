@@ -11,6 +11,11 @@
 //! `s: Any` slot and validated in [`access_field`]. Specificity (`Any` < `OfKind` < `Identifier`)
 //! resolves the overloads: an `Identifier` lhs wins `body_identifier`, a module / type-token lhs
 //! wins its own slot, and only a bare runtime value falls through to [`body_newtype`].
+//!
+//! The `field` position splits the same way. A bare token is `Identifier`-classed and outranks
+//! `Str`, so the spelled forms above always win it; a field that arrives as a runtime string —
+//! computed or literal — falls to the dynamic pair, [`body_dynamic_field`] for a value lhs and
+//! [`body_dynamic_module_field`] for a module one.
 
 use std::borrow::Cow;
 
@@ -119,6 +124,19 @@ fn read_field_name(
 /// step, so a spelling read off text keys the same symbol a bare token of that spelling would have
 /// minted. Text that classifies as neither channel names no binding, so it rides as a rendering —
 /// a digest-keyed record probe and an immediate module miss.
+/// Read the `field` member name off a `:Str` slot — the dynamic read's counterpart to
+/// [`read_field_name`]. The slot's type admits no other object shape, so the string arm is the
+/// whole vocabulary.
+fn read_dynamic_field_name(
+    args: BoundArgs<'_, '_>,
+    registries: &RunRegistries,
+) -> Result<FieldName, KError> {
+    match args.object(&SLOTS.field) {
+        Some(KObject::KString(text)) => Ok(classify_derived_field(text, registries)),
+        Some(_) | None => Err(KError::new(KErrorKind::MissingArg("field".to_string()))),
+    }
+}
+
 fn classify_derived_field(text: &str, registries: &RunRegistries) -> FieldName {
     match BinderSymbol::declared(text, &registries.labels) {
         Some(class) => FieldName::Token(class),
@@ -244,20 +262,14 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mac
 ///
 /// The name is classified and interned at the read ([`classify_derived_field`]), so `s."x"` probes
 /// the same symbol `s.x` does. The lhs is read the way [`body_newtype`] reads its own `s :Any`
-/// slot; a type-channel lhs names no runtime member and errors.
+/// slot; a type-channel lhs names no runtime member and errors. A module lhs picks
+/// [`body_dynamic_module_field`] through the more specific empty-signature slot, the same split the
+/// bare-token overloads make.
 pub fn body_dynamic_field<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    let field_name = match ctx.args.object(&SLOTS.field) {
-        // The slot is `:Str`, so dispatch admits no other object shape.
-        Some(KObject::KString(text)) => classify_derived_field(text, ctx.registries),
-        Some(_) | None => {
-            return Action::done(Err(KError::new(KErrorKind::MissingArg(
-                "field".to_string(),
-            ))));
-        }
-    };
+    let field_name = crate::try_action!(read_dynamic_field_name(ctx.args, ctx.registries));
     let target = match ctx.args.held(&SLOTS.s) {
         Some(Held::Object(obj)) => obj,
         Some(Held::Type(_) | Held::UnresolvedType(_)) => {
@@ -295,26 +307,43 @@ pub fn body_dynamic_field<'a>(
 
 /// Projects the field off a module lhs riding the value channel's Object arm.
 pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::Action;
-    let m = match ctx.args.object(&SLOTS.s) {
-        Some(KObject::Module(module)) => *module,
-        Some(other) => {
-            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "s".to_string(),
-                expected: "Module".to_string(),
-                got: other.ktype().name(ctx.registries),
-            })));
-        }
-        None => {
-            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "s".to_string(),
-                expected: "Module".to_string(),
-                got: "Type".to_string(),
-            })));
-        }
-    };
+    let m = crate::try_action!(module_lhs(ctx.args, ctx.registries));
     let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
     route(access_module_member(m, &field_name, ctx.registries))
+}
+
+/// `ATTR <s:EmptySignature> <field:Str>` — [`body_module`]'s dynamic read. The empty-signature slot
+/// every module's self-sig satisfies outranks [`body_dynamic_field`]'s `Any`, so a module lhs with a
+/// string field lands here and answers out of the module's own bindings rather than missing against
+/// the record walk.
+pub fn body_dynamic_module_field<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> crate::machine::Action<'a> {
+    let m = crate::try_action!(module_lhs(ctx.args, ctx.registries));
+    let field_name = crate::try_action!(read_dynamic_field_name(ctx.args, ctx.registries));
+    route(access_module_member(m, &field_name, ctx.registries))
+}
+
+/// The `s` slot as the [`Module`] the empty-signature match promised. Both module bodies enter
+/// through here; the arms below are what a mismatch between that promise and the bound cell would
+/// surface.
+fn module_lhs<'a>(
+    args: BoundArgs<'a, '_>,
+    registries: &RunRegistries,
+) -> Result<&'a Module<'a>, KError> {
+    match args.object(&SLOTS.s) {
+        Some(KObject::Module(module)) => Ok(*module),
+        Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
+            arg: "s".to_string(),
+            expected: "Module".to_string(),
+            got: other.ktype().name(registries),
+        })),
+        None => Err(KError::new(KErrorKind::TypeMismatch {
+            arg: "s".to_string(),
+            expected: "Module".to_string(),
+            got: "Type".to_string(),
+        })),
+    }
 }
 
 /// Project `field` off a Type-channel lhs. A signature answers directly from its owned schema —
@@ -638,6 +667,18 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
+    // Module lhs with a computed field name. The empty-signature slot outranks the dynamic read's
+    // `Any`, so `m."x"` answers out of the module's bindings instead of the record walk.
+    let dynamic_module_field_sig = || {
+        sig(
+            KType::ANY,
+            vec![
+                kw("ATTR"),
+                arg(registries, &SLOTS.s, KType::EMPTY_SIGNATURE),
+                arg(registries, &SLOTS.field, KType::STR),
+            ],
+        )
+    };
     // Module lhs with a Type-classed field (e.g. the `Outer.Inner` step in `Outer.Inner.x`).
     let module_type_field_sig = || {
         sig(
@@ -673,6 +714,14 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         "ATTR",
         dynamic_field_sig(),
         body_dynamic_field,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        dynamic_module_field_sig(),
+        body_dynamic_module_field,
         registries,
         gate,
     );
@@ -790,6 +839,44 @@ mod tests {
             matches!(&err.kind, KErrorKind::ShapeError(m)
                 if m.contains("`Point` has no field `z`")),
             "expected the ordinary no-member miss, got {err}",
+        );
+    }
+
+    /// A module answers a computed member name out of its own bindings — the dynamic read's
+    /// module split, reached because the empty-signature slot outranks the value read's `Any`.
+    #[test]
+    fn a_module_lhs_reads_a_member_named_by_a_string() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("MODULE m = ((LET x = 7))");
+        let result = test_run.run_one(test_run.parse_one("ATTR m \"x\""));
+        assert!(matches!(result, KObject::Number(n) if *n == 7.0));
+    }
+
+    /// The name need not be a literal there either.
+    #[test]
+    fn a_module_lhs_reads_a_member_named_by_a_computed_string() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("MODULE m = ((LET x = 7))\nLET name_var = \"x\"");
+        let result = test_run.run_one(test_run.parse_one("ATTR m (name_var)"));
+        assert!(matches!(result, KObject::Number(n) if *n == 7.0));
+    }
+
+    /// A computed name naming no module member misses the same way a bare token does.
+    #[test]
+    fn a_module_lhs_with_an_unknown_string_field_errors() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("MODULE m = ((LET x = 7))");
+        let err = test_run.run_one_err(test_run.parse_one("ATTR m \"ghost\""));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("has no member `ghost`")),
+            "expected the ordinary module miss, got {err}",
         );
     }
 
