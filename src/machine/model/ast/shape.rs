@@ -11,7 +11,7 @@ use crate::machine::SplicedCell;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::KeyElement;
 use crate::machine::model::ast::KeywordToken;
-use crate::machine::model::labels::KeywordSymbol;
+use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
 use crate::source::Spanned;
 
 use super::working::WorkingExpression;
@@ -75,8 +75,9 @@ pub trait Part<'a>: Copy {
     /// This part read as a field-list position. See [`FieldSlot`].
     fn field_slot(&self) -> FieldSlot<'a>;
 
-    /// Surface rendering, for the field walker's shape diagnostics.
-    fn summarize(&self) -> String;
+    /// Surface rendering, for the field walker's shape diagnostics. Takes the run's interner
+    /// because a symbol-carrying part renders its text through it.
+    fn summarize(&self, labels: &LabelInterner) -> String;
 }
 
 /// Pure-structural classification of an expression into the no-keyword fast-lane shapes, the

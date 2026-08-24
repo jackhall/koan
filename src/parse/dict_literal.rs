@@ -8,6 +8,7 @@
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::ExpressionPart;
+use crate::machine::model::labels::LabelInterner;
 use crate::source::Spanned;
 
 pub(super) struct DictFrame<'a> {
@@ -210,7 +211,7 @@ impl<'a> DictFrame<'a> {
     /// Commit any in-progress pair and yield the completed contents — a dict's pairs or
     /// a record's `(field, value)` list. Errors for a key/field without its separator, a
     /// separator without a value, or (record mode) a non-identifier field name.
-    pub(super) fn finish(mut self) -> Result<BraceContents<'a>, KError> {
+    pub(super) fn finish(mut self, labels: &LabelInterner) -> Result<BraceContents<'a>, KError> {
         // Only an explicit `:` commits the frame to a dict; `Record` and the
         // separator-less `Unknown` (empty `{}`) both finish as a record.
         let is_record = self.mode != BraceMode::Dict;
@@ -253,7 +254,7 @@ impl<'a> DictFrame<'a> {
                         return Err(KError::parse(
                             format!(
                                 "record field name must be a bare identifier or Type token, got `{}`",
-                                other.summarize()
+                                other.summarize(labels)
                             ),
                             None,
                         ));

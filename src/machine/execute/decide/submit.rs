@@ -55,7 +55,7 @@ impl<'run> Host<'run> {
         let installs = statement_binder_plan(&expr)
             .map(|plan| plan.to_owned_key(&self.ambient.registries().labels));
         if let (SubmitContext::SubDispatch, Some(key)) = (ctx, &installs) {
-            let carrier = expr.summarize();
+            let carrier = expr.summarize(&self.ambient.registries().labels);
             // A rejected declaration that registers overloads (an `FN` / `OP` in a `LET`'s value
             // slot) has a one-statement spelling to suggest; a nested plain `LET` does not.
             let error = KError::new(KErrorKind::NestedBinder {

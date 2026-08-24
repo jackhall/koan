@@ -54,7 +54,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             other => {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "FROM field list must be bare field names, got `{}`",
-                    other.summarize(),
+                    other.summarize(&ctx.registries.labels),
                 )))));
             }
         }

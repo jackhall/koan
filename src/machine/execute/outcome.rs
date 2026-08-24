@@ -34,6 +34,7 @@ use super::nodes::WorkLabel;
 use super::nodes::{ChainOp, NodeWork};
 use super::obligation::ReturnObligation;
 use crate::machine::core::BlockRequest;
+use crate::machine::model::labels::LabelInterner;
 
 /// What a node's step wants the harness to do — the single currency every producer and finish
 /// returns. See the module docs for the taxonomy.
@@ -185,9 +186,9 @@ pub(in crate::machine::execute) enum DeferredTraceFrame<'step> {
 }
 
 impl DeferredTraceFrame<'_> {
-    pub(in crate::machine::execute) fn render(&self) -> TraceFrame {
+    pub(in crate::machine::execute) fn render(&self, labels: &LabelInterner) -> TraceFrame {
         match self {
-            Self::Working { function, expr } => TraceFrame::from_expr(*function, expr),
+            Self::Working { function, expr } => TraceFrame::from_expr(*function, expr, labels),
             Self::Bare {
                 function,
                 expression,
@@ -326,12 +327,13 @@ fn all_or_first_error<'s, 'd>(
     scratch: BumpAllocator<'s>,
     results: &[Result<DepTerminal<'d>, KError>],
     dep_error_frame: Option<DeferredTraceFrame<'_>>,
+    labels: &LabelInterner,
 ) -> Result<BumpVec<'s, DepTerminal<'d>>, KError> {
     let mut terminals = BumpVec::with_capacity_in(results.len(), scratch);
     for r in results {
         match r {
             Ok(t) => terminals.push(*t),
-            Err(e) => return Err(propagate_dep_error(e, dep_error_frame)),
+            Err(e) => return Err(propagate_dep_error(e, dep_error_frame, labels)),
         }
     }
     Ok(terminals)
@@ -352,7 +354,12 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
     finish: TerminalDepFinish<'a>,
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _id| {
-        let terminals = match all_or_first_error(view.scratch(), results, dep_error_frame) {
+        let terminals = match all_or_first_error(
+            view.scratch(),
+            results,
+            dep_error_frame,
+            &view.registries().labels,
+        ) {
             Ok(terminals) => terminals,
             Err(e) => return Outcome::Done(Err(e)),
         };
@@ -394,7 +401,7 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
             // whole reach — the finish adopts or opens it at its own step brand.
             Ok(t) => Ok(view.current_scope().lift_spliced(&t.cell)),
             // Frameless: the recovery-site dispatch attaches its own frame.
-            Err(e) => Err(propagate_dep_error(e, None)),
+            Err(e) => Err(propagate_dep_error(e, None, &view.registries().labels)),
         };
         finish(view, result)
     })

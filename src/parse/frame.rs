@@ -12,6 +12,7 @@ use crate::machine::model::ast::{ExpressionPart, KeywordToken};
 use crate::source::{self, Span, Spanned};
 
 use super::dict_literal::{BraceContents, DictFrame};
+use crate::machine::model::labels::LabelInterner;
 
 /// An open frame collects its parts in a plain `Vec` and freezes them into a node only at
 /// [`BracketFrame::into_part`], where the run is complete — a node's parts and structural cache are
@@ -84,6 +85,7 @@ impl<'a> BracketFrame<'a> {
         self,
         brand: ProgramBrand<'a>,
         end: u32,
+        labels: &LabelInterner,
     ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
         let file = source::current();
         match self {
@@ -172,7 +174,7 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
-                let part = match dict.finish()? {
+                let part = match dict.finish(labels)? {
                     BraceContents::Dict(pairs) => ExpressionPart::DictLiteral(
                         brand.region().allocator().slice_from_iter(pairs),
                     ),
@@ -231,11 +233,12 @@ pub(super) fn close_paren_to_part<'a>(
     brand: ProgramBrand<'a>,
     frame: BracketFrame<'a>,
     end: u32,
+    labels: &LabelInterner,
 ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
     match frame {
-        BracketFrame::Expression { .. } => frame.into_part(brand, end),
-        BracketFrame::Quote { .. } => frame.into_part(brand, end),
-        BracketFrame::SigiledTypeExpr { .. } => frame.into_part(brand, end),
+        BracketFrame::Expression { .. } => frame.into_part(brand, end, labels),
+        BracketFrame::Quote { .. } => frame.into_part(brand, end, labels),
+        BracketFrame::SigiledTypeExpr { .. } => frame.into_part(brand, end, labels),
         BracketFrame::RecordTypeExpr { span_start, .. } => Err(KError::parse(
             "unclosed ':{': this record type was never closed with a matching '}'",
             Some(Span {

@@ -12,7 +12,7 @@
 //! reach the value channel at all — not by audit, but because no constructor takes one.
 
 use crate::machine::core::{RegionBrand, read_resting};
-use crate::machine::model::labels::KeywordSymbol;
+use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
 use crate::machine::model::{Carried, Held, KObject};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::machine::{AdoptSeam, SplicedCell};
@@ -87,12 +87,12 @@ impl<'a> Part<'a> for WorkingPart<'a> {
         }
     }
 
-    fn summarize(&self) -> String {
-        WorkingPart::summarize(self)
+    fn summarize(&self, labels: &LabelInterner) -> String {
+        WorkingPart::summarize(self, labels)
     }
 }
 
-/// Registry-free rendering of a spliced cell's carried value, for `Debug` and the registry-free
+/// Registry-free rendering of a spliced cell's carried value, for `Debug` and
 /// [`WorkingPart::summarize`]. A type name resolves through the registry, which neither signature
 /// carries, so the type channel renders its content-digest hex — the value's own identity — and an
 /// object renders its type's digest. An unlowered name is already a bare surface string.
@@ -122,11 +122,11 @@ impl<'a> std::fmt::Debug for WorkingPart<'a> {
 
 impl<'a> WorkingPart<'a> {
     /// Per-part subset of [`WorkingExpression::summarize`].
-    pub fn summarize(&self) -> String {
+    pub fn summarize(&self, labels: &LabelInterner) -> String {
         match self {
-            WorkingPart::Ast(part) => part.summarize(),
-            WorkingPart::Expression(e) => e.summarize(),
-            WorkingPart::RecordType(e) => format!(":{{{}}}", e.summarize()),
+            WorkingPart::Ast(part) => part.summarize(labels),
+            WorkingPart::Expression(e) => e.summarize(labels),
+            WorkingPart::RecordType(e) => format!(":{{{}}}", e.summarize(labels)),
             WorkingPart::Spliced { cell } => read_resting(cell, spliced_summary),
             WorkingPart::StagedSlot => "<staged>".to_string(),
         }
@@ -412,11 +412,12 @@ impl<'a> WorkingExpression<'a> {
         self.untyped_key.to_vec()
     }
 
-    /// Surface rendering of the whole expression — parts only, so no registry is needed.
-    pub fn summarize(&self) -> String {
+    /// Surface rendering of the whole expression, resolving each symbol-carrying part through
+    /// the run's interner.
+    pub fn summarize(&self, labels: &LabelInterner) -> String {
         self.parts
             .iter()
-            .map(|p| p.value.summarize())
+            .map(|p| p.value.summarize(labels))
             .collect::<Vec<_>>()
             .join(" ")
     }

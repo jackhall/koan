@@ -12,7 +12,7 @@ use crate::machine::core::{
     FoldingBrand, KError, KErrorKind, KoanStorageProfile, RegionBrand, Scope,
 };
 use crate::machine::model::NamedPairs;
-use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode, TypeRegistry};
+use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode};
 use crate::machine::model::{ExpressionSignature, Record, SignatureDraft, SignatureElement};
 use crate::witnessed::BumpVec;
 use crate::witnessed::RegionHandleFamily;
@@ -26,6 +26,7 @@ pub mod exec;
 pub mod pick;
 
 use crate::machine::model::RunRegistries;
+use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::{Symbol, render_label};
 pub use action::ActionFn;
 pub use body::Body;
@@ -133,7 +134,7 @@ impl<'a> KFunction<'a> {
     ) -> DeliveredFunction {
         let brand = captured.brand();
         let signature = ExpressionSignature::mint(brand, draft, &registries.labels);
-        let value_ktype = function_value_ktype(&signature, &registries.types);
+        let value_ktype = function_value_ktype(&signature, registries);
         let seed = FunctionBirth {
             captured,
             signature,
@@ -223,13 +224,13 @@ impl<'a> KFunction<'a> {
                     Some(ExpressionPart::Keyword(t)) if s.symbol() == t.symbol() => {}
                     Some(ExpressionPart::Keyword(t)) => {
                         return Err(KError::new(KErrorKind::DispatchFailed {
-                            expr: summarize_parts(parts),
+                            expr: summarize_parts(parts, &registries.labels),
                             reason: format!("expected keyword '{s}', got '{t}'"),
                         }));
                     }
                     _ => {
                         return Err(KError::new(KErrorKind::DispatchFailed {
-                            expr: summarize_parts(parts),
+                            expr: summarize_parts(parts, &registries.labels),
                             reason: format!("expected keyword '{s}'"),
                         }));
                     }
@@ -239,7 +240,7 @@ impl<'a> KFunction<'a> {
                         return Err(KError::new(KErrorKind::TypeMismatch {
                             arg: render_label(arg.name.symbol(), registries),
                             expected: arg.ktype.name(registries),
-                            got: part.value.summarize(),
+                            got: part.value.summarize(&registries.labels),
                         }));
                     }
                 }
@@ -338,10 +339,10 @@ impl<'a> KFunction<'a> {
 
 /// Surface rendering of a call's parts for a diagnostic — the same text
 /// [`WorkingExpression::summarize`] produces, from the parts run alone.
-fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>]) -> String {
+fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>], labels: &LabelInterner) -> String {
     parts
         .iter()
-        .map(|part| part.value.summarize())
+        .map(|part| part.value.summarize(labels))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -355,7 +356,8 @@ fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>]) -> String {
 /// hashable surface shadow of the deferred form, so equality and specificity read the deferred
 /// shape directly instead of seeing it coarsened to `Any`. See
 /// [ktype/records-and-limits.md § Record fields](../../../design/typing/ktype/records-and-limits.md#record-fields-and-ktype-hashing).
-fn function_value_ktype(signature: &ExpressionSignature<'_>, types: &TypeRegistry) -> KType {
+fn function_value_ktype(signature: &ExpressionSignature<'_>, registries: &RunRegistries) -> KType {
+    let types = &registries.types;
     // The signature already owns its parameter schema; the function type shares it rather than
     // re-deriving one — one intern-boundary copy per definition, never per call.
     let params = Record::from_pairs(
@@ -367,7 +369,7 @@ fn function_value_ktype(signature: &ExpressionSignature<'_>, types: &TypeRegistr
     let ret = match signature.return_type() {
         ReturnType::Resolved(kt) => kt,
         ReturnType::Deferred(d) => types.intern(TypeNode::DeferredReturn(
-            DeferredReturnSurface::from_deferred(&d),
+            DeferredReturnSurface::from_deferred(&d, &registries.labels),
         )),
     };
     types.function_type(params, ret)

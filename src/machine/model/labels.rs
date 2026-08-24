@@ -108,6 +108,13 @@ impl LabelInterner {
             .map(|text| text.to_string())
     }
 
+    /// The text for `symbol`, or the standard placeholder when this run never interned it — the
+    /// total form of [`resolve`](Self::resolve) every render path uses.
+    pub fn render(&self, symbol: Symbol) -> String {
+        self.resolve(symbol)
+            .unwrap_or_else(|| "<label>".to_string())
+    }
+
     /// How many distinct labels this run has recorded.
     pub fn len(&self) -> usize {
         self.texts.borrow().len()

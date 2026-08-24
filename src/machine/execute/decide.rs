@@ -25,6 +25,7 @@ pub(in crate::machine::execute) use super::outcome::StepDeps;
 use super::outcome::{
     ParkDeps, TerminalDepFinish, continue_inline, dep_error_frame, tail_continue,
 };
+use crate::machine::model::labels::LabelInterner;
 use crate::scheduler::{Dep, Deps};
 use crate::witnessed::BumpAllocator;
 
@@ -202,10 +203,11 @@ pub(in crate::machine::execute) fn working_frame<'step>(
 pub(in crate::machine::execute) fn propagate_dep_error(
     e: &KError,
     frame: Option<DeferredTraceFrame<'_>>,
+    labels: &LabelInterner,
 ) -> KError {
     let cloned = e.clone_for_propagation();
     match frame {
-        Some(f) => cloned.with_frame(f.render()),
+        Some(f) => cloned.with_frame(f.render(labels)),
         None => cloned,
     }
 }
@@ -453,12 +455,12 @@ fn classify_dispatch<'step>(
         // drive abort.
         DispatchShape::NonCallableHead => {
             Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-                expr: expr.summarize(),
+                expr: expr.summarize(&view.registries().labels),
                 reason: format!(
                     "head is not callable: `{}`",
                     expr.parts
                         .first()
-                        .map(|p| p.value.summarize())
+                        .map(|p| p.value.summarize(&view.registries().labels))
                         .unwrap_or_else(|| "<empty>".into())
                 ),
             })))

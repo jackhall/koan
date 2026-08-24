@@ -12,6 +12,7 @@ use crate::witnessed::RegionHandleFamily;
 use super::{DeliveredCarried, FoldingBrand, RegionBrand, SubstrateDoor};
 use super::{KoanStorageProfile, Scope, scope_frame};
 use crate::machine::model::RunRegistries;
+use crate::machine::model::labels::LabelInterner;
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
@@ -118,10 +119,14 @@ impl TraceFrame {
 
     /// TraceFrame keyed off the expression a slot is dispatching, with a caller-chosen `function`
     /// label (e.g. `"<bind>"`) for scheduler-internal frames without a real `KFunction`.
-    pub fn from_expr(function: impl Into<String>, expr: &WorkingExpression<'_>) -> TraceFrame {
+    pub fn from_expr(
+        function: impl Into<String>,
+        expr: &WorkingExpression<'_>,
+        labels: &LabelInterner,
+    ) -> TraceFrame {
         TraceFrame {
             function: function.into(),
-            expression: expr.summarize(),
+            expression: expr.summarize(labels),
             location: location_from_expr(expr),
         }
     }

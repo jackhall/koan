@@ -682,7 +682,9 @@ pub(super) fn function_compat<'v>(
         ReturnType::Resolved(kt) => *kt == ret || kt.is_more_specific_than(ret, registries),
         ReturnType::Deferred(d) => match types.node(ret) {
             TypeNode::Any => true,
-            TypeNode::DeferredReturn(slot) => DeferredReturnSurface::from_deferred(d) == slot,
+            TypeNode::DeferredReturn(slot) => {
+                DeferredReturnSurface::from_deferred(d, &registries.labels) == slot
+            }
             _ => false,
         },
     };

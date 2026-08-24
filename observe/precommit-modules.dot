@@ -291,6 +291,7 @@ digraph {
     "koan::builtins::await_body" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::branch_walk" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -453,12 +454,14 @@ digraph {
     "koan::machine::core::kerror" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::kerror" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine" [label="uses", style="dashed"];
@@ -526,6 +529,7 @@ digraph {
     "koan::machine::execute::decide" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::decide" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::decide::apply_callable" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::apply_callable" -> "koan::machine" [label="uses", style="dashed"];
@@ -695,6 +699,7 @@ digraph {
     "koan::machine::execute::outcome" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::outcome" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::execute::producer_id" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::step_carried" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::step_carried" -> "koan::machine" [label="uses", style="dashed"];
@@ -873,6 +878,7 @@ digraph {
     "koan::parse::dict_literal" -> "koan::machine" [label="uses", style="dashed"];
     "koan::parse::dict_literal" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::parse::dict_literal" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::parse::dict_literal" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::parse::dict_literal" -> "koan::source" [label="uses", style="dashed"];
     "koan::parse::expression_tree" -> "koan::machine" [label="uses", style="dashed"];
     "koan::parse::expression_tree" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -887,6 +893,7 @@ digraph {
     "koan::parse::frame" -> "koan::machine" [label="uses", style="dashed"];
     "koan::parse::frame" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::parse::frame" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::parse::frame" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::parse::frame" -> "koan::parse::dict_literal" [label="uses", style="dashed"];
     "koan::parse::frame" -> "koan::source" [label="uses", style="dashed"];
     "koan::parse::operators" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -909,6 +916,7 @@ digraph {
     "koan::parse::tokens" -> "koan::parse::operators" [label="uses", style="dashed"];
     "koan::parse::tokens" -> "koan::source" [label="uses", style="dashed"];
     "koan::parse::triple_list" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::parse::triple_list" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::parse::triple_list" -> "koan::source" [label="uses", style="dashed"];
     "koan::parse::whitespace" -> "koan::machine" [label="uses", style="dashed"];
     "koan::parse::whitespace" -> "koan::parse::quotes" [label="uses", style="dashed"];

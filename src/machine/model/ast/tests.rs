@@ -4,6 +4,7 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier, classify_dispatch_shape,
 };
+use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::Held;
@@ -102,10 +103,10 @@ fn unresolved_carrier_classifies_as_a_proper_type() {
 
 #[test]
 fn summarize_atomic_variants() {
-    assert_eq!(kw("LET").summarize(), "LET");
-    assert_eq!(ident("x").summarize(), "x");
+    assert_eq!(kw("LET").summarize(&LabelInterner::new()), "LET");
+    assert_eq!(ident("x").summarize(&LabelInterner::new()), "x");
     assert_eq!(
-        ExpressionPart::Type(TypeIdentifier::leaf("Number")).summarize(),
+        ExpressionPart::Type(TypeIdentifier::leaf("Number")).summarize(&LabelInterner::new()),
         "Number",
     );
 }
@@ -113,18 +114,21 @@ fn summarize_atomic_variants() {
 #[test]
 fn summarize_literal_variants() {
     assert_eq!(
-        ExpressionPart::Literal(KLiteral::Number(1.5)).summarize(),
+        ExpressionPart::Literal(KLiteral::Number(1.5)).summarize(&LabelInterner::new()),
         "1.5"
     );
     assert_eq!(
-        ExpressionPart::Literal(KLiteral::String("hi")).summarize(),
+        ExpressionPart::Literal(KLiteral::String("hi")).summarize(&LabelInterner::new()),
         "hi"
     );
     assert_eq!(
-        ExpressionPart::Literal(KLiteral::Boolean(true)).summarize(),
+        ExpressionPart::Literal(KLiteral::Boolean(true)).summarize(&LabelInterner::new()),
         "true"
     );
-    assert_eq!(ExpressionPart::Literal(KLiteral::Null).summarize(), "null");
+    assert_eq!(
+        ExpressionPart::Literal(KLiteral::Null).summarize(&LabelInterner::new()),
+        "null"
+    );
 }
 
 #[test]
@@ -132,13 +136,13 @@ fn summarize_list_and_dict_literals() {
     let program = program_storage();
     let brand = program.brand();
     let items = list(brand, vec![num(1.0), num(2.0)]);
-    assert_eq!(items.summarize(), "[1 2]");
+    assert_eq!(items.summarize(&LabelInterner::new()), "[1 2]");
 
     let pairs = dict(
         brand,
         vec![(ExpressionPart::Literal(KLiteral::String("k")), num(7.0))],
     );
-    assert_eq!(pairs.summarize(), "{k: 7}");
+    assert_eq!(pairs.summarize(&LabelInterner::new()), "{k: 7}");
 }
 
 #[test]
@@ -146,7 +150,7 @@ fn summarize_nested_expression_part_threads_through() {
     let program = program_storage();
     let brand = program.brand();
     let inner = expr(brand, vec![kw("ADD"), ident("a"), ident("b")]);
-    assert_eq!(inner.summarize(), "ADD a b");
+    assert_eq!(inner.summarize(&LabelInterner::new()), "ADD a b");
 }
 
 #[test]
@@ -154,7 +158,7 @@ fn kexpression_summarize_joins_parts_with_spaces() {
     let program = program_storage();
     let brand = program.brand();
     let e = build(brand, vec![kw("LET"), ident("x"), ident("=")]);
-    assert_eq!(e.summarize(), "LET x =");
+    assert_eq!(e.summarize(&LabelInterner::new()), "LET x =");
 }
 
 #[test]
@@ -200,8 +204,8 @@ fn borrow_inner_expressions_success_and_mismatch() {
         .borrow_inner_expressions()
         .expect("all parts are expressions");
     assert_eq!(borrowed.len(), 2);
-    assert_eq!(borrowed[0].summarize(), "a");
-    assert_eq!(borrowed[1].summarize(), "b");
+    assert_eq!(borrowed[0].summarize(&LabelInterner::new()), "a");
+    assert_eq!(borrowed[1].summarize(&LabelInterner::new()), "b");
 
     let mixed = build(brand, vec![expr(brand, vec![ident("a")]), ident("b")]);
     assert!(mixed.borrow_inner_expressions().is_none());
@@ -224,7 +228,7 @@ fn try_split_inner_expressions_first_non_expression_returns_err() {
     let err = e
         .try_split_inner_expressions()
         .expect_err("non-expr head must Err");
-    assert_eq!(err.summarize(), "a b");
+    assert_eq!(err.summarize(&LabelInterner::new()), "a b");
 }
 
 #[test]
@@ -242,7 +246,7 @@ fn try_split_inner_expressions_middle_non_expression_returns_err() {
     let err = e
         .try_split_inner_expressions()
         .expect_err("non-expr middle must Err");
-    assert_eq!(err.summarize(), "a b c");
+    assert_eq!(err.summarize(&LabelInterner::new()), "a b c");
 }
 
 #[test]
@@ -259,9 +263,9 @@ fn try_split_inner_expressions_all_expressions_returns_ok() {
     );
     let (preceding, last) = e.try_split_inner_expressions().expect("all-expr is Ok");
     assert_eq!(preceding.len(), 2);
-    assert_eq!(preceding[0].summarize(), "a");
-    assert_eq!(preceding[1].summarize(), "b");
-    assert_eq!(last.summarize(), "c");
+    assert_eq!(preceding[0].summarize(&LabelInterner::new()), "a");
+    assert_eq!(preceding[1].summarize(&LabelInterner::new()), "b");
+    assert_eq!(last.summarize(&LabelInterner::new()), "c");
 }
 
 // ---------- Structural cache: shape, untyped_key, operator_probe ----------

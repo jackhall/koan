@@ -10,7 +10,7 @@
 use std::rc::Rc;
 
 use crate::machine::core::{DepPlacement, OpenedFunction};
-use crate::machine::model::labels::{Symbol, TypeSymbol};
+use crate::machine::model::labels::{LabelInterner, Symbol, TypeSymbol};
 use crate::machine::model::render_label;
 use crate::machine::model::{Carried, Record, TypeMemberMap, constructor_param_names};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
@@ -43,7 +43,10 @@ enum CallBody<'step> {
 /// Classify the single body part of a `head (...)` / `head {...}` call from
 /// `expr.parts[1..]`. The body must be exactly one nested-parens (`Positional`) or one
 /// record literal (`Named`); anything else is a non-match.
-fn extract_call_body<'step>(expr: &WorkingExpression<'step>) -> Result<CallBody<'step>, KError> {
+fn extract_call_body<'step>(
+    expr: &WorkingExpression<'step>,
+    labels: &LabelInterner,
+) -> Result<CallBody<'step>, KError> {
     match &expr.parts[1..] {
         [
             Spanned {
@@ -58,7 +61,7 @@ fn extract_call_body<'step>(expr: &WorkingExpression<'step>) -> Result<CallBody<
             },
         ] => Ok(CallBody::Positional(inner.parts)),
         _ => Err(KError::new(KErrorKind::DispatchFailed {
-            expr: expr.summarize(),
+            expr: expr.summarize(labels),
             reason: "no matching function".to_string(),
         })),
     }
@@ -71,9 +74,13 @@ const NAMED_ONLY: &str =
 const POSITIONAL_ONLY: &str =
     "positional construction takes `(value)`, not a record literal `{name = value}`";
 
-fn body_shape_err<'step>(expr: &WorkingExpression<'step>, reason: &str) -> Outcome<'step> {
+fn body_shape_err<'step>(
+    expr: &WorkingExpression<'step>,
+    reason: &str,
+    labels: &LabelInterner,
+) -> Outcome<'step> {
     Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-        expr: expr.summarize(),
+        expr: expr.summarize(labels),
         reason: reason.to_string(),
     })))
 }
@@ -100,7 +107,7 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
         // `apply_constructor` rather than here.
         ResolvedCallable::Constructor { identity } => apply_constructor(ctx, identity, expr),
         ResolvedCallable::Function(f) => {
-            let body = match extract_call_body(expr) {
+            let body = match extract_call_body(expr, &ctx.registries().labels) {
                 Ok(b) => b,
                 Err(e) => return Outcome::Done(Err(e)),
             };
@@ -193,18 +200,22 @@ fn apply_constructor<'step>(
         NodeSchema::TypeConstructor {
             schema: variant_schema,
             ..
-        } if !variant_schema.is_empty() => match extract_call_body(expr) {
-            Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
-                brand,
-                identity,
-                Rc::new(variant_schema),
-                parts,
-                ctx.registries(),
-                ctx.scratch(),
-            ),
-            Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-            Err(e) => Outcome::Done(Err(e)),
-        },
+        } if !variant_schema.is_empty() => {
+            match extract_call_body(expr, &ctx.registries().labels) {
+                Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
+                    brand,
+                    identity,
+                    Rc::new(variant_schema),
+                    parts,
+                    ctx.registries(),
+                    ctx.scratch(),
+                ),
+                Ok(CallBody::Named(_)) => {
+                    body_shape_err(expr, POSITIONAL_ONLY, &ctx.registries().labels)
+                }
+                Err(e) => Outcome::Done(Err(e)),
+            }
+        }
         // An identity wrapper wraps one value and infers one type argument from it, so value
         // construction is an arity-1 surface; a wider family applies by name only.
         NodeSchema::TypeConstructor { param_names, .. } if param_names.len() > 1 => {
@@ -215,13 +226,17 @@ fn apply_constructor<'step>(
                 param_names.len(),
             )))))
         }
-        NodeSchema::TypeConstructor { .. } => match extract_call_body(expr) {
-            Ok(CallBody::Positional(parts)) => {
-                constructors::dispatch_construct_apply(brand, identity, parts, ctx.scratch())
+        NodeSchema::TypeConstructor { .. } => {
+            match extract_call_body(expr, &ctx.registries().labels) {
+                Ok(CallBody::Positional(parts)) => {
+                    constructors::dispatch_construct_apply(brand, identity, parts, ctx.scratch())
+                }
+                Ok(CallBody::Named(_)) => {
+                    body_shape_err(expr, POSITIONAL_ONLY, &ctx.registries().labels)
+                }
+                Err(e) => Outcome::Done(Err(e)),
             }
-            Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-            Err(e) => Outcome::Done(Err(e)),
-        },
+        }
     }
 }
 
@@ -402,7 +417,7 @@ fn apply_union_construct<'step>(
         };
     }
     // The tag names which member; the built value's `identity` is that member's own sealed handle.
-    match extract_call_body(expr) {
+    match extract_call_body(expr, &ctx.registries().labels) {
         Ok(CallBody::Positional(parts)) => {
             let (tag, tag_text, value_part) =
                 match constructors::prepare_args(parts, ctx.registries()) {
@@ -425,7 +440,7 @@ fn apply_union_construct<'step>(
                 ))),
             }
         }
-        Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
+        Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY, &ctx.registries().labels),
         Err(e) => Outcome::Done(Err(e)),
     }
 }
@@ -509,7 +524,7 @@ fn apply_function<'step>(
                 Err(e) => Outcome::Done(Err(e)),
             }
         }
-        CallBody::Positional(_) => body_shape_err(expr, NAMED_ONLY),
+        CallBody::Positional(_) => body_shape_err(expr, NAMED_ONLY, &ctx.registries().labels),
     }
 }
 

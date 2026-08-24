@@ -89,7 +89,12 @@ pub(super) fn announce_type_members(
                 let Some(schema) = union_schema(statement) else {
                     continue;
                 };
-                match pair_list_names(&schema, "UNION schema", FieldNameKind::Type) {
+                match pair_list_names(
+                    &schema,
+                    "UNION schema",
+                    FieldNameKind::Type,
+                    &registries.labels,
+                ) {
                     Ok(tags) => {
                         let tags: Result<Vec<_>, _> = tags
                             .iter()

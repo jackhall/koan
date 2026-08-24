@@ -41,13 +41,13 @@ pub(super) fn initial<'step>(
         DispatchOutcome::Resolved(r) => r,
         DispatchOutcome::Ambiguous(n) => {
             return Outcome::Done(Err(KError::new(KErrorKind::AmbiguousDispatch {
-                expr: expr.summarize(),
+                expr: expr.summarize(&ctx.registries().labels),
                 candidates: n,
             })));
         }
         DispatchOutcome::Unmatched => {
             return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-                expr: expr.summarize(),
+                expr: expr.summarize(&ctx.registries().labels),
                 reason: "no matching function".to_string(),
             })));
         }
@@ -116,13 +116,13 @@ fn finish<'step>(
         DispatchOutcome::Resolved(r) => walk_and_invoke(ctx, r, working_expr, &bare_outcomes),
         DispatchOutcome::Ambiguous(n) => {
             Outcome::Done(Err(KError::new(KErrorKind::AmbiguousDispatch {
-                expr: working_expr.summarize(),
+                expr: working_expr.summarize(&ctx.registries().labels),
                 candidates: n,
             })))
         }
         DispatchOutcome::Deferred | DispatchOutcome::Unmatched => {
             Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-                expr: working_expr.summarize(),
+                expr: working_expr.summarize(&ctx.registries().labels),
                 reason: "no matching function".to_string(),
             })))
         }

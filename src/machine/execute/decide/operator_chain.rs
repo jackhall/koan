@@ -52,7 +52,7 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
                 // The powerset keys mean a hit already covers the probe, so a non-cover is a
                 // registry-build bug — surface it as a clean non-match rather than a wrong fold.
                 None => Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-                    expr: expr.summarize(),
+                    expr: expr.summarize(&ctx.registries().labels),
                     reason: cross_group_reason(&probe_key(&operators)),
                 }))),
                 Some(ChainPlan::FoldLeft) => reduce_fold_left(ctx, expr),
@@ -440,7 +440,7 @@ fn park_on_pending_operators<'step, 'b>(
         // The spelling the diagnostic names is re-derived here rather than cached on the node: the
         // probe travels as symbol bits, and this is the one path that has to render it.
         return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-            expr: expr.summarize(),
+            expr: expr.summarize(&ctx.registries().labels),
             reason: undeclared_operator_reason(&probe_key(&chain_operators(expr))),
         })));
     }

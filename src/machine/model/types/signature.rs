@@ -221,10 +221,10 @@ pub enum DeferredReturnSurface {
 }
 
 impl DeferredReturnSurface {
-    pub fn from_deferred(d: &DeferredReturn<'_>) -> Self {
+    pub fn from_deferred(d: &DeferredReturn<'_>, labels: &LabelInterner) -> Self {
         match d {
             DeferredReturn::Type(t) => Self::Type(t.render()),
-            DeferredReturn::Expression(e) => Self::Expression(e.summarize()),
+            DeferredReturn::Expression(e) => Self::Expression(e.summarize(labels)),
         }
     }
 
@@ -248,9 +248,7 @@ impl<'a> std::fmt::Debug for DeferredReturn<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DeferredReturn::Type(t) => f.debug_tuple("Type").field(t).finish(),
-            DeferredReturn::Expression(e) => {
-                f.debug_tuple("Expression").field(&e.summarize()).finish()
-            }
+            DeferredReturn::Expression(e) => f.debug_tuple("Expression").field(e).finish(),
         }
     }
 }
@@ -261,7 +259,7 @@ impl<'a> ReturnType<'a> {
         match self {
             ReturnType::Resolved(kt) => kt.name(registries),
             ReturnType::Deferred(DeferredReturn::Type(t)) => t.render(),
-            ReturnType::Deferred(DeferredReturn::Expression(e)) => e.summarize(),
+            ReturnType::Deferred(DeferredReturn::Expression(e)) => e.summarize(&registries.labels),
         }
     }
 

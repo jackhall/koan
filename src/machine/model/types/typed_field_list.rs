@@ -14,7 +14,7 @@ use crate::machine::model::Symbol;
 use crate::machine::model::ast::{
     ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart,
 };
-use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::labels::{LabelInterner, TypeSymbol};
 use crate::machine::model::values::Carried;
 pub use crate::parse::FieldNameKind;
 use crate::parse::parse_pair_list;
@@ -167,177 +167,191 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
         list: context_list,
         member: context_member,
     } = context;
-    let parsed = parse_pair_list(parts, context_list, name_kind, |part, name| {
-        // Every field types a value, so each field type must be a proper type; a bare
-        // constructor of kind `* -> *` standing unapplied is a kind error. Applied to each
-        // elaborated field on the way out, so the arms below share one verdict — the
-        // `KType::ANY` placeholders a `Pending` walk yields are proper and pass, and the
-        // re-walk checks the resolved type they stand for.
-        let checked = |kt: KType| match super::sig_schema::unsaturated_constructor_message(
-            kt,
-            &format!("the type of {context_member} `{name}`"),
-            registries,
-        ) {
-            Some(message) => Err(message),
-            None => Ok(kt),
-        };
-        match part.field_slot() {
-            FieldSlot::Type(t) => match elaborate_type_identifier(elaborator, &t, registries) {
-                TypeResolution::Done(kt) => checked(kt),
-                TypeResolution::Park(producers) => {
-                    awaited.extend(producers);
-                    // Placeholder, discarded under Pending; lets the walk collect every
-                    // parking producer in one pass.
-                    Ok(KType::ANY)
+    let parsed = parse_pair_list(
+        parts,
+        context_list,
+        name_kind,
+        &registries.labels,
+        |part, name| {
+            // Every field types a value, so each field type must be a proper type; a bare
+            // constructor of kind `* -> *` standing unapplied is a kind error. Applied to each
+            // elaborated field on the way out, so the arms below share one verdict — the
+            // `KType::ANY` placeholders a `Pending` walk yields are proper and pass, and the
+            // re-walk checks the resolved type they stand for.
+            let checked = |kt: KType| match super::sig_schema::unsaturated_constructor_message(
+                kt,
+                &format!("the type of {context_member} `{name}`"),
+                registries,
+            ) {
+                Some(message) => Err(message),
+                None => Ok(kt),
+            };
+            match part.field_slot() {
+                FieldSlot::Type(t) => match elaborate_type_identifier(elaborator, &t, registries) {
+                    TypeResolution::Done(kt) => checked(kt),
+                    TypeResolution::Park(producers) => {
+                        awaited.extend(producers);
+                        // Placeholder, discarded under Pending; lets the walk collect every
+                        // parking producer in one pass.
+                        Ok(KType::ANY)
+                    }
+                    TypeResolution::Unbound(msg) => {
+                        Err(format!("{msg} in {context_list} for `{}`", name))
+                    }
+                },
+                // A co-declared sibling `rewrite_threaded_self_refs` already sealed in. The cell is a
+                // resident of the elaborating scope's own region — the walk that seals one and the walk
+                // that reads it back run against the same cart — so the read stands under that scope's
+                // own region owner. What it yields is region-free either way: a `KType` is an interned
+                // registry handle borrowing nothing.
+                FieldSlot::Resolved(cell) => {
+                    elaborator
+                        .scope
+                        .read_spliced(&cell, |carried| match carried {
+                            Carried::Type(kt) => checked(kt),
+                            other => Err(format!(
+                                "{context_list} type for `{}` resolved to non-type value `{}`",
+                                name,
+                                other.summarize(registries),
+                            )),
+                        })
                 }
-                TypeResolution::Unbound(msg) => {
-                    Err(format!("{msg} in {context_list} for `{}`", name))
-                }
-            },
-            // A co-declared sibling `rewrite_threaded_self_refs` already sealed in. The cell is a
-            // resident of the elaborating scope's own region — the walk that seals one and the walk
-            // that reads it back run against the same cart — so the read stands under that scope's
-            // own region owner. What it yields is region-free either way: a `KType` is an interned
-            // registry handle borrowing nothing.
-            FieldSlot::Resolved(cell) => {
-                elaborator
-                    .scope
-                    .read_spliced(&cell, |carried| match carried {
-                        Carried::Type(kt) => checked(kt),
-                        other => Err(format!(
-                            "{context_list} type for `{}` resolved to non-type value `{}`",
-                            name,
-                            other.summarize(registries),
+                // A sigil body whose co-declared references are already threaded dispatches as it
+                // stands — the rewrite that produced it did what this arm's `Ast` peer does below.
+                FieldSlot::ThreadedSigil(body) => {
+                    match results.as_mut().and_then(|feed| feed.pop()) {
+                        Some(Carried::Type(kt)) => checked(kt),
+                        Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => {
+                            Err(format!(
+                                "{context_list} type for `{}` resolved to non-type value `{}`",
+                                name,
+                                other.summarize(registries),
+                            ))
+                        }
+                        None if results.is_some() => Err(format!(
+                            "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
                         )),
-                    })
-            }
-            // A sigil body whose co-declared references are already threaded dispatches as it
-            // stands — the rewrite that produced it did what this arm's `Ast` peer does below.
-            FieldSlot::ThreadedSigil(body) => match results.as_mut().and_then(|feed| feed.pop()) {
-                Some(Carried::Type(kt)) => checked(kt),
-                Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => Err(format!(
-                    "{context_list} type for `{}` resolved to non-type value `{}`",
+                        None => {
+                            sub_dispatches.push(*body);
+                            Ok(KType::ANY)
+                        }
+                    }
+                }
+                // A threaded record body elaborates inline exactly as its `Ast` peer does, and for the
+                // same reason: a record type is folded here, never sub-Dispatched as a whole.
+                FieldSlot::ThreadedRecord(body) => {
+                    match parse_typed_field_list_via_elaborator(
+                        FieldParts::threaded(body),
+                        FieldListContext::RECORD_TYPE,
+                        FieldNameKind::Identifier,
+                        elaborator,
+                        results.as_deref_mut(),
+                        registries,
+                    ) {
+                        FieldListOutcome::Done(pairs) => {
+                            Ok(types.record(Record::from_pairs(pairs)))
+                        }
+                        FieldListOutcome::Err(msg) => Err(msg),
+                        FieldListOutcome::Pending {
+                            awaited_producers,
+                            sub_dispatches: inner_subs,
+                        } => {
+                            awaited.extend(awaited_producers);
+                            sub_dispatches.extend(inner_subs);
+                            Ok(KType::ANY)
+                        }
+                    }
+                }
+                // Sigils sub-Dispatch through the standalone dispatcher, which carries no window
+                // context, so co-declared references are pre-resolved to sibling carriers first
+                // (see `rewrite_threaded_self_refs`).
+                FieldSlot::AstSigil(boxed) => {
+                    // `:(Tree Leaf)` while `Tree` is a binder of the active window: a sibling-variant
+                    // reference. It cannot sub-dispatch (parking would deadlock on this very seal's
+                    // producer), so it lowers straight to the variant's handle against the window —
+                    // relative while the window is open, absolute once it has sealed.
+                    if let [first, second] = boxed.parts
+                        && let (ExpressionPart::Type(head), ExpressionPart::Type(tag)) =
+                            (&first.value, &second.value)
+                        && let Some(binder) = TypeSymbol::of(head.as_str())
+                        && let Some(view) = elaborator.window().filter(|v| v.binds(binder))
+                    {
+                        let rendered_tag = tag.render();
+                        let index = view
+                            .variant_index(binder, Symbol::of(&rendered_tag))
+                            .ok_or_else(|| {
+                                format!(
+                                    "{context_list}: `{rendered_tag}` is not a variant of `{}`",
+                                    head.as_str(),
+                                )
+                            })?;
+                        return Ok(match view.sealed_member(index) {
+                            Some(kt) => kt,
+                            None => types.intern(super::node::TypeNode::Sibling(index)),
+                        });
+                    }
+                    match results.as_mut().and_then(|feed| feed.pop()) {
+                        // Re-walk: the `Type`-arm is the single guard rejecting a sub that
+                        // resolved to a value-by-expression.
+                        Some(Carried::Type(kt)) => checked(kt),
+                        Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => {
+                            Err(format!(
+                                "{context_list} type for `{}` resolved to non-type value `{}`",
+                                name,
+                                other.summarize(registries),
+                            ))
+                        }
+                        None if results.is_some() => Err(format!(
+                            "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
+                        )),
+                        // The body dispatches directly — the sigil wrapper's own handler does no more
+                        // than hand its body to the dispatch entry.
+                        None => {
+                            sub_dispatches.push(rewrite_threaded_self_refs(
+                                boxed,
+                                &elaborator.threaded,
+                                elaborator.scope,
+                                elaborator.window(),
+                                types,
+                            ));
+                            Ok(KType::ANY)
+                        }
+                    }
+                }
+                // A nested record type `:{…}` elaborates inline through this same walker,
+                // sharing the elaborator and `results` feed; its awaited producers / sub-dispatches merge
+                // into the outer set. No sub-Dispatch of the record node, no slot bookkeeping.
+                FieldSlot::AstRecord(boxed) => {
+                    match parse_typed_field_list_via_elaborator(
+                        FieldParts::of(boxed),
+                        FieldListContext::RECORD_TYPE,
+                        FieldNameKind::Identifier,
+                        elaborator,
+                        results.as_deref_mut(),
+                        registries,
+                    ) {
+                        FieldListOutcome::Done(pairs) => {
+                            Ok(types.record(Record::from_pairs(pairs)))
+                        }
+                        FieldListOutcome::Err(msg) => Err(msg),
+                        FieldListOutcome::Pending {
+                            awaited_producers,
+                            sub_dispatches: inner_subs,
+                        } => {
+                            awaited.extend(awaited_producers);
+                            sub_dispatches.extend(inner_subs);
+                            Ok(KType::ANY)
+                        }
+                    }
+                }
+                FieldSlot::Name(_) | FieldSlot::Other => Err(format!(
+                    "{context_list} type for `{}` must be a type name token, got {}",
                     name,
-                    other.summarize(registries),
+                    Part::summarize(part, &registries.labels)
                 )),
-                None if results.is_some() => Err(format!(
-                    "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
-                )),
-                None => {
-                    sub_dispatches.push(*body);
-                    Ok(KType::ANY)
-                }
-            },
-            // A threaded record body elaborates inline exactly as its `Ast` peer does, and for the
-            // same reason: a record type is folded here, never sub-Dispatched as a whole.
-            FieldSlot::ThreadedRecord(body) => {
-                match parse_typed_field_list_via_elaborator(
-                    FieldParts::threaded(body),
-                    FieldListContext::RECORD_TYPE,
-                    FieldNameKind::Identifier,
-                    elaborator,
-                    results.as_deref_mut(),
-                    registries,
-                ) {
-                    FieldListOutcome::Done(pairs) => Ok(types.record(Record::from_pairs(pairs))),
-                    FieldListOutcome::Err(msg) => Err(msg),
-                    FieldListOutcome::Pending {
-                        awaited_producers,
-                        sub_dispatches: inner_subs,
-                    } => {
-                        awaited.extend(awaited_producers);
-                        sub_dispatches.extend(inner_subs);
-                        Ok(KType::ANY)
-                    }
-                }
             }
-            // Sigils sub-Dispatch through the standalone dispatcher, which carries no window
-            // context, so co-declared references are pre-resolved to sibling carriers first
-            // (see `rewrite_threaded_self_refs`).
-            FieldSlot::AstSigil(boxed) => {
-                // `:(Tree Leaf)` while `Tree` is a binder of the active window: a sibling-variant
-                // reference. It cannot sub-dispatch (parking would deadlock on this very seal's
-                // producer), so it lowers straight to the variant's handle against the window —
-                // relative while the window is open, absolute once it has sealed.
-                if let [first, second] = boxed.parts
-                    && let (ExpressionPart::Type(head), ExpressionPart::Type(tag)) =
-                        (&first.value, &second.value)
-                    && let Some(binder) = TypeSymbol::of(head.as_str())
-                    && let Some(view) = elaborator.window().filter(|v| v.binds(binder))
-                {
-                    let rendered_tag = tag.render();
-                    let index = view
-                        .variant_index(binder, Symbol::of(&rendered_tag))
-                        .ok_or_else(|| {
-                            format!(
-                                "{context_list}: `{rendered_tag}` is not a variant of `{}`",
-                                head.as_str(),
-                            )
-                        })?;
-                    return Ok(match view.sealed_member(index) {
-                        Some(kt) => kt,
-                        None => types.intern(super::node::TypeNode::Sibling(index)),
-                    });
-                }
-                match results.as_mut().and_then(|feed| feed.pop()) {
-                    // Re-walk: the `Type`-arm is the single guard rejecting a sub that
-                    // resolved to a value-by-expression.
-                    Some(Carried::Type(kt)) => checked(kt),
-                    Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => {
-                        Err(format!(
-                            "{context_list} type for `{}` resolved to non-type value `{}`",
-                            name,
-                            other.summarize(registries),
-                        ))
-                    }
-                    None if results.is_some() => Err(format!(
-                        "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
-                    )),
-                    // The body dispatches directly — the sigil wrapper's own handler does no more
-                    // than hand its body to the dispatch entry.
-                    None => {
-                        sub_dispatches.push(rewrite_threaded_self_refs(
-                            boxed,
-                            &elaborator.threaded,
-                            elaborator.scope,
-                            elaborator.window(),
-                            types,
-                        ));
-                        Ok(KType::ANY)
-                    }
-                }
-            }
-            // A nested record type `:{…}` elaborates inline through this same walker,
-            // sharing the elaborator and `results` feed; its awaited producers / sub-dispatches merge
-            // into the outer set. No sub-Dispatch of the record node, no slot bookkeeping.
-            FieldSlot::AstRecord(boxed) => {
-                match parse_typed_field_list_via_elaborator(
-                    FieldParts::of(boxed),
-                    FieldListContext::RECORD_TYPE,
-                    FieldNameKind::Identifier,
-                    elaborator,
-                    results.as_deref_mut(),
-                    registries,
-                ) {
-                    FieldListOutcome::Done(pairs) => Ok(types.record(Record::from_pairs(pairs))),
-                    FieldListOutcome::Err(msg) => Err(msg),
-                    FieldListOutcome::Pending {
-                        awaited_producers,
-                        sub_dispatches: inner_subs,
-                    } => {
-                        awaited.extend(awaited_producers);
-                        sub_dispatches.extend(inner_subs);
-                        Ok(KType::ANY)
-                    }
-                }
-            }
-            FieldSlot::Name(_) | FieldSlot::Other => Err(format!(
-                "{context_list} type for `{}` must be a type name token, got {}",
-                name,
-                Part::summarize(part)
-            )),
-        }
-    });
+        },
+    );
     match parsed {
         Err(msg) => FieldListOutcome::Err(msg),
         Ok(fields) => {
@@ -493,8 +507,9 @@ pub fn pair_list_names(
     expr: &KExpression<'_>,
     context: &'static str,
     name_kind: FieldNameKind,
+    labels: &LabelInterner,
 ) -> Result<Vec<String>, String> {
-    parse_pair_list(expr.parts, context, name_kind, |_, _| Ok(())).map(|pairs| {
+    parse_pair_list(expr.parts, context, name_kind, labels, |_, _| Ok(())).map(|pairs| {
         pairs
             .into_iter()
             .map(|(name, ())| name)

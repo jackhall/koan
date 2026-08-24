@@ -4,6 +4,7 @@ use crate::builtins::test_support::kw_part;
 use crate::builtins::test_support::{TestRun, marker, run_root_bare};
 use crate::machine::core::{FrameStorageExt, Scope, program_storage, run_root_storage};
 use crate::machine::model::RunRegistries;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KExpression, KType, ReturnType, SignatureDraft};
 use crate::machine::model::{KKind, KObject};
 use crate::machine::model::{KLiteral, TypeIdentifier};

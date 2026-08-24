@@ -56,20 +56,21 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                     (tag, payload_envelope(&envelope), Some(e))
                 }
             };
-        let body_expr = match find_branch_body_by_tag(&branches_expr, tag, true) {
-            Ok(Some(body)) => body,
-            // On no match: re-raise the original `KError`, or `ShapeError` on the success path
-            // without an `Ok` or `_` arm.
-            Ok(None) => {
-                return match original_error {
-                    Some(e) => Action::done(Err(e)),
-                    None => Action::done(Err(KError::new(KErrorKind::ShapeError(
-                        "TRY missing Ok arm".to_string(),
-                    )))),
-                };
-            }
-            Err(msg) => return Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
-        };
+        let body_expr =
+            match find_branch_body_by_tag(&branches_expr, tag, true, &fctx.registries.labels) {
+                Ok(Some(body)) => body,
+                // On no match: re-raise the original `KError`, or `ShapeError` on the success path
+                // without an `Ok` or `_` arm.
+                Ok(None) => {
+                    return match original_error {
+                        Some(e) => Action::done(Err(e)),
+                        None => Action::done(Err(KError::new(KErrorKind::ShapeError(
+                            "TRY missing Ok arm".to_string(),
+                        )))),
+                    };
+                }
+                Err(msg) => return Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
+            };
         arm_tail(fctx.scope, it_carrier, body_expr, contract, fctx.registries)
     });
     Action::catch(

@@ -8,6 +8,7 @@
 //! (ruling F1). [`resolve_arm_contract`] builds the `-> :T` return contract both arms
 //! enforce on their result.
 
+use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
 use crate::machine::model::{Symbol, TypeSymbol, ValueSymbol};
 use crate::machine::model::{TypeResolution, most_specific_ktype};
@@ -148,6 +149,7 @@ pub(crate) fn find_branch_body_by_tag<'a>(
     branches: &KExpression<'a>,
     target_tag: Symbol,
     allow_wildcard: bool,
+    labels: &LabelInterner,
 ) -> Result<Option<KExpression<'a>>, String> {
     let parts = &branches.parts;
     if !parts.len().is_multiple_of(3) {
@@ -176,7 +178,7 @@ pub(crate) fn find_branch_body_by_tag<'a>(
             other => {
                 return Err(format!(
                     "branch tag must be a capitalized variant tag or boolean literal, got {}",
-                    other.summarize()
+                    other.summarize(labels)
                 ));
             }
         };
@@ -185,7 +187,7 @@ pub(crate) fn find_branch_body_by_tag<'a>(
             other => {
                 return Err(format!(
                     "branch separator must be `->`, got {}",
-                    other.summarize()
+                    other.summarize(labels)
                 ));
             }
         }
@@ -194,7 +196,7 @@ pub(crate) fn find_branch_body_by_tag<'a>(
             other => {
                 return Err(format!(
                     "branch body must be a parenthesized expression, got {}",
-                    other.summarize()
+                    other.summarize(labels)
                 ));
             }
         };
@@ -313,7 +315,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
             other => {
                 return Err(format!(
                     "branch separator must be `->`, got {}",
-                    other.summarize()
+                    other.summarize(&registries.labels)
                 ));
             }
         }
@@ -322,7 +324,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
             other => {
                 return Err(format!(
                     "branch body must be a parenthesized expression, got {}",
-                    other.summarize()
+                    other.summarize(&registries.labels)
                 ));
             }
         };
@@ -372,7 +374,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
             other => {
                 return Err(format!(
                     "branch head must be a capitalized type name or boolean literal, got {}",
-                    other.summarize()
+                    other.summarize(&registries.labels)
                 ));
             }
         }

@@ -230,10 +230,7 @@ fn render_param_record(params: &Record<KType>, registries: &RunRegistries) -> St
 /// hand-built handle. Rendering stays total: the placeholder prints instead of panicking, because
 /// error formatting must never be the thing that fails.
 pub fn render_label(symbol: Symbol, registries: &RunRegistries) -> String {
-    registries
-        .labels
-        .resolve(symbol)
-        .unwrap_or_else(|| "<label>".to_string())
+    registries.labels.render(symbol)
 }
 
 /// The structural rendering of a non-empty interface: `SIG (member: Type, …)` over every member

@@ -304,7 +304,7 @@ pub fn build_tree<'a>(
                 let frame = stack.pop_top().ok_or_else(|| {
                     KError::parse("closed paren without matching open paren", None)
                 })?;
-                stack.push_part(close_paren_to_part(program, frame, end)?);
+                stack.push_part(close_paren_to_part(program, frame, end, labels)?);
             }
             '[' => {
                 let span_start = reader.cursor;

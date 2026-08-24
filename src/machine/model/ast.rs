@@ -222,8 +222,8 @@ impl<'a> Part<'a> for ExpressionPart<'a> {
         }
     }
 
-    fn summarize(&self) -> String {
-        ExpressionPart::summarize(self)
+    fn summarize(&self, labels: &LabelInterner) -> String {
+        ExpressionPart::summarize(self, labels)
     }
 }
 
@@ -259,30 +259,30 @@ impl<'a> ExpressionPart<'a> {
     }
 
     /// Per-part subset of [`KExpression::summarize`].
-    pub fn summarize(&self) -> String {
+    pub fn summarize(&self, labels: &LabelInterner) -> String {
         match self {
             ExpressionPart::Keyword(kw) => kw.text().to_string(),
             ExpressionPart::Identifier(s) => (*s).to_string(),
             ExpressionPart::Type(t) => t.render(),
-            ExpressionPart::Expression(e) => e.summarize(),
-            ExpressionPart::SigiledTypeExpr(e) => format!(":({})", e.summarize()),
-            ExpressionPart::RecordType(e) => format!(":{{{}}}", e.summarize()),
-            ExpressionPart::QuotedExpression(e) => format!("#({})", e.summarize()),
+            ExpressionPart::Expression(e) => e.summarize(labels),
+            ExpressionPart::SigiledTypeExpr(e) => format!(":({})", e.summarize(labels)),
+            ExpressionPart::RecordType(e) => format!(":{{{}}}", e.summarize(labels)),
+            ExpressionPart::QuotedExpression(e) => format!("#({})", e.summarize(labels)),
             ExpressionPart::ListLiteral(items) => {
-                let inner: Vec<String> = items.iter().map(|p| p.summarize()).collect();
+                let inner: Vec<String> = items.iter().map(|p| p.summarize(labels)).collect();
                 format!("[{}]", inner.join(" "))
             }
             ExpressionPart::DictLiteral(pairs) => {
                 let inner: Vec<String> = pairs
                     .iter()
-                    .map(|(k, v)| format!("{}: {}", k.summarize(), v.summarize()))
+                    .map(|(k, v)| format!("{}: {}", k.summarize(labels), v.summarize(labels)))
                     .collect();
                 format!("{{{}}}", inner.join(", "))
             }
             ExpressionPart::RecordLiteral(pairs) => {
                 let inner: Vec<String> = pairs
                     .iter()
-                    .map(|(k, v)| format!("{} = {}", k, v.summarize()))
+                    .map(|(k, v)| format!("{} = {}", k, v.summarize(labels)))
                     .collect();
                 format!("{{{}}}", inner.join(", "))
             }
@@ -620,11 +620,12 @@ impl<'a> KExpression<'a> {
         }
     }
 
-    /// Surface rendering of the whole expression — parts only, so no registry is needed.
-    pub fn summarize(&self) -> String {
+    /// Surface rendering of the whole expression, resolving each symbol-carrying part through
+    /// the run's interner.
+    pub fn summarize(&self, labels: &LabelInterner) -> String {
         self.parts
             .iter()
-            .map(|p| p.value.summarize())
+            .map(|p| p.value.summarize(labels))
             .collect::<Vec<_>>()
             .join(" ")
     }

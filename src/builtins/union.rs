@@ -111,7 +111,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // Pre-scan the variant tags so every variant has a stable relative index before any payload
     // elaborates: a payload naming a later-declared sibling must mint the index that sibling will
     // fill. The binder itself is not a member — it denotes the union of them all.
-    let tags = match pair_list_names(&schema_expr, "UNION schema", FieldNameKind::Type) {
+    let tags = match pair_list_names(
+        &schema_expr,
+        "UNION schema",
+        FieldNameKind::Type,
+        &ctx.registries.labels,
+    ) {
         Ok(tags) => tags,
         Err(message) => return Action::done(Err(KError::new(KErrorKind::ShapeError(message)))),
     };

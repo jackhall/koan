@@ -144,7 +144,7 @@ pub(super) fn close_collection<'a>(
     let frame = stack
         .pop_top()
         .expect("peek_top.matches_closer checked above; flush_token preserves variant");
-    let part = frame.into_part(stack.brand(), end)?;
+    let part = frame.into_part(stack.brand(), end, stack.labels())?;
     stack.push_part(part);
     Ok(())
 }

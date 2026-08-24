@@ -7,6 +7,7 @@
 //! supplied by a `parse_slot` closure.
 
 use crate::machine::model::ast::{FieldSlot, Part};
+use crate::machine::model::labels::LabelInterner;
 use crate::source::Spanned;
 
 /// Which token shapes are accepted as a field/parameter *name* by [`parse_pair_list`].
@@ -33,6 +34,7 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
     parts: &'a [Spanned<P>],
     context: &str,
     name_kind: FieldNameKind,
+    labels: &LabelInterner,
     mut parse_slot: impl FnMut(&P, &str) -> Result<T, String>,
 ) -> Result<Vec<(String, T)>, String> {
     if !parts.len().is_multiple_of(2) {
@@ -58,13 +60,13 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
             (_, FieldNameKind::Type) => {
                 return Err(format!(
                     "{context} variant tag must be a capitalized type name, got {}",
-                    parts[i].value.summarize(),
+                    parts[i].value.summarize(labels),
                 ));
             }
             _ => {
                 return Err(format!(
                     "{context} name must be a bare identifier, got {}",
-                    parts[i].value.summarize(),
+                    parts[i].value.summarize(labels),
                 ));
             }
         };
@@ -105,6 +107,7 @@ mod tests {
             expr.parts,
             "FN parameters",
             FieldNameKind::IdentifierOrType,
+            &LabelInterner::new(),
             |p, _| match p {
                 ExpressionPart::Type(t) => Ok(t.render()),
                 _ => Err("unexpected slot".to_string()),
@@ -122,6 +125,7 @@ mod tests {
             expr.parts,
             "STRUCT schema",
             FieldNameKind::Identifier,
+            &LabelInterner::new(),
             |_, _| Ok::<_, String>(()),
         );
         assert!(
