@@ -79,6 +79,51 @@ p.w
 error: shape error: `Point` has no field `w`
 ```
 
+## Reading a field named at runtime
+
+`.` needs the field name spelled out. When the name is only known at runtime,
+write the read out longhand as `ATTR <value> <name>` and give it a string:
+
+```koan
+NEWTYPE Point = :{x :Number, y :Number}
+LET p = (Point {x = 3, y = 4})
+LET which = "y"
+PRINT (ATTR p (which))
+```
+
+```text
+4
+```
+
+A string literal works the same way — `ATTR p "x"` reads the same field `p.x`
+does. A bare name in that position is always the *field's* name, never a
+variable holding one, even when both spellings exist:
+
+```koan
+NEWTYPE Point = :{x :Number, y :Number}
+LET p = (Point {x = 3, y = 4})
+LET x = "y"
+PRINT p.x
+```
+
+```text
+3
+```
+
+`p.x` reads the field `x` and ignores the binding `x` entirely; to go through
+the binding you have to ask for it, with `ATTR p (x)`. Modules answer a computed
+name too, out of their own bindings:
+
+```koan
+MODULE m = ((LET x = 7))
+LET which = "x"
+PRINT (ATTR m (which))
+```
+
+```text
+7
+```
+
 ## Required fields and extra fields
 
 A record type names the fields a value must have. Leaving one out is an error at

@@ -62,7 +62,7 @@ Use the source-tree-changes section to decide whether to update README.md's sour
 
 ### 5. Decide audit status
 
-Based on everything you have seen, choose a traffic light status. Do not include documentation issues that you were able to fix.
+Based on everything you have seen, choose a traffic light status. Do not include documentation issues that you were able to fix. Do not include issues with the implementer's handoff unless they hide an issue with the code.
 
 - **green** Everything as expected, no issues with the audit or documentation.
 - **yellow** Uncertain/minor issues or deviations from the roadmap.

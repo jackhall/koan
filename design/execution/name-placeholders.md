@@ -146,9 +146,9 @@ because sibling overloads under one head keyword (e.g. two `FN (PICK xs :A) ...`
 
 The two channels are two fields of one key, not two alternatives: a
 [`StoredBinderKey`](../../src/machine/model/binder.rs) carries an optional
-[`BinderName`](../../src/machine/model/binder.rs) — `Value(&str)` for a name still
-awaiting classification at the install seam, `Type(TypeSymbol)` for one the parser
-already minted — and an optional
+[`BinderSymbol`](../../src/machine/model/labels.rs) — `Value(ValueSymbol)` or
+`Type(TypeSymbol)`, either way the symbol the parser minted when it classified the
+token — and an optional
 [`BucketKeys`](../../src/machine/model/binder.rs) pair, so one statement may fill
 either channel or both. The variant *is* the bind kind, so the record states no
 separate kind tag beside the name. The **combined statement forms** —
@@ -157,8 +157,9 @@ separate kind tag beside the name. The **combined statement forms** —
 binder: the value name and the bucket key(s) the declaration's body registers
 under. Two bucket keys is the maximum any form reaches (a `UNARY OP` declares the
 keyword-first list key plus the binary bridge key), so the record is fixed-size
-and `Copy`: a value name and a key run are borrows into the declaring node's own
-region, a type name is a lifetime-free symbol, and nothing is heap-owned. The owned twin
+and `Copy`: a name of either class is a lifetime-free symbol, a key run is a borrow
+into the declaring node's own region, and nothing is heap-owned. `to_owned_key`
+mints nothing — both channels arrive already classified and interned. The owned twin
 [`BinderKey`](../../src/machine/model/binder.rs) is the transient currency the
 submission path hands the bindings tables.
 
@@ -204,8 +205,8 @@ form that installs nothing; everything else stays placeholder-free.
 A claim's `BindKind` (value or type) picks its destination table, and each
 binder's kind is fixed by the name part its binder-name extractor reads:
 `type_part_binder_name` (SIG / UNION / NEWTYPE) reads a `Type`
-part and yields `BinderName::Type`; `identifier_part_binder_name` (`LET <name> = …`,
-`MODULE`) reads an `Identifier` part and yields `BinderName::Value`. The kind is read
+part and yields `BinderSymbol::Type`; `identifier_part_binder_name` (`LET <name> = …`,
+`MODULE`) reads an `Identifier` part and yields `BinderSymbol::Value`. The kind is read
 back off the variant, so a spec cannot declare one kind and extract the other. `MODULE` binds a
 value under a value token, so its claim and its write sit on the same ladder — no
 binder straddles the two kinds, and a write of one kind can never finalize the

@@ -118,12 +118,6 @@ fn read_field_name(
     Err(KError::new(KErrorKind::MissingArg("field".to_string())))
 }
 
-/// Classify a member name that reached the read as text rather than as a token the parse minted —
-/// a rendered type handle, or the runtime string [`body_dynamic_field`] reads. This is the value
-/// channel's one derived-symbol door: [`BinderSymbol::declared`] classifies and interns in one
-/// step, so a spelling read off text keys the same symbol a bare token of that spelling would have
-/// minted. Text that classifies as neither channel names no binding, so it rides as a rendering —
-/// a digest-keyed record probe and an immediate module miss.
 /// Read the `field` member name off a `:Str` slot — the dynamic read's counterpart to
 /// [`read_field_name`]. The slot's type admits no other object shape, so the string arm is the
 /// whole vocabulary.
@@ -137,6 +131,14 @@ fn read_dynamic_field_name(
     }
 }
 
+/// Classify a member name that reached the read as text rather than as a token the parse minted —
+/// a rendered type handle, or the runtime string [`read_dynamic_field_name`] reads. This is the
+/// value channel's one derived-symbol door: [`BinderSymbol::declared`] classifies and interns in
+/// one step, so a spelling read off text keys the same symbol a bare token of that spelling would
+/// have minted. Interning here is what widens the label table past the run's source text — see
+/// [design/label-interning.md](../../design/label-interning.md). Text that classifies as neither
+/// channel names no binding, so it rides as a rendering — a digest-keyed record probe and an
+/// immediate module miss.
 fn classify_derived_field(text: &str, registries: &RunRegistries) -> FieldName {
     match BinderSymbol::declared(text, &registries.labels) {
         Some(class) => FieldName::Token(class),

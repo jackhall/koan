@@ -25,7 +25,8 @@ use std::rc::Rc;
 crate::slots! { SLOTS { return_type } }
 
 /// The arm binder every `MATCH` and `TRY` arm binds its scrutinee under. A name the machine
-/// fixes in Rust source rather than one a program spells, so it declares as a [`StaticName`] and
+/// fixes in Rust source rather than one a program spells, so it declares as a
+/// [`StaticName`](crate::machine::model::StaticName) and
 /// is minted once for the process — an arm binds by loading that symbol, not by classifying `it`
 /// again per arm taken.
 static IT: crate::machine::model::StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "it");

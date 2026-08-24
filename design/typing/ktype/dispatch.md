@@ -86,6 +86,29 @@ call like `ATTR p z` where `p` resolves to a record value admits both a
 concrete-typed `ATTR` overload and an `ATTR <s:Identifier>` fallback;
 the concrete overload wins by specificity without tying.
 
+`Str` is the one exception to that rule: **`Identifier` out-specifies `Str`**,
+and `Str` does not out-specify `Identifier`. The two slots read the same bare
+token at different depths — an `Identifier` slot claims the token *itself*, a
+`Str` slot only the value the token resolves to — so when one bucket offers both
+readings, the token reading wins. A field token stays bare wherever an
+`Identifier` slot admits it, and a local string binding that happens to share the
+spelling cannot steal it. The pair has no other consumer: `Identifier` is not
+user-spellable, and no other builtin bucket puts the two slot types in one
+position, so the ranking alone decides and dispatch admission needs no carve-out.
+
+`ATTR`'s `field` position is where that matters. The spelled forms — the `.`
+sugar (`s.x`) and the written-out `ATTR s x` alike — bind the field bare through
+an `Identifier` slot. A field that arrives as a runtime string instead falls to a
+**pair** of dynamic overloads, split by the lhs exactly as the bare-token
+overloads are: `ATTR <s :Any> <field :Str>` reads a member off a runtime value,
+and `ATTR <s :EmptySignature> <field :Str>` answers out of a module's own
+bindings, `EmptySignature` (which every module's self-sig satisfies)
+out-specifying `Any`. So `s."x"` and `ATTR s (name_var)` reach the same member
+`s.x` does — the dynamic read classifies and interns the text at the read, which
+is the value channel's one derived-symbol door
+([label-interning.md](../../label-interning.md)) — while `ATTR p x` with `x`
+bound to a string still reads the member named `x`.
+
 ### Overload bucket visibility filter
 
 Function-bucket lookup pre-filters by per-overload visibility before the strict

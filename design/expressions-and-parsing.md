@@ -75,7 +75,11 @@ The `Keyword`-vs-slot split is the parser's contract with dispatch:
   interned for it, and the symbol is what the key holds and every keyword
   comparison reads ([label-interning.md](label-interning.md)).
 - `Identifier`, `Type`, literals, and sub-expressions become slots that compete
-  on type specificity (see [typing/ktype/README.md](typing/ktype/README.md)).
+  on type specificity (see [typing/ktype/README.md](typing/ktype/README.md)). The
+  two name parts carry a symbol and no text at all — `Identifier(ValueSymbol)` and
+  `Type(TypeSymbol)`, each minted and interned by the classification that produced
+  the part — so a name is hashed once, at the parse, and every later reader carries
+  those bits ([label-interning.md](label-interning.md)).
 
 `KExpression` is itself a first-class `KObject` variant — user code can hold an
 unevaluated expression as a value, pass it around, and evaluate it on demand.

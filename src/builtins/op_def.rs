@@ -600,8 +600,7 @@ fn bridge_body<'a>(
         ExpressionPart::expression(
             program,
             &[Spanned::bare(ExpressionPart::Identifier(
-                ValueSymbol::declared(slot.text(), labels)
-                    .expect("an operand slot's spelling is a value token"),
+                labels.record(slot),
             ))],
         )
     };

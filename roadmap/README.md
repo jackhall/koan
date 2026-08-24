@@ -47,7 +47,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Parse at runtime](metaprogramming/parse-at-runtime.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Deferred signature summaries](reduce_allocs/deferred-signature-summaries.md)
-- [Parse-interned identifiers](reduce_allocs/parse-interned-identifiers.md)
+- [Symbol-keyed field lists](reduce_allocs/symbol-keyed-field-lists.md)
 - [Symbol-only keyword tokens](reduce_allocs/symbol-only-keyword-tokens.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)

@@ -174,8 +174,10 @@ pushes them. The terms that do not move are the ones whose frames are nowhere ne
 one-parameter call at 36.7, a builtin call at 64.7, and the operator chain, whose `+` opens no frame
 of its own.
 
-No shape gains heap traffic. Every movement in this column is either the seeding constant or a chunk
-crossing; the value-side symbol work takes allocations off the execute path and adds none.
+Every movement in this column is either the seeding constant or a chunk crossing: the value-side
+symbol work opens no new allocation site on a per-step, per-dispatch or per-call path. A crossing is
+still one more call to the allocator per repetition — what it is not is traffic a marginal path
+newly makes, which is why the same four terms move in both directions as layouts change.
 
 ### Symbol mints
 
@@ -217,9 +219,11 @@ keyword, value name and Type name alike — now mints once where it minted twice
 token** mints at the parse that classifies it and nowhere after, where each seam that read one
 used to re-classify its text. The tagged cycle splits its drop of 10 between them, 7 and 3:
 7 across the tokens it declares per cycle, and 3 on its `-> :Number` leaf alone, which cost four
-mints a cycle and now costs the one the parse takes. The value side is now the same story:
-[parse-interned identifiers](../roadmap/reduce_allocs/parse-interned-identifiers.md) is what the
-drops above measure. What is left on the marginal terms is spelled by the program's
+mints a cycle and now costs the one the parse takes. The value side is now the same story — an
+`Identifier` part carries the symbol its parse minted and every reader down to the lookup ladder
+takes it
+([label-interning.md § Where text becomes a symbol](../design/label-interning.md#where-text-becomes-a-symbol)),
+which is what the drops above measure. What is left on the marginal terms is spelled by the program's
 **keywords** — a statement's leading token, an operator's — and carrying those from the parse
 boundary too is
 [symbol-only keyword tokens](../roadmap/reduce_allocs/symbol-only-keyword-tokens.md). The flat

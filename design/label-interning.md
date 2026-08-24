@@ -162,11 +162,13 @@ Two text constructors, and the split is the interning rule stated above:
   door instead, below, which reaches the interner without classifying anything.
 - **`of(text)`** — pure classification, no interning. The *probe* constructor: a lookup
   arriving as source text converts once here, and a wrong-class name misses by returning
-  `None` at the seam rather than by probing a table. `ValueSymbol` and `KeywordSymbol` expose
-  it; **`TypeSymbol` does not** — a Type token is minted at the parse that classifies it and
-  every later reader carries that symbol, so there is no text for a type-side probe to convert.
-  A seam that must probe a type-keyed table from runtime text derives a bare `Symbol` and
-  compares bits.
+  `None` at the seam rather than by probing a table. **Only `KeywordSymbol` exposes it** — the
+  operator and dispatch tables key by fixed tokens read back out of source, so the keyword side
+  is the one vocabulary a bare spelling still legitimately enters. Neither *name* class has a
+  peer: a name is minted at the parse that classifies it, on both sides of the partition, and
+  every later reader carries that symbol rather than re-classifying a spelling. A seam that must
+  probe a name-keyed table from runtime text derives a bare `Symbol` and compares bits, or takes
+  the `declared` door above when it wants the class as well.
 
 Both run the class predicate through one hidden `classify` funnel, shared with the
 `static_name!` mint below, so a class has exactly one implementation of "does this text
@@ -183,7 +185,8 @@ registration labels a bucket rather than binding a name, so it is untouched by t
 ## Names fixed in Rust source
 
 Some labels are not read out of a program at all: a builtin's parameter slot, the `Result`
-family's `Ok` / `Error` tags, the `KError` family name. Their spelling is `&'static str` written
+family's `Ok` / `Error` tags, the `KError` family name, the `it` an arm binds its scrutinee
+under. Their spelling is `&'static str` written
 in Rust, so their symbol is the same 128 bits for the whole process and there is nothing for a
 per-run or per-call classification to discover. Such a name is **declared once and compared by
 symbol thereafter**.
@@ -246,6 +249,13 @@ fixed at a source site. The builtin type vocabulary is fixed in source like the 
 `StaticName<TypeSymbol>`s beside the handle each lowers to, and that one table is what both root
 registration and `KType::from_symbol` read, so a builtin type name is matched by eleven symbol
 compares and never classified from text.
+
+A name the machine *binds into a program's scope* is fixed in source the same way. `it` — the
+scrutinee binder every `MATCH` and `TRY` arm opens — is a `StaticName<ValueSymbol>` declared in
+[branch_walk.rs](../src/builtins/branch_walk.rs) beside the arm tail that binds it, and read
+through `record` there. It is value-class like a parameter slot but is not one: no signature
+registers it, and the arm binds under the symbol the static already holds, so an arm taken hashes
+no text.
 
 The mint count is measured, not bounded, in
 [audit/README.md § Symbol mints](../audit/README.md#symbol-mints).
@@ -328,16 +338,41 @@ type-declaring builtin's binder name. Because the symbol is lifetime-free and `C
 crossing a region boundary is copied rather than re-bumped, and a name that must be *printed*
 resolves back through the interner.
 
-The **value** vocabulary converts at the **lookup seam** instead: a resolve ladder takes `&str`,
-classifies once at the top with `of`, and compares symbol bits from there down. A wrong-class
-probe misses at that conversion — against a map that could never have held such a key.
+The **value** vocabulary converts at the parse boundary too, and for the same reasons — the two
+name classes are mirror images. Where the parser classifies a token as neither keyword-class nor
+Type-class it mints the token's `ValueSymbol` through `declared`, and the part carries the symbol
+alone (`ExpressionPart::Identifier(ValueSymbol)`, `FieldSlot::Name(ValueSymbol)`). Every later
+reader carries it: the bind seam's `Held::Identifier` carrier — the value-channel mirror of
+`Held::UnresolvedType`, read back through `BoundArgs::identifier` and nothing else — the
+value-lookup ladder (`Scope::resolve_value_delivered`, which takes a `ValueSymbol` rather than a
+spelling), each binder builtin's own name read, and the statement's `StoredBinderKey`, whose
+`to_owned_key` mints nothing. Because no lookup re-derives a digest, a name spelled once and read
+many times is hashed once, at the parse.
+
+The consequence for the surface is that neither name class admits a bare probe. A binder builtin
+that needs the spelling back — for a diagnostic that quotes the name — renders it out of the run's
+interner rather than holding text beside the symbol.
 
 ## Probes never intern
 
-A runtime string probing a record (the `attr` lane) computes `Symbol::of(text)`
-and searches the record or substrate directly. A miss is a lookup miss; the
-interner is never consulted and never written. Interner growth is therefore
-bounded by the run's source text: only syntactic construction sites intern.
+A runtime string probing a record computes `Symbol::of(text)` and searches the
+record or substrate directly. A miss is a lookup miss; the interner is never
+consulted and never written.
+
+The **derived-symbol door** is the exception, and there is exactly one on each
+side of the name partition. On the value side it is
+[`classify_derived_field`](../src/builtins/attr.rs), which every member name that
+reaches `ATTR` as text rather than as a parse-minted token funnels through — a
+rendered type handle, or the runtime string the dynamic `ATTR <s> <field :Str>`
+overloads read. It classifies through `BinderSymbol::declared`, so a spelling read
+off text keys the same symbol a bare token of that spelling would have minted, and
+`s."x"` and `s.x` reach one member. Classifying through `declared` means it also
+**interns**: a computed member name is recorded, so interner growth is bounded by
+the run's source text *plus* the distinct member names a run computes. That is the
+price of the two spellings agreeing, and it is paid only by a program that names a
+member at runtime. Text classifying as neither bindable class names no binding at
+all, so it never reaches the interner — it rides as a rendering, which is a
+digest-keyed record probe and an immediate module miss.
 
 ## Rendering
 
@@ -359,9 +394,6 @@ back out of a part (`parse_pair_list`, the record-literal field-name read).
 
 ## Open work
 
-- [roadmap/reduce_allocs/parse-interned-identifiers.md](../roadmap/reduce_allocs/parse-interned-identifiers.md)
-  — `Identifier` parts carry their classified symbol alone from the parse boundary, so the value
-  vocabulary stops re-deriving a digest the parser could have carried.
 - [roadmap/reduce_allocs/symbol-keyed-field-lists.md](../roadmap/reduce_allocs/symbol-keyed-field-lists.md)
   — record-literal keys, field lists and FN parameter names as symbols.
 - [roadmap/reduce_allocs/symbol-only-keyword-tokens.md](../roadmap/reduce_allocs/symbol-only-keyword-tokens.md)

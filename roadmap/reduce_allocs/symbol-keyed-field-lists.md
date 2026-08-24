@@ -39,9 +39,7 @@ evaluation.
 
 ## Dependencies
 
-**Requires:**
-
-- [Parse-interned identifiers](parse-interned-identifiers.md) — both part kinds must be
-  symbol-only before a field list can be.
+**Requires:** none — the Identifier and Type parts a field list keys on both carry their
+parse-minted symbol already.
 
 **Unblocks:** none.
