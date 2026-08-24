@@ -242,6 +242,15 @@ The bounds are tight by design: the margin is smaller than the 100 (loop), 127 (
 on the scaling path would add, so one added allocation fails a test. Rebaselining is meant to be
 a deliberate edit, and the failure message says so.
 
+What a bound defends is exactly that: **no allocation added to a per-step, per-dispatch or
+per-call path.** It is not a claim that the absolute figure never rises. Two things move these
+numbers without any such allocation existing, and both are expected to force a rebaseline:
+registering a builtin overload, which every run pays once at seeding and every shape here
+therefore carries; and a change to what a frame holds by *byte size*, which slides the four
+boundary-straddling terms across bumpalo's 496-byte first chunk in whichever direction it packs.
+When a bound moves, the question the failure message asks is which of the three it was. Only the
+first — a new allocation on a marginal path — is a regression.
+
 Those figures sit 9 under the whole-program table above — the same gap for both shapes, and
 essentially all of it process startup. The interpreter holds almost no lazy one-time state, so
 there is little for a first-run bracket to absorb.
