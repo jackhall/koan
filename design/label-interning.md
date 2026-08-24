@@ -110,9 +110,10 @@ carries — roles shared, not translated.
 
 Per call, the argument currency is `BoundArgs`: the definition-time schema paired
 with a values-only slice on the step scratch arena, aligned slot-for-slot. Each
-slot holds the bound cell and its optional delivery envelope. A named read
-computes `Symbol::of(name)`, scans the schema (symbol compare, linear over call
-arity) and indexes the slot; iteration zips schema with slots. Dispatch's slot
+slot holds the bound cell and its optional delivery envelope. A named read takes
+the slot's declared name (below), reads the symbol off its memo, scans the schema
+(symbol compare, linear over call arity) and indexes the slot; iteration zips
+schema with slots. Nothing on that path hashes. Dispatch's slot
 correspondence (`validate_call_args`) is what makes the positional fill sound.
 Nothing is re-keyed per call, on either the builtin or the user-defined lane, and
 the per-call heap cost of argument passing is zero.
@@ -157,7 +158,10 @@ Two constructors, and the split is the interning rule stated above:
   arriving as source text converts once here, and a wrong-class name misses by returning
   `None` at the seam rather than by probing a table.
 - **`declared(text, labels)`** — classify **and** intern. The *declaration* constructor:
-  a name entering a binding table is recorded so a later diagnostic naming it renders.
+  a name entering a binding table is recorded so a later diagnostic naming it renders. Its text
+  is chosen at runtime — a name the program spelled, or one the machine picks out of a value in
+  hand. A name the machine fixes in its own source takes the third door instead, below, which
+  reaches the interner without classifying anything.
 
 **`BinderSymbol`** is the fourth type: an enum over the two *bindable* classes,
 `Value(ValueSymbol) | Type(TypeSymbol)`, for a seam that accepts either and routes on the
@@ -166,6 +170,62 @@ answer — an FN parameter name, a placeholder install, a module member probe. I
 are fixed syntax and bind to nothing, so they are not a variant: **nothing binds to a
 keyword**, and a keyword-class name mints no `ValueSymbol`. A keyworded dispatch
 registration labels a bucket rather than binding a name, so it is untouched by that rule.
+
+## Names fixed in Rust source
+
+Some labels are not read out of a program at all: a builtin's parameter slot, the `Result`
+family's `Ok` / `Error` tags, the `KError` family name. Their spelling is `&'static str` written
+in Rust, so their symbol is the same 128 bits for the whole process and there is nothing for a
+per-run or per-call classification to discover. Such a name is **declared once and compared by
+symbol thereafter**.
+
+The declaration is a `StaticName<S>` ([`labels.rs`](../src/machine/model/labels.rs)): the
+spelling beside a `LazyLock` memo of its classified symbol, built by the `static_name!` macro,
+which supplies the class's own `of` as the mint. A `LazyLock` over a pure function of a literal
+is a memo and not run state — `Symbol::of` answers the same bits in every run and every process,
+so the cached value carries nothing from one run into the next. The class predicate still runs on
+the same text it would have run on, once, at first touch; a spelling that will not classify
+panics there naming itself and the class it failed.
+
+`S` ranges over the **`ClassifiedSymbol`** types — a sealed trait exposing the raw digest, so a
+generic seam can compare and intern without knowing the class. Its implementors are the three
+class newtypes plus `BinderSymbol`, which is the classified vocabulary entire; sealed, because a
+further implementor would be a class the token grammar does not have.
+
+`LabelInterner::record(&StaticName<S>) -> S` is the declaration door for such a name: it reads
+the symbol off the memo and records the spelling under it, so a run gets its interner entry — a
+diagnostic naming the slot still renders — at the cost of one map lookup and no hash. That is the
+whole difference from `declared`, which has to classify text it is seeing for the first time.
+
+**Where a name is declared is where it is used.** Each builtin file declares the spellings its own
+bodies and registrations name, beside them; a child module borrows its parent's through `super::`.
+There is no central slot module, and the statics are not a registry: a shared table could only
+deduplicate mint *count*, never identity. Two builtins that spell a slot `name` already share one
+symbol, because `Symbol::of` is a pure function of text and does not know which declaration minted
+first. What the per-file placement does buy is that a slot's spelling sits next to the body it
+parameterizes.
+
+The consumers are the two ends of one slot:
+
+- Registration. [`builtins::arg`](../src/builtins.rs) takes a `&StaticName<ValueSymbol>` and
+  records it. A slot is therefore value-class **by declaration** — the class is settled where the
+  spelling is written rather than probed at registration.
+- Body reads. `BoundArgs`'s named doors (`held` / `object` / `ktype` / `unresolved_type` /
+  `carrier`) and the `require_*` helpers take the same `&StaticName<ValueSymbol>`
+  ([action.rs](../src/machine/core/kfunction/action.rs)), so the static a signature registers and
+  the static a body reads are one item and cannot drift apart. A diagnostic that has to name the
+  slot renders its `text()`, which is the spelling as written.
+
+The Rust-side tags are the same shape one level up: `Ok`, `Error` and `Result` are declared in
+[result.rs](../src/builtins/result.rs) and `KError` in
+[kerror.rs](../src/machine/core/kerror.rs), each a `StaticName<TypeSymbol>` recorded at the
+registration that builds its type. `CATCH` reads the tags back through `result`'s own statics, so
+the tag a `Result` value is built under is the tag its registration declared. A name chosen at
+runtime takes `declared`: a `KError` variant's name is picked by the variant in hand rather than
+fixed at a source site, and the builtin type table matches its eleven names as text.
+
+The mint count is measured, not bounded, in
+[audit/README.md § Symbol mints](../audit/README.md#symbol-mints).
 
 ## Name-keyed tables
 
@@ -258,9 +318,6 @@ paths stay total.
 
 ## Open work
 
-- [roadmap/reduce_allocs/symbol-mint-figure-and-static-names.md](../roadmap/reduce_allocs/symbol-mint-figure-and-static-names.md)
-  — a mint counter for the audit shapes, and Rust-side fixed names (builtin slot names, the
-  builtin type table) declared once as static symbols instead of hashed per read.
 - [roadmap/reduce_allocs/parse-interned-type-tokens.md](../roadmap/reduce_allocs/parse-interned-type-tokens.md)
   and [roadmap/reduce_allocs/parse-interned-identifiers.md](../roadmap/reduce_allocs/parse-interned-identifiers.md)
   — `Type` and `Identifier` parts carry their classified symbol alone from the parse boundary, so

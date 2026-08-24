@@ -60,9 +60,9 @@ fn sched_read_carried<'run>(
     crate::builtins::test_support::extract_terminal(&test_run.runtime, scope, id)
 }
 
-/// The fixture's one parameter. Declared here rather than drawn from `builtins::slots` because no
-/// builtin spells a slot `n` — the fixture registers it and reads it back through this one static,
-/// so the signature and the body cannot drift apart.
+/// The fixture's one parameter, declared beside the body that reads it exactly as a builtin's own
+/// slot is: the fixture registers it and reads it back through this one static, so the signature
+/// and the body cannot drift apart.
 static N: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "n");
 
 /// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`

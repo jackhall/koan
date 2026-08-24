@@ -81,7 +81,10 @@ use crate::machine::model::symbol_from_quote_body;
 use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{GroupSeal, OverloadSeal};
 
-/// This builtin's slot spellings, minted once and read back by symbol.
+/// This builtin's slot spellings, minted once and read back by symbol. A pairwise group's
+/// combiner is itself an `OP`, so it binds the same `left` / `right` pair — but positionally, by
+/// the infix shape the reducer synthesizes, not by name. `operands` is the unary form's single
+/// parameter: the whole run as one list.
 static BODY: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "body");
 static LEFT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "left");
 static NAME: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "name");

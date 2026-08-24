@@ -116,7 +116,7 @@ statements sits under *n* nested scopes that each shadow the `PROBE` bucket with
 non-admitting same-key overload, so every dispatch strict- and hard-rejects at all *n* shadow
 scopes before picking at the root. The two `builtin_call_calls*.koan` shapes are the same
 differencing trick over a fourth axis, **call arity**: 8 and 40 repetitions of one
-three-parameter builtin call (`MATCH … -> … WITH …`, bound as `expr` / `return_type` /
+three-parameter builtin call (`MATCH … -> … WITH …`, bound as `value` / `return_type` /
 `branches`), an arity the binary operator chain does not reach. Between them the four axes
 cover where the execute path's allocation traffic scales.
 
@@ -166,6 +166,41 @@ at 531. None of it reaches a differencing pair, which cancels registration along
 setup; the one marginal term that did move is the step term, 93.0 to 92.0, and that one is the
 splice door's doing — a splice inherits the bucket key its node was constructed with instead of
 bumping a second identical run.
+
+### Symbol mints
+
+The symbols column reads the same way: a fixed term the empty program sets, and a marginal term
+each differencing pair leaves behind.
+
+The **fixed** symbol figure is **905**, down from 1 322 before the Rust-side names were
+declared. Seeding is where almost all of a run's mints are, because every builtin overload
+registers a signature and each parameter slot classified its spelling from text at that moment
+— once per registration, once per run, over spellings fixed in Rust source. Each such spelling
+is now a `StaticName` declared beside the body that reads it
+([label-interning.md § Names fixed in Rust source](../design/label-interning.md#names-fixed-in-rust-source)):
+minted once for the process at first touch, recorded into the run's interner without hashing at
+registration, and compared by symbol everywhere after. The 417 the empty program sheds is that
+per-run re-classification.
+
+The marginal terms are what a call itself mints, seeding cancelled. A **builtin call** is 16,
+down from 20 — four per call, one for each slot read on the `MATCH` path, which now compares a
+memoized symbol rather than hashing the parameter's spelling. A **tagged construct-and-match**
+cycle is 22, down from 27. A **scope-walk dispatch** is 4, down from 6, at both depths: the
+reads the walk sheds are depth-independent, exactly like its allocation term. The **operator
+chain**, read against the empty program rather than a differencing pair, is 2.0 per dispatch
+over its 127, down from 4.0.
+
+A **user-function call** is flat at 3.0 per call — at one parameter and at eight, before and
+after. A user function's parameter names are spelled by the koan program, so no Rust-side static
+reaches them and this item cannot touch the term; moving it takes carrying the classified symbol
+from the parse boundary
+([parse-interned identifiers](../roadmap/reduce_allocs/parse-interned-identifiers.md)). That
+flat line is the bound on what declaring names in Rust source can buy: it prices the machine's
+own vocabulary, not the program's.
+
+The allocations column does not move on any shape. A `StaticName`'s memo is a `LazyLock` over a
+`Copy` digest, so forcing it heap-allocates nothing, and registration writes the interner entry
+it always wrote.
 
 ## The regression test
 

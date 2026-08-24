@@ -36,8 +36,6 @@ structural `:` / `,` / `=` delimiters the parser consumes.
 
 **Requires:**
 
-- [Symbol-mint figure and static names](symbol-mint-figure-and-static-names.md) — static
-  keyword names.
 - [Parse-interned type tokens](parse-interned-type-tokens.md) — the interner-aware rendering seam.
 
 **Unblocks:** none.

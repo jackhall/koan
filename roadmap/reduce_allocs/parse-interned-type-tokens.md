@@ -14,8 +14,11 @@ alive: `Held::UnresolvedType`, `Carried::UnresolvedType`, `DeferredReturn::Type`
 `TypeCapture::AtWake`, `ReturnTypeCapture::Unresolved(String)` and friends all carry the name's
 bytes, so a type name crossing a region boundary is re-bumped (`lift.rs`, `reach.rs`'s
 `AdoptedType`) and a deferred return type is rebuilt from a `String` at finish
-(`fn_def/return_type.rs`). Keyword tokens already carry their symbol from the parse boundary;
-Type tokens do not.
+(`fn_def/return_type.rs`). `KType::from_name`
+([src/machine/model/types/ktype_resolution.rs](../../src/machine/model/types/ktype_resolution.rs))
+matches the eleven builtin type names by string compare at every bind-seam and elaboration
+fall-through. Keyword tokens already carry their symbol from the parse boundary; Type tokens do
+not.
 
 **Acceptance criteria.**
 
@@ -30,6 +33,10 @@ Type tokens do not.
   symbol. `TypeSymbol::of(text)` is deleted — `declared` is its only constructor, and its production
   callers are the parser, builtin registration, and the rendered-builtin-name sites
   (`val_decl.rs`, `let_binding.rs`, `require_bare_type_name`'s `Held::Type` arm).
+- `KType::from_symbol(TypeSymbol)` is the builtin type lookup: the eleven builtin type names are
+  declared as `StaticName<TypeSymbol>`s and the table compares symbol bits, so no seam classifies
+  a builtin type name from text. `KType::from_name(&str)` is gone, and `builtins::builtin_type_name`
+  registers each name off its static.
 - Rendering a part or expression (`summarize`, trace frames, diagnostics that name a token)
   resolves the symbol through the run's `LabelInterner`; a miss renders the standard placeholder.
   The type-name re-bump sites and the deferred-return rebuild are gone.
@@ -48,10 +55,7 @@ Type tokens do not.
 
 ## Dependencies
 
-**Requires:**
-
-- [Symbol-mint figure and static names](symbol-mint-figure-and-static-names.md) — the figure this
-  item quotes, and `KType::from_symbol`.
+**Requires:** none — the `symbols_minted` figure this item quotes is shipped.
 
 **Unblocks:**
 

@@ -142,7 +142,7 @@ traffic two ways.
 
 ```sh
 bash audit/measure.sh                                   # whole-program totals per shape
-cargo run --features alloc-count -- program.koan        # one program's total, on stderr
+cargo run --features alloc-count -- program.koan        # one program's totals, on stderr
 cargo test --test allocation_baseline                   # the bounded regression test
 ```
 
@@ -168,3 +168,33 @@ which is why a reintroduced per-wake allocation surfaces there as a `+1` before
 it reaches koan's bounds at all. The one allocation the window still admits is
 the install door's debug-only acyclicity check, named at the constant that
 expects it.
+
+## Symbol mints
+
+The `alloc-count` feature carries a second reading beside the allocation tally: the
+process's `Symbol` mint count, printed as `symbols_minted: N` and captured by
+`audit/measure.sh` as the third column of its report. Hashing takes no allocation, so
+this is the only instrument that sees a mint leave a per-call path
+([audit/README.md § Symbol mints](audit/README.md#symbol-mints)).
+
+The figure is **recorded, not bounded**. It has no entry in
+`tests/allocation_baseline.rs`: the counter is a lib-side `cfg` an integration test
+cannot reach. A figure that moves is caught by re-measuring and rebaselining the table,
+the same way the allocation column's absolute rows are.
+
+The names fixed in Rust source — builtin parameter slots and the `Result` / `KError`
+tags ([design/label-interning.md § Names fixed in Rust source](design/label-interning.md#names-fixed-in-rust-source))
+— are pinned by two unit tests in
+[`labels/tests.rs`](src/machine/model/labels/tests.rs), over a static of that test
+module's own so they pin the mechanism rather than whatever spelling a builtin happens
+to declare: `a_static_name_mints_what_of_mints` (the memo is exactly what the class's
+`of` would mint, and `text()` is the spelling as written) and
+`record_interns_the_spelling_under_the_memoized_symbol` (`record` hands back the
+memoized symbol, interns the spelling under it, and a second call adds nothing).
+
+There is deliberately no exhaustive "every declared static classifies" test, because
+every declaration is already forced by every test that runs a program: each slot static
+reaches `arg` at its builtin's registration and each tag static reaches the registration
+that builds its type, so building a prelude forces the whole set of memos. A spelling
+that will not classify panics in *every* such test rather than only in the one
+exercising its builtin.

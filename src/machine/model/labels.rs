@@ -338,9 +338,10 @@ pub fn wrong_binder_class(name: &str, wanted: super::BindKind) -> String {
     }
 }
 
-/// The classified-symbol classes as one bound: what [`StaticName`] is parameterized over and what
-/// [`LabelInterner::record`] accepts. Sealed — the four newtypes above are the whole partition, and
-/// a fifth implementor would be a class the token grammar does not have.
+/// The classified-symbol types as one bound: what [`StaticName`] is parameterized over and what
+/// [`LabelInterner::record`] accepts. Sealed — the three class newtypes plus [`BinderSymbol`] are
+/// the vocabulary entire, and a further implementor would be a class the token grammar does not
+/// have.
 pub trait ClassifiedSymbol: Copy + sealed::Sealed {
     /// The raw digest, so a generic seam can compare and intern without knowing the class.
     fn symbol(self) -> Symbol;
