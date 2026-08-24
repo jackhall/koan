@@ -50,7 +50,9 @@ fn is_unconstrained_name(kt: KType) -> bool {
 impl KType {
     /// Strict specificity ordering. Concrete types outrank `Any` and the unconstrained-name slot
     /// types (`Identifier`, `ProperType`), so an overload like `ATTR <s:NewType>` beats its
-    /// `ATTR <s:Identifier>` sibling when both admit. A nominal-family kind out-specifies
+    /// `ATTR <s:Identifier>` sibling when both admit. `Str` is the one exception to that rule:
+    /// `Identifier` out-specifies it, because the two slots read the same bare token at different
+    /// depths (see `more_specific_walk`). A nominal-family kind out-specifies
     /// `OfKind(ProperType)` (`OfKind(NewType) ≺ OfKind(ProperType)`), and a sealed member
     /// out-specifies the `OfKind(kind)` of its own family. Parameterized containers are
     /// covariant in their inner slots. Returns `false` for equal types.
@@ -72,6 +74,17 @@ impl KType {
         let types = &registries.types;
         if other == KType::ANY && self != KType::ANY {
             return true;
+        }
+        // An `Identifier` slot claims the token itself; a `Str` slot claims the token's resolved
+        // value. When one bucket offers both readings of the same bare token, the token reading
+        // wins: a name binds bare wherever an `Identifier` slot admits it, and a string binding
+        // that shadows the name cannot steal it. The second guard exempts `Str` from the general
+        // "concrete outranks the unconstrained-name slots" rule below.
+        if self == KType::IDENTIFIER && other == KType::STR {
+            return true;
+        }
+        if self == KType::STR && other == KType::IDENTIFIER {
+            return false;
         }
         if is_unconstrained_name(other) && !(is_unconstrained_name(self) || self == KType::ANY) {
             return true;

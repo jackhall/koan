@@ -23,10 +23,12 @@ parse boundary; Identifier tokens do not.
   reads the carried symbol; the value-lookup ladder takes a `ValueSymbol`; `BinderNameFn` yields a
   `BinderSymbol`; `StoredBinderKey::name` holds a `BinderSymbol` and `to_owned_key` mints nothing.
   A module's or group's child-scope name is stored as a symbol and rendered through the interner.
-- `ATTR` has a `field :Str` overload for dynamic member access: `ATTR s name_var` with
-  `name_var` bound to a string reaches the member of `s` whose label is that text, deriving a
-  bare `Symbol` through `labels.intern` (and a class through `BinderSymbol::declared`). The `.`
-  sugar (`s.x`) still binds its right-hand token bare through the `IDENTIFIER` overload.
+- `ATTR` has one `<s :Any> <field :Str>` overload for dynamic member access: a string-valued
+  field operand — a literal (`ATTR s "x"`) or a computed value (`ATTR s (name_var)`) — reaches
+  the member of `s` whose label is that text, deriving a bare `Symbol` through `labels.intern`
+  (and a class through `BinderSymbol::declared`). A bare field token always binds bare through
+  the `IDENTIFIER` overload — the `.` sugar (`s.x`) and spelled `ATTR s x` alike — even when
+  that token is also a local binding holding a string.
 - `ValueSymbol::of(text)` and `BinderSymbol::of(text)` are deleted: a classified symbol is born
   only at a declaration (`declared`) — the parser, a Rust-side static name, or a rendered builtin
   name — and a consumer that takes runtime text derives a bare `Symbol`.
@@ -43,7 +45,14 @@ parse boundary; Identifier tokens do not.
   `KString` arm in `read_field_name` is the lowering artifact and goes away with the bare carrier.
   Dynamic access is a separate, explicit `field :Str` overload — the one derived-symbol door on
   `ATTR` — so the bare/derived split is visible in the overload table rather than hidden in a
-  lowering.
+  lowering. One overload, `<s :Any> <field :Str>`, reusing the `access_field` ladder; no per-lhs
+  `Str` family.
+- *Bare token vs resolved string — decided.* `KType::IDENTIFIER` ranks more specific than
+  `KType::STR` (and `STR` not more specific than `IDENTIFIER`) in `is_more_specific_than`, so a
+  bare field token shadowed by a local string binding still picks the `IDENTIFIER` overload — an
+  Identifier slot claims the token itself, a `Str` slot only a resolved value. A dispatch
+  admission carve-out was rejected: the ranking alone decides, and the pair has no other consumer
+  (`Identifier` is not user-spellable and no other builtin bucket pairs the two).
 
 ## Dependencies
 

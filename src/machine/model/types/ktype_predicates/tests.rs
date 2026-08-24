@@ -1234,3 +1234,22 @@ fn verdict_purity_across_a_cold_registry() {
     let after = n_cold.is_more_specific_than(a_cold, &cold);
     assert_eq!(before, after);
 }
+
+#[test]
+fn is_more_specific_identifier_beats_str() {
+    let registries = RunRegistries::new();
+    // A bare field token binds bare: `ATTR <field :Identifier>` outranks `ATTR <field :Str>`,
+    // so a local string binding that shadows the name cannot claim the token.
+    assert!(KType::IDENTIFIER.is_more_specific_than(KType::STR, &registries));
+    assert!(!KType::STR.is_more_specific_than(KType::IDENTIFIER, &registries));
+}
+
+#[test]
+fn is_more_specific_identifier_ranking_otherwise_intact() {
+    let registries = RunRegistries::new();
+    // `m.x` routes to the module overload, which depends on a signature out-specifying the
+    // unconstrained-name slot.
+    assert!(KType::EMPTY_SIGNATURE.is_more_specific_than(KType::IDENTIFIER, &registries));
+    assert!(KType::IDENTIFIER.is_more_specific_than(KType::ANY, &registries));
+    assert!(KType::NUMBER.is_more_specific_than(KType::IDENTIFIER, &registries));
+}
