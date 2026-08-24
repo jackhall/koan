@@ -816,7 +816,7 @@ impl<'a> Bindings<'a> {
             .into_iter()
             .map(|(name, claim)| {
                 let name = render_label(name, registries);
-                let kind = BinderSymbol::of(&name)
+                let kind = BinderSymbol::classify(&name)
                     .expect("only a bindable name is ever claimed")
                     .bind_kind();
                 (name, kind, claim.producer)

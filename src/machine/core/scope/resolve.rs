@@ -95,13 +95,18 @@ impl<'a> Scope<'a> {
     /// Chain-gated companion to [`Self::resolve`]. Per-scope hits are filtered through the
     /// [`binding_cutoff`](Self::binding_cutoff), so hidden entries (later siblings, or value-style
     /// binders before their lexical position) are skipped and the walk continues outward.
+    ///
+    /// The test ladder takes a spelling where the production entry
+    /// ([`Self::resolve_value_delivered`]) takes a [`ValueSymbol`]: a fixture writes a name it just
+    /// spelled, so it classifies here through the hidden funnel. A non-value spelling names nothing
+    /// on this channel and answers `None`.
     #[cfg(test)]
     pub fn resolve_with_chain(
         &self,
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<&'a KObject<'a>>> {
-        self.resolve_value_delivered(ValueSymbol::of(name)?, chain)
+        self.resolve_value_delivered(ValueSymbol::classify(name)?, chain)
             .map(|hit| {
                 hit.map(|delivered| {
                     self.adopt_carried(&delivered, AdoptSeam::Retaining)
@@ -156,7 +161,7 @@ impl<'a> Scope<'a> {
         name: &str,
         cutoff: Option<usize>,
     ) -> Option<NameLookup<&'a KObject<'a>>> {
-        let name = ValueSymbol::of(name)?;
+        let name = ValueSymbol::classify(name)?;
         self.bindings().lookup_value(name, cutoff).map(|hit| {
             hit.map(|sealed| {
                 let delivered = self.lift_resident(sealed);

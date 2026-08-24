@@ -532,19 +532,19 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::of("x")
+                name: crate::machine::model::BinderSymbol::classify("x")
                     .expect("a test fixture parameter is a value token"),
                 ktype: KType::ANY,
             }),
             SignatureElement::keyword("+"),
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::of("y")
+                name: crate::machine::model::BinderSymbol::classify("y")
                     .expect("a test fixture parameter is a value token"),
                 ktype: KType::ANY,
             }),
             SignatureElement::keyword("+"),
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::of("z")
+                name: crate::machine::model::BinderSymbol::classify("z")
                     .expect("a test fixture parameter is a value token"),
                 ktype: KType::ANY,
             }),

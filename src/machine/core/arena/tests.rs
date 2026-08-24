@@ -1155,8 +1155,10 @@ fn region_death_frees_every_drop_free_family() {
                 elements: vec![
                     SignatureElement::keyword(brand.allocator().text(&format!("TAKE_{i}"))),
                     SignatureElement::Argument(Argument {
-                        name: crate::machine::model::BinderSymbol::of(&format!("operand_{i}"))
-                            .expect("a test fixture parameter is a value token"),
+                        name: crate::machine::model::BinderSymbol::classify(&format!(
+                            "operand_{i}"
+                        ))
+                        .expect("a test fixture parameter is a value token"),
                         ktype: KType::NUMBER,
                     }),
                 ],

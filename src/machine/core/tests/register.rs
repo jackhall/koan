@@ -279,7 +279,7 @@ fn register_function_allows_overload_with_different_arg_types() {
         elements: vec![
             SignatureElement::keyword("BAR"),
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::of("v")
+                name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 ktype: KType::NUMBER,
             }),
@@ -290,7 +290,7 @@ fn register_function_allows_overload_with_different_arg_types() {
         elements: vec![
             SignatureElement::keyword("BAR"),
             SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::of("v")
+                name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
                 ktype: KType::STR,
             }),

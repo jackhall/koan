@@ -65,7 +65,7 @@ fn lookup_sig_value_kt(
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("`{sig_name}` should bind a Signature KType, got {handle:?}"),
     };
-    ValueSymbol::of(name)
+    ValueSymbol::classify(name)
         .and_then(|slot| schema.value_slots.get(&slot).copied())
         .unwrap_or_else(|| panic!("`{name}` should be bound in the SIG's stored schema"))
 }

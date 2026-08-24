@@ -66,7 +66,7 @@ fn the_three_classes_partition_token_text() {
         "AND OR", "X",
     ] {
         let hits = [
-            ValueSymbol::of(text).is_some(),
+            ValueSymbol::classify(text).is_some(),
             TypeSymbol::classify(text).is_some(),
             KeywordSymbol::of(text).is_some(),
         ]
@@ -79,12 +79,12 @@ fn the_three_classes_partition_token_text() {
 
 #[test]
 fn value_symbols_accept_value_tokens_only() {
-    assert!(ValueSymbol::of("xs").is_some());
-    assert!(ValueSymbol::of("int_ord").is_some());
+    assert!(ValueSymbol::classify("xs").is_some());
+    assert!(ValueSymbol::classify("int_ord").is_some());
     // Nothing binds to a keyword.
-    assert!(ValueSymbol::of("USING").is_none());
-    assert!(ValueSymbol::of("+").is_none());
-    assert!(ValueSymbol::of("IntOrd").is_none());
+    assert!(ValueSymbol::classify("USING").is_none());
+    assert!(ValueSymbol::classify("+").is_none());
+    assert!(ValueSymbol::classify("IntOrd").is_none());
 }
 
 #[test]
@@ -138,22 +138,22 @@ fn a_probe_key_with_a_value_token_mints_nothing() {
 #[test]
 fn binder_symbols_carry_the_bind_kind_and_reject_keywords() {
     assert_eq!(
-        BinderSymbol::of("xs").map(BinderSymbol::bind_kind),
+        BinderSymbol::classify("xs").map(BinderSymbol::bind_kind),
         Some(BindKind::Value)
     );
     assert_eq!(
-        BinderSymbol::of("IntOrd").map(BinderSymbol::bind_kind),
+        BinderSymbol::classify("IntOrd").map(BinderSymbol::bind_kind),
         Some(BindKind::Type)
     );
-    assert!(BinderSymbol::of("USING").is_none());
+    assert!(BinderSymbol::classify("USING").is_none());
 }
 
-/// `of` is a probe: it classifies without recording anything. `declared` is the declaration
-/// constructor and interns, so a diagnostic can render the name later.
+/// `classify` is the pure funnel: it decides the class without recording anything. `declared` is
+/// the declaration constructor and interns, so a diagnostic can render the name later.
 #[test]
 fn only_declared_interns_the_text() {
     let interner = LabelInterner::new();
-    assert!(ValueSymbol::of("probed").is_some());
+    assert!(ValueSymbol::classify("probed").is_some());
     assert_eq!(interner.len(), 0);
 
     let declared = ValueSymbol::declared("bound", &interner).expect("value token");
@@ -172,7 +172,7 @@ fn only_declared_interns_the_text() {
 #[test]
 fn classified_symbols_carry_the_bare_digest() {
     assert_eq!(
-        ValueSymbol::of("xs").expect("value token").symbol(),
+        ValueSymbol::classify("xs").expect("value token").symbol(),
         Symbol::of("xs")
     );
     assert_eq!(
@@ -184,7 +184,7 @@ fn classified_symbols_carry_the_bare_digest() {
         Symbol::of("+ *")
     );
     assert_eq!(
-        BinderSymbol::of("xs").expect("value token").symbol(),
+        BinderSymbol::classify("xs").expect("value token").symbol(),
         Symbol::of("xs")
     );
 }
@@ -195,9 +195,9 @@ fn classified_symbols_carry_the_bare_digest() {
 fn classified_symbols_hash_through_the_identity_hasher() {
     use std::collections::HashMap;
     let mut values: HashMap<ValueSymbol, u8, IdentityBuildHasher> = HashMap::default();
-    values.insert(ValueSymbol::of("xs").expect("value token"), 1);
+    values.insert(ValueSymbol::classify("xs").expect("value token"), 1);
     assert_eq!(
-        values.get(&ValueSymbol::of("xs").expect("value token")),
+        values.get(&ValueSymbol::classify("xs").expect("value token")),
         Some(&1)
     );
 
@@ -223,13 +223,13 @@ static SLOT: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "slot");
 // A group of this module's own, pinning `slots!` the same way.
 crate::slots! { GROUP { width, height } }
 
-/// A [`StaticName`]'s memo is exactly what its class's `of` would have minted — the whole basis for
+/// A [`StaticName`]'s memo is exactly what its class's `classify` mints — the whole basis for
 /// reading a slot by static instead of by spelling.
 #[test]
-fn a_static_name_mints_what_of_mints() {
+fn a_static_name_mints_what_classify_mints() {
     assert_eq!(
         SLOT.symbol(),
-        ValueSymbol::of("slot").expect("`slot` is a value token")
+        ValueSymbol::classify("slot").expect("`slot` is a value token")
     );
     assert_eq!(SLOT.text(), "slot");
 }
@@ -257,11 +257,11 @@ fn a_slot_group_declares_each_field_independently() {
     assert_eq!(GROUP.height.text(), "height");
     assert_eq!(
         GROUP.width.symbol(),
-        ValueSymbol::of("width").expect("`width` is a value token")
+        ValueSymbol::classify("width").expect("`width` is a value token")
     );
     assert_eq!(
         GROUP.height.symbol(),
-        ValueSymbol::of("height").expect("`height` is a value token")
+        ValueSymbol::classify("height").expect("`height` is a value token")
     );
     assert_ne!(GROUP.width.symbol(), GROUP.height.symbol());
 }

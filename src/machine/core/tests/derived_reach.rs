@@ -24,7 +24,7 @@ fn key(elements: Vec<SignatureElement<'_>>) -> UntypedKey {
 
 fn slot(name: &str) -> SignatureElement<'_> {
     SignatureElement::Argument(Argument {
-        name: crate::machine::model::BinderSymbol::of(name)
+        name: crate::machine::model::BinderSymbol::classify(name)
             .expect("a test fixture parameter is a value token"),
         ktype: KType::NUMBER,
     })

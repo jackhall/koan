@@ -221,8 +221,11 @@ macro_rules! classified_symbol {
             #[doc = concat!("The symbol for `text` if it classifies as ", $class, ", else `None`.")]
             ///
             /// Pure classification — no interning. The hidden funnel
-            /// [`declared`](Self::declared) and [`static_name!`](crate::static_name) share; a class
-            /// whose surface still admits a bare probe re-exports it under its own `of`.
+            /// [`declared`](Self::declared) and [`static_name!`](crate::static_name) share. Only
+            /// [`KeywordSymbol`] re-exports it as a surface probe (`of`): the operator and dispatch
+            /// tables key by fixed tokens read back out of source. A *name* is minted at the parse
+            /// that classifies it, on both sides of the partition, and every later reader carries
+            /// that symbol rather than re-classifying a spelling.
             #[doc(hidden)]
             pub fn classify(text: &str) -> Option<Self> {
                 let classifies: fn(&str) -> bool = $classifies;
@@ -283,16 +286,6 @@ classified_symbol!(
     "a keyword-class token"
 );
 
-impl ValueSymbol {
-    /// The probe constructor: classify `text` without interning it. A value name is still born from
-    /// source text at the install seam, so the value side admits a bare probe. `TypeSymbol` has no
-    /// peer — a Type token is minted at the parse that classifies it, and every later reader
-    /// carries that symbol.
-    pub fn of(text: &str) -> Option<Self> {
-        ValueSymbol::classify(text)
-    }
-}
-
 impl KeywordSymbol {
     /// The probe constructor: classify `text` without interning it. The operator and dispatch
     /// tables key by fixed tokens read back out of source, so the keyword side admits a bare probe.
@@ -335,8 +328,8 @@ impl Borrow<Symbol> for TypeSymbol {
 }
 
 /// A **bindable** name: the two classes a declaration can actually install under. Keywords are
-/// fixed syntax and bind to nothing, so they are not a variant — `BinderSymbol::of` of keyword text
-/// is `None`.
+/// fixed syntax and bind to nothing, so they are not a variant — [`declared`](Self::declared) of
+/// keyword text is `None`.
 ///
 /// This is the currency of a seam that accepts either class and routes on the answer: an FN
 /// parameter name, a placeholder install, a member probe. The variant *is* the
@@ -349,17 +342,21 @@ pub enum BinderSymbol {
 }
 
 impl BinderSymbol {
-    /// The bindable symbol for `text`, or `None` if it is keyword-class. Pure — no interning.
-    pub fn of(text: &str) -> Option<Self> {
-        if let Some(name) = TypeSymbol::classify(text) {
-            return Some(BinderSymbol::Type(name));
+    /// The hidden classification funnel, mirroring the per-class [`classify`](ValueSymbol::classify)
+    /// the macro writes: the two bindable classes are disjoint, so probing Type-side first and
+    /// value-side second decides the variant, and keyword-class text answers `None` on both.
+    #[doc(hidden)]
+    pub fn classify(text: &str) -> Option<Self> {
+        match TypeSymbol::classify(text) {
+            Some(name) => Some(BinderSymbol::Type(name)),
+            None => ValueSymbol::classify(text).map(BinderSymbol::Value),
         }
-        ValueSymbol::of(text).map(BinderSymbol::Value)
     }
 
-    /// Classify `text` as bindable **and** record it for rendering — the declaration constructor.
+    /// Classify `text` as bindable **and** record it for rendering — the declaration constructor,
+    /// and the only surface way to mint a `BinderSymbol` from text.
     pub fn declared(text: &str, labels: &LabelInterner) -> Option<Self> {
-        let classified = BinderSymbol::of(text)?;
+        let classified = BinderSymbol::classify(text)?;
         labels.intern(text);
         Some(classified)
     }
@@ -425,7 +422,7 @@ impl ClassifiedSymbol for BinderSymbol {
 ///
 /// The text is `&'static`, so its symbol is the same bits for the whole process and there is no
 /// reason to re-derive it. The memo is a [`LazyLock`](std::sync::LazyLock) over the class's own
-/// `of`, which makes the first read a mint and every read after it a load: a builtin body that
+/// `classify`, which makes the first read a mint and every read after it a load: a builtin body that
 /// reads a slot on every call hashes nothing, and the class predicate still runs, at first touch,
 /// on the same text the spelling would have been classified from.
 ///
@@ -510,7 +507,7 @@ macro_rules! slots {
         static $group: SlotNames = SlotNames {
             $(
                 $slot: $crate::machine::model::StaticName::new(stringify!($slot), || {
-                    <$crate::machine::model::ValueSymbol>::of(stringify!($slot)).expect(concat!(
+                    <$crate::machine::model::ValueSymbol>::classify(stringify!($slot)).expect(concat!(
                         "`",
                         stringify!($slot),
                         "` classifies as a value-class parameter slot"

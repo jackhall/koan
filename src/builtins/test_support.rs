@@ -535,7 +535,7 @@ pub fn lookup_type(scope: &Scope<'_>, name: &str) -> Option<crate::machine::mode
 
 pub fn lookup_binding<'a>(scope: &Scope<'a>, name: &str) -> Option<&'a KObject<'a>> {
     scope
-        .resolve_value_delivered(crate::machine::model::ValueSymbol::of(name)?, None)
+        .resolve_value_delivered(crate::machine::model::ValueSymbol::classify(name)?, None)
         .and_then(NameLookup::bound)
         .map(|delivered| {
             scope
@@ -688,7 +688,7 @@ pub(crate) fn one_slot_sig<'a>(name: &'a str, kt: KType) -> SignatureDraft<'a> {
     SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![SignatureElement::Argument(Argument {
-            name: crate::machine::model::BinderSymbol::of(name)
+            name: crate::machine::model::BinderSymbol::classify(name)
                 .expect("a test fixture parameter is a value token"),
             ktype: kt,
         })],
