@@ -30,9 +30,11 @@ not.
 - The type-side lookup ladder and `elaborate_type_identifier` take a `TypeSymbol`; variant-tag and
   member matches compare carried symbol bits; `require_bare_type_name` yields a `TypeSymbol`; the
   type-side binder-name extractors yield a `TypeSymbol`; the type-declaring builtins read the carried
-  symbol. `TypeSymbol::of(text)` is deleted — `declared` is its only constructor, and its production
-  callers are the parser, builtin registration, and the rendered-builtin-name sites
-  (`val_decl.rs`, `let_binding.rs`, `require_bare_type_name`'s `Held::Type` arm).
+  symbol. `TypeSymbol::of(text)` is deleted — its text constructors are `declared` and the
+  `static_name!` mint, sharing one hidden classification funnel; `declared`'s production callers
+  are the parser, builtin registration, and the rendered-builtin-name sites (`val_decl.rs`,
+  `let_binding.rs`, `require_bare_type_name`'s `Held::Type` arm). A runtime-text probe of a
+  type-keyed table derives a bare `Symbol` instead.
 - `KType::from_symbol(TypeSymbol)` is the builtin type lookup: the eleven builtin type names are
   declared as `StaticName<TypeSymbol>`s and the table compares symbol bits, so no seam classifies
   a builtin type name from text. `KType::from_name(&str)` is gone, and `builtins::builtin_type_name`
@@ -50,6 +52,10 @@ not.
   `parse_pair_list` get it threaded. Lands here because this is the first symbol-only part.
 - *Deferred-return digest — decided.* `type_digest.rs` feeds the `TypeSymbol` bits for
   `DeferredReturnSurface::Type`; nothing persists digests across runs.
+- *Binder plan name — decided.* `StoredBinderKey::name` and `BinderNameFn` carry
+  `BinderName<'a> { Value(&'a str), Type(TypeSymbol) }`; the `Type` arm interns nothing at
+  `to_owned_key`. [Parse-interned identifiers](parse-interned-identifiers.md) collapses it to a
+  `BinderSymbol`.
 - *`resolve_name`'s value-channel probe of a Type token — decided.* Deleted: `ValueSymbol::of`
   of Type-class text is `None`, so the probe is a guaranteed miss today.
 
