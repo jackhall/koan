@@ -24,6 +24,12 @@ use std::rc::Rc;
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { return_type } }
 
+/// The arm binder every `MATCH` and `TRY` arm binds its scrutinee under. A name the machine
+/// fixes in Rust source rather than one a program spells, so it declares as a [`StaticName`] and
+/// is minted once for the process — an arm binds by loading that symbol, not by classifying `it`
+/// again per arm taken.
+static IT: crate::machine::model::StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "it");
+
 /// Read the MATCH / TRY `-> :T` slot from `ctx.args` (resolving a forward-referenced bare name
 /// against the call-site scope/chain) into the [`ReturnContract::Arm`] both `MATCH` and `TRY`
 /// arms are checked against.
@@ -117,7 +123,7 @@ pub(crate) fn arm_tail<'a>(
         // retiring frame does not ride the arm's binding). The projection is identity — the
         // envelope already names exactly what `it` binds — and a later read of `it` rebuilds its
         // carrier from the stored reach.
-        let it = ValueSymbol::declared("it", &registries.labels).expect("`it` is a value token");
+        let it = registries.labels.record(&IT);
         let _ = child.bind_delivered_direct(
             it,
             &it_carrier,

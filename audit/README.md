@@ -87,20 +87,20 @@ reads the allocations column; the symbol terms are quoted in the prose below.
 
 | shape | what it exercises | allocations | symbols | scaling term |
 |---|---|---|---|---|
-| `shapes/tail_loop.koan` | 100 tail-recursive steps | 11 957 | 741 | 92.0 per step, linear |
+| `shapes/tail_loop.koan` | 100 tail-recursive steps | 11 957 | 641 | 92.0 per step, linear |
 | `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 5 463 | 748 | ≈23 per dispatch, mildly superlinear |
 | `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 374 | 682 | — |
 | `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 4 971 | 746 | 49.9 per dispatch |
 | `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 4 796 | 834 | — |
 | `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 390 | 898 | 49.8 per dispatch |
-| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 110 | 676 | — |
-| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 180 | 900 | 64.7 per call |
+| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 110 | 669 | — |
+| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 180 | 861 | 64.7 per call |
 | `shapes/user_fn_params1_calls8.koan` | 8 one-parameter user-function calls | 2 941 | 636 | — |
 | `shapes/user_fn_params1_calls40.koan` | 40 one-parameter user-function calls | 4 115 | 668 | 36.7 per call |
 | `shapes/user_fn_params8_calls8.koan` | 8 eight-parameter user-function calls | 3 238 | 650 | — |
 | `shapes/user_fn_params8_calls40.koan` | 40 eight-parameter user-function calls | 5 244 | 682 | 62.7 per call, 3.71 per parameter |
-| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 3 425 | 727 | — |
-| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 6 391 | 1 111 | 92.7 per cycle |
+| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 3 425 | 720 | — |
+| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 6 391 | 1 072 | 92.7 per cycle |
 | *(empty program)* | interpreter startup and builtin seeding | 2 530 | 618 | — |
 
 No shape can use comments: koan has none, and `#` is reserved for quoting. The prose
@@ -196,19 +196,22 @@ carries into the recording, so a declaration mints once. That single change is 2
 the other 12 are the eleven builtin type names, declared as statics rather than classified from
 text wherever a seam needed one.
 
-The marginal terms are what a call itself mints, seeding cancelled. A **tail-loop step** is 1.0,
-down from 3.0 — the largest drop here, and the cleanest read of what a parse-minted value name buys:
-the step's two statements spell `n` twice, and neither spelling is hashed again now that the parse
-that classified the token carries its symbol to every reader. A **scope-walk dispatch** is 2, down
-from 3, at both depths — one `PROBE y`, one value name, one mint gone, and the saving is
-depth-independent exactly like its allocation term. A **user-function call** is 1.0 per call, down
-from 2.0, still flat across the arities: the same at one parameter and at eight.
+Every marginal term falls, and one of them falls to nothing. A **tail-loop step** mints **0.0**:
+the shape's whole figure is 641 at 10 steps, at 50, at 100 and at 200, so a loop in steady state
+hashes no text at all. That is the cleanest statement of what a parse-minted name buys — the step's
+two statements spell `n` twice and its `MATCH` binds `it` once, and all three are symbols the parse
+and the arm binder already hold. A **scope-walk dispatch** is 2, down from 3, at both depths — one
+`PROBE y`, one value name, one mint gone, and the saving is depth-independent exactly like its
+allocation term. A **user-function call** is 1.0 per call, down from 2.0, still flat across the
+arities: the same at one parameter and at eight. A **builtin call** is 6, down from 7, and a
+**tagged construct-and-match** cycle 11, down from 12; both shapes are `MATCH` statements, and the
+1 each sheds is the arm binder that used to classify `it` afresh on every arm taken.
 
-Three terms are unchanged. A **builtin call** is 7, a **tagged construct-and-match** cycle 12, and
-the **operator chain** — read against the empty program rather than a differencing pair — 1.0 per
-dispatch over its 127.
+One term does not move: the **operator chain**, read against the empty program rather than a
+differencing pair, is 1.0 per dispatch over its 127. A `+` chain binds nothing and names nothing —
+what it still mints is its own keyword.
 
-Those three fell to an earlier pair of changes, in much the same proportion. The single-hash **declaration**
+An earlier pair of changes set those terms up. The single-hash **declaration**
 above is not only a seeding effect: a statement declares tokens as it runs, and each of them —
 keyword, value name and Type name alike — now mints once where it minted twice. And a **Type
 token** mints at the parse that classifies it and nowhere after, where each seam that read one
@@ -216,7 +219,7 @@ used to re-classify its text. The tagged cycle splits its drop of 10 between the
 7 across the tokens it declares per cycle, and 3 on its `-> :Number` leaf alone, which cost four
 mints a cycle and now costs the one the parse takes. The value side is now the same story:
 [parse-interned identifiers](../roadmap/reduce_allocs/parse-interned-identifiers.md) is what the
-three drops above measure. What is left on the marginal terms is spelled by the program's
+drops above measure. What is left on the marginal terms is spelled by the program's
 **keywords** — a statement's leading token, an operator's — and carrying those from the parse
 boundary too is
 [symbol-only keyword tokens](../roadmap/reduce_allocs/symbol-only-keyword-tokens.md). The flat
