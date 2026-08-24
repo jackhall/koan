@@ -31,7 +31,7 @@ use super::{arg, kw, sig};
 use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
-use crate::machine::model::{StaticName, ValueSymbol};
+use crate::machine::model::{KeywordSymbol, StaticName, ValueSymbol};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { left, right } }
@@ -179,7 +179,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::NUMBER,
             vec![
                 arg(registries, &SLOTS.left, KType::NUMBER),
-                kw(op),
+                kw(registries, op),
                 arg(registries, &SLOTS.right, KType::NUMBER),
             ],
         )
@@ -189,7 +189,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::BOOL,
             vec![
                 arg(registries, &SLOTS.left, KType::NUMBER),
-                kw(op),
+                kw(registries, op),
                 arg(registries, &SLOTS.right, KType::NUMBER),
             ],
         )
@@ -209,7 +209,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::BOOL,
         vec![
             arg(registries, &SLOTS.left, KType::BOOL),
-            kw("AND"),
+            kw(registries, "AND"),
             arg(registries, &SLOTS.right, KType::BOOL),
         ],
     );
@@ -237,7 +237,7 @@ pub fn register_builtin_operator_groups<'a>(
         scope,
         &["<", "<=", ">", ">="],
         ReductionMode::Pairwise {
-            combiner: "AND",
+            combiner: registries.labels.record(&AND_COMBINER),
             direction: FoldDirection::Left,
         },
         registries,
@@ -259,21 +259,35 @@ pub fn register_builtin_operator_groups<'a>(
     );
 }
 
+/// The comparison group's pair-result combiner, spelled in Rust source and so declared once.
+static AND_COMBINER: StaticName<KeywordSymbol> = crate::static_name!(KeywordSymbol, "AND");
+
 /// One builtin seed: the group record in the root's own region, then its powerset keys at
 /// [`BindingIndex::BUILTIN`]. The root's region is the eternal tier, so a builtin group outlives
 /// every per-call region and an inner scope's resolved carrier names an ordinary foreign member.
+///
+/// The glyphs are classified and interned here, at the seam where their spellings are still in
+/// hand — which is what lets a later conflict diagnostic render the probe keys this seeding
+/// installs.
 fn seed<'a>(
     scope: &'a Scope<'a>,
-    members: &[&str],
-    mode: ReductionMode<'_>,
+    glyphs: &[&str],
+    mode: ReductionMode,
     registries: &RunRegistries,
     gate: &mut WriteGate,
 ) {
-    let cell = scope.birth_operator_group(members, mode);
+    let members: Vec<KeywordSymbol> = glyphs
+        .iter()
+        .map(|glyph| {
+            KeywordSymbol::declared(glyph, &registries.labels)
+                .expect("a builtin operator glyph is keyword-class")
+        })
+        .collect();
+    let cell = scope.birth_operator_group(&members, mode);
     let seal = GroupSeal::of_delivered(scope, &cell);
     scope
         .register_group_under_all_subsets_direct(
-            members,
+            &members,
             seal,
             BindingIndex::BUILTIN,
             registries,

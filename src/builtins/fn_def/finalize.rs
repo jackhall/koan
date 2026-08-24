@@ -54,7 +54,7 @@ pub(crate) enum FnKind {
 /// (short-circuited before [`classify`] runs) and with `Pending`'s payload
 /// kept by-value so the planning match stays readable.
 pub(crate) enum ParamListResult<'a> {
-    Done(Vec<SignatureElement<'a>>),
+    Done(Vec<SignatureElement>),
     Pending {
         awaited_producers: Vec<ProducerId>,
         sub_dispatches: Vec<(usize, KExpression<'a>)>,
@@ -64,7 +64,7 @@ pub(crate) enum ParamListResult<'a> {
 /// Terminal shape of FN-def's planning step.
 pub(crate) enum FnPlan<'a> {
     Synchronous {
-        elements: Vec<SignatureElement<'a>>,
+        elements: Vec<SignatureElement>,
         return_type: ReturnType<'a>,
     },
     Deferred(DeferredInputs<'a>),
@@ -90,7 +90,7 @@ pub(crate) struct DeferredInputs<'a> {
     /// verbatim instead of re-parsing `signature_expr` (which the anonymous path
     /// has no keyword/arg form of). `None` for the keyworded FN path, which
     /// re-elaborates the spliced signature.
-    pub prebuilt_elements: Option<Vec<SignatureElement<'a>>>,
+    pub prebuilt_elements: Option<Vec<SignatureElement>>,
 }
 
 /// Decide between the synchronous build path and the deferred path.
@@ -198,7 +198,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
 /// reach [`finalize_fn_with_kind`]. A [`ReturnType::Deferred`] carrier names a parameter and
 /// elaborates per call, so it is checked at that boundary, not here.
 fn check_value_type_kinds(
-    elements: &[SignatureElement<'_>],
+    elements: &[SignatureElement],
     return_type: &ReturnType<'_>,
     registries: &RunRegistries,
 ) -> Result<(), KError> {
@@ -237,7 +237,7 @@ fn check_value_type_kinds(
 /// Quadratic in the parameter names, which a signature has a handful of, and this runs once per
 /// definition.
 fn check_distinct_parameter_names(
-    elements: &[SignatureElement<'_>],
+    elements: &[SignatureElement],
     registries: &RunRegistries,
 ) -> Result<(), KError> {
     let names = || {
@@ -264,7 +264,7 @@ fn check_distinct_parameter_names(
 /// function's only handle.
 pub(crate) fn finalize_fn_with_kind<'a>(
     scope: &'a Scope<'a>,
-    elements: Vec<SignatureElement<'a>>,
+    elements: Vec<SignatureElement>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
     kind: FnKind,
@@ -279,7 +279,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // shadow-by-name, neither of which has a single right answer for a
     // multi-token signature like `(a ADD b)`.
     let name = elements.iter().find_map(|e| match e {
-        SignatureElement::Keyword(s) => Some((*s).to_string()),
+        SignatureElement::Keyword(s) => registries.labels.resolve(s.symbol()),
         _ => None,
     });
 

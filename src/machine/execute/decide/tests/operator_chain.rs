@@ -7,7 +7,7 @@
 //! observable: over `10 % 4 % 1 % 0` the three pairs are `14`, `5`, `1`, which fold left to
 //! `(14 - 5) - 1` = 8 and right to `14 - (5 - 1)` = 10.
 
-use crate::builtins::test_support::{TestRun, keyword_name};
+use crate::builtins::test_support::{TestRun, operator_run, probe_symbol};
 use crate::machine::BindingIndex;
 use crate::machine::GroupSeal;
 use crate::machine::core::{program_storage, run_root_storage};
@@ -25,15 +25,19 @@ fn register_pairwise_fixture<'a>(
 ) {
     let scope = test_run.scope;
     let record = scope.birth_operator_group(
-        &["%"],
+        &[probe_symbol("%")],
         ReductionMode::Pairwise {
-            combiner,
+            combiner: crate::machine::model::KeywordSymbol::declared(
+                combiner,
+                &test_run.registries().labels,
+            )
+            .expect("a test fixture combiner is keyword-class"),
             direction,
         },
     );
     scope
         .register_operator_group_direct(
-            keyword_name("%", test_run.registries()),
+            operator_run(&["%"], test_run.registries()),
             GroupSeal::of_delivered(scope, &record),
             BindingIndex::BUILTIN,
             test_run.registries(),

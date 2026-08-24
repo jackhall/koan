@@ -166,7 +166,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let signature = sig(
         KType::ANY,
         vec![
-            kw("VAL"),
+            kw(registries, "VAL"),
             arg(registries, &SLOTS.name, KType::IDENTIFIER),
             arg(registries, &SLOTS.ty, KType::of_kind(KKind::ProperType)),
         ],

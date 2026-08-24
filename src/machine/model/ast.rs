@@ -1,7 +1,6 @@
 //! The raw AST: what the parser produces and what a function body, a quote, and a stored signature
-//! hold. Every node borrows its storage — parts, keyword text, and the structural cache alike — so a
-//! node is `Copy`, `Drop`-free, and copying one to another region is a slice copy rather than a
-//! rebuild.
+//! hold. Every node borrows its storage — the parts and the structural cache alike — so a node is
+//! `Copy`, `Drop`-free, and copying one to another region is a slice copy rather than a rebuild.
 //!
 //! The scheduler's own per-call form is [`WorkingExpression`], a distinct type in [`working`]. A
 //! resolved sub-result and a staging hole live only there, which is what keeps this type
@@ -30,72 +29,6 @@ pub use working::{WorkingExpression, WorkingPart};
 #[cfg(test)]
 mod tests;
 
-/// A keyword occurrence: the token's program-storage text beside the [`KeywordSymbol`] minted for
-/// it. Keyword identity travels as the symbol — every key, probe and comparison reads
-/// [`symbol`](Self::symbol) — and the text rides along for rendering, diagnostics, and the
-/// operator-probe join.
-///
-/// The two constructors mirror the classified-symbol pair: [`declared`](Self::declared) at a site
-/// whose text should be resolvable later (the parser, signature mint), [`of`](Self::of) at a probe
-/// or a hand-built node. Both return `None` for text that is not keyword-class.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KeywordToken<'a> {
-    text: &'a str,
-    symbol: KeywordSymbol,
-}
-
-impl<'a> KeywordToken<'a> {
-    /// Classify, mint, and intern — the declaration door. The interner is what lets a diagnostic
-    /// naming a bucket render the keyword back out of a symbol-only key.
-    pub fn declared(text: &'a str, labels: &LabelInterner) -> Option<Self> {
-        KeywordSymbol::declared(text, labels).map(|symbol| KeywordToken { text, symbol })
-    }
-
-    /// Classify and mint, recording nothing — the probe door, for a lookup key or a hand-built node
-    /// whose text no diagnostic resolves through the interner.
-    pub fn of(text: &'a str) -> Option<Self> {
-        KeywordSymbol::of(text).map(|symbol| KeywordToken { text, symbol })
-    }
-
-    /// A draft keyword whose symbol is that of `normalized` rather than of `text` — the one door
-    /// where the pairing is not text-for-text.
-    ///
-    /// A signature draft may spell a fixed token lowercase, and the bucket such a shape keys is the
-    /// uppercased spelling [`ExpressionSignature::mint`] re-homes. `text` stays as drafted so a
-    /// pre-mint render shows what the caller wrote; mint replaces the whole token with the
-    /// normalized pairing, so the split lives only inside an unminted draft.
-    ///
-    /// [`ExpressionSignature::mint`]: crate::machine::model::ExpressionSignature::mint
-    pub(crate) fn drafted(text: &'a str, normalized: &str) -> Option<Self> {
-        KeywordSymbol::of(normalized).map(|symbol| KeywordToken { text, symbol })
-    }
-
-    /// The token's identity. Comparisons and keys read this.
-    pub fn symbol(self) -> KeywordSymbol {
-        self.symbol
-    }
-
-    /// The spelling, as the borrow of program storage it arrived as.
-    pub fn text(self) -> &'a str {
-        self.text
-    }
-
-    /// The same token with its text re-homed into `brand`'s region. A text move only — the symbol
-    /// rides through, so nothing is re-classified and nothing is re-hashed.
-    pub fn rehomed<'b>(self, brand: RegionBrand<'b>) -> KeywordToken<'b> {
-        KeywordToken {
-            text: brand.allocator().text(self.text),
-            symbol: self.symbol,
-        }
-    }
-}
-
-impl std::fmt::Display for KeywordToken<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.text)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum KLiteral<'a> {
     Number(f64),
@@ -123,13 +56,13 @@ impl<'a> KLiteral<'a> {
     }
 }
 
-/// One element of a parsed expression. A name — value-side or type-side — is a symbol the parse
-/// minted when it classified the token, so it carries no borrow at all. The arms that do borrow do
-/// so at `'a`: a nested node is a pointer to a sibling node in the same storage, and a literal run
-/// is a bumped slice.
+/// One element of a parsed expression. A keyword and a name — value-side or type-side — are each a
+/// symbol the parse minted when it classified the token, so they carry no borrow at all. The arms
+/// that do borrow do so at `'a`: a nested node is a pointer to a sibling node in the same storage,
+/// and a literal run is a bumped slice.
 #[derive(Debug, Clone, Copy)]
 pub enum ExpressionPart<'a> {
-    Keyword(KeywordToken<'a>),
+    Keyword(KeywordSymbol),
     Identifier(ValueSymbol),
     Type(TypeSymbol),
     Expression(ProgramNode<'a>),
@@ -162,9 +95,9 @@ pub enum ExpressionPart<'a> {
 }
 
 impl<'a> Part<'a> for ExpressionPart<'a> {
-    fn class(&self) -> PartClass<'a> {
+    fn class(&self) -> PartClass {
         match self {
-            ExpressionPart::Keyword(kw) => PartClass::Keyword(*kw),
+            ExpressionPart::Keyword(symbol) => PartClass::Keyword(*symbol),
             ExpressionPart::Identifier(_) => PartClass::Identifier,
             ExpressionPart::Type(_) => PartClass::Type,
             ExpressionPart::Expression(_) => PartClass::Expression,
@@ -227,7 +160,7 @@ impl<'a> ExpressionPart<'a> {
     /// Per-part subset of [`KExpression::summarize`].
     pub fn summarize(&self, labels: &LabelInterner) -> String {
         match self {
-            ExpressionPart::Keyword(kw) => kw.text().to_string(),
+            ExpressionPart::Keyword(symbol) => labels.render(symbol.symbol()),
             ExpressionPart::Identifier(v) => labels.render(v.symbol()),
             ExpressionPart::Type(t) => labels.render(t.symbol()),
             ExpressionPart::Expression(e) => e.summarize(labels),
@@ -301,7 +234,12 @@ impl<'a> ExpressionPart<'a> {
     /// bytes there, so the product is dest-resident and holds no allocation of its own.
     pub fn resolve(&self, brand: RegionBrand<'a>) -> KObject<'a> {
         match self {
-            ExpressionPart::Keyword(kw) => KObject::KString(brand.allocator().text(kw.text())),
+            // A keyword part is fixed syntax, never data: a literal rejects one at parse
+            // (`parse_stack::push_part`), and dispatch consumes a fixed token positionally against
+            // its bucket key rather than resolving it.
+            ExpressionPart::Keyword(_) => {
+                unreachable!("a keyword part is fixed syntax and never resolves to a value")
+            }
             // A name part carries a symbol, not text, and never becomes a string on the way to a
             // slot. `:Identifier` is part-kind-exact — it admits this part shape and no resolved
             // cell (`accepts_part` / `accepts_carried`) — so an identifier reaches the bind seam
@@ -349,15 +287,19 @@ impl<'a> ExpressionPart<'a> {
     }
 
     /// The [`KObject`] a **region-pure** part denotes, at *any* lifetime — the lifetime-generic peer
-    /// of [`resolve`](Self::resolve) for static-cell sites that fold. The region-pure variants
-    /// (keyword, literal) reach nothing outside `brand`'s own region, so the value is constructible
+    /// of [`resolve`](Self::resolve) for static-cell sites that fold. The region-pure variant
+    /// (a literal) reaches nothing outside `brand`'s own region, so the value is constructible
     /// at the caller's fold brand, where [`resolve`](Self::resolve)'s invariant `KObject<'a>` cannot
     /// go. Borrow-bearing variants are classified to owned sub-dispatches before any static cell, so
     /// they never reach here.
     pub fn resolve_region_pure<'b>(&self, brand: RegionBrand<'b>) -> KObject<'b> {
         match self {
-            ExpressionPart::Keyword(kw) => KObject::KString(brand.allocator().text(kw.text())),
             ExpressionPart::Literal(lit) => lit.to_kobject(brand),
+            // Fixed syntax, never data — a literal rejects a keyword at parse and dispatch
+            // consumes one positionally.
+            ExpressionPart::Keyword(_) => {
+                unreachable!("a keyword part is fixed syntax and never resolves to a value")
+            }
             // A name part in an aggregate is eagerly resolved against the scope chain
             // (`classify_aggregate_part`), so it becomes a resolved cell before any static cell
             // folds — a raw name never reaches a fold brand.
@@ -416,6 +358,16 @@ pub struct KExpression<'a> {
 // is what makes a reattach a shortening; nothing here weakens it.
 reattachable! { KExpression<'static> => KExpression<'r> }
 
+/// The three structural facts a node caches at construction, as one value so the doors that
+/// compute them and the door that carries them from a peeled source hand the same thing to the
+/// chokepoint.
+#[derive(Clone, Copy)]
+struct StructuralCache<'a> {
+    untyped_key: &'a [KeyElement],
+    shape: DispatchShape,
+    operator_probe: Option<KeywordSymbol>,
+}
+
 impl<'a> KExpression<'a> {
     /// Spanless construction door for a borrowed run; `span`/`file` populated by later phases.
     pub fn new(brand: RegionBrand<'a>, parts: &[Spanned<ExpressionPart<'a>>]) -> Self {
@@ -456,6 +408,47 @@ impl<'a> KExpression<'a> {
         Self::from_run(brand, brand.allocator().slice_from_iter(parts), span, file)
     }
 
+    /// **Rebuild** door for a run whose parts were rewritten *without* changing what the structural
+    /// cache reads: the peel pass ([`peel_redundant`](crate::parse::peel_redundant)) drops redundant
+    /// wrappers from the innards of nested parts, so every surviving node keeps its part-kind
+    /// sequence and every keyword symbol in its run. The three cached facts — bucket key, dispatch
+    /// shape, operator probe — are exactly those two things read, so they carry over from `cache_of`
+    /// instead of being recomputed, which is what keeps peel from re-bumping a bucket key and
+    /// re-minting a probe digest per nested node. The `debug_assert` is the contract: a caller whose
+    /// rewrite changes the shape has no business here.
+    ///
+    /// `cache_of` must be the node the run was rewritten *from* and must live in the same region, so
+    /// the carried key slice stays resident where the new node does.
+    pub(crate) fn rebuild_from_iter<I>(
+        brand: RegionBrand<'a>,
+        parts: I,
+        span: Option<Span>,
+        file: Option<FileId>,
+        cache_of: &KExpression<'a>,
+    ) -> Self
+    where
+        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
+        RunIter<I>: ExactSizeIterator,
+    {
+        let parts = brand.allocator().slice_from_iter(parts);
+        debug_assert_eq!(
+            cache_of.shape,
+            classify_dispatch_shape(parts),
+            "a rebuild carries its source's structural cache, so the rewrite must preserve the shape"
+        );
+        Self::seal(
+            brand,
+            parts,
+            span,
+            file,
+            StructuralCache {
+                untyped_key: cache_of.untyped_key,
+                shape: cache_of.shape,
+                operator_probe: cache_of.operator_probe,
+            },
+        )
+    }
+
     /// Construction chokepoint, over a parts run **already resident** in `brand`'s region: fills the
     /// structural cache from it and does nothing else. Every door above lands here, differing only
     /// in how the run reached the region — so none ships with a stale or unfilled cache and no part
@@ -466,15 +459,37 @@ impl<'a> KExpression<'a> {
         span: Option<Span>,
         file: Option<FileId>,
     ) -> Self {
-        let untyped_key = stored_untyped_key(brand, parts);
         let shape = classify_dispatch_shape(parts);
+        Self::seal(
+            brand,
+            parts,
+            span,
+            file,
+            StructuralCache {
+                untyped_key: stored_untyped_key(brand, parts),
+                shape,
+                operator_probe: operator_probe_for(parts, shape),
+            },
+        )
+    }
+
+    /// The node itself, over a resident run and a settled structural cache: fills the two binder
+    /// caches and freezes. The one place a `KExpression` is written, so neither door above can ship
+    /// a node whose binder caches disagree with its parts.
+    fn seal(
+        brand: RegionBrand<'a>,
+        parts: &'a [Spanned<ExpressionPart<'a>>],
+        span: Option<Span>,
+        file: Option<FileId>,
+        cache: StructuralCache<'a>,
+    ) -> Self {
         let mut expression = KExpression {
             parts,
             span,
             file,
-            untyped_key,
-            shape,
-            operator_probe: operator_probe_for(parts, shape),
+            untyped_key: cache.untyped_key,
+            shape: cache.shape,
+            operator_probe: cache.operator_probe,
             binder_plan: None,
             binder_name_slot: None,
         };

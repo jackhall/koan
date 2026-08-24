@@ -6,6 +6,7 @@
 //! set at the `transfer_into` layer, not here.
 
 use super::*;
+use crate::builtins::test_support::probe_symbol;
 use crate::builtins::test_support::{TestRun, run_root_bare};
 use crate::machine::core::{
     FoldingBrand, KoanRegion, KoanRegionExt, KoanStorageProfile, program_storage, run_root_storage,
@@ -43,7 +44,7 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
         home,
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::NULL),
-            elements: vec![SignatureElement::keyword("__INNER__")],
+            elements: vec![SignatureElement::Keyword(probe_symbol("__INNER__"))],
         },
         Body::Builtin(|ctx| {
             crate::machine::core::Action::done_resident(

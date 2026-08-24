@@ -3,18 +3,19 @@
 //! description a registered callable carries, plus the operator-group half, whose yoked birth
 //! composes a different (member-less) description for the same structural reason.
 
-use crate::builtins::test_support::{TestRun, keyword_name, run_root_bare};
+use crate::builtins::test_support::probe_symbol;
+use crate::builtins::test_support::{TestRun, operator_run, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{BindingIndex, program_storage, run_root_storage};
 use crate::machine::model::{
-    Argument, KType, ReturnType, SignatureDraft, SignatureElement, UntypedKey, probe_key,
+    Argument, KType, ReturnType, SignatureDraft, SignatureElement, UntypedKey,
 };
 
 use super::body_no_op;
 
 /// The untyped bucket key for a signature shape, built the way the registration door derives it —
 /// keyword spellings and slots, types irrelevant.
-fn key(elements: Vec<SignatureElement<'_>>) -> UntypedKey {
+fn key(elements: Vec<SignatureElement>) -> UntypedKey {
     SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements,
@@ -22,7 +23,7 @@ fn key(elements: Vec<SignatureElement<'_>>) -> UntypedKey {
     .untyped_key()
 }
 
-fn slot(name: &str) -> SignatureElement<'_> {
+fn slot(name: &str) -> SignatureElement {
     SignatureElement::Argument(Argument {
         name: crate::machine::model::BinderSymbol::classify(name)
             .expect("a test fixture parameter is a value token"),
@@ -56,9 +57,10 @@ fn builtin_seed_registers_a_callable_reaching_exactly_its_home_region() {
         .unwrap();
 
     let foreign = run_root_storage();
-    let lookup = scope
-        .bindings()
-        .lookup_function(&key(vec![SignatureElement::keyword("FOO")]), None);
+    let lookup = scope.bindings().lookup_function(
+        &key(vec![SignatureElement::Keyword(probe_symbol("FOO"))]),
+        None,
+    );
     assert_eq!(lookup.overloads.len(), 1);
     let opened = scope.open_function(&lookup.overloads[0]);
     assert!(
@@ -87,7 +89,10 @@ fn fn_declaration_registers_a_callable_reaching_exactly_its_home_region() {
     let foreign = run_root_storage();
     let scope = test_run.scope;
     let lookup = scope.bindings().lookup_function(
-        &key(vec![SignatureElement::keyword("DOUBLE"), slot("x")]),
+        &key(vec![
+            SignatureElement::Keyword(probe_symbol("DOUBLE")),
+            slot("x"),
+        ]),
         None,
     );
     assert_eq!(lookup.overloads.len(), 1, "the FN registered its overload");
@@ -111,7 +116,7 @@ fn op_declaration_registers_a_callable_reaching_exactly_its_home_region() {
     let lookup = scope.bindings().lookup_function(
         &key(vec![
             slot("left"),
-            SignatureElement::keyword("MINUS"),
+            SignatureElement::Keyword(probe_symbol("MINUS")),
             slot("right"),
         ]),
         None,
@@ -138,10 +143,7 @@ fn operator_group_birth_composes_a_member_less_description_at_the_declaring_regi
     let scope = test_run.scope;
     let sealed = scope
         .bindings()
-        .lookup_operator_group(
-            keyword_name(&probe_key(&["MINUS"]), test_run.registries()),
-            None,
-        )
+        .lookup_operator_group(operator_run(&["MINUS"], test_run.registries()), None)
         .expect("a standalone OP declares its own operator group");
     let delivered = scope.lift_resident(sealed);
     let opened = delivered.open_at();

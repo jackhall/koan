@@ -35,7 +35,7 @@ fn live_buckets() -> HashSet<UntypedKey> {
 fn render_key(key: &[super::KeyElementSpec]) -> Vec<String> {
     key.iter()
         .map(|element| match element {
-            super::KeyElementSpec::Keyword(k) => (*k).to_string(),
+            super::KeyElementSpec::Keyword(name) => name.text().to_string(),
             super::KeyElementSpec::Slot => "_".to_string(),
         })
         .collect()
@@ -47,7 +47,7 @@ fn expression_for_key<'a>(brand: RegionBrand<'a>, spec: &BinderSpec) -> KExpress
     KExpression::new_from_iter(
         brand,
         spec.key.iter().map(|element| match element {
-            super::KeyElementSpec::Keyword(k) => Spanned::bare(kw_part(k)),
+            super::KeyElementSpec::Keyword(name) => Spanned::bare(kw_part(name.text())),
             super::KeyElementSpec::Slot => Spanned::bare(identifier_part("x")),
         }),
     )
@@ -97,7 +97,7 @@ fn spec_channels_cover_every_installing_entry() {
     assert!(
         silent[0]
             .first()
-            .is_some_and(|element| matches!(element, super::KeyElementSpec::Keyword("VAL"))),
+            .is_some_and(|element| matches!(element, super::KeyElementSpec::Keyword(name) if name.text() == "VAL")),
         "the silent entry must be `VAL`",
     );
 }
@@ -112,7 +112,7 @@ fn operator_def_marker_agrees_with_the_keys_it_labels() {
         let names_op = spec
             .key
             .iter()
-            .any(|element| matches!(element, super::KeyElementSpec::Keyword("OP")));
+            .any(|element| matches!(element, super::KeyElementSpec::Keyword(name) if name.text() == "OP"));
         assert_eq!(
             spec.surface == super::BinderSurface::OperatorDef,
             names_op,

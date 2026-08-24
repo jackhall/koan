@@ -93,7 +93,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::BOOL,
             vec![
                 arg(registries, &SLOTS.left, KType::ANY),
-                kw(op),
+                kw(registries, op),
                 arg(registries, &SLOTS.right, KType::ANY),
             ],
         )

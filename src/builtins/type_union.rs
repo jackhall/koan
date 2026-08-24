@@ -25,6 +25,10 @@ use crate::machine::model::RunRegistries;
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { left, members, right } }
 
+/// The union operator's glyph, spelled in Rust source and so declared once.
+static UNION_OPERATOR: crate::machine::model::StaticName<crate::machine::model::KeywordSymbol> =
+    crate::static_name!(crate::machine::model::KeywordSymbol, "|");
+
 const MEMBERS_SLOT: &str = "`|` members";
 
 /// The two-member keyworded form `A | B`: both operands ride resolved-type slots (the shared
@@ -82,12 +86,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let types = &registries.types;
     let (_carrier, writes) = super::op_def::register_unary_operator(
         scope,
-        "|",
+        registries.labels.record(&UNION_OPERATOR),
         OperatorForm {
             signature: sig(
                 KType::of_kind(KKind::AnyType),
                 vec![
-                    kw("|"),
+                    kw(registries, "|"),
                     arg(registries, &SLOTS.members, types.list(KType::ANY)),
                 ],
             ),
@@ -98,7 +102,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
                 KType::of_kind(KKind::AnyType),
                 vec![
                     arg(registries, &SLOTS.left, KType::of_kind(KKind::AnyType)),
-                    kw("|"),
+                    kw(registries, "|"),
                     arg(registries, &SLOTS.right, KType::of_kind(KKind::AnyType)),
                 ],
             ),

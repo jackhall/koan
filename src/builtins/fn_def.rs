@@ -219,7 +219,7 @@ pub fn body_record_schema<'a>(
     // resolving its text through the run's interner and classifying that — the one seam where a
     // signature's names arrive without their text alongside. The return-type classifier wants the
     // same text to match against the return surface's tokens, so both fall out of one pass.
-    let mut elements: Vec<SignatureElement<'a>> = Vec::with_capacity(schema.len());
+    let mut elements: Vec<SignatureElement> = Vec::with_capacity(schema.len());
     let mut param_names: Vec<String> = Vec::with_capacity(schema.len());
     for (field, ktype) in schema.iter() {
         let Some(text) = ctx.registries.labels.resolve(field) else {
@@ -302,15 +302,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("FN"),
+                kw(registries, "FN"),
                 arg(registries, &SLOTS.signature, KType::KEXPRESSION),
-                kw("->"),
+                kw(registries, "->"),
                 arg(
                     registries,
                     &SLOTS.return_type,
                     KType::of_kind(KKind::ProperType),
                 ),
-                kw("="),
+                kw(registries, "="),
                 arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
@@ -323,11 +323,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("FN"),
+                kw(registries, "FN"),
                 arg(registries, &SLOTS.signature, KType::KEXPRESSION),
-                kw("->"),
+                kw(registries, "->"),
                 arg(registries, &SLOTS.return_type, KType::SIGILED_TYPE_EXPR),
-                kw("="),
+                kw(registries, "="),
                 arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
@@ -341,11 +341,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("FN"),
+                kw(registries, "FN"),
                 arg(registries, &SLOTS.signature, KType::KEXPRESSION),
-                kw("->"),
+                kw(registries, "->"),
                 arg(registries, &SLOTS.return_type, KType::IDENTIFIER),
-                kw("="),
+                kw(registries, "="),
                 arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
@@ -358,19 +358,19 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("FN"),
+                kw(registries, "FN"),
                 arg(
                     registries,
                     &SLOTS.signature,
                     KType::of_kind(KKind::ProperType),
                 ),
-                kw("->"),
+                kw(registries, "->"),
                 arg(
                     registries,
                     &SLOTS.return_type,
                     KType::of_kind(KKind::ProperType),
                 ),
-                kw("="),
+                kw(registries, "="),
                 arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
@@ -384,14 +384,14 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("LET"),
+                kw(registries, "LET"),
                 arg(registries, &SLOTS.name, name),
-                kw("="),
-                kw("FN"),
+                kw(registries, "="),
+                kw(registries, "FN"),
                 arg(registries, &SLOTS.signature, signature),
-                kw("->"),
+                kw(registries, "->"),
                 arg(registries, &SLOTS.return_type, return_type),
-                kw("="),
+                kw(registries, "="),
                 arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )

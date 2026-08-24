@@ -20,7 +20,9 @@ fn a_resplice_inherits_the_key_run_and_the_operator_probe() {
             "a + b * c",
         ),
     );
-    assert_eq!(chain.operator_probe(), Some(probe_symbol("* +")));
+    let probe =
+        crate::machine::model::KeywordSymbol::of_run(&[probe_symbol("*"), probe_symbol("+")]);
+    assert_eq!(chain.operator_probe(), Some(probe));
 
     // The splice shape: every operand slot gives way to a staging hole, every keyword position
     // stands.

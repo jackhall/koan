@@ -13,8 +13,7 @@ pub use labels::{
     ValueSymbol, is_type_name, wrong_binder_class,
 };
 pub use operators::{
-    FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode, binary_key, probe_key,
-    unary_key,
+    FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode, binary_key, unary_key,
 };
 pub use registries::RunRegistries;
 pub(crate) use types::IdentityBuildHasher;
@@ -34,8 +33,8 @@ pub use values::{
 };
 
 pub(crate) use ast::{
-    DispatchShape, ExpressionPart, KExpression, KLiteral, KeywordToken, Part, PartClass,
-    ProgramExpression, WorkingExpression, WorkingPart, classify_dispatch_shape,
+    DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass, ProgramExpression,
+    WorkingExpression, WorkingPart, classify_dispatch_shape,
 };
 pub(crate) use binder::type_binder;
 pub use binder::{BindKind, BinderBucketFn, BinderNameFn, BinderSurface};

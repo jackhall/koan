@@ -133,7 +133,7 @@ impl<'a> KFunction<'a> {
         registries: &RunRegistries,
     ) -> DeliveredFunction {
         let brand = captured.brand();
-        let signature = ExpressionSignature::mint(brand, draft, &registries.labels);
+        let signature = ExpressionSignature::mint(brand, draft);
         let value_ktype = function_value_ktype(&signature, registries);
         let seed = FunctionBirth {
             captured,
@@ -191,7 +191,7 @@ impl<'a> KFunction<'a> {
             .elements()
             .iter()
             .map(|el| match el {
-                SignatureElement::Keyword(kw) => kw.text().to_string(),
+                SignatureElement::Keyword(symbol) => render_label(symbol.symbol(), registries),
                 SignatureElement::Argument(arg) => {
                     format!("<{}>", render_label(arg.name.symbol(), registries))
                 }
@@ -221,14 +221,19 @@ impl<'a> KFunction<'a> {
         for (el, part) in self.signature.elements().iter().zip(parts.iter()) {
             match el {
                 SignatureElement::Keyword(s) => match part.value.as_ast() {
-                    Some(ExpressionPart::Keyword(t)) if s.symbol() == t.symbol() => {}
+                    Some(ExpressionPart::Keyword(t)) if *s == t => {}
                     Some(ExpressionPart::Keyword(t)) => {
+                        let (s, t) = (
+                            registries.labels.display(s.symbol()),
+                            registries.labels.display(t.symbol()),
+                        );
                         return Err(KError::new(KErrorKind::DispatchFailed {
                             expr: summarize_parts(parts, &registries.labels),
                             reason: format!("expected keyword '{s}', got '{t}'"),
                         }));
                     }
                     _ => {
+                        let s = registries.labels.display(s.symbol());
                         return Err(KError::new(KErrorKind::DispatchFailed {
                             expr: summarize_parts(parts, &registries.labels),
                             reason: format!("expected keyword '{s}'"),
@@ -327,7 +332,7 @@ impl<'a> KFunction<'a> {
             brand,
             self.signature.elements().iter().map(|el| {
                 Spanned::bare(WorkingPart::Ast(match el {
-                    SignatureElement::Keyword(kw) => ExpressionPart::Keyword(kw.rehomed(brand)),
+                    SignatureElement::Keyword(symbol) => ExpressionPart::Keyword(*symbol),
                     SignatureElement::Argument(a) => pairs
                         .take(a.name.symbol())
                         .expect("every named slot checked satisfiable above"),

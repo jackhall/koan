@@ -1,5 +1,6 @@
 use super::*;
 use crate::builtins::register_builtin;
+use crate::builtins::test_support::probe_symbol;
 use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{TestRun, marker, run_root_bare};
 use crate::builtins::test_support::{identifier_part, kw_part};
@@ -62,7 +63,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("OP"),
+            SignatureElement::Keyword(probe_symbol("OP")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
@@ -188,7 +189,7 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("OP"),
+            SignatureElement::Keyword(probe_symbol("OP")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
@@ -229,7 +230,7 @@ fn function_value_ktype_projects_kfunction() {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![
-            SignatureElement::keyword("CALL"),
+            SignatureElement::Keyword(probe_symbol("CALL")),
             SignatureElement::Argument(crate::machine::model::Argument {
                 name: crate::machine::model::BinderSymbol::classify("x")
                     .expect("a test fixture parameter is a value token"),
@@ -261,7 +262,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("OP"),
+            SignatureElement::Keyword(probe_symbol("OP")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),

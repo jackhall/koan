@@ -1,6 +1,7 @@
 //! `register` arm of `machine::core` tests.
 
 use super::super::{BindingIndex, DeclarationSite, NameLookup};
+use crate::builtins::test_support::probe_symbol;
 use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{
     binder_name, mock_declaration_site, run_root_bare, type_name, value_name,
@@ -277,7 +278,7 @@ fn register_function_allows_overload_with_different_arg_types() {
     let sig_num = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("BAR"),
+            SignatureElement::Keyword(probe_symbol("BAR")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
@@ -288,7 +289,7 @@ fn register_function_allows_overload_with_different_arg_types() {
     let sig_str = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("BAR"),
+            SignatureElement::Keyword(probe_symbol("BAR")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),

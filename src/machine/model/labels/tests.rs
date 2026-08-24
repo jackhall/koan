@@ -107,32 +107,54 @@ fn keyword_symbols_cover_joined_operator_probes() {
     assert!(KeywordSymbol::of("IntOrd").is_none());
 }
 
-/// The streamed mint and the joined mint are the same symbol. This is what lets an operator chain
-/// carry `u128` bits while its group registration keys off the joined spelling
-/// (`powerset_probes`) — a divergence here would make every chain miss its own registration.
+/// A run digest reads its members as a *set*: order does not matter and repeats collapse. This is
+/// what lets a chain's probe (`operator_probe_for`, which streams operators in source order, with
+/// repeats) hit the key its group's powerset registered (`powerset_probes`, which streams a subset)
+/// — a divergence here would make every chain miss its own registration.
 #[test]
-fn a_streamed_probe_key_mints_what_the_joined_one_does() {
-    for fragments in [
-        vec!["+"],
-        vec!["*", "+"],
-        vec!["AND", "OR"],
-        vec!["<=", "==", ">="],
-        vec!["+", "AND", "≺"],
-    ] {
-        assert_eq!(
-            KeywordSymbol::of_parts(&fragments),
-            KeywordSymbol::of(&fragments.join(" ")),
-            "streamed and joined mints must agree for {fragments:?}",
-        );
-    }
+fn a_run_digest_is_order_insensitive_and_dedupes() {
+    let run = |glyphs: &[&str]| {
+        let members: Vec<_> = glyphs
+            .iter()
+            .map(|glyph| KeywordSymbol::of(glyph).expect("a fixture glyph is keyword-class"))
+            .collect();
+        KeywordSymbol::of_run(&members)
+    };
+    assert_eq!(run(&["*", "+"]), run(&["+", "*"]));
+    assert_eq!(run(&["+", "*", "+"]), run(&["+", "*"]));
+    assert_eq!(run(&["+"]), run(&["+", "+"]));
+    assert_ne!(run(&["+"]), run(&["+", "*"]));
 }
 
-/// `of_parts` classifies every fragment, so a run carrying a non-keyword token mints nothing —
-/// the same seam miss `of` gives on the joined spelling.
+/// A singleton run is its own key, distinct from the bare member symbol: a probe is a digest over
+/// the run, so nothing can confuse the group registered for `{+}` with the token `+` itself.
 #[test]
-fn a_probe_key_with_a_value_token_mints_nothing() {
-    assert!(KeywordSymbol::of_parts(&["+", "xs"]).is_none());
-    assert!(KeywordSymbol::of(&["+", "xs"].join(" ")).is_none());
+fn a_singleton_run_is_not_its_member() {
+    let plus = KeywordSymbol::of("+").expect("`+` is keyword-class");
+    assert_ne!(KeywordSymbol::of_run(&[plus]), plus);
+}
+
+/// The rendering `declared_run` records is what a diagnostic naming a probe key resolves, and it is
+/// recorded under the very digest `of_run` mints, so registration and probe agree by construction.
+#[test]
+fn a_declared_run_records_its_join_under_the_probe_digest() {
+    let labels = LabelInterner::new();
+    let members: Vec<_> = ["+", "*"]
+        .iter()
+        .map(|glyph| {
+            KeywordSymbol::declared(glyph, &labels).expect("a fixture glyph is keyword-class")
+        })
+        .collect();
+    let declared = KeywordSymbol::declared_run(&members, &labels);
+    assert_eq!(declared, KeywordSymbol::of_run(&members));
+    let rendered = labels.render(declared.symbol());
+    assert!(
+        rendered
+            .split(' ')
+            .collect::<std::collections::HashSet<_>>()
+            == ["+", "*"].into_iter().collect(),
+        "the recorded rendering names both members: {rendered}",
+    );
 }
 
 #[test]

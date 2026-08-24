@@ -10,7 +10,7 @@
 
 use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
-use crate::machine::model::{Symbol, TypeSymbol, ValueSymbol};
+use crate::machine::model::{KeywordSymbol, Symbol, TypeSymbol, ValueSymbol};
 use crate::machine::model::{TypeResolution, most_specific_ktype};
 
 use crate::machine::DeliveredCarried;
@@ -30,6 +30,15 @@ crate::slots! { SLOTS { return_type } }
 /// is minted once for the process — an arm binds by loading that symbol, not by classifying `it`
 /// again per arm taken.
 static IT: crate::machine::model::StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "it");
+
+/// The branch separator token, declared once beside [`IT`] so the arms are recognized by a symbol
+/// compare against a memoized name rather than a spelling.
+static ARROW: crate::machine::model::StaticName<KeywordSymbol> =
+    crate::static_name!(KeywordSymbol, "->");
+
+/// The catch-all branch tag `_`, a pure-symbol token and so keyword-class.
+static WILDCARD: crate::machine::model::StaticName<KeywordSymbol> =
+    crate::static_name!(KeywordSymbol, "_");
 
 /// Read the MATCH / TRY `-> :T` slot from `ctx.args` (resolving a forward-referenced bare name
 /// against the call-site scope/chain) into the [`ReturnContract::Arm`] both `MATCH` and `TRY`
@@ -181,7 +190,9 @@ pub(crate) fn find_branch_body_by_tag<'a>(
                 Some(Symbol::of(if b { "true" } else { "false" }))
             }
             // `_` is a pure-symbol token classified as `Keyword`, not a type name.
-            ExpressionPart::Keyword(kw) if allow_wildcard && kw.text() == "_" => None,
+            ExpressionPart::Keyword(symbol) if allow_wildcard && symbol == WILDCARD.symbol() => {
+                None
+            }
             other => {
                 return Err(format!(
                     "branch tag must be a capitalized variant tag or boolean literal, got {}",
@@ -190,7 +201,7 @@ pub(crate) fn find_branch_body_by_tag<'a>(
             }
         };
         match arrow_part.value {
-            ExpressionPart::Keyword(kw) if kw.text() == "->" => {}
+            ExpressionPart::Keyword(symbol) if symbol == ARROW.symbol() => {}
             other => {
                 return Err(format!(
                     "branch separator must be `->`, got {}",
@@ -318,7 +329,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
         let body_part = &parts[i + 2];
 
         match arrow_part.value {
-            ExpressionPart::Keyword(kw) if kw.text() == "->" => {}
+            ExpressionPart::Keyword(symbol) if symbol == ARROW.symbol() => {}
             other => {
                 return Err(format!(
                     "branch separator must be `->`, got {}",

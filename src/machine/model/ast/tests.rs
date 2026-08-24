@@ -13,6 +13,20 @@ use crate::source::Spanned;
 fn kw(s: &str) -> ExpressionPart<'_> {
     kw_part(s)
 }
+/// [`kw`] for a test that renders the part back: the spelling is recorded in `labels`, so
+/// `summarize` resolves it rather than reaching the missing-label placeholder.
+fn declared_kw<'a>(s: &str, labels: &LabelInterner) -> ExpressionPart<'a> {
+    ExpressionPart::Keyword(
+        crate::machine::model::KeywordSymbol::declared(s, labels)
+            .expect("a test fixture keyword is keyword-class"),
+    )
+}
+/// The probe key a chain over `glyphs` computes — the run digest, minted the way
+/// `operator_probe_for` mints it.
+fn operator_probe_of(glyphs: &[&str]) -> crate::machine::model::KeywordSymbol {
+    let members: Vec<_> = glyphs.iter().map(|glyph| probe_symbol(glyph)).collect();
+    crate::machine::model::KeywordSymbol::of_run(&members)
+}
 fn ident<'a>(s: &str, labels: &LabelInterner) -> ExpressionPart<'a> {
     ExpressionPart::Identifier(
         crate::machine::model::ValueSymbol::declared(s, labels)
@@ -109,7 +123,10 @@ fn unresolved_carrier_classifies_as_a_proper_type() {
 #[test]
 fn summarize_atomic_variants() {
     let registries = RunRegistries::new();
-    assert_eq!(kw("LET").summarize(&registries.labels), "LET");
+    assert_eq!(
+        declared_kw("LET", &registries.labels).summarize(&registries.labels),
+        "LET"
+    );
     assert_eq!(
         ident("x", &registries.labels).summarize(&registries.labels),
         "x"
@@ -162,7 +179,11 @@ fn summarize_nested_expression_part_threads_through() {
     let brand = program.brand();
     let inner = expr(
         brand,
-        vec![kw("ADD"), ident("a", &labels), ident("b", &labels)],
+        vec![
+            declared_kw("ADD", &labels),
+            ident("a", &labels),
+            ident("b", &labels),
+        ],
     );
     assert_eq!(inner.summarize(&labels), "ADD a b");
 }
@@ -172,7 +193,14 @@ fn kexpression_summarize_joins_parts_with_spaces() {
     let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
-    let e = build(brand, vec![kw("LET"), ident("x", &labels), kw("=")]);
+    let e = build(
+        brand,
+        vec![
+            declared_kw("LET", &labels),
+            ident("x", &labels),
+            declared_kw("=", &labels),
+        ],
+    );
     assert_eq!(e.summarize(&labels), "LET x =");
 }
 
@@ -322,7 +350,7 @@ fn operator_chain_three_operand_classifies_and_probes() {
         ],
     );
     assert_eq!(e.shape(), DispatchShape::OperatorChain);
-    assert_eq!(e.operator_probe(), Some(probe_symbol("+")));
+    assert_eq!(e.operator_probe(), Some(operator_probe_of(&["+"])));
 }
 
 #[test]
@@ -330,7 +358,7 @@ fn operator_chain_mixed_operators_probe_is_sorted_unique() {
     let labels = LabelInterner::new();
     let program = program_storage();
     let brand = program.brand();
-    // `a + b * c` — two distinct operators; probe is sorted-joined uniques.
+    // `a + b * c` — two distinct operators; the probe is the digest of the two-member run.
     let e = build(
         brand,
         vec![
@@ -342,7 +370,7 @@ fn operator_chain_mixed_operators_probe_is_sorted_unique() {
         ],
     );
     assert_eq!(e.shape(), DispatchShape::OperatorChain);
-    assert_eq!(e.operator_probe(), Some(probe_symbol("* +")));
+    assert_eq!(e.operator_probe(), Some(operator_probe_of(&["*", "+"])));
 }
 
 #[test]
@@ -352,7 +380,7 @@ fn union_pipe_chain_over_types_is_operator_chain() {
     // `Aa | Bb | Cc` — type operands, two `|` positions.
     let e = build(brand, vec![ty("Aa"), kw("|"), ty("Bb"), kw("|"), ty("Cc")]);
     assert_eq!(e.shape(), DispatchShape::OperatorChain);
-    assert_eq!(e.operator_probe(), Some(probe_symbol("|")));
+    assert_eq!(e.operator_probe(), Some(operator_probe_of(&["|"])));
 }
 
 #[test]
@@ -429,8 +457,8 @@ fn cached_fields_equal_on_demand_recompute() {
         .parts
         .iter()
         .map(|p| match &p.value {
-            ExpressionPart::Keyword(kw) => {
-                crate::machine::model::types::KeyElement::Keyword(kw.symbol())
+            ExpressionPart::Keyword(symbol) => {
+                crate::machine::model::types::KeyElement::Keyword(*symbol)
             }
             _ => crate::machine::model::types::KeyElement::Slot,
         })
@@ -457,7 +485,7 @@ fn cache_rides_a_copy() {
     );
     let c = e;
     assert_eq!(c.shape(), DispatchShape::OperatorChain);
-    assert_eq!(c.operator_probe(), Some(probe_symbol("|")));
+    assert_eq!(c.operator_probe(), Some(operator_probe_of(&["|"])));
     assert_eq!(c.untyped_key(), e.untyped_key());
     assert_eq!(c.stored_key(), e.stored_key());
 }
@@ -536,13 +564,13 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
                     .expect("a test fixture parameter is a value token"),
                 ktype: KType::ANY,
             }),
-            SignatureElement::keyword("+"),
+            SignatureElement::Keyword(probe_symbol("+")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("y")
                     .expect("a test fixture parameter is a value token"),
                 ktype: KType::ANY,
             }),
-            SignatureElement::keyword("+"),
+            SignatureElement::Keyword(probe_symbol("+")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("z")
                     .expect("a test fixture parameter is a value token"),

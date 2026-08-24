@@ -252,9 +252,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::EMPTY_SIGNATURE,
             vec![
-                kw("MODULE"),
+                kw(registries, "MODULE"),
                 arg(registries, &SLOTS.name, name_kt),
-                kw("="),
+                kw(registries, "="),
                 arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )

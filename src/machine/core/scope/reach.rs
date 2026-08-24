@@ -17,6 +17,7 @@ use crate::machine::core::{
     FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt,
     KoanStorageProfile, ModuleRefFamily, ScopeRefFamily, product_reaches_region,
 };
+use crate::machine::model::KeywordSymbol;
 use crate::machine::model::{
     Carried, CarriedFamily, KObject, KType, Module, ModuleDraft, OperatorGroup,
     OperatorGroupFamily, ReductionMode, RegionEscape, copy_or_pin, relocate_object_into,
@@ -603,9 +604,9 @@ impl<'a> Scope<'a> {
 
     /// **Birth an operator-group record in this scope's own region.** The record is built inside a
     /// [`yoke_branded`](KoanRegionExt::yoke_branded) whose `for<'b>` brand is the region-purity
-    /// proof: [`OperatorGroup::alloc`] re-homes the member texts and any combiner name at that same
-    /// brand, so the finished record borrows nothing but the region it was born into, and the
-    /// closure has no way to smuggle an ambient borrow into `&'b OperatorGroup<'b>`.
+    /// proof: [`OperatorGroup::alloc`] copies the member symbols at that same brand, so the finished
+    /// record borrows nothing but the region it was born into, and the closure has no way to
+    /// smuggle an ambient borrow into `&'b OperatorGroup<'b>`.
     ///
     /// The envelope carries the description the yoke composed — hosted here, no members — which is
     /// what [`GroupSeal::of_delivered`](crate::machine::core::carrier_witness::GroupSeal) rests into
@@ -613,8 +614,8 @@ impl<'a> Scope<'a> {
     /// own ambient lifetimes: only what the closure *returns* is confined by the brand.
     pub(crate) fn birth_operator_group(
         &self,
-        members: &[&str],
-        mode: ReductionMode<'_>,
+        members: &[KeywordSymbol],
+        mode: ReductionMode,
     ) -> DeliveredOperatorGroup {
         KoanRegion::yoke_branded::<OperatorGroupFamily, _>(self.home(), |brand| {
             OperatorGroup::alloc(brand, members, mode)

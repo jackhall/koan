@@ -34,7 +34,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let signature = sig(
         KType::STR,
-        vec![kw("PRINT"), arg(registries, &SLOTS.msg, KType::ANY)],
+        vec![
+            kw(registries, "PRINT"),
+            arg(registries, &SLOTS.msg, KType::ANY),
+        ],
     );
     crate::builtins::register_builtin(scope, "PRINT", signature, body, registries, gate);
 }

@@ -10,7 +10,7 @@
 //! sub-dispatching against the outer scope.
 
 use crate::machine::core::RegionBrand;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KeywordToken, WorkingPart};
+use crate::machine::model::ast::{ExpressionPart, KExpression, WorkingPart};
 
 use super::ktype::KType;
 use super::registry::TypeRegistry;
@@ -30,7 +30,7 @@ pub enum KeyElement {
 /// Bucket key produced by both `ExpressionSignature::untyped_key` and
 /// `KExpression::untyped_key`; they MUST agree for any pair that should match. The parser
 /// classifies source tokens via `is_keyword_token` and mints each one's symbol there;
-/// [`ExpressionSignature::mint`] uppercases lowercase registered tokens before minting, so a
+/// [`SignatureElement::keyword`] uppercases a lowercase Rust-spelled token before minting, so a
 /// registration and a call arrive at the same symbol for the same token.
 pub type UntypedKey = Vec<KeyElement>;
 
@@ -103,9 +103,9 @@ pub fn most_specific_ktype(candidates: &[KType], registries: &RunRegistries) -> 
 }
 
 /// The normalized spelling of a fixed token: uppercased iff it contains a lowercase ASCII letter.
-/// [`ExpressionSignature::mint`] applies it on the way into the region and
-/// [`SignatureDraft::untyped_key`] applies it to answer what bucket a draft *will* key, so the two
-/// never disagree about a token's spelling.
+/// The draft door [`SignatureElement::keyword`] applies it once, where the Rust-spelled text is
+/// still in hand, so every element past that door already carries the symbol of its normalized
+/// spelling and no later stage re-derives one.
 fn normalized_keyword(token: &str) -> std::borrow::Cow<'_, str> {
     if token.chars().any(|c| c.is_ascii_lowercase()) {
         std::borrow::Cow::Owned(token.to_ascii_uppercase())
@@ -122,7 +122,7 @@ impl SignatureDraft<'_> {
         self.elements
             .iter()
             .map(|el| match el {
-                SignatureElement::Keyword(kw) => KeyElement::Keyword(kw.symbol()),
+                SignatureElement::Keyword(symbol) => KeyElement::Keyword(*symbol),
                 SignatureElement::Argument(_) => KeyElement::Slot,
             })
             .collect()
@@ -147,13 +147,13 @@ pub enum Specificity {
 /// `'a` names both the elements run and `return_type`'s `Deferred` arm, which captures a live
 /// [`KExpression`] for per-call re-elaboration.
 ///
-/// The fields are private because [`Self::mint`] is the only door: it is what normalizes the fixed
-/// tokens and re-homes every name at the destination brand, so a signature that skipped either is
+/// The fields are private because [`Self::mint`] is the only door: it is what settles the elements
+/// run and the parameter schema at the destination brand, so a signature that skipped it is
 /// unconstructible. Build one through a [`SignatureDraft`].
 #[derive(Clone, Copy)]
 pub struct ExpressionSignature<'a> {
     return_type: ReturnType<'a>,
-    elements: &'a [SignatureElement<'a>],
+    elements: &'a [SignatureElement],
     /// The parameter schema: `(symbol, declared type)` in declaration order, bumped once at
     /// [`Self::mint`]. This is the argument currency's key half — a call carries only a values
     /// slice aligned to it, so no name-keyed container is built per call. Shared with the function
@@ -166,15 +166,14 @@ pub struct ExpressionSignature<'a> {
 }
 
 /// The pre-mint form of an [`ExpressionSignature`]: the same elements in a growable buffer, before
-/// [`ExpressionSignature::mint`] normalizes them and re-homes their text.
+/// [`ExpressionSignature::mint`] settles them into the destination region.
 ///
-/// A draft's names may borrow from anywhere at `'a` — a `&'static` builtin literal, a program-storage
-/// AST part, a string already bumped elsewhere — because the mint door re-bumps every one of them at
-/// the destination. That is what keeps this a *buffer* of the stored element type rather than a
-/// parallel owned representation.
+/// Every element is `Copy` and lifetime-free — a keyword is its symbol, an argument its classified
+/// name and type — so the buffer holds the stored element type itself rather than a parallel owned
+/// representation, and `'a` threads only through `return_type`'s `Deferred` arm.
 pub struct SignatureDraft<'a> {
     pub return_type: ReturnType<'a>,
-    pub elements: Vec<SignatureElement<'a>>,
+    pub elements: Vec<SignatureElement>,
 }
 
 /// Carrier for an FN's declared return type. The surface admits parameter-name references
@@ -285,38 +284,17 @@ impl<'a> ReturnType<'a> {
 }
 
 impl<'a> ExpressionSignature<'a> {
-    /// **Build a signature into `brand`'s region** — the sole door, and the reason a signature's text
-    /// always lives where the signature does.
+    /// **Build a signature into `brand`'s region** — the sole door, and the reason a signature's
+    /// elements run and parameter schema always live where the signature does.
     ///
-    /// Two things happen here and nowhere else. Fixed tokens are **normalized**: a lowercase
-    /// registered token is uppercased so the bucket key matches what dispatch computes from incoming
-    /// expressions. TODO(monadic-effects): emit a warning instead of silently rewriting once effects
-    /// exist — rejecting would lose the "drop in a builtin without thinking about caps" affordance.
-    /// And every name is **re-homed** through [`RegionBrand::allocator`], including a `&'static`
-    /// builtin literal, so "a signature's text lives in the signature's own region" holds with no
-    /// exceptions and a draft is free to name text borrowed from anywhere at `'a`.
-    pub fn mint(brand: RegionBrand<'a>, draft: SignatureDraft<'a>, labels: &LabelInterner) -> Self {
-        let elements: &'a [SignatureElement<'a>] =
-            brand
-                .allocator()
-                .slice_from_iter(draft.elements.into_iter().map(|element| match element {
-                    // Registration is a declaration site: the normalized spelling is interned here
-                    // so a diagnostic naming this shape's bucket resolves the keyword back out of a
-                    // symbol-only key.
-                    SignatureElement::Keyword(kw) => {
-                        let text = brand.allocator().text(&normalized_keyword(kw.text()));
-                        SignatureElement::Keyword(
-                            KeywordToken::declared(text, labels).expect(
-                                "a signature keyword classifies keyword-class once normalized",
-                            ),
-                        )
-                    }
-                    // An argument's name is already its symbol — fixed-width, region-free — so
-                    // only the keyword text above needs re-homing.
-                    SignatureElement::Argument(argument) => SignatureElement::Argument(argument),
-                }));
-        // The parameter schema, built once here: every later call reads it rather than re-keying
-        // its own. Both slices ride the signature's own region, so they live exactly as long as it.
+    /// Every element arrives settled: a keyword is the symbol of its normalized spelling, minted at
+    /// the draft door ([`SignatureElement::keyword`]) or read off a parsed token, and an argument is
+    /// a classified name beside its type. So the elements run is a slice copy, and what happens here
+    /// and nowhere else is deriving the two positional tables — the parameter schema and the
+    /// part-slot map — that every later call reads instead of re-keying its own.
+    pub fn mint(brand: RegionBrand<'a>, draft: SignatureDraft<'a>) -> Self {
+        let elements: &'a [SignatureElement] = brand.allocator().slice(&draft.elements);
+        // Both slices ride the signature's own region, so they live exactly as long as it.
         let params = brand.allocator().slice_from_iter(
             elements
                 .iter()
@@ -361,7 +339,7 @@ impl<'a> ExpressionSignature<'a> {
     }
 
     /// The call shape, as the bumped run it rests in.
-    pub fn elements(&self) -> &'a [SignatureElement<'a>] {
+    pub fn elements(&self) -> &'a [SignatureElement] {
         self.elements
     }
 
@@ -373,9 +351,7 @@ impl<'a> ExpressionSignature<'a> {
             .iter()
             .zip(expr.parts)
             .all(|(el, part)| match (el, &part.value) {
-                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => {
-                    s.symbol() == t.symbol()
-                }
+                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
                 (SignatureElement::Keyword(_), _) => false,
                 (SignatureElement::Argument(arg), part_value) => arg.matches(part_value, types),
             })
@@ -387,7 +363,7 @@ impl<'a> ExpressionSignature<'a> {
         self.elements()
             .iter()
             .map(|el| match el {
-                SignatureElement::Keyword(kw) => KeyElement::Keyword(kw.symbol()),
+                SignatureElement::Keyword(symbol) => KeyElement::Keyword(*symbol),
                 SignatureElement::Argument(_) => KeyElement::Slot,
             })
             .collect()
@@ -402,7 +378,7 @@ impl<'a> ExpressionSignature<'a> {
             self.elements()
                 .iter()
                 .map(|el| match el {
-                    SignatureElement::Keyword(kw) => DispatchTokenElement::Keyword(kw.symbol()),
+                    SignatureElement::Keyword(symbol) => DispatchTokenElement::Keyword(*symbol),
                     SignatureElement::Argument(a) => DispatchTokenElement::Slot(a.ktype),
                 })
                 .collect(),
@@ -472,9 +448,7 @@ impl<'a> ExpressionSignature<'a> {
             .iter()
             .zip(other.elements().iter())
             .all(|(x, y)| match (x, y) {
-                (SignatureElement::Keyword(s), SignatureElement::Keyword(t)) => {
-                    s.symbol() == t.symbol()
-                }
+                (SignatureElement::Keyword(s), SignatureElement::Keyword(t)) => s == t,
                 (SignatureElement::Argument(ax), SignatureElement::Argument(ay)) => {
                     ax.ktype == ay.ktype
                 }
@@ -483,27 +457,30 @@ impl<'a> ExpressionSignature<'a> {
     }
 }
 
-/// One position of a call shape: a fixed token, or a parameter slot. A keyword's text is an `&'a
-/// str` borrow — bumped into the signature's own region once [`ExpressionSignature::mint`] has run,
-/// and free to borrow from anywhere at `'a` before that — beside the [`KeywordSymbol`] the shape's
-/// bucket key and every keyword comparison read.
+/// One position of a call shape: a fixed token as the [`KeywordSymbol`] the shape's bucket key and
+/// every keyword comparison read, or a parameter slot. Lifetime-free and `Copy` — both arms are
+/// fixed-width content digests beside a type, so an elements run is a slice copy into whatever
+/// region the signature lands in.
 #[derive(Clone, Copy, Debug)]
-pub enum SignatureElement<'a> {
-    Keyword(KeywordToken<'a>),
+pub enum SignatureElement {
+    Keyword(KeywordSymbol),
     Argument(Argument),
 }
 
-impl<'a> SignatureElement<'a> {
-    /// A draft keyword from bare text: the symbol is minted from the **normalized** spelling
-    /// [`ExpressionSignature::mint`] will store, so a draft that spells a token lowercase keys the
-    /// same bucket as the uppercased form the mint re-homes. The text rides through as written.
+impl SignatureElement {
+    /// The **draft door** for a fixed token spelled in Rust source: normalize the spelling, then
+    /// classify and intern it. A draft that spells a token lowercase therefore keys the same bucket
+    /// as the uppercased form, and a diagnostic naming that bucket resolves the keyword back out of
+    /// a symbol-only key. TODO(monadic-effects): emit a warning instead of silently rewriting once
+    /// effects exist — rejecting would lose the "drop in a builtin without thinking about caps"
+    /// affordance.
     ///
     /// Panics on text that cannot classify post-normalization — unreachable from source (a
     /// lowercase token parses as an Identifier, never a Keyword), and a builtin draft spelling one
     /// could never dispatch.
-    pub fn keyword(text: &'a str) -> SignatureElement<'a> {
+    pub fn keyword(text: &str, labels: &LabelInterner) -> SignatureElement {
         SignatureElement::Keyword(
-            KeywordToken::drafted(text, &normalized_keyword(text))
+            KeywordSymbol::declared(&normalized_keyword(text), labels)
                 .expect("a signature keyword classifies keyword-class once normalized"),
         )
     }

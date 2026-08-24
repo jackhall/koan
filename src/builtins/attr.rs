@@ -602,7 +602,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("ATTR"),
+                kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::IDENTIFIER),
                 arg(registries, &SLOTS.field, KType::IDENTIFIER),
             ],
@@ -612,7 +612,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("ATTR"),
+                kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::EMPTY_SIGNATURE),
                 arg(registries, &SLOTS.field, KType::IDENTIFIER),
             ],
@@ -630,7 +630,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("ATTR"),
+                kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::ANY),
                 arg(registries, &SLOTS.field, KType::IDENTIFIER),
             ],
@@ -643,7 +643,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("ATTR"),
+                kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::ANY),
                 arg(registries, &SLOTS.field, KType::STR),
             ],
@@ -653,7 +653,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("ATTR"),
+                kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::of_kind(KKind::ProperType)),
                 arg(registries, &SLOTS.field, KType::IDENTIFIER),
             ],
@@ -663,7 +663,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("ATTR"),
+                kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::of_kind(KKind::ProperType)),
                 arg(registries, &SLOTS.field, KType::of_kind(KKind::ProperType)),
             ],
@@ -675,7 +675,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("ATTR"),
+                kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::EMPTY_SIGNATURE),
                 arg(registries, &SLOTS.field, KType::STR),
             ],
@@ -686,7 +686,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("ATTR"),
+                kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::EMPTY_SIGNATURE),
                 arg(registries, &SLOTS.field, KType::of_kind(KKind::ProperType)),
             ],

@@ -1,4 +1,4 @@
-use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::{TestRun, operator_run};
 use crate::machine::model::ReductionMode;
 use crate::machine::model::{KType, TypeNode};
 use crate::machine::{program_storage, run_root_storage};
@@ -12,7 +12,7 @@ fn pipe_is_a_unary_operator_group() {
     let test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let group = scope
-        .resolve_operator_group_delivered(crate::builtins::test_support::probe_symbol("|"), None)
+        .resolve_operator_group_delivered(operator_run(&["|"], test_run.registries()), None)
         .expect("`|` must resolve to a registered operator group");
     let mode = group.open(|group| format!("{:?}", group.mode()));
     assert!(

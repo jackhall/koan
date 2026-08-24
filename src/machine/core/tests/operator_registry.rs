@@ -12,17 +12,18 @@
 
 use std::rc::Rc;
 
-use crate::builtins::test_support::{TestRun, keyword_name, probe_symbol, run_root_bare};
+use crate::builtins::test_support::{TestRun, operator_run, probe_symbol, run_root_bare};
 use crate::machine::DeliveredOperatorGroup;
 use crate::machine::core::{
     BindingIndex, CallFrame, GroupSeal, Scope, program_storage, run_root_storage,
 };
-use crate::machine::model::{OperatorGroup, ReductionMode, RunRegistries, probe_key};
+use crate::machine::model::{OperatorGroup, ReductionMode, RunRegistries};
 
 /// The declaration door a fixture takes: birth the record in `scope`'s own region and rest that
 /// envelope, which is what every registry entry for this declaration then holds a bit-copy of.
-fn declare<'a>(scope: &'a Scope<'a>, members: &[&str], mode: ReductionMode<'_>) -> GroupSeal<'a> {
-    GroupSeal::of_delivered(scope, &scope.birth_operator_group(members, mode))
+fn declare<'a>(scope: &'a Scope<'a>, members: &[&str], mode: ReductionMode) -> GroupSeal<'a> {
+    let members: Vec<_> = members.iter().map(|glyph| probe_symbol(glyph)).collect();
+    GroupSeal::of_delivered(scope, &scope.birth_operator_group(&members, mode))
 }
 
 /// Arithmetic-shaped group: `+` and `-` fold left.
@@ -42,13 +43,12 @@ fn register_then_resolve_group_by_probe() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let group = arithmetic_group(scope);
-    // A module registers the powerset; `probe_key` is the sorted-joined probe for a
-    // chain mixing both operators — byte order sorts `+` before `-`.
-    let key = probe_key(&["+", "-"]);
-    assert_eq!(key, "+ -");
+    // A module registers the powerset; the key is the run digest a chain mixing both operators
+    // computes.
+    let key = operator_run(&["+", "-"], &registries);
     scope
         .register_operator_group_direct(
-            keyword_name(&key, &registries),
+            key,
             group,
             BindingIndex::value(1),
             &registries,
@@ -56,11 +56,11 @@ fn register_then_resolve_group_by_probe() {
         )
         .unwrap();
     let resolved = scope
-        .resolve_operator_group_delivered(probe_symbol(&key), None)
+        .resolve_operator_group_delivered(key, None)
         .expect("registered probe resolves");
     assert!(resolved.open(|group| {
-        group.covers(&["+"])
-            && group.covers(&["-"])
+        group.covers(&[probe_symbol("+")])
+            && group.covers(&[probe_symbol("-")])
             && matches!(group.mode(), ReductionMode::FoldLeft)
     }));
 }
@@ -73,7 +73,7 @@ fn undeclared_probe_misses() {
     let group = arithmetic_group(scope);
     scope
         .register_operator_group_direct(
-            keyword_name("+", &registries),
+            operator_run(&["+"], &registries),
             group,
             BindingIndex::value(1),
             &registries,
@@ -83,7 +83,7 @@ fn undeclared_probe_misses() {
     // `*` was never registered.
     assert!(
         scope
-            .resolve_operator_group_delivered(probe_symbol("*"), None)
+            .resolve_operator_group_delivered(operator_run(&["*"], &registries), None)
             .is_none()
     );
 }
@@ -97,7 +97,7 @@ fn cross_group_probe_misses() {
     // Only the within-group subsets are registered.
     scope
         .register_operator_group_direct(
-            keyword_name("+", &registries),
+            operator_run(&["+"], &registries),
             group.clone(),
             BindingIndex::value(1),
             &registries,
@@ -106,7 +106,7 @@ fn cross_group_probe_misses() {
         .unwrap();
     scope
         .register_operator_group_direct(
-            keyword_name("-", &registries),
+            operator_run(&["-"], &registries),
             group.clone(),
             BindingIndex::value(1),
             &registries,
@@ -115,7 +115,7 @@ fn cross_group_probe_misses() {
         .unwrap();
     scope
         .register_operator_group_direct(
-            keyword_name(&probe_key(&["+", "-"]), &registries),
+            operator_run(&["+", "-"], &registries),
             group,
             BindingIndex::value(1),
             &registries,
@@ -126,7 +126,7 @@ fn cross_group_probe_misses() {
     // produces the probe "+ |", which nothing registered — a clean miss.
     assert!(
         scope
-            .resolve_operator_group_delivered(probe_symbol("+ |"), None)
+            .resolve_operator_group_delivered(operator_run(&["+", "|"], &registries), None)
             .is_none()
     );
 }
@@ -143,7 +143,7 @@ fn innermost_scope_shadows_outer() {
 
     outer
         .register_operator_group_direct(
-            keyword_name("+", &registries),
+            operator_run(&["+"], &registries),
             outer_group,
             BindingIndex::value(1),
             &registries,
@@ -152,7 +152,7 @@ fn innermost_scope_shadows_outer() {
         .unwrap();
     inner
         .register_operator_group_direct(
-            keyword_name("+", &registries),
+            operator_run(&["+"], &registries),
             inner_group,
             BindingIndex::value(1),
             &registries,
@@ -162,13 +162,13 @@ fn innermost_scope_shadows_outer() {
 
     // The inner registration wins the chain walk.
     let resolved = inner
-        .resolve_operator_group_delivered(probe_symbol("+"), None)
+        .resolve_operator_group_delivered(operator_run(&["+"], &registries), None)
         .expect("inner registration resolves");
     assert!(resolved.open(|group| matches!(group.mode(), ReductionMode::FoldRight)));
 
     // From the outer scope, only the outer registration is visible.
     let outer_resolved = outer
-        .resolve_operator_group_delivered(probe_symbol("+"), None)
+        .resolve_operator_group_delivered(operator_run(&["+"], &registries), None)
         .expect("outer registration resolves");
     assert!(outer_resolved.open(|group| matches!(group.mode(), ReductionMode::FoldLeft)));
 }
@@ -181,7 +181,7 @@ fn visibility_cutoff_hides_later_sibling_registration() {
     let group = arithmetic_group(scope);
     scope
         .register_operator_group_direct(
-            keyword_name("+", &registries),
+            operator_run(&["+"], &registries),
             group,
             BindingIndex::value(5),
             &registries,
@@ -192,14 +192,14 @@ fn visibility_cutoff_hides_later_sibling_registration() {
     assert!(
         scope
             .bindings()
-            .lookup_operator_group(keyword_name("+", &registries), Some(3))
+            .lookup_operator_group(operator_run(&["+"], &registries), Some(3))
             .is_none()
     );
     // A consumer at cutoff 9 can.
     assert!(
         scope
             .bindings()
-            .lookup_operator_group(keyword_name("+", &registries), Some(9))
+            .lookup_operator_group(operator_run(&["+"], &registries), Some(9))
             .is_some()
     );
 }
@@ -208,11 +208,15 @@ fn visibility_cutoff_hides_later_sibling_registration() {
 fn covers_gates_subset_membership() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let group = OperatorGroup::alloc(scope.brand(), &["+", "-"], ReductionMode::FoldLeft);
-    assert!(group.covers(&["+", "-"]));
-    assert!(group.covers(&["+"]));
+    let group = OperatorGroup::alloc(
+        scope.brand(),
+        &[probe_symbol("+"), probe_symbol("-")],
+        ReductionMode::FoldLeft,
+    );
+    assert!(group.covers(&[probe_symbol("+"), probe_symbol("-")]));
+    assert!(group.covers(&[probe_symbol("+")]));
     // `*` is not a member.
-    assert!(!group.covers(&["+", "*"]));
+    assert!(!group.covers(&[probe_symbol("+"), probe_symbol("*")]));
 }
 
 /// The member slice is sorted and deduped at the allocation door, whatever order (and however many
@@ -221,10 +225,15 @@ fn covers_gates_subset_membership() {
 fn alloc_sorts_and_dedups_the_member_slice() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let group = OperatorGroup::alloc(scope.brand(), &["-", "+", "-"], ReductionMode::FoldLeft);
-    let members: Vec<&str> = group.member_operators().collect();
-    assert_eq!(members, ["+", "-"]);
-    assert!(group.covers(&["-", "+"]));
+    let group = OperatorGroup::alloc(
+        scope.brand(),
+        &[probe_symbol("-"), probe_symbol("+"), probe_symbol("-")],
+        ReductionMode::FoldLeft,
+    );
+    let mut expected = vec![probe_symbol("+"), probe_symbol("-")];
+    expected.sort_unstable();
+    assert_eq!(group.member_symbols().collect::<Vec<_>>(), expected);
+    assert!(group.covers(&[probe_symbol("-"), probe_symbol("+")]));
 }
 
 /// A scope may register a probe the builtins already claim (`+`): the walk is innermost-wins,
@@ -241,7 +250,7 @@ fn inner_registration_of_a_builtin_probe_wins_inside_and_not_outside() {
     let group = declare(inner, &["+"], ReductionMode::FoldRight);
     inner
         .register_operator_group_direct(
-            keyword_name("+", test_run.registries()),
+            operator_run(&["+"], test_run.registries()),
             group,
             BindingIndex::value(1),
             test_run.registries(),
@@ -250,15 +259,16 @@ fn inner_registration_of_a_builtin_probe_wins_inside_and_not_outside() {
         .expect("a builtin probe is shadowable, not a rebind");
 
     let inside = inner
-        .resolve_operator_group_delivered(probe_symbol("+"), None)
+        .resolve_operator_group_delivered(operator_run(&["+"], test_run.registries()), None)
         .expect("the inner registration resolves");
     assert!(inside.open(|group| matches!(group.mode(), ReductionMode::FoldRight)));
 
     let outside = root
-        .resolve_operator_group_delivered(probe_symbol("+"), None)
+        .resolve_operator_group_delivered(operator_run(&["+"], test_run.registries()), None)
         .expect("the root's builtin additive group resolves");
     assert!(outside.open(|group| {
-        matches!(group.mode(), ReductionMode::FoldLeft) && group.covers(&["+", "-"])
+        matches!(group.mode(), ReductionMode::FoldLeft)
+            && group.covers(&[probe_symbol("+"), probe_symbol("-")])
     }));
 }
 
@@ -280,7 +290,7 @@ fn re_registering_an_equal_record_is_a_no_op() {
     );
     scope
         .register_operator_group_direct(
-            keyword_name("+", &registries),
+            operator_run(&["+"], &registries),
             first.clone(),
             BindingIndex::value(1),
             &registries,
@@ -289,7 +299,7 @@ fn re_registering_an_equal_record_is_a_no_op() {
         .unwrap();
     scope
         .register_operator_group_direct(
-            keyword_name("+", &registries),
+            operator_run(&["+"], &registries),
             first,
             BindingIndex::value(2),
             &registries,
@@ -298,7 +308,7 @@ fn re_registering_an_equal_record_is_a_no_op() {
         .expect("an address-identical re-register is idempotent");
     scope
         .register_operator_group_direct(
-            keyword_name("+", &registries),
+            operator_run(&["+"], &registries),
             second,
             BindingIndex::value(3),
             &registries,
@@ -310,7 +320,7 @@ fn re_registering_an_equal_record_is_a_no_op() {
     assert!(
         scope
             .bindings()
-            .lookup_operator_group(keyword_name("+", &registries), Some(2))
+            .lookup_operator_group(operator_run(&["+"], &registries), Some(2))
             .is_some()
     );
 }
@@ -327,7 +337,7 @@ fn re_registering_a_conflicting_mode_errors() {
     let unary = declare(scope, &["+"], ReductionMode::Unary);
     scope
         .register_operator_group_direct(
-            keyword_name("+", &registries),
+            operator_run(&["+"], &registries),
             fold,
             BindingIndex::value(1),
             &registries,
@@ -336,7 +346,7 @@ fn re_registering_a_conflicting_mode_errors() {
         .unwrap();
     let error = scope
         .register_operator_group_direct(
-            keyword_name("+", &registries),
+            operator_run(&["+"], &registries),
             unary,
             BindingIndex::value(2),
             &registries,
@@ -363,7 +373,7 @@ fn using_window_surfaces_the_modules_operator_group() {
     let group = declare(module, &["+"], ReductionMode::FoldRight);
     module
         .register_operator_group_direct(
-            keyword_name("+", &registries),
+            operator_run(&["+"], &registries),
             group,
             BindingIndex::value(1),
             &registries,
@@ -373,14 +383,14 @@ fn using_window_surfaces_the_modules_operator_group() {
 
     // Outside the module the probe is undeclared.
     assert!(
-        root.resolve_operator_group_delivered(probe_symbol("+"), None)
+        root.resolve_operator_group_delivered(operator_run(&["+"], &registries), None)
             .is_none()
     );
 
     // `USING vec_ops SCOPE (…)`: the window borrows the module's façade over the call site.
     let window = root.alloc_transparent_window_for_test(module.bindings());
     let resolved = window
-        .resolve_operator_group_delivered(probe_symbol("+"), None)
+        .resolve_operator_group_delivered(operator_run(&["+"], &registries), None)
         .expect("the window surfaces the module's registry entry");
     assert!(resolved.open(|group| matches!(group.mode(), ReductionMode::FoldRight)));
 }
@@ -396,7 +406,7 @@ fn subset_registration_covers_every_probe_of_the_member_set() {
     let group = arithmetic_group(scope);
     scope
         .register_group_under_all_subsets_direct(
-            &["+", "-"],
+            &[probe_symbol("+"), probe_symbol("-")],
             group,
             BindingIndex::value(1),
             &registries,
@@ -405,17 +415,21 @@ fn subset_registration_covers_every_probe_of_the_member_set() {
         .unwrap();
 
     let mut addresses = Vec::new();
-    for probe in ["+", "-", "+ -"] {
+    for probe in [&["+"][..], &["-"][..], &["+", "-"][..]] {
         let resolved = scope
-            .resolve_operator_group_delivered(probe_symbol(probe), None)
-            .unwrap_or_else(|| panic!("the probe `{probe}` must resolve the registered group"));
+            .resolve_operator_group_delivered(operator_run(probe, &registries), None)
+            .unwrap_or_else(|| panic!("the probe `{probe:?}` must resolve the registered group"));
         addresses.push(record_address(&resolved));
     }
     assert!(
         addresses.windows(2).all(|pair| pair[0] == pair[1]),
         "every powerset key names the one record: {addresses:?}",
     );
-    assert_eq!(probe_key(&["-", "+", "-"]), "+ -");
+    // The digest is order-insensitive and dedupes, so a repeated-operator run keys the same probe.
+    assert_eq!(
+        operator_run(&["-", "+", "-"], &registries),
+        operator_run(&["+", "-"], &registries)
+    );
 }
 
 /// The record dies with its declaring **region**, and nothing but a live carrier keeps it. A group
@@ -442,7 +456,7 @@ fn resolved_group_survives_the_declaring_frames_shell_drop() {
         let group = declare(scope, &["≺"], ReductionMode::FoldRight);
         scope
             .register_operator_group_direct(
-                keyword_name("≺", test_run.registries()),
+                operator_run(&["≺"], test_run.registries()),
                 group,
                 BindingIndex::value(0),
                 test_run.registries(),
@@ -454,7 +468,7 @@ fn resolved_group_survives_the_declaring_frames_shell_drop() {
         let reader: Rc<CallFrame> = CallFrame::new(scope);
         reader.with_scope(|chain_scope| {
             chain_scope
-                .resolve_operator_group_delivered(probe_symbol("≺"), None)
+                .resolve_operator_group_delivered(operator_run(&["≺"], test_run.registries()), None)
                 .expect("the declaring frame's registration resolves one region down")
         })
     });
@@ -463,7 +477,7 @@ fn resolved_group_survives_the_declaring_frames_shell_drop() {
 
     assert!(
         envelope.open(|group| {
-            group.covers(&["≺"]) && matches!(group.mode(), ReductionMode::FoldRight)
+            group.covers(&[probe_symbol("≺")]) && matches!(group.mode(), ReductionMode::FoldRight)
         }),
         "the envelope's coverage keeps the declaring region alive across its frame's drop",
     );
@@ -482,7 +496,7 @@ fn resolved_carrier_reaches_the_declaring_ancestors_region() {
     let group = declare(ancestor, &["~"], ReductionMode::FoldLeft);
     ancestor
         .register_operator_group_direct(
-            keyword_name("~", test_run.registries()),
+            operator_run(&["~"], test_run.registries()),
             group,
             BindingIndex::value(1),
             test_run.registries(),
@@ -498,7 +512,7 @@ fn resolved_carrier_reaches_the_declaring_ancestors_region() {
             "the frame child must open its own region for the assertion to say anything",
         );
         let resolved = inner
-            .resolve_operator_group_delivered(probe_symbol("~"), None)
+            .resolve_operator_group_delivered(operator_run(&["~"], test_run.registries()), None)
             .expect("the ancestor's registration resolves from the frame child");
         assert!(
             resolved
@@ -516,7 +530,11 @@ fn resolved_carrier_reaches_the_declaring_ancestors_region() {
 fn nearest_group_context_stops_at_a_plain_module() {
     let region = run_root_storage();
     let root = run_root_bare(&region);
-    let group = OperatorGroup::alloc(root.brand(), &["+", "-"], ReductionMode::FoldLeft);
+    let group = OperatorGroup::alloc(
+        root.brand(),
+        &[probe_symbol("+"), probe_symbol("-")],
+        ReductionMode::FoldLeft,
+    );
 
     assert!(root.nearest_group_context().is_none());
 

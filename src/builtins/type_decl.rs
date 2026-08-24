@@ -24,6 +24,7 @@ use crate::machine::model::KType;
 use crate::machine::model::TypeNode;
 use crate::machine::model::TypeSymbol;
 use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{KeywordSymbol, StaticName};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -110,6 +111,10 @@ pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine:
     bind_abstract_member(ctx, member_name, kt)
 }
 
+/// The declaration-by-example separator, declared once so the position read is a symbol compare
+/// against a memoized name.
+static AS_KEYWORD: StaticName<KeywordSymbol> = crate::static_name!(KeywordSymbol, "AS");
+
 /// Parse `(<Param>… AS <Name>)` into `(param_names, member_name)`, all bare Type-class
 /// identifiers. One or more parameters declare; a repeated parameter name is a shape error, since
 /// the names key the application record. Any other shape is a form error naming the expected
@@ -126,7 +131,9 @@ pub(crate) fn parse_hk_decl(
     let as_pos = decl
         .parts
         .iter()
-        .position(|p| matches!(p.value, ExpressionPart::Keyword(kw) if kw.text() == "AS"))
+        .position(
+            |p| matches!(p.value, ExpressionPart::Keyword(symbol) if symbol == AS_KEYWORD.symbol()),
+        )
         .ok_or_else(shape_error)?;
     let param_parts = &decl.parts[..as_pos];
     let name_parts = &decl.parts[as_pos + 1..];
@@ -156,14 +163,17 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let bare_signature = sig(
         KType::ANY,
         vec![
-            kw("TYPE"),
+            kw(registries, "TYPE"),
             arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
         ],
     );
     crate::builtins::register_builtin(scope, "TYPE", bare_signature, body_bare, registries, gate);
     let hk_signature = sig(
         KType::ANY,
-        vec![kw("TYPE"), arg(registries, &SLOTS.decl, KType::KEXPRESSION)],
+        vec![
+            kw(registries, "TYPE"),
+            arg(registries, &SLOTS.decl, KType::KEXPRESSION),
+        ],
     );
     crate::builtins::register_builtin(scope, "TYPE", hk_signature, body_hk, registries, gate);
 }

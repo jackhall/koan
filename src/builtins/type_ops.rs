@@ -30,7 +30,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::ProperType),
             vec![
                 arg(registries, &SLOTS.sig, KType::of_kind(KKind::Signature)),
-                kw("WITH"),
+                kw(registries, "WITH"),
                 arg(registries, &SLOTS.bindings, types.record(Record::new())),
             ],
         )
@@ -46,8 +46,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::of_kind(KKind::AnyType),
             vec![
-                kw("TYPE"),
-                kw("OF"),
+                kw(registries, "TYPE"),
+                kw(registries, "OF"),
                 arg(registries, &SLOTS.value, KType::ANY),
             ],
         ),

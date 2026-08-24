@@ -16,16 +16,14 @@ use crate::machine::model::values::Carried;
 use workgraph::witnessed::Sealed;
 
 use crate::builtins::test_support::{
-    binder_name, keyword_name, mock_declaration_site, run_root_bare, type_name, type_token,
-    value_name,
+    binder_name, mock_declaration_site, operator_run, probe_symbol, run_root_bare, type_name,
+    type_token, value_name,
 };
 use crate::machine::core::GroupSeal;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::tests::{body_no_op, unit_signature};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{
-    ReductionMode, ReturnType, SignatureDraft, SignatureElement, probe_key,
-};
+use crate::machine::model::{ReductionMode, ReturnType, SignatureDraft, SignatureElement};
 
 /// Seal `obj` as resident in `region` under a description naming `foreign` — the shape a bind
 /// door produces once its mint has run, assembled here without a `Scope`.
@@ -417,7 +415,7 @@ fn a_two_bucket_binder_retires_the_key_it_did_not_seal() {
     let sealed_key = f.open(|f| f.signature.untyped_key());
     let bridge_key: UntypedKey = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::keyword("BRIDGE")],
+        elements: vec![SignatureElement::Keyword(probe_symbol("BRIDGE"))],
     }
     .untyped_key();
 
@@ -664,7 +662,7 @@ fn bump_backed_tables_full_churn() {
         // path, which strands the claim's bump bytes, exercised so the leak check sees it.
         let purged_key: UntypedKey = SignatureDraft {
             return_type: ReturnType::Resolved(KType::ANY),
-            elements: vec![SignatureElement::keyword("BAR")],
+            elements: vec![SignatureElement::Keyword(probe_symbol("BAR"))],
         }
         .untyped_key();
         scope
@@ -695,9 +693,10 @@ fn bump_backed_tables_full_churn() {
             "the finalized overload survives the sibling's retirement",
         );
 
-        // A per-group powerset install: every subset key's text bumped, all pointing at one record.
-        let record = scope.birth_operator_group(&["+", "-", "*"], ReductionMode::FoldLeft);
-        for probe in powerset_probes(&["+", "-", "*"], &registries.labels) {
+        // A per-group powerset install: one entry per subset, all pointing at one record.
+        let members = [probe_symbol("+"), probe_symbol("-"), probe_symbol("*")];
+        let record = scope.birth_operator_group(&members, ReductionMode::FoldLeft);
+        for probe in powerset_probes(&members, &registries.labels) {
             scope
                 .register_operator_group_direct(
                     probe,
@@ -711,7 +710,7 @@ fn bump_backed_tables_full_churn() {
         assert!(
             scope
                 .bindings()
-                .lookup_operator_group(keyword_name(&probe_key(&["*", "+"]), &registries), None)
+                .lookup_operator_group(operator_run(&["*", "+"], &registries), None)
                 .is_some()
         );
 

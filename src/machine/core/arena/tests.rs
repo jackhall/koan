@@ -3,6 +3,7 @@
 //! — these tests fail when Miri reports UB, not on values.
 
 use super::*;
+use crate::builtins::test_support::probe_symbol;
 use crate::builtins::test_support::{
     TestRun, per_call_storage, run_root_bare, type_name, type_token, value_name,
 };
@@ -1147,13 +1148,12 @@ fn region_death_frees_every_drop_free_family() {
         "the shapes genuinely occupy the region under test"
     );
 
-    let brand = scope.brand();
     let callables: Vec<&KFunction<'_>> = (0..4)
         .map(|i| {
             let draft = SignatureDraft {
                 return_type: ReturnType::Resolved(KType::NULL),
                 elements: vec![
-                    SignatureElement::keyword(brand.allocator().text(&format!("TAKE_{i}"))),
+                    SignatureElement::Keyword(probe_symbol(&format!("TAKE_{i}"))),
                     SignatureElement::Argument(Argument {
                         name: crate::machine::model::BinderSymbol::classify(&format!(
                             "operand_{i}"

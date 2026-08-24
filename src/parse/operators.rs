@@ -7,8 +7,8 @@
 //! span so diagnostics can point at the exact operator character.
 
 use crate::machine::core::ProgramBrand;
-use crate::machine::model::ast::{ExpressionPart, KeywordToken};
-use crate::machine::model::labels::LabelInterner;
+use crate::machine::model::ast::ExpressionPart;
+use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
 use crate::source::{self, Span, Spanned};
 
 pub type UnaryBuild = for<'a> fn(
@@ -66,7 +66,7 @@ fn build_attr<'a>(
     let type_context = matches!(rhs.value, ExpressionPart::Type(_));
     let kw = Spanned::at(
         ExpressionPart::Keyword(
-            KeywordToken::declared("ATTR", labels).expect("`ATTR` is keyword-class"),
+            KeywordSymbol::declared("ATTR", labels).expect("`ATTR` is keyword-class"),
         ),
         trigger,
     );
@@ -92,7 +92,7 @@ fn build_try<'a>(
     };
     let kw = Spanned::at(
         ExpressionPart::Keyword(
-            KeywordToken::declared("TRY", labels).expect("`TRY` is keyword-class"),
+            KeywordSymbol::declared("TRY", labels).expect("`TRY` is keyword-class"),
         ),
         trigger,
     );

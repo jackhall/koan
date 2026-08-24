@@ -7,12 +7,13 @@ mod operator_registry;
 mod register;
 mod types;
 
+use crate::builtins::test_support::probe_symbol;
 use crate::machine::model::{KType, ReturnType, Scalar, SignatureDraft, SignatureElement};
 
 pub(super) fn unit_signature<'a>() -> SignatureDraft<'a> {
     SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::keyword("FOO")],
+        elements: vec![SignatureElement::Keyword(probe_symbol("FOO"))],
     }
 }
 

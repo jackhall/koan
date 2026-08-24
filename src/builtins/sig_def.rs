@@ -60,9 +60,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let signature = sig(
         KType::of_kind(KKind::Signature),
         vec![
-            kw("SIG"),
+            kw(registries, "SIG"),
             arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
-            kw("="),
+            kw(registries, "="),
             arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ],
     );

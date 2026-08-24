@@ -7,10 +7,11 @@
 //! ([`PartClass`]) and the readers below are written once against that vocabulary, so a shape rule
 //! is stated in exactly one place.
 
+use smallvec::SmallVec;
+
 use crate::machine::SplicedCell;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::KeyElement;
-use crate::machine::model::ast::KeywordToken;
 use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
 use crate::source::Spanned;
 
@@ -18,10 +19,11 @@ use super::KExpression;
 use super::working::WorkingExpression;
 
 /// The structural family a part belongs to — the axis shape classification, the bucket key and the
-/// operator probe read. A keyword carries its text because those readers need it.
+/// operator probe read. A keyword carries the symbol its parse minted, which is what all three
+/// readers key by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PartClass<'a> {
-    Keyword(KeywordToken<'a>),
+pub enum PartClass {
+    Keyword(KeywordSymbol),
     Identifier,
     Type,
     Expression,
@@ -70,7 +72,7 @@ pub enum FieldSlot<'a> {
 /// [`field_slot`](Part::field_slot) for the field-list walk. Implemented by
 /// [`ExpressionPart`](super::ExpressionPart) and [`WorkingPart`](super::WorkingPart).
 pub trait Part<'a>: Copy {
-    fn class(&self) -> PartClass<'a>;
+    fn class(&self) -> PartClass;
 
     /// This part read as a field-list position. See [`FieldSlot`].
     fn field_slot(&self) -> FieldSlot<'a>;
@@ -212,11 +214,12 @@ fn is_operator_chain_shape<'a, P: Part<'a>>(parts: &[Spanned<P>]) -> bool {
     })
 }
 
-/// The symbol of the probe key an `OperatorChain` looks the per-scope operator registry up by:
-/// its unique operator keywords, sorted and space-joined. `None` for any other shape.
+/// The probe key an `OperatorChain` looks the per-scope operator registry up by: the digest of the
+/// run of its operator keywords, minted by [`KeywordSymbol::of_run`]. `None` for any other shape.
 ///
-/// The sorted run streams through [`KeywordSymbol::of_parts`], so the join itself is never built
-/// and nothing is bumped — the node carries `u128` bits, and a registry probe compares them.
+/// The group registration mints its powerset keys through the same constructor, so a registered key
+/// and this probe agree by construction and neither side touches text. The node carries `u128`
+/// bits, and a registry probe compares them.
 pub fn operator_probe_for<'a, P: Part<'a>>(
     parts: &[Spanned<P>],
     shape: DispatchShape,
@@ -224,16 +227,19 @@ pub fn operator_probe_for<'a, P: Part<'a>>(
     if shape != DispatchShape::OperatorChain {
         return None;
     }
-    let mut operators: Vec<&str> = parts
-        .iter()
-        .filter_map(|part| match part.value.class() {
-            PartClass::Keyword(kw) => Some(kw.text()),
-            _ => None,
-        })
-        .collect();
-    operators.sort_unstable();
-    operators.dedup();
-    KeywordSymbol::of_parts(&operators)
+    // Distinct operators, in a stack buffer. `of_run` reads its members as a set, so dropping a
+    // repeat here mints the same digest — what it buys is the bound. A chain holds one entry per
+    // operator it names, not one per term, so the buffer is sized by the member count of the group
+    // the chain must resolve against rather than by the length of an arbitrarily long run.
+    let mut operators: SmallVec<[KeywordSymbol; 8]> = SmallVec::new();
+    for part in parts {
+        if let PartClass::Keyword(symbol) = part.value.class()
+            && !operators.contains(&symbol)
+        {
+            operators.push(symbol);
+        }
+    }
+    Some(KeywordSymbol::of_run(&operators))
 }
 
 /// The stored bucket key: `Keyword` parts contribute the symbol they carry, every other part a
@@ -246,7 +252,7 @@ pub fn stored_untyped_key<'a, P: Part<'a>>(
     brand
         .allocator()
         .slice_from_iter(parts.iter().map(|part| match part.value.class() {
-            PartClass::Keyword(kw) => KeyElement::Keyword(kw.symbol()),
+            PartClass::Keyword(symbol) => KeyElement::Keyword(symbol),
             _ => KeyElement::Slot,
         }))
 }

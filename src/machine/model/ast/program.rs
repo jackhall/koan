@@ -184,6 +184,29 @@ impl<'a> ProgramBrand<'a> {
         ))
     }
 
+    /// [`build_expression_from_iter`](Self::build_expression_from_iter)'s **rebuild** peer —
+    /// [`KExpression::rebuild_from_iter`] with the tier proof attached, for a rewrite that preserves
+    /// what the structural cache reads.
+    pub fn rebuild_expression_from_iter<I>(
+        self,
+        parts: I,
+        span: Option<Span>,
+        file: Option<FileId>,
+        cache_of: &KExpression<'a>,
+    ) -> ProgramExpression<'a>
+    where
+        I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
+        RunIter<I>: ExactSizeIterator,
+    {
+        ProgramExpression(KExpression::rebuild_from_iter(
+            self.region(),
+            parts,
+            span,
+            file,
+            cache_of,
+        ))
+    }
+
     /// Bump a marked node into program storage, yielding the reference an arm payload holds.
     pub fn alloc_node(self, expression: ProgramExpression<'a>) -> ProgramNode<'a> {
         ProgramNode(self.region().allocator().value(expression.0))

@@ -1,6 +1,7 @@
 //! Span-population tests. Spans are inclusive-start / exclusive-end byte offsets
 //! into the original source.
 
+use crate::builtins::test_support::probe_symbol;
 use crate::machine::core::{ProgramBrand, program_storage};
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::parse::expression_tree::{parse, parse_with_path};
@@ -68,7 +69,7 @@ fn attr_token_spans_full_token_and_trigger_is_one_byte() {
     let kw = &outer.parts[0];
     let lhs = &outer.parts[1];
     let rhs = &outer.parts[2];
-    assert!(matches!(kw.value, ExpressionPart::Keyword(k) if k.text() == "ATTR"));
+    assert!(matches!(kw.value, ExpressionPart::Keyword(symbol) if symbol == probe_symbol("ATTR")));
     assert_eq!(kw.span, Some(s(3, 4)));
     assert_eq!(lhs.span, Some(s(0, 3)));
     assert_eq!(rhs.span, Some(s(4, 7)));
@@ -80,7 +81,9 @@ fn chained_attr_sub_atoms_get_distinct_trigger_spans() {
     let exprs = top(program.brand(), "foo.bar.baz");
     let outer = &exprs[0];
     assert_eq!(span_of(outer), Some(s(0, 11)));
-    assert!(matches!(outer.parts[0].value, ExpressionPart::Keyword(k) if k.text() == "ATTR"));
+    assert!(
+        matches!(outer.parts[0].value, ExpressionPart::Keyword(symbol) if symbol == probe_symbol("ATTR"))
+    );
     assert_eq!(outer.parts[0].span, Some(s(7, 8)));
     let Spanned {
         value: ExpressionPart::Expression(inner),
@@ -189,7 +192,7 @@ fn ascription_compound_keyword_spans_two_bytes() {
     let outer = &exprs[0];
     assert_eq!(outer.parts[0].span, Some(s(0, 4)));
     let kw = &outer.parts[1];
-    assert!(matches!(kw.value, ExpressionPart::Keyword(k) if k.text() == ":|"));
+    assert!(matches!(kw.value, ExpressionPart::Keyword(symbol) if symbol == probe_symbol(":|")));
     assert_eq!(kw.span, Some(s(5, 7)));
 }
 

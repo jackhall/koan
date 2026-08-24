@@ -4,6 +4,7 @@
 //! producer-resident substrate) and the fold's composition keeps every member the envelope named,
 //! the producer's region among them, which is what covers the foreign substrate.
 
+use crate::builtins::test_support::probe_symbol;
 use std::rc::Rc;
 
 use super::*;
@@ -27,7 +28,7 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KFunction<'run> 
         home,
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::NULL),
-            elements: vec![SignatureElement::keyword("__INNER__")],
+            elements: vec![SignatureElement::Keyword(probe_symbol("__INNER__"))],
         },
         Body::Builtin(|ctx| {
             crate::machine::core::Action::done_resident(

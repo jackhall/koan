@@ -45,7 +45,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let signature = sig(
         return_type,
         vec![
-            kw("CATCH"),
+            kw(registries, "CATCH"),
             arg(registries, &SLOTS.expr, KType::KEXPRESSION),
         ],
     );

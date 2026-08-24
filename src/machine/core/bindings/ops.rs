@@ -19,12 +19,13 @@
 //! discipline and stays direct (`*_direct` on [`Scope`]), under the construction-door mint of the
 //! same gate.
 
+use smallvec::SmallVec;
+
 use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{
-    KType, KeywordSymbol, LabelInterner, RunRegistries, TypeSymbol, ValueSymbol, probe_key,
-    render_label,
+    KType, KeywordSymbol, LabelInterner, RunRegistries, TypeSymbol, ValueSymbol, render_label,
 };
 
 /// How a [`WriteOp::Type`] meets an existing `types[name]`: `Insert` is strict insert-if-absent (a
@@ -158,24 +159,32 @@ impl<'a> WriteOp<'a> {
 /// The probe key of every nonempty subset of `members` — the powerset-key story
 /// [`crate::machine::model::operators`] describes, shared by the builtin seeds, the `GROUP` binder
 /// and the `OP` declaration. `members.len()` stays small, so the `2^n - 1` bitmask walk is cheap;
-/// each subset's key is derived through [`probe_key`] rather than hand-enumerated, so a
-/// registration key always agrees with a real chain's probe.
+/// each subset's key is minted through [`KeywordSymbol::declared_run`], the same run-digest
+/// constructor a live chain's probe (`operator_probe_for`) mints through, so a registration key and
+/// a real chain's probe agree by construction and neither side touches text.
 ///
-/// Each probe key is interned as it is built, so an operator-conflict diagnostic can render the
-/// probe it names. One region-hosted record backs every key, so past the interning the whole
-/// install allocates nothing.
-pub(crate) fn powerset_probes(members: &[&str], labels: &LabelInterner) -> Vec<KeywordSymbol> {
+/// Each key records the rendered join of its members as it is built, so an operator-conflict
+/// diagnostic can name the probe it stands for. One region-hosted record backs every key, so past
+/// that recording the whole install allocates nothing.
+pub(crate) fn powerset_probes(
+    members: &[KeywordSymbol],
+    labels: &LabelInterner,
+) -> Vec<KeywordSymbol> {
     let subset_count = 1usize << members.len();
+    // One stack buffer, refilled per mask: the walk visits `2^n - 1` subsets, so materializing each
+    // one afresh would allocate once per registry entry.
+    let mut subset: SmallVec<[KeywordSymbol; 8]> = SmallVec::new();
     (1..subset_count)
         .map(|mask| {
-            let subset: Vec<&str> = members
-                .iter()
-                .enumerate()
-                .filter(|(bit, _)| mask & (1 << bit) != 0)
-                .map(|(_, op)| *op)
-                .collect();
-            KeywordSymbol::declared(&probe_key(&subset), labels)
-                .expect("a joined run of operator tokens is keyword-class")
+            subset.clear();
+            subset.extend(
+                members
+                    .iter()
+                    .enumerate()
+                    .filter(|(bit, _)| mask & (1 << bit) != 0)
+                    .map(|(_, op)| *op),
+            );
+            KeywordSymbol::declared_run(&subset, labels)
         })
         .collect()
 }

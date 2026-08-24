@@ -41,11 +41,11 @@ mod tests;
 
 pub mod test_support;
 
-/// Signature-element constructor for a keyword slot. The text rides as a borrow at whatever
-/// lifetime the caller has — a `&'static` literal for a builtin, an operator symbol at the defining
-/// scope's — since the mint door re-homes every signature name at the function's own region.
-pub(crate) fn kw(s: &str) -> SignatureElement<'_> {
-    SignatureElement::keyword(s)
+/// Signature-element constructor for a keyword slot. The spelling is normalized, classified and
+/// interned at this door, so the element is the token's symbol and that registration is what lets a
+/// diagnostic naming this shape's bucket resolve the keyword back out of a symbol-only key.
+pub(crate) fn kw(registries: &RunRegistries, s: &str) -> SignatureElement {
+    SignatureElement::keyword(s, &registries.labels)
 }
 
 /// Signature-element constructor for an argument slot. The name arrives as a [`StaticName`] the
@@ -54,11 +54,11 @@ pub(crate) fn kw(s: &str) -> SignatureElement<'_> {
 /// text back through the same interner. Slots are value-class by declaration —
 /// [`StaticName<ValueSymbol>`] is what the static carries — so the class is settled where the
 /// spelling is written rather than probed here.
-pub(crate) fn arg<'a>(
+pub(crate) fn arg(
     registries: &RunRegistries,
     name: &StaticName<ValueSymbol>,
     ktype: KType,
-) -> SignatureElement<'a> {
+) -> SignatureElement {
     SignatureElement::Argument(Argument {
         name: BinderSymbol::Value(registries.labels.record(name)),
         ktype,
@@ -67,10 +67,7 @@ pub(crate) fn arg<'a>(
 
 /// Assemble a [`SignatureDraft`] with `Resolved(return_type)`. Builtins needing
 /// `Deferred(...)` build the draft directly.
-pub(crate) fn sig<'a>(
-    return_type: KType,
-    elements: Vec<SignatureElement<'a>>,
-) -> SignatureDraft<'a> {
+pub(crate) fn sig<'a>(return_type: KType, elements: Vec<SignatureElement>) -> SignatureDraft<'a> {
     SignatureDraft {
         return_type: ReturnType::Resolved(return_type),
         elements,

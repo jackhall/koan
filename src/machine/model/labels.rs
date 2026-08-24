@@ -33,23 +33,8 @@ impl Symbol {
         Symbol::of_hash(blake3::hash(text.as_bytes()))
     }
 
-    /// The digest of `fragments` joined by single spaces, taken without materializing the join:
-    /// one hasher streams each fragment and the separator between them, so the bytes fed are
-    /// exactly the bytes [`of`](Self::of) sees over the joined string and the two agree bit for
-    /// bit. The joined form is what a caller renders; nothing here builds it.
-    pub fn of_parts(fragments: &[&str]) -> Symbol {
-        let mut hasher = blake3::Hasher::new();
-        for (index, fragment) in fragments.iter().enumerate() {
-            if index > 0 {
-                hasher.update(b" ");
-            }
-            hasher.update(fragment.as_bytes());
-        }
-        Symbol::of_hash(hasher.finalize())
-    }
-
-    /// The low 128 bits of a finished BLAKE3 hash — the single funnel both [`of`](Self::of) and
-    /// [`of_parts`](Self::of_parts) end in, and so the one site the mint tally counts.
+    /// The low 128 bits of a finished BLAKE3 hash — the single funnel [`of`](Self::of) and
+    /// [`KeywordSymbol::of_run`] end in, and so the one site the mint tally counts.
     fn of_hash(hash: blake3::Hash) -> Symbol {
         #[cfg(feature = "alloc-count")]
         MINTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -68,7 +53,7 @@ impl Symbol {
 #[cfg(feature = "alloc-count")]
 static MINTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// The process's symbol-mint total — every [`Symbol::of`] and [`Symbol::of_parts`] since startup.
+/// The process's symbol-mint total — every symbol minted since startup.
 #[cfg(feature = "alloc-count")]
 pub fn symbols_minted() -> u64 {
     MINTED.load(std::sync::atomic::Ordering::Relaxed)
@@ -278,8 +263,8 @@ classified_symbol!(
 classified_symbol!(
     /// A **keyword-class** token: fixed syntax, per
     /// [`is_keyword_token`](crate::machine::model::is_keyword_token) — `FN`, `+`, `<=`, and the
-    /// space-joined operator probe keys built out of them (`"+ *"`), which stay keyword-class
-    /// because they gain no lowercase letter. Nothing *binds* to one; the class exists because the
+    /// run digests built out of them by [`of_run`](KeywordSymbol::of_run), which stand for the
+    /// operator sets the chain lane probes by. Nothing *binds* to one; the class exists because the
     /// operator table and the dispatch lane key by fixed tokens.
     KeywordSymbol,
     crate::machine::model::is_keyword_token,
@@ -293,19 +278,62 @@ impl KeywordSymbol {
         KeywordSymbol::classify(text)
     }
 
-    /// The probe key `fragments` joined by single spaces stands for, minted without building the
-    /// join — how an operator chain reaches its group registration, whose powerset keys are minted
-    /// from the joined spelling (`crate::machine::core::bindings::ops::powerset_probes`).
+    /// The probe key a *run* of keyword symbols stands for: the members sorted by symbol bits and
+    /// deduped, their 16-byte little-endian digests streamed through one hasher. The fragments are
+    /// fixed-width, so no separator is needed to keep the feed unambiguous. An operator chain and
+    /// the group registration whose powerset keys it must hit
+    /// (`crate::machine::core::bindings::ops::powerset_probes`) both mint here, so a registered key
+    /// and a live probe agree by construction and no probe path touches text.
     ///
-    /// Every fragment must classify keyword-class on its own, and the joined run then does too: a
-    /// separator adds no lowercase letter, and a fragment carrying letters already clears the
-    /// two-uppercase bar for the whole.
-    pub fn of_parts(fragments: &[&str]) -> Option<Self> {
-        fragments
-            .iter()
-            .all(|fragment| crate::machine::model::is_keyword_token(fragment))
-            .then(|| KeywordSymbol(Symbol::of_parts(fragments)))
+    /// Keyword-class inputs witness the class of the product: a run of keyword-class tokens names
+    /// fixed syntax and binds to nothing, exactly what the class stands for.
+    pub fn of_run(members: &[KeywordSymbol]) -> Self {
+        let sorted = sorted_run(members);
+        let mut hasher = blake3::Hasher::new();
+        for member in &sorted {
+            hasher.update(&member.symbol().0.to_le_bytes());
+        }
+        KeywordSymbol(Symbol::of_hash(hasher.finalize()))
     }
+
+    /// [`of_run`](Self::of_run) plus a recorded rendering: the members' interned spellings joined
+    /// by single spaces in the same sorted, deduped order, recorded under the digest so a
+    /// diagnostic naming the probe key renders the run it stands for. Registration-time only — a
+    /// live probe mints through [`of_run`](Self::of_run) and renders nothing.
+    pub fn declared_run(members: &[KeywordSymbol], labels: &LabelInterner) -> Self {
+        let sorted = sorted_run(members);
+        let run = KeywordSymbol::of_run(&sorted);
+        let mut rendering = String::new();
+        for (index, member) in sorted.iter().enumerate() {
+            if index > 0 {
+                rendering.push(' ');
+            }
+            // Written straight into the one buffer — `display` borrows the recorded text rather
+            // than copying it out, so a run renders in a single allocation.
+            let _ = std::fmt::Write::write_fmt(
+                &mut rendering,
+                format_args!("{}", labels.display(member.symbol())),
+            );
+        }
+        labels.record_text(run.symbol(), &rendering);
+        run
+    }
+}
+
+/// A run of keyword symbols as the set it denotes: sorted by symbol bits and deduped, in a stack
+/// buffer.
+///
+/// Both feeds hand over distinct members, so the buffer is sized by an operator group's member
+/// count — and that count is bounded by the group's own powerset install, which writes `2^n`
+/// registry entries. A run that spills to the heap is one no declaration would write. The bound
+/// matters because the chain probe this feeds mints once per node at parse, where a per-node heap
+/// allocation would show up in the recorded baselines.
+fn sorted_run(members: &[KeywordSymbol]) -> smallvec::SmallVec<[KeywordSymbol; 8]> {
+    let mut sorted: smallvec::SmallVec<[KeywordSymbol; 8]> =
+        smallvec::SmallVec::from_slice(members);
+    sorted.sort_unstable();
+    sorted.dedup();
+    sorted
 }
 
 /// The **recovery door**: a table keyed by [`TypeSymbol`] admits a probe by bare symbol bits, and a

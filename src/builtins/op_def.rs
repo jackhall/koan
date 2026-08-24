@@ -38,8 +38,8 @@ use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::bindings::{WriteOp, powerset_probes};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::KType;
-use crate::machine::model::labels::TypeSymbol;
-use crate::machine::model::{ExpressionPart, KExpression, KeywordToken};
+use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol};
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KKind, SignatureDraft, SignatureElement};
 use crate::machine::model::{OperatorGroup, ReductionMode, binary_key, unary_key};
 use crate::machine::{
@@ -53,7 +53,6 @@ use crate::witnessed::Witnessed;
 use super::fn_def::return_type::{ReturnTypeState, classify_return_type, extract_type_slot_raw};
 use super::resolve_or_await::{expect_type_terminal, resolve_at_wake};
 use super::{arg, kw, sig};
-use crate::machine::model::LabelInterner;
 use crate::machine::model::RunRegistries;
 
 /// Slot labels for the type-resolution diagnostics.
@@ -90,13 +89,14 @@ crate::slots! { SLOTS { body, left, name, operand, operands, return_type, right,
 
 /// Body-side symbol read: a quoted slot's raw `KObject::KExpression` is the quote body. Shared with
 /// `GROUP`, whose pairwise `combiner` slot names an operator the same way (`super::group_def`).
-pub(super) fn symbol_from_slot<'a>(
-    args: BoundArgs<'a, '_>,
+pub(super) fn symbol_from_slot(
+    args: BoundArgs<'_, '_>,
     builtin: &str,
     slot: &StaticName<ValueSymbol>,
-) -> Result<&'a str, KError> {
+    labels: &LabelInterner,
+) -> Result<KeywordSymbol, KError> {
     let quoted = require_kexpression(args, builtin, slot)?;
-    symbol_from_quote_body(&quoted).map(|sym| sym.text())
+    symbol_from_quote_body(&quoted).map_err(|reason| reason.into_error(labels))
 }
 
 // ---------- type slots ----------
@@ -205,11 +205,22 @@ fn build<'a>(
     kind: OpKind,
     bound_name: Option<crate::machine::model::ValueSymbol>,
 ) -> Action<'a> {
-    let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", &SLOTS.symbol));
+    let sym = crate::try_action!(symbol_from_slot(
+        ctx.args,
+        "OP",
+        &SLOTS.symbol,
+        &ctx.registries.labels
+    ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "OP", &SLOTS.body));
     let has_result = ctx.args.held(&SLOTS.return_type).is_some();
     let group = ctx.scope.nearest_group_context();
-    crate::try_action!(check_group_context(kind, has_result, group, sym));
+    crate::try_action!(check_group_context(
+        kind,
+        has_result,
+        group,
+        sym,
+        &ctx.registries.labels
+    ));
 
     let operand_raw = crate::try_action!(extract_type_slot_raw(
         ctx.args,
@@ -311,8 +322,10 @@ fn check_group_context(
     kind: OpKind,
     has_result: bool,
     group: Option<&OperatorGroup<'_>>,
-    sym: &str,
+    symbol: KeywordSymbol,
+    labels: &LabelInterner,
 ) -> Result<(), KError> {
+    let sym = labels.display(symbol.symbol());
     if kind == OpKind::Unary && group.is_some() {
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "`UNARY OP #({sym})` cannot be declared inside a GROUP: a unary operator takes the \
@@ -335,7 +348,7 @@ fn check_group_context(
 /// Everything the finalize needs that does not come out of the dep results, captured whole into the
 /// dep-finish closure so the deferred and synchronous paths run the same code.
 struct OpPlan<'program: 'a, 'a> {
-    sym: &'a str,
+    sym: KeywordSymbol,
     kind: OpKind,
     body_expr: KExpression<'a>,
     /// Inside a `GROUP` body the group owns the registry entry for every member, so the declaration
@@ -381,7 +394,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
             OpKind::Binary => {
                 let elements = vec![
                     arg(registries, &SLOTS.left, operand),
-                    kw(sym),
+                    SignatureElement::Keyword(sym),
                     arg(registries, &SLOTS.right, operand),
                 ];
                 let result_type = result.unwrap_or(operand);
@@ -413,7 +426,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                 let list_signature = sig(
                     result_type,
                     vec![
-                        kw(sym),
+                        SignatureElement::Keyword(sym),
                         arg(registries, &SLOTS.operands, types.list(operand)),
                     ],
                 );
@@ -425,7 +438,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                     result_type,
                     vec![
                         arg(registries, &SLOTS.left, operand),
-                        kw(sym),
+                        SignatureElement::Keyword(sym),
                         arg(registries, &SLOTS.right, operand),
                     ],
                 );
@@ -489,7 +502,7 @@ pub(super) struct OperatorForm<'a> {
 /// write a size-1 `Unary` record under the very key its `GROUP` already claims.
 pub(super) fn register_unary_operator<'a>(
     scope: &'a Scope<'a>,
-    sym: &str,
+    sym: KeywordSymbol,
     list: OperatorForm<'a>,
     binary: OperatorForm<'a>,
     in_group: bool,
@@ -504,22 +517,23 @@ pub(super) fn register_unary_operator<'a>(
         signature: binary_signature,
         body: binary_body,
     } = binary;
+    let spelling = registries.labels.display(sym.symbol());
     assert_eq!(
         list_signature.untyped_key(),
         unary_key(sym),
-        "unary operator `{sym}`: the list-form signature must key the bucket a reduced run or a \
-         prefix use computes",
+        "unary operator `{spelling}`: the list-form signature must key the bucket a reduced run or \
+         a prefix use computes",
     );
     assert_eq!(
         binary_signature.untyped_key(),
         binary_key(sym),
-        "unary operator `{sym}`: the binary-form signature must key the bucket a two-operand use \
-         computes",
+        "unary operator `{spelling}`: the binary-form signature must key the bucket a two-operand \
+         use computes",
     );
     assert!(
         !in_group,
-        "unary operator `{sym}`: a unary operator chains with nothing, so it can only be its own \
-         single-member group",
+        "unary operator `{spelling}`: a unary operator chains with nothing, so it can only be its \
+         own single-member group",
     );
     // The list body first: its function is the operator's primary value, the one an `OP`
     // declaration evaluates to.
@@ -562,7 +576,7 @@ pub(super) fn register_unary_operator<'a>(
 /// style: the overload lands in `functions` only, never in `data`.
 fn register_body<'a>(
     scope: &'a Scope<'a>,
-    sym: &str,
+    sym: KeywordSymbol,
     signature: SignatureDraft<'a>,
     body: Body<'a>,
     bind_index: BindingIndex,
@@ -570,7 +584,12 @@ fn register_body<'a>(
 ) -> Result<(SealedValue<'a>, WriteOp<'a>), KError> {
     let cell = KFunction::alloc_captured(scope, signature, body, registries);
     let write = WriteOp::Overload {
-        name: sym.to_string(),
+        // The `functions` table keys an overload by the operator's spelling, so this is the one
+        // place the glyph is resolved back — the parse that classified it interned it.
+        name: registries
+            .labels
+            .resolve(sym.symbol())
+            .expect("a parsed operator glyph is interned where it was classified"),
         index: bind_index,
         seal: OverloadSeal::of_delivered(scope, &cell, registries),
         builtin_shadow_guard: false,
@@ -585,17 +604,15 @@ fn register_body<'a>(
 /// carries its named operands).
 ///
 /// The one runtime site that mints **value-channel** nodes: the operand wrappers are marked
-/// `Expression` arms, so the whole body — texts, operand nodes, and the node the parts reach —
-/// builds in program storage. The single `'a` is the brand's own lifetime, which is what the mint
-/// doors take; `sym` arrives as a plain `&str` and is re-allocated through `brand` to reach it.
+/// `Expression` arms, so the whole body — the operand nodes and the node the parts reach — builds
+/// in program storage. The single `'a` is the brand's own lifetime, which is what the mint doors
+/// take; `sym` is already the classified glyph, so the keyword part is a copy.
 fn bridge_body<'a>(
     program: ProgramBrand<'a>,
     labels: &LabelInterner,
-    sym: &str,
+    sym: KeywordSymbol,
 ) -> KExpression<'a> {
     let brand = program.region();
-    let sym = brand.allocator().text(sym);
-    let sym = KeywordToken::declared(sym, labels).expect("an operator glyph is keyword-class");
     let operand = |slot: &StaticName<ValueSymbol>| {
         ExpressionPart::expression(
             program,
@@ -658,7 +675,13 @@ fn body_unary_combined<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 /// nothing to default it to. This overload exists only to say so; without it the shape is a bare
 /// dispatch miss.
 fn body_unary_missing_result<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", &SLOTS.symbol));
+    let symbol = crate::try_action!(symbol_from_slot(
+        ctx.args,
+        "OP",
+        &SLOTS.symbol,
+        &ctx.registries.labels
+    ));
+    let sym = ctx.registries.labels.display(symbol.symbol());
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "`UNARY OP #({sym})` must declare its result type: \
          `UNARY OP #({sym}) OVER <Operand> -> <Result> = (…)`",
@@ -667,7 +690,13 @@ fn body_unary_missing_result<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 
 /// The combined twin of [`body_unary_missing_result`], naming the flat spelling in its suggestion.
 fn body_unary_missing_result_combined<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", &SLOTS.symbol));
+    let symbol = crate::try_action!(symbol_from_slot(
+        ctx.args,
+        "OP",
+        &SLOTS.symbol,
+        &ctx.registries.labels
+    ));
+    let sym = ctx.registries.labels.display(symbol.symbol());
     let name = match crate::builtins::fn_def::combined_bound_name(ctx.args) {
         Ok(name) => crate::machine::model::render_label(name.symbol(), ctx.registries),
         Err(_) => "op".to_string(),
@@ -693,12 +722,12 @@ fn type_carriers() -> [KType; 2] {
 /// and bare `OP`.
 fn combined<'a>(
     registries: &RunRegistries,
-    mut elements: Vec<SignatureElement<'a>>,
+    mut elements: Vec<SignatureElement>,
 ) -> SignatureDraft<'a> {
     let mut prefixed = vec![
-        kw("LET"),
+        kw(registries, "LET"),
         arg(registries, &SLOTS.name, KType::IDENTIFIER),
-        kw("="),
+        kw(registries, "="),
     ];
     prefixed.append(&mut elements);
     sig(KType::ANY, prefixed)
@@ -711,47 +740,47 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // synthesizes, whose structural type only exists once its signature is known.
     let binary = |operand: KType| {
         vec![
-            kw("OP"),
+            kw(registries, "OP"),
             arg(registries, &SLOTS.symbol, KType::KEXPRESSION),
-            kw("OVER"),
+            kw(registries, "OVER"),
             arg(registries, &SLOTS.operand, operand),
-            kw("="),
+            kw(registries, "="),
             arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ]
     };
     let binary_with_result = |operand: KType, result: KType| {
         vec![
-            kw("OP"),
+            kw(registries, "OP"),
             arg(registries, &SLOTS.symbol, KType::KEXPRESSION),
-            kw("OVER"),
+            kw(registries, "OVER"),
             arg(registries, &SLOTS.operand, operand),
-            kw("->"),
+            kw(registries, "->"),
             arg(registries, &SLOTS.return_type, result),
-            kw("="),
+            kw(registries, "="),
             arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ]
     };
     let unary = |operand: KType, result: KType| {
         vec![
-            kw("UNARY"),
-            kw("OP"),
+            kw(registries, "UNARY"),
+            kw(registries, "OP"),
             arg(registries, &SLOTS.symbol, KType::KEXPRESSION),
-            kw("OVER"),
+            kw(registries, "OVER"),
             arg(registries, &SLOTS.operand, operand),
-            kw("->"),
+            kw(registries, "->"),
             arg(registries, &SLOTS.return_type, result),
-            kw("="),
+            kw(registries, "="),
             arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ]
     };
     let unary_missing_result = |operand: KType| {
         vec![
-            kw("UNARY"),
-            kw("OP"),
+            kw(registries, "UNARY"),
+            kw(registries, "OP"),
             arg(registries, &SLOTS.symbol, KType::KEXPRESSION),
-            kw("OVER"),
+            kw(registries, "OVER"),
             arg(registries, &SLOTS.operand, operand),
-            kw("="),
+            kw(registries, "="),
             arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ]
     };

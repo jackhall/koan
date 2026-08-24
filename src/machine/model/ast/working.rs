@@ -65,7 +65,7 @@ pub enum WorkingPart<'a> {
 }
 
 impl<'a> Part<'a> for WorkingPart<'a> {
-    fn class(&self) -> PartClass<'a> {
+    fn class(&self) -> PartClass {
         match self {
             WorkingPart::Ast(part) => part.class(),
             WorkingPart::Expression(_) => PartClass::Expression,

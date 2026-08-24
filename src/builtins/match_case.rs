@@ -95,15 +95,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let signature = sig(
         KType::ANY,
         vec![
-            kw("MATCH"),
+            kw(registries, "MATCH"),
             arg(registries, &SLOTS.value, KType::ANY),
-            kw("->"),
+            kw(registries, "->"),
             arg(
                 registries,
                 &SLOTS.return_type,
                 KType::of_kind(KKind::ProperType),
             ),
-            kw("WITH"),
+            kw(registries, "WITH"),
             arg(registries, &SLOTS.branches, KType::KEXPRESSION),
         ],
     );

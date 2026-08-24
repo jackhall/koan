@@ -26,7 +26,6 @@ use crate::machine::core::bindings::{
 };
 use crate::machine::core::carrier_witness::{DeliveredFunction, GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind};
-#[cfg(test)]
 use crate::machine::model::KeywordSymbol;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{
@@ -332,8 +331,8 @@ impl<'a> Scope<'a> {
     /// the caller makes.
     pub(crate) fn alloc_group_child(
         outer: &'a Scope<'a>,
-        members: &[&str],
-        mode: ReductionMode<'_>,
+        members: &[KeywordSymbol],
+        mode: ReductionMode,
         announced: Option<crate::machine::model::AnnouncedData>,
         registries: &RunRegistries,
     ) -> Result<&'a Scope<'a>, KError> {
@@ -357,7 +356,7 @@ impl<'a> Scope<'a> {
     /// instead.
     pub(crate) fn register_group_under_all_subsets_direct(
         &self,
-        members: &[&str],
+        members: &[KeywordSymbol],
         seal: GroupSeal<'a>,
         index: BindingIndex,
         registries: &RunRegistries,

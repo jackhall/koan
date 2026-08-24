@@ -21,7 +21,7 @@ use crate::parse::quotes::mask_quotes;
 pub(super) fn describe(e: &KExpression<'_>, labels: &LabelInterner) -> String {
     fn describe_part(p: &ExpressionPart<'_>, labels: &LabelInterner) -> String {
         match p {
-            ExpressionPart::Keyword(s) => format!("t({})", s),
+            ExpressionPart::Keyword(s) => format!("t({})", labels.render(s.symbol())),
             ExpressionPart::Identifier(v) => format!("t({})", labels.render(v.symbol())),
             ExpressionPart::Type(t) => format!("T({})", labels.render(t.symbol())),
             ExpressionPart::Expression(e) => describe(e, labels),

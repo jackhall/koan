@@ -9,7 +9,7 @@
 //! pool.
 
 use crate::builtins::test_support::type_token;
-use crate::builtins::test_support::{TestRun, parse_one, type_name};
+use crate::builtins::test_support::{TestRun, operator_run, parse_one, probe_symbol, type_name};
 use crate::machine::ProducerId;
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::core::{program_storage, run_root_storage};
@@ -861,7 +861,9 @@ fn classifier_operator_chain_routes_to_operator_chain() {
     );
     assert_eq!(
         expr.operator_probe(),
-        Some(crate::builtins::test_support::probe_symbol("+"))
+        Some(crate::machine::model::KeywordSymbol::of_run(&[
+            probe_symbol("+")
+        ]))
     );
 }
 
@@ -937,10 +939,10 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     let types = test_run.registry_handle();
     let inner = scope.alloc_child_under();
 
-    let record = inner.birth_operator_group(&["-"], ReductionMode::FoldRight);
+    let record = inner.birth_operator_group(&[probe_symbol("-")], ReductionMode::FoldRight);
     inner
         .register_operator_group_direct(
-            crate::builtins::test_support::keyword_name("-", types.registries()),
+            operator_run(&["-"], types.registries()),
             GroupSeal::of_delivered(inner, &record),
             BindingIndex::value(0),
             types.registries(),
@@ -997,10 +999,10 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let types = test_run.registry_handle();
-    let record = scope.birth_operator_group(&["~"], ReductionMode::Unary);
+    let record = scope.birth_operator_group(&[probe_symbol("~")], ReductionMode::Unary);
     scope
         .register_operator_group_direct(
-            crate::builtins::test_support::keyword_name("~", types.registries()),
+            operator_run(&["~"], test_run.registries()),
             GroupSeal::of_delivered(scope, &record),
             BindingIndex::BUILTIN,
             types.registries(),

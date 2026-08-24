@@ -1,5 +1,6 @@
 use super::*;
 use crate::builtins::test_support::kw_part;
+use crate::builtins::test_support::probe_symbol;
 use crate::builtins::test_support::{type_name, type_token};
 use crate::machine::core::{RegionBrand, program_storage};
 use crate::machine::model::RunRegistries;
@@ -20,12 +21,22 @@ fn one_slot(brand: RegionBrand<'_>, kt: KType) -> ExpressionSignature<'_> {
                 ktype: kt,
             })],
         },
-        &crate::machine::model::LabelInterner::new(),
     )
 }
 
-fn expr_with_keyword<'a>(brand: RegionBrand<'a>, kw: &'a str) -> KExpression<'a> {
-    KExpression::new(brand, &[Spanned::bare(kw_part(kw))])
+fn expr_with_keyword<'a>(
+    brand: RegionBrand<'a>,
+    kw: &str,
+    registries: &RunRegistries,
+) -> KExpression<'a> {
+    let symbol = crate::machine::model::KeywordSymbol::declared(kw, &registries.labels)
+        .expect("a test fixture keyword is keyword-class");
+    KExpression::new(
+        brand,
+        &[Spanned::bare(
+            crate::machine::model::ExpressionPart::Keyword(symbol),
+        )],
+    )
 }
 
 #[test]
@@ -78,6 +89,7 @@ fn return_type_clone_round_trips_all_arms() {
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword(
         program.brand().region(),
         "FOO",
+        &registries,
     )));
     assert_eq!(e.name(&registries), e.clone().name(&registries));
 }
@@ -101,9 +113,8 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
         brand,
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::ANY),
-            elements: vec![SignatureElement::keyword("FOO")],
+            elements: vec![SignatureElement::Keyword(probe_symbol("FOO"))],
         },
-        &crate::machine::model::LabelInterner::new(),
     );
     let empty: KExpression<'_> = KExpression::new(brand, &[]);
     assert!(!sig.matches(&empty, types));
@@ -133,7 +144,12 @@ fn deferred_return_debug_renders_both_arms() {
     let t = DeferredReturn::Type(type_token("Er"));
     assert!(format!("{:?}", t).contains("Type"));
     let program = program_storage();
-    let e = DeferredReturn::Expression(expr_with_keyword(program.brand().region(), "FOO"));
+    let registries = RunRegistries::new();
+    let e = DeferredReturn::Expression(expr_with_keyword(
+        program.brand().region(),
+        "FOO",
+        &registries,
+    ));
     assert!(format!("{:?}", e).contains("Expression"));
 }
 
@@ -148,6 +164,7 @@ fn return_type_name_covers_all_arms() {
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword(
         program.brand().region(),
         "FOO",
+        &registries,
     )));
     assert_eq!(e.name(&registries), "FOO");
 }
@@ -166,7 +183,6 @@ fn sig_with<'a>(
                 ktype: slot,
             })],
         },
-        &crate::machine::model::LabelInterner::new(),
     )
 }
 
@@ -202,14 +218,14 @@ fn indistinguishable_splits_on_argument_type_and_keywords() {
     let text = sig_with(brand, ReturnType::Resolved(KType::ANY), KType::STR);
     assert!(!num.indistinguishable_from(&text));
 
+    let labels = crate::machine::model::LabelInterner::new();
     let kw = |token: &'static str| {
         ExpressionSignature::mint(
             brand,
             SignatureDraft {
                 return_type: ReturnType::Resolved(KType::ANY),
-                elements: vec![SignatureElement::keyword(token)],
+                elements: vec![SignatureElement::keyword(token, &labels)],
             },
-            &crate::machine::model::LabelInterner::new(),
         )
     };
     let empty = ExpressionSignature::mint(
@@ -218,7 +234,6 @@ fn indistinguishable_splits_on_argument_type_and_keywords() {
             return_type: ReturnType::Resolved(KType::ANY),
             elements: vec![],
         },
-        &crate::machine::model::LabelInterner::new(),
     );
     assert!(kw("FOO").indistinguishable_from(&kw("FOO")));
     assert!(!kw("FOO").indistinguishable_from(&kw("BAR")));
@@ -250,10 +265,10 @@ fn return_type_matches_value_deferred_always_true_resolved_delegates() {
 fn dispatch_token_equality_matches_indistinguishable_from() {
     fn keyworded<'a>(
         brand: RegionBrand<'a>,
-        keyword: &'a str,
+        keyword: &str,
         slots: &[KType],
     ) -> ExpressionSignature<'a> {
-        let mut elements = vec![SignatureElement::keyword(keyword)];
+        let mut elements = vec![SignatureElement::Keyword(probe_symbol(keyword))];
         elements.extend(slots.iter().map(|kt| {
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v").expect("value token"),
@@ -266,7 +281,6 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
                 return_type: ReturnType::Resolved(KType::ANY),
                 elements,
             },
-            &crate::machine::model::LabelInterner::new(),
         )
     }
 
@@ -287,7 +301,6 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
                     ktype: KType::NUMBER,
                 })],
             },
-            &crate::machine::model::LabelInterner::new(),
         ),
         keyworded(brand, "TAKE", &[KType::NUMBER]),
         keyworded(brand, "TAKE", &[KType::ANY]),
@@ -299,7 +312,6 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
                 return_type: ReturnType::Resolved(KType::ANY),
                 elements: vec![],
             },
-            &crate::machine::model::LabelInterner::new(),
         ),
     ];
     for (i, a) in signatures.iter().enumerate() {
@@ -350,10 +362,10 @@ fn a_bumped_dispatch_token_matches_what_its_owned_form_does() {
     let brand = program.brand().region();
     fn keyworded<'a>(
         brand: RegionBrand<'a>,
-        keyword: &'a str,
+        keyword: &str,
         slots: &[KType],
     ) -> ExpressionSignature<'a> {
-        let mut elements = vec![SignatureElement::keyword(keyword)];
+        let mut elements = vec![SignatureElement::Keyword(probe_symbol(keyword))];
         elements.extend(slots.iter().map(|kt| {
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v").expect("value token"),
@@ -366,7 +378,6 @@ fn a_bumped_dispatch_token_matches_what_its_owned_form_does() {
                 return_type: ReturnType::Resolved(KType::ANY),
                 elements,
             },
-            &crate::machine::model::LabelInterner::new(),
         )
     }
 

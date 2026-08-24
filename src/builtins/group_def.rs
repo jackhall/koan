@@ -42,6 +42,7 @@ use crate::machine::body_statement_refs;
 use crate::machine::model::KExpression;
 use crate::machine::model::KKind;
 use crate::machine::model::KType;
+use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
 use crate::machine::model::{FoldDirection, ReductionMode};
 use crate::machine::model::{OpArity, op_declaration_arity};
 use crate::machine::{Action, BodyCtx, require_identifier_name, require_kexpression};
@@ -82,7 +83,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
     // The scan's diagnostics quote the group by name, so the binder's spelling is read back once
     // here and the symbol itself carries on to the binding.
     let spelling = crate::machine::model::render_label(name.symbol(), ctx.registries);
-    let members = crate::try_action!(scan_members(&body_expr, &spelling));
+    let members = crate::try_action!(scan_members(&body_expr, &spelling, &ctx.registries.labels));
     // A group *is* a module, so its body announces its top-level type declarations the same way.
     let announced = crate::try_action!(super::module_def::announce_type_members(
         &body_expr,
@@ -90,12 +91,11 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
         ctx.registries
     ));
 
-    let member_refs: Vec<&str> = members.iter().map(|s| s.as_str()).collect();
     // The record, the child scope and its member powerset all land in one door, so the registry is
     // live before the scope is anything a node could reach.
     let child_scope = crate::try_action!(Scope::alloc_group_child(
         ctx.scope,
-        &member_refs,
+        &members,
         mode,
         announced,
         ctx.registries,
@@ -108,17 +108,16 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
 /// `combiner` slot as a **symbol** (the same extraction an `OP` declaration's `#(<sym>)` takes). The
 /// combiner is checked at neither declaration nor registration — it is a name the chain's use site
 /// resolves, so a missing, non-callable, or wrong-arity combiner is an ordinary error there. The
-/// symbol borrows the args here and is re-hosted into the group's own region by
-/// [`OperatorGroup::alloc`](crate::machine::model::OperatorGroup::alloc).
-fn reduction_mode<'a>(
-    ctx: &BodyCtx<'_, 'a, '_>,
+/// mode is fixed-width and lifetime-free, so it rides into the group's region unchanged.
+fn reduction_mode(
+    ctx: &BodyCtx<'_, '_, '_>,
     group_mode: GroupMode,
-) -> Result<ReductionMode<'a>, KError> {
+) -> Result<ReductionMode, KError> {
     Ok(match group_mode {
         GroupMode::Fold(FoldDirection::Left) => ReductionMode::FoldLeft,
         GroupMode::Fold(FoldDirection::Right) => ReductionMode::FoldRight,
         GroupMode::Pairwise(direction) => ReductionMode::Pairwise {
-            combiner: symbol_from_slot(ctx.args, "GROUP", &SLOTS.combiner)?,
+            combiner: symbol_from_slot(ctx.args, "GROUP", &SLOTS.combiner, &ctx.registries.labels)?,
             direction,
         },
     })
@@ -132,8 +131,12 @@ fn reduction_mode<'a>(
 ///
 /// A `UNARY OP` is refused here rather than at the member's own dispatch: a unary operator takes the
 /// whole run as one list, so it chains with nothing and can be no group's member.
-fn scan_members(body: &KExpression<'_>, name: &str) -> Result<Vec<String>, KError> {
-    let mut members: Vec<String> = Vec::new();
+fn scan_members(
+    body: &KExpression<'_>,
+    name: &str,
+    labels: &LabelInterner,
+) -> Result<Vec<KeywordSymbol>, KError> {
+    let mut members: Vec<KeywordSymbol> = Vec::new();
     for statement in body_statement_refs(body) {
         match op_declaration_arity(statement) {
             None => continue,
@@ -144,9 +147,10 @@ fn scan_members(body: &KExpression<'_>, name: &str) -> Result<Vec<String>, KErro
                 ))));
             }
             Some(OpArity::Binary) => {
-                let symbol = symbol_from_parts(statement)?.text();
-                if !members.iter().any(|m| m == symbol) {
-                    members.push(symbol.to_string());
+                let symbol =
+                    symbol_from_parts(statement).map_err(|reason| reason.into_error(labels))?;
+                if !members.contains(&symbol) {
+                    members.push(symbol);
                 }
             }
         }
@@ -186,11 +190,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::EMPTY_SIGNATURE,
             vec![
-                kw("GROUP"),
+                kw(registries, "GROUP"),
                 arg(registries, &SLOTS.name, name_kt),
-                kw("FOLD"),
-                kw(direction),
-                kw("="),
+                kw(registries, "FOLD"),
+                kw(registries, direction),
+                kw(registries, "="),
                 arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
@@ -199,13 +203,13 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::EMPTY_SIGNATURE,
             vec![
-                kw("GROUP"),
+                kw(registries, "GROUP"),
                 arg(registries, &SLOTS.name, name_kt),
-                kw("PAIRWISE"),
-                kw("FOLD"),
+                kw(registries, "PAIRWISE"),
+                kw(registries, "FOLD"),
                 arg(registries, &SLOTS.combiner, KType::KEXPRESSION),
-                kw(direction),
-                kw("="),
+                kw(registries, direction),
+                kw(registries, "="),
                 arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )

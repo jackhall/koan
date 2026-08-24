@@ -4,6 +4,7 @@
 //! each destination and releases when the envelope drops. The [`Weak`] census is the direct probe — a released
 //! frame's `FrameStorage` upgrades to `None` once the last strong holder drops.
 
+use crate::builtins::test_support::probe_symbol;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
@@ -198,7 +199,7 @@ fn probe_body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>, registries: &RunRegistries) {
     let signature = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
-        elements: vec![SignatureElement::keyword("PROBE")],
+        elements: vec![SignatureElement::Keyword(probe_symbol("PROBE"))],
     };
     crate::builtins::register_builtin(
         scope,

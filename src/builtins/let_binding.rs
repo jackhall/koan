@@ -257,9 +257,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("LET"),
+                kw(registries, "LET"),
                 arg(registries, &SLOTS.name, KType::IDENTIFIER),
-                kw("="),
+                kw(registries, "="),
                 arg(registries, &SLOTS.value, KType::ANY),
             ],
         )
@@ -268,9 +268,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::ANY,
             vec![
-                kw("LET"),
+                kw(registries, "LET"),
                 arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
-                kw("="),
+                kw(registries, "="),
                 arg(registries, &SLOTS.value, KType::ANY),
             ],
         )

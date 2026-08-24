@@ -15,7 +15,8 @@ structural `:` / `,` / `=` delimiters the parser consumes.
 - `ExpressionPart::Keyword`, `PartClass::Keyword` and `SignatureElement::Keyword` carry a
   `KeywordSymbol` and nothing else; `KeywordToken` does not exist. Every fixed-keyword comparison
   is a symbol compare against a static name; spec matching and operator-probe minting work over
-  symbols; `mint` interns the normalized spelling without re-homing text.
+  symbols; the draft door (`SignatureElement::keyword`) interns the normalized spelling, and
+  `mint` re-homes no text.
 - A keyword token inside a list, dict or record literal is a parse error; the `Keyword` arms of
   `ExpressionPart::resolve` / `resolve_region_pure` are gone.
 - Rendering a keyword (summaries, bucket-key diagnostics, signature text) resolves through the
@@ -27,10 +28,10 @@ structural `:` / `,` / `=` delimiters the parser consumes.
 
 - *Draft spelling — decided.* `KeywordToken::drafted` (draft text vs normalized symbol) collapses
   to the normalized symbol; a pre-mint draft renders its normalized spelling.
-- *Probe fragments — open.* `KeywordSymbol::of_parts` streams text fragments; with symbol-only
-  parts the chain either resolves fragment text through the interner to stream it, or the
-  group-registration side keys its powerset probes on a symbol-run digest. Recommended: the
-  symbol-run digest, so no probe path touches text.
+- *Probe fragments — decided.* The chain probe and the group-registration powerset both key on a
+  symbol-run digest: member symbols sorted by symbol bits, deduped, their digests hashed through
+  one shared constructor, so registration and probe agree by construction and no probe path
+  touches text. Registration records a rendered join under the digest for diagnostics.
 
 ## Dependencies
 

@@ -327,7 +327,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::EMPTY_SIGNATURE,
         vec![
             arg(registries, &SLOTS.m, KType::EMPTY_SIGNATURE),
-            kw(":|"),
+            kw(registries, ":|"),
             arg(registries, &SLOTS.s, KType::of_kind(KKind::Signature)),
         ],
     );
@@ -335,7 +335,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::EMPTY_SIGNATURE,
         vec![
             arg(registries, &SLOTS.m, KType::EMPTY_SIGNATURE),
-            kw(":!"),
+            kw(registries, ":!"),
             arg(registries, &SLOTS.s, KType::of_kind(KKind::Signature)),
         ],
     );

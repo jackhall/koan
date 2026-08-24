@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::test_support::{SharedBuf, TestRun, lookup_binding, lookup_type};
-use koan::machine::model::{KObject, SignatureElement, TypeNode};
+use koan::machine::model::{KObject, KeywordSymbol, SignatureElement, TypeNode};
 use koan::machine::{
     FrameStorage, KFunction, ProgramStorage, Scope, program_storage, run_root_storage,
 };
@@ -42,15 +42,16 @@ fn run<'a>(program: &'a ProgramStorage, region: &'a Rc<FrameStorage>, src: &str)
 /// (gated `#[cfg(test)]`), so we go through the public `Bindings::iter_functions`
 /// value-yielding iterator.
 fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
+    let wanted = KeywordSymbol::of(keyword).expect("a fixture keyword is keyword-class");
     for (_, bucket) in scope.bindings().iter_functions() {
         for sealed in bucket {
             let first_kw = scope.read_function(&sealed, |f| {
                 f.signature.elements().iter().find_map(|e| match e {
-                    SignatureElement::Keyword(s) => Some((*s).to_string()),
+                    SignatureElement::Keyword(s) => Some(*s),
                     _ => None,
                 })
             });
-            if first_kw.as_deref() == Some(keyword) {
+            if first_kw == Some(wanted) {
                 return scope.open_function(&sealed).value();
             }
         }

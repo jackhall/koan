@@ -312,9 +312,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::of_kind(KKind::AnyType),
             vec![
-                kw("NEWTYPE"),
+                kw(registries, "NEWTYPE"),
                 arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
-                kw("="),
+                kw(registries, "="),
                 arg(registries, &SLOTS.repr, KType::of_kind(KKind::ProperType)),
             ],
         )
@@ -323,9 +323,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::of_kind(KKind::AnyType),
             vec![
-                kw("NEWTYPE"),
+                kw(registries, "NEWTYPE"),
                 arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
-                kw("="),
+                kw(registries, "="),
                 arg(registries, &SLOTS.repr, KType::SIGILED_TYPE_EXPR),
             ],
         )
@@ -334,9 +334,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::of_kind(KKind::AnyType),
             vec![
-                kw("NEWTYPE"),
+                kw(registries, "NEWTYPE"),
                 arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
-                kw("="),
+                kw(registries, "="),
                 arg(registries, &SLOTS.repr, KType::RECORD_TYPE),
             ],
         )
@@ -361,7 +361,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     let constructor_family_sig = sig(
         KType::of_kind(KKind::AnyType),
         vec![
-            kw("NEWTYPE"),
+            kw(registries, "NEWTYPE"),
             arg(registries, &SLOTS.decl, KType::KEXPRESSION),
         ],
     );

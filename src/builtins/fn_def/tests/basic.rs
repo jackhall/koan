@@ -1,6 +1,6 @@
 //! Basic FN registration, dispatch, and parameter binding.
 
-use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn};
+use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn, probe_symbol};
 use crate::machine::model::{KObject, SignatureElement};
 use crate::machine::{program_storage, run_root_storage};
 
@@ -16,7 +16,7 @@ fn fn_registers_user_function_under_keyword_signature() {
 
     let f = lookup_fn(scope, "GREET");
     match f.signature.elements() {
-        [SignatureElement::Keyword(kw)] => assert_eq!(kw.text(), "GREET"),
+        [SignatureElement::Keyword(kw)] => assert_eq!(*kw, probe_symbol("GREET")),
         _ => panic!("expected single-Keyword signature [Keyword(\"GREET\")]"),
     }
 }

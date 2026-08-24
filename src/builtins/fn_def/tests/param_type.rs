@@ -1,6 +1,6 @@
 //! Typed parameters: dispatch routing on parameter types, overloads, shape errors.
 
-use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn};
+use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn, probe_symbol};
 use crate::machine::KErrorKind;
 use crate::machine::model::{Argument, KObject, KType, SignatureElement};
 use crate::machine::{program_storage, run_root_storage};
@@ -22,7 +22,7 @@ fn fn_typed_param_records_ktype_on_signature() {
             SignatureElement::Keyword(kw),
             SignatureElement::Argument(Argument { name, ktype }),
         ] => {
-            assert_eq!(kw.text(), "DOUBLE");
+            assert_eq!(*kw, probe_symbol("DOUBLE"));
             assert_eq!(name.symbol(), Symbol::of("x"));
             assert_eq!(*ktype, KType::NUMBER);
         }

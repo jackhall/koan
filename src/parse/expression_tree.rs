@@ -18,10 +18,8 @@ use std::rc::Rc;
 
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
-use crate::machine::model::ast::{
-    ExpressionPart, KExpression, KLiteral, KeywordToken, ProgramExpression,
-};
-use crate::machine::model::labels::LabelInterner;
+use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, ProgramExpression};
+use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
 use crate::parse::quotes::{JUMP_MARK, LEN_SEP, LITERAL_MARK, mask_quotes};
 use crate::parse::whitespace::collapse_whitespace;
 use crate::source::{self, CurrentFileGuard, FileId, SourceFile, Span, Spanned};
@@ -282,7 +280,7 @@ pub fn build_tree<'a>(
                     let (head, sigil_cursor) = match pending_sigil.take() {
                         Some(('$', sc)) => (
                             Some(
-                                KeywordToken::declared("EVAL", labels)
+                                KeywordSymbol::declared("EVAL", labels)
                                     .expect("`EVAL` is keyword-class"),
                             ),
                             Some(sc),
@@ -304,7 +302,7 @@ pub fn build_tree<'a>(
                 let frame = stack.pop_top().ok_or_else(|| {
                     KError::parse("closed paren without matching open paren", None)
                 })?;
-                stack.push_part(close_paren_to_part(program, frame, end, labels)?);
+                stack.push_part(close_paren_to_part(program, frame, end, labels)?)?;
             }
             '[' => {
                 let span_start = reader.cursor;
@@ -408,11 +406,11 @@ pub fn build_tree<'a>(
                             };
                             stack.push_part(Spanned::at(
                                 ExpressionPart::Keyword(
-                                    KeywordToken::declared(":|", labels)
+                                    KeywordSymbol::declared(":|", labels)
                                         .expect("`:|` is keyword-class"),
                                 ),
                                 span,
-                            ));
+                            ))?;
                             prev = Some('|');
                             continue;
                         }
@@ -424,11 +422,11 @@ pub fn build_tree<'a>(
                             };
                             stack.push_part(Spanned::at(
                                 ExpressionPart::Keyword(
-                                    KeywordToken::declared(":!", labels)
+                                    KeywordSymbol::declared(":!", labels)
                                         .expect("`:!` is keyword-class"),
                                 ),
                                 span,
-                            ));
+                            ))?;
                             prev = Some('!');
                             continue;
                         }
@@ -535,11 +533,11 @@ pub fn build_tree<'a>(
                 };
                 stack.push_part(Spanned::at(
                     ExpressionPart::Keyword(
-                        KeywordToken::declared(text, labels)
+                        KeywordSymbol::declared(text, labels)
                             .expect("comparison glyphs are keyword-class"),
                     ),
                     span,
-                ));
+                ))?;
             }
             // `mask_quotes` rewrote the body as either an empty pair or
             // `LITERAL_MARK <idx> LEN_SEP <len>` + closing quote + trailing JUMP.
@@ -562,7 +560,7 @@ pub fn build_tree<'a>(
                         stack.push_part(Spanned::at(
                             ExpressionPart::Literal(KLiteral::String("")),
                             span,
-                        ));
+                        ))?;
                     }
                     Some(LITERAL_MARK) => {
                         let (idx, _orig_byte_len) = reader.read_literal_marker()?;
@@ -590,7 +588,7 @@ pub fn build_tree<'a>(
                                 program.region().allocator().text(literal),
                             )),
                             span,
-                        ));
+                        ))?;
                     }
                     _ => {
                         return Err(KError::parse(
@@ -630,8 +628,11 @@ pub fn build_tree<'a>(
 /// wrapper.
 ///
 /// The survivor is a fresh node: its parts are rewritten slot by slot straight into program
-/// storage, through [`ProgramBrand::build_expression_from_iter`], so the structural cache is filled
-/// from the shape the parse exit actually hands on.
+/// storage. The rewrite only reaches *inside* nested parts, so the survivor keeps its part-kind
+/// sequence and every keyword symbol of its run — which is the whole of what the structural cache
+/// reads. It therefore goes through [`ProgramBrand::rebuild_expression_from_iter`], carrying the
+/// survivor's own cache rather than re-bumping a bucket key and re-minting an operator probe per
+/// node.
 fn peel_redundant<'a>(
     brand: ProgramBrand<'a>,
     expression: KExpression<'a>,
@@ -648,10 +649,11 @@ fn peel_redundant<'a>(
     {
         survivor = **inner;
     }
-    brand.build_expression_from_iter(
+    brand.rebuild_expression_from_iter(
         survivor.parts.iter().map(|part| peel_spanned(brand, *part)),
         outer_span.or(survivor.span),
         outer_file.or(survivor.file),
+        &survivor,
     )
 }
 

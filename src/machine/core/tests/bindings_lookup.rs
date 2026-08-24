@@ -3,6 +3,7 @@
 //! [`crate::machine::core::Bindings::lookup_function`] — the visibility-aware
 //! lookups the index-gated resolver walks.
 
+use crate::builtins::test_support::probe_symbol;
 use crate::builtins::test_support::{
     binder_name, mock_declaration_site, run_root_bare, type_name, value_name,
 };
@@ -195,7 +196,7 @@ fn lookup_function_filters_per_overload_visibility() {
     let sig_num = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("BAR"),
+            SignatureElement::Keyword(probe_symbol("BAR")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
@@ -206,7 +207,7 @@ fn lookup_function_filters_per_overload_visibility() {
     let sig_str = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("BAR"),
+            SignatureElement::Keyword(probe_symbol("BAR")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
@@ -366,7 +367,7 @@ fn retirement_drops_every_bucket_the_statement_claimed() {
     let sealed_key = f.open(|f| f.signature.untyped_key());
     let other_key = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::keyword("BAR")],
+        elements: vec![SignatureElement::Keyword(probe_symbol("BAR"))],
     }
     .untyped_key();
 

@@ -11,8 +11,8 @@ use smallvec::SmallVec;
 
 use crate::machine::core::{KError, KErrorKind, RegionBrand};
 use crate::machine::model::ast::{Part, PartClass};
-use crate::machine::model::labels::{BinderSymbol, KeywordSymbol};
-use crate::machine::model::{ExpressionPart, KExpression, KeywordToken};
+use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner, StaticName};
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::source::Spanned;
 
@@ -190,8 +190,8 @@ pub(crate) fn fn_def_binder_bucket<'a>(
     let mut i = 0;
     while i < parts.len() {
         match parts[i].value {
-            ExpressionPart::Keyword(kw) => {
-                key.push(KeyElement::Keyword(kw.symbol()));
+            ExpressionPart::Keyword(symbol) => {
+                key.push(KeyElement::Keyword(symbol));
                 i += 1;
             }
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
@@ -222,6 +222,58 @@ fn next_is_type_slot(parts: &[Spanned<ExpressionPart<'_>>], index: usize) -> boo
     })
 }
 
+/// The fixed tokens the binder-introducing forms are spelled with, each declared once and minted
+/// once. Every spec-table entry names its keywords out of this group, and the reserved-symbol list
+/// and the `FN` / `UNARY` position reads compare against the same memoized symbols, so the spelling
+/// of a surface token is written in exactly one place.
+struct SurfaceKeywords {
+    let_: StaticName<KeywordSymbol>,
+    type_: StaticName<KeywordSymbol>,
+    module: StaticName<KeywordSymbol>,
+    group: StaticName<KeywordSymbol>,
+    fold: StaticName<KeywordSymbol>,
+    left: StaticName<KeywordSymbol>,
+    right: StaticName<KeywordSymbol>,
+    pairwise: StaticName<KeywordSymbol>,
+    equals: StaticName<KeywordSymbol>,
+    sig: StaticName<KeywordSymbol>,
+    union: StaticName<KeywordSymbol>,
+    newtype: StaticName<KeywordSymbol>,
+    fn_: StaticName<KeywordSymbol>,
+    arrow: StaticName<KeywordSymbol>,
+    op: StaticName<KeywordSymbol>,
+    over: StaticName<KeywordSymbol>,
+    unary: StaticName<KeywordSymbol>,
+    val: StaticName<KeywordSymbol>,
+    /// The pattern-guard sigil `:|`.
+    guard: StaticName<KeywordSymbol>,
+    /// The otherwise-guard sigil `:!`.
+    otherwise: StaticName<KeywordSymbol>,
+}
+
+static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
+    let_: crate::static_name!(KeywordSymbol, "LET"),
+    type_: crate::static_name!(KeywordSymbol, "TYPE"),
+    module: crate::static_name!(KeywordSymbol, "MODULE"),
+    group: crate::static_name!(KeywordSymbol, "GROUP"),
+    fold: crate::static_name!(KeywordSymbol, "FOLD"),
+    left: crate::static_name!(KeywordSymbol, "LEFT"),
+    right: crate::static_name!(KeywordSymbol, "RIGHT"),
+    pairwise: crate::static_name!(KeywordSymbol, "PAIRWISE"),
+    equals: crate::static_name!(KeywordSymbol, "="),
+    sig: crate::static_name!(KeywordSymbol, "SIG"),
+    union: crate::static_name!(KeywordSymbol, "UNION"),
+    newtype: crate::static_name!(KeywordSymbol, "NEWTYPE"),
+    fn_: crate::static_name!(KeywordSymbol, "FN"),
+    arrow: crate::static_name!(KeywordSymbol, "->"),
+    op: crate::static_name!(KeywordSymbol, "OP"),
+    over: crate::static_name!(KeywordSymbol, "OVER"),
+    unary: crate::static_name!(KeywordSymbol, "UNARY"),
+    val: crate::static_name!(KeywordSymbol, "VAL"),
+    guard: crate::static_name!(KeywordSymbol, ":|"),
+    otherwise: crate::static_name!(KeywordSymbol, ":!"),
+};
+
 /// The signature slot of an `FN` declaration: the part right after the `FN` keyword. Read by
 /// position relative to that keyword rather than at a fixed index, so the bare form and the
 /// combined `LET <name> = FN …` statement share one extractor. A `RecordType` there is the
@@ -231,7 +283,9 @@ fn signature_expr_part<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>
     let fn_index = expr
         .parts
         .iter()
-        .position(|part| matches!(part.value, ExpressionPart::Keyword(kw) if kw.text() == "FN"))?;
+        .position(|part| {
+            matches!(part.value, ExpressionPart::Keyword(symbol) if symbol == KEYWORDS.fn_.symbol())
+        })?;
     match expr.parts.get(fn_index + 1)?.value {
         ExpressionPart::Expression(inner) => Some(inner.reference()),
         _ => None,
@@ -242,42 +296,74 @@ fn signature_expr_part<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>
 /// operator under one of these would make its own declaration form unreadable. Every other
 /// keyword-classified token is a legal operator symbol, including an all-caps alphabetic name
 /// (`OP #(MAX) OVER Number` is fine).
-const RESERVED_SYMBOLS: [&str; 12] = [
-    "OP", "UNARY", "OVER", "GROUP", "FOLD", "PAIRWISE", "LEFT", "RIGHT", "=", "->", ":|", ":!",
+static RESERVED_SYMBOLS: [&StaticName<KeywordSymbol>; 12] = [
+    &KEYWORDS.op,
+    &KEYWORDS.unary,
+    &KEYWORDS.over,
+    &KEYWORDS.group,
+    &KEYWORDS.fold,
+    &KEYWORDS.pairwise,
+    &KEYWORDS.left,
+    &KEYWORDS.right,
+    &KEYWORDS.equals,
+    &KEYWORDS.arrow,
+    &KEYWORDS.guard,
+    &KEYWORDS.otherwise,
 ];
+
+/// Why a quoted operator symbol will not do. The reason travels as data rather than as a rendered
+/// message because the binder hook that reads a symbol runs inside node construction, where the
+/// run's [`LabelInterner`] is out of reach; each surface that *reports* the refusal renders the
+/// glyph itself ([`Self::into_error`]).
+pub(crate) enum SymbolError {
+    /// The quote body is not exactly one keyword token.
+    Shape,
+    /// A token the `OP` / `GROUP` surface spells with.
+    Reserved(KeywordSymbol),
+}
+
+impl SymbolError {
+    /// The diagnostic, rendered against the run that interned the glyph.
+    pub(crate) fn into_error(self, labels: &LabelInterner) -> KError {
+        KError::new(KErrorKind::ShapeError(match self {
+            SymbolError::Shape => {
+                "operator symbol must be one quoted token: `OP #(+) OVER Number = (…)`".to_string()
+            }
+            SymbolError::Reserved(symbol) => format!(
+                "`{}` is reserved by the operator-declaration surface and cannot name an operator",
+                labels.display(symbol.symbol()),
+            ),
+        }))
+    }
+}
 
 /// The operator symbol a quote body carries: exactly one `Keyword` part. The `symbol` slot is
 /// typed `:KExpression`, so a `QuotedExpression` part arrives raw and un-dispatched (it makes the
 /// declaration a lazy candidate) and its body is read here as data. A multi-part body, a
 /// non-keyword token, or a reserved symbol is a shape error.
-pub(crate) fn symbol_from_quote_body<'a>(
-    inner: &KExpression<'a>,
-) -> Result<KeywordToken<'a>, KError> {
+pub(crate) fn symbol_from_quote_body(
+    inner: &KExpression<'_>,
+) -> Result<KeywordSymbol, SymbolError> {
     let [part] = inner.parts else {
-        return Err(symbol_shape_error());
+        return Err(SymbolError::Shape);
     };
-    let ExpressionPart::Keyword(sym) = part.value else {
-        return Err(symbol_shape_error());
+    let ExpressionPart::Keyword(symbol) = part.value else {
+        return Err(SymbolError::Shape);
     };
-    if RESERVED_SYMBOLS.contains(&sym.text()) {
-        return Err(KError::new(KErrorKind::ShapeError(format!(
-            "`{sym}` is reserved by the operator-declaration surface and cannot name an operator",
-        ))));
+    if RESERVED_SYMBOLS
+        .iter()
+        .any(|reserved| reserved.symbol() == symbol)
+    {
+        return Err(SymbolError::Reserved(symbol));
     }
-    Ok(sym)
-}
-
-fn symbol_shape_error() -> KError {
-    KError::new(KErrorKind::ShapeError(
-        "operator symbol must be one quoted token: `OP #(+) OVER Number = (…)`".to_string(),
-    ))
+    Ok(symbol)
 }
 
 /// Statement-side symbol read: the declaration's first `QuotedExpression` part. `GROUP` scans its
 /// unevaluated body block with this to collect its members; the binder hook uses it to decide
 /// whether to install park edges (discarding the diagnostic — the body's own extraction surfaces
 /// it).
-pub(crate) fn symbol_from_parts<'a>(expr: &KExpression<'a>) -> Result<KeywordToken<'a>, KError> {
+pub(crate) fn symbol_from_parts(expr: &KExpression<'_>) -> Result<KeywordSymbol, SymbolError> {
     let quoted = expr
         .parts
         .iter()
@@ -285,7 +371,7 @@ pub(crate) fn symbol_from_parts<'a>(expr: &KExpression<'a>) -> Result<KeywordTok
             ExpressionPart::QuotedExpression(inner) => Some(inner.reference()),
             _ => None,
         })
-        .ok_or_else(symbol_shape_error)?;
+        .ok_or(SymbolError::Shape)?;
     symbol_from_quote_body(quoted)
 }
 
@@ -293,9 +379,9 @@ pub(crate) fn symbol_from_parts<'a>(expr: &KExpression<'a>) -> Result<KeywordTok
 /// prefix of the combined one. `UNARY` is a reserved symbol ([`RESERVED_SYMBOLS`]), so no operator
 /// name can put the token anywhere else in the run.
 fn is_unary_form(expr: &KExpression<'_>) -> bool {
-    expr.parts
-        .iter()
-        .any(|part| matches!(part.value, ExpressionPart::Keyword(kw) if kw.text() == "UNARY"))
+    expr.parts.iter().any(|part| {
+        matches!(part.value, ExpressionPart::Keyword(symbol) if symbol == KEYWORDS.unary.symbol())
+    })
 }
 
 /// Park keys: every bucket this declaration's body registers an overload under, so a later sibling
@@ -306,7 +392,7 @@ pub(crate) fn op_def_binder_bucket<'a>(
     expr: &KExpression<'a>,
 ) -> Option<BucketKeys<'a>> {
     // The glyph's symbol is already minted on the quoted part, so the park keys are read off it.
-    let sym = symbol_from_parts(expr).ok()?.symbol();
+    let sym = symbol_from_parts(expr).ok()?;
     if is_unary_form(expr) {
         Some(BucketKeys {
             first: stored_unary_key(brand, sym),
@@ -339,20 +425,21 @@ fn stored_unary_key<'a>(brand: RegionBrand<'a>, symbol: KeywordSymbol) -> &'a [K
 // ---------- the spec table ----------
 
 /// One element of a [`BinderSpec`] bucket key: a fixed keyword token or a slot. The spec table is
-/// `static`, so a keyword rests as its spelling and matching compares against the spelling a part
-/// carries — a spec probe is a table walk over short runs, not a place to mint symbols.
+/// `static`, so a keyword rests as one of the [`KEYWORDS`] names and matching compares its memoized
+/// symbol against the symbol a part carries — a spec probe is a table walk over short runs that
+/// hashes nothing past each name's first touch.
 pub enum KeyElementSpec {
-    Keyword(&'static str),
+    Keyword(&'static StaticName<KeywordSymbol>),
     Slot,
 }
 
 impl KeyElementSpec {
-    /// True iff `part` fills this position: a spec keyword against the part's own token text, a
+    /// True iff `part` fills this position: a spec keyword against the part's own symbol, a
     /// spec slot against any non-keyword part — the same classification
     /// [`stored_untyped_key`](crate::machine::model::ast::stored_untyped_key) reads.
     fn matches_part<'a, P: Part<'a>>(&self, part: &P) -> bool {
         match (self, part.class()) {
-            (KeyElementSpec::Keyword(spelling), PartClass::Keyword(kw)) => *spelling == kw.text(),
+            (KeyElementSpec::Keyword(name), PartClass::Keyword(symbol)) => name.symbol() == symbol,
             (KeyElementSpec::Keyword(_), _) | (_, PartClass::Keyword(_)) => false,
             (KeyElementSpec::Slot, _) => true,
         }
@@ -363,8 +450,8 @@ impl KeyElementSpec {
     #[cfg(test)]
     fn matches(&self, element: &KeyElement) -> bool {
         match (self, element) {
-            (KeyElementSpec::Keyword(spelling), KeyElement::Keyword(symbol)) => {
-                crate::machine::model::labels::KeywordSymbol::of(spelling) == Some(*symbol)
+            (KeyElementSpec::Keyword(name), KeyElement::Keyword(symbol)) => {
+                name.symbol() == *symbol
             }
             (KeyElementSpec::Slot, KeyElement::Slot) => true,
             _ => false,
@@ -375,11 +462,16 @@ impl KeyElementSpec {
 /// Which declaration surface a spec entry belongs to. Binder discovery itself never branches on
 /// this; it exists so a consumer outside binder discovery can recognize a surface by *full bucket
 /// key*, a structural read that a statement merely spelling one of the surface's keywords cannot
-/// fool.
+/// fool. An entry names its surface here rather than a reader re-matching the key run, because the
+/// entry is already the answer to "which full key is this".
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BinderSurface {
     /// `OP #(…) OVER …` / `UNARY OP #(…) OVER …`, bare or in its combined `LET <name> =` spelling.
     OperatorDef,
+    /// `NEWTYPE <name> = <representation>` — the declaration form, not the constructor family.
+    NewTypeDef,
+    /// `UNION <name> = <variants>`.
+    UnionDef,
     /// Every other binder-introducing form.
     Other,
 }
@@ -451,7 +543,7 @@ use KeyElementSpec::{Keyword as Kw, Slot};
 pub static BINDER_SPECS: &[BinderSpec] = &[
     // LET <name> = <value>: value-name overload then type-alias overload.
     BinderSpec {
-        key: &[Kw("LET"), Slot, Kw("="), Slot],
+        key: &[Kw(&KEYWORDS.let_), Slot, Kw(&KEYWORDS.equals), Slot],
         names: &[identifier_part_binder_name, type_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
@@ -459,7 +551,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     },
     // TYPE <name> — SIG-body-only abstract-type declarator (bare and higher-kinded share the key).
     BinderSpec {
-        key: &[Kw("TYPE"), Slot],
+        key: &[Kw(&KEYWORDS.type_), Slot],
         names: &[type_decl_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
@@ -467,7 +559,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     },
     // MODULE <name> = <body> (identifier overload; the type-named overload has no hooks).
     BinderSpec {
-        key: &[Kw("MODULE"), Slot, Kw("="), Slot],
+        key: &[Kw(&KEYWORDS.module), Slot, Kw(&KEYWORDS.equals), Slot],
         names: &[identifier_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
@@ -475,7 +567,14 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     },
     // GROUP <name> FOLD LEFT = <body>.
     BinderSpec {
-        key: &[Kw("GROUP"), Slot, Kw("FOLD"), Kw("LEFT"), Kw("="), Slot],
+        key: &[
+            Kw(&KEYWORDS.group),
+            Slot,
+            Kw(&KEYWORDS.fold),
+            Kw(&KEYWORDS.left),
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
         names: &[identifier_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
@@ -483,7 +582,14 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     },
     // GROUP <name> FOLD RIGHT = <body>.
     BinderSpec {
-        key: &[Kw("GROUP"), Slot, Kw("FOLD"), Kw("RIGHT"), Kw("="), Slot],
+        key: &[
+            Kw(&KEYWORDS.group),
+            Slot,
+            Kw(&KEYWORDS.fold),
+            Kw(&KEYWORDS.right),
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
         names: &[identifier_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
@@ -492,13 +598,13 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // GROUP <name> PAIRWISE FOLD <combiner> LEFT = <body>.
     BinderSpec {
         key: &[
-            Kw("GROUP"),
+            Kw(&KEYWORDS.group),
             Slot,
-            Kw("PAIRWISE"),
-            Kw("FOLD"),
+            Kw(&KEYWORDS.pairwise),
+            Kw(&KEYWORDS.fold),
             Slot,
-            Kw("LEFT"),
-            Kw("="),
+            Kw(&KEYWORDS.left),
+            Kw(&KEYWORDS.equals),
             Slot,
         ],
         names: &[identifier_part_binder_name],
@@ -509,13 +615,13 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // GROUP <name> PAIRWISE FOLD <combiner> RIGHT = <body>.
     BinderSpec {
         key: &[
-            Kw("GROUP"),
+            Kw(&KEYWORDS.group),
             Slot,
-            Kw("PAIRWISE"),
-            Kw("FOLD"),
+            Kw(&KEYWORDS.pairwise),
+            Kw(&KEYWORDS.fold),
             Slot,
-            Kw("RIGHT"),
-            Kw("="),
+            Kw(&KEYWORDS.right),
+            Kw(&KEYWORDS.equals),
             Slot,
         ],
         names: &[identifier_part_binder_name],
@@ -525,7 +631,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     },
     // SIG <name> = <body>.
     BinderSpec {
-        key: &[Kw("SIG"), Slot, Kw("="), Slot],
+        key: &[Kw(&KEYWORDS.sig), Slot, Kw(&KEYWORDS.equals), Slot],
         names: &[type_part_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
@@ -533,23 +639,23 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     },
     // UNION <name> = <schema>.
     BinderSpec {
-        key: &[Kw("UNION"), Slot, Kw("="), Slot],
+        key: &[Kw(&KEYWORDS.union), Slot, Kw(&KEYWORDS.equals), Slot],
         names: &[type_part_binder_name],
         bucket: None,
-        surface: BinderSurface::Other,
+        surface: BinderSurface::UnionDef,
         name_slot: Some(1),
     },
     // NEWTYPE <name> = <repr> (scalar / sigil / record reprs share the key).
     BinderSpec {
-        key: &[Kw("NEWTYPE"), Slot, Kw("="), Slot],
+        key: &[Kw(&KEYWORDS.newtype), Slot, Kw(&KEYWORDS.equals), Slot],
         names: &[type_part_binder_name],
         bucket: None,
-        surface: BinderSurface::Other,
+        surface: BinderSurface::NewTypeDef,
         name_slot: Some(1),
     },
     // NEWTYPE <decl> — constructor family (keyword set {NEWTYPE}, disjoint from the `= _` forms).
     BinderSpec {
-        key: &[Kw("NEWTYPE"), Slot],
+        key: &[Kw(&KEYWORDS.newtype), Slot],
         names: &[type_decl_binder_name],
         bucket: None,
         surface: BinderSurface::Other,
@@ -558,7 +664,14 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // FN <signature> -> <return_type> = <body> (every FN overload shares this key; the anonymous
     // record-schema form claims no bucket because the extractor rejects its signature operand).
     BinderSpec {
-        key: &[Kw("FN"), Slot, Kw("->"), Slot, Kw("="), Slot],
+        key: &[
+            Kw(&KEYWORDS.fn_),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
         names: &[],
         bucket: Some(fn_def_binder_bucket),
         surface: BinderSurface::Other,
@@ -566,7 +679,14 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     },
     // OP <symbol> OVER <operand> = <body>.
     BinderSpec {
-        key: &[Kw("OP"), Slot, Kw("OVER"), Slot, Kw("="), Slot],
+        key: &[
+            Kw(&KEYWORDS.op),
+            Slot,
+            Kw(&KEYWORDS.over),
+            Slot,
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
         names: &[],
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
@@ -575,13 +695,13 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
         key: &[
-            Kw("OP"),
+            Kw(&KEYWORDS.op),
             Slot,
-            Kw("OVER"),
+            Kw(&KEYWORDS.over),
             Slot,
-            Kw("->"),
+            Kw(&KEYWORDS.arrow),
             Slot,
-            Kw("="),
+            Kw(&KEYWORDS.equals),
             Slot,
         ],
         names: &[],
@@ -592,14 +712,14 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
         key: &[
-            Kw("UNARY"),
-            Kw("OP"),
+            Kw(&KEYWORDS.unary),
+            Kw(&KEYWORDS.op),
             Slot,
-            Kw("OVER"),
+            Kw(&KEYWORDS.over),
             Slot,
-            Kw("->"),
+            Kw(&KEYWORDS.arrow),
             Slot,
-            Kw("="),
+            Kw(&KEYWORDS.equals),
             Slot,
         ],
         names: &[],
@@ -614,14 +734,14 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // LET <name> = FN <signature> -> <return_type> = <body>.
     BinderSpec {
         key: &[
-            Kw("LET"),
+            Kw(&KEYWORDS.let_),
             Slot,
-            Kw("="),
-            Kw("FN"),
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.fn_),
             Slot,
-            Kw("->"),
+            Kw(&KEYWORDS.arrow),
             Slot,
-            Kw("="),
+            Kw(&KEYWORDS.equals),
             Slot,
         ],
         names: &[identifier_part_binder_name],
@@ -632,14 +752,14 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // LET <name> = OP <symbol> OVER <operand> = <body>.
     BinderSpec {
         key: &[
-            Kw("LET"),
+            Kw(&KEYWORDS.let_),
             Slot,
-            Kw("="),
-            Kw("OP"),
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.op),
             Slot,
-            Kw("OVER"),
+            Kw(&KEYWORDS.over),
             Slot,
-            Kw("="),
+            Kw(&KEYWORDS.equals),
             Slot,
         ],
         names: &[identifier_part_binder_name],
@@ -650,16 +770,16 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // LET <name> = OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
         key: &[
-            Kw("LET"),
+            Kw(&KEYWORDS.let_),
             Slot,
-            Kw("="),
-            Kw("OP"),
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.op),
             Slot,
-            Kw("OVER"),
+            Kw(&KEYWORDS.over),
             Slot,
-            Kw("->"),
+            Kw(&KEYWORDS.arrow),
             Slot,
-            Kw("="),
+            Kw(&KEYWORDS.equals),
             Slot,
         ],
         names: &[identifier_part_binder_name],
@@ -670,17 +790,17 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // LET <name> = UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
         key: &[
-            Kw("LET"),
+            Kw(&KEYWORDS.let_),
             Slot,
-            Kw("="),
-            Kw("UNARY"),
-            Kw("OP"),
+            Kw(&KEYWORDS.equals),
+            Kw(&KEYWORDS.unary),
+            Kw(&KEYWORDS.op),
             Slot,
-            Kw("OVER"),
+            Kw(&KEYWORDS.over),
             Slot,
-            Kw("->"),
+            Kw(&KEYWORDS.arrow),
             Slot,
-            Kw("="),
+            Kw(&KEYWORDS.equals),
             Slot,
         ],
         names: &[identifier_part_binder_name],
@@ -693,7 +813,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
     // installs nothing; it appears here so the one-place specification of the declaration forms is
     // complete.
     BinderSpec {
-        key: &[Kw("VAL"), Slot, Slot],
+        key: &[Kw(&KEYWORDS.val), Slot, Slot],
         names: &[],
         bucket: None,
         surface: BinderSurface::Other,
@@ -720,11 +840,10 @@ pub(crate) enum TypeDeclarationSurface {
 pub(crate) fn announced_type_declaration(
     expression: &KExpression<'_>,
 ) -> Option<TypeDeclarationSurface> {
-    let spec = binder_spec_for(expression)?;
-    match spec.key {
-        [Kw("NEWTYPE"), Slot, Kw("="), Slot] => Some(TypeDeclarationSurface::NewType),
-        [Kw("UNION"), Slot, Kw("="), Slot] => Some(TypeDeclarationSurface::Union),
-        _ => None,
+    match binder_spec_for(expression)?.surface {
+        BinderSurface::NewTypeDef => Some(TypeDeclarationSurface::NewType),
+        BinderSurface::UnionDef => Some(TypeDeclarationSurface::Union),
+        BinderSurface::OperatorDef | BinderSurface::Other => None,
     }
 }
 

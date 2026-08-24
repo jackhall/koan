@@ -2,7 +2,7 @@
 
 use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::type_token;
-use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn};
+use crate::builtins::test_support::{TestRun, fn_is_registered, lookup_fn, probe_symbol};
 use crate::machine::{program_storage, run_root_storage};
 
 /// `LET MyList = :(LIST OF Number)` writes the elaborated `KType::list(Number)`
@@ -66,7 +66,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
             SignatureElement::Keyword(kw),
             SignatureElement::Argument(Argument { name, ktype }),
         ] => {
-            assert_eq!(kw.text(), "USE_ORD");
+            assert_eq!(*kw, probe_symbol("USE_ORD"));
             assert_eq!(name.symbol(), crate::machine::model::Symbol::of("er"));
             match test_run.types().node(*ktype) {
                 TypeNode::Signature { schema, .. } => {

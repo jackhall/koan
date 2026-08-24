@@ -2,6 +2,7 @@
 
 use super::super::super::outcome::Outcome;
 use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::probe_symbol;
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::ReturnType;
 use crate::machine::model::{Carried, KObject};
@@ -136,7 +137,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
         "DEFERTEST",
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::STR),
-            elements: vec![SignatureElement::keyword("DEFERTEST")],
+            elements: vec![SignatureElement::Keyword(probe_symbol("DEFERTEST"))],
         },
         body,
         test_run.registries(),

@@ -154,7 +154,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         types.record(Record::new()),
         vec![
             arg(registries, &SLOTS.fields, KType::KEXPRESSION),
-            kw("FROM"),
+            kw(registries, "FROM"),
             arg(registries, &SLOTS.record, types.record(Record::new())),
         ],
     );

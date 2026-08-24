@@ -190,8 +190,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::of_kind(KKind::AnyType),
             vec![
-                kw("LIST"),
-                kw("OF"),
+                kw(registries, "LIST"),
+                kw(registries, "OF"),
                 arg(registries, &SLOTS.elem, KType::of_kind(KKind::AnyType)),
             ],
         ),
@@ -205,9 +205,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::of_kind(KKind::AnyType),
             vec![
-                kw("MAP"),
+                kw(registries, "MAP"),
                 arg(registries, &SLOTS.k, KType::of_kind(KKind::AnyType)),
-                kw("->"),
+                kw(registries, "->"),
                 arg(registries, &SLOTS.v, KType::of_kind(KKind::AnyType)),
             ],
         ),
@@ -222,7 +222,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 arg(registries, &SLOTS.applied, KType::of_kind(KKind::AnyType)),
-                kw("AS"),
+                kw(registries, "AS"),
                 arg(registries, &SLOTS.ctor, KType::of_kind(KKind::AnyType)),
             ],
         ),
@@ -236,9 +236,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         sig(
             KType::of_kind(KKind::AnyType),
             vec![
-                kw("FN"),
+                kw(registries, "FN"),
                 arg(registries, &SLOTS.sig, KType::KEXPRESSION),
-                kw("->"),
+                kw(registries, "->"),
                 // `OfKind(AnyType)` admits every type value — a `-> Ordered` signature return
                 // and `-> Module` (which lowers to the empty signature) included.
                 arg(registries, &SLOTS.ret, KType::of_kind(KKind::AnyType)),

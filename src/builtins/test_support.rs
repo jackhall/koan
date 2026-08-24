@@ -22,6 +22,8 @@ use crate::machine::core::StatementId;
 use crate::machine::core::{ProgramBrand, ProgramStorage, RegionBrand};
 #[cfg(test)]
 use crate::machine::model::Carried;
+#[cfg(test)]
+use crate::machine::model::ExpressionPart;
 use crate::machine::model::KExpression;
 use crate::machine::model::KObject;
 #[cfg(test)]
@@ -30,8 +32,6 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeRegistry;
 #[cfg(test)]
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
-#[cfg(test)]
-use crate::machine::model::{ExpressionPart, KeywordToken};
 use crate::machine::{AdoptSeam, FrameStorage, KError, NameLookup, Scope};
 #[cfg(test)]
 use crate::machine::{BindingIndex, DeclarationSite, Installer};
@@ -84,16 +84,6 @@ pub(crate) fn type_name(
 pub(crate) fn type_token(text: &str) -> crate::machine::model::TypeSymbol {
     crate::machine::model::TypeSymbol::classify(text)
         .unwrap_or_else(|| panic!("test fixture name `{text}` is not a Type token"))
-}
-
-/// [`value_name`] for the operator registry's keyword-class probe keys.
-#[cfg(test)]
-pub(crate) fn keyword_name(
-    text: &str,
-    registries: &crate::machine::model::RunRegistries,
-) -> crate::machine::model::KeywordSymbol {
-    crate::machine::model::KeywordSymbol::declared(text, &registries.labels)
-        .unwrap_or_else(|| panic!("test fixture name `{text}` is not a keyword-class token"))
 }
 
 /// [`value_name`] for a seam that takes either bindable class.
@@ -575,7 +565,7 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
     let mut found: Option<&'a KFunction<'a>> = None;
     for (_, bucket) in scope.bindings().iter_functions() {
         for sealed in bucket {
-            if first_keyword_of(scope, &sealed).as_deref() != Some(keyword) {
+            if first_keyword_of(scope, &sealed) != Some(probe_symbol(keyword)) {
                 continue;
             }
             assert!(
@@ -590,10 +580,13 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
 
 /// The first keyword of a dormant overload's signature, read under `scope`'s own pin.
 #[cfg(test)]
-fn first_keyword_of(scope: &Scope<'_>, sealed: &SealedFunction) -> Option<String> {
+fn first_keyword_of(
+    scope: &Scope<'_>,
+    sealed: &SealedFunction,
+) -> Option<crate::machine::model::labels::KeywordSymbol> {
     scope.read_function(sealed, |f| {
         f.signature.elements().iter().find_map(|e| match e {
-            SignatureElement::Keyword(kw) => Some(kw.text().to_string()),
+            SignatureElement::Keyword(symbol) => Some(*symbol),
             _ => None,
         })
     })
@@ -610,16 +603,17 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
         .any(|(_, bucket)| {
             bucket
                 .iter()
-                .any(|sealed| first_keyword_of(scope, sealed).as_deref() == Some(keyword))
+                .any(|sealed| first_keyword_of(scope, sealed) == Some(probe_symbol(keyword)))
         })
 }
 
 /// A keyword part for a hand-built AST: classify and mint, recording nothing. A test node is not a
 /// declaration, so nothing resolves its keywords through the run's interner.
 #[cfg(test)]
-pub(crate) fn kw_part<'a>(text: &'a str) -> ExpressionPart<'a> {
+pub(crate) fn kw_part<'a>(text: &str) -> ExpressionPart<'a> {
     ExpressionPart::Keyword(
-        KeywordToken::of(text).expect("a test fixture keyword is keyword-class"),
+        crate::machine::model::KeywordSymbol::of(text)
+            .expect("a test fixture keyword is keyword-class"),
     )
 }
 
@@ -640,6 +634,26 @@ pub(crate) fn identifier_part<'a>(text: &str) -> ExpressionPart<'a> {
 pub(crate) fn probe_symbol(text: &str) -> crate::machine::model::labels::KeywordSymbol {
     crate::machine::model::labels::KeywordSymbol::of(text)
         .expect("a test fixture operator probe is keyword-class")
+}
+
+/// The operator-registry probe key a run of `glyphs` stands for — the same run digest
+/// `operator_probe_for` mints for a live chain and `powerset_probes` registers under, so a test
+/// spelling a probe by hand keys exactly what the machine would. Declared, not probed: a fixture
+/// that registers under this key stands in for a real registration, and a diagnostic naming the key
+/// has to resolve it.
+#[cfg(test)]
+pub(crate) fn operator_run(
+    glyphs: &[&str],
+    registries: &crate::machine::model::RunRegistries,
+) -> crate::machine::model::labels::KeywordSymbol {
+    let members: Vec<_> = glyphs
+        .iter()
+        .map(|glyph| {
+            crate::machine::model::labels::KeywordSymbol::declared(glyph, &registries.labels)
+                .unwrap_or_else(|| panic!("test fixture glyph `{glyph}` is not keyword-class"))
+        })
+        .collect();
+    crate::machine::model::labels::KeywordSymbol::declared_run(&members, &registries.labels)
 }
 
 /// A keyword bucket-key element from its spelling, for a key a test spells out by hand.

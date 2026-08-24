@@ -52,7 +52,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let signature = sig(
         KType::ANY,
-        vec![kw("EVAL"), arg(registries, &SLOTS.expr, KType::ANY)],
+        vec![
+            kw(registries, "EVAL"),
+            arg(registries, &SLOTS.expr, KType::ANY),
+        ],
     );
     crate::builtins::register_builtin(scope, "EVAL", signature, body, registries, gate);
 }

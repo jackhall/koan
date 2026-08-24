@@ -1,6 +1,7 @@
 //! `dispatch` arm of `machine::core` tests.
 
 use super::super::{FrameStorageExt, Scope, program_storage, run_root_storage};
+use crate::builtins::test_support::probe_symbol;
 use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{identifier_part, kw_part};
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
@@ -42,7 +43,7 @@ fn two_slot_sig<'a>(a: KType, b: KType) -> SignatureDraft<'a> {
                     .expect("a test fixture parameter is a value token"),
                 ktype: a,
             }),
-            SignatureElement::keyword("OP"),
+            SignatureElement::Keyword(probe_symbol("OP")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("b")
                     .expect("a test fixture parameter is a value token"),
@@ -331,7 +332,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     let outer_sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("MARK"),
+            SignatureElement::Keyword(probe_symbol("MARK")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
@@ -509,7 +510,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     let pick_num = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("PICK"),
+            SignatureElement::Keyword(probe_symbol("PICK")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
@@ -569,7 +570,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     let pick_str = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("PICK"),
+            SignatureElement::Keyword(probe_symbol("PICK")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),

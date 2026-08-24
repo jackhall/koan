@@ -48,7 +48,7 @@ pub(crate) fn collect_param_names_from_signature(
 }
 
 pub(crate) enum ParamListOutcome<'a> {
-    Done(Vec<SignatureElement<'a>>),
+    Done(Vec<SignatureElement>),
     /// One or more parameter slots couldn't elaborate synchronously. The caller schedules an
     /// `AwaitDeps` over `awaited_producers` and any sub-Dispatches, then re-runs
     /// `parse_fn_param_list` over the same (unmodified) `signature` with the resolved
@@ -85,7 +85,7 @@ pub(crate) fn parse_fn_param_list<'a>(
     // including the one synthesized name (a bare-leaf `Type` part in parameter-name position).
     // Keyword tokens keep riding as `&'a str`; the mint door re-homes those at the function's own
     // region.
-    let mut elements: Vec<SignatureElement<'a>> = Vec::with_capacity(parts.len());
+    let mut elements: Vec<SignatureElement> = Vec::with_capacity(parts.len());
     let mut awaited: Vec<ProducerId> = Vec::new();
     let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
     let mut first_err: Option<String> = None;

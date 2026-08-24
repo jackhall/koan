@@ -52,11 +52,36 @@ impl<'a, 'l> ParseStack<'a, 'l> {
     /// Push a span-carrying part into the current top frame (root if none
     /// open). The span is preserved when the destination's storage is
     /// `Vec<Spanned<…>>`; List/Dict/SigiledTypeExpr frames discard it.
-    pub(super) fn push_part(&mut self, part: Spanned<ExpressionPart<'a>>) {
+    ///
+    /// The one funnel every part passes through, so it is where a **keyword in a literal** is
+    /// refused: a list, dict or record literal holds values, and the only keyword-shaped things its
+    /// syntax has are the `,` / `:` / `=` delimiters the frame consumes itself. Every other frame —
+    /// root, `Expression`, `Quote`, `SigiledTypeExpr`, `RecordTypeExpr` — still admits keywords,
+    /// which is what `#(+)` bodies and `OP` declarations rest on. A `a.b` or `x?` inside a literal
+    /// is unaffected: the suffix builders wrap their keyword inside a nested part before it reaches
+    /// here.
+    pub(super) fn push_part(&mut self, part: Spanned<ExpressionPart<'a>>) -> Result<(), KError> {
         match self.rest.last_mut() {
-            Some(f) => f.push(part),
+            Some(f) => {
+                if let (
+                    BracketFrame::List { .. } | BracketFrame::Dict { .. },
+                    ExpressionPart::Keyword(symbol),
+                ) = (&*f, part.value)
+                {
+                    return Err(KError::parse(
+                        format!(
+                            "`{}` is a keyword, so it cannot be an element of a list, dict, or \
+                             record literal",
+                            self.labels.display(symbol.symbol()),
+                        ),
+                        part.span,
+                    ));
+                }
+                f.push(part);
+            }
             None => self.root.push(part),
         }
+        Ok(())
     }
 
     pub(super) fn peek_top(&self) -> Option<&BracketFrame<'a>> {
@@ -100,7 +125,7 @@ pub(super) fn flush_token<'a>(
             .take()
             .expect("token_start must be set whenever buf is non-empty");
         let part = classify_token(stack.brand(), stack.labels(), &tok, start)?;
-        stack.push_part(part);
+        stack.push_part(part)?;
     } else {
         *token_start = None;
     }
@@ -145,7 +170,7 @@ pub(super) fn close_collection<'a>(
         .pop_top()
         .expect("peek_top.matches_closer checked above; flush_token preserves variant");
     let part = frame.into_part(stack.brand(), end, stack.labels())?;
-    stack.push_part(part);
+    stack.push_part(part)?;
     Ok(())
 }
 

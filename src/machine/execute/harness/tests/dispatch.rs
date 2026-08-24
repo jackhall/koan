@@ -2,6 +2,7 @@
 //! returns a distinct labeled marker so a test can identify which overload won.
 //! Counterpart `resolve_dispatch`-only assertions live in `machine::core::tests::dispatch`.
 
+use crate::builtins::test_support::probe_symbol;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::BindingIndex;
@@ -58,7 +59,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     let outer_sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("MARK"),
+            SignatureElement::Keyword(probe_symbol("MARK")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
@@ -82,7 +83,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     let inner_sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("MARK"),
+            SignatureElement::Keyword(probe_symbol("MARK")),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
@@ -189,10 +190,13 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let program = program_storage();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
+    let registries = RunRegistries::new();
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::keyword("foo"),
+            // The draft door is what normalizes; a Rust-spelled lowercase token keys the
+            // uppercased bucket a call computes.
+            SignatureElement::keyword("foo", &registries.labels),
             SignatureElement::Argument(Argument {
                 name: crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
@@ -205,7 +209,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
         "FOO",
         sig,
         body_lowercase,
-        &RunRegistries::new(),
+        &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
 

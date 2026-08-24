@@ -19,11 +19,9 @@
 use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
 use crate::machine::model::Part;
-use crate::machine::model::labels::KeywordSymbol;
-use crate::machine::model::{
-    ExpressionPart, KeywordToken, PartClass, WorkingExpression, WorkingPart,
-};
-use crate::machine::model::{FoldDirection, KeyElement, OperatorGroup, ReductionMode, probe_key};
+use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
+use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
+use crate::machine::model::{FoldDirection, KeyElement, OperatorGroup, ReductionMode};
 use crate::machine::{KError, KErrorKind, ProducerId};
 use crate::scheduler::Deps;
 use crate::source::{Span, Spanned};
@@ -47,13 +45,16 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
     match s.resolve_operator_group_delivered(probe, chain) {
         None => park_on_pending_operators(ctx, s, expr),
         Some(delivered) => {
-            let operators = chain_operators(expr);
+            let operators = chain_operator_symbols(expr);
             match delivered.open(|group| ChainPlan::of(group, &operators)) {
                 // The powerset keys mean a hit already covers the probe, so a non-cover is a
                 // registry-build bug — surface it as a clean non-match rather than a wrong fold.
                 None => Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                     expr: expr.summarize(&ctx.registries().labels),
-                    reason: cross_group_reason(&probe_key(&operators)),
+                    reason: cross_group_reason(&rendered_operators(
+                        &operators,
+                        &ctx.registries().labels,
+                    )),
                 }))),
                 Some(ChainPlan::FoldLeft) => reduce_fold_left(ctx, expr),
                 Some(ChainPlan::FoldRight) => reduce_fold_right(ctx, expr),
@@ -67,14 +68,16 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
     }
 }
 
-/// The reduction mode as owned data, read inside the delivery envelope's open so the reducers run
-/// with nothing borrowed from the declaring region.
+/// The reduction mode, read inside the delivery envelope's open so the reducers run with nothing
+/// borrowed from the declaring region. Every arm is fixed-width — a combiner is its keyword symbol
+/// — so the plan copies out rather than owning anything.
+#[derive(Clone, Copy)]
 enum ChainPlan {
     FoldLeft,
     FoldRight,
     Unary,
     Pairwise {
-        combiner: String,
+        combiner: KeywordSymbol,
         direction: FoldDirection,
     },
 }
@@ -82,7 +85,7 @@ enum ChainPlan {
 impl ChainPlan {
     /// The plan for a chain naming `operators`, or `None` when the hit group does not cover them
     /// all — a cross-group mix.
-    fn of(group: &OperatorGroup<'_>, operators: &[&str]) -> Option<ChainPlan> {
+    fn of(group: &OperatorGroup<'_>, operators: &[KeywordSymbol]) -> Option<ChainPlan> {
         if !group.covers(operators) {
             return None;
         }
@@ -94,7 +97,7 @@ impl ChainPlan {
                 combiner,
                 direction,
             } => ChainPlan::Pairwise {
-                combiner: combiner.to_string(),
+                combiner,
                 direction,
             },
         })
@@ -106,22 +109,24 @@ fn chain_operator_symbols(expr: &WorkingExpression<'_>) -> Vec<KeywordSymbol> {
     expr.parts
         .iter()
         .filter_map(|part| match part.value.class() {
-            PartClass::Keyword(kw) => Some(kw.symbol()),
+            PartClass::Keyword(symbol) => Some(symbol),
             _ => None,
         })
         .collect()
 }
 
-/// The chain's operator glyphs in source order, for the readers that need the spelling: the
-/// reduction plan, which matches a group's declared glyphs, and the diagnostics.
-fn chain_operators<'a>(expr: &WorkingExpression<'a>) -> Vec<&'a str> {
-    expr.parts
+/// The chain's distinct operators as one space-joined spelling, for the two diagnostics that name
+/// the probe. Resolved here rather than cached on the node: the probe travels as symbol bits, and
+/// every glyph was interned where the parse classified it. Sorted by the rendered spelling so the
+/// message reads the same for a given operator set however the run was written.
+fn rendered_operators(operators: &[KeywordSymbol], labels: &LabelInterner) -> String {
+    let mut spellings: Vec<String> = operators
         .iter()
-        .filter_map(|part| match part.value.class() {
-            PartClass::Keyword(kw) => Some(kw.text()),
-            _ => None,
-        })
-        .collect()
+        .map(|operator| labels.render(operator.symbol()))
+        .collect();
+    spellings.sort_unstable();
+    spellings.dedup();
+    spellings.join(" ")
 }
 
 /// Operands (even indices) and operator keywords (odd indices), each keeping its `Spanned` wrapper
@@ -292,7 +297,7 @@ fn reduce_unary<'step>(
 fn reduce_pairwise<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
-    combiner: String,
+    combiner: KeywordSymbol,
     direction: FoldDirection,
 ) -> Outcome<'step> {
     let (operands, operators) = split_chain_parts(expr);
@@ -323,7 +328,7 @@ fn install_pairwise_fold<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     operands: Vec<Spanned<WorkingPart<'step>>>,
     operators: Vec<Spanned<WorkingPart<'step>>>,
-    combiner: String,
+    combiner: KeywordSymbol,
     direction: FoldDirection,
     chain: WorkingExpression<'step>,
     dep_error_frame: Option<DeferredTraceFrame<'step>>,
@@ -368,7 +373,7 @@ fn install_pairwise_fold<'step>(
                 let mut pairs = pairs.into_iter();
                 let mut acc = pairs.next().expect(PAIRWISE_HAS_TWO_PAIRS);
                 for pair in pairs {
-                    acc = combine(brand, &combiner, acc, pair, &chain);
+                    acc = combine(brand, combiner, acc, pair, &chain);
                 }
                 acc
             }
@@ -376,7 +381,7 @@ fn install_pairwise_fold<'step>(
                 let mut pairs = pairs.into_iter().rev();
                 let mut acc = pairs.next().expect(PAIRWISE_HAS_TWO_PAIRS);
                 for pair in pairs {
-                    acc = combine(brand, &combiner, pair, acc, &chain);
+                    acc = combine(brand, combiner, pair, acc, &chain);
                 }
                 acc
             }
@@ -402,7 +407,7 @@ const PAIRWISE_HAS_TWO_PAIRS: &str =
 /// its own, so it takes the chain's extent, and the combined node names the chain's file.
 pub(super) fn combine<'step>(
     brand: RegionBrand<'step>,
-    combiner: &str,
+    combiner: KeywordSymbol,
     left: WorkingExpression<'step>,
     right: WorkingExpression<'step>,
     chain: &WorkingExpression<'step>,
@@ -412,10 +417,7 @@ pub(super) fn combine<'step>(
         &[
             wrap_as_operand(brand, left),
             Spanned {
-                value: WorkingPart::Ast(ExpressionPart::Keyword(
-                    KeywordToken::of(brand.allocator().text(combiner))
-                        .expect("an operator glyph is keyword-class"),
-                )),
+                value: WorkingPart::Ast(ExpressionPart::Keyword(combiner)),
                 span: chain.span,
             },
             wrap_as_operand(brand, right),
@@ -437,11 +439,12 @@ fn park_on_pending_operators<'step, 'b>(
 ) -> Outcome<'step> {
     let to_wait = pending_operator_sources(ctx, s, expr);
     if to_wait.is_empty() {
-        // The spelling the diagnostic names is re-derived here rather than cached on the node: the
-        // probe travels as symbol bits, and this is the one path that has to render it.
         return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(&ctx.registries().labels),
-            reason: undeclared_operator_reason(&probe_key(&chain_operators(expr))),
+            reason: undeclared_operator_reason(&rendered_operators(
+                &chain_operator_symbols(expr),
+                &ctx.registries().labels,
+            )),
         })));
     }
     let parked_expr = *expr;
