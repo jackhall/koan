@@ -62,7 +62,7 @@ fn allocations_for(source: &str, path: &str) -> u64 {
     delta
 }
 
-/// 100 tail-recursive steps, 91.0 allocations each — exactly linear, measured flat at
+/// 100 tail-recursive steps, 92.0 allocations each — exactly linear, measured flat at
 /// 10/50/100/200. Measured 2026-08-24 at 11 948. ≈1 of those per step is an arena chunk rather
 /// than a heap object: a step's frame does not fit bumpalo's 496-byte first chunk, so the region
 /// takes a second one. That term tracks the byte size of what a frame holds — `Scope` above all —
@@ -117,7 +117,7 @@ fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
 /// dispatches' marginal cost; differencing *those* leaves what 8 extra scopes cost per
 /// dispatch. Before the walk's buffers moved onto the step scratch arena that difference
 /// measured 509 — ≈2 heap allocations per extra scope walked, per dispatch. Measured
-/// 2026-08-24 it is **−3**: 1 562 allocations for 32 dispatches at depth 10 against 1 565 at
+/// 2026-08-24 it is **−3**: 1 594 allocations for 32 dispatches at depth 10 against 1 597 at
 /// depth 2, the two depths indistinguishable and the deeper walk marginally the cheaper.
 ///
 /// The bound is one allocation per extra dispatch, far under the ≥256 that a single
