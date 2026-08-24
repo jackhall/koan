@@ -64,7 +64,7 @@ fn resolve_for_lowers_builtin_leaf_to_type_arm() {
     let slot = KType::of_kind(KKind::ProperType);
     // Consume the scope-tied `Held` inside `matches!` so no borrow outlives `storage`.
     assert!(matches!(
-        part.resolve_for(&slot, scope, &LabelInterner::new()),
+        part.resolve_for(&slot, scope),
         Held::Type(t) if t == KType::NUMBER
     ));
 }
@@ -79,7 +79,7 @@ fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
     let registries = RunRegistries::new();
     let part = ExpressionPart::Type(type_name("MyType", &registries));
     let slot = KType::of_kind(KKind::ProperType);
-    match part.resolve_for(&slot, scope, &registries.labels) {
+    match part.resolve_for(&slot, scope) {
         Held::UnresolvedType(te) => {
             assert_eq!(registries.labels.render(te.symbol()), "MyType")
         }
@@ -100,7 +100,7 @@ fn unresolved_carrier_classifies_as_a_proper_type() {
     let types = &registries.types;
     let part = ExpressionPart::Type(type_token("MyType"));
     let slot = KType::of_kind(KKind::ProperType);
-    let held = part.resolve_for(&slot, scope, &registries.labels);
+    let held = part.resolve_for(&slot, scope);
     assert_eq!(held.ktype(types), KType::of_kind(KKind::ProperType));
     assert!(held.as_type().is_none(), "it carries no type handle");
     assert!(held.as_object().is_none(), "and it is not a value");

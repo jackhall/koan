@@ -62,8 +62,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             None => None,
         },
     };
-    let name = match (ctx.args.object(&SLOTS.name), type_name) {
-        (Some(KObject::KString(s)), _) => {
+    // The value-classified binder, carried straight off the `:Identifier` slot: the parse
+    // classified and interned the token, so the symbol below is the one it minted. `name` is that
+    // symbol's spelling, read back once for the diagnostics that quote the binder.
+    let mut value_binder: Option<ValueSymbol> = None;
+    let name = match (ctx.args.identifier(&SLOTS.name), type_name) {
+        (Some(v), _) => {
+            let s = ctx.registries.labels.render(v.symbol());
             // A type-language carrier under a value-classified name is a cross-kind error. A module
             // is *not* one: it is a value, and a value-classified name is exactly where it belongs.
             let type_kind = match rhs {
@@ -72,6 +77,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 }
                 Held::Type(_) | Held::UnresolvedType(_) => Some("type"),
                 Held::Object(_) => None,
+                // The RHS slot is `:Any`, which admits no raw name part.
+                Held::Identifier(_) => {
+                    unreachable!("LET's bound-value slot never captures an identifier")
+                }
             };
             if let Some(kind) = type_kind {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
@@ -80,10 +89,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                      identifier instead (uppercase-leading plus at least one lowercase \
                      letter, e.g. `{suggestion}`)",
                     name = s,
-                    suggestion = capitalize_identifier(s),
+                    suggestion = capitalize_identifier(&s),
                 ))));
             }
-            (*s).to_string()
+            value_binder = Some(v);
+            s
         }
         (_, Some(resolved_name)) => {
             type_classified_name = true;
@@ -99,6 +109,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 // A module is a value, and the Type-token namespace names things that type a field.
                 // `LET view = (m :| S)` is the wrong spelling for a module binding, whatever the RHS
                 // produced it (an ascription view, a functor call) — respell it snake_case.
+                // The RHS slot is `:Any`, which admits no raw name part.
+                Held::Identifier(_) => {
+                    unreachable!("LET's bound-value slot never captures an identifier")
+                }
                 Held::Object(KObject::Module(_)) => {
                     return done_err(KError::new(KErrorKind::ShapeError(format!(
                         "LET binder `{resolved_name}` is Type-classified but the bound value is a \
@@ -115,13 +129,6 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 }
             }
             resolved_name
-        }
-        (Some(other), None) => {
-            return done_err(KError::new(KErrorKind::TypeMismatch {
-                arg: "name".to_string(),
-                expected: "Identifier or ProperType".to_string(),
-                got: other.ktype().name(ctx.registries),
-            }));
         }
         (None, None) => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
@@ -159,13 +166,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             builtin_shadow_guard: true,
         })
     } else {
-        // The value channel's half of the same seam.
-        let Some(binder) = ValueSymbol::declared(&name, &ctx.registries.labels) else {
-            return done_err(KError::new(KErrorKind::ShapeError(wrong_binder_class(
-                &name,
-                BindKind::Value,
-            ))));
-        };
+        // The value channel needs no seam of its own: only the `:Identifier` arm reaches here, and
+        // its symbol was classified value-side at the parse.
+        let binder = value_binder.expect("a value-route LET binds the name slot's own symbol");
         let value = rhs
             .as_object()
             .expect("value-route LET RHS is the Object arm");

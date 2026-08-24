@@ -132,6 +132,16 @@ impl<'a, 'c> BoundArgs<'a, 'c> {
         self.held(name).and_then(Held::as_type)
     }
 
+    /// The argument's captured name — the value-channel read of an `:Identifier` slot. The bind
+    /// seam parks the token's symbol here rather than rendering it to a string, so a name-taking
+    /// builtin reads the symbol the parse minted.
+    pub fn identifier(&self, name: &StaticName<ValueSymbol>) -> Option<ValueSymbol> {
+        match self.held(name) {
+            Some(Held::Identifier(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
     /// The argument's unlowered type name. The bind seam parks a bare user type name here rather
     /// than lowering it to a handle, so a type-slot consumer probes this before [`Self::ktype`] and
     /// resolves the name against its own scope chain.
@@ -186,6 +196,10 @@ pub fn require_ktype<'a>(
             expected: "ProperType".to_string(),
             got: crate::machine::model::types::render_label(ti.symbol(), registries),
         })),
+        // Every slot reaching here is a type slot, which admits no raw name part.
+        Some(Held::Identifier(_)) => {
+            unreachable!("a type slot never captures an identifier")
+        }
         None => Err(KError::new(KErrorKind::MissingArg(name.text().to_string()))),
     }
 }
@@ -193,20 +207,20 @@ pub fn require_ktype<'a>(
 /// Resolve the identifier-name in the `Identifier`-arm of arg `slot` — the binder name of a
 /// value-defining builtin (MODULE) — or the canonical error: `MissingArg` for an absent slot,
 /// `ShapeError` for any other value shape. `surface` is the keyword embedded in the diagnostic.
-/// The value-channel twin of [`require_bare_type_name`]; an `Identifier` name part resolves to a
-/// `KObject::KString` cell.
+/// The value-channel twin of [`require_bare_type_name`]; both hand back the symbol their slot
+/// captured, which the parse minted when it classified the token.
 pub fn require_identifier_name<'a>(
     args: BoundArgs<'a, '_>,
     slot: &StaticName<ValueSymbol>,
     surface: &str,
     registries: &RunRegistries,
-) -> Result<String, KError> {
+) -> Result<ValueSymbol, KError> {
     let spelling = slot.text();
-    match args.object(slot) {
-        Some(KObject::KString(s)) => Ok((*s).to_string()),
+    match args.held(slot) {
+        Some(Held::Identifier(v)) => Ok(*v),
         Some(other) => Err(KError::new(KErrorKind::ShapeError(format!(
             "{surface} {spelling} must be a bare identifier, got `{}`",
-            other.ktype().name(registries),
+            other.ktype(&registries.types).name(registries),
         )))),
         None => Err(KError::new(KErrorKind::MissingArg(spelling.to_string()))),
     }
@@ -237,6 +251,8 @@ pub fn require_bare_type_name<'a>(
                 )))
             })
         }
+        // A type-name slot is `PROPER_TYPE` / `ANY_TYPE`, which admits no raw value-name part.
+        Some(Held::Identifier(_)) => unreachable!("a type-name slot never captures an identifier"),
         Some(Held::Object(_)) | None => {
             Err(KError::new(KErrorKind::MissingArg(slot.text().to_string())))
         }

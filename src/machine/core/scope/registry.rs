@@ -293,12 +293,11 @@ impl<'a> Scope<'a> {
     /// so the door mints its own [`WriteGate`].
     pub(crate) fn alloc_module_view(
         outer: &'a Scope<'a>,
-        path: String,
         src: &'a crate::machine::core::Bindings<'a>,
         registries: &RunRegistries,
         type_entries: impl FnOnce(crate::machine::core::ScopeId) -> Vec<(TypeSymbol, KType)>,
     ) -> Result<&'a Scope<'a>, KError> {
-        let view = outer.alloc_child_under_module(&path, None);
+        let view = outer.alloc_child_under_module(None);
         view.bindings().bulk_install_from(
             src,
             registries,
@@ -333,7 +332,6 @@ impl<'a> Scope<'a> {
     /// the caller makes.
     pub(crate) fn alloc_group_child(
         outer: &'a Scope<'a>,
-        name: String,
         members: &[&str],
         mode: ReductionMode<'_>,
         announced: Option<crate::machine::model::AnnouncedData>,
@@ -342,7 +340,7 @@ impl<'a> Scope<'a> {
         let cell = outer.birth_operator_group(members, mode);
         let seal = GroupSeal::of_delivered(outer, &cell);
         let record = outer.adopt_group_record(&cell);
-        let child = outer.alloc_child_under_group(&name, record, announced);
+        let child = outer.alloc_child_under_group(record, announced);
         child.register_group_under_all_subsets_direct(
             members,
             seal,

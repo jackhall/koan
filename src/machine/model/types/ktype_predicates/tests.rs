@@ -379,7 +379,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         &spliced_part(&region, Carried::Type(struct_token)),
         types.registries()
     ));
-    let child = scope.alloc_child_under_module("IntMod", None);
+    let child = scope.alloc_child_under_module(None);
     // A module value surfaces its principal signature, interned from its members before the value
     // exists — build it through the same door production does.
     let draft = ModuleDraft::empty();
@@ -952,7 +952,7 @@ fn module_object_ktype_reports_self_sig() {
     // One-member modules built through the production door: the draft carries `Elt`, and the
     // self-sig is derived from it and interned before the value exists.
     let one_member = |name: &str, elt: KType| {
-        let child = scope.alloc_child_under_module(name, None);
+        let child = scope.alloc_child_under_module(None);
         let mut draft = ModuleDraft::empty();
         draft
             .type_members
@@ -1001,7 +1001,7 @@ fn matches_value_admits_module_object_via_signature_slot() {
     let sig_scope = scope.alloc_child_under_sig(type_token("Ss"));
     let schema = SigSchema::project_decl(sig_scope, types.registries());
 
-    let child = scope.alloc_child_under_module("M", None);
+    let child = scope.alloc_child_under_module(None);
     let mut draft = ModuleDraft::empty();
     draft
         .type_members

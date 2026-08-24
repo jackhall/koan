@@ -1181,7 +1181,7 @@ fn region_death_frees_every_drop_free_family() {
     // names again, for the same reason the callables' are.
     let modules: Vec<&Module<'_>> = (0..2)
         .map(|i| {
-            let child = scope.alloc_child_under_module(&format!("member_module_{i}"), None);
+            let child = scope.alloc_child_under_module(None);
             let mut draft = ModuleDraft::empty();
             draft.type_members.insert(
                 type_name(&format!("Member_{i}"), types.registries()),

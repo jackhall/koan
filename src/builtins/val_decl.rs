@@ -19,7 +19,7 @@ use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{KKind, KObject, KType, TypeNode};
+use crate::machine::model::{KKind, KType, TypeNode};
 use crate::machine::{KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
@@ -87,28 +87,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         )));
     }
 
-    let name = match ctx.args.object(&SLOTS.name) {
-        Some(KObject::KString(s)) => (*s).to_string(),
-        Some(other) => {
-            return done_err(KError::new(KErrorKind::TypeMismatch {
-                arg: "name".to_string(),
-                expected: "Identifier".to_string(),
-                got: other.ktype().name(ctx.registries),
-            }));
-        }
-        None => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
-    };
-
-    // A slot binds a value name. Type members (Type-class names) are declared with `TYPE`
-    // (abstract) or `LET` (manifest), not `VAL` — so a Type token here gets the spelling
-    // correction rather than the generic partition message.
-    let Some(slot_name) =
-        crate::machine::model::ValueSymbol::declared(&name, &ctx.registries.labels)
-    else {
-        return done_err(KError::new(KErrorKind::ShapeError(format!(
-            "VAL slot name `{name}` classifies as a Type token; declare an abstract type \
-             member with `TYPE {name}` or a manifest one with `LET {name} = <Type>`",
-        ))));
+    let Some(slot_name) = ctx.args.identifier(&SLOTS.name) else {
+        return done_err(KError::new(KErrorKind::MissingArg("name".to_string())));
     };
 
     let carrier = match ctx.args.unresolved_type(&SLOTS.ty) {

@@ -359,7 +359,7 @@ fn using_window_surfaces_the_modules_operator_group() {
     let region = run_root_storage();
     let root = run_root_bare(&region);
 
-    let module = root.alloc_child_under_module("vec_ops", None);
+    let module = root.alloc_child_under_module(None);
     let group = declare(module, &["+"], ReductionMode::FoldRight);
     module
         .register_operator_group_direct(
@@ -520,7 +520,7 @@ fn nearest_group_context_stops_at_a_plain_module() {
 
     assert!(root.nearest_group_context().is_none());
 
-    let group_scope = root.alloc_child_under_group("vec_ops", group, None);
+    let group_scope = root.alloc_child_under_group(group, None);
     let in_group = group_scope
         .nearest_group_context()
         .expect("a GROUP body is its own group context");
@@ -535,10 +535,10 @@ fn nearest_group_context_stops_at_a_plain_module() {
     );
 
     // A plain module declared inside the group body is not a group.
-    let nested_module = group_scope.alloc_child_under_module("inner", None);
+    let nested_module = group_scope.alloc_child_under_module(None);
     assert!(nested_module.nearest_group_context().is_none());
 
     // Nor is a module that never carried a group.
-    let plain_module = root.alloc_child_under_module("plain", None);
+    let plain_module = root.alloc_child_under_module(None);
     assert!(plain_module.nearest_group_context().is_none());
 }

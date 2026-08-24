@@ -13,7 +13,9 @@ use crate::machine::body_statement_refs;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
-use crate::machine::model::{AnnouncedData, FieldNameKind, pair_list_names, type_binder};
+use crate::machine::model::{
+    AnnouncedData, FieldNameKind, ValueSymbol, pair_list_names, type_binder,
+};
 use crate::machine::model::{KKind, SigSchema};
 use crate::machine::model::{Module, ModuleDraft};
 use crate::machine::model::{TypeDeclarationSurface, announced_type_declaration};
@@ -41,8 +43,12 @@ pub fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         ctx.registries
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", &SLOTS.body));
-    let announced = crate::try_action!(announce_type_members(&body_expr, &name, ctx.registries));
-    let child_scope = ctx.scope.alloc_child_under_module(&name, announced);
+    // The pre-scan's diagnostics quote the module by name, so the binder's spelling is read back
+    // once here and the symbol itself carries on to the binding.
+    let spelling = render_label(name.symbol(), ctx.registries);
+    let announced =
+        crate::try_action!(announce_type_members(&body_expr, &spelling, ctx.registries));
+    let child_scope = ctx.scope.alloc_child_under_module(announced);
     await_module_body(child_scope, name, body_expr, ctx.bind_index())
 }
 
@@ -132,20 +138,16 @@ fn union_schema<'a>(statement: &KExpression<'a>) -> Option<KExpression<'a>> {
 /// body returns to the dispatcher.
 pub(super) fn await_module_body<'a>(
     child_scope: &'a Scope<'a>,
-    name: String,
+    name: ValueSymbol,
     body_expr: KExpression<'a>,
     bind_index: BindingIndex,
 ) -> Action<'a> {
     use super::await_body::await_body_in_scope;
 
-    let name_for_finish = name;
     await_body_in_scope(child_scope, body_expr, move |fctx| {
-        // A module is a value, so its name binds under a value token. The seam classifies once and
-        // the finish reads symbol bits from here down.
-        let binder = match crate::machine::model::value_binder(&name_for_finish, fctx.registries) {
-            Ok(binder) => binder,
-            Err(e) => return Action::done(Err(e)),
-        };
+        // A module is a value, so its name binds under a value token — the one the parse classified
+        // and interned, which the finish reads as symbol bits throughout.
+        let binder = name;
         // Idempotent-finalize guard: a re-bound name short-circuits, re-surfacing the
         // already-bound module value from its **stored** reach.
         if let Some(NameLookup::Bound(sealed)) = fctx.scope.bindings().lookup_value(binder, None) {
@@ -153,9 +155,7 @@ pub(super) fn await_module_body<'a>(
                 fctx.scope.lift_resident(sealed),
             )));
         }
-        if let Some(error) =
-            unsealed_announcement_error(child_scope, &name_for_finish, fctx.registries)
-        {
+        if let Some(error) = unsealed_announcement_error(child_scope, name, fctx.registries) {
             return Action::done(Err(error));
         }
         // Mirror the module's type members into the draft. The classified key types keep `data`
@@ -171,8 +171,11 @@ pub(super) fn await_module_body<'a>(
         let self_sig = fctx
             .types()
             .signature(SigSchema::raw_self_sig(child_scope, &draft));
+        // A module's path is its surface spelling, so the binder's symbol renders once here — the
+        // one text this finish needs.
+        let path = render_label(name.symbol(), fctx.registries);
         let module: &'a Module<'a> =
-            Module::alloc_at_child_scope(&name_for_finish, child_scope, draft, self_sig);
+            Module::alloc_at_child_scope(&path, child_scope, draft, self_sig);
         // Fused MODULE-finish seal: the module reference held **directly** here (never
         // recovered by walking the built value) is merged into this scope's region, which mints
         // and retains the child's region as the Object-arm module value's reach — this scope's
@@ -198,13 +201,14 @@ pub(super) fn await_module_body<'a>(
 /// rather than a module that binds half a group.
 pub(super) fn unsealed_announcement_error(
     child_scope: &Scope<'_>,
-    name: &str,
+    name: ValueSymbol,
     registries: &RunRegistries,
 ) -> Option<KError> {
     let window = child_scope.own_declaration_window()?;
     if window.is_sealed() {
         return None;
     }
+    let name = render_label(name.symbol(), registries);
     // A variant carries no declaration of its own: its binder's statement is what never filled it.
     let unfilled: Vec<String> = window
         .unfilled_members()

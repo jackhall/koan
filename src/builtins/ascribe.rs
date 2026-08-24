@@ -46,7 +46,6 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
     // are absent rather than masked.
     let new_scope = match Scope::alloc_module_view(
         ctx.scope,
-        format!("{} :| {}", m.path, s_name),
         m.child_scope().bindings(),
         ctx.registries,
         // The nonce every per-call mint carries is the newborn view scope's id, handed in by the

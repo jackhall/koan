@@ -16,7 +16,7 @@ fn announced_module<'a>(
     for member in members {
         announced.announce(type_token(member));
     }
-    parent.alloc_child_under_module("m", Some(announced))
+    parent.alloc_child_under_module(Some(announced))
 }
 
 /// A Type token cannot name a value: `bind_value_direct` takes a `ValueSymbol`, and Type-class

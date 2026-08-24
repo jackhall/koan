@@ -40,11 +40,13 @@ use crate::machine::model::render_label;
 /// - `Anonymous` — a record-schema binder (`FN :{…}`) has no keyword, so it
 ///   registers nothing; the value it evaluates to is its only handle.
 ///
-/// `bound_name` borrows the `name` slot's `KString` off the args record, so the kind carries the
-/// declaring node's lifetime and stays `Copy`.
+/// `bound_name` is the symbol the `name` slot captured — the one the parse minted — so the kind
+/// carries no borrow and stays `Copy`.
 #[derive(Clone, Copy)]
-pub(crate) enum FnKind<'a> {
-    Function { bound_name: Option<&'a str> },
+pub(crate) enum FnKind {
+    Function {
+        bound_name: Option<crate::machine::model::ValueSymbol>,
+    },
     Anonymous,
 }
 
@@ -265,7 +267,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     elements: Vec<SignatureElement<'a>>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
-    kind: FnKind<'a>,
+    kind: FnKind,
     bind_index: BindingIndex,
     registries: &RunRegistries,
 ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp<'a>>), KError> {
@@ -328,7 +330,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // builds of the same source.
     if let Some(bound_name) = bound_name {
         writes.push(WriteOp::Value {
-            name: crate::machine::model::value_binder(bound_name, registries)?,
+            name: bound_name,
             index: bind_index,
             sealed: cell.duplicate(),
         });
@@ -361,7 +363,7 @@ pub(crate) fn defer<'a>(
     signature_expr: KExpression<'a>,
     inputs: DeferredInputs<'a>,
     body_expr: KExpression<'a>,
-    kind: FnKind<'a>,
+    kind: FnKind,
     bind_index: BindingIndex,
 ) -> crate::machine::Action<'a> {
     use crate::machine::model::WorkingExpression;

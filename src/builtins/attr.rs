@@ -19,7 +19,7 @@ use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeResolution;
-use crate::machine::model::{BinderSymbol, Carried, Module, TypeSymbol};
+use crate::machine::model::{BinderSymbol, Carried, Module};
 use crate::machine::model::{CarriedFamily, Held, KObject, KType, PartedCell, TypeNode};
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
@@ -43,52 +43,65 @@ fn route<'a>(result: Result<StepCarried<'a>, KError>) -> crate::machine::Action<
 }
 
 /// The `field` member name, carried as the classification of the channel it arrived on rather
-/// than as text a consumer re-derives a class from. `class` is `None` when the name binds
-/// nowhere — a keyword-class token, or a compound type render like `List<Number>` — so it can
-/// name no member and every consumer treats it as an immediate miss reporting `text`.
-struct FieldName<'a> {
-    class: Option<BinderSymbol>,
-    text: Cow<'a, str>,
+/// than as text a consumer re-derives a class from. A member probe reads only [`Self::symbol`],
+/// so the spelling is rendered where a diagnostic quotes it and nowhere else.
+enum FieldName {
+    /// A name token the parse classified and interned. Its class *is* the channel it arrived on,
+    /// which is the map a member probe keys.
+    Token(BinderSymbol),
+    /// A type rendered from a handle rather than read off a token — a compound like
+    /// `List<Number>`. It binds nowhere, so it names no member and every consumer treats it as an
+    /// immediate miss reporting this text.
+    Rendered(String),
 }
 
-impl FieldName<'_> {
+impl FieldName {
+    /// The classification the name arrived under, or `None` for a rendering that names no member.
+    fn class(&self) -> Option<BinderSymbol> {
+        match self {
+            FieldName::Token(class) => Some(*class),
+            FieldName::Rendered(_) => None,
+        }
+    }
+
     /// The bare digest for a runtime data-label probe. A record field is classless (see
     /// [design/label-interning.md](../../design/label-interning.md)), so the lookup keys on the
     /// digest alone — reusing the classification's when the name has one, hashing the text when
     /// it does not.
     fn symbol(&self) -> Symbol {
-        match self.class {
-            Some(class) => class.symbol(),
-            None => Symbol::of(&self.text),
+        match self {
+            FieldName::Token(class) => class.symbol(),
+            FieldName::Rendered(text) => Symbol::of(text),
+        }
+    }
+
+    /// The spelling a diagnostic quotes. A classified name renders out of the run's label table
+    /// here — the one place the member read needs text at all.
+    fn text(&self, registries: &RunRegistries) -> Cow<'_, str> {
+        match self {
+            FieldName::Token(class) => Cow::Owned(crate::machine::model::render_label(
+                class.symbol(),
+                registries,
+            )),
+            FieldName::Rendered(text) => Cow::Borrowed(text),
         }
     }
 }
 
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
-/// type-channel leaf token (resolved or rendered), else a `MissingArg`. Each channel classifies the
-/// name where its text is in hand, so no consumer re-derives the class by a predicate over text.
-fn read_field_name<'a>(
-    args: BoundArgs<'a, '_>,
+/// type-channel leaf token (resolved or rendered), else a `MissingArg`. Each channel hands over the
+/// class it arrived on, so no consumer re-derives the class by a predicate over text.
+fn read_field_name(
+    args: BoundArgs<'_, '_>,
     registries: &RunRegistries,
-) -> Result<FieldName<'a>, KError> {
-    if let Some(obj) = args.object(&SLOTS.field) {
-        return match obj {
-            KObject::KString(s) => Ok(FieldName {
-                class: BinderSymbol::of(s),
-                text: Cow::Borrowed(*s),
-            }),
-            other => Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "field".to_string(),
-                expected: "Identifier".to_string(),
-                got: other.ktype().name(registries),
-            })),
-        };
+) -> Result<FieldName, KError> {
+    if let Some(v) = args.identifier(&SLOTS.field) {
+        // The parse classified this token value-side, so the channel tag is settled and nothing
+        // here reads a spelling.
+        return Ok(FieldName::Token(BinderSymbol::Value(v)));
     }
     if let Some(te) = args.unresolved_type(&SLOTS.field) {
-        return Ok(FieldName {
-            class: Some(BinderSymbol::Type(te)),
-            text: Cow::Owned(crate::machine::model::render_label(te.symbol(), registries)),
-        });
+        return Ok(FieldName::Token(BinderSymbol::Type(te)));
     }
     if let Some(kt) = args.ktype(&SLOTS.field) {
         // The bind seam lowers a `Type`-token field only when the name is registry-known — that is,
@@ -96,9 +109,9 @@ fn read_field_name<'a>(
         // above. A primitive carries no interned name to recover a class from, and names no member
         // either, so this classifies its rendering and misses.
         let text = kt.name(registries);
-        return Ok(FieldName {
-            class: BinderSymbol::of(&text),
-            text: Cow::Owned(text),
+        return Ok(match BinderSymbol::declared(&text, &registries.labels) {
+            Some(class) => FieldName::Token(class),
+            None => FieldName::Rendered(text),
         });
     }
     Err(KError::new(KErrorKind::MissingArg("field".to_string())))
@@ -113,39 +126,20 @@ pub fn body_identifier<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    let s_name = match ctx.args.object(&SLOTS.s) {
-        Some(KObject::KString(s)) => *s,
-        Some(other) => {
-            return Action::done(Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "s".to_string(),
-                expected: "Identifier".to_string(),
-                got: other.ktype().name(ctx.registries),
-            })));
-        }
-        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
+    let Some(s_name) = ctx.args.identifier(&SLOTS.s) else {
+        return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string()))));
     };
     let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
     // `s` is a bound name: cross the binding's own carrier as the field read's lhs operand, so the
     // projected field folds every region the bound value reaches. The lift is the only read — the
     // field probe runs under the envelope's own pins rather than off a bare reference.
-    if let Some(name) = crate::machine::model::ValueSymbol::of(s_name)
-        && let Some(lhs) = ctx.scope.lookup_value_delivered(name)
-    {
+    // The type channel is not consulted here: a value-classified token names no type, and a
+    // Type-token lhs picks `body_type_lhs` through its own slot.
+    if let Some(lhs) = ctx.scope.lookup_value_delivered(s_name) {
         return route(access_field(&ctx.ctx, &field_name, &lhs, ctx.registries));
     }
-    // An abstract type's name reaches this overload as a `KString` — the bind seam lowers a
-    // `Type` token in an `:Identifier` slot to its rendering — so the type channel is consulted
-    // under the name's own class; an identifier-class spelling classifies to `None` and misses.
-    if let Some(name) = TypeSymbol::declared(s_name, &ctx.registries.labels)
-        && let Some(kt) = ctx.scope.resolve_type(name)
-        && let TypeNode::AbstractType { name, .. } = ctx.types().node(kt)
-    {
-        return Action::done(Err(abstract_type_has_no_members(
-            &crate::machine::model::render_label(name.symbol(), ctx.registries),
-        )));
-    }
     Action::done(Err(KError::new(KErrorKind::UnboundName(
-        s_name.to_string(),
+        crate::machine::model::render_label(s_name.symbol(), ctx.registries),
     ))))
 }
 
@@ -255,7 +249,7 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
         }
     };
     let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
-    route(access_module_member(m, &field_name))
+    route(access_module_member(m, &field_name, ctx.registries))
 }
 
 /// Project `field` off a Type-channel lhs. A signature answers directly from its owned schema —
@@ -267,7 +261,7 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
 fn access_type_member<'a>(
     scope: &Scope<'a>,
     kt: KType,
-    field: &FieldName<'_>,
+    field: &FieldName,
     registries: &RunRegistries,
 ) -> Result<StepCarried<'a>, KError> {
     let types = &registries.types;
@@ -280,7 +274,7 @@ fn access_type_member<'a>(
             // partition is keyed by that same classification: a Type-class name can key only the
             // type-member maps, a Value-class one only the value slots. An unclassifiable name
             // keys neither and falls to the no-member error below.
-            let member = match field.class {
+            let member = match field.class() {
                 Some(BinderSymbol::Type(name)) => schema
                     .manifest_members
                     .get(&name)
@@ -293,7 +287,7 @@ fn access_type_member<'a>(
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
                     kt.name(registries),
-                    field.text
+                    field.text(registries)
                 )))),
             }
         }
@@ -330,23 +324,22 @@ fn abstract_type_has_no_members(name: &str) -> KError {
 /// falls to the `other` arm.
 fn wrapped_field_cell<'w>(
     target: &'w KObject<'w>,
-    field: Symbol,
-    text: &str,
+    field: &FieldName,
     registries: &RunRegistries,
 ) -> Result<PartedCell<'w>, KError> {
     match target {
         KObject::Wrapped { inner, type_id } => match inner.payload() {
-            KObject::Record(substrate, _) => match substrate.field_index(field) {
+            KObject::Record(substrate, _) => match substrate.field_index(field.symbol()) {
                 Some(at) => Ok(substrate
                     .project(at)
                     .expect("the index came from this substrate's own layout")),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
                     type_id.name(registries),
-                    text
+                    field.text(registries)
                 )))),
             },
-            payload => wrapped_field_cell(payload, field, text, registries),
+            payload => wrapped_field_cell(payload, field, registries),
         },
         other => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
@@ -369,19 +362,14 @@ fn wrapped_field_cell<'w>(
 /// door; a type member is owned data that clones into the read site's own region.
 fn access_field<'a>(
     step: &StepAllocator<'a>,
-    field: &FieldName<'_>,
+    field: &FieldName,
     lhs: &DeliveredCarried,
     registries: &RunRegistries,
 ) -> Result<StepCarried<'a>, KError> {
     // The open borrows the envelope's own pins for the whole read, which covers both the walk and
     // the `lift_out` upgrade below.
     let opened = lhs.open_at();
-    let parted = wrapped_field_cell(
-        opened.value().object(),
-        field.symbol(),
-        &field.text,
-        registries,
-    )?;
+    let parted = wrapped_field_cell(opened.value().object(), field, registries)?;
     match parted.value() {
         // A type member is owned data: it clones out of the container and allocates into the read
         // site's own region, so the read carries no dependence on the lhs carrier.
@@ -389,6 +377,9 @@ fn access_field<'a>(
         // A record field cell is a value or a resolved type; the bind seam's unlowered carrier
         // never lands in one.
         Held::UnresolvedType(_) => unreachable!("a record field is never an unlowered type name"),
+        // A name carrier is minted only for an `:Identifier` slot at the bind seam; a member cell
+        // comes from a container, which never holds one.
+        Held::Identifier(_) => unreachable!("a record field is never a captured identifier"),
         Held::Object(value) => {
             // A shallow scalar embeds no borrow at all, so it rebuilds owned and seals empty rather
             // than naming the member's run.
@@ -429,7 +420,8 @@ fn access_field<'a>(
 /// constraint.)
 fn access_module_member<'a>(
     m: &'a Module<'a>,
-    field: &FieldName<'_>,
+    field: &FieldName,
+    registries: &RunRegistries,
 ) -> Result<StepCarried<'a>, KError> {
     let module_scope = m.child_scope();
     // The field carries the classification of the channel it arrived on; the arms below probe the
@@ -438,10 +430,11 @@ fn access_module_member<'a>(
     let no_member = || {
         KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
-            m.path, field.text
+            m.path,
+            field.text(registries)
         )))
     };
-    let Some(binder) = field.class else {
+    let Some(binder) = field.class() else {
         return Err(no_member());
     };
     if let BinderSymbol::Type(name) = binder

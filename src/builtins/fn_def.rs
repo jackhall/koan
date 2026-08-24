@@ -7,7 +7,7 @@ use crate::machine::WriteGate;
 use crate::machine::model::Elaborator;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeNode;
-use crate::machine::model::{Argument, BinderSymbol, KType, SignatureElement};
+use crate::machine::model::{Argument, BinderSymbol, KType, SignatureElement, ValueSymbol};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -29,7 +29,7 @@ crate::slots! { SLOTS { body, name, return_type, signature } }
 pub(crate) fn build_fn_like<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
     builtin: &str,
-    kind: FnKind<'a>,
+    kind: FnKind,
 ) -> crate::machine::Action<'a> {
     use crate::machine::{Action, require_kexpression};
     use finalize::defer;
@@ -43,6 +43,7 @@ pub(crate) fn build_fn_like<'a>(
     } = kind
         && ctx.scope.is_in_sig_body()
     {
+        let name = crate::machine::model::render_label(name.symbol(), ctx.registries);
         return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
             "inside a SIG body, value slots must use VAL — write `(VAL {name}: <Type>)` \
                  instead of binding a function",
@@ -117,19 +118,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     build_fn_like(ctx, "FN", FnKind::Function { bound_name: None })
 }
 
-/// The `name` slot of a combined `LET <name> = …` statement, as a borrow at the declaring node's
-/// lifetime — an `Identifier` name part arrives as a `KObject::KString` cell, exactly as plain
-/// `LET` reads it. The slot is typed `IDENTIFIER`, so any other shape reaches a sibling overload
-/// rather than this read.
-pub(super) fn combined_bound_name<'a>(args: BoundArgs<'a, '_>) -> Result<&'a str, KError> {
-    use crate::machine::model::KObject;
-    match args.object(&SLOTS.name) {
-        Some(KObject::KString(s)) => Ok(s),
-        Some(_) => Err(KError::new(KErrorKind::ShapeError(
-            "LET name must be a bare identifier".to_string(),
-        ))),
-        None => Err(KError::new(KErrorKind::MissingArg("name".to_string()))),
-    }
+/// The `name` slot of a combined `LET <name> = …` statement, as the symbol the parse minted —
+/// exactly as plain `LET` reads it. The slot is typed `IDENTIFIER`, so any other shape reaches a
+/// sibling overload rather than this read.
+pub(super) fn combined_bound_name(args: BoundArgs<'_, '_>) -> Result<ValueSymbol, KError> {
+    args.identifier(&SLOTS.name)
+        .ok_or_else(|| KError::new(KErrorKind::MissingArg("name".to_string())))
 }
 
 /// `LET <name> = FN <signature> -> <return> = (<body>)` — one statement whose single binder
@@ -182,6 +176,7 @@ pub fn body_value_named_return<'a>(
         "FN",
         ctx.registries
     ));
+    let name = crate::machine::model::render_label(name.symbol(), ctx.registries);
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "FN return-type slot names a type, but `{name}` is a value. For the type of a value — a \
          module-valued parameter, say — write `-> :(TYPE OF {name})`"
@@ -232,7 +227,7 @@ pub fn body_record_schema<'a>(
                 "anonymous FN signature field has no recorded name".to_string(),
             ))));
         };
-        let Some(name) = BinderSymbol::of(&text) else {
+        let Some(name) = BinderSymbol::declared(&text, &ctx.registries.labels) else {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "anonymous FN parameter `{text}` is a keyword token, which nothing binds to",
             )))));

@@ -413,11 +413,8 @@ impl<'step> Host<'step> {
                 // included — so the cell is built **inside** a zero-dep fold, born co-located with
                 // that frame as its reach.
                 let frame = current_dest_frame(&self.ambient);
-                let labels = &self.ambient.registries().labels;
                 Slot::Static(KoanRegion::fold_witnessed(frame, move |brand| {
-                    Carried::Object(
-                        brand.alloc_object_folded(other.resolve_region_pure(*brand, labels)),
-                    )
+                    Carried::Object(brand.alloc_object_folded(other.resolve_region_pure(*brand)))
                 }))
             }
         }

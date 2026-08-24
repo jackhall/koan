@@ -26,6 +26,10 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
                 crate::machine::model::render_label(ti.symbol(), ctx.registries),
             )))));
         }
+        // The `value` slot is `:Any`, which admits no raw name part.
+        Some(Held::Identifier(_)) => {
+            unreachable!("`TYPE OF`'s value slot never captures an identifier")
+        }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("value".into())))),
     };
     if value.is_unstamped_empty_container() {

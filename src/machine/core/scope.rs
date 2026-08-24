@@ -145,7 +145,6 @@ pub enum ScopeKind<'a> {
     /// for free. Read through [`Scope::nearest_declaration_window`] (a consumer, walking out) and
     /// [`Scope::own_declaration_window`] (a declarator, this scope only).
     Module {
-        name: &'a str,
         group: Option<&'a OperatorGroup<'a>>,
         window: Option<AnnouncedWindow<'a>>,
     },
@@ -302,16 +301,11 @@ impl<'a> Scope<'a> {
     /// minted by `:|`). `announced` is the body's type-declaration pre-scan; its runs are bumped
     /// into this child's own region here, inside the construction door, so the window is live
     /// before any body statement can reach the scope.
-    fn child_under_module(
-        outer: &'a Scope<'a>,
-        name: &'a str,
-        announced: Option<&AnnouncedData>,
-    ) -> Scope<'a> {
+    fn child_under_module(outer: &'a Scope<'a>, announced: Option<&AnnouncedData>) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new(outer.brand)),
             ScopeKind::Module {
-                name,
                 group: None,
                 window: announced.map(|data| AnnouncedWindow::bump(outer.brand(), data)),
             },
@@ -324,7 +318,6 @@ impl<'a> Scope<'a> {
     /// [`Self::nearest_group_context`] hands back to the `OP` declarations inside.
     fn child_under_group(
         outer: &'a Scope<'a>,
-        name: &'a str,
         group: &'a OperatorGroup<'a>,
         announced: Option<&AnnouncedData>,
     ) -> Scope<'a> {
@@ -332,7 +325,6 @@ impl<'a> Scope<'a> {
             outer,
             ScopeBindings::Owned(Bindings::new(outer.brand)),
             ScopeKind::Module {
-                name,
                 group: Some(group),
                 window: announced.map(|data| AnnouncedWindow::bump(outer.brand(), data)),
             },
@@ -423,18 +415,11 @@ impl<'a> Scope<'a> {
 
     /// Allocate a same-region child stamped as a MODULE body (also the per-ascription view `:|`
     /// mints, which announces nothing). `announced` is the body's type-declaration pre-scan, owned
-    /// plain data whose runs are bumped into the child's own region here; `name` is re-homed the
-    /// same way.
-    pub fn alloc_child_under_module(
-        &'a self,
-        name: &str,
-        announced: Option<AnnouncedData>,
-    ) -> &'a Scope<'a> {
-        let name = self.brand().allocator().text(name);
-        Self::bump_child(
-            self,
-            Scope::child_under_module(self, name, announced.as_ref()),
-        )
+    /// plain data whose runs are bumped into the child's own region here. A body's name is its
+    /// declaration's — the binder holds the symbol and the module value carries the path — so the
+    /// scope stamp re-homes no spelling of its own.
+    pub fn alloc_child_under_module(&'a self, announced: Option<AnnouncedData>) -> &'a Scope<'a> {
+        Self::bump_child(self, Scope::child_under_module(self, announced.as_ref()))
     }
 
     /// Allocate a `GROUP` body: a MODULE-kinded child carrying the [`OperatorGroup`] record its `OP`
@@ -442,14 +427,12 @@ impl<'a> Scope<'a> {
     /// `&'a` — so this needs no crossing either.
     pub fn alloc_child_under_group(
         &'a self,
-        name: &str,
         group: &'a OperatorGroup<'a>,
         announced: Option<AnnouncedData>,
     ) -> &'a Scope<'a> {
-        let name = self.brand().allocator().text(name);
         Self::bump_child(
             self,
-            Scope::child_under_group(self, name, group, announced.as_ref()),
+            Scope::child_under_group(self, group, announced.as_ref()),
         )
     }
 

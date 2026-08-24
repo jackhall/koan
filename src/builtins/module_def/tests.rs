@@ -297,7 +297,7 @@ fn module_finalize_short_circuits_on_idempotent_state() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    let child = scope.alloc_child_under_module("foo", None);
+    let child = scope.alloc_child_under_module(None);
     // Every mint carries its self-sig (2d eager-seal invariant), so a manually pre-seeded
     // module derives its interface from the same (empty) draft production would, before the
     // value exists.

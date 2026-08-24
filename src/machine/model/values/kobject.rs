@@ -641,6 +641,8 @@ impl<'a> KObject<'a> {
 fn cell_reach<'a>(cell: &Rehomed<'a>, door: SubstrateDoor<'a, '_>) -> CellReach<'a, FrameStorage> {
     match cell.cell() {
         Held::Type(_) | Held::UnresolvedType(_) => CellReach::Owned,
+        // A name carrier lives in a bound-argument slot, never in a container substrate.
+        Held::Identifier(_) => unreachable!("a captured identifier is never a substrate cell"),
         Held::Object(o) => object_cell_reach(o, door),
     }
 }
@@ -918,6 +920,8 @@ fn copy_held_into<'b>(cell: &Held<'b>, dest: SubstrateDoor<'b, '_>) -> Held<'b> 
         Held::Object(o) => Held::Object(copy_object_into(o, dest)),
         Held::Type(t) => Held::Type(*t),
         Held::UnresolvedType(ti) => Held::UnresolvedType(*ti),
+        // A name carrier lives in a bound-argument slot, never in a container substrate.
+        Held::Identifier(_) => unreachable!("a captured identifier is never a substrate cell"),
     }
 }
 

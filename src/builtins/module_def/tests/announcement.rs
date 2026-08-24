@@ -276,13 +276,13 @@ fn unfilled_announced_member_is_a_typed_error() {
     let scope = test_run.scope;
     let mut announced = AnnouncedData::default();
     announced.announce(type_name("Ghost", test_run.registries()));
-    let child = scope.alloc_child_under_module("ghosted", Some(announced));
+    let child = scope.alloc_child_under_module(Some(announced));
+    let ghosted = value_name("ghosted", test_run.registries());
     assert!(
-        super::super::unsealed_announcement_error(scope, "ghosted", test_run.registries())
-            .is_none(),
+        super::super::unsealed_announcement_error(scope, ghosted, test_run.registries()).is_none(),
         "a window-less scope owes nothing",
     );
-    let error = super::super::unsealed_announcement_error(child, "ghosted", test_run.registries())
+    let error = super::super::unsealed_announcement_error(child, ghosted, test_run.registries())
         .expect("an unfilled announced member must error");
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg)

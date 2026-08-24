@@ -281,6 +281,8 @@ fn held_flat_size() -> u64 {
 pub(crate) fn held_copy_cost(h: &Held<'_>) -> u64 {
     match h {
         Held::Type(_) | Held::UnresolvedType(_) => held_flat_size(),
+        // A name carrier lives in a bound-argument slot, never in a container substrate.
+        Held::Identifier(_) => unreachable!("a captured identifier is never a substrate cell"),
         Held::Object(o) => object_copy_cost(o),
     }
 }

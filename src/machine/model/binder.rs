@@ -43,18 +43,6 @@ pub fn type_binder(
     })
 }
 
-/// The **value** channel's half of [`type_binder`].
-pub fn value_binder(
-    name: &str,
-    registries: &crate::machine::model::RunRegistries,
-) -> Result<crate::machine::model::ValueSymbol, KError> {
-    crate::machine::model::ValueSymbol::declared(name, &registries.labels).ok_or_else(|| {
-        KError::new(KErrorKind::ShapeError(
-            crate::machine::model::wrong_binder_class(name, BindKind::Value),
-        ))
-    })
-}
-
 /// Structural name extractor for a binder builtin. Returning `Some(name)` names the placeholder a
 /// forward reference parks on while the binder's body is in flight. Both channels' names are `Copy`
 /// symbols the parser minted when it classified the token, so the read allocates nothing and the

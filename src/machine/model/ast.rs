@@ -268,13 +268,15 @@ impl<'a> ExpressionPart<'a> {
     /// unresolved name, so the token's symbol rides through verbatim and scope-aware
     /// elaboration defers to
     /// [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).
+    /// An `:Identifier` slot is that carrier's value-channel mirror: the token's symbol rides
+    /// through on [`Held::Identifier`], so a captured name is never rendered to a string to be
+    /// bound.
     ///
     /// [`KFunction::bind_args`]: crate::machine::KFunction::bind_args
     pub fn resolve_for(
         &self,
         slot: &crate::machine::model::KType,
         scope: &'a crate::machine::core::Scope<'a>,
-        labels: &LabelInterner,
     ) -> Held<'a> {
         use crate::machine::model::types::KType;
         if let (ExpressionPart::Type(t), KType::PROPER_TYPE | KType::ANY_TYPE) = (self, *slot) {
@@ -289,20 +291,26 @@ impl<'a> ExpressionPart<'a> {
         if let (ExpressionPart::RecordType(inner), KType::RECORD_TYPE) = (self, *slot) {
             return Held::Object(KObject::KExpression(inner.expression()));
         }
-        Held::Object(self.resolve(scope.brand(), labels))
+        if let (ExpressionPart::Identifier(name), KType::IDENTIFIER) = (self, *slot) {
+            return Held::Identifier(*name);
+        }
+        Held::Object(self.resolve(scope.brand()))
     }
 
     /// The [`KObject`] this part denotes, built into `brand`'s region — the string arms bump their
     /// bytes there, so the product is dest-resident and holds no allocation of its own.
-    pub fn resolve(&self, brand: RegionBrand<'a>, labels: &LabelInterner) -> KObject<'a> {
+    pub fn resolve(&self, brand: RegionBrand<'a>) -> KObject<'a> {
         match self {
             ExpressionPart::Keyword(kw) => KObject::KString(brand.allocator().text(kw.text())),
-            ExpressionPart::Identifier(v) => {
-                KObject::KString(brand.allocator().text(&labels.render(v.symbol())))
-            }
-            ExpressionPart::Type(t) => {
-                KObject::KString(brand.allocator().text(&labels.render(t.symbol())))
-            }
+            // A name part carries a symbol, not text, and never becomes a string on the way to a
+            // slot. `:Identifier` is part-kind-exact — it admits this part shape and no resolved
+            // cell (`accepts_part` / `accepts_carried`) — so an identifier reaches the bind seam
+            // only through the `Held::Identifier` arm of `resolve_for`; a `Type` part likewise
+            // reaches only a `PROPER_TYPE` / `ANY_TYPE` slot, taken at the top of the same
+            // function. Every other slot is served by an eagerly-resolved carrier, not a raw name.
+            ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => unreachable!(
+                "a name part is captured as its symbol by resolve_for, never resolved to a string"
+            ),
             ExpressionPart::Literal(KLiteral::Number(n)) => KObject::Number(*n),
             ExpressionPart::Literal(KLiteral::String(s)) => {
                 KObject::KString(brand.allocator().text(s))
@@ -342,24 +350,20 @@ impl<'a> ExpressionPart<'a> {
 
     /// The [`KObject`] a **region-pure** part denotes, at *any* lifetime — the lifetime-generic peer
     /// of [`resolve`](Self::resolve) for static-cell sites that fold. The region-pure variants
-    /// (keyword, bare identifier, type name, literal) reach nothing outside `brand`'s own region, so
-    /// the value is constructible at the caller's fold brand, where [`resolve`](Self::resolve)'s
-    /// invariant `KObject<'a>` cannot go. Borrow-bearing variants are classified to owned
-    /// sub-dispatches before any static cell, so they never reach here.
-    pub fn resolve_region_pure<'b>(
-        &self,
-        brand: RegionBrand<'b>,
-        labels: &LabelInterner,
-    ) -> KObject<'b> {
+    /// (keyword, literal) reach nothing outside `brand`'s own region, so the value is constructible
+    /// at the caller's fold brand, where [`resolve`](Self::resolve)'s invariant `KObject<'a>` cannot
+    /// go. Borrow-bearing variants are classified to owned sub-dispatches before any static cell, so
+    /// they never reach here.
+    pub fn resolve_region_pure<'b>(&self, brand: RegionBrand<'b>) -> KObject<'b> {
         match self {
             ExpressionPart::Keyword(kw) => KObject::KString(brand.allocator().text(kw.text())),
-            ExpressionPart::Identifier(v) => {
-                KObject::KString(brand.allocator().text(&labels.render(v.symbol())))
-            }
-            ExpressionPart::Type(t) => {
-                KObject::KString(brand.allocator().text(&labels.render(t.symbol())))
-            }
             ExpressionPart::Literal(lit) => lit.to_kobject(brand),
+            // A name part in an aggregate is eagerly resolved against the scope chain
+            // (`classify_aggregate_part`), so it becomes a resolved cell before any static cell
+            // folds — a raw name never reaches a fold brand.
+            ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => unreachable!(
+                "a bare name in an aggregate is resolved to a cell before any static-cell fold"
+            ),
             // A quote's `KObject::KExpression` is invariant in `'a` with no `'static` rebuild, so it
             // cannot be constructed at the caller's fold brand — the classifier routes a quote to
             // its own sub-dispatch (which seals it through the expression door) before any static cell.
@@ -371,8 +375,8 @@ impl<'a> ExpressionPart<'a> {
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_) => unreachable!(
                 "resolve_region_pure is only called on a region-pure static-cell part \
-                 (keyword / bare identifier / type name / literal); borrow-bearing parts are \
-                 classified to sub-dispatches before any static cell"
+                 (keyword / literal); borrow-bearing parts are classified to sub-dispatches \
+                 before any static cell"
             ),
         }
     }

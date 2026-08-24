@@ -79,11 +79,14 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "GROUP", &SLOTS.body));
     let mode = crate::try_action!(reduction_mode(ctx, group_mode));
-    let members = crate::try_action!(scan_members(&body_expr, &name));
+    // The scan's diagnostics quote the group by name, so the binder's spelling is read back once
+    // here and the symbol itself carries on to the binding.
+    let spelling = crate::machine::model::render_label(name.symbol(), ctx.registries);
+    let members = crate::try_action!(scan_members(&body_expr, &spelling));
     // A group *is* a module, so its body announces its top-level type declarations the same way.
     let announced = crate::try_action!(super::module_def::announce_type_members(
         &body_expr,
-        &name,
+        &spelling,
         ctx.registries
     ));
 
@@ -92,7 +95,6 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
     // live before the scope is anything a node could reach.
     let child_scope = crate::try_action!(Scope::alloc_group_child(
         ctx.scope,
-        name.clone(),
         &member_refs,
         mode,
         announced,

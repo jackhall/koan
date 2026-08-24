@@ -224,9 +224,9 @@ impl KType {
                 TypeNode::OfKind(k) => k.admits(t.kind_of(types)),
                 _ => self == *t,
             },
-            // An aggregate cell holds a value or a resolved type; the bind seam's unlowered
-            // name carrier never becomes one, so no slot classifies it.
-            Held::UnresolvedType(_) => false,
+            // An aggregate cell holds a value or a resolved type; neither of the bind seam's
+            // name carriers ever becomes one, so no slot classifies them.
+            Held::UnresolvedType(_) | Held::Identifier(_) => false,
         }
     }
 

@@ -200,7 +200,11 @@ fn resolve_capture<'a>(
 /// (and any explicit result) type, then synthesize and register the operator's `KFunction`(s). A
 /// type slot naming a still-finalizing type binder — or spelled as a `:(…)` expression that has to
 /// sub-dispatch — defers the whole build to a dep-finish.
-fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, bound_name: Option<&'a str>) -> Action<'a> {
+fn build<'a>(
+    ctx: &BodyCtx<'_, 'a, '_>,
+    kind: OpKind,
+    bound_name: Option<crate::machine::model::ValueSymbol>,
+) -> Action<'a> {
     let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", &SLOTS.symbol));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "OP", &SLOTS.body));
     let has_result = ctx.args.held(&SLOTS.return_type).is_some();
@@ -344,7 +348,7 @@ struct OpPlan<'program: 'a, 'a> {
     program: ProgramBrand<'program>,
     /// `Some` for the combined `LET <name> = OP …` statement, which also binds the operator's
     /// primary function under that value name — one declaration reaching both install channels.
-    bound_name: Option<&'a str>,
+    bound_name: Option<crate::machine::model::ValueSymbol>,
 }
 
 impl<'program: 'a, 'a> OpPlan<'program, 'a> {
@@ -451,7 +455,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
         // stamps: the bound name and the registered overload are the same operator body.
         if let Some(bound_name) = bound_name {
             writes.push(WriteOp::Value {
-                name: crate::machine::model::value_binder(bound_name, registries)?,
+                name: bound_name,
                 index: bind_index,
                 sealed: cell.duplicate(),
             });
@@ -665,7 +669,10 @@ fn body_unary_missing_result<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 /// The combined twin of [`body_unary_missing_result`], naming the flat spelling in its suggestion.
 fn body_unary_missing_result_combined<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", &SLOTS.symbol));
-    let name = crate::builtins::fn_def::combined_bound_name(ctx.args).unwrap_or("op");
+    let name = match crate::builtins::fn_def::combined_bound_name(ctx.args) {
+        Ok(name) => crate::machine::model::render_label(name.symbol(), ctx.registries),
+        Err(_) => "op".to_string(),
+    };
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "`UNARY OP #({sym})` must declare its result type: \
          `LET {name} = UNARY OP #({sym}) OVER <Operand> -> <Result> = (…)`",

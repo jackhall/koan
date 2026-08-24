@@ -37,11 +37,11 @@ pub(crate) use ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, KeywordToken, Part, PartClass,
     ProgramExpression, WorkingExpression, WorkingPart, classify_dispatch_shape,
 };
+pub(crate) use binder::type_binder;
 pub use binder::{BindKind, BinderBucketFn, BinderNameFn, BinderSurface};
 pub(crate) use binder::{OpArity, op_declaration_arity};
 pub(crate) use binder::{StoredBinderKey, symbol_from_parts, symbol_from_quote_body};
 pub(crate) use binder::{TypeDeclarationSurface, announced_type_declaration};
-pub(crate) use binder::{type_binder, value_binder};
 pub(crate) use types::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
     SealOutcome, SigSchema, TypeMemberMap, TypeResolution, constructor_param_names,

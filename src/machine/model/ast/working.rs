@@ -161,7 +161,6 @@ impl<'a> WorkingPart<'a> {
         &self,
         slot: &crate::machine::model::KType,
         scope: &'a crate::machine::core::Scope<'a>,
-        labels: &LabelInterner,
     ) -> Held<'a> {
         match self {
             WorkingPart::Spliced { cell } => {
@@ -174,15 +173,15 @@ impl<'a> WorkingPart<'a> {
                     Carried::Object(obj) => Held::Object(obj.deep_clone()),
                 }
             }
-            WorkingPart::Ast(part) => part.resolve_for(slot, scope, labels),
-            _ => Held::Object(self.resolve(scope.brand(), labels)),
+            WorkingPart::Ast(part) => part.resolve_for(slot, scope),
+            _ => Held::Object(self.resolve(scope.brand())),
         }
     }
 
     /// The [`KObject`] this slot denotes, built into `brand`'s region.
-    pub fn resolve(&self, brand: RegionBrand<'a>, labels: &LabelInterner) -> KObject<'a> {
+    pub fn resolve(&self, brand: RegionBrand<'a>) -> KObject<'a> {
         match self {
-            WorkingPart::Ast(part) => part.resolve(brand, labels),
+            WorkingPart::Ast(part) => part.resolve(brand),
             // A value cell holds a `KExpression`, so a node the scheduler synthesized has no way to
             // become one — and never needs to: a synthesized node is always on its way to
             // `become_dispatch`, while every raw capture a `:KExpression` slot makes is of parsed
@@ -210,13 +209,9 @@ impl<'a> WorkingPart<'a> {
     /// of [`resolve`](Self::resolve) for static-cell sites that fold. Only an AST arm is ever
     /// region-pure; the scheduler's own arms are classified to sub-dispatches before any
     /// static cell.
-    pub fn resolve_region_pure<'b>(
-        &self,
-        brand: RegionBrand<'b>,
-        labels: &LabelInterner,
-    ) -> KObject<'b> {
+    pub fn resolve_region_pure<'b>(&self, brand: RegionBrand<'b>) -> KObject<'b> {
         match self {
-            WorkingPart::Ast(part) => part.resolve_region_pure(brand, labels),
+            WorkingPart::Ast(part) => part.resolve_region_pure(brand),
             _ => unreachable!(
                 "resolve_region_pure is only called on a region-pure static-cell part; \
                  synthesized nodes, spliced cells and staging holes are classified to owned \
