@@ -87,21 +87,21 @@ reads the allocations column; the symbol terms are quoted in the prose below.
 
 | shape | what it exercises | allocations | symbols | scaling term |
 |---|---|---|---|---|
-| `shapes/tail_loop.koan` | 100 tail-recursive steps | 11 957 | 641 | 92.0 per step, linear |
-| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 5 463 | 748 | ≈23 per dispatch, mildly superlinear |
-| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 374 | 682 | — |
-| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 4 971 | 746 | 49.9 per dispatch |
-| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 4 796 | 834 | — |
-| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 390 | 898 | 49.8 per dispatch |
-| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 110 | 669 | — |
-| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 180 | 861 | 64.7 per call |
-| `shapes/user_fn_params1_calls8.koan` | 8 one-parameter user-function calls | 2 941 | 636 | — |
-| `shapes/user_fn_params1_calls40.koan` | 40 one-parameter user-function calls | 4 115 | 668 | 36.7 per call |
-| `shapes/user_fn_params8_calls8.koan` | 8 eight-parameter user-function calls | 3 238 | 650 | — |
-| `shapes/user_fn_params8_calls40.koan` | 40 eight-parameter user-function calls | 5 244 | 682 | 62.7 per call, 3.71 per parameter |
-| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 3 425 | 720 | — |
-| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 6 391 | 1 072 | 92.7 per cycle |
-| *(empty program)* | interpreter startup and builtin seeding | 2 530 | 618 | — |
+| `shapes/tail_loop.koan` | 100 tail-recursive steps | 11 945 | 398 | 92.0 per step, linear |
+| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 5 438 | 498 | ≈23 per dispatch, mildly superlinear |
+| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 363 | 433 | — |
+| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 4 960 | 497 | 49.9 per dispatch |
+| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 4 783 | 569 | — |
+| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 378 | 633 | 49.8 per dispatch |
+| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 098 | 424 | — |
+| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 168 | 616 | 64.7 per call |
+| `shapes/user_fn_params1_calls8.koan` | 8 one-parameter user-function calls | 2 929 | 391 | — |
+| `shapes/user_fn_params1_calls40.koan` | 40 one-parameter user-function calls | 4 104 | 423 | 36.7 per call |
+| `shapes/user_fn_params8_calls8.koan` | 8 eight-parameter user-function calls | 3 226 | 406 | — |
+| `shapes/user_fn_params8_calls40.koan` | 40 eight-parameter user-function calls | 5 231 | 438 | 62.7 per call, 3.70 per parameter |
+| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 3 413 | 480 | — |
+| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 6 380 | 832 | 92.7 per cycle |
+| *(empty program)* | interpreter startup and builtin seeding | 2 519 | 367 | — |
 
 No shape can use comments: koan has none, and `#` is reserved for quoting. The prose
 that would have headed each file is here instead.
@@ -128,7 +128,7 @@ is unmeasured; the shapes are sized to the linear-enough middle rather than to t
 
 The walk term is **flat in depth**. Differencing the two call counts at one depth cancels
 parse and setup and leaves 32 dispatches' marginal cost: 1 597 allocations at depth 2 against
-1 594 at depth 10 — 49.9 and 49.8 per dispatch, the two depths indistinguishable. The walk's
+1 595 at depth 10 — 49.9 and 49.8 per dispatch, the two depths indistinguishable. The walk's
 per-scope buffers are hosted on the drain's step scratch arena
 ([dag-scheduler.md § The drain protocol](../workgraph/design/dag-scheduler.md#the-drain-protocol)),
 so a deeper walk bumps more scratch bytes and takes no heap allocation for them. The grid's
@@ -149,7 +149,7 @@ The **nominal-member** axis is the two `tagged_construct` shapes, 8 and 40 repet
 union's `SetMember` node out of the registry, selects a variant out of the constructor's schema,
 builds the tagged value and matches on its tag — so it is the shape that prices a *name that was
 declared*, where the four axes above price names that are bound, looked up or passed. It costs
-**92.7 per cycle**, from 2 966 allocations for the 32 cycles the shapes differ by. One of those 32 is
+**92.7 per cycle**, from 2 967 allocations for the 32 cycles the shapes differ by. One of those 32 is
 an arena chunk rather than heap traffic — bumpalo's 496-byte first chunk, and the only allocation
 size that moves anywhere in this table. The cycle's frame sits within a few bytes of that boundary
 and has crossed it twice: carrying a Type token as a symbol rather than as text took it under, to
@@ -158,13 +158,14 @@ is how the whole frame packs, so its direction does not follow the direction of 
 that deletion *shrank* `Scope`, 464 bytes to 448.
 
 The **fixed** figure the four axes are read against is the empty program's own: interpreter
-startup and builtin seeding, at **2 530**. Seeding registers every builtin overload, and each
-registration writes a bucket key and a dispatch token; both hold a keyword's symbol rather than
-its text, so the seeding pass copies no keyword bytes and mints no per-element string. The figure
-is nearly inert to the symbol work itself — an empty program names nothing, so parse-interned
-tokens move it by one — but it is not inert to the *count* of overloads: registering the two
-dynamic `ATTR` reads costs 38, and since every run pays seeding once, that 38 lands on every shape
-in the table alike.
+startup and builtin seeding, at **2 519**, down 11. Seeding registers every builtin overload, and
+each registration writes a bucket key and a dispatch token; both hold a keyword's symbol rather
+than its text, so the seeding pass now copies no keyword bytes at all. The 11 is arena chunks:
+registration re-homed each keyword's normalized spelling into the signature's own region, one
+per keyword element of every builtin signature, and those bumps are gone. The figure is otherwise
+inert to the symbol work — an empty program names nothing — but it is not inert to the *count* of
+overloads: registering the two dynamic `ATTR` reads costs 38, and since every run pays seeding
+once, that 38 lands on every shape in the table alike.
 
 The marginal terms move the other way, and it is the same four that moved last time: the step term
 91.0 to 92.0, the walk term 48.9/48.8 to 49.9/49.8, the eight-parameter call term 61.7 to 62.7, the
@@ -174,8 +175,16 @@ pushes them. The terms that do not move are the ones whose frames are nowhere ne
 one-parameter call at 36.7, a builtin call at 64.7, and the operator chain, whose `+` opens no frame
 of its own.
 
-Every movement in this column is either the seeding constant or a chunk crossing: the value-side
-symbol work opens no new allocation site on a per-step, per-dispatch or per-call path. A crossing is
+One shape moves further than the seeding constant: the operator chain falls 25, and the 14 beyond
+the constant is the **peel's**. `peel_redundant` rebuilds every node it walks, and refilling that
+node's structural cache meant a second bump of its bucket key. The rebuild door carries the
+survivor's cache instead, since the peel preserves the part-kind sequence and every keyword symbol
+the cache reads. What it saves grows with the node's part count — 1 for a three-part node, 5 at
+15 parts, 14 for the chain's 255 — because a longer key crosses more arena chunk doublings on its
+way into the region.
+
+Every other movement in this column is the seeding constant or a chunk crossing: the symbol work
+opens no new allocation site on a per-step, per-dispatch or per-call path. A crossing is
 still one more call to the allocator per repetition — what it is not is traffic a marginal path
 newly makes, which is why the same four terms move in both directions as layouts change.
 
@@ -184,51 +193,60 @@ newly makes, which is why the same four terms move in both directions as layouts
 The symbols column reads the same way: a fixed term the empty program sets, and a marginal term
 each differencing pair leaves behind.
 
-The **fixed** symbol figure is **618** — 614, plus 4 for the two dynamic `ATTR` overloads. The 614
-was itself down from 905, before a declaration recorded its spelling under the digest it had
-already taken. Seeding is where almost all of a run's mints are, because
-every builtin overload registers a signature and every parameter slot, bucket key and dispatch
-token is declared as it goes. Each such spelling is a `StaticName` declared beside the body that
-reads it
+The **fixed** symbol figure is **367**, down 251. Seeding is where almost all of a run's mints are,
+because every builtin overload registers a signature and every parameter slot, bucket key and
+dispatch token is declared as it goes. The 251 is one hash per keyword element of every builtin
+signature: a draft classified the spelling it was written with, and registration classified the
+normalized form again to key its record. The draft door normalizes and interns once, and
+registration copies the classified symbol, so a keyword element is hashed where it is written and
+nowhere after. Each such spelling is a `StaticName` declared beside the body that reads it
 ([label-interning.md § Names fixed in Rust source](../design/label-interning.md#names-fixed-in-rust-source)):
-minted once for the process at first touch and compared by symbol everywhere after. What the 291
-sheds is the second hash each *declaration* used to take — classifying the text and then handing
-the same text to the interner, which hashed it again to key the record. The classified symbol now
-carries into the recording, so a declaration mints once. That single change is 279 of the 291;
-the other 12 are the eleven builtin type names, declared as statics rather than classified from
-text wherever a seam needed one.
+minted once for the process at first touch and compared by symbol everywhere after.
 
-Every marginal term falls, and one of them falls to nothing. A **tail-loop step** mints **0.0**:
-the shape's whole figure is 641 at 10 steps, at 50, at 100 and at 200, so a loop in steady state
-hashes no text at all. That is the cleanest statement of what a parse-minted name buys — the step's
-two statements spell `n` twice and its `MATCH` binds `it` once, and all three are symbols the parse
-and the arm binder already hold. A **scope-walk dispatch** is 2, down from 3, at both depths — one
-`PROBE y`, one value name, one mint gone, and the saving is depth-independent exactly like its
-allocation term. A **user-function call** is 1.0 per call, down from 2.0, still flat across the
-arities: the same at one parameter and at eight. A **builtin call** is 6, down from 7, and a
-**tagged construct-and-match** cycle 11, down from 12; both shapes are `MATCH` statements, and the
-1 each sheds is the arm binder that used to classify `it` afresh on every arm taken.
+Not all of the process's one-time mints sit in that fixed figure any more. A keyword the machine
+compares against — `AS`, `->`, `_`, the binder's key specs, the reserved operator names — is such a
+`StaticName`, and it mints when the path that reads it is first walked, which is in some *program*
+rather than at seeding. So a shape read against the empty program picks up a small constant for the
+statics it is the first to touch: `PRINT 1` picks up 2. It is a per-process constant, not a
+per-repetition one — the 8- and 40-repetition variants of every shape above pick up the same
+amount, so it lands in the fixed part of a reading and in no marginal term.
 
-One term does not move: the **operator chain**, read against the empty program rather than a
-differencing pair, is 1.0 per dispatch over its 127. A `+` chain binds nothing and names nothing —
-what it still mints is its own keyword.
+Every marginal term is unchanged, and one of them is still nothing. A **tail-loop step** mints
+**0.0**: the shape's whole figure is 398 at 10 steps, at 50, at 100 and at 200, so a loop in steady
+state hashes no text at all. That is the cleanest statement of what a parse-minted name buys — the
+step's two statements spell `n` twice and its `MATCH` binds `it` once, and all three are symbols the
+parse and the arm binder already hold. A **scope-walk dispatch** is 2 at both depths — one `PROBE y`,
+one value name — and the saving is depth-independent exactly like its allocation term. A
+**user-function call** is 1.0 per call, flat across the arities: the same at one parameter and at
+eight. A **builtin call** is 6 and a **tagged construct-and-match** cycle 11; both shapes are `MATCH`
+statements.
 
-An earlier pair of changes set those terms up. The single-hash **declaration**
-above is not only a seeding effect: a statement declares tokens as it runs, and each of them —
-keyword, value name and Type name alike — now mints once where it minted twice. And a **Type
-token** mints at the parse that classifies it and nowhere after, where each seam that read one
-used to re-classify its text. The tagged cycle splits its drop of 10 between them, 7 and 3:
-7 across the tokens it declares per cycle, and 3 on its `-> :Number` leaf alone, which cost four
-mints a cycle and now costs the one the parse takes. The value side is now the same story — an
-`Identifier` part carries the symbol its parse minted and every reader down to the lookup ladder
+What the *declaration* side sheds is visible in the scope-walk grid, which is the only pair of
+shapes here that differ in how many overloads they declare. The depth-10 shapes declare eight more
+shadowing overloads than the depth-2 ones and land 16 mints lower for it — the same double hash as
+seeding's, two per overload, now taken once.
+
+The **operator chain** is read against the empty program rather than a differencing pair, and its
+131 is exact: 127 for the `+` tokens, one for `PRINT`, one for the chain's probe key, and 2 for the
+statics it first touches. The probe is the entry this shape records. An `OperatorChain` node keys
+the operator registry by a digest over the run of operators it names, and that digest was minted
+twice at parse — once when the bracket frame closed into a node, and again when the redundant-wrapper
+peel rebuilt the node and refilled its cache from scratch. The peel carries the survivor's cache,
+so the chain mints one probe where it minted two, and the registration side mints its powerset keys
+through the same run-digest constructor
+([operators.md](../design/operators.md)) — so a registered key and a live chain's probe agree by
+construction, and no probe path reads text at all.
+
+An earlier pair of changes set the marginal terms up. The single-hash **declaration** above is not
+only a seeding effect: a statement declares tokens as it runs, and each of them — keyword, value
+name and Type name alike — mints once where it minted twice. And a **Type token** mints at the parse
+that classifies it and nowhere after, where each seam that read one used to re-classify its text.
+An `Identifier` part carries the symbol its parse minted and every reader down to the lookup ladder
 takes it
-([label-interning.md § Where text becomes a symbol](../design/label-interning.md#where-text-becomes-a-symbol)),
-which is what the drops above measure. What is left on the marginal terms is spelled by the program's
-**keywords** — a statement's leading token, an operator's — and carrying those from the parse
-boundary too is
-[symbol-only keyword tokens](../roadmap/reduce_allocs/symbol-only-keyword-tokens.md). The flat
-line across arities is unchanged in meaning: a parameter costs nothing to name, whichever side
-declares it.
+([label-interning.md § Where text becomes a symbol](../design/label-interning.md#where-text-becomes-a-symbol));
+a `Keyword` part carries its symbol and nothing else, so the spelling a diagnostic prints is
+resolved out of the run's label table rather than carried beside every token. The flat line across
+arities is unchanged in meaning: a parameter costs nothing to name, whichever side declares it.
 
 The symbol work costs nothing in the allocations column. A `StaticName`'s memo is a `LazyLock` over
 a `Copy` digest, so forcing it heap-allocates nothing, and registration writes the interner entry it
@@ -237,10 +255,10 @@ always wrote; what moves that column here is frame layout and overload count, ab
 ## The regression test
 
 `tests/allocation_baseline.rs` asserts the two absolute shapes' bracketed counts against a
-stated bound — 11 985 for the loop, 5 490 for the chain, carrying 37 and 36 allocations of
+stated bound — 11 973 for the loop, 5 465 for the chain, carrying 37 and 36 allocations of
 headroom — and each differencing pair's marginal count against its measurement plus 31: 2 101
-for the builtin call, 1 205 for the one-parameter user call, 863 for the seven-parameter slope,
-2 997 for the tagged construction.
+for the builtin call, 1 206 for the one-parameter user call, 861 for the seven-parameter slope,
+2 998 for the tagged construction.
 The bounds are tight by design: the margin is smaller than the 100 (loop), 127 (chain) or 32
 (every differencing pair, which is how many repetitions they differ by) a single new allocation
 on the scaling path would add, so one added allocation fails a test. Rebaselining is meant to be
@@ -256,8 +274,9 @@ When a bound moves, the question the failure message asks is which of the three 
 first — a new allocation on a marginal path — is a regression.
 
 Those figures sit 9 under the whole-program table above — the same gap for both shapes, and
-essentially all of it process startup. The interpreter holds almost no lazy one-time state, so
-there is little for a first-run bracket to absorb.
+essentially all of it process startup. What lazy one-time state the interpreter does hold — a
+`StaticName`'s memo, forced the first time a path reads it — the untracked warm-up run below
+absorbs, so little of it is left for a first-run bracket to carry.
 
 `allocations_for` still runs each shape once *outside* its bracket. The bounds are tight
 enough that one lazy static added later would break them by test order alone — whichever test

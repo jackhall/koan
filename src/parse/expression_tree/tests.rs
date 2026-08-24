@@ -8,6 +8,7 @@ mod basics;
 mod interning;
 mod list_dict;
 mod literals;
+mod probes;
 mod spans;
 mod type_sigil;
 mod value_sigil;

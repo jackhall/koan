@@ -435,3 +435,62 @@ fn duplicate_dict_key_is_allowed() {
         "[D{s(a): n(1), s(a): n(2)}]",
     );
 }
+
+/// A literal holds values, and a keyword is not one: it is fixed syntax that only means
+/// something in combination. The refusal is a parse error naming the spelling, so the reader
+/// learns which token they wrote is syntax rather than a value.
+#[test]
+fn keyword_in_list_literal_errors() {
+    let error = tree("[FOO 1]").unwrap_err();
+    assert!(
+        error.contains("`FOO` is a keyword"),
+        "the error must name the spelling, got: {error}",
+    );
+}
+
+/// An operator glyph is a keyword too, so a bare list of an arithmetic run is refused: the
+/// chain wants a parenthesized expression, not a list literal.
+#[test]
+fn operator_in_list_literal_errors() {
+    let error = tree("[1 + 2]").unwrap_err();
+    assert!(
+        error.contains("`+` is a keyword"),
+        "the error must name the glyph, got: {error}",
+    );
+}
+
+#[test]
+fn keyword_as_dict_value_errors() {
+    let error = tree("{count: FOO}").unwrap_err();
+    assert!(
+        error.contains("`FOO` is a keyword"),
+        "the error must name the spelling, got: {error}",
+    );
+}
+
+#[test]
+fn keyword_as_dict_key_errors() {
+    let error = tree("{FOO: 1}").unwrap_err();
+    assert!(
+        error.contains("`FOO` is a keyword"),
+        "the error must name the spelling, got: {error}",
+    );
+}
+
+/// Record literals route through the same brace frame, so a keyword in a field value is
+/// refused on the same funnel.
+#[test]
+fn keyword_as_record_field_value_errors() {
+    let error = tree("{x = FOO}").unwrap_err();
+    assert!(
+        error.contains("`FOO` is a keyword"),
+        "the error must name the spelling, got: {error}",
+    );
+}
+
+/// The refusal is about a *bare* keyword reaching a literal frame. A parenthesized expression
+/// nested inside the literal is an ordinary element, keywords and all.
+#[test]
+fn keyword_inside_a_nested_expression_stays_legal() {
+    assert_eq!(tree("[(1 + 2) 3]").unwrap(), "[L[[n(1) t(+) n(2)] n(3)]]",);
+}

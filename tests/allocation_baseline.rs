@@ -63,7 +63,7 @@ fn allocations_for(source: &str, path: &str) -> u64 {
 }
 
 /// 100 tail-recursive steps, 92.0 allocations each — exactly linear, measured flat at
-/// 10/50/100/200. Measured 2026-08-24 at 11 948. ≈1 of those per step is an arena chunk rather
+/// 10/50/100/200. Measured 2026-08-24 at 11 936. ≈1 of those per step is an arena chunk rather
 /// than a heap object: a step's frame does not fit bumpalo's 496-byte first chunk, so the region
 /// takes a second one. That term tracks the byte size of what a frame holds — `Scope` above all —
 /// and moves by one per step whenever a layout change carries the frame across the boundary, in
@@ -73,7 +73,7 @@ fn allocations_for(source: &str, path: &str) -> u64 {
 /// cannot see one allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
-    const BOUND: u64 = 11_985;
+    const BOUND: u64 = 11_973;
     let delta = allocations_for(
         include_str!("../audit/shapes/tail_loop.koan"),
         "audit/shapes/tail_loop.koan",
@@ -88,13 +88,13 @@ fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
 
 /// A 128-operand `+` chain, so 127 dispatches at ≈23 allocations each — mildly superlinear,
 /// with marginal cost rising across the 16→32 … 128→256 operand doublings. Measured 2026-08-24
-/// at 5 454. A `+` chain reaches no ATTR overload, so the per-dispatch term is unmoved by one being
+/// at 5 429. A `+` chain reaches no ATTR overload, so the per-dispatch term is unmoved by one being
 /// registered; what such a registration moves is the startup constant every shape here carries. The
 /// bound is the measurement plus 36, under the 127 a single new per-dispatch allocation would add.
 /// Same headroom rule as the loop.
 #[test]
 fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
-    const BOUND: u64 = 5_490;
+    const BOUND: u64 = 5_465;
     let delta = allocations_for(
         include_str!("../audit/shapes/operator_chain.koan"),
         "audit/shapes/operator_chain.koan",
@@ -117,7 +117,7 @@ fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
 /// dispatches' marginal cost; differencing *those* leaves what 8 extra scopes cost per
 /// dispatch. Before the walk's buffers moved onto the step scratch arena that difference
 /// measured 509 — ≈2 heap allocations per extra scope walked, per dispatch. Measured
-/// 2026-08-24 it is **−3**: 1 594 allocations for 32 dispatches at depth 10 against 1 597 at
+/// 2026-08-24 it is **−2**: 1 595 allocations for 32 dispatches at depth 10 against 1 597 at
 /// depth 2, the two depths indistinguishable and the deeper walk marginally the cheaper.
 ///
 /// The bound is one allocation per extra dispatch, far under the ≥256 that a single
@@ -194,8 +194,8 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 /// builds no string. What remains in the slope is per-*argument* cost the bind does not own: the
 /// extra source the call site parses, and the delivery carrier each argument travels in.
 ///
-/// Measured 2026-08-24: **1 174** for 32 one-parameter calls (36.7 each) and **2 006** for 32
-/// eight-parameter calls (62.7 each), a slope of 832 — 3.71 per parameter per call. One of those
+/// Measured 2026-08-24: **1 175** for 32 one-parameter calls (36.7 each) and **2 005** for 32
+/// eight-parameter calls (62.7 each), a slope of 830 — 3.70 per parameter per call. One of those
 /// 32 is an arena chunk, not heap traffic: at eight parameters the call's own region does not fit
 /// bumpalo's 496-byte first chunk and takes a second one, while at one parameter it is never near
 /// the boundary. That term follows the byte size of what a frame holds and flips with any layout
@@ -206,8 +206,8 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 /// by ≈224.
 #[test]
 fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
-    const PER_CALL_BOUND: u64 = 1_205;
-    const PER_PARAMETER_BOUND: u64 = 863;
+    const PER_CALL_BOUND: u64 = 1_206;
+    const PER_PARAMETER_BOUND: u64 = 861;
     let arity1 = allocations_for(
         include_str!("../audit/shapes/user_fn_params1_calls40.koan"),
         "audit/shapes/user_fn_params1_calls40.koan",
@@ -249,7 +249,7 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
 /// registry (a clone per read), selects a variant out of the constructor's schema, builds the
 /// tagged value, and matches on its tag.
 ///
-/// Measured 2026-08-24 at **2 966** for the 32 cycles (92.7 each). One per cycle is an arena
+/// Measured 2026-08-24 at **2 967** for the 32 cycles (92.7 each). One per cycle is an arena
 /// chunk rather than heap traffic: the cycle's frame does not fit bumpalo's 496-byte first chunk,
 /// so its region takes a second one. That term follows the byte size of what a frame holds and
 /// flips with any layout change either way.
@@ -258,7 +258,7 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
 /// across the repetition gap — fails it.
 #[test]
 fn the_tagged_construct_shape_stays_within_its_per_construction_bound() {
-    const BOUND: u64 = 2_997;
+    const BOUND: u64 = 2_998;
     let marginal = allocations_for(
         include_str!("../audit/shapes/tagged_construct_calls40.koan"),
         "audit/shapes/tagged_construct_calls40.koan",
