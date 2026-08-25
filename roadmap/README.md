@@ -47,6 +47,8 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Parse at runtime](metaprogramming/parse-at-runtime.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Deferred return-obligation labels](reduce_allocs/deferred-return-obligation-labels.md)
+- [Frame and scope bookkeeping](reduce_allocs/frame-scope-bookkeeping.md)
+- [Outcome and obligation boxing](reduce_allocs/outcome-obligation-boxing.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
