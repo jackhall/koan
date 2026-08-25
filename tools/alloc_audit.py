@@ -382,66 +382,131 @@ def prior_terms(record_dir: Path, sha: str) -> dict[str, tuple[float, float]]:
 # --- reporting --------------------------------------------------------------
 
 
-def _delta(now: float, then: float | None, places: int = 0) -> str:
+def _delta(now: float, then: float | None, places: int = 0,
+           tolerance: float = 0.0) -> str:
+    """The figure's movement, or `=` when it has not moved by more than `tolerance`.
+
+    The difference is rounded to the printed precision before either the comparison
+    or the formatting, so the two agree and so the noise a float difference carries
+    below that precision cannot decide parity. The default tolerance calls a figure
+    moved as soon as it prints as moved; a derived figure passes one unit in the
+    last printed place, the smallest tolerance there is above zero."""
     if then is None:
         return "—"
-    difference = now - then
-    if abs(difference) < 10 ** -places / 2:
+    difference = round(now - then, places)
+    if abs(difference) <= tolerance:
         return "="
     return f"{difference:+.{places}f}"
 
 
+def _plural(count: int, noun: str) -> str:
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+def _summary(shapes: int, moved_shapes: int, moved_terms: int,
+             bounds: int, drifted: int, against: tuple[str, str] | None) -> str:
+    """The one line a quiet sweep leads with: what moved, against what, and how the
+    bounds stand. Every figure it names is either zero — nothing below it to read —
+    or the row count of a table printed underneath."""
+    basis = f"vs {against[0]} {against[1]}" if against else "no recorded sweep"
+    if against is None:
+        movement = f"{_plural(shapes, 'shape')} measured"
+    elif moved_shapes or moved_terms:
+        movement = (f"{_plural(moved_shapes, 'shape')}, "
+                    f"{_plural(moved_terms, 'term')} moved")
+    else:
+        movement = f"{_plural(shapes, 'shape')}, all terms at parity"
+    if not bounds:
+        verdict = "bounds not checked"
+    elif drifted:
+        verdict = f"{bounds - drifted}/{bounds} bounds ok, {drifted} drifted"
+    else:
+        verdict = f"{bounds} bounds ok"
+    return f"allocation audit: {movement} {basis}; {verdict}"
+
+
 def report(readings: dict[str, tuple[int, int]], bracketed: dict[str, int],
            terms: dict[str, tuple[float, float]], record_dir: Path,
-           against: tuple[str, str] | None) -> None:
+           against: tuple[str, str] | None,
+           quiet: bool = False) -> tuple[int, int, list[str]]:
     """Print the sweep, each figure beside its delta against the recorded sweep
-    `against` — the newest one on record, or none when the record is empty."""
-    if against is None:
-        print("no recorded sweep to compare against")
-    else:
-        print(f"against the sweep recorded {against[0]} at {against[1]} "
-              f"({_display(_run_path(record_dir, against[1]))})")
+    `against` — the newest one on record, or none when the record is empty.
+
+    Under `quiet`, a row whose figures both match that sweep is dropped, and a
+    table left with no rows is not printed at all: a sweep that has not moved
+    then says so in the caller's one-line summary rather than in forty. Returns
+    the count of moved shape rows and moved term rows either way."""
+    lines: list[str] = []
+    if not quiet:
+        if against is None:
+            lines.append("no recorded sweep to compare against")
+        else:
+            lines.append(f"against the sweep recorded {against[0]} at {against[1]} "
+                         f"({_display(_run_path(record_dir, against[1]))})")
     recorded = read_run(record_dir, against[1]) if against else {}
 
-    print(f"\n{'shape':<30} {'allocations':>12} {'Δ':>7} {'symbols':>8} {'Δ':>6} "
-          f"{'bracketed':>10}")
+    shape_rows = []
     for shape, (allocations, symbols) in sorted(readings.items()):
         prior = recorded.get(shape)
         bracket = bracketed.get(shape)
         allocation_delta = _delta(allocations, prior[0] if prior else None)
         symbol_delta = _delta(symbols, prior[1] if prior else None)
-        print(f"{shape:<30} {allocations:>12} {allocation_delta:>7} "
-              f"{symbols:>8} {symbol_delta:>6} "
-              f"{bracket if bracket is not None else '-':>10}")
+        shape_rows.append((allocation_delta != "=" or symbol_delta != "=",
+                           f"{shape:<30} {allocations:>12} {allocation_delta:>7} "
+                           f"{symbols:>8} {symbol_delta:>6} "
+                           f"{bracket if bracket is not None else '-':>10}"))
 
     recorded_terms = prior_terms(record_dir, against[1]) if against else {}
-    print(f"\n{'term':<22} {'allocations':>12} {'Δ':>7} {'symbols':>8} {'Δ':>6}  basis")
+    term_rows = []
     for term in TERMS:
         if term.name not in terms:
             continue
         alloc, symbols = terms[term.name]
         prior = recorded_terms.get(term.name)
-        print(f"{term.name:<22} {alloc:>12.2f} {_delta(alloc, prior[0] if prior else None, 2):>7} "
-              f"{symbols:>8.2f} {_delta(symbols, prior[1] if prior else None, 2):>6}  {term.basis}")
+        # A term is differenced and divided out of a pair of readings, so it carries
+        # rounding noise in its last printed place that no allocation caused. One
+        # unit of tolerance is what separates that noise from a term that moved.
+        allocation_delta = _delta(alloc, prior[0] if prior else None, 2, 10 ** -2)
+        symbol_delta = _delta(symbols, prior[1] if prior else None, 2, 10 ** -2)
+        term_rows.append((allocation_delta != "=" or symbol_delta != "=",
+                          f"{term.name:<22} {alloc:>12.2f} {allocation_delta:>7} "
+                          f"{symbols:>8.2f} {symbol_delta:>6}  {term.basis}"))
+
+    lines += _table(f"{'shape':<30} {'allocations':>12} {'Δ':>7} {'symbols':>8} "
+                    f"{'Δ':>6} {'bracketed':>10}", shape_rows, quiet)
+    lines += _table(f"{'term':<22} {'allocations':>12} {'Δ':>7} {'symbols':>8} "
+                    f"{'Δ':>6}  basis", term_rows, quiet)
+    return (sum(moved for moved, _ in shape_rows),
+            sum(moved for moved, _ in term_rows), lines)
 
 
-def report_bounds(bracketed: dict[str, int]) -> int:
+def _table(header: str, rows: list[tuple[bool, str]], quiet: bool) -> list[str]:
+    """Render `header` over `rows`, keeping only the moved ones under `quiet` and
+    every one otherwise. A table left with no rows renders as nothing at all."""
+    kept = [row for moved, row in rows if moved or not quiet]
+    return ["", header, *kept] if kept else []
+
+
+def report_bounds(bracketed: dict[str, int],
+                  quiet: bool = False) -> tuple[int, list[str]]:
     """Print each bound's headroom over its measurement. A bound earns its place by
     sitting above the measurement (the test passes) and under one repetition-set of
     it (the test can still see a single added allocation); anything else is a bound
-    that has drifted from what its own doc comment claims.
+    that has drifted from what its own doc comment claims. Under `quiet`, only the
+    drifted bounds are kept. Returns how many drifted, beside the lines.
     """
     constants = read_bound_constants()
     labels = {bound: f"{bound.test}::{bound.const}" for bound in BOUNDS}
     width = max(len(label) for label in labels.values())
-    print(f"\n{'bound':<{width}} {'measured':>9} {'bound':>8} {'headroom':>9}  verdict")
+    rows = []
     drifted = 0
     for bound in BOUNDS:
         value = constants.get((bound.test, bound.const))
         measured = _evaluate(bound.measure, bracketed)
         label = labels[bound]
         if value is None or measured is None:
-            print(f"{label:<{width}} {'—':>9} {'—':>8} {'—':>9}  unreadable")
+            rows.append((True, f"{label:<{width}} {'—':>9} {'—':>8} "
+                               f"{'—':>9}  unreadable"))
             drifted += 1
             continue
         headroom = value - measured
@@ -453,8 +518,11 @@ def report_bounds(bracketed: dict[str, int]) -> int:
             verdict = "ok"
         if verdict != "ok":
             drifted += 1
-        print(f"{label:<{width}} {measured:>9} {value:>8} {headroom:>9}  {verdict}")
-    return drifted
+        rows.append((verdict != "ok",
+                     f"{label:<{width}} {measured:>9} {value:>8} {headroom:>9}  {verdict}"))
+    return drifted, _table(
+        f"{'bound':<{width}} {'measured':>9} {'bound':>8} {'headroom':>9}  verdict",
+        rows, quiet)
 
 
 def main() -> int:
@@ -464,6 +532,9 @@ def main() -> int:
                         help="record this sweep into the trend logs (default: read-only)")
     parser.add_argument("--dir", type=Path, default=RECORD_DIR,
                         help=f"where the record lives (default: {_display(RECORD_DIR)})")
+    parser.add_argument("--quiet", action="store_true",
+                        help="print one summary line, plus only the rows that moved "
+                             "against the recorded sweep and the bounds that drifted")
     parser.add_argument("--no-bounds", action="store_true",
                         help="skip the bracketed run behind the bound check; not for a "
                              "recording sweep, whose entry carries that reading")
@@ -485,10 +556,15 @@ def main() -> int:
     date, sha = _stamp()
     # A recording sweep reports against the newest sweep it is not about to replace;
     # a read-only one reports against the newest on record, its own commit included.
-    report(readings, bracketed, terms, args.dir,
-           prior_sweep(args.dir, exclude=sha if args.baseline else None))
-    if not args.no_bounds:
-        report_bounds(bracketed)
+    against = prior_sweep(args.dir, exclude=sha if args.baseline else None)
+    moved_shapes, moved_terms, lines = report(readings, bracketed, terms, args.dir,
+                                              against, args.quiet)
+    drifted, bound_lines = (0, []) if args.no_bounds else report_bounds(bracketed, args.quiet)
+    if args.quiet:
+        print(_summary(len(readings), moved_shapes, moved_terms,
+                       len(BOUNDS) if not args.no_bounds else 0, drifted, against))
+    for line in lines + bound_lines:
+        print(line)
 
     if args.baseline:
         path = record_run(readings, bracketed, date, sha, args.dir)

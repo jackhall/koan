@@ -24,6 +24,7 @@ def regenerate_source_data(
     src_root: Path = Path("src"),
     package: str = "koan",
     reexport_correct: bool = True,
+    quiet: bool = False,
 ) -> None:
     cargo_cmd = [
         "cargo", "modules", "dependencies",
@@ -31,7 +32,8 @@ def regenerate_source_data(
         "--no-externs", "--no-sysroot",
         "--no-traits", "--no-fns", "--no-types",
     ]
-    print(f"regenerating {edges_path} via `cargo modules dependencies`...")
+    note = (lambda *_: None) if quiet else print
+    note(f"regenerating {edges_path} via `cargo modules dependencies`...")
     proc = subprocess.run(cargo_cmd, cwd=REPO, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         raise SystemExit(
@@ -40,14 +42,14 @@ def regenerate_source_data(
     edges_path.write_text(proc.stdout)
 
     if reexport_correct:
-        print("re-attributing uses edges to written import surface "
-              "(reexport correction)...")
+        note("re-attributing uses edges to written import surface "
+             "(reexport correction)...")
         graph = parse_dot(edges_path)
         corrected = reexport.correct(graph.nodes, src_root, package)
         write_dot(edges_path, graph.nodes, graph.owns, corrected)
 
     doclinks = REPO / "tools" / "doclinks.py"
-    print("regenerating observe/doc_graph.dot via `doclinks.py signals`...")
+    note("regenerating observe/doc_graph.dot via `doclinks.py signals`...")
     proc = subprocess.run(
         ["python3", str(doclinks), "signals"],
         cwd=REPO, capture_output=True, text=True, check=False,

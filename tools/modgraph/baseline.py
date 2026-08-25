@@ -51,6 +51,32 @@ def _parse_baseline_line(line: str) -> tuple[str, str, float] | None:
         return None
 
 
+def _read_top_entry(path: Path) -> tuple[str, str, float] | None:
+    """The newest recorded measurement, or none when the log is absent or bare."""
+    for line in (path.read_text().splitlines() if path.exists() else []):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parsed = _parse_baseline_line(stripped)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def read_delta(path: Path, score: Score) -> None:
+    """Print the delta a read-only run reports — the same line `update_baseline`
+    prints, minus the recording. The trend log holds one entry per commit, so a
+    local sanity-check reads it rather than writing to it, and still gets to name
+    the number it moved from."""
+    prior = _read_top_entry(path)
+    if prior is None:
+        print(f"\nbaseline: score {score.total:.2f} — no prior baseline.")
+    else:
+        prior_date, prior_sha, prior_per_loc = prior
+        print(f"\nbaseline: score {score.total:.2f} vs prior {prior_per_loc:.2f} "
+              f"from {prior_date} {prior_sha} (Δ {score.total - prior_per_loc:+.2f}).")
+
+
 def update_baseline(path: Path, score: Score, root_loc: int) -> None:
     """Prune stale entries, prepend today's measurement, write the file, and
     print a one-line delta against the prior top entry.

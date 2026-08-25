@@ -84,7 +84,15 @@ term prices which path, what moves one, and what a movement is evidence of.
 
 `tools/alloc_audit.py` is the only writer. `tools/verify.sh` runs it every slate, read-only
 unless `KOAN_REBASELINE` is set, and the pre-commit hook sets it and stages the result — so the
-record and the change that moved it land in one commit. A `+` on an entry's SHA marks a reading
+record and the change that moved it land in one commit. The slate passes `--quiet`, which keeps
+the shape and term rows that moved against the recorded sweep and the bounds that drifted, and
+drops the rest under a one-line summary; run the script without it for the whole sweep.
+
+A shape's Δ column is exact: a single allocation more than the recorded sweep prints as `+1`,
+which is the movement the bounds exist to catch. A term's is not, because a term is differenced
+and divided out of a pair of readings and so carries rounding noise in its last printed place
+that no allocation caused — one unit there reads as `=`, and two is the smallest movement a term
+can report. A `+` on an entry's SHA marks a reading
 taken over a tree with uncommitted changes, which every pre-commit entry is: its stamp names the
 commit the reading was taken *on top of*. Absolute figures are not portable across machines or
 toolchains; what they are for is the margin over an empty program, and its movement when the
