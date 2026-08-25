@@ -24,6 +24,9 @@ work, decides when each resolved call runs, and hands its body the live scope.
   execution modes.
 - [Name placeholders and submission](name-placeholders.md) — forward-reference
   name placeholders and submission-time binder install (the submit side).
+- [The continuation currency](continuations.md) — the one stored-continuation
+  signature, generic combinator composition with a single erasure, the two-tier
+  bumped/boxed erase door, and the co-location and capture rules.
 - [Classify and apply](classify-and-apply.md) — the shape classifier, the fast
   lanes, the keyworded apply pipeline, and dispatch birth/resume (the execute side).
 - [Calls, values, and performance](calls-and-values.md) — the `KObject` model/core

@@ -423,7 +423,8 @@ unpublished-scope doors are
 ### Dispatch birth and resume
 
 A dispatch slot is the one [`NodeWork`](../../src/machine/execute/nodes.rs) shape with
-a decide `cont` (built by [`ignore_results`](../../src/machine/execute/outcome.rs)).
+a decide `cont` — a continuation that ignores the dep-results slice
+([the continuation currency](continuations.md)).
 The `cont` captures a
 `DecideCtx -> Outcome` closure that reads the step context, classifies /
 re-resolves,

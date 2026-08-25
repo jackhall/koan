@@ -130,7 +130,8 @@ data, and a single harness method applies them. The three pieces:
   state — the active per-call frame, the run frame, the
   executing slot's lexical payload (scope handle + chain, projected from the
   slot's anchor), and the slot's declared-return obligation
-  (the continuation capture a tail chain carries; its presence *is* the
+  (`Copy` data riding beside the tail chain's continuation,
+  [continuations.md](continuations.md); its presence *is* the
   contract-chain flag) — lives on the
   host ([`ambient`](../../src/machine/execute/ambient.rs)), not the scheduler,
   which is a pure DAG runtime. [`Host::step`](../../src/machine/execute/harness.rs)
