@@ -17,7 +17,7 @@ so a combinator can add behavior only by re-boxing what it was handed.
 **Acceptance criteria.**
 
 - A steady-state tail-loop step allocates no continuation boxes: a re-profile of
-  `audit/shapes/tail_loop.koan` attributes no per-step term to `ignore_results`,
+  `audit/shapes/tail_loop_steps100.koan` attributes no per-step term to `ignore_results`,
   `with_obligation`, `short_circuit`, or `seal_witnessed`.
 - The recorded tail-loop baseline in [audit/README.md](../../audit/README.md) drops by
   the boxing share, and `tests/allocation_baseline.rs` is re-measured to the new figure.

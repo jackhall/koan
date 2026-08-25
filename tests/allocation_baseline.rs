@@ -1,8 +1,8 @@
 //! Allocation baselines for the recorded execute-path shapes.
 //!
-//! `audit/shapes/tail_loop.koan` is step churn — a tail-recursive countdown, one machine
-//! step per iteration. `audit/shapes/operator_chain.koan` is per-dispatch churn — a flat
-//! 128-operand `+` chain, one dispatch per operator. Between them they cover the two
+//! `audit/shapes/tail_loop_steps100.koan` is step churn — a tail-recursive countdown, one
+//! machine step per iteration. `audit/shapes/operator_chain_operands128.koan` is per-dispatch
+//! churn — a flat 128-operand `+` chain, one dispatch per operator. Between them they cover the two
 //! places the execute path's allocation traffic scales, and each is held to an absolute
 //! bound. The four `audit/shapes/scope_walk_*.koan` shapes cover a third axis — how far
 //! the dispatch scope walk reaches — and are held to a *shape* instead: differenced against
@@ -17,8 +17,8 @@
 //! verify slate. It reads the counter's **thread-local** tally rather than its
 //! process-wide one: the tests below run concurrently in this one binary, so a shared
 //! counter would tally each into the other's bracket. The whole-program figure — the same
-//! run plus interpreter startup, read off the process tally — is what `audit/measure.sh`
-//! reports and what `audit/README.md` records.
+//! run plus interpreter startup, read off the process tally — is what `tools/alloc_audit.py`
+//! sweeps, and both readings are recorded per shape in `observe/alloc/`.
 //!
 //! Both figures are debug profile, matching every other measurement in the repo, and both
 //! are order-independent: [`allocations_for`] warms the process-wide lazy statics before it
@@ -42,7 +42,7 @@ static COUNTING_ALLOCATOR: counting_alloc::Counting<std::alloc::System> =
 /// `path` is passed through rather than defaulted so this reads the same entry point the
 /// binary does (`interpret_with_writer_path`, `src/main.rs`). The path-carrying parse
 /// allocates more than the `<input>` fallback, in proportion to the source's spans, so
-/// defaulting it here would put this bracket and `audit/measure.sh`'s whole-program figure
+/// defaulting it here would put this bracket and the sweep's whole-program figure
 /// on different call paths.
 fn allocations_for(source: &str, path: &str) -> u64 {
     // Run the shape once outside the bracket, to warm every process-wide lazy static it
@@ -59,51 +59,57 @@ fn allocations_for(source: &str, path: &str) -> u64 {
     let outcome = interpret_with_writer_path(source, Some(path), Box::new(io::sink()));
     let delta = counting_alloc::thread_allocations() - before;
     assert!(outcome.is_ok(), "shape failed to run: {:?}", outcome.err());
+
+    // The bracketed figure, for `tools/alloc_audit.py` to read back under
+    // `--nocapture` — captured and so invisible in an ordinary run. It is printed
+    // before any bound is asserted, so a bound that fails still reports the
+    // measurement a rebaseline is read off.
+    println!("bracketed {path} {delta}");
     delta
 }
 
-/// 100 tail-recursive steps, 92.0 allocations each — exactly linear, measured flat at
-/// 10/50/100/200. Measured 2026-08-24 at 10 463. ≈1 of those per step is an arena chunk rather
-/// than a heap object: a step's frame does not fit bumpalo's 496-byte first chunk, so the region
-/// takes a second one. That term tracks the byte size of what a frame holds — `Scope` above all —
-/// and moves by one per step whenever a layout change carries the frame across the boundary, in
-/// either direction. The constant term is the run's seeding, so registering a builtin overload
-/// moves this and every other shape here by the same amount. The bound is the measurement plus 37,
-/// less than the 100 a single new per-step allocation would add. Tight on purpose: a looser bound
-/// cannot see one allocation, and rebaselining is meant to be a deliberate edit.
+/// 100 tail-recursive steps, at the `step` term in `observe/alloc/terms.txt` — exactly linear,
+/// flat across the sizes swept. About one allocation per step is an arena chunk rather than a heap
+/// object: a step's frame does not fit bumpalo's 496-byte first chunk, so the region takes a second
+/// one. That term tracks the byte size of what a frame holds — `Scope` above all — and moves by one
+/// per step whenever a layout change carries the frame across the boundary, in either direction.
+/// The constant term is the run's seeding, so registering a builtin overload moves this and every
+/// other shape here by the same amount. The bound sits over the recorded bracketed reading by less
+/// than the 100 a single new per-step allocation would add. Tight on purpose: a looser bound cannot
+/// see one allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
     const BOUND: u64 = 10_500;
     let delta = allocations_for(
-        include_str!("../audit/shapes/tail_loop.koan"),
-        "audit/shapes/tail_loop.koan",
+        include_str!("../audit/shapes/tail_loop_steps100.koan"),
+        "audit/shapes/tail_loop_steps100.koan",
     );
     assert!(
         delta <= BOUND,
         "the 100-step tail loop allocated {delta} times, over its {BOUND} bound — an \
-         allocation was added to the per-step path; re-measure with `audit/measure.sh` \
-         and rebaseline deliberately if the cost is intended"
+         allocation was added to the per-step path; re-measure with \
+         `tools/alloc_audit.py` and rebaseline deliberately if the cost is intended"
     );
 }
 
-/// A 128-operand `+` chain, so 127 dispatches at ≈23 allocations each — mildly superlinear,
-/// with marginal cost rising across the 16→32 … 128→256 operand doublings. Measured 2026-08-24
-/// at 3 965. A `+` chain reaches no ATTR overload, so the per-dispatch term is unmoved by one being
-/// registered; what such a registration moves is the startup constant every shape here carries. The
-/// bound is the measurement plus 36, under the 127 a single new per-dispatch allocation would add.
-/// Same headroom rule as the loop.
+/// A 128-operand `+` chain, so 127 dispatches, at the `dispatch` term in
+/// `observe/alloc/terms.txt` — mildly superlinear, with marginal cost rising across the 16→32 …
+/// 128→256 operand doublings. A `+` chain reaches no ATTR overload, so the per-dispatch term is
+/// unmoved by one being registered; what such a registration moves is the startup constant every
+/// shape here carries. The bound sits over the recorded bracketed reading by less than the 127 a
+/// single new per-dispatch allocation would add. Same headroom rule as the loop.
 #[test]
 fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
     const BOUND: u64 = 4_001;
     let delta = allocations_for(
-        include_str!("../audit/shapes/operator_chain.koan"),
-        "audit/shapes/operator_chain.koan",
+        include_str!("../audit/shapes/operator_chain_operands128.koan"),
+        "audit/shapes/operator_chain_operands128.koan",
     );
     assert!(
         delta <= BOUND,
         "the 128-operand chain allocated {delta} times, over its {BOUND} bound — an \
          allocation was added to the per-dispatch path; re-measure with \
-         `audit/measure.sh` and rebaseline deliberately if the cost is intended"
+         `tools/alloc_audit.py` and rebaseline deliberately if the cost is intended"
     );
 }
 
@@ -115,10 +121,10 @@ fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
 ///
 /// Differencing the two call counts at one depth cancels parse and setup, leaving 32
 /// dispatches' marginal cost; differencing *those* leaves what 8 extra scopes cost per
-/// dispatch. Before the walk's buffers moved onto the step scratch arena that difference
-/// measured 509 — ≈2 heap allocations per extra scope walked, per dispatch. Measured
-/// 2026-08-24 it is **−2**: 1 595 allocations for 32 dispatches at depth 10 against 1 597 at
-/// depth 2, the two depths indistinguishable and the deeper walk marginally the cheaper.
+/// dispatch — the `scope_walk_scope` term in `observe/alloc/terms.txt`, which reads as zero:
+/// the two depths are indistinguishable. The walk's per-scope buffers are hosted on the drain's
+/// step scratch arena, which is what took that term to zero and is where a regression would put
+/// it back.
 ///
 /// The bound is one allocation per extra dispatch, far under the ≥256 that a single
 /// reintroduced per-scope allocation would add (8 extra scopes × 32 dispatches).
@@ -155,15 +161,14 @@ fn per_dispatch_cost_does_not_grow_with_scope_walk_depth() {
 /// `branches`). Differencing them cancels interpreter startup and leaves 32 calls' marginal
 /// cost — the parse of the 32 extra statements included, since that is how the shapes differ.
 ///
-/// Measured 2026-08-22 at **2 070** for the 32 calls (64.7 each), down from 2 359 (73.7 each)
-/// when a call re-keyed its arguments onto parameter names. 256 of that drop is exactly 8 per
-/// call: the 2n = 6 parameter-name copies a three-parameter bind used to make, plus the two
-/// per-call containers — the argument map and the carrier map — that the schema-keyed argument
-/// view replaces with a slice on the step scratch arena. The remaining 33 is the one name copy
-/// per call a symbol-keyed scope binding table no longer makes.
+/// The recorded figure is the `builtin_call` term in `observe/alloc/terms.txt`. What a call no
+/// longer pays at this arity is the 2n = 6 parameter-name copies a three-parameter bind used to
+/// make, plus the two per-call containers — the argument map and the carrier map — that the
+/// schema-keyed argument view replaces with a slice on the step scratch arena, plus the one name
+/// copy per call a symbol-keyed scope binding table no longer makes.
 ///
-/// The bound is the measurement plus 31, so one re-introduced per-call allocation — 32 across
-/// the repetition gap the shapes difference by — fails it.
+/// The bound sits over the recorded reading by under 32 — the repetition gap the shapes
+/// difference by — so one re-introduced per-call allocation fails it.
 #[test]
 fn the_builtin_call_shape_stays_within_its_per_call_bound() {
     const BOUND: u64 = 2_101;
@@ -178,7 +183,7 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
         marginal <= BOUND,
         "32 three-parameter builtin calls allocated {marginal} times, over the {BOUND} bound \
          — a per-call or per-parameter allocation is back on the builtin bind path; re-measure \
-         with `audit/measure.sh` and rebaseline deliberately if the cost is intended"
+         with `tools/alloc_audit.py` and rebaseline deliberately if the cost is intended"
     );
 }
 
@@ -194,16 +199,16 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 /// builds no string. What remains in the slope is per-*argument* cost the bind does not own: the
 /// extra source the call site parses, and the delivery carrier each argument travels in.
 ///
-/// Measured 2026-08-24: **1 175** for 32 one-parameter calls (36.7 each) and **2 005** for 32
-/// eight-parameter calls (62.7 each), a slope of 830 — 3.70 per parameter per call. One of those
-/// 32 is an arena chunk, not heap traffic: at eight parameters the call's own region does not fit
-/// bumpalo's 496-byte first chunk and takes a second one, while at one parameter it is never near
-/// the boundary. That term follows the byte size of what a frame holds and flips with any layout
+/// The recorded figures are the `user_fn_params1`, `user_fn_params8` and `user_fn_parameter`
+/// terms in `observe/alloc/terms.txt`. About one allocation per call at eight parameters is an
+/// arena chunk, not heap traffic: at that arity the call's own region does not fit bumpalo's
+/// 496-byte first chunk and takes a second one, while at one parameter it is never near the
+/// boundary. That term follows the byte size of what a frame holds and flips with any layout
 /// change either way.
 ///
-/// Both bounds are the measurement plus 31, so one re-introduced per-call allocation — 32 across
-/// the repetition gap — fails the first, and a re-introduced per-parameter one fails the second
-/// by ≈224.
+/// Both bounds sit over their recorded readings by under one repetition gap, so one re-introduced
+/// per-call allocation — 32 across the gap — fails the first, and a re-introduced per-parameter
+/// one fails the second by ≈224.
 #[test]
 fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
     const PER_CALL_BOUND: u64 = 1_206;
@@ -226,7 +231,7 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
         arity1 <= PER_CALL_BOUND,
         "32 one-parameter user calls allocated {arity1} times, over the {PER_CALL_BOUND} bound \
          — an allocation was added to the per-call frame bind; re-measure with \
-         `audit/measure.sh` and rebaseline deliberately if the cost is intended"
+         `tools/alloc_audit.py` and rebaseline deliberately if the cost is intended"
     );
     let slope = arity8 - arity1;
     assert!(
@@ -249,13 +254,13 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
 /// registry (a clone per read), selects a variant out of the constructor's schema, builds the
 /// tagged value, and matches on its tag.
 ///
-/// Measured 2026-08-24 at **2 967** for the 32 cycles (92.7 each). One per cycle is an arena
-/// chunk rather than heap traffic: the cycle's frame does not fit bumpalo's 496-byte first chunk,
-/// so its region takes a second one. That term follows the byte size of what a frame holds and
-/// flips with any layout change either way.
+/// The recorded figure is the `tagged_construct` term in `observe/alloc/terms.txt`. One
+/// allocation per cycle is an arena chunk rather than heap traffic: the cycle's frame does not fit
+/// bumpalo's 496-byte first chunk, so its region takes a second one. That term follows the byte
+/// size of what a frame holds and flips with any layout change either way.
 ///
-/// The bound is the measurement plus 31, so one re-introduced per-construction allocation — 32
-/// across the repetition gap — fails it.
+/// The bound sits over the recorded reading by under 32 — the repetition gap — so one
+/// re-introduced per-construction allocation fails it.
 #[test]
 fn the_tagged_construct_shape_stays_within_its_per_construction_bound() {
     const BOUND: u64 = 2_998;
@@ -270,6 +275,6 @@ fn the_tagged_construct_shape_stays_within_its_per_construction_bound() {
         marginal <= BOUND,
         "32 tagged constructions allocated {marginal} times, over the {BOUND} bound — an \
          allocation was added to the tagged-construction path; re-measure with \
-         `audit/measure.sh` and rebaseline deliberately if the cost is intended"
+         `tools/alloc_audit.py` and rebaseline deliberately if the cost is intended"
     );
 }

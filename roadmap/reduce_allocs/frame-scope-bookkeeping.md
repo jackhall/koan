@@ -21,7 +21,7 @@ lifetime is exactly one iteration.
 **Acceptance criteria.**
 
 - A steady-state tail hop mints no fresh frame bookkeeping: a re-profile of
-  `audit/shapes/tail_loop.koan` attributes no per-step term to `CallFrame::new`,
+  `audit/shapes/tail_loop_steps100.koan` attributes no per-step term to `CallFrame::new`,
   `build_frame_child_witnessed`, `SlotFrame` minting, or `LexicalFrame::push`.
 - `Scope::adopt_carried`'s nine per-step allocations are attributed site-by-site, and
   every one not required by a genuine cross-hop escape is removed.

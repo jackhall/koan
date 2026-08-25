@@ -1,11 +1,11 @@
 # Reduce allocations
 
-Cut the execute path's measured allocation traffic. The recorded baselines in
-[audit/README.md](../../audit/README.md) put a number on every step, every dispatch and
-every call — ≈92 allocations per tail-loop step, ≈23 per operator dispatch, ≈65 per
-three-parameter builtin call, and a scope walk whose per-dispatch cost is flat in depth —
-and `tests/allocation_baseline.rs` holds the shapes to a bound, so each item here removes a
-named term from a measured total rather than an assumed one. A dhat profile of the audit
+Cut the execute path's measured allocation traffic. The recorded figures in
+[`observe/alloc/`](../../observe/alloc) put a number on every step, every dispatch and every
+call — `terms.txt` carries one marginal cost per unit of work, stamped with the commit it was
+measured at, and [audit/README.md](../../audit/README.md) says what each term prices — and
+`tests/allocation_baseline.rs` holds the shapes to a bound, so each item here removes a named
+term from a measured total rather than an assumed one. A dhat profile of the audit
 shapes (2026-08-18, differencing runs at two sizes to isolate the scaling term) attributes
 the per-step cost across a handful of near-equal subsystems; the items below own the ones
 still standing.

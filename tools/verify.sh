@@ -5,8 +5,8 @@
 # fractal-complexity score.
 # Mirrors the `verify` skill (.claude/skills/verify/).
 #
-# The modgraph and coverage steps print current scores. They rebaseline
-# `observe/complexity.txt` / `observe/coverage.txt` only when invoked with
+# The modgraph, coverage, and allocation-audit steps print current readings. They
+# rebaseline `observe/complexity.txt` / `observe/coverage.txt` / `observe/alloc/` only when invoked with
 # `KOAN_REBASELINE` set — pre-commit sets it; manual runs leave it unset,
 # since the trend logs should record one entry per commit, not one per
 # local sanity-check.
@@ -102,23 +102,23 @@ if [ "$WORKGRAPH_ONLY" = 1 ]; then
     exit 0
 fi
 
-step "1/8 cargo llvm-cov (instrumented tests → $LCOV)"
+step "1/9 cargo llvm-cov (instrumented tests → $LCOV)"
 quiet cargo llvm-cov --quiet --lcov --output-path "$LCOV"
 
 # llvm-cov does not run doctests (instrumented doctests are nightly-only), so the
 # `compile_fail` escape guards on the lifetime-erasure accessors go unchecked above.
 # Run them here: a `compile_fail` doctest that *starts* compiling is a test failure.
-step "2/8 cargo test --doc (doctests + compile_fail guards)"
+step "2/9 cargo test --doc (doctests + compile_fail guards)"
 quiet cargo test --doc --quiet
 
-step "3/8 cargo clippy"
+step "3/9 cargo clippy"
 if ! out="$(cargo clippy --all-targets -- -D warnings 2>&1)"; then
     printf '%s\n' "$out"
     cargo clippy --fix --allow-dirty --allow-staged --all-targets
     cargo clippy --all-targets -- -D warnings
 fi
 
-step "4/8 doclinks check"
+step "4/9 doclinks check"
 # --gates-only drops the informational source-tree changes report; the four
 # gating audits (links, deps, orphans, next-items) still run and still gate.
 python3 tools/doclinks.py check --gates-only
@@ -126,18 +126,26 @@ python3 tools/doclinks.py check --gates-only
 # The tutorial's runnable snippets (```koan blocks with an expected ```text output)
 # are diffed against the interpreter. Needs the plain debug binary — llvm-cov above
 # builds an instrumented one under a different profile, so build it explicitly.
-step "5/8 tutorial snippets"
+step "5/9 tutorial snippets"
 quiet cargo build --quiet
 python3 tools/verify_snippets.py
 
-step "6/8 coverage delta (lcov: $LCOV)"
+# The allocation shapes in `audit/shapes/`, swept through the counting allocator
+# (`--features alloc-count`) and the bounded regression test's brackets. Reports each
+# shape's totals, the marginal terms differenced out of them, and the headroom left on
+# every bound in `tests/allocation_baseline.rs`. Never gating: the bounds themselves
+# are asserted by that test, which step 1 ran.
+step "6/9 allocation audit (record: observe/alloc/)"
+python3 tools/alloc_audit.py ${REBASELINE:+--baseline}
+
+step "7/9 coverage delta (lcov: $LCOV)"
 python3 tools/coverage.py --lcov "$LCOV" \
     ${REBASELINE:+--baseline observe/coverage.txt}
 
-step "7/8 modgraph tooling tests"
+step "8/9 modgraph tooling tests"
 quiet python3 tools/modgraph/tests.py
 
-step "8/8 modgraph score (DOT: $DOT)"
+step "9/9 modgraph score (DOT: $DOT)"
 # `regen` runs cargo-modules, re-attributes uses edges to the written import
 # surface (re-export correction), refreshes observe/doc_graph.dot, then scores.
 # --quiet drops the per-module report, leaving the bottom-line score (and delta).

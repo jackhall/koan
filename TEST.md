@@ -141,20 +141,29 @@ The counting global allocator ([`audit/`](audit/README.md)) reports allocation
 traffic two ways.
 
 ```sh
-bash audit/measure.sh                                   # whole-program totals per shape
+python3 tools/alloc_audit.py                            # sweep every shape and report
+python3 tools/alloc_audit.py --baseline                 # sweep and record
 cargo run --features alloc-count -- program.koan        # one program's totals, on stderr
 cargo test --test allocation_baseline                   # the bounded regression test
 ```
 
-`audit/measure.sh` reproduces the committed baseline table in
-[audit/README.md](audit/README.md); the table is transcribed by hand, so a
-figure that moves is a deliberate edit. The regression test brackets each
-recorded shape and asserts its count against a bound tight enough to see one
-added allocation — 41 allocations of headroom against the 100 (loop) or 127
-(chain) a single new one on the scaling path costs. A failure means either an
-allocation was added to the execute path or an unrelated fixed cost moved;
-re-measure with `audit/measure.sh` before rebaselining, and rebaseline the table
-and the bound together.
+The sweep is the recorder. It runs every shape through the counted binary,
+differences the readings into the marginal terms, and writes both to
+[`observe/alloc/`](observe/alloc) — one file per sweep, named for the commit it
+was taken on, plus `terms.txt` trending the terms across the last five sweeps.
+`tools/verify.sh` runs it
+every slate, read-only unless `KOAN_REBASELINE` is set, and the pre-commit hook
+sets it and stages the result — so the record and the change that moved it land
+in one commit, and nothing has to be re-measured against a base revision to be
+trusted. What a figure *means* is in [audit/README.md](audit/README.md), which
+quotes none of them.
+
+The regression test is the gate. It brackets each recorded shape and asserts its count
+against a bound whose headroom is smaller than the repetition count a single new allocation
+on the scaling path would cost, so one added allocation fails it. The sweep prints every
+bound's headroom beside the reading it is set over and flags one that has drifted. A failure
+means either an allocation was added to the execute path or an unrelated fixed cost moved;
+re-measure with `tools/alloc_audit.py` before rebaselining.
 
 `workgraph` counts on its own, with its own copy of the scaffolding
 ([`workgraph/src/tests.rs`](workgraph/src/tests.rs), a delegating counter over
@@ -172,15 +181,15 @@ expects it.
 ## Symbol mints
 
 The `alloc-count` feature carries a second reading beside the allocation tally: the
-process's `Symbol` mint count, printed as `symbols_minted: N` and captured by
-`audit/measure.sh` as the third column of its report. Hashing takes no allocation, so
+process's `Symbol` mint count, printed as `symbols_minted: N` and recorded beside the
+allocation figure in `observe/alloc/`. Hashing takes no allocation, so
 this is the only instrument that sees a mint leave a per-call path
 ([audit/README.md § Symbol mints](audit/README.md#symbol-mints)).
 
 The figure is **recorded, not bounded**. It has no entry in
 `tests/allocation_baseline.rs`: the counter is a lib-side `cfg` an integration test
-cannot reach. A figure that moves is caught by re-measuring and rebaselining the table,
-the same way the allocation column's absolute rows are.
+cannot reach. A figure that moves shows up as a delta in the sweep's report, the same way
+the allocation column's absolute rows do.
 
 The names fixed in Rust source — builtin parameter slots and the `Result` / `KError`
 tags ([design/label-interning.md § Names fixed in Rust source](design/label-interning.md#names-fixed-in-rust-source))
