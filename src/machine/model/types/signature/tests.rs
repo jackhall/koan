@@ -401,3 +401,56 @@ fn a_bumped_dispatch_token_matches_what_its_owned_form_does() {
         }
     }
 }
+
+/// The `DuplicateOverload` text a bucket entry's stored token renders to: keywords resolved
+/// through the interner, slot types under the `:`-sigil convention — and a compound slot, whose
+/// surface already opens a sigil, is not given a second one.
+#[test]
+fn a_dispatch_token_renders_its_keywords_and_slot_types() {
+    fn keyworded<'a>(
+        brand: RegionBrand<'a>,
+        keyword: &str,
+        slots: &[KType],
+        registries: &RunRegistries,
+    ) -> ExpressionSignature<'a> {
+        let symbol = crate::machine::model::KeywordSymbol::declared(keyword, &registries.labels)
+            .expect("a test fixture keyword is keyword-class");
+        let mut elements = vec![SignatureElement::Keyword(symbol)];
+        elements.extend(slots.iter().map(|kt| {
+            SignatureElement::Argument(Argument {
+                name: crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+                ktype: *kt,
+            })
+        }));
+        ExpressionSignature::mint(
+            brand,
+            SignatureDraft {
+                return_type: ReturnType::Resolved(KType::ANY),
+                elements,
+            },
+        )
+    }
+
+    let registries = RunRegistries::new();
+    let program = program_storage();
+    let brand = program.brand().region();
+
+    let leaf = keyworded(brand, "TAKE", &[KType::NUMBER], &registries);
+    assert_eq!(
+        summarize_dispatch(leaf.dispatch_token().elements(), &registries),
+        "fn(TAKE :Number)",
+    );
+
+    let list = registries.types.list(KType::NUMBER);
+    let compound = keyworded(brand, "TAKE", &[list], &registries);
+    assert_eq!(
+        summarize_dispatch(compound.dispatch_token().elements(), &registries),
+        "fn(TAKE :(LIST OF Number))",
+    );
+
+    let two = keyworded(brand, "TAKE", &[KType::NUMBER, KType::ANY], &registries);
+    assert_eq!(
+        summarize_dispatch(two.dispatch_token().elements(), &registries),
+        "fn(TAKE :Number :Any)",
+    );
+}

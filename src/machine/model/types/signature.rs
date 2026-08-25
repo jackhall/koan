@@ -12,7 +12,7 @@
 use crate::machine::core::RegionBrand;
 use crate::machine::model::ast::{ExpressionPart, KExpression, WorkingPart};
 
-use super::ktype::KType;
+use super::ktype::{KType, render_label};
 use super::registry::TypeRegistry;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
@@ -68,6 +68,39 @@ impl DispatchToken {
     pub fn elements(&self) -> &[DispatchTokenElement] {
         &self.0
     }
+}
+
+/// Render a callable's *dispatch identity* — the keywords and slot types a collision is decided
+/// on — as `fn(DOUBLE :Number)`. Argument names are absent by construction: the token carries
+/// none, and they never distinguish two overloads
+/// ([`ExpressionSignature::indistinguishable_from`] reads types alone). A name-keyed view of a
+/// callable is its `value_ktype`, the by-name identity.
+///
+/// A slot renders through [`KType::name`] under `render_param_record`'s sigil convention: a leaf
+/// surface gets a `:` prefix, one that already opens a sigil (`:(LIST OF Number)`) is left as-is.
+///
+/// Free rather than a method on [`DispatchToken`], because the caller that needs it — the
+/// duplicate-overload arm — holds a bucket entry's stored run, not an owned token.
+pub(crate) fn summarize_dispatch(
+    elements: &[DispatchTokenElement],
+    registries: &RunRegistries,
+) -> String {
+    let rendered = elements
+        .iter()
+        .map(|el| match el {
+            DispatchTokenElement::Keyword(symbol) => render_label(symbol.symbol(), registries),
+            DispatchTokenElement::Slot(ktype) => {
+                let surface = ktype.name(registries);
+                if surface.starts_with(':') {
+                    surface
+                } else {
+                    format!(":{surface}")
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("fn({rendered})")
 }
 
 /// True iff `s` classifies as a keyword (fixed token). See

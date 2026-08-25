@@ -121,7 +121,9 @@ impl<'a> WriteOp<'a> {
                 {
                     return Err(KError::new(KErrorKind::Rebind { name }));
                 }
-                scope.bindings().write_overload(&name, index, seal, gate)
+                scope
+                    .bindings()
+                    .write_overload(&name, index, seal, registries, gate)
             }
             WriteOp::Type {
                 name,

@@ -312,7 +312,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
             writes.push(WriteOp::Overload {
                 name,
                 index: bind_index,
-                seal: OverloadSeal::of_delivered(scope, &birth, registries),
+                seal: OverloadSeal::of_delivered(scope, &birth),
                 builtin_shadow_guard: true,
             });
             bound_name

@@ -10,7 +10,6 @@ use crate::machine::model::{
 use super::arena::{FrameStorage, KoanRegion};
 use super::kfunction::KFunctionFamily;
 use super::scope::Scope;
-use crate::machine::model::RunRegistries;
 
 /// Koan's value-carrier witness: the library [`Carrier`](crate::witnessed::Carrier) over koan's
 /// frame owner — a reference to the value's hosted reach description and nothing else. The
@@ -121,11 +120,9 @@ pub(crate) struct OverloadSeal<'a> {
     pub sealed: SealedFunction<'a>,
     /// `signature.untyped_key()` — the bucket this callable belongs in.
     pub key: UntypedKey,
-    /// `signature.dispatch_token()` — the stored form of the duplicate-overload predicate.
+    /// `signature.dispatch_token()` — the stored form of the duplicate-overload predicate, and
+    /// what the `DuplicateOverload` diagnostic renders the colliding overload from.
     pub token: DispatchToken,
-    /// `KFunction::summarize()`, rendered here so the `DuplicateOverload` diagnostic can name the
-    /// colliding overload without re-opening it.
-    pub summary: String,
 }
 
 impl<'a> OverloadSeal<'a> {
@@ -139,23 +136,12 @@ impl<'a> OverloadSeal<'a> {
     /// coverage is lodged there ([`Delivered::rest_in`](crate::witnessed::Delivered::rest_in)),
     /// which the library's self rule makes free for a value already resident in it. Everything the
     /// bucket write keys on is read inside the envelope's own open and travels as plain data.
-    pub(crate) fn of_delivered(
-        scope: &'a Scope<'a>,
-        cell: &DeliveredFunction,
-        registries: &RunRegistries,
-    ) -> Self {
-        let (key, token, summary) = cell.open(|f| {
-            (
-                f.signature.untyped_key(),
-                f.signature.dispatch_token(),
-                f.summarize(registries),
-            )
-        });
+    pub(crate) fn of_delivered(scope: &'a Scope<'a>, cell: &DeliveredFunction) -> Self {
+        let (key, token) = cell.open(|f| (f.signature.untyped_key(), f.signature.dispatch_token()));
         OverloadSeal {
             sealed: cell.rest_in(scope.brand().handle()),
             key,
             token,
-            summary,
         }
     }
 }

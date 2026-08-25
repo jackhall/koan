@@ -20,6 +20,7 @@ pub(crate) use types::IdentityBuildHasher;
 pub use types::TypeRegistry;
 pub use types::builtin_types;
 pub use types::most_specific_ktype;
+pub(crate) use types::summarize_dispatch;
 pub use types::{
     AnnouncedData, AnnouncedMember, AnnouncedWindow, Argument, DeclWindow, DeferredReturn,
     DeferredReturnSurface, DispatchToken, DispatchTokenElement, ExpressionSignature, KKind, KType,

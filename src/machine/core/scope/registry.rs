@@ -138,7 +138,7 @@ impl<'a> Scope<'a> {
         WriteOp::Overload {
             name,
             index,
-            seal: OverloadSeal::of_delivered(self, cell, registries),
+            seal: OverloadSeal::of_delivered(self, cell),
             builtin_shadow_guard: true,
         }
         .apply(self, registries, gate)

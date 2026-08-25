@@ -75,7 +75,7 @@ use crate::machine::model::{
     BinderSymbol, IdentityBuildHasher, KeywordSymbol, RunRegistries, TypeSymbol, ValueSymbol,
     render_label,
 };
-use crate::machine::model::{DispatchTokenElement, KeyElement};
+use crate::machine::model::{DispatchTokenElement, KeyElement, summarize_dispatch};
 use crate::machine::model::{KType, UntypedKey};
 use crate::witnessed::BumpBackedMap;
 use crate::witnessed::{BumpAllocator, Sealed};
@@ -172,23 +172,20 @@ impl<'a> DataEntry<'a> {
 pub(crate) struct FunctionBucketEntry<'a> {
     pub(crate) index: BindingIndex,
     /// The stored form of the duplicate-overload predicate: an incoming callable whose token
-    /// matches this run is `DuplicateOverload`. A bumped run rather than the owned
-    /// [`DispatchToken`], so the entry carries no `Drop` and a bucket's death frees nothing.
+    /// matches this run is `DuplicateOverload`, and the diagnostic's text is rendered from this
+    /// run. A bumped run rather than the owned [`DispatchToken`], so the entry carries no `Drop`
+    /// and a bucket's death frees nothing.
     token: &'a [DispatchTokenElement],
-    /// The overload's rendered signature, for the `DuplicateOverload` diagnostic — bumped for
-    /// [`Self::token`]'s reason.
-    summary: &'a str,
     pub(crate) sealed: SealedFunction<'a>,
 }
 
 impl<'a> FunctionBucketEntry<'a> {
     /// A bit-copy of the entry, for the bulk-install snapshot — like [`DataEntry::duplicate`]. The
-    /// bumped run and text copy as the borrows they are; only the seal needs a verb.
+    /// bumped run copies as the borrow it is; only the seal needs a verb.
     fn duplicate(&self) -> Self {
         FunctionBucketEntry {
             index: self.index,
             token: self.token,
-            summary: self.summary,
             sealed: self.sealed.duplicate(),
         }
     }
@@ -438,7 +435,7 @@ fn bump_bucket(brand: RegionBrand<'_>) -> Bucket<'_> {
 /// a type insert screened against `data` — is atomic under it.
 ///
 /// The brand rides beside the cell because a write re-homes the text it stores: a dispatch
-/// bucket's key, an overload's summary and dispatch token all land in the same region the tables'
+/// bucket's key and an overload's dispatch token all land in the same region the tables'
 /// buckets do, so a table never points at bytes that can die before it.
 pub struct Bindings<'a> {
     brand: RegionBrand<'a>,
@@ -1016,7 +1013,7 @@ impl<'a> Bindings<'a> {
         for (key, slots) in functions {
             // The key is re-homed into *this* table's region. It buys no independence from the
             // source region and is not trying to: everything else a replayed entry carries — the sealed carrier, the
-            // dispatch token, the summary — stays a borrow into the source, which is sound for the
+            // dispatch token — stays a borrow into the source, which is sound for the
             // reason stated at the snapshot above, and is why re-homing the key is symmetry rather
             // than a guard. The relation is held by **retention, not by `'a`**: `'a` covers both
             // regions and orders neither, but the view module escaping
@@ -1064,10 +1061,11 @@ impl<'a> Bindings<'a> {
         Ok(())
     }
 
-    /// The `functions` write path: add `seal`'s callable to its dispatch bucket. The bucket key,
-    /// dedupe token and diagnostic summary were all computed at seal time, where the callable was
-    /// open — the write is pure table mutation, no carrier is opened and no bare reference crosses
-    /// the door. Token equality against a bucket sibling raises `DuplicateOverload`; claims are in
+    /// The `functions` write path: add `seal`'s callable to its dispatch bucket. The bucket key and
+    /// dedupe token were both computed at seal time, where the callable was open — the write is
+    /// pure table mutation, no carrier is opened and no bare reference crosses the door. Token
+    /// equality against a bucket sibling raises `DuplicateOverload`, whose text renders from the
+    /// standing entry's stored token, so the error arm opens nothing either; claims are in
     /// the store and don't participate in the dedupe. The write then **retires its own claim** on
     /// the same key at the same index — the sibling binders' claims stand as wake sources. Bucket
     /// order is not observable: the picker returns a unique winner or a tie that surfaces as
@@ -1077,6 +1075,7 @@ impl<'a> Bindings<'a> {
         name: &str,
         index: BindingIndex,
         seal: OverloadSeal<'a>,
+        registries: &RunRegistries,
         _gate: &mut WriteGate,
     ) -> Result<(), KError> {
         let mut tables = self.tables.borrow_mut();
@@ -1098,13 +1097,12 @@ impl<'a> Bindings<'a> {
         {
             return Err(KError::new(KErrorKind::DuplicateOverload {
                 name: name.to_string(),
-                signature: existing.summary.to_string(),
+                signature: summarize_dispatch(existing.token, registries),
             }));
         }
         bucket.push(FunctionBucketEntry {
             index,
             token: seal.token.store_in(self.brand),
-            summary: self.brand.allocator().text(&seal.summary),
             sealed: seal.sealed,
         });
         // A builtin seed, a direct registration or a bulk install claimed nothing, so this is a

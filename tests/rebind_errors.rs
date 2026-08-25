@@ -73,6 +73,10 @@ fn let_function_collides_with_let_value() {
 /// with `DuplicateOverload`. The signature key is the per-untyped-shape bucket; the
 /// exact-equal check inside `register_function` distinguishes a duplicate registration
 /// from a same-shape overload with different KTypes.
+///
+/// The two declarations name their parameter differently, because argument names are no part
+/// of what collides: the diagnostic renders the standing overload's dispatch identity —
+/// keywords and slot types — from its stored token.
 #[test]
 fn exact_signature_duplicate_errors() {
     let program = program_storage();
@@ -81,7 +85,7 @@ fn exact_signature_duplicate_errors() {
     let results = run_collecting_errors(
         &mut test_run,
         "FN (DOUBLE x :Number) -> Number = (x)\n\
-         FN (DOUBLE x :Number) -> Number = (x)",
+         FN (DOUBLE y :Number) -> Number = (y)",
     );
     assert!(results[0].is_ok());
     let err = match &results[1] {
@@ -89,8 +93,12 @@ fn exact_signature_duplicate_errors() {
         Ok(_) => panic!("duplicate FN should error"),
     };
     assert!(
-        matches!(&err.kind, KErrorKind::DuplicateOverload { name, .. } if name == "DOUBLE"),
-        "expected DuplicateOverload, got {err}",
+        matches!(
+            &err.kind,
+            KErrorKind::DuplicateOverload { name, signature }
+                if name == "DOUBLE" && signature == "fn(DOUBLE :Number)"
+        ),
+        "expected DuplicateOverload naming the dispatch identity, got {err}",
     );
 }
 

@@ -45,6 +45,7 @@ pub use sig_schema::{
 #[allow(unused_imports)]
 pub use signature::Specificity;
 pub use signature::most_specific_ktype;
+pub(crate) use signature::summarize_dispatch;
 pub use signature::{
     Argument, DeferredReturn, DeferredReturnSurface, DispatchToken, DispatchTokenElement,
     ExpressionSignature, KeyElement, ReturnType, SignatureDraft, SignatureElement, UntypedKey,

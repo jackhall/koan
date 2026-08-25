@@ -591,7 +591,7 @@ fn register_body<'a>(
             .resolve(sym.symbol())
             .expect("a parsed operator glyph is interned where it was classified"),
         index: bind_index,
-        seal: OverloadSeal::of_delivered(scope, &cell, registries),
+        seal: OverloadSeal::of_delivered(scope, &cell),
         builtin_shadow_guard: false,
     };
     Ok((scope.store_function_cell(&cell), write))
