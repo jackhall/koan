@@ -60,7 +60,13 @@ fn record<'a>(
     brand: ProgramBrand<'a>,
     fields: Vec<(&'a str, ExpressionPart<'a>)>,
 ) -> ExpressionPart<'a> {
-    ExpressionPart::RecordLiteral(brand.region().allocator().slice_from_iter(fields))
+    ExpressionPart::RecordLiteral(
+        brand.region().allocator().slice_from_iter(
+            fields
+                .into_iter()
+                .map(|(name, part)| (crate::builtins::test_support::binder_token(name), part)),
+        ),
+    )
 }
 fn sigil<'a>(brand: ProgramBrand<'a>, parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     ExpressionPart::SigiledTypeExpr(brand.nested_node_from_iter(parts_of(parts)))

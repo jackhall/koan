@@ -8,7 +8,7 @@
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
 use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::labels::LabelInterner;
+use crate::machine::model::labels::{BinderSymbol, LabelInterner};
 use crate::source::Spanned;
 
 pub(super) struct DictFrame<'a> {
@@ -28,10 +28,11 @@ enum BraceMode {
 }
 
 /// What a finished brace frame yields: a dict's `(key, value)` pairs or a record's
-/// `(field-name, value)` pairs (record keys are bare identifiers, validated at `finish`).
+/// `(field-name, value)` pairs (a record key is the Identifier or Type token's own symbol,
+/// validated at `finish`).
 pub(super) enum BraceContents<'a> {
     Dict(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
-    Record(Vec<(&'a str, ExpressionPart<'a>)>),
+    Record(Vec<(BinderSymbol, ExpressionPart<'a>)>),
 }
 
 const MIXED_DELIMITERS: &str = "mixed `:` and `=` in a brace literal: use `=` for every field (record) \
@@ -246,18 +247,10 @@ impl<'a> DictFrame<'a> {
             let mut fields = Vec::with_capacity(self.pairs.len());
             for (key, value) in self.pairs {
                 let name = match key {
-                    ExpressionPart::Identifier(v) => self
-                        .brand
-                        .region()
-                        .allocator()
-                        .text(&labels.render(v.symbol())),
+                    ExpressionPart::Identifier(v) => BinderSymbol::Value(v),
                     // A capitalized Type token is a valid literal field name (kept verbatim,
                     // never name-resolved) — e.g. abstract type-slot names in `WITH {Elt = T}`.
-                    ExpressionPart::Type(t) => self
-                        .brand
-                        .region()
-                        .allocator()
-                        .text(&labels.render(t.symbol())),
+                    ExpressionPart::Type(t) => BinderSymbol::Type(t),
                     other => {
                         return Err(KError::parse(
                             format!(
@@ -273,7 +266,10 @@ impl<'a> DictFrame<'a> {
                 // arbitrary value expressions keyed at runtime, not a shape.
                 if fields.iter().any(|(seen, _)| *seen == name) {
                     return Err(KError::parse(
-                        format!("duplicate field `{name}` in record literal"),
+                        format!(
+                            "duplicate field `{}` in record literal",
+                            labels.render(name.symbol())
+                        ),
                         None,
                     ));
                 }

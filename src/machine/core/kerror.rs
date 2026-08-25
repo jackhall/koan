@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::machine::model::WorkingExpression;
-use crate::machine::model::{Carried, CarriedFamily, KObject, Symbol};
+use crate::machine::model::{Carried, CarriedFamily, KObject};
 use crate::machine::model::{
     KKind, KType, RecursiveGroupWindow, RelativeSchema, StaticName, TypeMemberMap, TypeRegistry,
     TypeSymbol,
@@ -12,7 +12,7 @@ use crate::witnessed::RegionHandleFamily;
 use super::{DeliveredCarried, FoldingBrand, RegionBrand, SubstrateDoor};
 use super::{KoanStorageProfile, Scope, scope_frame};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::LabelInterner;
+use crate::machine::model::labels::{BinderSymbol, LabelInterner};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
@@ -212,14 +212,20 @@ impl KError {
             types,
         );
         // Every label here is a fixed literal of the error shape — syntactic in the same sense a
-        // source-written field name is, so each interns and renders back through the interner.
+        // source-written field name is, so each classifies and records here and renders back
+        // through the interner.
         let mut pairs: Vec<(String, KObject<'a>)> = fields;
         pairs.push(("frames".to_string(), frames_list));
-        let interned: Vec<(Symbol, KObject<'a>)> = pairs
+        let classified: Vec<(BinderSymbol, KObject<'a>)> = pairs
             .into_iter()
-            .map(|(name, value)| (registries.labels.intern(&name), value))
+            .map(|(name, value)| {
+                let name = BinderSymbol::declared(&name, &registries.labels).unwrap_or_else(|| {
+                    unreachable!("a KError field label is value-class text: `{name}`")
+                });
+                (name, value)
+            })
             .collect();
-        let record = KObject::record(door, &interned, types);
+        let record = KObject::record(door, &classified, types);
         // The variant name and `KError` are Type tokens of the error shape; both reach the run's
         // interner here so a rendered member name resolves.
         let variant = error_label(&name, registries);

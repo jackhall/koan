@@ -28,7 +28,7 @@ use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{Symbol, TypeSymbol};
+use crate::machine::model::{BinderSymbol, Symbol, TypeSymbol};
 use crate::scheduler::Deps;
 
 /// Which construction shape the resolved value subs feed. The carried `KType` is the sealed
@@ -41,7 +41,7 @@ pub(in crate::machine::execute) enum CtorKind {
     /// 2}`), with one value cell per field.
     RecordNewType {
         identity: KType,
-        field_names: Vec<Symbol>,
+        field_names: Vec<BinderSymbol>,
     },
     Tagged {
         schema: Rc<TypeMemberMap>,
@@ -195,15 +195,11 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
 pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
     brand: RegionBrand<'step>,
     identity: KType,
-    record_fields: &[(&'step str, ExpressionPart<'step>)],
-    registries: &RunRegistries,
+    record_fields: &[(BinderSymbol, ExpressionPart<'step>)],
     scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
-    // The literal's field labels are syntactic, so they intern here — once per construction site.
-    let field_names: Vec<Symbol> = record_fields
-        .iter()
-        .map(|(name, _)| registries.labels.intern(name))
-        .collect();
+    // The literal's field labels carry the symbols the parser minted for them.
+    let field_names: Vec<BinderSymbol> = record_fields.iter().map(|(name, _)| *name).collect();
     let value_parts: Vec<ValueCell<'step>> = record_fields
         .iter()
         .map(|(_, p)| ValueCell::Part(*p))
@@ -460,7 +456,7 @@ fn finish_witnessed<'step>(
             let opened: Vec<_> = terminals.iter().map(|t| t.cell.open_at()).collect();
             let probe: Vec<(Symbol, KObject<'_>)> = field_names
                 .iter()
-                .copied()
+                .map(|name| name.symbol())
                 .zip(opened.iter().map(|o| o.value().object().deep_clone()))
                 .collect();
             check_record_newtype_repr(*identity, &probe, view.registries())?;
@@ -515,7 +511,7 @@ fn finish_witnessed<'step>(
                     let door = region.with_holder(&holder);
                     // The names never rode the carrier — they pair back with the relocated
                     // values here, in the staging order the terminals were visited in.
-                    let mut pairs: BumpVec<'_, (Symbol, KObject<'_>)> =
+                    let mut pairs: BumpVec<'_, (BinderSymbol, KObject<'_>)> =
                         BumpVec::with_capacity_in(field_names.len(), door.allocator());
                     pairs.extend(field_names.iter().copied().zip(fields.iter().copied()));
                     let record = KObject::record(door, &pairs, types);

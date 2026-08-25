@@ -13,9 +13,7 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::Scalar;
 use crate::machine::model::Symbol;
 use crate::machine::model::values::RecordSubstrate;
-use crate::machine::model::{
-    Held, Record, ReturnType, SignatureDraft, SignatureElement, TypeRegistry,
-};
+use crate::machine::model::{Held, ReturnType, SignatureDraft, SignatureElement, TypeRegistry};
 use crate::machine::{Body, CallFrame, KFunction};
 use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::{Delivered, FoldedPlacement, Sealed};
@@ -53,13 +51,13 @@ fn alloc_home_borrowing_record<'run>(
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
-    let fields = Record::from_pairs(vec![
+    let fields = Vec::from([
         (
-            crate::machine::model::Symbol::of("v"),
+            crate::builtins::test_support::binder_token("v"),
             Held::Object(KObject::Number(value)),
         ),
         (
-            crate::machine::model::Symbol::of("f"),
+            crate::builtins::test_support::binder_token("f"),
             Held::Object(KObject::KFunction(closure)),
         ),
     ]);
@@ -164,17 +162,17 @@ fn alloc_split_reach_record<'run>(
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
-    let fields = Record::from_pairs(vec![
+    let fields = Vec::from([
         (
-            crate::machine::model::Symbol::of("v"),
+            crate::builtins::test_support::binder_token("v"),
             Held::Object(KObject::Number(1.0)),
         ),
         (
-            crate::machine::model::Symbol::of("here"),
+            crate::builtins::test_support::binder_token("here"),
             Held::Object(KObject::KFunction(here)),
         ),
         (
-            crate::machine::model::Symbol::of("there"),
+            crate::builtins::test_support::binder_token("there"),
             Held::Object(KObject::KFunction(there)),
         ),
     ]);

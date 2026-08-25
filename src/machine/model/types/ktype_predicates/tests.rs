@@ -299,9 +299,12 @@ fn record_value_admission_and_matches() {
     let value: &KObject<'_> = door.alloc_object_folded(KObject::record(
         door,
         &[
-            (crate::machine::model::Symbol::of("x"), KObject::Number(1.0)),
             (
-                crate::machine::model::Symbol::of("y"),
+                crate::builtins::test_support::binder_token("x"),
+                KObject::Number(1.0),
+            ),
+            (
+                crate::builtins::test_support::binder_token("y"),
                 KObject::KString("a"),
             ),
         ],

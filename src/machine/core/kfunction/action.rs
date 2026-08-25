@@ -712,7 +712,7 @@ pub enum DepRequest<'a> {
     },
     ListLit(&'a [ExpressionPart<'a>]),
     DictLit(&'a [(ExpressionPart<'a>, ExpressionPart<'a>)]),
-    RecordLit(&'a [(&'a str, ExpressionPart<'a>)]),
+    RecordLit(&'a [(BinderSymbol, ExpressionPart<'a>)]),
 }
 
 /// A statement block to fan out — **one producer, and so one dep, per statement**, in declaration

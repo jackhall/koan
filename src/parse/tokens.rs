@@ -301,7 +301,9 @@ mod tests {
             ExpressionPart::RecordLiteral(fields) => {
                 let inner: Vec<String> = fields
                     .iter()
-                    .map(|(name, v)| format!("{} = {}", name, describe(v, labels)))
+                    .map(|(name, v)| {
+                        format!("{} = {}", labels.render(name.symbol()), describe(v, labels))
+                    })
                     .collect();
                 format!("R{{{}}}", inner.join(", "))
             }

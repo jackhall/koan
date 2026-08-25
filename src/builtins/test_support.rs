@@ -96,6 +96,14 @@ pub(crate) fn binder_name(
         .unwrap_or_else(|| panic!("test fixture name `{text}` is not a bindable token"))
 }
 
+/// [`binder_name`] without the interner — [`type_token`]'s bindable-class twin, for a fixture
+/// that keys a record or a signature by symbol identity and never renders the name.
+#[cfg(test)]
+pub(crate) fn binder_token(text: &str) -> crate::machine::model::BinderSymbol {
+    crate::machine::model::BinderSymbol::classify(text)
+        .unwrap_or_else(|| panic!("test fixture name `{text}` is not a bindable token"))
+}
+
 /// A seeded test run: the run-root child `Scope`, the runtime that owns the run frame, and that
 /// frame's [`TypeRegistry`].
 ///

@@ -21,6 +21,7 @@ use crate::witnessed::RegionHandleFamily;
 /// operand's handle family, named for the merge turbofish.
 type DestHandleFamily = RegionHandleFamily<KoanStorageProfile>;
 use crate::builtins::test_support::type_token;
+use crate::machine::model::BinderSymbol;
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::Held;
 use crate::machine::model::KType;
@@ -529,8 +530,8 @@ fn substrate_born_at_a_fold_door_reaches_its_birth_region() {
             Delivered::destination(Rc::clone(&dest_storage)),
             move |(_region, _cells), _dest_handle, placement| {
                 let door = FoldingBrand::in_fold_closure(placement).with_holder(&owned_cells);
-                let fields = Record::from_pairs(vec![(
-                    crate::machine::model::Symbol::of("a"),
+                let fields = Vec::from([(
+                    crate::builtins::test_support::binder_token("a"),
                     Held::Object(KObject::Number(1.0)),
                 )]);
                 Carried::Object(door.alloc_object_folded(KObject::record_of_held(
@@ -564,8 +565,8 @@ fn alloc_home_closure_record<'run>(
     let door =
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
-    let fields = Record::from_pairs(vec![(
-        crate::machine::model::Symbol::of("f"),
+    let fields = Vec::from([(
+        crate::builtins::test_support::binder_token("f"),
         Held::Object(KObject::KFunction(kf)),
     )]);
     door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), types))
@@ -819,18 +820,18 @@ fn substrate_indexes_rehome_and_read_back_after_producer_free() {
         map.insert(KKey::String(key), Held::Object(KObject::Number(i as f64)));
     }
     let table = KObject::dict_of_held(door, map, types);
-    let fields = Record::from_pairs(
+    let fields: Vec<(BinderSymbol, Held<'_>)> = Vec::from_iter(
         NAMES
             .iter()
             .enumerate()
             .map(|(i, name)| {
                 (
-                    crate::machine::model::Symbol::of(name),
+                    crate::builtins::test_support::binder_token(name),
                     Held::Object(KObject::Number(i as f64)),
                 )
             })
             .chain(std::iter::once((
-                crate::machine::model::Symbol::of(TABLE),
+                crate::builtins::test_support::binder_token(TABLE),
                 Held::Object(table),
             )))
             .collect::<Vec<_>>(),
@@ -928,7 +929,7 @@ fn held_flat() -> u64 {
 /// `(copy_cost, borrows_home)` memos.
 fn record_memos<'run>(
     home: &'run Rc<CallFrame>,
-    fields: Record<Held<'run>>,
+    fields: Vec<(BinderSymbol, Held<'run>)>,
     registries: &RunRegistries,
 ) -> (u64, bool) {
     let types = &registries.types;
@@ -952,13 +953,13 @@ fn substrate_memo_scalar_record_is_priceable_and_home_free() {
     let home = CallFrame::new(scope);
     let registries = RunRegistries::new();
 
-    let fields = Record::from_pairs(vec![
+    let fields = Vec::from([
         (
-            crate::machine::model::Symbol::of("a"),
+            crate::builtins::test_support::binder_token("a"),
             Held::Object(KObject::Number(1.0)),
         ),
         (
-            crate::machine::model::Symbol::of("b"),
+            crate::builtins::test_support::binder_token("b"),
             Held::Object(KObject::Bool(true)),
         ),
     ]);
@@ -977,8 +978,8 @@ fn substrate_memo_string_cell_adds_its_length() {
     let home = CallFrame::new(scope);
     let registries = RunRegistries::new();
 
-    let fields = Record::from_pairs(vec![(
-        crate::machine::model::Symbol::of("s"),
+    let fields = Vec::from([(
+        crate::builtins::test_support::binder_token("s"),
         Held::Object(KObject::KString("hello")),
     )]);
     let (cost, borrows_home) = record_memos(&home, fields, &registries);
@@ -1002,8 +1003,8 @@ fn substrate_memo_home_vs_foreign_closure_leaf() {
     let foreign = CallFrame::new(scope);
     let registries = RunRegistries::new();
 
-    let base = Record::from_pairs(vec![(
-        crate::machine::model::Symbol::of("n"),
+    let base = Vec::from([(
+        crate::builtins::test_support::binder_token("n"),
         Held::Object(KObject::Number(0.0)),
     )]);
     let (base_cost, base_home) = record_memos(&home, base, &registries);
@@ -1011,13 +1012,13 @@ fn substrate_memo_home_vs_foreign_closure_leaf() {
     assert!(!base_home);
 
     let home_kf = alloc_local_kf(&home);
-    let with_home = Record::from_pairs(vec![
+    let with_home = Vec::from([
         (
-            crate::machine::model::Symbol::of("n"),
+            crate::builtins::test_support::binder_token("n"),
             Held::Object(KObject::Number(0.0)),
         ),
         (
-            crate::machine::model::Symbol::of("f"),
+            crate::builtins::test_support::binder_token("f"),
             Held::Object(KObject::KFunction(home_kf)),
         ),
     ]);
@@ -1029,13 +1030,13 @@ fn substrate_memo_home_vs_foreign_closure_leaf() {
     assert!(home_bit, "a home-captured closure sets borrows_home");
 
     let foreign_kf = alloc_local_kf(&foreign);
-    let with_foreign = Record::from_pairs(vec![
+    let with_foreign = Vec::from([
         (
-            crate::machine::model::Symbol::of("n"),
+            crate::builtins::test_support::binder_token("n"),
             Held::Object(KObject::Number(0.0)),
         ),
         (
-            crate::machine::model::Symbol::of("f"),
+            crate::builtins::test_support::binder_token("f"),
             Held::Object(KObject::KFunction(foreign_kf)),
         ),
     ]);
@@ -1064,13 +1065,13 @@ fn substrate_memo_nested_record_composes_by_memo() {
     let types = &registries.types;
 
     let inner_kf = alloc_local_kf(&home);
-    let inner_fields = Record::from_pairs(vec![
+    let inner_fields = Vec::from([
         (
-            crate::machine::model::Symbol::of("x"),
+            crate::builtins::test_support::binder_token("x"),
             Held::Object(KObject::KString("ab")),
         ),
         (
-            crate::machine::model::Symbol::of("f"),
+            crate::builtins::test_support::binder_token("f"),
             Held::Object(KObject::KFunction(inner_kf)),
         ),
     ]);
@@ -1094,8 +1095,8 @@ fn substrate_memo_nested_record_composes_by_memo() {
     );
     assert!(inner_home, "inner holds a home closure");
 
-    let outer_fields = Record::from_pairs(vec![(
-        crate::machine::model::Symbol::of("inner"),
+    let outer_fields = Vec::from([(
+        crate::builtins::test_support::binder_token("inner"),
         Held::Object(inner.deep_clone()),
     )]);
     let (cost, borrows_home) = record_memos(&home, outer_fields, &registries);
@@ -1128,8 +1129,8 @@ fn substrate_memo_list_cell_is_priceable_and_home_free() {
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(home.brand().handle()))
             .with_holder(&owned_cells);
     let list = KObject::list_of_held(list_door, &[Held::Object(KObject::Number(1.0))], types);
-    let fields = Record::from_pairs(vec![(
-        crate::machine::model::Symbol::of("l"),
+    let fields = Vec::from([(
+        crate::builtins::test_support::binder_token("l"),
         Held::Object(list),
     )]);
     let (cost, borrows_home) = record_memos(&home, fields, &registries);
@@ -1154,7 +1155,7 @@ mod seam_verb_table {
     /// (its substrate's stored reach names `home`, so the chooser reads a home crossing).
     fn build_record<'run>(
         home: &'run Rc<CallFrame>,
-        fields: Record<Held<'run>>,
+        fields: Vec<(BinderSymbol, Held<'run>)>,
         types: &TypeRegistry,
     ) -> &'run KObject<'run> {
         let owned_cells = crate::machine::core::FrameCoverage::empty();
@@ -1190,8 +1191,8 @@ mod seam_verb_table {
 
         // Program storage is where a raw AST node lives; an expression cell points into it.
         let expr = KObject::KExpression(program.brand().new_expression(&[]));
-        let fields = Record::from_pairs(vec![(
-            crate::machine::model::Symbol::of("e"),
+        let fields = Vec::from([(
+            crate::builtins::test_support::binder_token("e"),
             Held::Object(expr),
         )]);
         let value = build_record(&home, fields, types);
@@ -1244,8 +1245,8 @@ mod seam_verb_table {
             home.brand().alloc_scalar(Scalar::Number(n as f64));
         }
 
-        let fields = Record::from_pairs(vec![(
-            crate::machine::model::Symbol::of("a"),
+        let fields = Vec::from([(
+            crate::builtins::test_support::binder_token("a"),
             Held::Object(KObject::Number(1.0)),
         )]);
         let value = build_record(&home, fields, types);
@@ -1277,8 +1278,8 @@ mod seam_verb_table {
         // A long string dominates the record's rebuild cost. The record door re-bumps the bytes into
         // the host region, so they price on both sides of the ratio — the rebuild cost is still the
         // dominant term, so the verb pins.
-        let fields = Record::from_pairs(vec![(
-            crate::machine::model::Symbol::of("s"),
+        let fields = Vec::from([(
+            crate::builtins::test_support::binder_token("s"),
             Held::Object(KObject::KString(&big)),
         )]);
         let value = build_record(&home, fields, types);
@@ -1308,8 +1309,8 @@ mod seam_verb_table {
         let registries = RunRegistries::new();
         let types = &registries.types;
 
-        let fields = Record::from_pairs(vec![(
-            crate::machine::model::Symbol::of("a"),
+        let fields = Vec::from([(
+            crate::builtins::test_support::binder_token("a"),
             Held::Object(KObject::Number(1.0)),
         )]);
         let value = build_record(&home, fields, types);
@@ -1486,8 +1487,8 @@ fn plain_record_cell_run<'run>(
             producer.brand().handle(),
         ))
         .with_holder(&born_cells);
-        let fields = Record::from_pairs(vec![(
-            crate::machine::model::Symbol::of("acc"),
+        let fields = Vec::from([(
+            crate::builtins::test_support::binder_token("acc"),
             Held::Object(KObject::Number(index as f64)),
         )]);
         let object: &KObject<'_> =

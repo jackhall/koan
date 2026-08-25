@@ -10,7 +10,7 @@
 use std::rc::Rc;
 
 use crate::machine::core::{DepPlacement, OpenedFunction};
-use crate::machine::model::labels::{LabelInterner, Symbol, TypeSymbol};
+use crate::machine::model::labels::{BinderSymbol, LabelInterner, Symbol, TypeSymbol};
 use crate::machine::model::render_label;
 use crate::machine::model::{Carried, Record, TypeMemberMap, constructor_param_names};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
@@ -35,7 +35,7 @@ mod tests;
 /// loud `DispatchFailed`.
 enum CallBody<'step> {
     /// A `{x = 1}` record literal — named arguments.
-    Named(&'step [(&'step str, ExpressionPart<'step>)]),
+    Named(&'step [(BinderSymbol, ExpressionPart<'step>)]),
     /// A `(Error "x")` paren group — positional construction (tagged unions, newtypes).
     Positional(&'step [Spanned<ExpressionPart<'step>>]),
 }
@@ -184,7 +184,6 @@ fn apply_constructor<'step>(
                 brand,
                 identity,
                 fields,
-                ctx.registries(),
                 ctx.scratch(),
             ),
             _ => constructors::dispatch_construct_newtype(
@@ -241,9 +240,9 @@ fn apply_constructor<'step>(
 }
 
 /// One supplied type argument on its way to [`build_apply_args`]: the name's bare symbol bits as
-/// hashed at its call site, that same source text for the miss diagnostic, and the resolved
-/// argument.
-type SuppliedTypeArgument<'a> = (Symbol, &'a str, KType);
+/// the record-literal key carries them, and the resolved argument. A miss renders the name from
+/// the interner at the error site.
+type SuppliedTypeArgument = (Symbol, KType);
 
 /// Apply a type constructor to a record of named type arguments — `:(Result {Ok = Number, Error =
 /// MyError})`. Each field value rides its own sub-Dispatch, so a compound argument like
@@ -253,7 +252,7 @@ fn apply_named_type_args<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     identity: KType,
     param_names: Vec<TypeSymbol>,
-    fields: &[(&'step str, ExpressionPart<'step>)],
+    fields: &[(BinderSymbol, ExpressionPart<'step>)],
 ) -> Outcome<'step> {
     // An empty argument record supplies no dep to park on, so it decides here — against the same
     // key check the non-empty path runs.
@@ -266,12 +265,12 @@ fn apply_named_type_args<'step>(
         );
     }
     let brand = ctx.current_scope().brand();
-    // Argument names are record-literal keys — source text, hashed once here and matched by symbol
-    // bits from then on. A reference is not a declaration, so this is a bare probe through the
-    // recovery door; a name matching no declared parameter prints its own text in the miss.
-    let (names, value_parts): (Vec<(Symbol, &'step str)>, Vec<ExpressionPart<'step>>) = fields
+    // Argument names are record-literal keys, minted at parse and matched by symbol bits from
+    // here on. A reference is not a declaration, so this is a bare probe through the recovery
+    // door; a name matching no declared parameter renders its own text in the miss.
+    let (names, value_parts): (Vec<Symbol>, Vec<ExpressionPart<'step>>) = fields
         .iter()
-        .map(|(name, part)| ((Symbol::of(name), *name), *part))
+        .map(|(name, part)| (name.symbol(), *part))
         .unzip();
     let deps: Vec<DepRequest<'step>> = value_parts
         .into_iter()
@@ -283,22 +282,20 @@ fn apply_named_type_args<'step>(
     let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
         // Each argument is a type value cloned out as owned data, so the applied type embeds no
         // borrow of a producer's region and needs no carrier fold.
-        let supplied: Result<Vec<SuppliedTypeArgument<'step>>, KError> = terminals
+        let supplied: Result<Vec<SuppliedTypeArgument>, KError> = terminals
             .iter()
             .zip(&names)
-            .map(
-                |(terminal, (symbol, text))| match terminal.cell.open_at().value() {
-                    Carried::Type(kt) => Ok((*symbol, *text, kt)),
-                    Carried::Object(object) => Err(KError::new(KErrorKind::TypeMismatch {
-                        arg: (*text).to_string(),
-                        expected: "Type".to_string(),
-                        got: object.ktype().name(view.registries()),
-                    })),
-                    Carried::UnresolvedType(ti) => Err(KError::new(KErrorKind::UnboundName(
-                        render_label(ti.symbol(), view.registries()),
-                    ))),
-                },
-            )
+            .map(|(terminal, symbol)| match terminal.cell.open_at().value() {
+                Carried::Type(kt) => Ok((*symbol, kt)),
+                Carried::Object(object) => Err(KError::new(KErrorKind::TypeMismatch {
+                    arg: render_label(*symbol, view.registries()),
+                    expected: "Type".to_string(),
+                    got: object.ktype().name(view.registries()),
+                })),
+                Carried::UnresolvedType(ti) => Err(KError::new(KErrorKind::UnboundName(
+                    render_label(ti.symbol(), view.registries()),
+                ))),
+            })
             .collect();
         Outcome::Done(supplied.and_then(|supplied| {
             let args = build_apply_args(identity, &param_names, supplied, view.registries())?;
@@ -318,19 +315,19 @@ fn apply_named_type_args<'step>(
 fn build_apply_args(
     identity: KType,
     param_names: &[TypeSymbol],
-    supplied: Vec<SuppliedTypeArgument<'_>>,
+    supplied: Vec<SuppliedTypeArgument>,
     registries: &RunRegistries,
 ) -> Result<Record<KType>, KError> {
     // The supplied names carry bare symbol bits; a declared parameter that matches contributes its
     // own classified key, and a name matching none joins the misspellings in `unknown`.
     let mut matched = TypeMemberMap::default();
-    let mut unknown: Vec<&str> = Vec::new();
-    for (symbol, text, kt) in &supplied {
+    let mut unknown: Vec<Symbol> = Vec::new();
+    for (symbol, kt) in &supplied {
         match param_names.iter().find(|param| param.symbol() == *symbol) {
             Some(param) => {
                 matched.insert(*param, *kt);
             }
-            None => unknown.push(text),
+            None => unknown.push(*symbol),
         }
     }
     let missing: Vec<TypeSymbol> = param_names
@@ -338,7 +335,6 @@ fn build_apply_args(
         .copied()
         .filter(|name| !matched.contains_key(name))
         .collect();
-    unknown.sort_unstable();
     if !missing.is_empty() || !unknown.is_empty() {
         // The declared names resolve through the interner, which recorded them at the
         // constructor's declaration — on the miss path only, so a satisfied key check renders
@@ -354,12 +350,17 @@ fn build_apply_args(
         }
         let missing = render(&missing);
         let declared = render(param_names);
+        let mut unknown: Vec<String> = unknown
+            .iter()
+            .map(|symbol| render_label(*symbol, registries))
+            .collect();
+        unknown.sort_unstable();
         let mut problems = Vec::new();
         if !missing.is_empty() {
             problems.push(format!("missing {}", quoted_list(&borrow(&missing))));
         }
         if !unknown.is_empty() {
-            problems.push(format!("unknown {}", quoted_list(&unknown)));
+            problems.push(format!("unknown {}", quoted_list(&borrow(&unknown))));
         }
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "`{}` takes type parameters {} — {}",
@@ -506,11 +507,11 @@ fn apply_function<'step>(
     match body {
         CallBody::Named(fields) => {
             let brand = ctx.current_scope().brand();
-            // A named-argument label is syntactic, so it interns here and matches the parameter
-            // symbol the signature already carries.
+            // A named-argument label carries its parse-minted symbol, which matches the
+            // parameter symbol the signature already carries.
             let fields = fields
                 .iter()
-                .map(|(name, part)| (ctx.registries().labels.intern(name), *part))
+                .map(|(name, part)| (name.symbol(), *part))
                 .collect();
             match f
                 .value()

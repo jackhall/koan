@@ -439,7 +439,7 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
 
     use crate::builtins::test_support::{per_call_storage, run_root_bare};
     use crate::machine::core::{FoldingBrand, FrameStorageExt};
-    use crate::machine::model::{Held, Record, RegionEscape, copy_or_pin};
+    use crate::machine::model::{Held, RegionEscape, copy_or_pin};
     use crate::machine::{BindingIndex, FrameCoverage};
     use crate::witnessed::FoldedPlacement;
 
@@ -455,8 +455,8 @@ fn using_window_value_prices_against_the_module_region_it_lives_in() {
         module_storage.brand().handle(),
     ))
     .with_holder(&owned_cells);
-    let fields = Record::from_pairs(vec![(
-        crate::machine::model::Symbol::of("a"),
+    let fields = Vec::from([(
+        crate::builtins::test_support::binder_token("a"),
         Held::Object(KObject::Number(1.0)),
     )]);
     let record = door.alloc_object_folded(KObject::record_of_held(door, fields.as_slice(), types));

@@ -10,7 +10,9 @@
 use crate::source::{FileId, Span, Spanned};
 
 use crate::machine::core::{ProgramBrand, RegionBrand};
-use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
+use crate::machine::model::labels::{
+    BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol,
+};
 use crate::machine::model::{Held, KObject, Parseable, StoredBinderKey};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::witnessed::reattachable;
@@ -82,8 +84,9 @@ pub enum ExpressionPart<'a> {
     DictLiteral(&'a [(ExpressionPart<'a>, ExpressionPart<'a>)]),
     /// Anonymous record literal (`{x = 1, y = "a"}`) — identifier-keyed `=` pairs. The
     /// brace frame routes here when the first pair separator is `=`; `:` pairs stay a
-    /// `DictLiteral`. Field names are syntactic identifiers (never name-resolved).
-    RecordLiteral(&'a [(&'a str, ExpressionPart<'a>)]),
+    /// `DictLiteral`. A field name is the Identifier or Type token's own parse-minted
+    /// symbol, so a key carries its class and no consumer re-derives one from text.
+    RecordLiteral(&'a [(BinderSymbol, ExpressionPart<'a>)]),
     Literal(KLiteral<'a>),
     /// A `#(...)` quote: the parenthesized body captured at parse time as data. The parser folds
     /// the sigil and its group into this part, so quoting is static syntax — there is no runtime
@@ -181,7 +184,9 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::RecordLiteral(pairs) => {
                 let inner: Vec<String> = pairs
                     .iter()
-                    .map(|(k, v)| format!("{} = {}", k, v.summarize(labels)))
+                    .map(|(k, v)| {
+                        format!("{} = {}", labels.render(k.symbol()), v.summarize(labels))
+                    })
                     .collect();
                 format!("{{{}}}", inner.join(", "))
             }

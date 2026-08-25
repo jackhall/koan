@@ -225,7 +225,7 @@ fn record<'a>(
 ) -> KObject<'a> {
     let fields: Vec<_> = pairs
         .into_iter()
-        .map(|(k, v)| (crate::machine::model::Symbol::of(k), v))
+        .map(|(k, v)| (crate::builtins::test_support::binder_token(k), v))
         .collect();
     KObject::record(door, &fields, types)
 }

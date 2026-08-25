@@ -568,13 +568,13 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
         producer_frame.brand().handle(),
     ))
     .with_holder(&owned_cells);
-    let fields = Record::from_pairs(vec![
+    let fields = Vec::from([
         (
-            crate::machine::model::Symbol::of("x"),
+            crate::builtins::test_support::binder_token("x"),
             Held::Object(KObject::Number(1.0)),
         ),
         (
-            crate::machine::model::Symbol::of("y"),
+            crate::builtins::test_support::binder_token("y"),
             Held::Object(KObject::Number(2.0)),
         ),
     ]);
@@ -658,8 +658,8 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
         producer_frame.brand().handle(),
     ))
     .with_holder(&owned_cells);
-    let fields = Record::from_pairs(vec![(
-        crate::machine::model::Symbol::of("a"),
+    let fields = Vec::from([(
+        crate::builtins::test_support::binder_token("a"),
         Held::Object(KObject::Number(3.0)),
     )]);
     let obj: &KObject<'_> =
@@ -979,8 +979,8 @@ fn alloc_substrate_folded_homes_a_record_substrate_in_its_own_brand() {
         let owned_cells = crate::machine::core::FrameCoverage::empty();
         let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region))
             .with_holder(&owned_cells);
-        let fields = Record::from_pairs(vec![(
-            crate::machine::model::Symbol::of("x"),
+        let fields = Vec::from([(
+            crate::builtins::test_support::binder_token("x"),
             Held::Object(KObject::Number(1.0)),
         )]);
         Carried::Object(door.alloc_object_folded(KObject::record_of_held(
@@ -1121,8 +1121,8 @@ fn region_death_frees_every_drop_free_family() {
         }),
         scope.fold_resident_object(|brand| {
             let door = brand.with_holder(&owned_cells);
-            let fields = Record::from_pairs(vec![(
-                crate::machine::model::Symbol::of("field"),
+            let fields = Vec::from([(
+                crate::builtins::test_support::binder_token("field"),
                 Held::Object(KObject::KString(door.allocator().text("payload"))),
             )]);
             KObject::record_of_held(door, fields.as_slice(), &types)

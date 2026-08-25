@@ -24,8 +24,8 @@ use super::ctx::{DecideCtx, current_dest_frame, with_current_node_scope};
 use super::resolve::{Resolution, resolve_name};
 use super::stage_eager_part;
 use crate::machine::Scope;
+use crate::machine::model::BinderSymbol;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::Symbol;
 use crate::scheduler::{Deps, Scheduler};
 use crate::witnessed::RegionHandleFamily;
 
@@ -350,14 +350,14 @@ impl<'step> Host<'step> {
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
         brand: RegionBrand<'a>,
-        fields: &[(&'a str, ExpressionPart<'a>)],
+        fields: &[(BinderSymbol, ExpressionPart<'a>)],
     ) -> NodeId {
-        let mut names: Vec<Symbol> = Vec::with_capacity(fields.len());
+        let mut names: Vec<BinderSymbol> = Vec::with_capacity(fields.len());
         let mut deps = Deps::new();
         let mut rows = Vec::with_capacity(fields.len());
         for &(name, value) in fields {
             let value = self.classify_aggregate_part(sched, brand, value, &mut deps);
-            names.push(self.ambient.registries().labels.intern(name));
+            names.push(name);
             rows.push(AggRow { key: None, value });
         }
         self.schedule_aggregate(
@@ -368,7 +368,7 @@ impl<'step> Host<'step> {
                 // The field pairs are assembled in the destination region's own construction
                 // storage: the schedule-time name slice zipped against the delivered cells, with
                 // no owned record in between.
-                let mut pairs: BumpVec<'_, (Symbol, Held<'_>)> =
+                let mut pairs: BumpVec<'_, (BinderSymbol, Held<'_>)> =
                     BumpVec::with_capacity_in(names.len(), door.allocator());
                 pairs.extend(names.iter().copied().zip(value_helds.iter().copied()));
                 KObject::record_of_held(door, &pairs, types)

@@ -62,7 +62,13 @@ pub(super) fn describe(e: &KExpression<'_>, labels: &LabelInterner) -> String {
             ExpressionPart::RecordLiteral(fields) => {
                 let inner: Vec<String> = fields
                     .iter()
-                    .map(|(name, v)| format!("{} = {}", name, describe_part(v, labels)))
+                    .map(|(name, v)| {
+                        format!(
+                            "{} = {}",
+                            labels.render(name.symbol()),
+                            describe_part(v, labels)
+                        )
+                    })
                     .collect();
                 format!("R{{{}}}", inner.join(", "))
             }

@@ -6,7 +6,7 @@ use crate::machine::core::{
     FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
 };
 use crate::machine::model::ast::{KExpression, ProgramExpression};
-use crate::machine::model::labels::{Symbol, TypeSymbol};
+use crate::machine::model::labels::{BinderSymbol, Symbol, TypeSymbol};
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::types::render_label;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
@@ -303,10 +303,10 @@ impl<'a> KObject<'a> {
     /// [`Self::record_of_held`].
     pub fn record(
         door: SubstrateDoor<'a, '_>,
-        fields: &[(Symbol, KObject<'a>)],
+        fields: &[(BinderSymbol, KObject<'a>)],
         types: &TypeRegistry,
     ) -> KObject<'a> {
-        let mut held: BumpVec<'a, (Symbol, Held<'a>)> =
+        let mut held: BumpVec<'a, (BinderSymbol, Held<'a>)> =
             BumpVec::with_capacity_in(fields.len(), door.allocator());
         held.extend(
             fields
@@ -322,12 +322,21 @@ impl<'a> KObject<'a> {
     /// name-sorted, aligned with the bump-hosted name slice that is the substrate's whole layout.
     pub fn record_of_held(
         door: SubstrateDoor<'a, '_>,
-        fields: &[(Symbol, Held<'a>)],
+        fields: &[(BinderSymbol, Held<'a>)],
         types: &TypeRegistry,
     ) -> KObject<'a> {
-        let field_types =
-            Record::from_pairs(fields.iter().map(|(name, cell)| (*name, cell.ktype(types))));
-        KObject::Record(alloc_record(door, fields), types.record(field_types))
+        let field_types = Record::from_pairs(
+            fields
+                .iter()
+                .map(|(name, cell)| (name.symbol(), cell.ktype(types))),
+        );
+        KObject::Record(
+            alloc_record(
+                door,
+                fields.iter().map(|(name, cell)| (name.symbol(), *cell)),
+            ),
+            types.record(field_types),
+        )
     }
 
     /// `Record` carrier with an explicitly supplied **record type** — the whole interned
@@ -349,7 +358,7 @@ impl<'a> KObject<'a> {
         fields: &[(Symbol, Held<'a>)],
         record_type: KType,
     ) -> KObject<'a> {
-        KObject::Record(alloc_record(door, fields), record_type)
+        KObject::Record(alloc_record(door, fields.iter().copied()), record_type)
     }
 
     /// Fresh `Tagged` carrier over one payload value. Sections the payload cell through `door`, then
@@ -758,14 +767,14 @@ fn alloc_list<'a>(door: SubstrateDoor<'a, '_>, items: &[Held<'a>]) -> &'a ListSu
 /// binary search resolves a field exactly.
 fn alloc_record<'a>(
     door: SubstrateDoor<'a, '_>,
-    fields: &[(Symbol, Held<'a>)],
+    fields: impl ExactSizeIterator<Item = (Symbol, Held<'a>)>,
 ) -> &'a RecordSubstrate<'a> {
     // Both working buffers are bumped in the destination region itself — the construction storage
     // the door already writes the name slice and the cells into — so building a record takes no
     // heap container at any size.
     let mut pairs: BumpVec<'a, (Symbol, Held<'a>)> =
         BumpVec::with_capacity_in(fields.len(), door.allocator());
-    pairs.extend_from_slice(fields);
+    pairs.extend(fields);
     pairs.sort_unstable_by_key(|pair| pair.0);
     let names = door
         .allocator()
