@@ -291,7 +291,7 @@ The rails the dispatch driver feeds:
   lowering for the reinstalled step
   (a wrap-slot-only call like `MAKESET int_ord` resolves bare names in Step 3,
   leaves no eager parts, and binds in one step — no dep-finish detour). Otherwise
-  the decide returns an `Outcome::Park` with a `Continuation::Finish`
+  the decide returns an `Outcome::Park` with a `Continuation::Ready`
   declaring the fresh subs as deps with a splice finish; the harness parks the
   slot as a dep-finish carrying the finish. At dep completion the finish
   re-resolves the spliced `working_expr` and folds it into a `Continue` — via
@@ -336,7 +336,7 @@ graph cannot close a cycle, and the scheduler carries no cycle detection.
 A bare-identifier slot resolving to a producer returns `Outcome::Forward` and is
 spliced out (above). The other parking fast-lane handlers (the `fn_value`
 `FunctionValueCall` head-placeholder park) and the eager-resolve pass return an
-`Outcome::Park` with a `Continuation::Resume` for a re-resolve, whose harness
+`Outcome::Park` with a `Continuation::Ready` for a re-resolve, whose harness
 installs the park edge through the scheduler's single wiring door; the
 bare-name splice likewise re-points the moved edges at the resolved producer.
 An edge install lands the forward `notify` wake and the consumer's `pending`
@@ -446,9 +446,12 @@ and the aggregate a statement installs is read once from the node's cache.
 When a decide must wait — a keyworded resolve that found bare-name or
 overload producers, a `FunctionValueCall` head still resolving to a
 `Placeholder`, a `TypeCall` parked on a still-finalizing head — it returns an
-`Outcome::Park` whose continuation is a `Continuation::Resume` carrying an
-opaque [`ResumeFn`](../../src/machine/execute/decide.rs) closure
-(`DecideCtx -> Outcome`, built by `park_resume`). The harness wires the
+`Outcome::Park` whose continuation is a `Continuation::Ready` carrying a
+`DecideCtx -> Outcome` closure adapted onto the uniform continuation signature by
+[`decide_only`](../../src/machine/execute/outcome.rs) and erased on the bumped tier —
+its captures are `Copy`, so it is bump-allocated into the cart the park keeps rather
+than boxed (see [continuations.md](continuations.md)). `park_resume`
+([decide.rs](../../src/machine/execute/decide.rs)) is the door. The harness wires the
 slot's park edges and installs a fresh **resume** decide carrying that
 closure. On wake, the drain hands the step callback the dep results already
 read and their edges already released, and the callback runs the captured
@@ -466,8 +469,8 @@ against the now-populated scope:
 - A keyworded **overload** park carries the original (unspliced) expression and
   re-runs the resolve against the now-sealed slots of the `functions` bucket.
   **Eager subs never park here**: a `Deferred`/eager-subs resolve returns an
-  `Outcome::Park` with a `Continuation::Finish` and parks on a node with a
-  dep-finish `cont` whose finish re-resolves the spliced expression — so a
+  `Outcome::Park` with a `Continuation::Ready` and parks on a node whose
+  dep-finish continuation re-resolves the spliced expression — so a
   keyworded resume never re-enters for them. Re-resolve in the finish is
   authoritative: an element-typed `Future(_)` that narrows a typed-slot
   admission rules a speculative initial pick out, and the call surfaces
@@ -477,7 +480,7 @@ against the now-populated scope:
   carries the original call expression and re-runs the fast lane once
   `scope.resolve_with_chain` lands in the `NameLookup::Bound` arm. Its eager
   subs route through `apply_callable::install_eager_subs_track`, which returns
-  a `Continuation::Finish` carrying the picked `KFunction` from the head directly;
+  a `Continuation::Ready` carrying the picked `KFunction` from the head directly;
   `FunctionValueCall` is non-overload-set, so a typed `Future(_)` an eager sub
   reveals can't narrow the pick and the finish binds `picked` without
   re-resolving.

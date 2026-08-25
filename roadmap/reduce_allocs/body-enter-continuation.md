@@ -18,9 +18,10 @@ body-enter continuation bumps into the fresh cart's own region.
   the cart is re-derived from the slot's anchor at wake, never captured, and the
   leading statements ride as a region slice, not an owned `Vec`.
 - The fresh-cart bump door this builds also moves the `FreshChild`/`FreshTail` tail
-  decides in `tail_continue` onto the bumped tier — they ship Boxed from
-  [outcome-obligation-boxing](outcome-obligation-boxing.md), whose bumped host is the
-  current frame only.
+  decides in `tail_continue` onto the bumped tier: `decide_tail`'s `host` is `None` for
+  both placements, since
+  [`erase_bumped`](../../src/machine/execute/outcome.rs) hosts only in a brand the
+  deciding step already holds.
 - The leading-statements tail finish's capture set slims to `Copy` data plus its
   load-bearing block-frame `Rc` (nothing else keeps the block frame alive across that
   park), which keeps that finish on the Boxed tier.
@@ -32,6 +33,5 @@ body-enter continuation bumps into the fresh cart's own region.
 
 **Requires:**
 
-- [Outcome and obligation boxing](outcome-obligation-boxing.md)
 
 **Unblocks:** none.

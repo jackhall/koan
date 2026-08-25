@@ -250,7 +250,7 @@ action-harness catch (`Action::Catch`, lowered to a `Continuation::Catch`; see
 [execution/README.md](execution/README.md)): it waits on a watched slot and hands
 its `Result<&KObject, KError>` to a host closure that decides whether to recover
 or re-raise. Unlike a dep-finish, an errored dep does not short-circuit — TRY's
-finish always runs (`catch_cont`).
+finish always runs (the `catching` adapter).
 
 ### Exposed variants
 
@@ -296,7 +296,7 @@ the caller binds with `LET`, passes as an argument, or returns:
   MATCH-ing `e` after destructuring the `Result`.
 
 The [`CATCH`](../src/builtins/catch.rs) builtin reuses the same scheduler
-mechanism as `TRY-WITH` (`Action::Catch` / `CatchFinish`): it schedules `<expr>` as a
+mechanism as `TRY-WITH` (`Action::Catch` / the `catching` adapter): it schedules `<expr>` as a
 catching sub-dispatch and registers a finish closure that wraps the outcome in
 a `Result` value. The prelude `Result` identity is read from `bindings.types`
 (via `scope.resolve_type("Result")`) at body time, so a `CATCH`-produced

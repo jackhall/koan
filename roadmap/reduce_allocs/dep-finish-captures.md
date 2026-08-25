@@ -37,6 +37,5 @@ nested currencies generic compositions folded in before the one erasure.
 
 **Requires:**
 
-- [Outcome and obligation boxing](outcome-obligation-boxing.md)
 
 **Unblocks:** none.

@@ -74,10 +74,6 @@ assembly and the `run_action` recursion compose in generically).
 
 ## Open work
 
-- **Retype the currency and collapse the combinator layers**
-  ([roadmap/reduce_allocs/outcome-obligation-boxing.md](../../roadmap/reduce_allocs/outcome-obligation-boxing.md)):
-  the two-tier door, generic combinators, obligation as data, and the re-decide
-  continuations on the bumped tier.
 - **Body-enter path**
   ([roadmap/reduce_allocs/body-enter-continuation.md](../../roadmap/reduce_allocs/body-enter-continuation.md)):
   the fresh-cart co-location, the re-derived cart, the leading statements as a region

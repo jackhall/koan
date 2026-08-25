@@ -28,6 +28,5 @@ boxes per step after the engine's own continuations are bumped.
 
 **Requires:**
 
-- [Outcome and obligation boxing](outcome-obligation-boxing.md)
 
 **Unblocks:** none.

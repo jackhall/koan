@@ -11,9 +11,10 @@ one engine that serves both build-time and run-time execution. Part of the
 
 The scheduler models dispatch itself as a node. There is one node shape — a
 [`NodeWork`](../../src/machine/execute/nodes.rs) struct that waits on a set of deps
-and then runs a [`NodeCont`](../../src/machine/execute/outcome.rs) closure over
-their resolved terminals. A top-level expression enters as a *dispatch decide*: a
-`NodeWork` whose `cont` classifies the expression on first poll
+and then runs a [`NodeContinuation`](../../src/machine/execute/outcome.rs) — the
+slot's declared-return obligation as `Copy` data beside one erased call target —
+over their resolved terminals. A top-level expression enters as a *dispatch decide*: a
+`NodeWork` whose continuation classifies the expression on first poll
 ([`run_program`](../../src/machine/execute/harness.rs) collapses to "add one
 dispatch decide per top-level statement"; the rest is dynamic). At run time a
 decide walks its expression's parts, spawns sub-dispatch nodes for nested
@@ -21,30 +22,34 @@ sub-expressions, and a builtin body can declare further dispatch nodes as deps o
 the `Outcome` it returns.
 
 Per-family behavior — dep-finish vs. catch vs. decide — is not a node variant; it is
-which combinator built the `cont` closure ([`short_circuit`](../../src/machine/execute/outcome.rs)
-/ [`catch_cont`](../../src/machine/execute/outcome.rs) /
-[`ignore_results`](../../src/machine/execute/outcome.rs) in
-[`outcome.rs`](../../src/machine/execute/outcome.rs)). The node itself never branches
-and names no AST.
+which generic adapter shaped the closure *before* the construction site's single
+erasure ([`gated`](../../src/machine/execute/outcome.rs) /
+[`sealed_done`](../../src/machine/execute/outcome.rs) /
+[`catching`](../../src/machine/execute/outcome.rs) /
+[`decide_only`](../../src/machine/execute/outcome.rs) in
+[`outcome.rs`](../../src/machine/execute/outcome.rs)). Each takes an `impl FnOnce` and
+returns an `impl FnOnce`, so a family layer costs monomorphized code rather than a box;
+[continuations.md](continuations.md) carries the currency and its two-tier erase door.
+The node itself never branches and names no AST.
 
-- A **dep-finish** `cont` (built by `short_circuit`) waits on a fixed set of dep
+- A **dep-finish** continuation (adapted by `gated`) waits on a fixed set of dep
   slots, short-circuits on the first errored dep, and otherwise hands the
   resolved dep terminals (un-relocated: each terminal *is* the producer's
   lifetime-free delivery envelope, read under its own pins) to a single
-  [`TerminalDepFinish`](../../src/machine/execute/outcome.rs) closure — the one
-  delivery currency. A value-reading finish writes that shape directly; a value
+  finish closure — the one delivery currency. A value-reading finish writes that
+  shape directly; a value
   that must outlive the resolving step travels as its delivery envelope, adopted at
   the consumer's own step brand — every delivery, including the catch channel,
   is carrier-only; no dep ever crosses to a finish as a relocated copy. A
-  [`WitnessedDepFinish`](../../src/machine/execute/outcome.rs) (folds terminals
-  into one witnessed carrier) projects onto the same currency through
-  `seal_witnessed` before `short_circuit` ever sees it, so there is exactly one
+  *witnessed* finish (folds terminals into one witnessed carrier, returning a
+  `Result` so a shape error short-circuits) projects onto the same currency through
+  `sealed_done` before `gated` ever sees it, so there is exactly one
   delivery loop. List- and dict-literal planners use the witnessed shape; the
   construction logic — including already-resolved literal scalars that don't need
   a dep slot — lives in the closure's capture.
-- A **catch** `cont` (built by `catch_cont`) waits on one slot and hands its
-  terminal to a [`CatchFinish`](../../src/machine/execute/outcome.rs) closure as a
-  `Result<Sealed<CarriedFamily, FrameSet>, KError>` — the watched producer's own
+- A **catch** continuation (adapted by `catching`) waits on one slot and hands its
+  terminal to a recovery closure as a
+  `Result<DeliveredCarried, KError>` — the watched producer's own
   sealed carrier, duplicated with its pins. Unlike a dep-finish, an errored dep does not
   short-circuit — the closure always runs and decides whether to recover or
   re-raise. The `TRY-WITH` builtin
@@ -52,7 +57,7 @@ and names no AST.
   [error-handling.md](../error-handling.md)) is the sole caller today: it spawns its
   watched expression as a sub-dispatch and registers a catch that picks the
   matching branch by tag.
-- A **decide** `cont` (built by `ignore_results`) takes no dep values — it reads
+- A **decide** continuation (adapted by `decide_only`) takes no dep values — it reads
   the view and classifies / re-resolves — so its deps are park-only and the
   results slice is ignored.
 
@@ -300,11 +305,10 @@ The keyworded dispatcher extracts every nested sub-expression out of
 the parent's `parts` (replacing each with a placeholder `StagedSlot`) and
 declares them as the deps of a
 [`Park`](#the-dispatcher--scheduler-boundary) whose continuation
-is a `Continuation::Finish` — the dispatch flavor of a dep-finish. The
+is a `Continuation::Ready` — the dispatch flavor of a dep-finish. The
 harness submits each dep as a sub-Dispatch and parks the parent on a
-[`NodeWork`](../../src/machine/execute/nodes.rs) whose `cont` is a dep-finish wrapping
-that *splice finish* (a [`TerminalDepFinish`](../../src/machine/execute/outcome.rs)
-closure). When the deps terminalize, that finish rests each resolved value's
+[`NodeWork`](../../src/machine/execute/nodes.rs) whose continuation is that
+*splice finish* behind its `gated` dep-error check. When the deps terminalize, that finish rests each resolved value's
 delivery envelope in the finishing step's own region and freezes a new parts run
 with each staging hole replaced by its resting cell —
 `WorkingPart::Spliced { cell }` — through
