@@ -48,9 +48,14 @@ live and whether Drop runs.
 The region of **the frame the work installs under** — the current frame for an
 in-place replace or a park, the fresh cart for a body-enter `FreshTail` (the caller's
 frame dies under TCO reuse, so its region cannot host the callee's continuation). The
-closure follows the same rule as its captures, so both are covered by the anchor's one
-seal. Frame-region bumps free at frame death, not at wake; a slot parks a bounded
-number of times, so a dormant continuation's bytes are bounded per frame.
+rule is a construction-site property, not a convention: a replace rides as one
+[`Replacement`](../../src/machine/execute/outcome.rs) value bundling the work with the
+frame placement, and its `fresh_tail` / `fresh_child` constructors mint the host brand
+off the very frame the placement installs, so work hosted in a sibling cart's region is
+unrepresentable. The closure follows the same rule as its captures, so both are covered
+by the anchor's one seal. Frame-region bumps free at frame death, not at wake; a slot
+parks a bounded number of times, so a dormant continuation's bytes are bounded per
+frame.
 
 ## Capture discipline
 
@@ -74,10 +79,6 @@ assembly and the `run_action` recursion compose in generically).
 
 ## Open work
 
-- **Body-enter path**
-  ([roadmap/reduce_allocs/body-enter-continuation.md](../../roadmap/reduce_allocs/body-enter-continuation.md)):
-  the fresh-cart co-location, the re-derived cart, the leading statements as a region
-  slice.
 - **Dep-finish captures**
   ([roadmap/reduce_allocs/dep-finish-captures.md](../../roadmap/reduce_allocs/dep-finish-captures.md)):
   the engine dep-finish sites onto the bumped tier with region-slice captures.
