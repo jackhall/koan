@@ -40,13 +40,14 @@ use super::super::outcome::{Await, Outcome, StepDeps, dep_error_frame};
 use super::SubDispatch;
 use super::ctx::DecideCtx;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{Symbol, TypeSymbol};
+use crate::machine::model::{BinderSymbol, TypeSymbol};
 
 /// Composes the final `KType` from the elaborated pairs, plus whatever owned type content the
 /// caller closed over (e.g. the FN return type). The composed value is allocated into the
 /// consumer's own region through the single type door.
 pub(crate) type BrandCompose<'step> = Box<
-    dyn for<'r> FnOnce(Vec<(Symbol, KType)>, &'r RunRegistries) -> Result<KType, KError> + 'step,
+    dyn for<'r> FnOnce(Vec<(BinderSymbol, KType)>, &'r RunRegistries) -> Result<KType, KError>
+        + 'step,
 >;
 
 /// `Action`-path finalize, returning a witnessed carrier beside the binding writes the declarator
@@ -56,7 +57,7 @@ pub(crate) type FieldListFinalizeAction<'a> = Box<
     dyn for<'r, 'w> FnOnce(
             &FinishCtx<'a, 'r>,
             Option<&'w DeclWindow<'a>>,
-            Vec<(Symbol, KType)>,
+            Vec<(BinderSymbol, KType)>,
         ) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError>
         + 'a,
 >;
@@ -86,7 +87,7 @@ impl<'step> FieldListRewalk<'step> {
         scope: &Scope<'step>,
         feed: &[Carried<'f>],
         registries: &RunRegistries,
-    ) -> Result<Vec<(Symbol, KType)>, KError> {
+    ) -> Result<Vec<(BinderSymbol, KType)>, KError> {
         let mut result_feed = ResultFeed::new(feed);
         let mut elaborator = Elaborator::new(scope)
             .with_threaded(self.threaded.iter().copied())

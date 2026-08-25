@@ -325,11 +325,8 @@ impl<'a> KObject<'a> {
         fields: &[(BinderSymbol, Held<'a>)],
         types: &TypeRegistry,
     ) -> KObject<'a> {
-        let field_types = Record::from_pairs(
-            fields
-                .iter()
-                .map(|(name, cell)| (name.symbol(), cell.ktype(types))),
-        );
+        let field_types =
+            Record::from_pairs(fields.iter().map(|(name, cell)| (*name, cell.ktype(types))));
         KObject::Record(
             alloc_record(
                 door,

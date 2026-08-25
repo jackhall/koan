@@ -45,7 +45,7 @@ fn record(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
     types.record(Record::from_pairs(
         pairs
             .into_iter()
-            .map(|(n, t)| (crate::machine::model::Symbol::of(n), t)),
+            .map(|(n, t)| (crate::builtins::test_support::binder_token(n), t)),
     ))
 }
 
@@ -203,7 +203,7 @@ fn constructor_apply(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
         Record::from_pairs(
             pairs
                 .into_iter()
-                .map(|(n, t)| (crate::machine::model::Symbol::of(n), t)),
+                .map(|(n, t)| (crate::builtins::test_support::binder_token(n), t)),
         ),
     )
 }

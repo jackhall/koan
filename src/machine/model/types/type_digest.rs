@@ -487,7 +487,7 @@ fn feed_record_canonical(
 ) {
     let mut pairs: Vec<(Symbol, TypeDigest)> = record
         .iter()
-        .map(|(symbol, value)| (symbol, canonical_type_digest(*value, schema, types)))
+        .map(|(key, value)| (key.symbol(), canonical_type_digest(*value, schema, types)))
         .collect();
     pairs.sort_unstable_by_key(|pair| pair.0);
     h.count(pairs.len());
@@ -517,7 +517,7 @@ pub(crate) fn member_ref_digest(scc_digest: TypeDigest, index: usize) -> TypeDig
 fn feed_record(h: &mut DigestHasher, record: &Record<KType>) {
     let mut pairs: Vec<(Symbol, TypeDigest)> = record
         .iter()
-        .map(|(symbol, value)| (symbol, value.digest()))
+        .map(|(key, value)| (key.symbol(), value.digest()))
         .collect();
     pairs.sort_unstable_by_key(|pair| pair.0);
     h.count(pairs.len());

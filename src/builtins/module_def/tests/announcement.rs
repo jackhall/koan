@@ -19,7 +19,7 @@ fn member_scc_and_fields(
 ) -> (
     TypeDigest,
     usize,
-    Vec<(crate::machine::model::Symbol, KType)>,
+    Vec<(crate::machine::model::BinderSymbol, KType)>,
 ) {
     let handle = crate::builtins::test_support::lookup_type(scope, name)
         .unwrap_or_else(|| panic!("expected {name} to be a type in scope"));
@@ -69,11 +69,11 @@ fn module_mutual_newtype_pair_seals_in_either_order() {
         let bb = lookup_type(members, "Bb").expect("Bb binds");
         assert_eq!(
             a_fields[0],
-            (crate::machine::model::Symbol::of("other"), bb)
+            (crate::builtins::test_support::binder_token("other"), bb)
         );
         assert_eq!(
             b_fields[0],
-            (crate::machine::model::Symbol::of("other"), aa)
+            (crate::builtins::test_support::binder_token("other"), aa)
         );
         assert!(
             members

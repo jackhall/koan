@@ -214,28 +214,19 @@ pub fn body_record_schema<'a>(
             ))));
         }
     };
-    // The schema's field labels are bare symbols, so each parameter's binding class comes from
-    // resolving its text through the run's interner and classifying that — the one seam where a
-    // signature's names arrive without their class alongside. The return-surface scan probes by
-    // bare symbol bits, so it reads the schema's keys directly.
-    let param_names: Vec<Symbol> = schema.keys().collect();
-    let mut elements: Vec<SignatureElement> = Vec::with_capacity(schema.len());
-    for (field, ktype) in schema.iter() {
-        let Some(text) = ctx.registries.labels.resolve(field) else {
-            return Action::done(Err(KError::new(KErrorKind::ShapeError(
-                "anonymous FN signature field has no recorded name".to_string(),
-            ))));
-        };
-        let Some(name) = BinderSymbol::classify(&text) else {
-            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-                "anonymous FN parameter `{text}` is a keyword token, which nothing binds to",
-            )))));
-        };
-        elements.push(SignatureElement::Argument(Argument {
-            name,
-            ktype: *ktype,
-        }));
-    }
+    // The schema's keys are the classified names its own field-list parse minted, so each
+    // parameter's binding class rides straight into its `Argument`. The return-surface scan probes
+    // by bare symbol bits, so it reads the same keys down to their symbols.
+    let param_names: Vec<Symbol> = schema.keys().map(BinderSymbol::symbol).collect();
+    let elements: Vec<SignatureElement> = schema
+        .iter()
+        .map(|(name, ktype)| {
+            SignatureElement::Argument(Argument {
+                name,
+                ktype: *ktype,
+            })
+        })
+        .collect();
     let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "FN", &SLOTS.body));
     let return_type_state = crate::try_action!(classify_return_type(

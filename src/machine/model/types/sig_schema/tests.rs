@@ -56,7 +56,7 @@ fn fn_type(params: Vec<(&str, KType)>, ret: KType, types: &TypeRegistry) -> KTyp
         Record::from_pairs(
             params
                 .into_iter()
-                .map(|(n, t)| (crate::machine::model::Symbol::of(n), t)),
+                .map(|(n, t)| (crate::builtins::test_support::binder_token(n), t)),
         ),
         ret,
     )
@@ -654,13 +654,13 @@ fn substitute_top_level_and_nested() {
         types.list(KType::NUMBER)
     );
     let rec = types.record(Record::from_pairs([(
-        crate::machine::model::Symbol::of("f"),
+        crate::builtins::test_support::binder_token("f"),
         sig_abstract(SUP_ID, "Type", &registries),
     )]));
     assert_eq!(
         substitute_sig_members(rec, SUP_ID, &map, types),
         types.record(Record::from_pairs([(
-            crate::machine::model::Symbol::of("f"),
+            crate::builtins::test_support::binder_token("f"),
             KType::NUMBER
         )]))
     );
@@ -680,13 +680,19 @@ fn substitute_constructor_apply_abstract_ctor_position() {
     map.insert(type_name("Wrap", &registries), real);
     let applied = types.constructor_apply(
         sig_abstract_ctor(SUP_ID, "Wrap", 1, &registries),
-        Record::from_pairs([(crate::machine::model::Symbol::of("Type"), KType::NUMBER)]),
+        Record::from_pairs([(
+            crate::builtins::test_support::binder_token("Type"),
+            KType::NUMBER,
+        )]),
     );
     assert_eq!(
         substitute_sig_members(applied, SUP_ID, &map, types),
         types.constructor_apply(
             real,
-            Record::from_pairs([(crate::machine::model::Symbol::of("Type"), KType::NUMBER)])
+            Record::from_pairs([(
+                crate::builtins::test_support::binder_token("Type"),
+                KType::NUMBER
+            )])
         )
     );
 }

@@ -224,7 +224,10 @@ fn tagged_relocation_rebuilds_payload_into_dest() {
     });
     let identity = types.constructor_apply(
         ctor,
-        Record::from_pairs([(crate::machine::model::Symbol::of("Elem"), KType::NUMBER)]),
+        Record::from_pairs([(
+            crate::builtins::test_support::binder_token("Elem"),
+            KType::NUMBER,
+        )]),
     );
     let owned_cells = crate::machine::core::FrameCoverage::empty();
     let source_door =
@@ -406,7 +409,7 @@ fn type_recursive_member_relocates_and_navigates() {
     let tree = RecursiveGroupWindow::seal_singleton(
         type_token("Tree"),
         RelativeSchema::NewType(types.record(Record::from_pairs([(
-            crate::machine::model::Symbol::of("children"),
+            crate::builtins::test_support::binder_token("children"),
             types.list(types.intern(TypeNode::Sibling(0))),
         )]))),
         None,

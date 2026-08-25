@@ -216,7 +216,7 @@ mod bare_leaf_resolution {
             .fill(
                 0,
                 types.record(Record::from_pairs([(
-                    crate::machine::model::Symbol::of("x"),
+                    crate::builtins::test_support::binder_token("x"),
                     KType::NUMBER,
                 )])),
                 scope.brand(),

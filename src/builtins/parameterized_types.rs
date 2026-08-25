@@ -20,8 +20,8 @@ use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::model::BinderSymbol;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::Symbol;
 use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{BrandCompose, FieldListDeferral};
 
@@ -37,7 +37,7 @@ const FN_PARAM_NAME_KIND: FieldNameKind = FieldNameKind::IdentifierOrType;
 
 /// Fold the elaborated `(name, type)` pairs into the parameter record and intern the function
 /// type. Shared by the synchronous and dep-finish paths.
-fn finalize_carrier(fields: Vec<(Symbol, KType)>, ret: KType, types: &TypeRegistry) -> KType {
+fn finalize_carrier(fields: Vec<(BinderSymbol, KType)>, ret: KType, types: &TypeRegistry) -> KType {
     types.function_type(Record::from_pairs(fields), ret)
 }
 
@@ -62,6 +62,7 @@ fn require_proper_type(
 mod action_bodies {
     use super::SLOTS;
     use super::{build_carrier, require_proper_type};
+    use crate::machine::model::BinderSymbol;
     use crate::machine::model::constructor_param_names;
     use crate::machine::{Action, BodyCtx, require_ktype};
 
@@ -119,8 +120,8 @@ mod action_bodies {
         };
         // `AS` is arity-1 sugar: the applied type fills the constructor's sole parameter, so
         // `:(Number AS Wrap)` elaborates exactly as `:(Wrap {Elem = Number})` does. The parameter
-        // name interned at the constructor's declaration, so its symbol keys the record directly.
-        let args = Record::from_pairs([(param_name.symbol(), applied)]);
+        // name is the type symbol its declaration minted, so it keys the record directly.
+        let args = Record::from_pairs([(BinderSymbol::Type(*param_name), applied)]);
         let apply = ctx.types().constructor_apply(ctor, args);
         Action::done(Ok(ctx.ctx.type_carried(apply)))
     }
@@ -315,7 +316,7 @@ mod tests {
                 assert_eq!(
                     arguments,
                     Record::from_pairs([(
-                        test_run.registries().labels.intern("Type"),
+                        crate::builtins::test_support::binder_name("Type", test_run.registries()),
                         KType::NUMBER
                     )]),
                 );
@@ -345,8 +346,14 @@ mod tests {
             result,
             types.function_type(
                 Record::from_pairs(vec![
-                    (test_run.registries().labels.intern("x"), KType::NUMBER),
-                    (test_run.registries().labels.intern("y"), KType::STR)
+                    (
+                        crate::builtins::test_support::binder_name("x", test_run.registries()),
+                        KType::NUMBER
+                    ),
+                    (
+                        crate::builtins::test_support::binder_name("y", test_run.registries()),
+                        KType::STR
+                    )
                 ]),
                 KType::BOOL,
             )
@@ -376,7 +383,7 @@ mod tests {
             result,
             types.function_type(
                 Record::from_pairs(vec![(
-                    test_run.registries().labels.intern("Ty"),
+                    crate::builtins::test_support::binder_name("Ty", test_run.registries()),
                     KType::of_kind(KKind::Signature)
                 )]),
                 KType::EMPTY_SIGNATURE,
@@ -398,7 +405,7 @@ mod tests {
             result,
             types.function_type(
                 Record::from_pairs(vec![(
-                    test_run.registries().labels.intern("xs"),
+                    crate::builtins::test_support::binder_name("xs", test_run.registries()),
                     types.list(KType::NUMBER)
                 )]),
                 KType::BOOL,
@@ -421,15 +428,18 @@ mod tests {
             test_run.run_one_type(test_run.parse_one(":{x :Wrapped, y :(LIST OF Number)}"));
         let types = test_run.types();
         let inner = types.record(Record::from_pairs(vec![(
-            test_run.registries().labels.intern("a"),
+            crate::builtins::test_support::binder_name("a", test_run.registries()),
             KType::NUMBER,
         )]));
         assert_eq!(
             result,
             types.record(Record::from_pairs(vec![
-                (test_run.registries().labels.intern("x"), inner),
                 (
-                    test_run.registries().labels.intern("y"),
+                    crate::builtins::test_support::binder_name("x", test_run.registries()),
+                    inner
+                ),
+                (
+                    crate::builtins::test_support::binder_name("y", test_run.registries()),
                     types.list(KType::NUMBER)
                 ),
             ])),
@@ -454,9 +464,7 @@ mod tests {
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
                 assert_eq!(
-                    params
-                        .get(test_run.registries().labels.intern("xs"))
-                        .copied(),
+                    params.get(crate::machine::model::Symbol::of("xs")).copied(),
                     Some(types.list(KType::NUMBER)),
                     "the sigil param must lower to LIST OF Number",
                 );
@@ -505,8 +513,14 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         let expected = test_run.types().function_type(
             Record::from_pairs(vec![
-                (test_run.registries().labels.intern("x"), KType::NUMBER),
-                (test_run.registries().labels.intern("y"), KType::STR),
+                (
+                    crate::builtins::test_support::binder_name("x", test_run.registries()),
+                    KType::NUMBER,
+                ),
+                (
+                    crate::builtins::test_support::binder_name("y", test_run.registries()),
+                    KType::STR,
+                ),
             ]),
             KType::BOOL,
         );
@@ -530,7 +544,7 @@ mod tests {
         let types = test_run.types();
         let expected = types.function_type(
             Record::from_pairs(vec![(
-                test_run.registries().labels.intern("xs"),
+                crate::builtins::test_support::binder_name("xs", test_run.registries()),
                 types.list(KType::NUMBER),
             )]),
             KType::BOOL,
@@ -546,14 +560,14 @@ mod tests {
         let types = test_run.types();
         let expected = types.function_type(
             Record::from_pairs(vec![(
-                test_run.registries().labels.intern("Ty"),
+                crate::builtins::test_support::binder_name("Ty", test_run.registries()),
                 KType::of_kind(KKind::Signature),
             )]),
             KType::EMPTY_SIGNATURE,
         );
         // Param name `Ty` (capitalized, a `Type` token) must survive the round-trip.
         assert!(
-            matches!(types.node(expected), TypeNode::KFunction { params, .. } if params.get(test_run.registries().labels.intern("Ty")).is_some()),
+            matches!(types.node(expected), TypeNode::KFunction { params, .. } if params.get(crate::machine::model::Symbol::of("Ty")).is_some()),
         );
         assert_round_trips(&mut test_run, expected);
     }
@@ -619,7 +633,7 @@ mod tests {
         match types.node(result) {
             TypeNode::Record { fields: record } => {
                 let field = record
-                    .get(test_run.registries().labels.intern("x"))
+                    .get(crate::machine::model::Symbol::of("x"))
                     .expect("record must have field x");
                 assert_eq!(
                     field.name(test_run.registries()),
@@ -646,7 +660,7 @@ mod tests {
             TypeNode::KFunction { params, ret } => {
                 assert_eq!(
                     params
-                        .get(test_run.registries().labels.intern("x"))
+                        .get(crate::machine::model::Symbol::of("x"))
                         .map(|kt| kt.name(test_run.registries())),
                     Some("Wrapped".to_string()),
                     "the SetMember param must survive the sync compose",
@@ -671,9 +685,7 @@ mod tests {
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
                 assert_eq!(
-                    params
-                        .get(test_run.registries().labels.intern("x"))
-                        .copied(),
+                    params.get(crate::machine::model::Symbol::of("x")).copied(),
                     Some(KType::NUMBER),
                     "the region-free param must be Number",
                 );

@@ -335,12 +335,14 @@ impl TypeRegistry {
     /// length and the same key set; `None` on differing key sets, which [`Self::join`] coarsens
     /// to `Any`.
     fn join_param_record(&self, a: &Record<KType>, b: &Record<KType>) -> Option<Record<KType>> {
-        if a.len() != b.len() || !a.keys().all(|k| b.get(k).is_some()) {
+        if a.len() != b.len() || !a.keys().all(|k| b.get(k.symbol()).is_some()) {
             return None;
         }
+        // The joined record keeps the left operand's classified keys; both sides agree on the
+        // symbol bits, which is what identity reads.
         Some(
             a.iter()
-                .map(|(name, x)| (name, self.join(*x, *b.get(name).unwrap())))
+                .map(|(name, x)| (name, self.join(*x, *b.get(name.symbol()).unwrap())))
                 .collect(),
         )
     }

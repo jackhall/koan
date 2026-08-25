@@ -33,9 +33,9 @@ use crate::machine::{StepCarried, seal_type_identity};
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
+use crate::machine::model::BinderSymbol;
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::Symbol;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { decl, name, repr } }
@@ -88,7 +88,7 @@ fn finalize_record_newtype<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: TypeSymbol,
     window: &DeclWindow<'a>,
-    fields: Vec<(Symbol, KType)>,
+    fields: Vec<(BinderSymbol, KType)>,
     site: DeclarationSite,
 ) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError> {
     if fields.is_empty() {
@@ -393,7 +393,11 @@ mod tests {
         scope: &Scope<'_>,
         types: &TypeRegistry,
         name: &str,
-    ) -> (usize, KType, Vec<(crate::machine::model::Symbol, KType)>) {
+    ) -> (
+        usize,
+        KType,
+        Vec<(crate::machine::model::BinderSymbol, KType)>,
+    ) {
         let handle = lookup_type(scope, name)
             .unwrap_or_else(|| panic!("expected {name} to be a type in scope"));
         match types.node(handle) {
@@ -668,7 +672,7 @@ mod tests {
         assert_eq!(
             fields
                 .iter()
-                .find(|(f, _)| *f == crate::machine::model::Symbol::of("value"))
+                .find(|(f, _)| f.symbol() == crate::machine::model::Symbol::of("value"))
                 .map(|(_, t)| *t),
             Some(KType::NUMBER),
             "value stays a builtin leaf",
@@ -676,7 +680,7 @@ mod tests {
         assert_eq!(
             fields
                 .iter()
-                .find(|(f, _)| *f == crate::machine::model::Symbol::of("next"))
+                .find(|(f, _)| f.symbol() == crate::machine::model::Symbol::of("next"))
                 .map(|(_, t)| *t),
             Some(node_handle),
             "next seals to the member's own handle (a self-reference)",
@@ -709,7 +713,7 @@ mod tests {
         assert_eq!(
             fields
                 .iter()
-                .find(|(f, _)| *f == crate::machine::model::Symbol::of("children"))
+                .find(|(f, _)| f.symbol() == crate::machine::model::Symbol::of("children"))
                 .map(|(_, t)| *t),
             Some(types.list(tree_handle)),
             "children seals its self-reference to List of the member's own handle",
@@ -738,7 +742,7 @@ mod tests {
         let (_, outer_handle, fields) = record_fields(scope, types, "Outer");
         let inner_ty = fields
             .iter()
-            .find(|(f, _)| *f == crate::machine::model::Symbol::of("inner"))
+            .find(|(f, _)| f.symbol() == crate::machine::model::Symbol::of("inner"))
             .map(|(_, t)| *t)
             .expect("inner field present");
         match types.node(inner_ty) {
@@ -778,7 +782,7 @@ mod tests {
         );
         let kids_ty = fields
             .iter()
-            .find(|(f, _)| *f == crate::machine::model::Symbol::of("kids"))
+            .find(|(f, _)| f.symbol() == crate::machine::model::Symbol::of("kids"))
             .map(|(_, t)| *t)
             .expect("kids field present");
         let element = match types.node(kids_ty) {
@@ -1075,7 +1079,7 @@ mod tests {
                 assert_eq!(
                     arguments,
                     Record::from_pairs([(
-                        crate::machine::model::Symbol::of("Type"),
+                        crate::builtins::test_support::binder_token("Type"),
                         KType::NUMBER
                     )]),
                 );
@@ -1176,7 +1180,7 @@ mod tests {
                         assert_eq!(
                             arguments,
                             Record::from_pairs([(
-                                crate::machine::model::Symbol::of("Type"),
+                                crate::builtins::test_support::binder_token("Type"),
                                 KType::NUMBER
                             )]),
                         );

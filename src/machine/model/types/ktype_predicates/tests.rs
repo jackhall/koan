@@ -6,7 +6,6 @@ use crate::machine::model::Carried;
 use crate::machine::model::ModuleDraft;
 use crate::machine::model::Record;
 use crate::machine::model::Scalar;
-use crate::machine::model::Symbol;
 use crate::machine::model::TypeMemberMap;
 use crate::machine::model::ast::{ExpressionPart, WorkingPart};
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
@@ -119,7 +118,10 @@ fn is_more_specific_function_width_subset() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let unary = types.function_type(
-        Record::from_pairs(vec![(Symbol::of("x"), KType::NUMBER)]),
+        Record::from_pairs(vec![(
+            crate::builtins::test_support::binder_token("x"),
+            KType::NUMBER,
+        )]),
         KType::NUMBER,
     );
     let nullary = types.function_type(Record::new(), KType::NUMBER);
@@ -135,11 +137,17 @@ fn is_more_specific_function_param_contravariant() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let any_param = types.function_type(
-        Record::from_pairs(vec![(Symbol::of("x"), KType::ANY)]),
+        Record::from_pairs(vec![(
+            crate::builtins::test_support::binder_token("x"),
+            KType::ANY,
+        )]),
         KType::STR,
     );
     let number_param = types.function_type(
-        Record::from_pairs(vec![(Symbol::of("x"), KType::NUMBER)]),
+        Record::from_pairs(vec![(
+            crate::builtins::test_support::binder_token("x"),
+            KType::NUMBER,
+        )]),
         KType::STR,
     );
     assert!(any_param.is_more_specific_than(number_param, &registries));
@@ -153,11 +161,17 @@ fn is_more_specific_function_return_covariant() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let number_ret = types.function_type(
-        Record::from_pairs(vec![(Symbol::of("x"), KType::NUMBER)]),
+        Record::from_pairs(vec![(
+            crate::builtins::test_support::binder_token("x"),
+            KType::NUMBER,
+        )]),
         KType::NUMBER,
     );
     let any_ret = types.function_type(
-        Record::from_pairs(vec![(Symbol::of("x"), KType::NUMBER)]),
+        Record::from_pairs(vec![(
+            crate::builtins::test_support::binder_token("x"),
+            KType::NUMBER,
+        )]),
         KType::ANY,
     );
     assert!(number_ret.is_more_specific_than(any_ret, &registries));
@@ -168,7 +182,7 @@ fn record_ty(types: &TypeRegistry, fields: Vec<(&str, KType)>) -> KType {
     types.record(Record::from_pairs(
         fields
             .into_iter()
-            .map(|(n, t)| (crate::machine::model::Symbol::of(n), t)),
+            .map(|(n, t)| (crate::builtins::test_support::binder_token(n), t)),
     ))
 }
 
@@ -612,8 +626,8 @@ fn result_member(registries: &RunRegistries) -> KType {
 /// The args record for a `Result` application, keyed by the carrier's parameter names.
 fn result_args(ok: KType, error: KType) -> Record<KType> {
     Record::from_pairs([
-        (crate::machine::model::Symbol::of("Ok"), ok),
-        (crate::machine::model::Symbol::of("Error"), error),
+        (crate::builtins::test_support::binder_token("Ok"), ok),
+        (crate::builtins::test_support::binder_token("Error"), error),
     ])
 }
 

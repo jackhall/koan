@@ -12,7 +12,7 @@ use crate::machine::{StepCarried, seal_type_identity};
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{BinderSymbol, Symbol, TypeSymbol};
+use crate::machine::model::{BinderSymbol, TypeSymbol};
 use crate::machine::model::{display_label, render_label};
 
 // This builtin's slot spellings, minted once and read back by symbol.
@@ -32,7 +32,7 @@ fn finalize_union<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: TypeSymbol,
     window: &DeclWindow<'a>,
-    fields: Vec<(Symbol, KType)>,
+    fields: Vec<(BinderSymbol, KType)>,
     site: DeclarationSite,
 ) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError> {
     if fields.is_empty() {
@@ -46,13 +46,13 @@ fn finalize_union<'a>(
     let binder = name;
     let mut sealed = false;
     for (tag, payload) in fields {
-        // A variant tag arrives as the record literal's bare field symbol. It probes the window's
-        // member list by those bits and the stored `TypeSymbol` the declaration minted is the hit —
-        // no class predicate, and text only where the miss is reported.
-        let index = match window.view().variant_index(binder, tag) {
+        // A variant tag arrives as the classified name its own `Type` token minted. It probes the
+        // window's member list by symbol bits and the stored `TypeSymbol` the declaration minted is
+        // the hit — no class predicate, and text only where the miss is reported.
+        let index = match window.view().variant_index(binder, tag.symbol()) {
             Some(index) => index,
             None => {
-                let tag = render_label(tag, fctx.registries);
+                let tag = render_label(tag.symbol(), fctx.registries);
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "UNION `{}`: variant `{tag}` is not one of the declared variants",
                     render_label(name.symbol(), fctx.registries),
@@ -361,8 +361,14 @@ mod tests {
         let fctx = crate::machine::FinishCtx::for_scope(scope, types.registries());
         let fields = || {
             vec![
-                (types.registries().labels.intern("Some"), KType::NUMBER),
-                (types.registries().labels.intern("None"), KType::NULL),
+                (
+                    crate::builtins::test_support::binder_token("Some"),
+                    KType::NUMBER,
+                ),
+                (
+                    crate::builtins::test_support::binder_token("None"),
+                    KType::NULL,
+                ),
             ]
         };
         // Each declarator dispatch mints its own window (the union name is the binder, its variants

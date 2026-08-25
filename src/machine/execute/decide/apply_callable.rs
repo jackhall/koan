@@ -369,13 +369,13 @@ fn build_apply_args(
             problems.join(", "),
         ))));
     }
-    // The parameter name was interned where the constructor was declared, so the record key is
-    // the symbol it already carries.
+    // A constructor parameter is declared by a `Type` token, so the symbol it already carries
+    // keys the record with its class intact.
     Ok(Record::from_pairs(param_names.iter().map(|name| {
         let arg = matched
             .remove(name)
             .expect("every declared parameter is supplied — the key check passed");
-        (name.symbol(), arg)
+        (BinderSymbol::Type(*name), arg)
     })))
 }
 

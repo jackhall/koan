@@ -101,12 +101,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let narrowed_type = ctx
         .types()
         .record(Record::from_pairs(names.iter().map(|symbol| {
-            (
-                *symbol,
-                *record_fields
-                    .get(*symbol)
-                    .expect("probed ambient: field exists in the record"),
-            )
+            let (name, ktype) = record_fields
+                .get_key_value(*symbol)
+                .expect("probed ambient: field exists in the record");
+            (name, *ktype)
         })));
 
     // Cross the record as the projection's lhs operand. A carrier-less lhs is region-pure by the

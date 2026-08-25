@@ -557,7 +557,6 @@ digraph {
     "koan::machine::execute::decide::constructors" -> "koan::machine::execute::decide::ctx" [label="uses", style="dashed"];
     "koan::machine::execute::decide::constructors" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::decide::constructors" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::execute::decide::constructors" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::decide::constructors" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::decide::ctx" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::ctx" -> "koan::machine" [label="uses", style="dashed"];

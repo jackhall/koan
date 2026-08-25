@@ -315,7 +315,10 @@ fn tagged_erased_and_stamped_are_distinct_identities() {
         &num(1.0),
         types.constructor_apply(
             ctor,
-            Record::from_pairs([(crate::machine::model::Symbol::of("Type"), KType::NUMBER)]),
+            Record::from_pairs([(
+                crate::builtins::test_support::binder_token("Type"),
+                KType::NUMBER,
+            )]),
         ),
     );
     assert_eq!(erased.value_equal(&stamped, &registries), Ok(false));

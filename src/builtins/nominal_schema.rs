@@ -10,11 +10,11 @@
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::DeclWindow;
 use crate::machine::model::KType;
+use crate::machine::model::{BinderSymbol, TypeSymbol};
 use crate::machine::model::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts,
     parse_typed_field_list_via_elaborator,
 };
-use crate::machine::model::{Symbol, TypeSymbol};
 use crate::machine::{Action, BodyCtx, FinishCtx};
 use crate::machine::{DeclarationSite, KError, KErrorKind, TraceFrame};
 use crate::machine::{FieldListDeferral, StepCarried};
@@ -26,7 +26,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
     &FinishCtx<'a, '_>,
     TypeSymbol,
     &DeclWindow<'a>,
-    Vec<(Symbol, KType)>,
+    Vec<(BinderSymbol, KType)>,
     DeclarationSite,
 ) -> Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError>;
 

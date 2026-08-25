@@ -249,7 +249,10 @@ fn constructor_apply_name_renders_surface_form() {
     );
     let app = types.constructor_apply(
         ctor,
-        Record::from_pairs([(registries.labels.intern("Type"), KType::NUMBER)]),
+        Record::from_pairs([(
+            crate::builtins::test_support::binder_token("Type"),
+            KType::NUMBER,
+        )]),
     );
     assert_eq!(app.name(&registries), ":(Wrap {Type = Number})");
 }

@@ -16,7 +16,7 @@ use crate::machine::{program_storage, run_root_storage};
 fn applied_args(
     kt: KType,
     registries: &RunRegistries,
-) -> Vec<(crate::machine::model::Symbol, KType)> {
+) -> Vec<(crate::machine::model::BinderSymbol, KType)> {
     match registries.types.node(kt) {
         TypeNode::ConstructorApply { arguments, .. } => {
             arguments.iter().map(|(name, arg)| (name, *arg)).collect()
@@ -36,8 +36,14 @@ fn result_applies_named_type_arguments() {
     assert_eq!(
         applied_args(applied, test_run.registries()),
         vec![
-            (crate::machine::model::Symbol::of("Ok"), KType::NUMBER),
-            (crate::machine::model::Symbol::of("Error"), KType::STR),
+            (
+                crate::builtins::test_support::binder_token("Ok"),
+                KType::NUMBER
+            ),
+            (
+                crate::builtins::test_support::binder_token("Error"),
+                KType::STR
+            ),
         ],
     );
 }
@@ -52,7 +58,10 @@ fn user_family_applies_named_type_argument() {
     let applied = test_run.run_one_type(test_run.parse_one(":(Wrap {Elem = Number})"));
     assert_eq!(
         applied_args(applied, test_run.registries()),
-        vec![(crate::machine::model::Symbol::of("Elem"), KType::NUMBER)],
+        vec![(
+            crate::builtins::test_support::binder_token("Elem"),
+            KType::NUMBER
+        )],
     );
 }
 
@@ -68,7 +77,7 @@ fn compound_type_argument_sub_dispatches() {
     assert_eq!(
         applied_args(applied, test_run.registries()),
         vec![(
-            crate::machine::model::Symbol::of("Elem"),
+            crate::builtins::test_support::binder_token("Elem"),
             test_run.types().list(KType::NUMBER)
         )],
     );
@@ -237,8 +246,14 @@ fn multi_parameter_family_rejects_value_construction() {
     assert_eq!(
         applied_args(applied, test_run.registries()),
         vec![
-            (crate::machine::model::Symbol::of("One"), KType::NUMBER),
-            (crate::machine::model::Symbol::of("Two"), KType::STR),
+            (
+                crate::builtins::test_support::binder_token("One"),
+                KType::NUMBER
+            ),
+            (
+                crate::builtins::test_support::binder_token("Two"),
+                KType::STR
+            ),
         ],
     );
 }
@@ -304,7 +319,10 @@ fn constructor_apply_over_abstract_slot_is_a_type_constructor() {
     });
     let applied = types.constructor_apply(
         ctor,
-        Record::from_pairs([(crate::machine::model::Symbol::of("Elem"), KType::NUMBER)]),
+        Record::from_pairs([(
+            crate::builtins::test_support::binder_token("Elem"),
+            KType::NUMBER,
+        )]),
     );
     assert_eq!(applied.kind_of(types), KKind::TypeConstructor);
 }

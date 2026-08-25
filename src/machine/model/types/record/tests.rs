@@ -10,14 +10,14 @@ fn rec(pairs: &[(&str, i32)]) -> Record<i32> {
     Record::from_pairs(
         pairs
             .iter()
-            .map(|(k, v)| (crate::machine::model::Symbol::of(k), *v)),
+            .map(|(k, v)| (crate::builtins::test_support::binder_token(k), *v)),
     )
 }
 
 #[test]
 fn iter_preserves_insertion_order() {
     let r = rec(&[("x", 1), ("y", 2), ("z", 3)]);
-    let names: Vec<Symbol> = r.keys().collect();
+    let names: Vec<Symbol> = r.keys().map(BinderSymbol::symbol).collect();
     assert_eq!(names, ["x", "y", "z"].map(Symbol::of));
 }
 

@@ -117,8 +117,14 @@ fn name_renders_function() {
     let types = &registries.types;
     let t = types.function_type(
         Record::from_pairs(vec![
-            (registries.labels.intern("x"), KType::NUMBER),
-            (registries.labels.intern("y"), KType::STR),
+            (
+                crate::builtins::test_support::binder_name("x", &registries),
+                KType::NUMBER,
+            ),
+            (
+                crate::builtins::test_support::binder_name("y", &registries),
+                KType::STR,
+            ),
         ]),
         KType::BOOL,
     );
@@ -133,7 +139,10 @@ fn name_renders_function_with_sigiled_param() {
     let types = &registries.types;
     let list_of_number = types.list(KType::NUMBER);
     let t = types.function_type(
-        Record::from_pairs(vec![(registries.labels.intern("xs"), list_of_number)]),
+        Record::from_pairs(vec![(
+            crate::builtins::test_support::binder_name("xs", &registries),
+            list_of_number,
+        )]),
         KType::NUMBER,
     );
     assert_eq!(
@@ -288,15 +297,27 @@ fn function_params_order_blind_identity() {
     let types = &registries.types;
     let forward = types.function_type(
         Record::from_pairs(vec![
-            (registries.labels.intern("x"), KType::NUMBER),
-            (registries.labels.intern("y"), KType::STR),
+            (
+                crate::builtins::test_support::binder_name("x", &registries),
+                KType::NUMBER,
+            ),
+            (
+                crate::builtins::test_support::binder_name("y", &registries),
+                KType::STR,
+            ),
         ]),
         KType::BOOL,
     );
     let reversed = types.function_type(
         Record::from_pairs(vec![
-            (registries.labels.intern("y"), KType::STR),
-            (registries.labels.intern("x"), KType::NUMBER),
+            (
+                crate::builtins::test_support::binder_name("y", &registries),
+                KType::STR,
+            ),
+            (
+                crate::builtins::test_support::binder_name("x", &registries),
+                KType::NUMBER,
+            ),
         ]),
         KType::BOOL,
     );
@@ -310,11 +331,17 @@ fn function_params_name_sensitive_identity() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let by_x = types.function_type(
-        Record::from_pairs(vec![(registries.labels.intern("x"), KType::NUMBER)]),
+        Record::from_pairs(vec![(
+            crate::builtins::test_support::binder_name("x", &registries),
+            KType::NUMBER,
+        )]),
         KType::BOOL,
     );
     let by_y = types.function_type(
-        Record::from_pairs(vec![(registries.labels.intern("y"), KType::NUMBER)]),
+        Record::from_pairs(vec![(
+            crate::builtins::test_support::binder_name("y", &registries),
+            KType::NUMBER,
+        )]),
         KType::BOOL,
     );
     assert_ne!(by_x, by_y);

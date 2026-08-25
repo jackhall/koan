@@ -35,9 +35,11 @@ fn constructor_apply_admits(
     slot_constructor == value_constructor
         && value_arguments.len() == slot_arguments.len()
         && slot_arguments.iter().all(|(name, slot_argument)| {
-            value_arguments.get(name).is_some_and(|value_argument| {
-                *slot_argument == KType::ANY || *value_argument == *slot_argument
-            })
+            value_arguments
+                .get(name.symbol())
+                .is_some_and(|value_argument| {
+                    *slot_argument == KType::ANY || *value_argument == *slot_argument
+                })
         })
 }
 
@@ -173,11 +175,14 @@ impl KType {
                 },
             ) if ca == cb
                 && aa.len() == ab.len()
-                && aa.keys().all(|name| ab.get(name).is_some()) =>
+                && aa.keys().all(|name| ab.get(name.symbol()).is_some()) =>
             {
                 // Same constructor, same parameter names: compare each argument against its
                 // same-named counterpart.
-                let pairs = || aa.iter().map(|(name, x)| (*x, *ab.get(name).unwrap()));
+                let pairs = || {
+                    aa.iter()
+                        .map(|(name, x)| (*x, *ab.get(name.symbol()).unwrap()))
+                };
                 let any_more = pairs().any(|(x, y)| x.is_more_specific_than(y, registries));
                 let all_equal_or_more =
                     pairs().all(|(x, y)| x == y || x.is_more_specific_than(y, registries));
@@ -253,7 +258,7 @@ impl KType {
             TypeNode::Record { fields } => match obj {
                 KObject::Record(substrate, _) => fields.iter().all(|(name, field_type)| {
                     substrate
-                        .field(name)
+                        .field(name.symbol())
                         .map(|v| field_type.matches_held(v, registries))
                         .unwrap_or(false)
                 }),
@@ -613,17 +618,17 @@ fn param_record_more_specific(
     rb: KType,
     registries: &RunRegistries,
 ) -> bool {
-    if !pa.keys().all(|k| pb.get(k).is_some()) {
+    if !pa.keys().all(|k| pb.get(k.symbol()).is_some()) {
         return false;
     }
     let params_ok = pa.iter().all(|(name, s)| {
-        let o = *pb.get(name).unwrap();
+        let o = *pb.get(name.symbol()).unwrap();
         o == *s || o.is_more_specific_than(*s, registries)
     });
     let params_more = pa.keys().any(|k| {
-        pb.get(k)
+        pb.get(k.symbol())
             .unwrap()
-            .is_more_specific_than(*pa.get(k).unwrap(), registries)
+            .is_more_specific_than(*pa.get(k.symbol()).unwrap(), registries)
     });
     let ret_more = ra.is_more_specific_than(rb, registries);
     let ret_ok = ra == rb || ret_more;
@@ -649,17 +654,17 @@ fn record_value_more_specific(
     b: &Record<KType>,
     registries: &RunRegistries,
 ) -> bool {
-    if !b.keys().all(|k| a.get(k).is_some()) {
+    if !b.keys().all(|k| a.get(k.symbol()).is_some()) {
         return false;
     }
     let depth_ok = b.iter().all(|(name, bt)| {
-        let at = *a.get(name).unwrap();
+        let at = *a.get(name.symbol()).unwrap();
         at == *bt || at.is_more_specific_than(*bt, registries)
     });
     let depth_more = b.keys().any(|k| {
-        a.get(k)
+        a.get(k.symbol())
             .unwrap()
-            .is_more_specific_than(*b.get(k).unwrap(), registries)
+            .is_more_specific_than(*b.get(k.symbol()).unwrap(), registries)
     });
     let width_strict = a.len() > b.len();
     depth_ok && (width_strict || depth_more)

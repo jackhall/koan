@@ -137,10 +137,10 @@ impl KType {
             } => {
                 let bindings: Vec<String> = arguments
                     .iter()
-                    .map(|(symbol, kt)| {
+                    .map(|(name, kt)| {
                         format!(
                             "{} = {}",
-                            render_label(symbol, registries),
+                            render_label(name.symbol(), registries),
                             kt.name(registries)
                         )
                     })
@@ -212,8 +212,8 @@ impl KType {
 fn render_param_record(params: &Record<KType>, registries: &RunRegistries) -> String {
     params
         .iter()
-        .map(|(symbol, kt)| {
-            let name = render_label(symbol, registries);
+        .map(|(key, kt)| {
+            let name = render_label(key.symbol(), registries);
             let surface = kt.name(registries);
             if surface.starts_with(':') {
                 format!("{name} {surface}")

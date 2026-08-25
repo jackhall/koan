@@ -365,12 +365,7 @@ fn function_value_ktype(signature: &ExpressionSignature<'_>, registries: &RunReg
     let types = &registries.types;
     // The signature already owns its parameter schema; the function type shares it rather than
     // re-deriving one — one intern-boundary copy per definition, never per call.
-    let params = Record::from_pairs(
-        signature
-            .params()
-            .iter()
-            .map(|(name, ktype)| (name.symbol(), *ktype)),
-    );
+    let params = Record::from_pairs(signature.params().iter().copied());
     let ret = match signature.return_type() {
         ReturnType::Resolved(kt) => kt,
         ReturnType::Deferred(d) => types.intern(TypeNode::DeferredReturn(

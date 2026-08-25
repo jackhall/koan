@@ -349,7 +349,7 @@ fn fn_return_type_constructor_apply_root_scope() {
                 assert_eq!(
                     arguments,
                     Record::from_pairs([(
-                        crate::machine::model::Symbol::of("Type"),
+                        crate::builtins::test_support::binder_token("Type"),
                         KType::NUMBER
                     )]),
                 );
@@ -430,7 +430,7 @@ fn monad_signature_smoke() {
                     assert_eq!(
                         arguments,
                         Record::from_pairs([(
-                            crate::machine::model::Symbol::of("Type"),
+                            crate::builtins::test_support::binder_token("Type"),
                             KType::NUMBER
                         )]),
                     );

@@ -10,7 +10,7 @@ use std::rc::Rc;
 use crate::machine::Scope;
 use crate::machine::StepCarried;
 use crate::machine::kerror_ktype;
-use crate::machine::model::{KObject, KType, Record, TypeSymbol};
+use crate::machine::model::{BinderSymbol, KObject, KType, Record, TypeSymbol};
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
@@ -33,11 +33,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         result_ctor,
         Record::from_pairs([
             (
-                registries.labels.record(&super::result::OK).symbol(),
+                BinderSymbol::Type(registries.labels.record(&super::result::OK)),
                 KType::ANY,
             ),
             (
-                registries.labels.record(&super::result::ERROR).symbol(),
+                BinderSymbol::Type(registries.labels.record(&super::result::ERROR)),
                 kerror_ktype(registries),
             ),
         ]),

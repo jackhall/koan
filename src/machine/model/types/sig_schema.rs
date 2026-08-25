@@ -645,7 +645,7 @@ fn slot_satisfied_by(
         (TypeNode::Record { fields: fd }, TypeNode::Record { fields: fs }) => {
             // Record-value covariance: every slot field present in the value, covariantly.
             fd.iter().all(|(name, dt)| {
-                fs.get(name)
+                fs.get(name.symbol())
                     .is_some_and(|st| slot_satisfied_by(*dt, *st, members, sig_id, registries))
             })
         }
@@ -662,7 +662,7 @@ fn slot_satisfied_by(
             ad.len() == as_.len()
                 && slot_types_equal(cd, cs, members, sig_id, types)
                 && ad.iter().all(|(name, d)| {
-                    as_.get(name)
+                    as_.get(name.symbol())
                         .is_some_and(|s| slot_satisfied_by(*d, *s, members, sig_id, registries))
                 })
         }
@@ -678,9 +678,9 @@ fn slot_satisfied_by(
         ) => {
             // Contravariant params (width-drop): every value param names a slot param the
             // substituted slot fixes equal-or-more-specific. Covariant return.
-            ps.keys().all(|k| pd.get(k).is_some())
+            ps.keys().all(|k| pd.get(k.symbol()).is_some())
                 && ps.iter().all(|(name, sp)| {
-                    pd.get(name).is_some_and(|dp| {
+                    pd.get(name.symbol()).is_some_and(|dp| {
                         slot_more_specific_or_equal(*dp, *sp, members, sig_id, registries)
                     })
                 })
@@ -746,9 +746,9 @@ fn slot_more_specific_or_equal(
         (TypeNode::Record { fields: fd }, TypeNode::Record { fields: ft }) => {
             // Record-value covariance with width-superset: the more-specific record has every
             // field of `target`, each covariantly refined.
-            ft.keys().all(|k| fd.get(k).is_some())
+            ft.keys().all(|k| fd.get(k.symbol()).is_some())
                 && ft.iter().all(|(name, tt)| {
-                    fd.get(name).is_some_and(|dt| {
+                    fd.get(name.symbol()).is_some_and(|dt| {
                         slot_more_specific_or_equal(*dt, *tt, members, sig_id, registries)
                     })
                 })
@@ -766,7 +766,7 @@ fn slot_more_specific_or_equal(
             ad.len() == at.len()
                 && slot_types_equal(cd, ct, members, sig_id, types)
                 && ad.iter().all(|(name, d)| {
-                    at.get(name).is_some_and(|t| {
+                    at.get(name.symbol()).is_some_and(|t| {
                         slot_more_specific_or_equal(*d, *t, members, sig_id, registries)
                     })
                 })
@@ -782,9 +782,9 @@ fn slot_more_specific_or_equal(
             },
         ) => {
             // Contravariant params, covariant return — the dual of the `slot_satisfied_by` case.
-            pd.keys().all(|k| pt.get(k).is_some())
+            pd.keys().all(|k| pt.get(k.symbol()).is_some())
                 && pd.iter().all(|(name, dp)| {
-                    pt.get(name)
+                    pt.get(name.symbol())
                         .is_some_and(|tp| slot_satisfied_by(*dp, *tp, members, sig_id, registries))
                 })
                 && slot_more_specific_or_equal(rd, rt, members, sig_id, registries)
@@ -820,7 +820,7 @@ fn slot_types_equal(
         (TypeNode::Record { fields: fd }, TypeNode::Record { fields: fo }) => {
             fd.len() == fo.len()
                 && fd.iter().all(|(name, dt)| {
-                    fo.get(name)
+                    fo.get(name.symbol())
                         .is_some_and(|ot| slot_types_equal(*dt, *ot, members, sig_id, types))
                 })
         }
@@ -837,7 +837,7 @@ fn slot_types_equal(
             ad.len() == ao.len()
                 && slot_types_equal(cd, co, members, sig_id, types)
                 && ad.iter().all(|(name, d)| {
-                    ao.get(name)
+                    ao.get(name.symbol())
                         .is_some_and(|o| slot_types_equal(*d, *o, members, sig_id, types))
                 })
         }
@@ -853,7 +853,7 @@ fn slot_types_equal(
         ) => {
             pd.len() == po.len()
                 && pd.iter().all(|(name, dt)| {
-                    po.get(name)
+                    po.get(name.symbol())
                         .is_some_and(|ot| slot_types_equal(*dt, *ot, members, sig_id, types))
                 })
                 && slot_types_equal(rd, ro, members, sig_id, types)

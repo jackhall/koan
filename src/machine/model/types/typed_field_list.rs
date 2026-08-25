@@ -10,7 +10,6 @@ use crate::machine::ProducerId;
 use crate::machine::Scope;
 use crate::machine::model::Record;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::Symbol;
 use crate::machine::model::ast::{
     ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart,
 };
@@ -61,7 +60,7 @@ impl FieldListContext {
 }
 
 pub enum FieldListOutcome<'a> {
-    Done(Vec<(Symbol, KType)>),
+    Done(Vec<(BinderSymbol, KType)>),
     /// `sub_dispatches` carries each sigil field's body as the scheduler's own node, in DFS walk
     /// order — the currency a [`SubDispatch`](crate::machine::core::SubDispatch) takes. The
     /// caller schedules them in that order and, on the dep-finish re-walk, feeds the resolved
@@ -359,12 +358,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     sub_dispatches,
                 }
             } else {
-                FieldListOutcome::Done(
-                    fields
-                        .into_iter()
-                        .map(|(name, kt)| (name.symbol(), kt))
-                        .collect(),
-                )
+                FieldListOutcome::Done(fields)
             }
         }
     }

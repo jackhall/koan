@@ -1,7 +1,6 @@
 use super::*;
 use crate::builtins::test_support::type_token;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::Symbol;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::types::Record;
 
@@ -161,7 +160,11 @@ fn union_of_flattens_nested_union() {
 
 fn function(params: Vec<(&str, KType)>, ret: KType, types: &TypeRegistry) -> KType {
     types.function_type(
-        Record::from_pairs(params.into_iter().map(|(n, t)| (Symbol::of(n), t))),
+        Record::from_pairs(
+            params
+                .into_iter()
+                .map(|(n, t)| (crate::builtins::test_support::binder_token(n), t)),
+        ),
         ret,
     )
 }

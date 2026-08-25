@@ -11,7 +11,6 @@ use crate::machine::core::{
     FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, RegionBrand, Scope,
 };
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::types::record_field;
 use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{KType, NodeSchema, TypeMemberMap, TypeNode, render_label};
@@ -28,7 +27,7 @@ use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{BinderSymbol, Symbol, TypeSymbol};
+use crate::machine::model::{BinderSymbol, TypeSymbol};
 use crate::scheduler::Deps;
 
 /// Which construction shape the resolved value subs feed. The carried `KType` is the sealed
@@ -254,7 +253,7 @@ fn check_newtype_repr<'a>(
 /// collapse question never arises (a bare field record is never itself a `Wrapped`).
 fn check_record_newtype_repr(
     identity: KType,
-    fields: &[(Symbol, KObject<'_>)],
+    fields: &[(BinderSymbol, KObject<'_>)],
     registries: &RunRegistries,
 ) -> Result<(), KError> {
     let types = &registries.types;
@@ -269,8 +268,10 @@ fn check_record_newtype_repr(
         TypeNode::Record {
             fields: repr_fields,
         } => repr_fields.iter().all(|(name, field_type)| {
-            record_field(fields, name)
-                .map(|v| field_type.matches_value(v, registries))
+            fields
+                .iter()
+                .find(|(key, _)| key.symbol() == name.symbol())
+                .map(|(_, v)| field_type.matches_value(v, registries))
                 .unwrap_or(false)
         }),
         _ => false,
@@ -454,9 +455,9 @@ fn finish_witnessed<'step>(
             // Each field value is read at its own resident brand — a pin-free read; the guards stay
             // bound across the probe build, and the deep clone is owned data that outlives them.
             let opened: Vec<_> = terminals.iter().map(|t| t.cell.open_at()).collect();
-            let probe: Vec<(Symbol, KObject<'_>)> = field_names
+            let probe: Vec<(BinderSymbol, KObject<'_>)> = field_names
                 .iter()
-                .map(|name| name.symbol())
+                .copied()
                 .zip(opened.iter().map(|o| o.value().object().deep_clone()))
                 .collect();
             check_record_newtype_repr(*identity, &probe, view.registries())?;
@@ -605,7 +606,7 @@ fn finish_witnessed<'step>(
             };
             // The parameter name interned where the constructor was declared, so the applied
             // argument's label is the symbol it already carries.
-            let param_symbol = param_name.symbol();
+            let param_symbol = BinderSymbol::Type(param_name);
             let home = build_type_operand(view.dest_frame(), identity);
             let types = view.types();
             // The wrap keeps the value verbatim — see the `NewType` arm's holder.

@@ -244,7 +244,7 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
     };
     assert_eq!(fields.len(), 1);
     let (xs_name, xs_type) = fields.iter().next().expect("one field");
-    assert_eq!(xs_name, Symbol::of("xs"));
+    assert_eq!(xs_name.symbol(), Symbol::of("xs"));
     match test_run.types().node(*xs_type) {
         TypeNode::List { element } => assert_eq!(element, KType::NUMBER),
         _ => panic!("xs must be KType::List(Number), got {xs_type:?}"),

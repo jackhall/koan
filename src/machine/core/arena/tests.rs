@@ -597,7 +597,7 @@ fn record_retype_shares_substrate_across_producer_frame_free() {
     let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
     let narrowed_type = types.record(Record::from_pairs([(
-        crate::machine::model::Symbol::of("x"),
+        crate::builtins::test_support::binder_token("x"),
         KType::NUMBER,
     )]));
     let sealed: StepCarried = ctx.alloc_carried_with(&[&dep], move |b, views| {
@@ -677,7 +677,7 @@ fn restamp_in_place_shares_substrate_and_self_rule_strips_the_owned_self_pin() {
 
     // The declared type the return re-stamps to — a distinct handle for the same record shape.
     let declared = types.record(Record::from_pairs([(
-        crate::machine::model::Symbol::of("a"),
+        crate::builtins::test_support::binder_token("a"),
         KType::NUMBER,
     )]));
 

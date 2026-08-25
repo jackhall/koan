@@ -187,8 +187,14 @@ fn type_constructor_ktype_erased_vs_applied() {
         _ => panic!("expected SetMember, got {erased_handle:?}"),
     }
     let arguments = Record::from_pairs([
-        (crate::machine::model::Symbol::of("Ok"), KType::NUMBER),
-        (crate::machine::model::Symbol::of("Error"), KType::STR),
+        (
+            crate::builtins::test_support::binder_token("Ok"),
+            KType::NUMBER,
+        ),
+        (
+            crate::builtins::test_support::binder_token("Error"),
+            KType::STR,
+        ),
     ]);
     let applied = KObject::tagged(
         door,
