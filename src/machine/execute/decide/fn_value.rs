@@ -13,7 +13,6 @@
 use crate::machine::ProducerId;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{DeliveredCarried, KError, KErrorKind, NameLookup};
-use crate::witnessed::BumpAllocator;
 
 use super::apply_callable::{ResolvedCallable, apply_callable};
 use super::ctx::DecideCtx;
@@ -32,7 +31,7 @@ pub(super) fn initial<'step>(
         // A binder that failed before binding the head propagates its error through the park (the
         // harness rules on an already-terminal producer when it installs); one that bound the head
         // wakes the resume onto the `Bound` arm above.
-        Some(NameLookup::Parked(source)) => install_head_park(source, expr, ctx.scratch()),
+        Some(NameLookup::Parked(source)) => install_head_park(source, expr, ctx),
         None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
             ctx.registries().labels.render(head.symbol()),
         )))),
@@ -67,11 +66,11 @@ fn dispatch_callable_value<'step>(
 fn install_head_park<'step>(
     source: ProducerId,
     expr: WorkingExpression<'step>,
-    scratch: BumpAllocator<'step>,
+    view: &DecideCtx<'_, 'step, '_>,
 ) -> Outcome<'step> {
     park_resume(
         vec![source],
-        scratch,
-        Box::new(move |ctx, _idx| initial(ctx, expr)),
+        view,
+        move |ctx: &DecideCtx<'_, 'step, '_>, _idx| initial(ctx, expr),
     )
 }

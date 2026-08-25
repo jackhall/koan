@@ -7,10 +7,12 @@
 //! semantics live one layer down in [`crate::machine::core::kfunction::exec`].
 
 use super::super::harness::KoanWorkload;
-use super::super::ignore_results;
+
 use super::super::nodes::{ChainOp, NodeWork, WorkLabel};
-use super::super::obligation::{ReturnObligation, with_obligation};
+use super::super::obligation::ReturnObligation;
+use super::super::outcome::DepTerminal;
 use super::super::outcome::Outcome;
+use super::super::{NodeContinuation, decide_only, erase_boxed, erase_bumped};
 use super::ctx::DecideCtx;
 use std::rc::Rc;
 
@@ -20,7 +22,7 @@ use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::{Body, CallFrame, KFunction, OpenedFunction};
 use crate::machine::core::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
-use crate::machine::{DeliveredCarried, KError, KErrorKind};
+use crate::machine::{DeliveredCarried, KError, KErrorKind, NodeId};
 use crate::witnessed::BumpVec;
 
 /// Fold a resolved call into a [`Outcome::Continue`] — the dispatcher's one invoke entry, routing on
@@ -42,7 +44,7 @@ pub(super) fn invoke_continue<'step>(
     match &picked.value().body {
         Body::Builtin(_) => Outcome::Continue {
             label: WorkLabel::of(&working_expr),
-            work: builtin_work(picked, working_expr, view.current_obligation()),
+            work: builtin_work(view, picked, working_expr, view.current_obligation()),
             frame: FramePlacement::Inherit,
             chain: ChainOp::Unchanged,
             block_entry: BlockEntry::None,
@@ -51,18 +53,24 @@ pub(super) fn invoke_continue<'step>(
     }
 }
 
-/// `obligation` wraps the continuation before the [`NodeWork::new`] erase, so the replacement step
-/// re-deposits the established declared-return checker.
+/// `obligation` rides the continuation as data, so the replacement step re-deposits the established
+/// declared-return checker. The invoke is `Inherit`, so the closure — `Copy` captures only — is
+/// hosted in the cart `view` already stands in.
 fn builtin_work<'step>(
+    view: &DecideCtx<'_, 'step, '_>,
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
 ) -> NodeWork<'step, KoanWorkload> {
-    let continuation = ignore_results(Box::new(move |view, _idx| {
-        invoke_builtin(view, picked, working_expr)
-    }));
-    let continuation = with_obligation(obligation, continuation);
-    NodeWork::new(continuation)
+    NodeWork::new(NodeContinuation::new(
+        obligation,
+        erase_bumped(
+            view.current_scope().brand(),
+            decide_only(move |view: &DecideCtx<'_, 'step, '_>, _idx| {
+                invoke_builtin(view, picked, working_expr)
+            }),
+        ),
+    ))
 }
 
 /// Frameless (`Inherit`), so the working expression and the slot's cart are the same region here as
@@ -215,25 +223,30 @@ fn body_continue<'step>(
     obligation: Option<ReturnObligation>,
 ) -> Outcome<'step> {
     let work_frame = Rc::clone(&frame);
-    let continuation = ignore_results(Box::new(move |view: &DecideCtx<'_, 'step, '_>, _idx| {
-        let brand = view.current_scope().brand();
-        super::run_action(
-            view,
-            Action::tail(
-                leading
-                    .into_iter()
-                    .map(|e| WorkingExpression::from_ast(brand, e))
-                    .collect(),
-                WorkingExpression::from_ast(brand, tail),
-                contract,
-                FramePlacement::Inherit,
-                BlockEntry::FrameScope(work_frame),
-            ),
-        )
-    }));
-    let continuation = with_obligation(obligation, continuation);
+    // Owning: the lowered statements and the `Rc` cart need drop glue, so the body enter stays on
+    // the boxed tier.
+    let continuation = erase_boxed(
+        move |view: &DecideCtx<'_, 'step, '_>,
+              _results: &[Result<DepTerminal<'_>, KError>],
+              _idx: NodeId| {
+            let brand = view.current_scope().brand();
+            super::run_action(
+                view,
+                Action::tail(
+                    leading
+                        .into_iter()
+                        .map(|e| WorkingExpression::from_ast(brand, e))
+                        .collect(),
+                    WorkingExpression::from_ast(brand, tail),
+                    contract,
+                    FramePlacement::Inherit,
+                    BlockEntry::FrameScope(work_frame),
+                ),
+            )
+        },
+    );
     Outcome::Continue {
-        work: NodeWork::new(continuation),
+        work: NodeWork::new(NodeContinuation::new(obligation, continuation)),
         frame: FramePlacement::FreshTail { frame },
         chain: ChainOp::Unchanged,
         block_entry: BlockEntry::None,

@@ -174,6 +174,7 @@ fn add_with_chain_without_chain_panics() {
                 )))],
             ),
             None,
+            None,
         ),
         &[],
         scope,

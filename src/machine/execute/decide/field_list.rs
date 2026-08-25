@@ -35,7 +35,7 @@ use crate::scheduler::{Dep, Deps};
 use crate::witnessed::BumpAllocator;
 
 use super::super::StepCarried;
-use super::super::TerminalDepFinish;
+use super::super::outcome::DepTerminal;
 use super::super::outcome::{Await, Outcome, StepDeps, dep_error_frame};
 use super::SubDispatch;
 use super::ctx::DecideCtx;
@@ -237,7 +237,7 @@ impl<'a> FieldListDeferral<'a> {
         scratch: BumpAllocator<'a>,
     ) -> Outcome<'a> {
         let (rewalk, deps, first_sub) = self.into_parts();
-        let finish: TerminalDepFinish<'a> = Box::new(move |view, terminals| {
+        let finish = move |view: &DecideCtx<'_, 'a, '_>, terminals: &[DepTerminal<'_>]| {
             // The sub-Dispatch tail feeds the walk; the deps ahead of it are notify-only waits on a
             // forward reference. The opens stay bound across the walk, so every value is read at one
             // common brand, and each field type is cloned out as owned data — no operand fold.
@@ -257,7 +257,7 @@ impl<'a> FieldListDeferral<'a> {
                 Ok(sealed) => Outcome::Done(Ok(sealed)),
                 Err(e) => Outcome::Done(Err(e)),
             }
-        });
+        };
         // Lower each sub-Dispatch request into the library dep currency `Await::on` consumes; the
         // entries the deferral already named pass through, keeping the tail index above valid.
         let mut lowered: StepDeps<'a> = Deps::with_capacity_in(deps.len(), scratch);

@@ -15,7 +15,7 @@
 
 use crate::machine::DeliveredCarried;
 use crate::machine::core::resolve_location;
-use crate::machine::core::{BlockEntry, FramePlacement, ReturnContract, ScopeId};
+use crate::machine::core::{BlockEntry, FramePlacement, RegionBrand, ReturnContract, ScopeId};
 #[cfg(test)]
 use crate::machine::model::Carried;
 use crate::machine::model::WorkingExpression;
@@ -31,7 +31,7 @@ use crate::witnessed::reattachable;
 use crate::witnessed::{BumpAllocator, BumpVec};
 
 use super::StepCarried;
-use super::decide::{DecideCtx, DepRequest, ResumeFn, propagate_dep_error};
+use super::decide::{DecideCtx, DepRequest, propagate_dep_error};
 use super::harness::KoanWorkload;
 use super::nodes::WorkLabel;
 use super::nodes::{ChainOp, NodeWork};
@@ -54,9 +54,8 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     /// A body's non-tail (leading) statements are NOT carried here — a producer with leading
     /// statements waits on them as deps (a [`BlockRequest::Body`]) and emits this `Continue` only
     /// from the resolving finish, restoring frame uniqueness for TCO reuse. The slot's
-    /// declared-return obligation likewise does not ride here: it is wrapped onto `work`'s
-    /// continuation at the construction site
-    /// ([`with_obligation`](super::obligation::with_obligation)).
+    /// declared-return obligation likewise does not ride here: it is set on `work`'s
+    /// [`NodeContinuation`] at the construction site, and the next step deposits it.
     Continue {
         work: NodeWork<'step, KoanWorkload>,
         frame: FramePlacement,
@@ -138,8 +137,15 @@ pub(in crate::machine::execute) fn tail_continue<'step>(
         .current_obligation()
         .or_else(|| contract.map(ReturnObligation::seal));
     let label = WorkLabel::of(&tail);
+    // The decide's closure is hosted by the region the replacement work installs under. An
+    // `Inherit` tail stays in the slot's current cart, so its brand is in hand here; a fresh cart
+    // is only reachable through the rank-2 `with_scope` door, so those tails erase owning.
+    let host = match frame {
+        FramePlacement::Inherit => Some(view.current_scope().brand()),
+        FramePlacement::FreshChild { .. } | FramePlacement::FreshTail { .. } => None,
+    };
     Outcome::Continue {
-        work: super::decide::decide_tail(tail, winner),
+        work: super::decide::decide_tail(tail, winner, host),
         frame,
         chain,
         block_entry,
@@ -147,24 +153,24 @@ pub(in crate::machine::execute) fn tail_continue<'step>(
     }
 }
 
-/// What a [`Outcome::Park`] runs once its deps resolve — the closed set of "what happens on wake":
-/// - `Finish` runs behind the [`short_circuit`] dep-error gate, so it never observes an errored dep.
-/// - `Catch` watches one realized dep *without* short-circuiting, so the closure can recover.
-/// - `Resume` re-runs the parked dispatch decide. It carries no deadlock sample of its own: a park
-///   keeps the slot's anchor, so the [`WorkLabel`] minted at submission is still the one a stuck
-///   slot renders through.
+/// What a [`Outcome::Park`] runs once its deps resolve. Both arms carry an already-composed,
+/// already-erased [`ContinuationCall`]: the dep-error gate, the witnessed projection and the
+/// decide's results-dropping adapter are folded in at the construction envelope, so the apply
+/// lowers a park by handing the call straight to the replacement work.
+///
+/// A park carries no deadlock sample of its own: it keeps the slot's anchor, so the [`WorkLabel`]
+/// minted at submission is still the one a stuck slot renders through.
 pub(in crate::machine::execute) enum Continuation<'step> {
-    /// Reads the resolved dep terminals directly (un-relocated value + reach carrier) and returns
-    /// the next [`Outcome`] — it may re-park. A finish whose value must outlive the resolving step
-    /// folds the dep's carrier via
+    /// Runs as soon as the wired deps resolve — a dep-finish behind its [`gated`] short-circuit, or
+    /// a dep-free decide the park re-runs on wake. A finish whose value must outlive the resolving
+    /// step folds the dep's carrier via
     /// [`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into).
-    Finish(TerminalDepFinish<'step>),
+    Ready(ContinuationCall<'step>),
+    /// Watches one dep, realized at apply time, *without* short-circuiting on its error, so the
+    /// finish can recover.
     Catch {
         watched: DepRequest<'step>,
-        finish: CatchFinish<'step>,
-    },
-    Resume {
-        resume: ResumeFn<'step>,
+        finish: ContinuationCall<'step>,
     },
 }
 
@@ -248,9 +254,10 @@ pub(in crate::machine::execute) enum ParkDeps<'step> {
     Block(BlockRequest<'step>),
 }
 
-/// The envelope builder for an [`Outcome::Park`] carrying a [`Continuation::Finish`]. A witnessed
-/// finish is projected onto the terminal delivery at construction, so the projection never rides as
-/// data. Skipping `error_frame` propagates a dep error frameless.
+/// The envelope builder for an [`Outcome::Park`] carrying a dep-finish. Both the witnessed
+/// projection and the dep-error gate compose here, at construction, so neither rides as data and
+/// the whole finish crosses into storage through one erasure. Skipping `error_frame` propagates a
+/// dep error frameless.
 pub(in crate::machine::execute) struct Await<'step> {
     deps: ParkDeps<'step>,
     dep_error_frame: Option<DeferredTraceFrame<'step>>,
@@ -280,37 +287,37 @@ impl<'step> Await<'step> {
         self
     }
 
-    /// Seal the envelope over a witnessed finish, applying the [`seal_witnessed`] projection here,
-    /// at construction.
-    pub(in crate::machine::execute) fn finish_witnessed(
-        self,
-        finish: WitnessedDepFinish<'step>,
-    ) -> Outcome<'step> {
-        self.finish_terminal(seal_witnessed(finish))
+    /// Seal the envelope over a witnessed finish, applying the [`sealed_done`] projection here, at
+    /// construction.
+    pub(in crate::machine::execute) fn finish_witnessed<F>(self, finish: F) -> Outcome<'step>
+    where
+        F: for<'view, 'd> FnOnce(
+                &DecideCtx<'_, 'step, 'view>,
+                &[DepTerminal<'d>],
+            ) -> Result<StepCarried<'step>, KError>
+            + 'step,
+    {
+        self.finish_terminal(sealed_done(finish))
     }
 
-    pub(in crate::machine::execute) fn finish_terminal(
-        self,
-        finish: TerminalDepFinish<'step>,
-    ) -> Outcome<'step> {
+    /// Seal the envelope over a terminal finish: compose the dep-error gate around it and erase
+    /// once. The gate's frame is baked in here *and* kept on the park, which the apply's
+    /// install-and-inspect path reads to label an already-errored producer.
+    pub(in crate::machine::execute) fn finish_terminal<F>(self, finish: F) -> Outcome<'step>
+    where
+        F: for<'view, 'd> FnOnce(
+                &DecideCtx<'_, 'step, 'view>,
+                &[DepTerminal<'d>],
+            ) -> Outcome<'step>
+            + 'step,
+    {
         Outcome::Park {
             deps: self.deps,
-            continuation: Continuation::Finish(finish),
+            continuation: Continuation::Ready(erase_boxed(gated(self.dep_error_frame, finish))),
             dep_error_frame: self.dep_error_frame,
         }
     }
 }
-
-/// Host-side closure for a catch [`NodeWork`](super::nodes::NodeWork). The watched slot's delivery
-/// envelope carries value, reach, and retained producer pin as one unit, adopted or opened at the
-/// finish's own step brand.
-pub(in crate::machine::execute) type CatchFinish<'a> = Box<
-    dyn for<'view> FnOnce(
-            &DecideCtx<'_, 'a, 'view>,
-            Result<DeliveredCarried, KError>,
-        ) -> Outcome<'a>
-        + 'a,
->;
 
 /// The resolved dep terminal every finish reads — a delivered resident of a region this step
 /// already covers, re-branded once at step start. Lives in core so the builtin-`Action` currency
@@ -318,25 +325,101 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
 pub(in crate::machine::execute) use crate::machine::core::DepTerminal;
 
 /// The one continuation every node runs when its deps resolve — the unified currency
-/// [`NodeWork`](super::nodes::NodeWork) carries. Dep terminals arrive in submission order, and an
-/// errored dep is *not* short-circuited here: the continuation decides. The combinators below build
-/// the per-family behavior into the closure so the node itself never branches.
-pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
-    dyn for<'view, 'd> FnOnce(
-            &DecideCtx<'_, 'a, 'view>,
+/// [`NodeWork`](super::nodes::NodeWork) carries: the slot's declared-return `obligation` as plain
+/// `Copy` data beside a two-tier `call` target. The step deposits the obligation into the ambient
+/// slot-step state and then runs the call, so carrying a checker down a tail chain costs a field
+/// rather than a wrapping closure.
+///
+/// Dep terminals reach the call in submission order, and an errored dep is *not* short-circuited
+/// here: the closure decides. Per-family behaviour — the dep-error gate, the witnessed projection,
+/// the catch lift — composes generically at the construction site ([`gated`], [`sealed_done`],
+/// [`catching`], [`decide_only`]) and crosses into storage through a single erasure.
+pub(in crate::machine::execute) struct NodeContinuation<'a> {
+    pub(in crate::machine::execute) obligation: Option<ReturnObligation>,
+    pub(in crate::machine::execute) call: ContinuationCall<'a>,
+}
+
+impl<'a> NodeContinuation<'a> {
+    pub(in crate::machine::execute) fn new(
+        obligation: Option<ReturnObligation>,
+        call: ContinuationCall<'a>,
+    ) -> Self {
+        NodeContinuation { obligation, call }
+    }
+}
+
+/// The stored call shape, as the re-entrant `Fn` the bumped tier holds: its closure is `Copy`, so
+/// nothing about running it consumes it.
+type BumpedCall<'a> = dyn for<'view, 'd> Fn(
+        &DecideCtx<'_, 'a, 'view>,
+        &[Result<DepTerminal<'d>, KError>],
+        NodeId,
+    ) -> Outcome<'a>
+    + 'a;
+
+/// The same call shape as the one-shot `FnOnce` the boxed tier holds, consumed by the step that
+/// runs it so its owned captures drop with it.
+type BoxedCall<'a> = dyn for<'view, 'd> FnOnce(
+        &DecideCtx<'_, 'a, 'view>,
+        &[Result<DepTerminal<'d>, KError>],
+        NodeId,
+    ) -> Outcome<'a>
+    + 'a;
+
+/// Where a stored continuation's closure lives — the two-tier erase door's product. Both tiers
+/// cross the same seal; the tier decides only where the bytes sit and whether drop glue runs.
+pub(in crate::machine::execute) enum ContinuationCall<'a> {
+    /// A `Copy` closure bump-allocated into the region of the frame the work installs under, called
+    /// by reference. `Copy` captures make the closure `Fn` and keep the host region Drop-free, the
+    /// invariant [`BumpAllocator::value`]'s `T: Copy` guard enforces.
+    Bumped(&'a BumpedCall<'a>),
+    /// An owning closure on the heap; its captures' destructors run at slot death.
+    Boxed(Box<BoxedCall<'a>>),
+}
+
+/// Erase a `Copy` closure onto the bumped tier, hosting its bytes in `host` — the region of the
+/// frame the work installs under (the current frame for a park or an in-place replace).
+///
+/// The parameter is a [`RegionBrand`], not a bare [`BumpAllocator`], deliberately: the step scratch
+/// arena carries no brand, so a scratch-hosted continuation — dangling at the next drain pop — is
+/// unrepresentable through this door.
+pub(in crate::machine::execute) fn erase_bumped<'step, F>(
+    host: RegionBrand<'step>,
+    f: F,
+) -> ContinuationCall<'step>
+where
+    F: for<'view, 'd> Fn(
+            &DecideCtx<'_, 'step, 'view>,
             &[Result<DepTerminal<'d>, KError>],
             NodeId,
-        ) -> Outcome<'a>
-        + 'a,
->;
+        ) -> Outcome<'step>
+        + Copy
+        + 'step,
+{
+    ContinuationCall::Bumped(host.handle().allocator().value(f))
+}
 
-/// `Reattachable` family for the [`NodeContinuation`]: a one-shot `Box<dyn FnOnce>` owning its
-/// captures, so it takes the `droppable` arm and rests as
+/// Erase an owning closure onto the boxed tier — the tier for a continuation whose captures need
+/// drop glue (a `KError`, a `Vec` of lowered statements, an `Rc` frame).
+pub(in crate::machine::execute) fn erase_boxed<'step, F>(f: F) -> ContinuationCall<'step>
+where
+    F: for<'view, 'd> FnOnce(
+            &DecideCtx<'_, 'step, 'view>,
+            &[Result<DepTerminal<'d>, KError>],
+            NodeId,
+        ) -> Outcome<'step>
+        + 'step,
+{
+    ContinuationCall::Boxed(Box::new(f))
+}
+
+/// `Reattachable` family for the [`NodeContinuation`]: its [`ContinuationCall::Boxed`] arm owns its
+/// captures, so the family takes the `droppable` arm and rests as
 /// `SealedPinned<ContinuationFamily, Rc<SlotFrame>>`, sealed against the slot's anchor at install.
-/// That anchor is what covers the run-lived data the continuation captures — the parked AST, a
-/// finish closure's captured scope, held in the run region or a strict ancestor of the slot's
-/// per-call cart — for the whole dormant life, which is the owned tier's standing obligation
-/// ([workgraph/design/witnessed-memory.md § What a droppable family
+/// That anchor is what covers the run-lived data the continuation reads — the parked AST, a finish
+/// closure's captured scope, a bumped closure's host region — held in the run region or a strict
+/// ancestor of the slot's per-call cart for the whole dormant life, which is the owned tier's
+/// standing obligation ([workgraph/design/witnessed-memory.md § What a droppable family
 /// accepts](../../../workgraph/design/witnessed-memory.md#what-a-droppable-family-accepts)).
 pub(in crate::machine::execute) struct ContinuationFamily;
 
@@ -361,74 +444,102 @@ fn all_or_first_error<'s, 'd>(
     Ok(terminals)
 }
 
-/// The one delivery currency a resolved dep-finish runs against. A value-reading finish writes this
-/// shape directly; a [`WitnessedDepFinish`] projects onto it through [`seal_witnessed`] — so
-/// [`short_circuit`] is the single loop that runs either.
-pub(in crate::machine::execute) type TerminalDepFinish<'a> = Box<
-    dyn for<'view, 'd> FnOnce(&DecideCtx<'_, 'a, 'view>, &[DepTerminal<'d>]) -> Outcome<'a> + 'a,
->;
-
-/// Dep-finish continuation: short-circuit on the first errored dep (labelled with
-/// `dep_error_frame`), else hand the resolved dep terminals to `finish`. The one delivery loop
-/// every dep-finish runs through.
-pub(in crate::machine::execute) fn short_circuit<'a>(
-    dep_error_frame: Option<DeferredTraceFrame<'a>>,
-    finish: TerminalDepFinish<'a>,
-) -> NodeContinuation<'a> {
-    Box::new(move |view, results, _id| {
+/// Adapt a dep-reading `finish` onto the uniform continuation signature behind the dep-error gate:
+/// short-circuit on the first errored dep (labelled with `dep_error_frame`), else hand `finish` the
+/// resolved terminals. The one delivery loop every dep-finish runs through.
+pub(in crate::machine::execute) fn gated<'step, F>(
+    dep_error_frame: Option<DeferredTraceFrame<'step>>,
+    finish: F,
+) -> impl for<'view, 'd> FnOnce(
+    &DecideCtx<'_, 'step, 'view>,
+    &[Result<DepTerminal<'d>, KError>],
+    NodeId,
+) -> Outcome<'step>
++ 'step
+where
+    F: for<'view, 'd> FnOnce(&DecideCtx<'_, 'step, 'view>, &[DepTerminal<'d>]) -> Outcome<'step>
+        + 'step,
+{
+    move |view: &DecideCtx<'_, 'step, '_>,
+          results: &[Result<DepTerminal<'_>, KError>],
+          _id: NodeId| {
         let terminals =
             match all_or_first_error(view.scratch(), results, dep_error_frame, view.registries()) {
                 Ok(terminals) => terminals,
                 Err(e) => return Outcome::Done(Err(e)),
             };
         finish(view, &terminals)
-    })
+    }
 }
 
-/// Host-side closure for a witnessed dep-finish. Folds the resolved dep terminals — with the
-/// finish's captured static-cell carriers — into the aggregate's witnessed carrier, so the result
-/// names every region it reaches by construction. Returns `Result` so a shape error (a non-scalar
-/// dict key) short-circuits to [`Outcome::Done`].
-pub(in crate::machine::execute) type WitnessedDepFinish<'a> = Box<
-    dyn for<'view, 'd> FnOnce(
-            &DecideCtx<'_, 'a, 'view>,
+/// Project a witnessed finish — one folding the resolved dep terminals into the aggregate's
+/// witnessed carrier, so the result names every region it reaches by construction — onto the
+/// terminal-finish delivery [`gated`] runs. Its `Result` is the shape channel: a shape error (a
+/// non-scalar dict key) short-circuits to [`Outcome::Done`].
+pub(in crate::machine::execute) fn sealed_done<'step, F>(
+    finish: F,
+) -> impl for<'view, 'd> FnOnce(&DecideCtx<'_, 'step, 'view>, &[DepTerminal<'d>]) -> Outcome<'step> + 'step
+where
+    F: for<'view, 'd> FnOnce(
+            &DecideCtx<'_, 'step, 'view>,
             &[DepTerminal<'d>],
-        ) -> Result<StepCarried<'a>, KError>
-        + 'a,
->;
-
-/// Project a [`WitnessedDepFinish`] onto the [`TerminalDepFinish`] delivery. The fold relocates each
-/// dep once (`transfer_into`) and names the union of their reaches, so no separate per-dep
-/// relocation runs here, and it hands back a step-branded carrier that seals as-is.
-pub(in crate::machine::execute) fn seal_witnessed<'a>(
-    finish: WitnessedDepFinish<'a>,
-) -> TerminalDepFinish<'a> {
-    Box::new(move |view, terminals| match finish(view, terminals) {
+        ) -> Result<StepCarried<'step>, KError>
+        + 'step,
+{
+    move |view: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| match finish(
+        view, terminals,
+    ) {
         Ok(carrier) => Outcome::Done(Ok(carrier)),
         Err(e) => Outcome::Done(Err(e)),
-    })
+    }
 }
 
-/// Catch continuation: no short-circuit on an errored dep, so the closure can recover or re-raise.
-pub(in crate::machine::execute) fn catch_continuation<'a>(
-    finish: CatchFinish<'a>,
-) -> NodeContinuation<'a> {
-    Box::new(move |view, results, _id| {
+/// Adapt a catch finish onto the uniform signature: no short-circuit on an errored dep, so the
+/// closure can recover or re-raise. The watched producer's delivered resident is lifted back into
+/// an envelope owning its whole reach, which the finish adopts or opens at its own step brand.
+pub(in crate::machine::execute) fn catching<'step, F>(
+    finish: F,
+) -> impl for<'view, 'd> FnOnce(
+    &DecideCtx<'_, 'step, 'view>,
+    &[Result<DepTerminal<'d>, KError>],
+    NodeId,
+) -> Outcome<'step>
++ 'step
+where
+    F: for<'view> FnOnce(
+            &DecideCtx<'_, 'step, 'view>,
+            Result<DeliveredCarried, KError>,
+        ) -> Outcome<'step>
+        + 'step,
+{
+    move |view: &DecideCtx<'_, 'step, '_>,
+          results: &[Result<DepTerminal<'_>, KError>],
+          _id: NodeId| {
         let result = match &results[0] {
-            // The watched producer's delivered resident, lifted back into an envelope owning its
-            // whole reach — the finish adopts or opens it at its own step brand.
             Ok(t) => Ok(view.current_scope().lift_spliced(&t.cell)),
             // Frameless: the recovery-site dispatch attaches its own frame.
             Err(e) => Err(propagate_dep_error(e, None, view.registries())),
         };
         finish(view, result)
-    })
+    }
 }
 
-/// Dispatch-decide continuation: a [`ResumeFn`] takes no dep values (it reads the view and spawns /
-/// re-resolves), so the results slice is ignored.
-pub(in crate::machine::execute) fn ignore_results<'a>(
-    resume: ResumeFn<'a>,
-) -> NodeContinuation<'a> {
-    Box::new(move |view, _results, id| resume(view, id))
+/// Adapt a dispatch decide onto the uniform signature: it takes no dep values (it reads the view
+/// and spawns / re-resolves), so the results slice is dropped. `Copy` captures in and out, so the
+/// product erases on the bumped tier.
+pub(in crate::machine::execute) fn decide_only<'step, F>(
+    resume: F,
+) -> impl for<'view, 'd> Fn(
+    &DecideCtx<'_, 'step, 'view>,
+    &[Result<DepTerminal<'d>, KError>],
+    NodeId,
+) -> Outcome<'step>
++ Copy
++ 'step
+where
+    F: for<'view> Fn(&DecideCtx<'_, 'step, 'view>, NodeId) -> Outcome<'step> + Copy + 'step,
+{
+    move |view: &DecideCtx<'_, 'step, '_>,
+          _results: &[Result<DepTerminal<'_>, KError>],
+          id: NodeId| resume(view, id)
 }

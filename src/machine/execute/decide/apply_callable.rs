@@ -19,7 +19,7 @@ use crate::machine::{KError, KErrorKind};
 use crate::scheduler::Deps;
 use crate::source::Spanned;
 
-use super::super::TerminalDepFinish;
+use super::super::outcome::DepTerminal;
 use super::super::outcome::dep_error_frame;
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
@@ -279,7 +279,7 @@ fn apply_named_type_args<'step>(
             placement: DepPlacement::OwnScope,
         })
         .collect();
-    let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
+    let finish = move |view: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
         // Each argument is a type value cloned out as owned data, so the applied type embeds no
         // borrow of a producer's region and needs no carrier fold.
         let supplied: Result<Vec<SuppliedTypeArgument>, KError> = terminals
@@ -303,7 +303,7 @@ fn apply_named_type_args<'step>(
                 .step_ctx()
                 .type_carried(view.types().constructor_apply(identity, args)))
         }))
-    });
+    };
     Await::on(Deps::from_requests_in(deps, ctx.scratch()))
         .error_frame(dep_error_frame())
         .finish_terminal(finish)

@@ -14,8 +14,8 @@ use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
 
 use super::super::StepCarried;
-use super::super::WitnessedDepFinish;
 use super::super::lift::relocate_seam;
+use super::super::outcome::DepTerminal;
 use super::apply_callable::{ResolvedCallable, apply_callable};
 use super::ctx::DecideCtx;
 use super::{
@@ -60,11 +60,9 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // The binder's terminal is not the type carrier (a finalize-combine returns its own
         // value), so the wake re-resolves the leaf against the now-sealed registry rather than
         // lifting that value.
-        TypeChannel::Parked(source) => park_resume(
-            vec![source],
-            ctx.scratch(),
-            Box::new(move |ctx, _idx| bare_type_leaf(ctx, ctx.current_scope(), t)),
-        ),
+        TypeChannel::Parked(source) => park_resume(vec![source], ctx, {
+            move |ctx: &DecideCtx<'_, 'step, '_>, _idx| bare_type_leaf(ctx, ctx.current_scope(), t)
+        }),
     }
 }
 
@@ -160,7 +158,7 @@ pub(super) fn literal_pass_through<'step>(
 /// the consumer region — so the literal's reach rides the terminal by construction rather than
 /// being recomputed beside it. A dep error short-circuits frameless before the finish runs.
 fn park_on_literal<'step>(dep: DepRequest<'step>, scratch: BumpAllocator<'step>) -> Outcome<'step> {
-    let finish: WitnessedDepFinish<'step> = Box::new(|view, deps| {
+    let finish = |view: &DecideCtx<'_, 'step, '_>, deps: &[DepTerminal<'_>]| {
         // The destination is a bare region handle (empty reach) sealed as an envelope witnessed by
         // the consumer's own frame, so the seam composes the producer's reach into it and homes
         // the product there — co-located by construction rather than by an asserted singleton.
@@ -168,7 +166,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>, scratch: BumpAllocator<'step>)
             &view.current_scope().lift_spliced(&deps[0].cell),
             Delivered::destination(view.dest_frame()),
         )))
-    });
+    };
     Await::on(Deps::from_requests_in([dep], scratch)).finish_witnessed(finish)
 }
 
@@ -197,8 +195,8 @@ pub(super) fn type_call<'step>(
             // win; reaching here means the claim still stands.
             return park_resume(
                 vec![source],
-                ctx.scratch(),
-                Box::new(move |ctx, _idx| type_call(ctx, expr)),
+                ctx,
+                move |ctx: &DecideCtx<'_, 'step, '_>, _idx| type_call(ctx, expr),
             );
         }
         None => {

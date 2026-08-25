@@ -3,14 +3,15 @@
 //! Sealing resolves the declared return type and retains the handles an error frame renders from,
 //! leaving pure `Copy` data — the chain carries nothing region-bound, no path downstream reopens a
 //! live contract, and a call that returns cleanly renders no trace text at all.
-//! [`with_obligation`] wraps a continuation so the obligation deposits into the ambient slot-step
-//! state at the top of every step, visible to the readers, the Done-boundary check, and the
-//! error-frame path for that step's dynamic extent.
+//! The obligation rides beside the continuation as plain data on the
+//! [`NodeContinuation`](super::outcome::NodeContinuation) the slot stores; the step deposits it
+//! into the ambient slot-step state before running the closure, so it is visible to the readers,
+//! the Done-boundary check, and the error-frame path for that step's dynamic extent.
 
 use crate::machine::core::{KFunction, ReturnContract};
 use crate::machine::model::{KType, ReturnType};
 
-use super::outcome::{DeferredTraceFrame, NodeContinuation};
+use super::outcome::DeferredTraceFrame;
 
 /// A slot's declared-return obligation, riding the tail chain as a continuation capture. It carries
 /// no pin: it is a checker and a retained frame, not a lifetime — the value it checks escapes only
@@ -69,20 +70,4 @@ impl ReturnObligation {
     pub(in crate::machine::execute) fn frame(&self) -> DeferredTraceFrame<'static> {
         self.frame
     }
-}
-
-/// Wrap a live continuation so it deposits `obligation` into the ambient slot-step state before
-/// running. A `None` obligation passes `inner` through unchanged, so construction sites state the
-/// fold once instead of each matching on the option.
-pub(in crate::machine::execute) fn with_obligation<'a>(
-    obligation: Option<ReturnObligation>,
-    inner: NodeContinuation<'a>,
-) -> NodeContinuation<'a> {
-    let Some(obligation) = obligation else {
-        return inner;
-    };
-    Box::new(move |view, deps, idx| {
-        view.deposit_obligation(obligation);
-        inner(view, deps, idx)
-    })
 }

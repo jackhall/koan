@@ -8,11 +8,13 @@
 //! somewhere else.
 
 use std::cell::Cell;
-use std::rc::Rc;
 
+use super::super::super::decide::DecideCtx;
 use super::super::super::decide::park_resume_labelled;
 use super::super::super::nodes::NodeWork;
-use super::super::super::outcome::{DeferredTraceFrame, Outcome, ignore_results};
+use super::super::super::outcome::{
+    DeferredTraceFrame, NodeContinuation, Outcome, decide_only, erase_boxed,
+};
 use crate::builtins::test_support::TestRun;
 use crate::machine::ProducerId;
 use crate::machine::core::{program_storage, run_root_storage};
@@ -53,29 +55,33 @@ fn park_on_errored_producer_propagates_producer_error() {
         "the errored producer terminalized before the park is wired",
     );
 
-    let resumed: Rc<Cell<bool>> = Rc::new(Cell::new(false));
-    let resumed_in_step = Rc::clone(&resumed);
+    // Leaked so the flag is a `Copy` capture: the resume erases on the bumped tier, whose
+    // closures are `Copy` by construction.
+    let resumed: &'static Cell<bool> = Box::leak(Box::new(Cell::new(false)));
     let frame = DeferredTraceFrame::Bare {
         function: "<test-park>",
         expression: "park on two producers",
     };
     let consumer = runtime.add(
-        NodeWork::new(ignore_results(Box::new(move |_view, _id| {
-            park_resume_labelled(
-                vec![
-                    ProducerId::from_scheduler_edge(edge_ok),
-                    ProducerId::from_scheduler_edge(edge_err),
-                ],
-                Some(frame),
-                _view.scratch(),
-                Box::new(move |_view, _id| {
-                    resumed_in_step.set(true);
-                    Outcome::Done(Err(KError::new(KErrorKind::ShapeError(
-                        "resume ran".into(),
-                    ))))
-                }),
-            )
-        }))),
+        NodeWork::new(NodeContinuation::new(
+            None,
+            erase_boxed(decide_only(move |view: &DecideCtx<'_, '_, '_>, _id| {
+                park_resume_labelled(
+                    vec![
+                        ProducerId::from_scheduler_edge(edge_ok),
+                        ProducerId::from_scheduler_edge(edge_err),
+                    ],
+                    Some(frame),
+                    view,
+                    move |_view: &DecideCtx<'_, '_, '_>, _id| {
+                        resumed.set(true);
+                        Outcome::Done(Err(KError::new(KErrorKind::ShapeError(
+                            "resume ran".into(),
+                        ))))
+                    },
+                )
+            })),
+        )),
         &[],
         scope,
         3,

@@ -17,7 +17,7 @@ use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
 use crate::witnessed::BumpAllocator;
 
-use super::super::TerminalDepFinish;
+use super::super::outcome::DepTerminal;
 use super::apply_callable::{ResolvedCallable, apply_callable};
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
@@ -80,7 +80,7 @@ fn park_on_head<'step>(
     type_only: bool,
     scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
-    let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
+    let finish = move |ctx: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
         let head_terminal = terminals[0];
         // The head dep rests in a region this step already covers; lift it to an owned envelope
         // so the adopt below can fold its reach into the classified callable, which outlives this
@@ -104,7 +104,7 @@ fn park_on_head<'step>(
             }
         };
         apply_callable(ctx, callable, &expr)
-    });
+    };
     Await::on(Deps::from_requests_in(
         [DepRequest::Dispatch {
             expr: head,

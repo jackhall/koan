@@ -6,12 +6,12 @@ use crate::machine::core::OpenedFunction;
 use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{DispatchOutcome, KError, KErrorKind};
 use crate::source::Spanned;
-use crate::witnessed::BumpAllocator;
 
 use super::super::nodes::{NodeWork, WorkLabel};
-use super::super::obligation::with_obligation;
+
+use super::super::outcome::DepTerminal;
 use super::super::outcome::continue_inline;
-use super::super::{TerminalDepFinish, ignore_results};
+use super::super::{NodeContinuation, decide_only, erase_bumped};
 use super::ctx::DecideCtx;
 use super::{
     Await, Outcome, PartWalk, Resolution, Resolved, StagedSubs, park_resume_labelled,
@@ -58,7 +58,7 @@ pub(super) fn initial<'step>(
             return install_eager_only(ctx, expr);
         }
         DispatchOutcome::ParkOnProducers(sources) => {
-            return park_on_claims(sources, expr, ctx.scratch());
+            return park_on_claims(sources, expr, ctx);
         }
     };
     // Binder name claims / pending overload slots are installed at statement submission from the
@@ -126,9 +126,7 @@ fn finish<'step>(
                 reason: "no matching function".to_string(),
             })))
         }
-        DispatchOutcome::ParkOnProducers(sources) => {
-            park_on_claims(sources, working_expr, ctx.scratch())
-        }
+        DispatchOutcome::ParkOnProducers(sources) => park_on_claims(sources, working_expr, ctx),
         DispatchOutcome::UnboundName(name) => {
             Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
         }
@@ -143,14 +141,14 @@ fn finish<'step>(
 fn park_on_claims<'step>(
     sources: Vec<ProducerId>,
     expr: WorkingExpression<'step>,
-    scratch: BumpAllocator<'step>,
+    view: &DecideCtx<'_, 'step, '_>,
 ) -> Outcome<'step> {
     let frame = working_frame("<dispatch-park>", &expr);
     park_resume_labelled(
         sources,
         Some(frame),
-        scratch,
-        Box::new(move |ctx, _id| initial(ctx, expr)),
+        view,
+        move |ctx: &DecideCtx<'_, 'step, '_>, _id| initial(ctx, expr),
     )
 }
 
@@ -162,9 +160,12 @@ fn redispatch_continue<'step>(
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let label = WorkLabel::of(&working_expr);
-    let continuation = with_obligation(
+    let continuation = NodeContinuation::new(
         view.current_obligation(),
-        ignore_results(Box::new(move |ctx, _id| finish(ctx, working_expr))),
+        erase_bumped(
+            view.current_scope().brand(),
+            decide_only(move |ctx: &DecideCtx<'_, 'step, '_>, _id| finish(ctx, working_expr)),
+        ),
     );
     continue_inline(NodeWork::new(continuation), label)
 }
@@ -209,7 +210,7 @@ pub(super) fn install_eager_subs<'step>(
     }
     let StagedSubs { part_indices, deps } = staged;
     let dep_error_frame = working_frame("<bind>", &working_expr);
-    let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
+    let finish = move |ctx: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
         // A parts run is frozen once its door bumps it, so the whole batch must land in one
         // rebuild. Deps land in staging order, so `part_indices` ascends 1:1 with `terminals` and
         // a single cursor over it places every cell in one pass.
@@ -234,7 +235,7 @@ pub(super) fn install_eager_subs<'step>(
             }),
         );
         finish_eager_subs(ctx, spliced, picked)
-    });
+    };
     Await::on(deps)
         .error_frame(dep_error_frame)
         .finish_terminal(finish)

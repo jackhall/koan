@@ -13,7 +13,6 @@ use super::{let_expr, working_one};
 fn dep_finish_waits_on_deps_then_runs_finish() {
     // Pins that dep-finish waits on every dep before invoking finish and that
     // finish-returned Outcome::Done(Value) lands in the slot's result.
-    use crate::machine::execute::TerminalDepFinish;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -23,29 +22,33 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     let runtime = &mut test_run.runtime;
     let dep_a = runtime.dispatch_in_scope(let_expr(&program, labels, "ca", 7.0), scope, 1);
     let dep_b = runtime.dispatch_in_scope(let_expr(&program, labels, "cb", 11.0), scope, 2);
-    let finish: TerminalDepFinish = Box::new(|_sched, terminals| {
-        let a = match terminals[0].cell.open_at().value() {
-            Carried::Object(KObject::Number(n)) => *n,
-            _ => {
-                return Outcome::Done(Err(crate::machine::KError::new(
-                    crate::machine::KErrorKind::ShapeError("a not number".into()),
-                )));
-            }
-        };
-        let b = match terminals[1].cell.open_at().value() {
-            Carried::Object(KObject::Number(n)) => *n,
-            _ => {
-                return Outcome::Done(Err(crate::machine::KError::new(
-                    crate::machine::KErrorKind::ShapeError("b not number".into()),
-                )));
-            }
-        };
-        let allocated = _sched.current_scope().fold_resident_object(|brand| {
-            KObject::KString(brand.allocator().text(&format!("{a}+{b}")))
-        });
-        Outcome::done_resident(_sched.current_scope(), Carried::Object(allocated))
-    });
-    let dep_finish_id = runtime.add_dep_finish(&[dep_a, dep_b], scope, finish, 3);
+    let dep_finish_id = runtime.add_dep_finish(
+        &[dep_a, dep_b],
+        scope,
+        |_sched, terminals| {
+            let a = match terminals[0].cell.open_at().value() {
+                Carried::Object(KObject::Number(n)) => *n,
+                _ => {
+                    return Outcome::Done(Err(crate::machine::KError::new(
+                        crate::machine::KErrorKind::ShapeError("a not number".into()),
+                    )));
+                }
+            };
+            let b = match terminals[1].cell.open_at().value() {
+                Carried::Object(KObject::Number(n)) => *n,
+                _ => {
+                    return Outcome::Done(Err(crate::machine::KError::new(
+                        crate::machine::KErrorKind::ShapeError("b not number".into()),
+                    )));
+                }
+            };
+            let allocated = _sched.current_scope().fold_resident_object(|brand| {
+                KObject::KString(brand.allocator().text(&format!("{a}+{b}")))
+            });
+            Outcome::done_resident(_sched.current_scope(), Carried::Object(allocated))
+        },
+        3,
+    );
     let watch = runtime.install_edge_for_test(dep_finish_id, scope);
     runtime.execute().unwrap();
     assert!(
@@ -63,7 +66,6 @@ fn dep_finish_short_circuits_on_dep_error() {
     // Pins that finish does not run when any dep errored, and that the
     // propagated error carries a "<deps>" frame.
     use crate::machine::KErrorKind;
-    use crate::machine::execute::TerminalDepFinish;
     use std::cell::Cell;
     use std::rc::Rc;
     let program = program_storage();
@@ -85,14 +87,19 @@ fn dep_finish_short_circuits_on_dep_error() {
 
     let invoked: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let invoked_clone = Rc::clone(&invoked);
-    let finish: TerminalDepFinish = Box::new(move |_sched, _terminals| {
-        invoked_clone.set(true);
-        let scope = _sched.current_scope();
-        let allocated = scope
-            .fold_resident_object(|brand| KObject::KString(brand.allocator().text("finish ran")));
-        Outcome::done_resident(scope, Carried::Object(allocated))
-    });
-    let dep_finish_id = runtime.add_dep_finish(&[dep_ok, dep_err], scope, finish, 3);
+    let dep_finish_id = runtime.add_dep_finish(
+        &[dep_ok, dep_err],
+        scope,
+        move |_sched, _terminals| {
+            invoked_clone.set(true);
+            let scope = _sched.current_scope();
+            let allocated = scope.fold_resident_object(|brand| {
+                KObject::KString(brand.allocator().text("finish ran"))
+            });
+            Outcome::done_resident(scope, Carried::Object(allocated))
+        },
+        3,
+    );
     let watch = runtime.install_edge_for_test(dep_finish_id, scope);
     runtime.execute().unwrap();
 

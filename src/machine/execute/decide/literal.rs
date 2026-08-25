@@ -15,10 +15,10 @@ use crate::machine::{
 use crate::source::Spanned;
 use crate::witnessed::{BumpVec, Delivered, RegionHandle, reattachable};
 
+use super::super::StepCarried;
 use super::super::harness::{Host, KoanWorkload};
 use super::super::lift::{HeldFamily, copy_held_from_carried, relocated_cell_still_borrows};
 use super::super::outcome::DepTerminal;
-use super::super::{StepCarried, WitnessedDepFinish};
 use super::SubmitContext;
 use super::ctx::{DecideCtx, current_dest_frame, with_current_node_scope};
 use super::resolve::{Resolution, resolve_name};
@@ -235,7 +235,7 @@ impl<'step> Host<'step> {
         rows: Vec<AggRow>,
         assemble: AggAssemble,
     ) -> NodeId {
-        let finish: WitnessedDepFinish<'step> = Box::new(move |view, terminals| {
+        let finish = move |view: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
             let n = rows.len();
             // Keys stay scalar (reaching no region): read out eagerly, erroring before the fold.
             let mut keys: Vec<PendingKey> = Vec::new();
@@ -282,7 +282,7 @@ impl<'step> Host<'step> {
                 },
             );
             Ok(StepCarried::born_delivered(built))
-        });
+        };
         self.submit_dep_finish_witnessed_in_own_scope(sched, deps, finish)
     }
 

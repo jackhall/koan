@@ -79,7 +79,7 @@ fn allocations_for(source: &str, path: &str) -> u64 {
 /// see one allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
-    const BOUND: u64 = 9_700;
+    const BOUND: u64 = 7_000;
     let delta = allocations_for(
         include_str!("../audit/shapes/tail_loop_steps100.koan"),
         "audit/shapes/tail_loop_steps100.koan",
@@ -100,7 +100,7 @@ fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
 /// single new per-dispatch allocation would add. Same headroom rule as the loop.
 #[test]
 fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
-    const BOUND: u64 = 4_001;
+    const BOUND: u64 = 3_100;
     let delta = allocations_for(
         include_str!("../audit/shapes/operator_chain_operands128.koan"),
         "audit/shapes/operator_chain_operands128.koan",
@@ -171,7 +171,7 @@ fn per_dispatch_cost_does_not_grow_with_scope_walk_depth() {
 /// difference by — so one re-introduced per-call allocation fails it.
 #[test]
 fn the_builtin_call_shape_stays_within_its_per_call_bound() {
-    const BOUND: u64 = 2_037;
+    const BOUND: u64 = 1_685;
     let marginal = allocations_for(
         include_str!("../audit/shapes/builtin_call_calls40.koan"),
         "audit/shapes/builtin_call_calls40.koan",
@@ -213,7 +213,7 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 /// one fails the second by ≈224.
 #[test]
 fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
-    const PER_CALL_BOUND: u64 = 950;
+    const PER_CALL_BOUND: u64 = 758;
     const PER_PARAMETER_BOUND: u64 = 381;
     let arity1 = allocations_for(
         include_str!("../audit/shapes/user_fn_params1_calls40.koan"),
@@ -265,7 +265,7 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
 /// re-introduced per-construction allocation fails it.
 #[test]
 fn the_tagged_construct_shape_stays_within_its_per_construction_bound() {
-    const BOUND: u64 = 2_934;
+    const BOUND: u64 = 2_454;
     let marginal = allocations_for(
         include_str!("../audit/shapes/tagged_construct_calls40.koan"),
         "audit/shapes/tagged_construct_calls40.koan",

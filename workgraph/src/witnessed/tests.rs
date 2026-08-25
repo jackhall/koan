@@ -76,7 +76,30 @@ reattachable! {
     droppable
     BoxFamily => Box<&'r u32>,
     DynContinuationFamily => TestContinuation<'r>,
+    TieredContinuationFamily => TieredContinuation<'r>,
     GlueProbeFamily => GlueProbe<'r>,
+}
+
+/// Two-tier stand-in: the shape koan's stored `ContinuationCall` takes — an enum whose arms are a
+/// **borrowed** fat pointer into the pinned region (a `Copy` closure bumped there, called by
+/// reference) and an owning boxed one. The `Box` arm gives the whole enum drop glue, so the family
+/// is droppable and rests on the owned tier even when the value in hand is the borrowed arm.
+struct TieredContinuationFamily;
+
+enum TieredContinuation<'r> {
+    /// The bumped tier: a `&dyn Fn` resident in the region the seal's pin holds, so the retype runs
+    /// over a fat pointer whose *referent* — not just the pointer — is lifetime-fabricated.
+    Bumped(&'r (dyn Fn() -> u32 + 'r)),
+    /// The owning tier, alongside it in the same enum, so the discriminant crosses the retype too.
+    #[allow(dead_code)]
+    Boxed(Box<dyn FnOnce() -> u32 + 'r>),
+}
+
+/// A region-only profile for the tiered carrier: the closure lives in the bump, nothing typed does.
+struct TieredProfile;
+
+impl StorageProfile for TieredProfile {
+    type FrameOwner = RegionHost<TieredProfile>;
 }
 
 /// A droppable *and* region-pointing stand-in — the shape the owned tier exists for. Its
@@ -451,6 +474,34 @@ fn sealed_pinned_open_invokes_a_fat_pointer_continuation() {
     assert_eq!(got, 17);
     // Re-read the region through a sibling `Rc` after the open to catch a tree-borrows regression.
     let _again: &u32 = &backing[0];
+}
+
+/// [`SealedPinned::open`] over a **borrowed** fat-pointer carrier: a `Copy` closure bumped into the
+/// region the seal pins is stored as a `&dyn Fn` inside a droppable enum, erased, and **called
+/// through the reference inside the brand**. Distinct from the boxed-continuation round trip above:
+/// there the fabricated lifetime covers only a heap box the carrier owns, here it covers a referent
+/// living in the pinned region, so a tree-borrows regression at the re-anchor shows up as a read of
+/// region memory through a forged tag rather than as a heap read. Fails on UB, not values.
+#[test]
+fn sealed_pinned_open_calls_a_bumped_continuation_by_reference() {
+    let host: Rc<RegionHost<TieredProfile>> = RegionHost::fresh(None);
+    let sealed: SealedPinned<TieredContinuationFamily, Rc<RegionHost<TieredProfile>>> = {
+        let handle = RegionHandle::from_owner(&*host);
+        // `value` takes `T: Copy`, so the bumped closure captures only `Copy` data and the region
+        // stays Drop-free — the production guard, here as the only door that admits the closure.
+        let bumped: &dyn Fn() -> u32 = handle.allocator().value(|| 40u32);
+        SealedPinned::erase(TieredContinuation::Bumped(bumped), Rc::clone(&host))
+    };
+    let operand: SealedExtern<RefFamily> = SealedExtern::erase(&2u32);
+    let got: u32 = sealed.open(
+        operand,
+        &host,
+        |_within, continuation: TieredContinuation<'_>, other: &u32| match continuation {
+            TieredContinuation::Bumped(call) => call() + *other,
+            TieredContinuation::Boxed(call) => call() + *other,
+        },
+    );
+    assert_eq!(got, 42);
 }
 
 /// **The owned tier's drop order** — a `SealedPinned` dropped unopened, holding the last `Rc` on

@@ -46,13 +46,9 @@ use super::decide::{
 use super::finalize::{NodeFinalize, finalize_error};
 use super::lift::relocate_seam;
 use super::nodes::{ChainOp, NodePayload, NodeScope, NodeWork, SlotFrame, WorkLabel};
-use super::obligation::with_obligation;
-use super::outcome::{
-    Await, Continuation, DepTerminal, Outcome, ParkDeps, TerminalDepFinish, dep_error_frame,
-};
-use super::{
-    ContinuationFamily, catch_continuation, ignore_results, seal_witnessed, short_circuit,
-};
+use super::outcome::{Await, Continuation, DepTerminal, Outcome, ParkDeps, dep_error_frame};
+use super::step_carried::StepCarried;
+use super::{ContinuationCall, ContinuationFamily, NodeContinuation, erase_boxed, gated};
 
 /// The Koan instantiation of the scheduler's [`Workload`] interface — the marker that binds the
 /// opaque scheduler types to their concrete Koan forms.
@@ -417,19 +413,25 @@ impl<'run> Host<'run> {
                         chain: chain.clone(),
                     },
                     |host| {
-                        let outcome = continuation(
-                            &DecideCtx::new(
-                                &host.ambient,
-                                scope,
-                                scope_frame(scope),
-                                Installer::Statement(anchor.statement()),
-                                &step_effects,
-                                host.program,
-                                scratch,
-                            ),
-                            &dep_sources,
-                            id,
+                        let view = DecideCtx::new(
+                            &host.ambient,
+                            scope,
+                            scope_frame(scope),
+                            Installer::Statement(anchor.statement()),
+                            &step_effects,
+                            host.program,
+                            scratch,
                         );
+                        // The slot's declared-return obligation rides its continuation as data;
+                        // depositing it here, inside the ambient bracket and before the closure
+                        // runs, is what makes the checker visible for this step's whole extent.
+                        if let Some(obligation) = continuation.obligation {
+                            view.deposit_obligation(obligation);
+                        }
+                        let outcome = match continuation.call {
+                            ContinuationCall::Bumped(call) => call(&view, &dep_sources, id),
+                            ContinuationCall::Boxed(call) => call(&view, &dep_sources, id),
+                        };
                         // Drained here so the writes take a firm borrow and land before any edge
                         // an errored step would strand. See [the step's binding
                         // writes](../../../design/execution/classify-and-apply.md#the-steps-binding-writes).
@@ -604,14 +606,10 @@ impl<'run> Host<'run> {
                         );
                     }
                 }
-                // Lower each variant to its outermost live continuation.
-                let continuation = match continuation {
-                    // A dispatch finish carries its own dep-error frame (the consuming call's, or
-                    // `None` frameless); an action/literal dep-finish carries the
-                    // `dep_error_frame()` label.
-                    Continuation::Finish(finish) => short_circuit(park_error_frame, finish),
-                    // The catch carries its single watched dep unrealized; `catch_continuation`
-                    // runs the finish without short-circuiting on a dep error.
+                // The call is already composed and erased at the construction envelope; the catch
+                // arm only owes its watched dep the wiring the other arms got above.
+                let call = match continuation {
+                    Continuation::Ready(call) => call,
                     Continuation::Catch { watched, finish } => {
                         let _watched_verdict = self.wire_deps(
                             sched,
@@ -621,18 +619,15 @@ impl<'run> Host<'run> {
                             scratch,
                             ParkDeps::List(Deps::from_requests_in([watched], scratch)),
                         );
-                        catch_continuation(finish)
+                        finish
                     }
-                    // A decide takes no dep values, so `ignore_results` drops the results slice.
-                    Continuation::Resume { resume } => ignore_results(resume),
                 };
-                // Carry the ambient obligation across the park so the resumed step's
-                // declared-return check still fires. The wrap sits on the outermost closure, so
-                // every variant — including the dep-error short-circuit — runs under it.
-                let continuation = with_obligation(self.ambient.current_obligation(), continuation);
+                // Carry the ambient obligation across the park as data, so the resumed step
+                // re-deposits it and its declared-return check still fires.
+                let work = NodeContinuation::new(self.ambient.current_obligation(), call);
                 // The degenerate replace: same cart, scope, and chain, so no anchor swaps in —
                 // and with it the slot keeps the `WorkLabel` its submission minted.
-                replace_verdict(NodeWork::new(continuation), None)
+                replace_verdict(NodeWork::new(work), None)
             }
             Outcome::Forward(source) => {
                 // The slot's result *is* the result behind `source`. Classification is the
@@ -688,21 +683,23 @@ impl<'run> Host<'run> {
                     // producer now resolved — no re-check, no loop. Both the park and the
                     // re-emission name `edge`, this slot's own name for the producer.
                     InstalledEdge::Parked(edge) => {
-                        let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
-                            // The single parked dep is the producer behind `edge`, at index 0.
-                            let producer_terminal = terminals[0];
-                            let checked = producer_terminal.cell.open(|value| {
-                                super::finalize::check_spliced_return(
-                                    &obligation,
-                                    value,
-                                    view.registries(),
-                                )
-                            });
-                            match checked {
-                                Ok(()) => Outcome::Forward(edge),
-                                Err(error) => Outcome::Done(Err(error)),
-                            }
-                        });
+                        let finish =
+                            move |view: &DecideCtx<'_, 'step, '_>,
+                                  terminals: &[DepTerminal<'_>]| {
+                                // The single parked dep is the producer behind `edge`, at index 0.
+                                let producer_terminal = terminals[0];
+                                let checked = producer_terminal.cell.open(|value| {
+                                    super::finalize::check_spliced_return(
+                                        &obligation,
+                                        value,
+                                        view.registries(),
+                                    )
+                                });
+                                match checked {
+                                    Ok(()) => Outcome::Forward(edge),
+                                    Err(error) => Outcome::Done(Err(error)),
+                                }
+                            };
                         let park = Await::on(Deps::from_producers_in([edge], scratch))
                             .error_frame(dep_error_frame())
                             .finish_terminal(finish);
@@ -1222,7 +1219,11 @@ impl<'run> Host<'run> {
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
         deps: Deps<NodeId>,
-        finish: super::WitnessedDepFinish<'a>,
+        finish: impl for<'view, 'd> FnOnce(
+            &DecideCtx<'_, 'a, 'view>,
+            &[DepTerminal<'d>],
+        ) -> Result<StepCarried<'a>, KError>
+        + 'a,
     ) -> NodeId {
         let payload = self
             .ambient
@@ -1231,9 +1232,9 @@ impl<'run> Host<'run> {
             .clone();
         let (cart, framed) = self.ambient.submission_cart();
         let anchor = SlotFrame::new(cart, payload.scope, payload.chain, WorkLabel::None);
-        let work = NodeWork::new(short_circuit(
-            Some(dep_error_frame()),
-            seal_witnessed(finish),
+        let work = NodeWork::new(NodeContinuation::new(
+            None,
+            erase_boxed(gated(Some(dep_error_frame()), super::sealed_done(finish))),
         ));
         let (sources, minted) =
             self.named_sources(sched, &anchor, deps, Global, |_host, _sched, producer| {
@@ -1256,8 +1257,17 @@ impl<'run> KoanRuntime<'run> {
     /// A bare dep-finish work item that waits on its wired deps, short-circuits on the first
     /// errored dep under the [`dep_error_frame`] label, else hands the resolved values to a
     /// value-only `finish`.
-    fn awaiting(finish: TerminalDepFinish<'run>) -> NodeWork<'run, KoanWorkload> {
-        NodeWork::new(short_circuit(Some(dep_error_frame()), finish))
+    fn awaiting(
+        finish: impl for<'view, 'd> FnOnce(
+            &DecideCtx<'_, 'run, 'view>,
+            &[DepTerminal<'d>],
+        ) -> Outcome<'run>
+        + 'run,
+    ) -> NodeWork<'run, KoanWorkload> {
+        NodeWork::new(NodeContinuation::new(
+            None,
+            erase_boxed(gated(Some(dep_error_frame()), finish)),
+        ))
     }
 
     /// Ambient-chain submission for any `NodeWork`; with no slot step installed the node is placed
@@ -1312,7 +1322,11 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         sub_work: &[NodeId],
         scope: &'run Scope<'run>,
-        finish: TerminalDepFinish<'run>,
+        finish: impl for<'view, 'd> FnOnce(
+            &DecideCtx<'_, 'run, 'view>,
+            &[DepTerminal<'d>],
+        ) -> Outcome<'run>
+        + 'run,
         index: usize,
     ) -> NodeId {
         self.add(Self::awaiting(finish), sub_work, scope, index)

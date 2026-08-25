@@ -29,8 +29,8 @@ pub use harness::KoanRuntime;
 pub(crate) use interpret::seed_run_root;
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
 pub(in crate::machine::execute) use outcome::{
-    CatchFinish, ContinuationFamily, TerminalDepFinish, WitnessedDepFinish, catch_continuation,
-    ignore_results, seal_witnessed, short_circuit,
+    ContinuationCall, ContinuationFamily, NodeContinuation, decide_only, erase_boxed, erase_bumped,
+    gated, sealed_done,
 };
 pub use producer_id::ProducerId;
 pub(crate) use producer_id::{deps_on, extend_deps_on};

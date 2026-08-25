@@ -532,7 +532,6 @@ digraph {
     "koan::machine::execute::decide" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::execute::decide" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::machine::execute::harness" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
@@ -542,7 +541,6 @@ digraph {
     "koan::machine::execute::decide::apply_callable" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::apply_callable" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::apply_callable" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::execute::decide::apply_callable" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::decide::apply_callable" -> "koan::machine::execute::decide" [label="uses", style="dashed"];
     "koan::machine::execute::decide::apply_callable" -> "koan::machine::execute::decide::constructors" [label="uses", style="dashed"];
     "koan::machine::execute::decide::apply_callable" -> "koan::machine::execute::decide::ctx" [label="uses", style="dashed"];
@@ -589,7 +587,6 @@ digraph {
     "koan::machine::execute::decide::field_list" -> "koan::machine::execute::decide::ctx" [label="uses", style="dashed"];
     "koan::machine::execute::decide::field_list" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::decide::field_list" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::execute::decide::fn_value" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::fn_value" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::fn_value" -> "koan::machine::execute::decide" [label="uses", style="dashed"];
     "koan::machine::execute::decide::fn_value" -> "koan::machine::execute::decide::apply_callable" [label="uses", style="dashed"];
@@ -598,20 +595,18 @@ digraph {
     "koan::machine::execute::decide::head_deferred" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::head_deferred" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::head_deferred" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::execute::decide::head_deferred" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::decide::head_deferred" -> "koan::machine::execute::decide" [label="uses", style="dashed"];
     "koan::machine::execute::decide::head_deferred" -> "koan::machine::execute::decide::apply_callable" [label="uses", style="dashed"];
     "koan::machine::execute::decide::head_deferred" -> "koan::machine::execute::decide::ctx" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::head_deferred" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::decide::head_deferred" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::decide::head_deferred" -> "koan::source" [label="uses", style="dashed"];
-    "koan::machine::execute::decide::keyworded" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::keyworded" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::keyworded" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::decide::keyworded" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::decide::keyworded" -> "koan::machine::execute::decide" [label="uses", style="dashed"];
     "koan::machine::execute::decide::keyworded" -> "koan::machine::execute::decide::ctx" [label="uses", style="dashed"];
     "koan::machine::execute::decide::keyworded" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
-    "koan::machine::execute::decide::keyworded" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
     "koan::machine::execute::decide::keyworded" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::decide::keyworded" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::decide::keyworded" -> "koan::source" [label="uses", style="dashed"];
@@ -630,9 +625,9 @@ digraph {
     "koan::machine::execute::decide::operator_chain" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::operator_chain" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::operator_chain" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::execute::decide::operator_chain" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::decide::operator_chain" -> "koan::machine::execute::decide" [label="uses", style="dashed"];
     "koan::machine::execute::decide::operator_chain" -> "koan::machine::execute::decide::ctx" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::operator_chain" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::decide::operator_chain" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::decide::operator_chain" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::execute::decide::operator_chain" -> "koan::source" [label="uses", style="dashed"];
@@ -657,6 +652,7 @@ digraph {
     "koan::machine::execute::decide::single_poll" -> "koan::machine::execute::decide::apply_callable" [label="uses", style="dashed"];
     "koan::machine::execute::decide::single_poll" -> "koan::machine::execute::decide::ctx" [label="uses", style="dashed"];
     "koan::machine::execute::decide::single_poll" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::single_poll" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::decide::single_poll" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::decide::single_poll" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::execute::decide::submit" -> "koan" [label="uses", style="dashed"];
@@ -680,8 +676,8 @@ digraph {
     "koan::machine::execute::harness" -> "koan::machine::execute::finalize" [label="uses", style="dashed"];
     "koan::machine::execute::harness" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::harness" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
-    "koan::machine::execute::harness" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
     "koan::machine::execute::harness" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
+    "koan::machine::execute::harness" -> "koan::machine::execute::step_carried" [label="uses", style="dashed"];
     "koan::machine::execute::harness" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::interpret" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::execute::interpret" -> "koan::machine" [label="uses", style="dashed"];

@@ -73,7 +73,7 @@ impl<'run> Host<'run> {
         let (cart, framed) = self.ambient.submission_cart();
         let anchor = SlotFrame::new(cart, node_scope, chain.clone(), WorkLabel::of(&expr));
         let id = sched.alloc_node(
-            super::decide_tail(expr, None),
+            super::decide_tail(expr, None, Some(scope.brand())),
             &[],
             std::rc::Rc::clone(&anchor),
             framed,

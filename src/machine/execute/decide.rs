@@ -7,6 +7,7 @@
 //! Every per-shape handler decides against a read-only [`DecideCtx`] and returns an [`Outcome`]
 //! that the harness ([`super::harness`]) applies, so no shape module mutates the scheduler.
 
+use crate::machine::DeliveredCarried;
 use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::{
@@ -18,12 +19,12 @@ use crate::machine::{KError, KErrorKind, NodeId};
 use crate::source::Spanned;
 
 use super::harness::KoanWorkload;
-use super::ignore_results;
 use super::nodes::{NodeWork, WorkLabel};
-use super::obligation::{ReturnObligation, with_obligation};
+use super::obligation::ReturnObligation;
 pub(in crate::machine::execute) use super::outcome::StepDeps;
 use super::outcome::{
-    ParkDeps, TerminalDepFinish, continue_inline, dep_error_frame, tail_continue,
+    DepTerminal, NodeContinuation, ParkDeps, catching, continue_inline, decide_only,
+    dep_error_frame, erase_boxed, erase_bumped, tail_continue,
 };
 use crate::machine::model::RunRegistries;
 use crate::scheduler::{Dep, Deps};
@@ -217,28 +218,40 @@ pub(in crate::machine::execute) fn propagate_dep_error(
 /// Park the slot on `sources` — the binder edges its names resolved to — and re-run its `resume`
 /// decide on wake. The park carries no deadlock sample of its own: it keeps the slot's anchor, so
 /// the [`WorkLabel`] minted at submission is what a stuck slot renders through.
-pub(in crate::machine::execute) fn park_resume<'step>(
+pub(in crate::machine::execute) fn park_resume<'step, F>(
     sources: Vec<ProducerId>,
-    scratch: BumpAllocator<'step>,
-    resume: ResumeFn<'step>,
-) -> Outcome<'step> {
-    park_resume_labelled(sources, None, scratch, resume)
+    view: &DecideCtx<'_, 'step, '_>,
+    resume: F,
+) -> Outcome<'step>
+where
+    F: for<'view> Fn(&DecideCtx<'_, 'step, 'view>, NodeId) -> Outcome<'step> + Copy + 'step,
+{
+    park_resume_labelled(sources, None, view, resume)
 }
 
 /// [`park_resume`] carrying an explicit dep-error frame, so an error the install surfaces when a
 /// source names an already-errored producer is framed at the park site rather than arriving bare.
-pub(in crate::machine::execute) fn park_resume_labelled<'step>(
+///
+/// A park keeps the slot's cart, so the resume closure is hosted in the region `view` already
+/// stands in — the bumped tier, with `Copy` captures and no heap.
+pub(in crate::machine::execute) fn park_resume_labelled<'step, F>(
     sources: Vec<ProducerId>,
     dep_error_frame: Option<DeferredTraceFrame<'step>>,
-    scratch: BumpAllocator<'step>,
-    resume: ResumeFn<'step>,
-) -> Outcome<'step> {
+    view: &DecideCtx<'_, 'step, '_>,
+    resume: F,
+) -> Outcome<'step>
+where
+    F: for<'view> Fn(&DecideCtx<'_, 'step, 'view>, NodeId) -> Outcome<'step> + Copy + 'step,
+{
     Outcome::Park {
         deps: ParkDeps::List(Deps::from_producers_in(
             sources.iter().copied().map(ProducerId::scheduler_edge),
-            scratch,
+            view.scratch(),
         )),
-        continuation: Continuation::Resume { resume },
+        continuation: Continuation::Ready(erase_bumped(
+            view.current_scope().brand(),
+            decide_only(resume),
+        )),
         dep_error_frame,
     }
 }
@@ -261,7 +274,14 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
     inner: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let label = WorkLabel::of(&inner);
-    continue_inline(decide_tail(inner, view.current_obligation()), label)
+    continue_inline(
+        decide_tail(
+            inner,
+            view.current_obligation(),
+            Some(view.current_scope().brand()),
+        ),
+        label,
+    )
 }
 
 /// What a dispatch part walk produced — the splice / stage pass over a node's slots.
@@ -375,28 +395,29 @@ pub(super) fn stage_all_eager_parts<'step>(
     PartWalk::Respliced { expr, staged }
 }
 
-// ---------- Resume closure ----------
-
-/// A dispatch slot's decide — the `DecideCtx -> Outcome` closure a dispatch
-/// [`NodeWork`](super::nodes::NodeWork) runs. Boxing keeps the router blind to whether it holds a
-/// birth decide or a park's captured resume, so every park wakes through the drain's step
-/// uniformly.
-pub(in crate::machine::execute) type ResumeFn<'step> =
-    Box<dyn for<'view> FnOnce(&DecideCtx<'_, 'step, 'view>, NodeId) -> Outcome<'step> + 'step>;
-
 // ---------- Cross-shape driver ----------
 
 /// Build a birth dispatch [`NodeWork`](super::nodes::NodeWork) for `expr`. A declared-return
-/// `obligation` re-deposits into the ambient slot-step state before classifying — the keep-first
-/// capture that carries the first caller's declared return down a tail chain. `None` inherits no
-/// obligation.
+/// `obligation` rides as data and re-deposits into the ambient slot-step state before the step
+/// classifies — the keep-first carriage of the first caller's declared return down a tail chain.
+/// `None` inherits no obligation.
+///
+/// `host` is the region of the frame this work installs under: `Some` erases the decide onto the
+/// bumped tier (its only capture is the `Copy` working expression), `None` erases it owning, for a
+/// placement whose fresh cart is not yet reachable as a brand.
 pub(in crate::machine::execute) fn decide_tail<'step>(
     expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
+    host: Option<RegionBrand<'step>>,
 ) -> NodeWork<'step, KoanWorkload> {
     // A birth decide waits on no deps: it runs on first poll, classifies, and routes.
-    let continuation = ignore_results(Box::new(move |view, _id| classify_dispatch(view, expr)));
-    NodeWork::new(with_obligation(obligation, continuation))
+    let decide =
+        decide_only(move |view: &DecideCtx<'_, 'step, '_>, _id| classify_dispatch(view, expr));
+    let call = match host {
+        Some(host) => erase_bumped(host, decide),
+        None => erase_boxed(decide),
+    };
+    NodeWork::new(NodeContinuation::new(obligation, call))
 }
 
 /// Build a [`NodeWork`](super::nodes::NodeWork) that fails on its first poll with `error`. The node
@@ -405,10 +426,15 @@ pub(in crate::machine::execute) fn decide_tail<'step>(
 pub(in crate::machine::execute) fn decide_error<'step>(
     error: KError,
 ) -> NodeWork<'step, KoanWorkload> {
-    let continuation = ignore_results(Box::new(move |_view: &DecideCtx<'_, '_, '_>, _id| {
-        Outcome::Done(Err(error))
-    }));
-    NodeWork::new(continuation)
+    // Owning: the captured `KError` needs its drop glue, so this decide stays on the boxed tier.
+    NodeWork::new(NodeContinuation::new(
+        None,
+        erase_boxed(
+            move |_view: &DecideCtx<'_, '_, '_>,
+                  _results: &[Result<DepTerminal<'_>, KError>],
+                  _id: NodeId| Outcome::Done(Err(error)),
+        ),
+    ))
 }
 
 /// Classify a freshly-born dispatch expression's shape and route to the matching per-shape decide.
@@ -475,15 +501,18 @@ fn classify_dispatch<'step>(
 /// Project a builtin's [`AwaitContinue`] onto the terminal-finish delivery: assemble the wake-time
 /// [`FinishCtx`] and recurse `run_action` on the `Action` it returns. Shared by the two await
 /// currencies — the dep list and the block — which differ only in how their deps are named.
-fn wrap_await_continue<'step>(finish: AwaitContinue<'step>) -> TerminalDepFinish<'step> {
-    Box::new(move |view, results| {
+fn wrap_await_continue<'step>(
+    finish: AwaitContinue<'step>,
+) -> impl for<'view, 'd> FnOnce(&DecideCtx<'_, 'step, 'view>, &[DepTerminal<'d>]) -> Outcome<'step> + 'step
+{
+    move |view: &DecideCtx<'_, 'step, '_>, results: &[DepTerminal<'_>]| {
         let fctx = FinishCtx {
             scope: view.current_scope(),
             ctx: view.step_ctx(),
             registries: view.registries(),
         };
         run_action(view, finish(&fctx, results))
-    })
+    }
 }
 
 /// Lower an [`Action`] into the [`Outcome`] currency, issuing no graph write of its own: an await
@@ -548,7 +577,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 !matches!(frame_placement, FramePlacement::FreshTail { .. }),
                 "a leading-carrying tail is a FreshChild frame, an Inherit cart, or an overlay"
             );
-            let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
+            let finish = move |view: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
                 let contract = match contract {
                     TailContract::Eager(contract) => contract,
                     // The return-type expression is the last leading statement, so its resolved
@@ -596,7 +625,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     block_entry,
                     body_index,
                 )
-            });
+            };
             Await::on_block(BlockRequest::Body {
                 statements: leading,
                 placement,
@@ -634,19 +663,21 @@ pub(in crate::machine::execute) fn run_action<'step>(
         ActionKind::Catch { watched, finish } => {
             // `watched` is realized (and owned) at apply time — an `InScope` watched enters a
             // fresh single-statement block, distinct from a dep-finish body's fan-out.
-            let wrapped: super::CatchFinish<'step> = Box::new(move |view, result| {
-                let fctx = FinishCtx {
-                    scope: view.current_scope(),
-                    ctx: view.step_ctx(),
-                    registries: view.registries(),
-                };
-                run_action(view, finish(&fctx, result))
-            });
+            let wrapped = catching(
+                move |view: &DecideCtx<'_, 'step, '_>, result: Result<DeliveredCarried, KError>| {
+                    let fctx = FinishCtx {
+                        scope: view.current_scope(),
+                        ctx: view.step_ctx(),
+                        registries: view.registries(),
+                    };
+                    run_action(view, finish(&fctx, result))
+                },
+            );
             Outcome::Park {
                 deps: ParkDeps::List(Deps::new_in(view.scratch())),
                 continuation: Continuation::Catch {
                     watched,
-                    finish: wrapped,
+                    finish: erase_boxed(wrapped),
                 },
                 dep_error_frame: None,
             }

@@ -26,7 +26,7 @@ use crate::machine::{KError, KErrorKind, ProducerId};
 use crate::scheduler::Deps;
 use crate::source::{Span, Spanned};
 
-use super::super::TerminalDepFinish;
+use super::super::outcome::DepTerminal;
 use super::ctx::DecideCtx;
 use super::{
     Await, DeferredTraceFrame, DepPlacement, DepRequest, Outcome, become_dispatch,
@@ -342,7 +342,7 @@ fn install_pairwise_fold<'step>(
             placement: DepPlacement::OwnScope,
         })
         .collect();
-    let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
+    let finish = move |ctx: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
         // Resting a shared middle operand's cell into both adjacent pairs is the splice that makes
         // evaluation once-only; the region's union bundle absorbs the repeated coverage, so a
         // middle operand costs one retention however many pairs read it.
@@ -387,7 +387,7 @@ fn install_pairwise_fold<'step>(
             }
         };
         become_dispatch(ctx, acc)
-    });
+    };
     Await::on(Deps::from_requests_in(deps, ctx.scratch()))
         .error_frame(dep_error_frame)
         .finish_terminal(finish)
@@ -452,8 +452,8 @@ fn park_on_pending_operators<'step, 'b>(
     park_resume_labelled(
         to_wait,
         Some(frame),
-        ctx.scratch(),
-        Box::new(move |ctx, _id| run(ctx, ctx.current_scope(), &parked_expr)),
+        ctx,
+        move |ctx: &DecideCtx<'_, 'step, '_>, _id| run(ctx, ctx.current_scope(), &parked_expr),
     )
 }
 

@@ -90,6 +90,7 @@ own — the `unsafe` they exercise is this primitive).
 - `sealed_extern_open_externally_witnessed`
 - `sealed_pinned_open_consumes_non_copy`
 - `sealed_pinned_open_invokes_a_fat_pointer_continuation`
+- `sealed_pinned_open_calls_a_bumped_continuation_by_reference`
 - `sealed_pinned_opens_beside_a_zipped_extern_operand`
 - `seal_option_none_opens_to_none`
 

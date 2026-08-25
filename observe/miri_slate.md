@@ -407,22 +407,27 @@ the `frameset_*` / `pins_region_walks_outer_chain` unit tests in
 
 **`ContinuationFamily` continuation erasure** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs))
 — the continuation generalizes the contract discipline from a `ReturnContract` enum to the whole
-`NodeContinuation` (`Box<dyn FnOnce>`). It is koan's only carrier family on the **owned tier**: a
-boxed `FnOnce` owns its captures, so the family takes the `droppable` `reattachable!` arm (no
-`DropFree`) and rests as `SealedPinned<ContinuationFamily, Rc<SlotFrame>>`, sealed against the slot's
-anchor at the scheduler's install door and opened once per step by that tier's single consuming verb.
-Both directions route the shared `retype`: `erase` forgets the captured `'run` for storage on a
+`NodeContinuation`: the slot's obligation as `Copy` data beside a two-tier `ContinuationCall`, whose
+arms are a `&dyn Fn` bumped into the frame region the work installs under and an owning
+`Box<dyn FnOnce>`. It is koan's only carrier family on the **owned tier**: the boxed arm owns its
+captures, so the whole family takes the `droppable` `reattachable!` arm (no `DropFree`) and rests as
+`SealedPinned<ContinuationFamily, Rc<SlotFrame>>`, sealed against the slot's anchor at the
+scheduler's install door and opened once per step by that tier's single consuming verb. Both
+directions route the shared `retype`: `erase` forgets the captured `'run` for storage on a
 lifetime-free node, and `open` recovers a step brand `'b` witnessed by the seal's own bundled anchor
-`Rc` (which pins the captures' home — the run region or a strict ancestor of the cart). The
-distinguishing layouts — the retype over a **fat pointer** (data + vtable), consumed by value and
-invoked inside the brand, and the drop of a parked slot that was never opened — are pinned
-library-side (`sealed_extern_open_invokes_a_fat_pointer_continuation`,
-`parked_continuation_drops_under_its_own_pin`, and
-`parked_continuation_opens_and_runs_after_its_handles_drop` in the workgraph slate). The open call
-site in
+`Rc` (which pins both tiers' home — the run region or a strict ancestor of the cart). The
+distinguishing layouts are pinned library-side: the retype over an **owned fat pointer** (data +
+vtable), consumed by value and invoked inside the brand
+(`sealed_pinned_open_invokes_a_fat_pointer_continuation`); the retype over a **borrowed** fat
+pointer inside an enum, whose referent is region memory the seal's pin holds and which is *called
+through the reference* inside the brand
+(`sealed_pinned_open_calls_a_bumped_continuation_by_reference`); and the drop of a parked slot that
+was never opened (`parked_continuation_drops_under_its_own_pin`,
+`parked_continuation_opens_and_runs_after_its_handles_drop`) — all in the workgraph slate. The open
+call site in
 [src/machine/execute/harness.rs](../src/machine/execute/harness.rs) (`Host::step`) runs the same
-transmute end-to-end every step, exercised by every scheduler-driving slate test. No separate
-minimal test here.
+transmute end-to-end every step, on whichever tier the slot stored, exercised by every
+scheduler-driving slate test. No separate minimal test here.
 
 The run-loop step-tail open (`Host::step`, opening the sealed continuation and the active-scope
 operand together at one generative brand) and the doctest fixture markers backing the
@@ -566,9 +571,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-25: 651s — 23 tests, 0 leaks, 0 UB
 - 2026-08-24: 1259s — 23 tests, 0 leaks, 0 UB
 - 2026-08-21: 1022s — 23 tests, 0 leaks, 0 UB
 - 2026-08-21: 1041s — 23 tests, 0 leaks, 0 UB
 - 2026-08-20: 722s — 22 tests, 0 leaks, 0 UB
-- 2026-08-20: 877s — 22 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

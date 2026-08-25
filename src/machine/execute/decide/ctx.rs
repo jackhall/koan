@@ -206,14 +206,14 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
     }
 
     /// Deposit the slot's declared-return obligation into the ambient slot-step state — the reach
-    /// the [`with_obligation`](super::super::obligation::with_obligation) wrapper closure runs to
-    /// carry the checker down the tail chain.
+    /// the step runs on its stored continuation's `obligation` field, carrying the checker down the
+    /// tail chain.
     pub(in crate::machine::execute) fn deposit_obligation(&self, obligation: ReturnObligation) {
         self.ambient.deposit_obligation(obligation)
     }
 
     /// Read the chain's established obligation without removing it — keep-first and park
-    /// propagation copy it to wrap the replacement continuation, and `enter_user_fn` asks
+    /// propagation copy it onto the replacement continuation, and `enter_user_fn` asks
     /// `.is_some()` of it to detect a tail call within an established chain.
     pub(in crate::machine::execute) fn current_obligation(&self) -> Option<ReturnObligation> {
         self.ambient.current_obligation()

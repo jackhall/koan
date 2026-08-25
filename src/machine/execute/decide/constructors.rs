@@ -22,8 +22,8 @@ use crate::witnessed::{
     BumpAllocator, BumpVec, Delivered, RegionHandle, RegionHandleFamily, reattachable,
 };
 
+use super::super::StepCarried;
 use super::super::outcome::DepTerminal;
-use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
 use crate::machine::model::RunRegistries;
@@ -376,9 +376,9 @@ fn launch<'step>(
             placement: DepPlacement::OwnScope,
         })
         .collect();
-    let combine_finish: WitnessedDepFinish<'step> = Box::new(move |view, terminals| {
+    let combine_finish = move |view: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
         finish_witnessed(view, &kind, terminals).map(StepCarried::born_delivered)
-    });
+    };
     Await::on(Deps::from_requests_in(deps, scratch)).finish_witnessed(combine_finish)
 }
 
