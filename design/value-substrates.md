@@ -60,9 +60,12 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
 - `Dict(&'a DictSubstrate<'a>, KType)` — a hash table frozen at construction, its
   buckets in the region's own bump.
 - `Record(&'a RecordSubstrate<'a>, KType)` — the field cells in the region, stored
-  sorted by field [symbol](label-interning.md). The door verbs take the field pairs
-  as a `&[(Symbol, Held<'a>)]` slice and bump their working buffers in the
-  destination region, so a record value carries no heap container of its own.
+  sorted by field [symbol](label-interning.md). The door verbs take the field pairs as a
+  slice and bump their working buffers in the destination region, so a record value carries
+  no heap container of its own. The substrate's own index is bare `Symbol`s: a construction
+  door that also mints the memoized field-*type* record takes classified
+  `&[(BinderSymbol, Held<'a>)]` pairs and drops to `key.symbol()` for the cells, while
+  `record_rehomed`, which relocates cells already laid out, stays bare-`Symbol` throughout.
 - `Tagged { value: &'a PayloadSubstrate<'a>, .. }` — the single-cell payload
   substrate in the arena.
 - `Wrapped { inner: &'a PayloadSubstrate<'a>, .. }` — the same one-cell payload

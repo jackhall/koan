@@ -48,15 +48,19 @@ composition the registry already uses for child type digests.
 
 ## Residency: owned records only at the intern boundary
 
-`Record<V>` — the ordered, identifier-keyed map behind struct schemas and function
-parameter lists — keys by `Symbol` and is backed by a plain `Vec<(Symbol, V)>` in
-insertion order. Lookup is a linear symbol compare (cheaper than hashing at record
-sizes), equality is order-blind, and hashing is the order-blind commutative fold.
-One heap allocation per record, no index table.
+`Record<V>` — the ordered, name-keyed map behind struct schemas and function
+parameter lists — keys by [`BinderSymbol`](#classified-label-vocabulary) and is backed by a
+plain `Vec<(BinderSymbol, V)>` in insertion order, so a field name carries the class its own
+declaration classified it into rather than dropping it at the intern boundary. Identity is
+the key's `Symbol` bits alone: equality, hashing and the type digest read `key.symbol()` and
+never the variant tag, so carrying the class widens nothing about what makes two records the
+same. Lookup is a linear symbol compare (cheaper than hashing at record sizes), equality is
+order-blind, and hashing is the order-blind commutative fold. One heap allocation per record,
+no index table.
 
 Owned `Record`s exist **only where content outlives every region**: the type
 registry's nodes. Everywhere transient, the currency is a borrowed slice
-`&[(Symbol, V)]` bumped in whichever region naturally hosts it — a signature's
+`&[(BinderSymbol, V)]` bumped in whichever region naturally hosts it — a signature's
 parameter schema in the definition's region, a call's argument slots on the step
 scratch arena, a record literal's field pairs in the destination region's own
 construction storage. Minting a type node copies the slice into an owned `Record`
@@ -71,6 +75,13 @@ the finished substrate, so building a record of any width takes no heap containe
 The one owned `Record` the door mints is the per-field *type* record it hands to
 `TypeRegistry::record` to memoize the value's `ktype()` — the intern boundary
 again, not a per-value cost.
+
+The two halves of that door are where the currency **splits**. A value's cells are laid out
+against a bare `&[Symbol]` index — a cell lookup is a name probe, and a probe carries no class
+— while the memoized type record keeps the classified key the declaration or the literal's own
+token minted. So `KObject::record_of_held` takes classified pairs, keys the type record with
+them, and drops to `key.symbol()` for the substrate in one line; `record_rehomed`, which
+relocates cells already laid out, stays bare-`Symbol` throughout.
 
 The registry's nodes stay lifetime-free: region-bumped slices inside `TypeNode`
 would thread a run-region lifetime through `TypeRegistry`, `CallFrame`, and the
@@ -103,7 +114,7 @@ with the hash.
 ## Argument binding: the schema owns the keys
 
 A call never builds a name-keyed container. The signature builds its parameter
-schema **once, at definition**: `params`, a region-bumped `&[(Symbol, KType)]` in
+schema **once, at definition**: `params`, a region-bumped `&[(BinderSymbol, KType)]` in
 declaration order, beside `part_slots`, each parameter's index into the
 signature's element list. This schema is the same record the function's *type*
 carries — roles shared, not translated.
@@ -151,7 +162,9 @@ witnessed, not asserted. Nothing is minted on this path and insertion still requ
 classified key, so a wrong-class probe misses against a map that could never have held it —
 the same disposition a wrong-class `of` conversion gets. `WITH` is the canonical user: a
 pin arrives as a bare record-field symbol and recovers its `TypeSymbol` from the schema
-member table the SIG declaration keyed.
+member table the SIG declaration keyed. A field record is the other: `Record::get_key_value`
+answers a bare-symbol probe with the stored `BinderSymbol`, which is how `FROM` narrows a
+record type to the fields it names while keeping each key's declared class.
 
 Two text constructors, and the split is the interning rule stated above:
 
@@ -250,6 +263,15 @@ fixed at a source site. The builtin type vocabulary is fixed in source like the 
 `StaticName<TypeSymbol>`s beside the handle each lowers to, and that one table is what both root
 registration and `KType::from_symbol` read, so a builtin type name is matched by eleven symbol
 compares and never classified from text.
+
+A **caught error's field names** are fixed in source too, and they are the case where the group is
+value-class without being slots: `arg`, `expected`, `got`, `message`, `frames` and the rest of the
+error record's labels are `StaticName<ValueSymbol>`s held in one `ErrorFields` static beside the
+`KErrorKind` match that builds each shape ([kerror.rs](../src/machine/core/kerror.rs)). A handler
+reads `message` or `expr` off a caught error by name, so the label is an ordinary record key — but
+the spelling is the machine's, not a program's, so it classifies at its first read like any other
+Rust-source name and `record` hands `to_tagged` the symbol per error with no text classified and no
+`String` built.
 
 A name the machine *binds into a program's scope* is fixed in source the same way. `it` — the
 scrutinee binder every `MATCH` and `TRY` arm opens — is a `StaticName<ValueSymbol>` declared in
@@ -406,10 +428,15 @@ costs no more than one built from a borrowed name.
 
 Because the surface parts of an expression carry symbols rather than text,
 `summarize` — the surface rendering of a part, an expression or a trace frame —
-takes the run's interner, and so do the parse-side walkers that render a name
-back out of a part (`parse_pair_list`, the record-literal field-name read).
+takes the run's interner, and so do the parse-side walkers that quote a name in a
+diagnostic. A field or parameter list is the shape to read that against: `parse_pair_list` and
+`parse_type_tag_names` — the pair-list door and the variant-tag pre-scan
+([triple_list.rs](../src/parse/triple_list.rs)) — take the interner and hand each name on as the
+symbol its own token minted, rendering only inside the message a rejected or duplicated name
+raises. The name a declaration *keeps* is never rendered — text appears on the error path and the
+print path, nowhere else.
+
 
 ## Open work
 
-- [roadmap/reduce_allocs/symbol-keyed-field-lists.md](../roadmap/reduce_allocs/symbol-keyed-field-lists.md)
-  — record-literal keys, field lists and FN parameter names as symbols.
+None tracked.

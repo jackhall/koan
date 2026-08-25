@@ -6,7 +6,7 @@ open work. Part of the [`KType` reference](README.md).
 ## Record fields and `KType` hashing
 
 A record schema's fields are a [`Record<V>`](../../../src/machine/model/types/record.rs) —
-an ordered identifier-keyed map, generic over its value, so the type level stores
+an ordered name-keyed map, generic over its value, so the type level stores
 `Record<KType>` and a value level can later store `Record<KObject>`.
 A record-repr member's [`NodeSchema::NewType`](../../../src/machine/model/types/node.rs)
 holds the handle of an interned `Record` node (`TypeNode::Record { fields: Record<KType> }`);
@@ -27,12 +27,20 @@ declare is a non-match, while extra *slot* parameters the value doesn't declare
 are fine — they arrive unbound under call-by-name. `KType::join` reuses the
 record join for both arms.
 
-The shape has two defining properties:
+The shape has three defining properties:
 
-- **Keys are [`Symbol`s](../../label-interning.md), not text.** The backing is a plain
-  `Vec<(Symbol, V)>` — one allocation, no index table — so a lookup is a linear `u128`
+- **Keys are [`BinderSymbol`s](../../label-interning.md), not text.** The backing is a plain
+  `Vec<(BinderSymbol, V)>` — one allocation, no index table — so a lookup is a linear `u128`
   compare over a handful of fields and no field name is ever copied into a record.
-  Rendering resolves the text back through the run's label interner.
+  Rendering resolves the text back through the run's label interner. A key carries the
+  binding class its own declaration established (`x` a value token, `Elt` a Type token), so a
+  schema hands that class back past the intern boundary instead of erasing it — **identity
+  reads the key's symbol bits alone**: `PartialEq`, `Hash` and the type digest all go through
+  `key.symbol()` and never see the variant tag. Probe doors (`Record::get`,
+  `get_index_of`, `remove`) therefore take a bare `Symbol` — a reference is not a
+  declaration and has no class to assert — and `Record::get_key_value` is the recovery
+  door that hands a stored key back with its class, witnessed because insertion required a
+  classified key ([label-interning.md § Classified label vocabulary](../../label-interning.md#classified-label-vocabulary)).
 - **Insertion order is preserved** for rendering and positional construction
   (`Record::iter` walks declaration order), but **equality ignores it**:
   `(x :Number, y :Str)` and `(y :Str, x :Number)` are the same record. `PartialEq`

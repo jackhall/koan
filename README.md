@@ -154,7 +154,7 @@ src/
 │   ├── dict_literal.rs     DictFrame state machine for `{k: v}` parsing
 │   ├── frame.rs            Frame enum — per-paren-group parser sub-state
 │   ├── parse_stack.rs      ParseStack — Frame stack with invariant-preserving methods
-│   ├── triple_list.rs      helper for triple-list parsing
+│   ├── triple_list.rs      `<name> <slot>` pair lists: parse_pair_list (classified names + slots) and parse_type_tag_names (the variant-tag pre-scan)
 │   ├── tokens.rs           classify tokens, compound-operator desugaring
 │   └── operators.rs        operator registry
 ├── builtins.rs          register_builtin, unseeded_scopes(), seed_builtins()
@@ -208,7 +208,7 @@ src/
     │   │   ├── kkind.rs           KKind — the shallow dispatch *kind* of a type (the OfKind expectation)
     │   │   ├── node.rs            TypeNode — one interned type's content, the thing a KType handle names
     │   │   ├── registry.rs        TypeRegistry — the run-frame-owned interning graph and verdict cache
-    │   │   ├── record.rs          Record<V> — ordered Symbol-keyed map over a Vec<(Symbol, V)>, backing record-type schemas and FN parameter identity
+    │   │   ├── record.rs          Record<V> — ordered BinderSymbol-keyed map over a Vec<(BinderSymbol, V)>, identity on the key's symbol bits, backing record-type schemas and FN parameter identity
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
     │   │   ├── ktype_resolution.rs   builtin type-name elaboration (from_symbol, eleven symbol compares against builtin_names)
     │   │   ├── builtin_names.rs   the eleven builtin type names as StaticName<TypeSymbol>s, each beside the KType it lowers to
@@ -237,7 +237,7 @@ src/
     │   │   ├── claims.rs  Claim / ClaimStore — the scope's in-flight binder claims (by_name / by_bucket read paths, by_statement retirement run), sized at the block fan-out
     │   │   ├── ops.rs     WriteOp / TypeWritePolicy — a binding-table write as outcome data, and the single apply interpreter the run loop drives
     │   │   └── gate.rs    WriteGate — the zero-sized capability every table write verb requires, minted only inside crate::machine (run loop + unpublished-scope construction door)
-    │   ├── kerror.rs      KError, KErrorKind, TraceFrame — structured runtime errors
+    │   ├── kerror.rs      KError, KErrorKind, TraceFrame — structured runtime errors, with the caught record's field labels as one StaticName<ValueSymbol> group
     │   ├── scope.rs       Scope — lexical environment: the bump-resident struct, its allocators (alloc_run_root / alloc_child_under / … , bumped at 'a; alloc_child_transparent through the crossing born door) with their private constructors, and small accessors (children below)
     │   ├── scope/
     │   │   ├── resolve.rs     name-resolution ladders — value / type / operator-group lookup, walk_chain / resolve_builtin_first, visibility cutoff, builtin-shadow consults

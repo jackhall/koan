@@ -187,10 +187,11 @@ Every shape that *declares* a parameter or a field falls by a small constant, an
 term falls with it. A declaration used to render its names back out of the interner: an FN
 parameter was rendered twice — once by the scan that collects parameter names before any
 elaboration, once by the parameter-list parse itself — and a field list built a `String` per name
-to run its dedup on. Both are gone, so the drop is **2 per declared parameter** and it lands
+to run its dedup on. Both are gone, so the drop is **2 per declared FN parameter** and it lands
 wherever a shape's declarations sit: 2 on the tail loop's one-parameter step function and on the
 one-parameter call shapes, 16 on the eight-parameter ones, 10 and 42 across the scope-walk grid's
-5 and 21 declared parameters, 3 at the tagged shape's two-variant `UNION`. It is a *declaration*
+5 and 21 declared parameters. The tagged shape declares a field list rather than a parameter
+list — its two variant tags never carried the second render — and falls 3. It is a *declaration*
 cost, so the 8- and 40-repetition variants of a pair fall by the same amount and every
 differencing term above is untouched.
 
