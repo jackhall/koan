@@ -87,20 +87,20 @@ reads the allocations column; the symbol terms are quoted in the prose below.
 
 | shape | what it exercises | allocations | symbols | scaling term |
 |---|---|---|---|---|
-| `shapes/tail_loop.koan` | 100 tail-recursive steps | 11 945 | 398 | 92.0 per step, linear |
+| `shapes/tail_loop.koan` | 100 tail-recursive steps | 11 943 | 398 | 92.0 per step, linear |
 | `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 5 438 | 498 | ≈23 per dispatch, mildly superlinear |
-| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 363 | 433 | — |
-| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 4 960 | 497 | 49.9 per dispatch |
-| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 4 783 | 569 | — |
-| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 378 | 633 | 49.8 per dispatch |
+| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 353 | 433 | — |
+| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 4 950 | 497 | 49.9 per dispatch |
+| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 4 741 | 569 | — |
+| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 336 | 633 | 49.8 per dispatch |
 | `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 098 | 424 | — |
 | `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 168 | 616 | 64.7 per call |
-| `shapes/user_fn_params1_calls8.koan` | 8 one-parameter user-function calls | 2 929 | 391 | — |
-| `shapes/user_fn_params1_calls40.koan` | 40 one-parameter user-function calls | 4 104 | 423 | 36.7 per call |
-| `shapes/user_fn_params8_calls8.koan` | 8 eight-parameter user-function calls | 3 226 | 406 | — |
-| `shapes/user_fn_params8_calls40.koan` | 40 eight-parameter user-function calls | 5 231 | 438 | 62.7 per call, 3.70 per parameter |
-| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 3 413 | 480 | — |
-| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 6 380 | 832 | 92.7 per cycle |
+| `shapes/user_fn_params1_calls8.koan` | 8 one-parameter user-function calls | 2 927 | 391 | — |
+| `shapes/user_fn_params1_calls40.koan` | 40 one-parameter user-function calls | 4 102 | 423 | 36.7 per call |
+| `shapes/user_fn_params8_calls8.koan` | 8 eight-parameter user-function calls | 3 210 | 406 | — |
+| `shapes/user_fn_params8_calls40.koan` | 40 eight-parameter user-function calls | 5 215 | 438 | 62.7 per call, 3.70 per parameter |
+| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 3 410 | 476 | — |
+| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 6 377 | 828 | 92.7 per cycle |
 | *(empty program)* | interpreter startup and builtin seeding | 2 519 | 367 | — |
 
 No shape can use comments: koan has none, and `#` is reserved for quoting. The prose
@@ -183,6 +183,17 @@ the cache reads. What it saves grows with the node's part count — 1 for a thre
 15 parts, 14 for the chain's 255 — because a longer key crosses more arena chunk doublings on its
 way into the region.
 
+Every shape that *declares* a parameter or a field falls by a small constant, and no marginal
+term falls with it. A declaration used to render its names back out of the interner: an FN
+parameter was rendered twice — once by the scan that collects parameter names before any
+elaboration, once by the parameter-list parse itself — and a field list built a `String` per name
+to run its dedup on. Both are gone, so the drop is **2 per declared parameter** and it lands
+wherever a shape's declarations sit: 2 on the tail loop's one-parameter step function and on the
+one-parameter call shapes, 16 on the eight-parameter ones, 10 and 42 across the scope-walk grid's
+5 and 21 declared parameters, 3 at the tagged shape's two-variant `UNION`. It is a *declaration*
+cost, so the 8- and 40-repetition variants of a pair fall by the same amount and every
+differencing term above is untouched.
+
 Every other movement in this column is the seeding constant or a chunk crossing: the symbol work
 opens no new allocation site on a per-step, per-dispatch or per-call path. A crossing is
 still one more call to the allocator per repetition — what it is not is traffic a marginal path
@@ -226,6 +237,19 @@ shapes here that differ in how many overloads they declare. The depth-10 shapes 
 shadowing overloads than the depth-2 ones, and that difference is 136 mints where it was 152 — 16
 shed, two per extra overload, the same double hash as seeding's now taken once.
 
+The **tagged** shapes' figure falls 4, the only symbol movement here. A field list used to hand
+its names on as text: the list parse built a `String` per name, `typed_field_list` interned each
+one to key the schema, and the tag binder hashed the same text again to declare the member — two
+mints per declared name, after the parse that classified it had already minted one. The list now
+yields those parse-minted symbols, so the two-variant `UNION` at the head of the shape declares
+its tags without hashing anything, and the record type it keys carries each key's binding class
+instead of erasing it at the intern boundary. The user-function shapes do not move with it: an FN
+signature never re-hashed a parameter name, it rendered one — an allocation, not a mint — so what
+a parameter declaration sheds lands entirely in the column to the left. The one mint that path did
+make, one per parameter name in the return-surface scan, is on the branch where the surface
+arrives as an unresolved name; `-> Number` reaches the definition already lowered to a type, so no
+shape in this table walks it.
+
 The **operator chain** is read against the empty program rather than a differencing pair, and its
 131 is exact: 127 for the `+` tokens, one for `PRINT`, one for the chain's probe key, and 2 for the
 statics it first touches. The probe is the entry this shape records. An `OperatorChain` node keys
@@ -255,7 +279,7 @@ always wrote; what moves that column here is frame layout and overload count, ab
 ## The regression test
 
 `tests/allocation_baseline.rs` asserts the two absolute shapes' bracketed counts against a
-stated bound — 11 973 for the loop, 5 465 for the chain, carrying 37 and 36 allocations of
+stated bound — 11 971 for the loop, 5 465 for the chain, carrying 37 and 36 allocations of
 headroom — and each differencing pair's marginal count against its measurement plus 31: 2 101
 for the builtin call, 1 206 for the one-parameter user call, 861 for the seven-parameter slope,
 2 998 for the tagged construction.
