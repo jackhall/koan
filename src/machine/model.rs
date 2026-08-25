@@ -36,7 +36,6 @@ pub(crate) use ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass, ProgramExpression,
     WorkingExpression, WorkingPart, classify_dispatch_shape,
 };
-pub(crate) use binder::type_binder;
 pub use binder::{BindKind, BinderBucketFn, BinderNameFn, BinderSurface};
 pub(crate) use binder::{OpArity, op_declaration_arity};
 pub(crate) use binder::{StoredBinderKey, symbol_from_parts, symbol_from_quote_body};

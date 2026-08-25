@@ -14,7 +14,7 @@ use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
 use crate::machine::model::{
-    AnnouncedData, FieldNameKind, ValueSymbol, pair_list_names, type_binder,
+    AnnouncedData, BinderSymbol, FieldNameKind, ValueSymbol, pair_list_names,
 };
 use crate::machine::model::{KKind, SigSchema};
 use crate::machine::model::{Module, ModuleDraft};
@@ -103,11 +103,16 @@ pub(super) fn announce_type_members(
                     &registries.labels,
                 ) {
                     Ok(tags) => {
-                        let tags: Result<Vec<_>, _> = tags
-                            .iter()
-                            .map(|tag| type_binder(tag, registries))
+                        let tags: Vec<_> = tags
+                            .into_iter()
+                            .map(|tag| {
+                                let BinderSymbol::Type(tag) = tag else {
+                                    unreachable!("FieldNameKind::Type admits only Type tokens")
+                                };
+                                tag
+                            })
                             .collect();
-                        announced.announce_binder(binder, tags?);
+                        announced.announce_binder(binder, tags);
                     }
                     Err(_) => continue,
                 }

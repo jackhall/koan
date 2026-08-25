@@ -3,28 +3,23 @@
 use crate::machine::ProducerId;
 use crate::machine::model::KType;
 use crate::machine::model::{Argument, SignatureElement};
-use crate::machine::model::{BinderSymbol, RunRegistries};
+use crate::machine::model::{BinderSymbol, RunRegistries, Symbol};
 use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface
 /// `Unbound` against a parameter name.
-pub(crate) fn collect_param_names_from_signature(
-    signature: &KExpression<'_>,
-    registries: &RunRegistries,
-) -> Vec<String> {
+pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) -> Vec<Symbol> {
     let parts = &signature.parts;
-    let mut names: Vec<String> = Vec::new();
+    let mut names: Vec<Symbol> = Vec::new();
     let mut i = 0;
     while i < parts.len() {
-        let param_name: Option<String> = match parts[i].value {
-            ExpressionPart::Identifier(v) => {
-                Some(crate::machine::model::render_label(v.symbol(), registries))
-            }
-            ExpressionPart::Type(t) => {
-                Some(crate::machine::model::render_label(t.symbol(), registries))
-            }
+        // The scan compares against reference leaves, which probe by bare symbol bits, so a
+        // parameter's name rides as the symbol its own token minted.
+        let param_name: Option<Symbol> = match parts[i].value {
+            ExpressionPart::Identifier(v) => Some(v.symbol()),
+            ExpressionPart::Type(t) => Some(t.symbol()),
             _ => None,
         };
         if let Some(name) = param_name {
@@ -81,8 +76,6 @@ pub(crate) fn parse_fn_param_list<'a>(
     resolved: Option<&[(usize, KType)]>,
 ) -> ParamListOutcome<'a> {
     let parts = signature.parts;
-    // A parameter name is syntactic, so it classifies and interns to a `BinderSymbol` here —
-    // including the one synthesized name (a bare-leaf `Type` part in parameter-name position).
     // Keyword tokens keep riding as `&'a str`; the mint door re-homes those at the function's own
     // region.
     let mut elements: Vec<SignatureElement> = Vec::with_capacity(parts.len());
@@ -96,15 +89,9 @@ pub(crate) fn parse_fn_param_list<'a>(
         // Each part's class *is* the binder's class: the lexer tags an `Identifier` only for a
         // token that classifies as neither keyword nor Type, and a `Type` part only for one that
         // classifies as a Type token — so each part hands over its own already-minted symbol.
-        let param_name: Option<(String, BinderSymbol)> = match parts[i].value {
-            ExpressionPart::Identifier(v) => Some((
-                crate::machine::model::render_label(v.symbol(), registries),
-                BinderSymbol::Value(v),
-            )),
-            ExpressionPart::Type(t) => Some((
-                crate::machine::model::render_label(t.symbol(), registries),
-                BinderSymbol::Type(t),
-            )),
+        let param_name: Option<BinderSymbol> = match parts[i].value {
+            ExpressionPart::Identifier(v) => Some(BinderSymbol::Value(v)),
+            ExpressionPart::Type(t) => Some(BinderSymbol::Type(t)),
             _ => None,
         };
         match (param_name, parts[i].value) {
@@ -112,7 +99,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                 elements.push(SignatureElement::Keyword(kw));
                 i += 1;
             }
-            (Some((name, symbol)), _) => {
+            (Some(symbol), _) => {
                 let slot_idx = i + 1;
                 let ty = parts.get(slot_idx).map(|p| p.value);
                 let feed = resolved.and_then(|r| {
@@ -132,8 +119,13 @@ pub(crate) fn parse_fn_param_list<'a>(
                                 awaited.extend(producers);
                             }
                             TypeResolution::Unbound(msg) if first_err.is_none() => {
-                                first_err =
-                                    Some(format!("{msg} in FN signature for parameter `{name}`"));
+                                first_err = Some(format!(
+                                    "{msg} in FN signature for parameter `{}`",
+                                    crate::machine::model::render_label(
+                                        symbol.symbol(),
+                                        registries
+                                    ),
+                                ));
                             }
                             TypeResolution::Unbound(_) => {}
                         }
@@ -183,6 +175,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                         i += 2;
                     }
                     _ => {
+                        let name = crate::machine::model::render_label(symbol.symbol(), registries);
                         return ParamListOutcome::Err(format!(
                             "FN signature parameter `{name}` requires a `:<Type>` annotation \
                              (e.g. `{name} :Number`)",

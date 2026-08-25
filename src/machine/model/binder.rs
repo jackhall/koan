@@ -28,21 +28,6 @@ pub enum BindKind {
     Type,
 }
 
-/// Classify a declaration's binder name into the **type** channel and record it for rendering, or
-/// the `ShapeError` naming the partition it crosses. This is the text→symbol declaration seam: past
-/// it every table key carries its own class, so a value/type crossing is unrepresentable rather
-/// than something a write door probes for.
-pub fn type_binder(
-    name: &str,
-    registries: &crate::machine::model::RunRegistries,
-) -> Result<crate::machine::model::TypeSymbol, KError> {
-    crate::machine::model::TypeSymbol::declared(name, &registries.labels).ok_or_else(|| {
-        KError::new(KErrorKind::ShapeError(
-            crate::machine::model::wrong_binder_class(name, BindKind::Type),
-        ))
-    })
-}
-
 /// Structural name extractor for a binder builtin. Returning `Some(name)` names the placeholder a
 /// forward reference parks on while the binder's body is in flight. Both channels' names are `Copy`
 /// symbols the parser minted when it classified the token, so the read allocates nothing and the

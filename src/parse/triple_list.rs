@@ -7,7 +7,7 @@
 //! supplied by a `parse_slot` closure.
 
 use crate::machine::model::ast::{FieldSlot, Part};
-use crate::machine::model::labels::LabelInterner;
+use crate::machine::model::labels::{BinderSymbol, LabelInterner};
 use crate::source::Spanned;
 
 /// Which token shapes are accepted as a field/parameter *name* by [`parse_pair_list`].
@@ -15,8 +15,8 @@ use crate::source::Spanned;
 /// STRUCT / record fields are lowercase user identifiers, so they require `Identifier`.
 /// FN parameters may be capitalized (`Ty`, `Er`) when they name a type or a
 /// signature value, which lexes as a `Type` token, so they opt into `IdentifierOrType`. UNION variant tags *are*
-/// types (`Some`, `Ok`) and so require `Type` — a lowercase tag is rejected. In every
-/// type-token case the name string is resolved through the run's label interner.
+/// types (`Some`, `Ok`) and so require `Type` — a lowercase tag is rejected. Each admitted
+/// token hands over the symbol its own parse minted, so the name carries its class already.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FieldNameKind {
     Identifier,
@@ -35,26 +35,26 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
     context: &str,
     name_kind: FieldNameKind,
     labels: &LabelInterner,
-    mut parse_slot: impl FnMut(&P, &str) -> Result<T, String>,
-) -> Result<Vec<(String, T)>, String> {
+    mut parse_slot: impl FnMut(&P, BinderSymbol) -> Result<T, String>,
+) -> Result<Vec<(BinderSymbol, T)>, String> {
     if !parts.len().is_multiple_of(2) {
         return Err(format!(
             "{context} must be `<name> <slot>` pairs; got {} parts (not a multiple of 2)",
             parts.len(),
         ));
     }
-    let mut out: Vec<(String, T)> = Vec::with_capacity(parts.len() / 2);
+    let mut out: Vec<(BinderSymbol, T)> = Vec::with_capacity(parts.len() / 2);
     let mut i = 0;
     while i < parts.len() {
         let name = match (parts[i].value.field_slot(), name_kind) {
             (FieldSlot::Name(v), FieldNameKind::Identifier | FieldNameKind::IdentifierOrType) => {
-                labels.render(v.symbol())
+                BinderSymbol::Value(v)
             }
             // Capitalized names (`Ty`, `Er` params; `Some`, `Ok` variant tags) lex as
             // `Type` tokens; admitted under `IdentifierOrType` (FN) and `Type`
             // (UNION tags), never for STRUCT / record fields.
             (FieldSlot::Type(t), FieldNameKind::IdentifierOrType | FieldNameKind::Type) => {
-                labels.render(t.symbol())
+                BinderSymbol::Type(t)
             }
             // A lowercase tag under the `Type` policy — tags must be capitalized type names.
             (_, FieldNameKind::Type) => {
@@ -70,10 +70,13 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
                 ));
             }
         };
-        if out.iter().any(|(n, _)| n == &name) {
-            return Err(format!("duplicate name `{}` in {context}", name));
+        if out.iter().any(|(n, _)| *n == name) {
+            return Err(format!(
+                "duplicate name `{}` in {context}",
+                labels.render(name.symbol()),
+            ));
         }
-        let slot = parse_slot(&parts[i + 1].value, &name)?;
+        let slot = parse_slot(&parts[i + 1].value, name)?;
         out.push((name, slot));
         i += 2;
     }
@@ -121,7 +124,13 @@ mod tests {
             },
         )
         .expect("Type-token name accepted under IdentifierOrType");
-        assert_eq!(out, vec![("Ty".to_string(), "Signature".to_string())]);
+        assert_eq!(
+            out,
+            vec![(
+                BinderSymbol::Type(declared("Ty", &labels)),
+                "Signature".to_string()
+            )]
+        );
     }
 
     #[test]

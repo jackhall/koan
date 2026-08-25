@@ -14,7 +14,7 @@ use crate::machine::model::Symbol;
 use crate::machine::model::ast::{
     ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart,
 };
-use crate::machine::model::labels::{LabelInterner, TypeSymbol};
+use crate::machine::model::labels::{BinderSymbol, LabelInterner, TypeSymbol};
 use crate::machine::model::values::Carried;
 pub use crate::parse::FieldNameKind;
 use crate::parse::parse_pair_list;
@@ -178,9 +178,10 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
             // elaborated field on the way out, so the arms below share one verdict — the
             // `KType::ANY` placeholders a `Pending` walk yields are proper and pass, and the
             // re-walk checks the resolved type they stand for.
+            let rendered = || registries.labels.render(name.symbol());
             let checked = |kt: KType| match super::sig_schema::unsaturated_constructor_message(
                 kt,
-                &format!("the type of {context_member} `{name}`"),
+                &format!("the type of {context_member} `{}`", rendered()),
                 registries,
             ) {
                 Some(message) => Err(message),
@@ -196,7 +197,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                         Ok(KType::ANY)
                     }
                     TypeResolution::Unbound(msg) => {
-                        Err(format!("{msg} in {context_list} for `{}`", name))
+                        Err(format!("{msg} in {context_list} for `{}`", rendered()))
                     }
                 },
                 // A co-declared sibling `rewrite_threaded_self_refs` already sealed in. The cell is a
@@ -211,7 +212,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                             Carried::Type(kt) => checked(kt),
                             other => Err(format!(
                                 "{context_list} type for `{}` resolved to non-type value `{}`",
-                                name,
+                                rendered(),
                                 other.summarize(registries),
                             )),
                         })
@@ -224,7 +225,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                         Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => {
                             Err(format!(
                                 "{context_list} type for `{}` resolved to non-type value `{}`",
-                                name,
+                                rendered(),
                                 other.summarize(registries),
                             ))
                         }
@@ -294,7 +295,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                         Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => {
                             Err(format!(
                                 "{context_list} type for `{}` resolved to non-type value `{}`",
-                                name,
+                                rendered(),
                                 other.summarize(registries),
                             ))
                         }
@@ -343,7 +344,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                 }
                 FieldSlot::Name(_) | FieldSlot::Other => Err(format!(
                     "{context_list} type for `{}` must be a type name token, got {}",
-                    name,
+                    rendered(),
                     Part::summarize(part, &registries.labels)
                 )),
             }
@@ -358,12 +359,10 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     sub_dispatches,
                 }
             } else {
-                // The one intern site for field labels: every name here is syntactic, and the
-                // interner records the text so rendering can resolve it back.
                 FieldListOutcome::Done(
                     fields
                         .into_iter()
-                        .map(|(name, kt)| (registries.labels.intern(&name), kt))
+                        .map(|(name, kt)| (name.symbol(), kt))
                         .collect(),
                 )
             }
@@ -498,11 +497,7 @@ pub fn pair_list_names(
     context: &'static str,
     name_kind: FieldNameKind,
     labels: &LabelInterner,
-) -> Result<Vec<String>, String> {
-    parse_pair_list(expr.parts, context, name_kind, labels, |_, _| Ok(())).map(|pairs| {
-        pairs
-            .into_iter()
-            .map(|(name, ())| name)
-            .collect::<Vec<String>>()
-    })
+) -> Result<Vec<BinderSymbol>, String> {
+    parse_pair_list(expr.parts, context, name_kind, labels, |_, _| Ok(()))
+        .map(|pairs| pairs.into_iter().map(|(name, ())| name).collect())
 }

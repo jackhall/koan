@@ -9,20 +9,20 @@
 use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{ExpressionPart, KExpression, Symbol};
 
-pub(super) fn type_expr_references_any(te: TypeSymbol, param_names: &[String]) -> bool {
+pub(super) fn type_expr_references_any(te: TypeSymbol, param_names: &[Symbol]) -> bool {
     // A parameter name is a reference, not a declaration, so it probes by bare symbol bits.
-    param_names.iter().any(|n| Symbol::of(n) == te.symbol())
+    param_names.contains(&te.symbol())
 }
 
-pub(super) fn kexpression_references_any(expr: &KExpression<'_>, param_names: &[String]) -> bool {
+pub(super) fn kexpression_references_any(expr: &KExpression<'_>, param_names: &[Symbol]) -> bool {
     expr.parts
         .iter()
         .any(|p| part_references_any(p.value, param_names))
 }
 
-fn part_references_any(part: ExpressionPart<'_>, param_names: &[String]) -> bool {
+fn part_references_any(part: ExpressionPart<'_>, param_names: &[Symbol]) -> bool {
     match part {
-        ExpressionPart::Identifier(v) => param_names.iter().any(|n| Symbol::of(n) == v.symbol()),
+        ExpressionPart::Identifier(v) => param_names.contains(&v.symbol()),
         ExpressionPart::Type(t) => type_expr_references_any(t, param_names),
         ExpressionPart::Expression(inner) => kexpression_references_any(&inner, param_names),
         ExpressionPart::SigiledTypeExpr(inner) => kexpression_references_any(&inner, param_names),

@@ -12,7 +12,7 @@ use crate::machine::{StepCarried, seal_type_identity};
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{Symbol, TypeSymbol, type_binder};
+use crate::machine::model::{BinderSymbol, Symbol, TypeSymbol};
 use crate::machine::model::{display_label, render_label};
 
 // This builtin's slot spellings, minted once and read back by symbol.
@@ -122,15 +122,18 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         Ok(tags) => tags,
         Err(message) => return Action::done(Err(KError::new(KErrorKind::ShapeError(message)))),
     };
-    // The tags classify and intern here, at the declaration that mints them, so the window, the
-    // sealed member nodes and every later diagnostic share one classified currency. The binder's
-    // own token the parser already minted.
+    // Every tag is the symbol its own `Type` token minted, so the window, the sealed member nodes
+    // and every later diagnostic share one classified currency with no re-derivation.
     let binder = name;
-    let tags: Vec<TypeSymbol> = crate::try_action!(
-        tags.iter()
-            .map(|tag| type_binder(tag, ctx.registries))
-            .collect::<Result<Vec<_>, _>>()
-    );
+    let tags: Vec<TypeSymbol> = tags
+        .into_iter()
+        .map(|tag| {
+            let BinderSymbol::Type(tag) = tag else {
+                unreachable!("FieldNameKind::Type admits only Type tokens")
+            };
+            tag
+        })
+        .collect();
     // The window this union's variants fill: the enclosing module body's, when it announced this
     // binder, else one this declaration owns — the one-binder special case of the same machinery.
     let window = match ctx.scope.own_declaration_window() {

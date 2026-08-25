@@ -9,7 +9,7 @@ use crate::machine::model::KExpression;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{DeferredReturn, ReturnType};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, Symbol};
 use crate::machine::{KError, KErrorKind, Scope};
 use std::rc::Rc;
 
@@ -88,7 +88,7 @@ pub(crate) fn extract_type_slot_raw<'a>(
 /// slot no parameter can reference (`OP`'s operand / return), which never classifies `Deferred`.
 pub(crate) fn classify_return_type<'a>(
     raw: ReturnTypeRaw<'a>,
-    param_names: &[String],
+    param_names: &[Symbol],
     scope: &Scope<'a>,
     chain: Option<Rc<LexicalFrame>>,
     label: &str,
