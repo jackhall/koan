@@ -30,7 +30,7 @@ pub(crate) use interpret::seed_run_root;
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
 pub(in crate::machine::execute) use outcome::{
     ContinuationCall, ContinuationFamily, NodeContinuation, decide_only, erase_boxed, erase_bumped,
-    gated, sealed_done,
+    gated_once,
 };
 pub use producer_id::ProducerId;
 pub(crate) use producer_id::{deps_on, extend_deps_on};
@@ -41,4 +41,4 @@ pub(crate) use test_support::edge_delivered;
 pub(crate) use decide::DispatchOutcome;
 #[cfg(test)]
 pub(crate) use decide::Resolution;
-pub(crate) use decide::{BrandCompose, FieldListDeferral, build_type_operand, seal_type_identity};
+pub(crate) use decide::{FieldListDeferral, build_type_operand, seal_type_identity};

@@ -380,22 +380,51 @@ impl<'step> Await<'step> {
     }
 
     /// Seal the envelope over a witnessed finish, applying the [`sealed_done`] projection here, at
-    /// construction.
-    pub(in crate::machine::execute) fn finish_witnessed<F>(self, finish: F) -> Outcome<'step>
+    /// construction. `host` is the region of the frame the park keeps — the slot's own cart — and
+    /// hosts both the erased closure and every list capture inside it.
+    pub(in crate::machine::execute) fn finish_witnessed<F>(
+        self,
+        host: RegionBrand<'step>,
+        finish: F,
+    ) -> Outcome<'step>
     where
-        F: for<'view, 'd> FnOnce(
+        F: for<'view, 'd> Fn(
                 &DecideCtx<'_, 'step, 'view>,
                 &[DepTerminal<'d>],
             ) -> Result<StepCarried<'step>, KError>
+            + Copy
             + 'step,
     {
-        self.finish_terminal(sealed_done(finish))
+        self.finish_terminal(host, sealed_done(finish))
     }
 
     /// Seal the envelope over a terminal finish: compose the dep-error gate around it and erase
-    /// once. The gate's frame is baked in here *and* kept on the park, which the apply's
-    /// install-and-inspect path reads to label an already-errored producer.
-    pub(in crate::machine::execute) fn finish_terminal<F>(self, finish: F) -> Outcome<'step>
+    /// once, onto the bumped tier in `host`. The gate's frame is baked in here *and* kept on the
+    /// park, which the apply's install-and-inspect path reads to label an already-errored producer.
+    pub(in crate::machine::execute) fn finish_terminal<F>(
+        self,
+        host: RegionBrand<'step>,
+        finish: F,
+    ) -> Outcome<'step>
+    where
+        F: for<'view, 'd> Fn(&DecideCtx<'_, 'step, 'view>, &[DepTerminal<'d>]) -> Outcome<'step>
+            + Copy
+            + 'step,
+    {
+        Outcome::Park {
+            deps: self.deps,
+            continuation: Continuation::Ready(erase_bumped(
+                host,
+                gated(self.dep_error_frame, finish),
+            )),
+            dep_error_frame: self.dep_error_frame,
+        }
+    }
+
+    /// [`Self::finish_terminal`]'s owning twin, for the finishes that stay on the boxed tier: a
+    /// builtin `Action`'s lowering and the leading-statements block frame, whose captures own drop
+    /// glue.
+    pub(in crate::machine::execute) fn finish_terminal_boxed<F>(self, finish: F) -> Outcome<'step>
     where
         F: for<'view, 'd> FnOnce(
                 &DecideCtx<'_, 'step, 'view>,
@@ -405,7 +434,10 @@ impl<'step> Await<'step> {
     {
         Outcome::Park {
             deps: self.deps,
-            continuation: Continuation::Ready(erase_boxed(gated(self.dep_error_frame, finish))),
+            continuation: Continuation::Ready(erase_boxed(gated_once(
+                self.dep_error_frame,
+                finish,
+            ))),
             dep_error_frame: self.dep_error_frame,
         }
     }
@@ -542,6 +574,35 @@ fn all_or_first_error<'s, 'd>(
 pub(in crate::machine::execute) fn gated<'step, F>(
     dep_error_frame: Option<DeferredTraceFrame<'step>>,
     finish: F,
+) -> impl for<'view, 'd> Fn(
+    &DecideCtx<'_, 'step, 'view>,
+    &[Result<DepTerminal<'d>, KError>],
+    NodeId,
+) -> Outcome<'step>
++ Copy
++ 'step
+where
+    F: for<'view, 'd> Fn(&DecideCtx<'_, 'step, 'view>, &[DepTerminal<'d>]) -> Outcome<'step>
+        + Copy
+        + 'step,
+{
+    move |view: &DecideCtx<'_, 'step, '_>,
+          results: &[Result<DepTerminal<'_>, KError>],
+          _id: NodeId| {
+        let terminals =
+            match all_or_first_error(view.scratch(), results, dep_error_frame, view.registries()) {
+                Ok(terminals) => terminals,
+                Err(e) => return Outcome::Done(Err(e)),
+            };
+        finish(view, &terminals)
+    }
+}
+
+/// [`gated`]'s one-shot twin for the boxed tier: same delivery loop over a finish that consumes its
+/// owned captures.
+pub(in crate::machine::execute) fn gated_once<'step, F>(
+    dep_error_frame: Option<DeferredTraceFrame<'step>>,
+    finish: F,
 ) -> impl for<'view, 'd> FnOnce(
     &DecideCtx<'_, 'step, 'view>,
     &[Result<DepTerminal<'d>, KError>],
@@ -570,12 +631,15 @@ where
 /// non-scalar dict key) short-circuits to [`Outcome::Done`].
 pub(in crate::machine::execute) fn sealed_done<'step, F>(
     finish: F,
-) -> impl for<'view, 'd> FnOnce(&DecideCtx<'_, 'step, 'view>, &[DepTerminal<'d>]) -> Outcome<'step> + 'step
+) -> impl for<'view, 'd> Fn(&DecideCtx<'_, 'step, 'view>, &[DepTerminal<'d>]) -> Outcome<'step>
++ Copy
++ 'step
 where
-    F: for<'view, 'd> FnOnce(
+    F: for<'view, 'd> Fn(
             &DecideCtx<'_, 'step, 'view>,
             &[DepTerminal<'d>],
         ) -> Result<StepCarried<'step>, KError>
+        + Copy
         + 'step,
 {
     move |view: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| match finish(

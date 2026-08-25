@@ -32,7 +32,11 @@ use crate::scheduler::Deps;
 
 /// Which construction shape the resolved value subs feed. The carried `KType` is the sealed
 /// member's own handle, stamped onto the produced `KObject` as its identity.
-pub(in crate::machine::execute) enum CtorKind {
+///
+/// Every variant is `Copy`, and the one list capture is a host-region slice, so the whole kind
+/// rides the bumped tier inside the launch's finish.
+#[derive(Clone, Copy)]
+pub(in crate::machine::execute) enum CtorKind<'step> {
     /// NewType construction (record-repr or scalar) from a single positional value, checked
     /// against the member's `repr`.
     NewType { identity: KType },
@@ -40,10 +44,13 @@ pub(in crate::machine::execute) enum CtorKind {
     /// 2}`), with one value cell per field.
     RecordNewType {
         identity: KType,
-        field_names: Vec<BinderSymbol>,
+        field_names: &'step [BinderSymbol],
     },
+    /// Tagged-union construction against a sealed `member`. `expected` is the tag's declared
+    /// payload type, resolved from the variant schema at the construction site — so an unknown tag
+    /// errors before the value expression evaluates, and the schema never crosses the park.
     Tagged {
-        schema: Rc<TypeMemberMap>,
+        expected: KType,
         member: KType,
         tag: TypeSymbol,
     },
@@ -197,8 +204,11 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
     record_fields: &[(BinderSymbol, ExpressionPart<'step>)],
     scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
-    // The literal's field labels carry the symbols the parser minted for them.
-    let field_names: Vec<BinderSymbol> = record_fields.iter().map(|(name, _)| *name).collect();
+    // The literal's field labels carry the symbols the parser minted for them. The run crosses the
+    // park inside the finish, so it lands in the host frame region.
+    let field_names: &'step [BinderSymbol] = brand
+        .allocator()
+        .slice_from_iter(record_fields.iter().map(|(name, _)| *name));
     let value_parts: Vec<ValueCell<'step>> = record_fields
         .iter()
         .map(|(_, p)| ValueCell::Part(*p))
@@ -317,7 +327,7 @@ pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
 pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
     brand: RegionBrand<'step>,
     member: KType,
-    schema: Rc<TypeMemberMap>,
+    schema: &TypeMemberMap,
     args_parts: &[Spanned<ExpressionPart<'step>>],
     registries: &RunRegistries,
     scratch: BumpAllocator<'step>,
@@ -326,15 +336,42 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
         Ok(v) => v,
         Err(e) => return Outcome::Done(Err(e)),
     };
-    construct_tagged(brand, member, schema, tag, value_part, scratch)
+    let expected = match expected_payload(schema, tag, registries) {
+        Ok(t) => t,
+        Err(e) => return Outcome::Done(Err(e)),
+    };
+    construct_tagged(brand, member, expected, tag, value_part, scratch)
 }
 
-/// Construct a tagged value from an already-split `(tag, value)` pair. The finish type-checks the
-/// value against `schema[tag]` and builds `KObject::Tagged { tag, value, identity: member }`.
+/// The tag's declared payload type, or the unknown-tag error naming every variant the schema
+/// declares. Both sides are classified symbols, so the lookup is a bits compare; the probed tag
+/// interned at the construction site and the known keys at their declarations, so the miss renders
+/// every name it prints.
+pub(in crate::machine::execute) fn expected_payload(
+    schema: &TypeMemberMap,
+    tag: TypeSymbol,
+    registries: &RunRegistries,
+) -> Result<KType, KError> {
+    schema.get(&tag).copied().ok_or_else(|| {
+        let known: Vec<String> = schema
+            .keys()
+            .map(|key| render_label(key.symbol(), registries))
+            .collect();
+        KError::new(KErrorKind::ShapeError(format!(
+            "tag `{}` not in union (known: {})",
+            render_label(tag.symbol(), registries),
+            known.join(", ")
+        )))
+    })
+}
+
+/// Construct a tagged value from an already-split `(tag, value)` pair whose payload type the caller
+/// resolved. The finish type-checks the value against `expected` and builds `KObject::Tagged { tag,
+/// value, identity: member }`.
 pub(in crate::machine::execute) fn construct_tagged<'step>(
     brand: RegionBrand<'step>,
     member: KType,
-    schema: Rc<TypeMemberMap>,
+    expected: KType,
     tag: TypeSymbol,
     value_part: ExpressionPart<'step>,
     scratch: BumpAllocator<'step>,
@@ -343,7 +380,7 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
         brand,
         vec![ValueCell::Part(value_part)],
         CtorKind::Tagged {
-            schema,
+            expected,
             member,
             tag,
         },
@@ -357,7 +394,7 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
 fn launch<'step>(
     brand: RegionBrand<'step>,
     value_parts: Vec<ValueCell<'step>>,
-    kind: CtorKind,
+    kind: CtorKind<'step>,
     scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
     debug_assert!(
@@ -377,9 +414,9 @@ fn launch<'step>(
         })
         .collect();
     let combine_finish = move |view: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
-        finish_witnessed(view, &kind, terminals).map(StepCarried::born_delivered)
+        finish_witnessed(view, kind, terminals).map(StepCarried::born_delivered)
     };
-    Await::on(Deps::from_requests_in(deps, scratch)).finish_witnessed(combine_finish)
+    Await::on(Deps::from_requests_in(deps, scratch)).finish_witnessed(brand, combine_finish)
 }
 
 /// Build the construction operand carrying `(dest brand, nominal identity)` across the build brand.
@@ -409,7 +446,7 @@ pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: KType) -> S
 /// infallible.
 fn finish_witnessed<'step>(
     view: &DecideCtx<'_, 'step, '_>,
-    kind: &CtorKind,
+    kind: CtorKind<'step>,
     terminals: &[DepTerminal<'_>],
 ) -> Result<DeliveredCarried, KError> {
     match kind {
@@ -419,9 +456,9 @@ fn finish_witnessed<'step>(
             // the brand is the proof; only the `collapse` verdict escapes the guard's borrow.
             let collapse = {
                 let opened = terminals[0].cell.open_at();
-                check_newtype_repr(*identity, opened.value().object(), view.registries())?
+                check_newtype_repr(identity, opened.value().object(), view.registries())?
             };
-            let home = build_type_operand(view.dest_frame(), *identity);
+            let home = build_type_operand(view.dest_frame(), identity);
             // The wrap keeps the value verbatim, so a payload substrate that stays foreign rides as
             // the payload cell's own stored run; the term's coverage is the holder-rule proof for
             // reading it. `transfer_into` and `.coverage()` need an owned envelope, so the term's
@@ -460,7 +497,7 @@ fn finish_witnessed<'step>(
                 .copied()
                 .zip(opened.iter().map(|o| o.value().object().deep_clone()))
                 .collect();
-            check_record_newtype_repr(*identity, &probe, view.registries())?;
+            check_record_newtype_repr(identity, &probe, view.registries())?;
             drop(opened);
             // The whole field run relocates in one act against a bare destination handle over the
             // dest frame's region (mirroring `literal`'s `AggBuildFamily`), so every field's reach
@@ -496,7 +533,7 @@ fn finish_witnessed<'step>(
                     ((dest_handle, slice), slice)
                 },
             );
-            let home = build_type_operand(Rc::clone(&dest_frame), *identity);
+            let home = build_type_operand(Rc::clone(&dest_frame), identity);
             let types = view.types();
             // The value born at this door is the record, whose stored run spans every field, so
             // its holder is the union across the run — the relocated envelope's coverage. No
@@ -530,25 +567,11 @@ fn finish_witnessed<'step>(
             Ok(product)
         }
         CtorKind::Tagged {
-            schema,
+            expected,
             member,
             tag,
         } => {
             debug_assert_eq!(terminals.len(), 1);
-            // Both sides are classified symbols, so the lookup is a bits compare. The probed tag
-            // interned at the construction site and the known keys at their declarations, so the
-            // miss renders every name it prints.
-            let expected = schema.get(tag).ok_or_else(|| {
-                let known: Vec<String> = schema
-                    .keys()
-                    .map(|key| render_label(key.symbol(), view.registries()))
-                    .collect();
-                KError::new(KErrorKind::ShapeError(format!(
-                    "tag `{}` not in union (known: {})",
-                    render_label(tag.symbol(), view.registries()),
-                    known.join(", ")
-                )))
-            })?;
             // The schema check reads the payload at the term's resident brand — a pin-free read;
             // only the verdict (and, on mismatch, an owned rendered name) escapes the guard's
             // borrow.
@@ -567,8 +590,7 @@ fn finish_witnessed<'step>(
                     }));
                 }
             }
-            let home = build_type_operand(view.dest_frame(), *member);
-            let tag = *tag;
+            let home = build_type_operand(view.dest_frame(), member);
             // The tag keeps the value verbatim — see the `NewType` arm's holder.
             let delivered = view.current_scope().lift_spliced(&terminals[0].cell);
             let holder = delivered.coverage().clone();
@@ -591,10 +613,10 @@ fn finish_witnessed<'step>(
         }
         CtorKind::ApplyConstructor { constructor } => {
             debug_assert_eq!(terminals.len(), 1);
-            let identity: KType = *constructor;
+            let identity: KType = constructor;
             // An identity wrapper takes exactly one type parameter; its name keys the applied
             // arg in the built `ConstructorApply`.
-            let param_name = match view.types().node(*constructor) {
+            let param_name = match view.types().node(constructor) {
                 TypeNode::SetMember {
                     schema: NodeSchema::TypeConstructor { param_names, .. },
                     ..

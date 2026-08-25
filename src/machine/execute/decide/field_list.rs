@@ -10,8 +10,9 @@
 //! `(name, KType)` pairs:
 //!
 //! - [`FieldListDeferral::outcome`] (the record-type sigil) and [`FieldListDeferral::action_composed`]
-//!   (the FN carrier) compose through a [`BrandCompose`] closure, which assembles one owned `KType`
-//!   and allocates it into the consumer's own region;
+//!   (the FN carrier) compose through a caller-supplied closure, which assembles one owned `KType`
+//!   and allocates it into the consumer's own region — folded in generically, so `outcome`'s finish
+//!   crosses the park as one `Copy` closure on the bumped tier;
 //! - [`FieldListDeferral::action`] (the UNION schema and the NEWTYPE record repr) hands the pairs to a
 //!   caller-supplied [`FieldListFinalizeAction`], which seals them through the declaration window into
 //!   interned member handles and crosses the nominal identity through
@@ -20,9 +21,9 @@
 use std::rc::Rc;
 
 use crate::machine::ProducerId;
+use crate::machine::core::LexicalFrame;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::core::{DepPlacement, FinishCtx};
-use crate::machine::core::{LexicalFrame, StepAllocator};
 use crate::machine::model::Carried;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{
@@ -32,7 +33,7 @@ use crate::machine::model::{
 use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, Scope, TraceFrame};
 use crate::scheduler::{Dep, Deps};
-use crate::witnessed::BumpAllocator;
+use crate::witnessed::BumpVec;
 
 use super::super::StepCarried;
 use super::super::outcome::DepTerminal;
@@ -41,14 +42,6 @@ use super::SubDispatch;
 use super::ctx::DecideCtx;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{BinderSymbol, TypeSymbol};
-
-/// Composes the final `KType` from the elaborated pairs, plus whatever owned type content the
-/// caller closed over (e.g. the FN return type). The composed value is allocated into the
-/// consumer's own region through the single type door.
-pub(crate) type BrandCompose<'step> = Box<
-    dyn for<'r> FnOnce(Vec<(BinderSymbol, KType)>, &'r RunRegistries) -> Result<KType, KError>
-        + 'step,
->;
 
 /// `Action`-path finalize, returning a witnessed carrier beside the binding writes the declarator
 /// decided; the pair lifts straight into
@@ -77,61 +70,79 @@ struct FieldListRewalk<'step> {
 }
 
 impl<'step> FieldListRewalk<'step> {
-    /// `'f` is independent of `'step`: the walk reads a fed value only to extract its `KType` or
-    /// render it into an error string, so the feed may arrive at the short borrow of a dep
-    /// envelope's open guard, while the output pairs are owned `KType`s. `ResultFeed` is always
-    /// installed — a `Done`-shaped walk never pops it, and a popped-dry feed hits the loud "fewer
-    /// resolved sub-dispatches" error inside the walker.
+    /// The owned-bundle door onto [`rewalk_fields`], for the `Action` paths that carry threaded
+    /// names, a declaration window, and an error frame.
     fn run<'f>(
         &self,
         scope: &Scope<'step>,
         feed: &[Carried<'f>],
         registries: &RunRegistries,
     ) -> Result<Vec<(BinderSymbol, KType)>, KError> {
-        let mut result_feed = ResultFeed::new(feed);
-        let mut elaborator = Elaborator::new(scope)
-            .with_threaded(self.threaded.iter().copied())
-            .with_chain(self.chain.clone());
-        if let Some(window) = self.window.as_ref() {
-            elaborator = elaborator.with_window(window.view());
-        }
-        match parse_typed_field_list_via_elaborator(
+        rewalk_fields(
+            scope,
             self.parts,
             self.context,
             self.name_kind,
-            &mut elaborator,
-            Some(&mut result_feed),
+            self.threaded.iter().copied(),
+            self.window.as_ref(),
+            self.chain.clone(),
+            self.error_frame.clone(),
+            feed,
             registries,
-        ) {
-            FieldListOutcome::Done(fields) => Ok(fields),
-            FieldListOutcome::Err(msg) => {
-                let error = KError::new(KErrorKind::ShapeError(msg));
-                Err(match self.error_frame.clone() {
-                    Some(frame) => error.with_frame(frame),
-                    None => error,
-                })
-            }
-            FieldListOutcome::Pending { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
-                "{}: forward type reference still unresolved after dep-finish wake",
-                self.context.list
-            )))),
-        }
+        )
     }
 }
 
-/// `feed` is the sub-Dispatch tail of the dep terminals in DFS order — the forward-ref deps are
-/// notify-only waits, so they never reach the walk. Every field type the walk produces is
-/// owned data, so the composed type embeds no borrow of a producer region.
-fn compose_field_list<'step, 'f>(
-    step_ctx: &StepAllocator<'step>,
-    scope: &'step Scope<'step>,
-    rewalk: FieldListRewalk<'step>,
+/// Re-walk a parked field list against the resolved sub-Dispatch feed, in the elaborator state the
+/// first walk ran under. Every parameter the deferral bundles is explicit here, so the bumped
+/// `outcome` finish reaches the walk carrying only the `Copy` state its path actually uses.
+///
+/// `'f` is independent of `'step`: the walk reads a fed value only to extract its `KType` or render
+/// it into an error string, so the feed may arrive at the short borrow of a dep envelope's open
+/// guard, while the output pairs are owned `KType`s. `ResultFeed` is always installed — a
+/// `Done`-shaped walk never pops it, and a popped-dry feed hits the loud "fewer resolved
+/// sub-dispatches" error inside the walker.
+#[allow(clippy::too_many_arguments)]
+fn rewalk_fields<'step, 'f>(
+    scope: &Scope<'step>,
+    parts: FieldParts<'step>,
+    context: FieldListContext,
+    name_kind: FieldNameKind,
+    threaded: impl IntoIterator<Item = TypeSymbol>,
+    window: Option<&DeclWindow<'step>>,
+    chain: Option<Rc<LexicalFrame>>,
+    error_frame: Option<TraceFrame>,
     feed: &[Carried<'f>],
-    compose: BrandCompose<'step>,
     registries: &RunRegistries,
-) -> Result<StepCarried<'step>, KError> {
-    let fields = rewalk.run(scope, feed, registries)?;
-    Ok(step_ctx.type_carried(compose(fields, registries)?))
+) -> Result<Vec<(BinderSymbol, KType)>, KError> {
+    let mut result_feed = ResultFeed::new(feed);
+    let mut elaborator = Elaborator::new(scope)
+        .with_threaded(threaded)
+        .with_chain(chain);
+    if let Some(window) = window {
+        elaborator = elaborator.with_window(window.view());
+    }
+    match parse_typed_field_list_via_elaborator(
+        parts,
+        context,
+        name_kind,
+        &mut elaborator,
+        Some(&mut result_feed),
+        registries,
+    ) {
+        FieldListOutcome::Done(fields) => Ok(fields),
+        FieldListOutcome::Err(msg) => {
+            let error = KError::new(KErrorKind::ShapeError(msg));
+            Err(match error_frame {
+                Some(frame) => error.with_frame(frame),
+                None => error,
+            })
+        }
+        FieldListOutcome::Pending { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
+            "{}: forward type reference still unresolved after dep-finish wake",
+            context.list
+        )))),
+    }
 }
 
 /// One field-list deferral, ready to finish into either dispatch currency. Holds the forward-ref
@@ -231,36 +242,66 @@ impl<'a> FieldListDeferral<'a> {
     /// Finish into the scheduler currency: an [`Outcome::Park`] whose dep-finish re-walks
     /// the field list once every dep resolves, then composes the pairs
     /// through `compose`. A pure decide, no write.
-    pub(in crate::machine::execute) fn outcome(
+    ///
+    /// The record-type sigil is this path's only caller, and it threads no self-reference, opens no
+    /// declaration window and attaches no error frame — so the finish carries only `Copy` walk state
+    /// and `compose`, and crosses the park bumped in the slot's own cart. The lexical chain is
+    /// re-derived at wake rather than captured: the park keeps the slot's anchor, whose payload the
+    /// step re-installs, so `view.active_chain()` is the very chain the decide walked under.
+    pub(in crate::machine::execute) fn outcome<C>(
         self,
-        compose: BrandCompose<'a>,
-        scratch: BumpAllocator<'a>,
-    ) -> Outcome<'a> {
+        view: &DecideCtx<'_, 'a, '_>,
+        compose: C,
+    ) -> Outcome<'a>
+    where
+        C: for<'r> Fn(Vec<(BinderSymbol, KType)>, &'r RunRegistries) -> Result<KType, KError>
+            + Copy
+            + 'a,
+    {
         let (rewalk, deps, first_sub) = self.into_parts();
+        debug_assert!(
+            rewalk.threaded.is_empty() && rewalk.window.is_none() && rewalk.error_frame.is_none(),
+            "the record-type sigil is `outcome`'s only path and carries none of the declaration state",
+        );
+        let FieldListRewalk {
+            parts,
+            context,
+            name_kind,
+            ..
+        } = rewalk;
         let finish = move |view: &DecideCtx<'_, 'a, '_>, terminals: &[DepTerminal<'_>]| {
             // The sub-Dispatch tail feeds the walk; the deps ahead of it are notify-only waits on a
             // forward reference. The opens stay bound across the walk, so every value is read at one
-            // common brand, and each field type is cloned out as owned data — no operand fold.
-            let opened: Vec<_> = terminals[first_sub..]
-                .iter()
-                .map(|t| t.cell.open_at())
-                .collect();
-            let owned: Vec<Carried<'_>> = opened.iter().map(|o| o.value()).collect();
-            match compose_field_list(
-                &view.step_ctx(),
+            // common brand, and each field type is cloned out as owned data — no operand fold. Both
+            // buffers die inside this wake step, so they ride the step scratch arena.
+            let scratch = view.scratch();
+            let mut opened = BumpVec::with_capacity_in(terminals.len() - first_sub, scratch);
+            opened.extend(terminals[first_sub..].iter().map(|t| t.cell.open_at()));
+            let mut owned: BumpVec<'_, Carried<'_>> =
+                BumpVec::with_capacity_in(opened.len(), scratch);
+            owned.extend(opened.iter().map(|o| o.value()));
+            let sealed = rewalk_fields(
                 view.current_scope(),
-                rewalk,
+                parts,
+                context,
+                name_kind,
+                [],
+                None,
+                view.active_chain(),
+                None,
                 &owned,
-                compose,
                 view.registries(),
-            ) {
-                Ok(sealed) => Outcome::Done(Ok(sealed)),
-                Err(e) => Outcome::Done(Err(e)),
-            }
+            )
+            .and_then(|fields| {
+                Ok(view
+                    .step_ctx()
+                    .type_carried(compose(fields, view.registries())?))
+            });
+            Outcome::Done(sealed)
         };
         // Lower each sub-Dispatch request into the library dep currency `Await::on` consumes; the
         // entries the deferral already named pass through, keeping the tail index above valid.
-        let mut lowered: StepDeps<'a> = Deps::with_capacity_in(deps.len(), scratch);
+        let mut lowered: StepDeps<'a> = Deps::with_capacity_in(deps.len(), view.scratch());
         for entry in deps.into_entries() {
             match entry {
                 Dep::Producer(source) => lowered.on(source),
@@ -271,7 +312,7 @@ impl<'a> FieldListDeferral<'a> {
         }
         Await::on(lowered)
             .error_frame(dep_error_frame())
-            .finish_terminal(finish)
+            .finish_terminal(view.current_scope().brand(), finish)
     }
 
     /// Finish into the `Action` currency: an [`ActionKind::AwaitDeps`](crate::machine::core::ActionKind)
@@ -301,11 +342,15 @@ impl<'a> FieldListDeferral<'a> {
         Action::await_deps(deps, finish)
     }
 
-    /// Finish into the `Action` currency through a [`BrandCompose`], adapting `compose` into a
+    /// Finish into the `Action` currency through a composer, adapting `compose` into a
     /// [`FieldListFinalizeAction`] that carries the composed `KType` through the finish's allocator.
     pub(crate) fn action_composed(
         self,
-        compose: BrandCompose<'a>,
+        compose: impl for<'r> FnOnce(
+            Vec<(BinderSymbol, KType)>,
+            &'r RunRegistries,
+        ) -> Result<KType, KError>
+        + 'a,
     ) -> crate::machine::core::Action<'a> {
         self.action(Box::new(move |fctx, _window, fields| {
             // A composed structural type declares no binder, so it writes nothing.
@@ -324,9 +369,8 @@ impl<'a> FieldListDeferral<'a> {
 pub(crate) fn elaborate_record_value<'step, 'view>(
     view: &DecideCtx<'_, 'step, 'view>,
     fields: FieldParts<'step>,
-    chain: Option<Rc<LexicalFrame>>,
 ) -> Outcome<'step> {
-    let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());
+    let mut elaborator = Elaborator::new(view.current_scope()).with_chain(view.active_chain());
     match parse_typed_field_list_via_elaborator(
         fields,
         FieldListContext::RECORD_TYPE,
@@ -350,10 +394,8 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
             FieldListContext::RECORD_TYPE,
             FieldNameKind::Identifier,
         )
-        .with_chain(chain)
-        .outcome(
-            Box::new(|pairs, registries| Ok(registries.types.record(Record::from_pairs(pairs)))),
-            view.scratch(),
-        ),
+        .outcome(view, |pairs, registries| {
+            Ok(registries.types.record(Record::from_pairs(pairs)))
+        }),
     }
 }

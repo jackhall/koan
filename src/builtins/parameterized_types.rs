@@ -20,10 +20,10 @@ use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
+use crate::machine::FieldListDeferral;
 use crate::machine::model::BinderSymbol;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{StaticName, ValueSymbol};
-use crate::machine::{BrandCompose, FieldListDeferral};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { applied, ctor, elem, k, ret, sig, v } }
@@ -134,8 +134,14 @@ mod action_bodies {
 /// The composer [`build_carrier`]'s deferred arm hands to the field-list deferral. The return type
 /// is owned data, so it rides the closure directly and pairs with the re-walked parameter list to
 /// finish the `KFunction`.
-fn ret_compose<'a>(ret: KType) -> BrandCompose<'a> {
-    Box::new(move |fields, registries| Ok(finalize_carrier(fields, ret, &registries.types)))
+fn ret_compose<'a>(
+    ret: KType,
+) -> impl for<'r> FnOnce(
+    Vec<(BinderSymbol, KType)>,
+    &'r RunRegistries,
+) -> Result<KType, crate::machine::KError>
++ 'a {
+    move |fields, registries| Ok(finalize_carrier(fields, ret, &registries.types))
 }
 
 /// Walk the parameter list through the shared field-list parser (the same one UNION / NEWTYPE use),

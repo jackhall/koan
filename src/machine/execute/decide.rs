@@ -29,7 +29,7 @@ use super::outcome::{
 };
 use crate::machine::model::RunRegistries;
 use crate::scheduler::{Dep, Deps};
-use crate::witnessed::BumpAllocator;
+use crate::witnessed::{BumpAllocator, BumpVec};
 
 pub(in crate::machine::execute) use crate::machine::core::{
     BodyPlacement, DepPlacement, DepRequest, SubDispatch,
@@ -60,7 +60,7 @@ pub(in crate::machine::execute) use super::outcome::{
 };
 pub(crate) use constructors::{build_type_operand, seal_type_identity};
 pub(in crate::machine::execute) use ctx::{DecideCtx, with_node_scope};
-pub(crate) use field_list::{BrandCompose, FieldListDeferral};
+pub(crate) use field_list::FieldListDeferral;
 pub(crate) use resolve::Resolution;
 pub(super) use resolve::{TypeChannel, type_channel};
 pub use resolve_dispatch::{DispatchOutcome, Resolved};
@@ -305,18 +305,19 @@ pub(in crate::machine::execute) enum PartWalk<'step> {
 /// and the slot each dep's result splices back into. The walk appends to both in one pass, so the
 /// park currency is built where the requests are produced rather than transposed afterwards.
 ///
-/// The two are hosted differently on purpose. `deps` is a [`StepDeps`], dead at the end of the pop
-/// that wired it; `part_indices` is heap-hosted, because the dep-finish closure carries it **across
-/// the park** — past the scratch reset — to place the resolved cells on wake.
+/// Both lists are hosted on the step's scratch arena, dead at the end of the pop that wired them:
+/// `deps` is consumed by the wiring door, and `part_indices` is copied into the host frame region
+/// at the park site, because the dep-finish closure carries the slots **across the park** — past
+/// the scratch reset — to place the resolved cells on wake.
 pub(in crate::machine::execute) struct StagedSubs<'step> {
-    pub(in crate::machine::execute) part_indices: Vec<usize>,
+    pub(in crate::machine::execute) part_indices: BumpVec<'step, usize>,
     pub(in crate::machine::execute) deps: StepDeps<'step>,
 }
 
 impl<'step> StagedSubs<'step> {
     pub(in crate::machine::execute) fn new_in(scratch: BumpAllocator<'step>) -> Self {
         StagedSubs {
-            part_indices: Vec::new(),
+            part_indices: BumpVec::new_in(scratch),
             deps: Deps::new_in(scratch),
         }
     }
@@ -664,7 +665,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 placement,
             })
             .error_frame(dep_error_frame())
-            .finish_terminal(finish)
+            .finish_terminal_boxed(finish)
         }
 
         ActionKind::AwaitDeps { deps, finish } => {
@@ -682,7 +683,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
             }
             Await::on(lowered)
                 .error_frame(dep_error_frame())
-                .finish_terminal(wrap_await_continue(finish))
+                .finish_terminal_boxed(wrap_await_continue(finish))
         }
 
         ActionKind::AwaitBlock { block, finish } => {
@@ -690,7 +691,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
             // by entry — it rides the block door whole.
             Await::on_block(block)
                 .error_frame(dep_error_frame())
-                .finish_terminal(wrap_await_continue(finish))
+                .finish_terminal_boxed(wrap_await_continue(finish))
         }
 
         ActionKind::Catch { watched, finish } => {

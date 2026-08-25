@@ -48,7 +48,7 @@ use super::lift::relocate_seam;
 use super::nodes::{ChainOp, NodePayload, NodeScope, NodeWork, SlotFrame, WorkLabel};
 use super::outcome::{Await, Continuation, DepTerminal, Outcome, ParkDeps, dep_error_frame};
 use super::step_carried::StepCarried;
-use super::{ContinuationCall, ContinuationFamily, NodeContinuation, erase_boxed, gated};
+use super::{ContinuationCall, ContinuationFamily, NodeContinuation, erase_boxed, gated_once};
 
 /// The Koan instantiation of the scheduler's [`Workload`] interface — the marker that binds the
 /// opaque scheduler types to their concrete Koan forms.
@@ -702,7 +702,7 @@ impl<'run> Host<'run> {
                             };
                         let park = Await::on(Deps::from_producers_in([edge], scratch))
                             .error_frame(dep_error_frame())
-                            .finish_terminal(finish);
+                            .finish_terminal(brand, finish);
                         self.apply(sched, park, brand, scratch, id, anchor)
                     }
                 }
@@ -1234,7 +1234,12 @@ impl<'run> Host<'run> {
         let anchor = SlotFrame::new(cart, payload.scope, payload.chain, WorkLabel::None);
         let work = NodeWork::new(NodeContinuation::new(
             None,
-            erase_boxed(gated(Some(dep_error_frame()), super::sealed_done(finish))),
+            erase_boxed(gated_once(
+                Some(dep_error_frame()),
+                move |view: &DecideCtx<'_, 'a, '_>, terminals: &[DepTerminal<'_>]| {
+                    Outcome::Done(finish(view, terminals))
+                },
+            )),
         ));
         let (sources, minted) =
             self.named_sources(sched, &anchor, deps, Global, |_host, _sched, producer| {
@@ -1266,7 +1271,7 @@ impl<'run> KoanRuntime<'run> {
     ) -> NodeWork<'run, KoanWorkload> {
         NodeWork::new(NodeContinuation::new(
             None,
-            erase_boxed(gated(Some(dep_error_frame()), finish)),
+            erase_boxed(gated_once(Some(dep_error_frame()), finish)),
         ))
     }
 

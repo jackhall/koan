@@ -209,6 +209,10 @@ pub(super) fn install_eager_subs<'step>(
         return finish_eager_subs(ctx, working_expr, picked);
     }
     let StagedSubs { part_indices, deps } = staged;
+    // The slot run crosses the park inside the finish, so it lands in the host frame region — the
+    // scratch arena the walk built it on is reset at the next drain pop.
+    let host = ctx.current_scope().brand();
+    let part_indices: &'step [usize] = host.allocator().slice(&part_indices);
     let dep_error_frame = working_frame("<bind>", &working_expr);
     let finish = move |ctx: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
         // A parts run is frozen once its door bumps it, so the whole batch must land in one
@@ -238,7 +242,7 @@ pub(super) fn install_eager_subs<'step>(
     };
     Await::on(deps)
         .error_frame(dep_error_frame)
-        .finish_terminal(finish)
+        .finish_terminal(host, finish)
 }
 
 /// Route a fully-spliced eager-subs `working_expr` to its continuation. Under `None` the re-resolve

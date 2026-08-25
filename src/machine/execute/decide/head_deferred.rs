@@ -15,7 +15,6 @@ use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
-use crate::witnessed::BumpAllocator;
 
 use super::super::outcome::DepTerminal;
 use super::apply_callable::{ResolvedCallable, apply_callable};
@@ -37,7 +36,7 @@ pub(in crate::machine::execute) fn initial_expr<'step>(
         WorkingPart::Expression(inner) => *inner,
         _ => unreachable!("HeadDeferred shape implies nested Expression head"),
     };
-    park_on_head(expr, head, false, ctx.scratch())
+    park_on_head(ctx, expr, head, false)
 }
 
 /// Wraps the sigil head as a one-part node rather than unwrapping it, so the type marker
@@ -56,7 +55,7 @@ pub(in crate::machine::execute) fn initial_type<'step>(
         }
         _ => unreachable!("TypeHeadDeferred shape implies SigiledTypeExpr head"),
     };
-    park_on_head(expr, head, true, ctx.scratch())
+    park_on_head(ctx, expr, head, true)
 }
 
 /// The general head lane: a head is callable whenever it *evaluates* to something callable, so any
@@ -68,17 +67,17 @@ pub(in crate::machine::execute) fn defer_head<'step>(
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let head = WorkingExpression::synthesized(ctx.current_scope().brand(), &[expr.parts[0]], &expr);
-    park_on_head(expr, head, false, ctx.scratch())
+    park_on_head(ctx, expr, head, false)
 }
 
 /// The apply-a-callable tail the finish hands off to may itself re-park, so the finish must be
 /// re-park-capable. A dep error short-circuits frameless in the harness before the finish runs, so
 /// the finish only ever sees a resolved head.
 fn park_on_head<'step>(
+    ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
     head: WorkingExpression<'step>,
     type_only: bool,
-    scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
     let finish = move |ctx: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
         let head_terminal = terminals[0];
@@ -110,9 +109,9 @@ fn park_on_head<'step>(
             expr: head,
             placement: DepPlacement::OwnScope,
         }],
-        scratch,
+        ctx.scratch(),
     ))
-    .finish_terminal(finish)
+    .finish_terminal(ctx.current_scope().brand(), finish)
 }
 
 /// A type identity is admitted as a constructor without pre-gating: `apply_callable`'s constructor

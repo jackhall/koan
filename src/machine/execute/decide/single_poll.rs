@@ -23,7 +23,7 @@ use super::{
     type_channel,
 };
 use crate::scheduler::Deps;
-use crate::witnessed::{BumpAllocator, Delivered};
+use crate::witnessed::Delivered;
 
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
@@ -96,8 +96,7 @@ pub(super) fn record_type<'step>(
         Some(WorkingPart::RecordType(fields)) => FieldParts::threaded(fields),
         _ => unreachable!("RecordType shape implies a single RecordType part"),
     };
-    let chain = ctx.active_chain();
-    super::field_list::elaborate_record_value(ctx, fields, chain)
+    super::field_list::elaborate_record_value(ctx, fields)
 }
 
 /// `(99)`, `("x")`, `([1 2 3])`, `((inner))` etc. — single-part
@@ -140,13 +139,13 @@ pub(super) fn literal_pass_through<'step>(
         ),
         WorkingPart::Expression(inner) => become_dispatch(ctx, *inner),
         WorkingPart::Ast(ExpressionPart::ListLiteral(items)) => {
-            park_on_literal(DepRequest::ListLit(items), ctx.scratch())
+            park_on_literal(ctx, DepRequest::ListLit(items))
         }
         WorkingPart::Ast(ExpressionPart::DictLiteral(pairs)) => {
-            park_on_literal(DepRequest::DictLit(pairs), ctx.scratch())
+            park_on_literal(ctx, DepRequest::DictLit(pairs))
         }
         WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)) => {
-            park_on_literal(DepRequest::RecordLit(fields), ctx.scratch())
+            park_on_literal(ctx, DepRequest::RecordLit(fields))
         }
         _ => unreachable!(
             "LiteralPassThrough classifier only routes Literal/Spliced/Expression/QuotedExpression/ListLiteral/DictLiteral/RecordLiteral"
@@ -157,7 +156,10 @@ pub(super) fn literal_pass_through<'step>(
 /// Park the slot on a single literal-producer dep, whose finish relocates the produced value into
 /// the consumer region — so the literal's reach rides the terminal by construction rather than
 /// being recomputed beside it. A dep error short-circuits frameless before the finish runs.
-fn park_on_literal<'step>(dep: DepRequest<'step>, scratch: BumpAllocator<'step>) -> Outcome<'step> {
+fn park_on_literal<'step>(
+    ctx: &DecideCtx<'_, 'step, '_>,
+    dep: DepRequest<'step>,
+) -> Outcome<'step> {
     let finish = |view: &DecideCtx<'_, 'step, '_>, deps: &[DepTerminal<'_>]| {
         // The destination is a bare region handle (empty reach) sealed as an envelope witnessed by
         // the consumer's own frame, so the seam composes the producer's reach into it and homes
@@ -167,7 +169,8 @@ fn park_on_literal<'step>(dep: DepRequest<'step>, scratch: BumpAllocator<'step>)
             Delivered::destination(view.dest_frame()),
         )))
     };
-    Await::on(Deps::from_requests_in([dep], scratch)).finish_witnessed(finish)
+    Await::on(Deps::from_requests_in([dep], ctx.scratch()))
+        .finish_witnessed(ctx.current_scope().brand(), finish)
 }
 
 /// Bare-`Type`-head call. The head resolves on the type channel and the identity routes through

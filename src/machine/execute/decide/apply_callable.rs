@@ -7,8 +7,6 @@
 //! does the resolution; this tail does the body-shape branching and launches
 //! construction or a function call.
 
-use std::rc::Rc;
-
 use crate::machine::core::{DepPlacement, OpenedFunction};
 use crate::machine::model::labels::{BinderSymbol, LabelInterner, Symbol, TypeSymbol};
 use crate::machine::model::render_label;
@@ -204,7 +202,7 @@ fn apply_constructor<'step>(
                 Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
                     brand,
                     identity,
-                    Rc::new(variant_schema),
+                    &variant_schema,
                     parts,
                     ctx.registries(),
                     ctx.scratch(),
@@ -268,10 +266,12 @@ fn apply_named_type_args<'step>(
     // Argument names are record-literal keys, minted at parse and matched by symbol bits from
     // here on. A reference is not a declaration, so this is a bare probe through the recovery
     // door; a name matching no declared parameter renders its own text in the miss.
-    let (names, value_parts): (Vec<Symbol>, Vec<ExpressionPart<'step>>) = fields
-        .iter()
-        .map(|(name, part)| (name.symbol(), *part))
-        .unzip();
+    // Both name runs cross the park inside the finish, so they land in the host frame region.
+    let names: &'step [Symbol] = brand
+        .allocator()
+        .slice_from_iter(fields.iter().map(|(name, _)| name.symbol()));
+    let param_names: &'step [TypeSymbol] = brand.allocator().slice(&param_names);
+    let value_parts: Vec<ExpressionPart<'step>> = fields.iter().map(|(_, part)| *part).collect();
     let deps: Vec<DepRequest<'step>> = value_parts
         .into_iter()
         .map(|part| DepRequest::Dispatch {
@@ -284,7 +284,7 @@ fn apply_named_type_args<'step>(
         // borrow of a producer's region and needs no carrier fold.
         let supplied: Result<Vec<SuppliedTypeArgument>, KError> = terminals
             .iter()
-            .zip(&names)
+            .zip(names)
             .map(|(terminal, symbol)| match terminal.cell.open_at().value() {
                 Carried::Type(kt) => Ok((*symbol, kt)),
                 Carried::Object(object) => Err(KError::new(KErrorKind::TypeMismatch {
@@ -298,7 +298,7 @@ fn apply_named_type_args<'step>(
             })
             .collect();
         Outcome::Done(supplied.and_then(|supplied| {
-            let args = build_apply_args(identity, &param_names, supplied, view.registries())?;
+            let args = build_apply_args(identity, param_names, supplied, view.registries())?;
             Ok(view
                 .step_ctx()
                 .type_carried(view.types().constructor_apply(identity, args)))
@@ -306,7 +306,7 @@ fn apply_named_type_args<'step>(
     };
     Await::on(Deps::from_requests_in(deps, ctx.scratch()))
         .error_frame(dep_error_frame())
-        .finish_terminal(finish)
+        .finish_terminal(brand, finish)
 }
 
 /// Key-check the supplied type arguments against the constructor's declared parameters and
@@ -421,37 +421,29 @@ fn apply_union_construct<'step>(
                 Err(e) => return Outcome::Done(Err(e)),
             };
             match union_member(&members, tag.symbol(), ctx.types()) {
-                Some(member) => constructors::construct_tagged(
-                    ctx.current_scope().brand(),
-                    member,
-                    Rc::new(union_variant_schema(&members, ctx.types())),
-                    tag,
-                    value_part,
-                    ctx.scratch(),
-                ),
+                // The member is the variant's own sealed handle, so its declared payload is a
+                // direct `NewType` repr read — the same value the variant schema would map the tag
+                // to, with no table to build.
+                Some(member) => match ctx.types().node(member) {
+                    TypeNode::SetMember {
+                        schema: NodeSchema::NewType(expected),
+                        ..
+                    } => constructors::construct_tagged(
+                        ctx.current_scope().brand(),
+                        member,
+                        expected,
+                        tag,
+                        value_part,
+                        ctx.scratch(),
+                    ),
+                    _ => unreachable!("a union variant is a sealed NewType member"),
+                },
                 None => Outcome::Done(Err(unknown_variant_error(&members, tag, ctx.registries()))),
             }
         }
         Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY, &ctx.registries().labels),
         Err(e) => Outcome::Done(Err(e)),
     }
-}
-
-/// The variant schema of an anonymous union of sealed newtype members: each member's tag mapped
-/// to its declared payload type (its `NewType` repr). This is the per-value type-check table the
-/// `Tagged` finish reads (`schema[tag]`).
-fn union_variant_schema(members: &[KType], types: &TypeRegistry) -> TypeMemberMap {
-    members
-        .iter()
-        .filter_map(|m| match types.node(*m) {
-            TypeNode::SetMember {
-                name,
-                schema: NodeSchema::NewType(repr),
-                ..
-            } => Some((name, repr)),
-            _ => None,
-        })
-        .collect()
 }
 
 /// The union member whose sealed newtype is named `name`, if any. `name` probes by bare symbol

@@ -25,6 +25,7 @@ use crate::machine::model::{FoldDirection, KeyElement, OperatorGroup, ReductionM
 use crate::machine::{KError, KErrorKind, ProducerId};
 use crate::scheduler::Deps;
 use crate::source::{Span, Spanned};
+use crate::witnessed::BumpVec;
 
 use super::super::outcome::DepTerminal;
 use super::ctx::DecideCtx;
@@ -333,12 +334,17 @@ fn install_pairwise_fold<'step>(
     chain: WorkingExpression<'step>,
     dep_error_frame: Option<DeferredTraceFrame<'step>>,
 ) -> Outcome<'step> {
-    let brand = ctx.current_scope().brand();
-    let operand_spans: Vec<Option<Span>> = operands.iter().map(|operand| operand.span).collect();
+    let host = ctx.current_scope().brand();
+    // The operator run and the operand spans cross the park inside the finish, so both land in the
+    // host frame region rather than the step scratch the walk builds transients on.
+    let operand_spans: &'step [Option<Span>] = host
+        .allocator()
+        .slice_from_iter(operands.iter().map(|operand| operand.span));
+    let operators: &'step [Spanned<WorkingPart<'step>>] = host.allocator().slice(&operators);
     let deps: Vec<DepRequest<'step>> = operands
         .into_iter()
         .map(|operand| DepRequest::Dispatch {
-            expr: WorkingExpression::synthesized(brand, &[operand], &chain),
+            expr: WorkingExpression::synthesized(host, &[operand], &chain),
             placement: DepPlacement::OwnScope,
         })
         .collect();
@@ -346,10 +352,11 @@ fn install_pairwise_fold<'step>(
         // Resting a shared middle operand's cell into both adjacent pairs is the splice that makes
         // evaluation once-only; the region's union bundle absorbs the repeated coverage, so a
         // middle operand costs one retention however many pairs read it.
-        let mut pairs = Vec::with_capacity(operators.len());
         let scope = ctx.current_scope();
         let brand = scope.brand();
-        for (i, operator) in operators.into_iter().enumerate() {
+        // The pairs buffer dies inside this wake step, so it rides the step scratch arena.
+        let mut pairs = BumpVec::with_capacity_in(operators.len(), ctx.scratch());
+        for (i, operator) in operators.iter().copied().enumerate() {
             let left = Spanned {
                 value: WorkingPart::Spliced {
                     cell: scope.rest_spliced(&terminals[i].cell),
@@ -370,7 +377,7 @@ fn install_pairwise_fold<'step>(
         }
         let acc = match direction {
             FoldDirection::Left => {
-                let mut pairs = pairs.into_iter();
+                let mut pairs = pairs.iter().copied();
                 let mut acc = pairs.next().expect(PAIRWISE_HAS_TWO_PAIRS);
                 for pair in pairs {
                     acc = combine(brand, combiner, acc, pair, &chain);
@@ -378,7 +385,7 @@ fn install_pairwise_fold<'step>(
                 acc
             }
             FoldDirection::Right => {
-                let mut pairs = pairs.into_iter().rev();
+                let mut pairs = pairs.iter().copied().rev();
                 let mut acc = pairs.next().expect(PAIRWISE_HAS_TWO_PAIRS);
                 for pair in pairs {
                     acc = combine(brand, combiner, pair, acc, &chain);
@@ -390,7 +397,7 @@ fn install_pairwise_fold<'step>(
     };
     Await::on(Deps::from_requests_in(deps, ctx.scratch()))
         .error_frame(dep_error_frame)
-        .finish_terminal(finish)
+        .finish_terminal(host, finish)
 }
 
 const PAIRWISE_HAS_TWO_PAIRS: &str =
