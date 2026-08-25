@@ -573,3 +573,45 @@ fn let_bound_dict_with_call_produced_string_keys_survives_every_producer_free() 
         other => panic!("expected a Dict, got {:?}", other.ktype()),
     }
 }
+
+/// **A body's leading statements ride the fresh cart's own region across a self-recursive tail
+/// loop.** Entering a user function bumps its body-enter continuation — and the run of leading
+/// statements it carries as a region slice — into the cart the same decide mints for the call, and
+/// the wake re-derives that cart from the slot's anchor rather than capturing it. The loop is what
+/// makes the placement observable: each hop installs a fresh cart and retires the deciding step's,
+/// so a run leaked into the deciding region instead of the callee's would be read after its free.
+/// Correctness of the interleaving is the observable half under plain `cargo test`; tree borrows is
+/// what confirms the read at wake never touches a retired region.
+#[test]
+fn leading_statements_ride_the_fresh_carts_region_across_a_self_tail_loop() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+
+    test_run.run(
+        "UNION Nat = (Zero :Null Succ :Nat)\n\
+         FN (COUNT n :Nat) -> Str = ((PRINT \"tick\") (PRINT \"tock\") (MATCH (n) -> :Str WITH (\
+             Zero -> (\"done\")\
+             Succ -> (COUNT (it))\
+         )))\n\
+         LET n0 = (Nat (Zero null))\n\
+         LET n1 = (Nat (Succ n0))\n\
+         LET n2 = (Nat (Succ n1))\n\
+         LET out = (COUNT n2)",
+    );
+
+    assert_eq!(
+        String::from_utf8_lossy(&captured.borrow()),
+        "tick\ntock\ntick\ntock\ntick\ntock\n",
+        "every hop must read both leading statements back out of its own cart's region, in order",
+    );
+    let result = test_run
+        .scope
+        .lookup("out")
+        .expect("the loop binds its result");
+    assert!(
+        matches!(result, crate::machine::model::KObject::KString(s) if *s == "done"),
+        "the loop's tail must resolve to the base arm's value, got {}",
+        result.ktype().name(test_run.registries()),
+    );
+}

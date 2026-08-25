@@ -75,17 +75,20 @@ group just to silence the stale-anchor check.
   residence at compile time; its `Drop`-free teardown rides the aggregate census test and its
   member-map round trips run under plain `cargo test`. The MODULE-body Combine continuation rides
   the stored scope-pointer re-anchor the born-door group pins. No `unsafe` of its own.
-- `src/machine/execute/dispatch/ctx.rs` — the `with_node_scope` read boundary is the
+- `src/machine/execute/decide/ctx.rs` — the `with_node_scope` read boundary is the
   sole production open of a `YokedChild` carrier; it passes the executing slot's
   cart `Rc` as the witness to `SealedExtern::open`, a **safe** call, so ctx.rs carries no
   `unsafe`. The group pins that boundary end-to-end (every scheduler-driving slate test); the
   `unsafe` it routes lives in `witnessed.rs`.
-- `src/machine/execute/dispatch/exec.rs` — `enter_user_fn` mints the callee's cart and binds the
+- `src/machine/execute/decide/exec.rs` — `enter_user_fn` mints the callee's cart, binds the
   call's arguments into it through safe scope/envelope verbs (`Scope::lift_spliced`,
-  `run_user_fn`'s `bind_delivered_direct`); the file carries no `unsafe`. The group pins the tail
-  hop's **ordering** — every read of the retiring region happens on the deciding side of the
-  replace — which no signature states; the `unsafe` it routes is the shared `retype` in
-  `witnessed.rs`, reached through the `Sealed::open_at` the lift performs.
+  `run_user_fn`'s `bind_delivered_direct`), and bumps the body-enter continuation and its leading
+  run into that same cart's region through `Replacement::fresh_tail`, whose constructor mints the
+  host brand off the very frame the placement installs; the file carries no `unsafe`. Its groups pin
+  the tail hop's **ordering** — every read of the retiring region happens on the deciding side of
+  the replace — and the body-enter **placement** — every read at the wake happens inside the cart
+  the replace installed — neither of which a signature states; the `unsafe` they route is the shared
+  `retype` in `witnessed.rs`, reached through the `Sealed::open_at` the lift performs.
 - `src/machine/execute/lift.rs` — `copy_carried` structurally copies at the brand a step open
   supplies (safe allocs throughout).
   The group pins the escaping-value **retention** discipline — a surviving closure / module borrow
@@ -117,7 +120,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-23 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
+24 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
 below are the exact test identifiers; pass them after `--` in the Miri command. A further 54 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
@@ -312,7 +315,7 @@ bound with no Miri-only failure mode, and runs under plain `cargo test`
 
 - `loop_carried_aggregate_survives_tail_hop_adoption`
 
-**Resting splice cell adopted before its tail hop** ([src/machine/execute/dispatch/exec.rs](../src/machine/execute/dispatch/exec.rs)) —
+**Resting splice cell adopted before its tail hop** ([src/machine/execute/decide/exec.rs](../src/machine/execute/decide/exec.rs)) —
 a spliced sub-result rests as a pin-less `Sealed` cell in the *dispatching* step's own region
 (`Scope::rest_delivered`), and the incarnation that runs the body has a freshly minted cart whose
 ancestor chain does not reach that region — so an adoption on the far side of the hop would have
@@ -326,6 +329,21 @@ hop — is a loud `region_metrics()` comparison across depths 3 and 11 with no M
 and runs under plain `cargo test` (`a_splicing_tail_loop_holds_no_region_per_iteration`).
 
 - `a_spliced_cell_is_adopted_before_its_tail_hop`
+
+**Body-enter continuation and its leading run in the fresh cart's region**
+([src/machine/execute/decide/exec.rs](../src/machine/execute/decide/exec.rs)) — entering a user
+function bumps its body-enter continuation into the cart the same decide mints for the call, and the
+run of leading statements the continuation carries is a slice leaked into that same region rather
+than an owned `Vec`. Neither is read in the step that writes it: the placement installs the cart,
+and the wake re-derives it from the slot's anchor (`DecideCtx::current_frame`) instead of capturing
+it. A self-recursive tail loop with leading statements is what makes the region choice observable —
+each hop installs a fresh cart and retires the deciding step's, so a run leaked into the deciding
+region would be read at wake after its free, and a continuation bumped into the wrong host would be
+invoked out of freed bytes. The interleaving of leading effects with the tail is the observable half
+under plain `cargo test`; tree borrows is the only check that the wake's reads stay inside a live
+region.
+
+- `leading_statements_ride_the_fresh_carts_region_across_a_self_tail_loop`
 
 **MATCH / TRY-WITH branch frames inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
 MATCH and TRY build their per-branch frame and seed the `it` bind through
@@ -378,7 +396,7 @@ the opened reference is live — is pinned library-side
 in the workgraph slate); every scheduler-driving slate test below exercises the production carrier
 end-to-end. No separate minimal test here.
 
-**`NodeScope::YokedChild` open — workload read boundary** ([src/machine/execute/dispatch/ctx.rs](../src/machine/execute/dispatch/ctx.rs))
+**`NodeScope::YokedChild` open — workload read boundary** ([src/machine/execute/decide/ctx.rs](../src/machine/execute/decide/ctx.rs))
 — the `carrier.open(frame, f)` call in the `with_node_scope` helper is the **sole** production
 open of a `YokedChild` carrier: it materializes the executing slot's scope from its raw
 `NodeScope` handle (the scheduler core hands the handle back but no longer interprets it), passing the
