@@ -11,7 +11,7 @@ use super::super::obligation::ReturnObligation;
 use super::super::outcome::DepTerminal;
 use super::super::outcome::Outcome;
 use super::super::outcome::Replacement;
-use super::super::{NodeContinuation, decide_only, erase_boxed, erase_bumped};
+use super::super::{NodeContinuation, decide_only, erase_bumped};
 use super::ctx::DecideCtx;
 use std::rc::Rc;
 
@@ -174,7 +174,8 @@ fn enter_user_fn<'step>(
             };
             body_continue(
                 frame,
-                leading.into_iter().copied().collect(),
+                &leading,
+                None,
                 *tail,
                 TailContract::Eager(Some(contract)),
                 label,
@@ -190,11 +191,10 @@ fn enter_user_fn<'step>(
             // sibling, so it joins the leading run and the lowering's finish reads the last result
             // (the resolved type) into a `PerCall` contract before tail-replacing into the body
             // terminal — subsequent calls skip resolution, so the recursion stays TCO-flat.
-            let mut leading: Vec<KExpression<'step>> = leading.into_iter().copied().collect();
-            leading.push(type_expr);
             body_continue(
                 frame,
-                leading,
+                &leading,
+                Some(type_expr),
                 *tail,
                 TailContract::FromLastResult {
                     func: picked.reseal(),
@@ -214,42 +214,54 @@ fn enter_user_fn<'step>(
 /// *reinstalled* step's brand — the cart's own region — which is why the lowering waits for that
 /// step instead of riding [`enter_user_fn`].
 ///
+/// The continuation bumps into the fresh cart's own region, so its captures are all `Copy`: the
+/// leading statements ride as a region slice co-located with the closure, and the cart itself is
+/// re-derived from the slot's anchor at wake rather than captured. `extra` is a deferred-return
+/// type expression, which joins the leading run as its last statement.
+///
 /// The tail re-enters the installed cart with `Inherit` — a second `FreshTail` here would mint
 /// another cart, discarding the one already holding the bound params — and the block entry carries
 /// it so the lowering fans any leading statements into it.
 fn body_continue<'step>(
     frame: Rc<CallFrame>,
-    leading: Vec<KExpression<'step>>,
+    leading: &[&KExpression<'step>],
+    extra: Option<KExpression<'step>>,
     tail: KExpression<'step>,
     contract: TailContract<'step>,
     label: WorkLabel,
     obligation: Option<ReturnObligation>,
 ) -> Outcome<'step> {
-    let replacement = Replacement::fresh_tail(&frame, |_host| {
-        let work_frame = Rc::clone(&frame);
-        // Owning: the lowered statements and the `Rc` cart need drop glue, so the body enter stays
-        // on the boxed tier.
-        let continuation = erase_boxed(
+    let replacement = Replacement::fresh_tail(&frame, |host| {
+        let mut run =
+            BumpVec::with_capacity_in(leading.len() + extra.is_some() as usize, host.allocator());
+        run.extend(leading.iter().map(|statement| **statement));
+        run.extend(extra);
+        let leading: &[KExpression<'_>] = run.leak();
+        let call = erase_bumped(
+            host,
             move |view: &DecideCtx<'_, '_, '_>,
                   _results: &[Result<DepTerminal<'_>, KError>],
                   _idx: NodeId| {
                 let brand = view.current_scope().brand();
+                let cart = view
+                    .current_frame()
+                    .expect("a body-enter wake runs against the cart its replace installed");
                 super::run_action(
                     view,
                     Action::tail(
                         leading
-                            .into_iter()
-                            .map(|e| WorkingExpression::from_ast(brand, e))
+                            .iter()
+                            .map(|statement| WorkingExpression::from_ast(brand, *statement))
                             .collect(),
                         WorkingExpression::from_ast(brand, tail),
                         contract,
                         FramePlacement::Inherit,
-                        BlockEntry::FrameScope(work_frame),
+                        BlockEntry::FrameScope(cart),
                     ),
                 )
             },
         );
-        NodeContinuation::new(obligation, continuation)
+        NodeContinuation::new(obligation, call)
     });
     Outcome::Continue {
         replacement,
