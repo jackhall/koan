@@ -15,8 +15,10 @@ error: unbound name 'mystery'
   in :(FN (x :Number) -> Str) (BOOM 1) at <input>:2:1
 ```
 
-The `in …` lines are the call trace, innermost first. An error raised at the top
-level, outside any call, has no frames.
+The `in …` lines are the call trace, innermost first. A frame for a function call
+names it two ways — the function's signature type, then the call site's own source
+text in parentheses — and ends with the file, line and column that call sits at.
+An error raised at the top level, outside any call, has no frames.
 
 ## Catching errors with `TRY`
 

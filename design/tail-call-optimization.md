@@ -188,10 +188,12 @@ A tail chain checks the value against the **first** caller's declared return, no
 the tail-most callee's, so the reinstalled slot keeps the first contract it entered.
 The declared type is a `Copy` registry handle — types reside in the run-region
 [type registry](typing/type-registry.md), not in any per-call region — and the
-error label is precomputed when the obligation is sealed, so the sealed contract
-is pure `Copy` data: it references no region and pins nothing. It survives every
-hop and the reinstall trivially under the keep-first rule; nothing about the
-contract touches the per-call region the loop turns over.
+error frame is retained unrendered, as the call site's span-and-file pair plus
+the callable's interned `value_ktype`, so the sealed contract is pure `Copy`
+data: it references no region, pins nothing, and costs a clean chain no trace
+text. It survives every hop and the reinstall trivially under the keep-first
+rule; nothing about the contract touches the per-call region the loop turns
+over.
 
 ## Library boundary
 

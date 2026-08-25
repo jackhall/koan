@@ -40,10 +40,8 @@ so a combinator can add behavior only by re-boxing what it was handed.
 
 ## Dependencies
 
-The recommended obligation-carriage shape composes with
-[deferred-return-obligation-labels.md](deferred-return-obligation-labels.md) making
-`ReturnObligation` `Copy` — an ordering preference, not a prerequisite: a `String`-labelled
-obligation can move as slot data too.
+[`ReturnObligation`](../../src/machine/execute/obligation.rs) is `Copy`, so the recommended
+obligation-carriage shape can ride it beside the continuation as plain slot data.
 
 **Requires:** none.
 

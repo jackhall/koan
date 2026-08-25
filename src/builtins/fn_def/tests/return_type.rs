@@ -259,8 +259,8 @@ fn user_fn_with_any_return_type_accepts_anything() {
 /// requires a `-> Type`), so their own contracts would *accept* the `Str`; the mismatch fires only
 /// because keep-first keeps `OUTER`'s `-> Number` across both hops (`OUTER -> MIDDLE -> INNER`) and
 /// carries its retained frame, rendered at error time from `OUTER`'s call site and signature. This
-/// exercises the invoke-continue/redispatch keep-first over a
-/// two-deep cross-function chain, not self-recursion.
+/// exercises the invoke-continue/redispatch keep-first over a two-deep cross-function chain, not
+/// self-recursion.
 #[test]
 fn keep_first_across_tail_chain_errors_against_outer_contract() {
     let program = program_storage();

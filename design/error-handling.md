@@ -56,16 +56,37 @@ short-circuits, appends a `TraceFrame`, and writes the error into its own slot (
 catch instead recovers or re-raises). Errors flow to the top level; the CLI
 formats them to stderr with the frame chain via `KError`'s `Display` impl.
 
-A park's own frame is *captured*, not rendered, when the park installs. A
-`DeferredTraceFrame`
-([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs)) holds a `Copy`
-label plus the working expression the slot dispatches, and becomes `TraceFrame` text
-only on the error arm — `propagate_dep_error`
-([src/machine/execute/decide.rs](../src/machine/execute/decide.rs)) is the single
-render point. A step that finishes without a dep error therefore allocates no trace
-text at all. What makes the deferral safe is that every frame-carrying park already
-holds that same expression in its continuation, sealed against the slot's anchor, so
-the expression's region is live wherever the render runs.
+A frame is *captured*, not rendered, at the point the work that might fail is set up.
+A `DeferredTraceFrame`
+([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs)) is `Copy` and has
+one arm per capture shape: a park's own frame carries a fixed label plus the working
+expression the slot dispatches; a frameless dep-finish carries two `&'static str`s; and
+a call's declared-return contract carries the call site's span-and-file pair plus the
+callable's interned `value_ktype`. Each becomes `TraceFrame` text only on an error arm —
+`propagate_dep_error`
+([src/machine/execute/decide.rs](../src/machine/execute/decide.rs)) for a dep error, and
+the declared-return readers in
+[src/machine/execute/finalize.rs](../src/machine/execute/finalize.rs) for a contract. A
+step that finishes without an error therefore allocates no trace text at all, and a call
+that returns cleanly renders no signature text.
+
+The two capture shapes are safe for different reasons. A frame-carrying park already holds
+its expression in its continuation, sealed against the slot's anchor, so the expression's
+region is live wherever the render runs. A contract's capture names no region at all: a
+span, a `FileId` into the run's source table, and a type-registry handle are all
+lifetime-free, which is what lets the sealed
+[`ReturnObligation`](../src/machine/execute/obligation.rs) ride a tail chain as pure
+`Copy` data (see
+[tail-call-optimization.md § The kept-first return contract](tail-call-optimization.md#the-kept-first-return-contract)).
+
+A rendered call frame names the call two ways: `function` carries the call site's own
+source text — `BOOM 1` for a keyword call, `f {x = 7}` for a bound-value one — and
+`expression` carries the callable's by-name identity, its `value_ktype` rendered through
+`KType::name` as `:(FN (x :Number) -> Str)`, with the frame's location resolved from the
+same span. A contract sealed from an expression with no source extent falls back to the
+by-name render alone. The by-name identity is the right render for a function *value*,
+which the anonymous `FN` form makes reachable only through the name a `LET` binds — that
+is call-site knowledge, and the call site is what `function` supplies.
 
 Dispatch failures (no match, ambiguous overload, arity mismatch in bind) flow
 through the same channel as builtin errors:

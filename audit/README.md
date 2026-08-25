@@ -154,9 +154,11 @@ call that a symbol-keyed scope binding table no longer makes.
 The **frame bind** terms are `user_fn_params1`, `user_fn_params8` and the `user_fn_parameter`
 slope between them. A user call binds each parameter into the fresh per-call scope under the
 name the signature's parameter schema carries — the classified symbol the binding table keys
-by — so the bind reaches no interner and builds no string. What stands in the slope is
-per-*argument* cost the bind does not own: the extra source the call site parses, and the
-delivery carrier each argument travels in.
+by — so the bind reaches no interner and builds no string. Nor does the call's declared-return
+contract: it seals a `Copy` call site and the callable's interned type handle, and renders trace
+text only on the error arm that spends it. What stands in the slope is per-*argument* cost the
+bind does not own: the extra source the call site parses, and the delivery carrier each argument
+travels in.
 
 Some terms straddle a chunk boundary. bumpalo's first chunk is 496 bytes, and a frame that does
 not fit it makes the region take a second one — one more allocation per repetition, and the only

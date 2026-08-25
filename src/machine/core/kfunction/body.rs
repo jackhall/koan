@@ -14,13 +14,11 @@ use crate::machine::core::carrier_witness::SealedFunction;
 /// MATCH / TRY arm with `-> :T`) rides the same channel as an FN call: `Arm` carries the
 /// declared type directly, `Function` reads it off the callee's signature.
 ///
-/// Sealed into a `ReturnObligation` — pure `Copy` data
-/// (the declared type plus a deferred trace frame) that rides the tail chain as a continuation
-/// capture. A
-/// tail chain keeps the **first** contract (the keep-first rule at the `Outcome::Continue`
-/// construction sites in the execute harness, which wraps each replacement continuation with the
-/// established obligation), so the check fires against the original caller's declared return, not the
-/// tail-most callee's.
+/// Sealed into a `ReturnObligation` — pure `Copy` data (the declared type plus a deferred trace
+/// frame) that rides the tail chain as a continuation capture. A tail chain keeps the **first**
+/// contract (the keep-first rule at the `Outcome::Continue` construction sites in the execute
+/// harness, which wraps each replacement continuation with the established obligation), so the
+/// check fires against the original caller's declared return, not the tail-most callee's.
 ///
 /// The callable arms carry the pick **at rest**, as the same [`SealedFunction`] the dispatch bucket
 /// holds: a tail chain outlives the step that picked, so nothing region-bound may ride it. A reader

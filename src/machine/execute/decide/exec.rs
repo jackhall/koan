@@ -130,7 +130,7 @@ fn enter_user_fn<'step>(
     let exec_frame = ExecFrame {
         region: Rc::clone(&frame),
     };
-    // An established contract chain is exactly one with a live obligation, so the duplicate's
+    // An established contract chain is exactly one with a live obligation, so the copy's
     // presence answers both reads: a deferred-return FN dispatched as a tail call inside one skips
     // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
     let obligation = view.current_obligation();

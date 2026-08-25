@@ -83,10 +83,13 @@ consumer binds the delivered value into a scope. There is no second escape chann
   re-stamped **in place**, in the producer's own region, at the Done boundary. The
   check moves no bytes and re-homes nothing. The sealed return obligation is pure
   `Copy` data — the declared type is a run-region registry handle
-  ([typing/type-registry.md](typing/type-registry.md)) and the error label is
-  precomputed at seal — so the obligation references no region, holds no pin, and
-  carries no relocation destination. Under TCO the obligation rides the tail chain
-  keep-first and the check fires once, at the chain's end, exactly as
+  ([typing/type-registry.md](typing/type-registry.md)) and the error frame is
+  retained unrendered, as the call site's span-and-file pair plus the callable's
+  interned `value_ktype` — so the obligation references no region, holds no pin, and
+  carries no relocation destination. A call that returns cleanly renders no trace
+  text at all; only the error arm that spends the frame does. Under TCO the
+  obligation rides the tail chain keep-first and the check fires once, at the
+  chain's end, exactly as
   [tail-call-optimization.md](tail-call-optimization.md) schedules it.
 - An **undeclared return** ends the same way: the value stays in its producer
   frame, whose lifetime delivery decides per destination — copied out at
