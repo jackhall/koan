@@ -27,11 +27,18 @@ nested currencies generic compositions folded in before the one erasure.
 - `BrandCompose` and `AggAssemble` no longer exist as boxed currencies — each composes
   generically into its finish before the erasure.
 - The field-list lexical-chain `Rc` re-derives from the ambient node payload at wake
-  (to confirm at planning; if it is not re-derivable, that finish stays Boxed and this
-  criterion is amended to record why).
+  (confirmed at planning: the `outcome` path's chain is the ambient `active_chain()`,
+  and a park re-installs the same slot payload before the finish runs).
 - The `dispatch` and `tagged_construct` terms in
   [`observe/alloc/terms.txt`](../../observe/alloc/terms.txt) drop by the removed boxes,
   and the affected bounds in `tests/allocation_baseline.rs` are re-measured.
+
+**Directions.**
+
+- Tagged-construct schema capture — decided. The finish captures the pre-resolved
+  `expected: KType` instead of the variant-schema `Rc`; the `schema.get(tag)` lookup
+  moves to the construction site, so an unknown tag on the `TypeConstructor` path
+  errors at decide time, before the value expression evaluates.
 
 ## Dependencies
 
