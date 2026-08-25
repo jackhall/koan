@@ -16,26 +16,28 @@ allocations (dhat, 2026-08-18), and every user `FN`/`OP` registration pays it ag
 
 - Registering a callable renders no signature text: the seal-time `summarize` call and
   the bucket's bump-copied summary are gone.
-- A `DuplicateOverload` error still names the colliding overload's signature in the same
-  rendered form as today.
+- A `DuplicateOverload` error names the colliding overload by its dispatch identity —
+  keywords and slot types rendered from the stored dispatch token, `fn(DOUBLE :Number)` —
+  with no argument names in the text.
 - The recorded empty-program startup baseline in [audit/README.md](../../audit/README.md)
   drops by the deferred share and is re-measured to the new figure.
 
 **Directions.**
 
-- *Collision-time render source — open.* Where the diagnostic's text comes from once
-  nothing is pre-rendered: render from the bucket entry's stored dispatch token (the
-  `DispatchTokenElement` run already encodes each keyword's `KeywordSymbol`, which the
-  run's interner resolves back to text, beside the argument shape) versus
-  opening the colliding sibling's `SealedFunction` on the error path to call `summarize`
-  there. Recommended: the stored token, keeping the "no write verb ever opens a carrier"
-  seal discipline intact even on the collision arm.
+- *Collision-time render source — decided.* Render from the bucket entry's stored
+  dispatch token on the error arm: each keyword's `KeywordSymbol` resolves back to text
+  through the run's interner, and each slot renders as its `KType::name`. The "no write
+  verb ever opens a carrier" seal discipline holds even on the collision arm, and the
+  token stays unmodified — pure dedupe identity, no name freight, no bespoke equality.
+- *Rendered form — decided.* The diagnostic drops argument names: overloads collide on
+  keywords and slot types (`indistinguishable_from` is name-independent), so the text is
+  exactly the collision's evidence — `fn(DOUBLE :Number)`, slot types in the same
+  `:`-sigil convention `render_param_record` uses. Argument names remain the *by-name*
+  identity: a function value's `value_ktype` keys its parameter record by declared name
+  and renders through `KType::name`, and by-name call paths are untouched here.
 
 ## Dependencies
 
 **Requires:** none.
 
-**Unblocks:**
-
-- [Deferred return-obligation labels](deferred-return-obligation-labels.md) — shares the
-  error-time callable render this item settles.
+**Unblocks:** none.

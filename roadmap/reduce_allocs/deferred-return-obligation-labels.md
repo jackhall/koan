@@ -26,26 +26,30 @@ function's only allocation.
 - A call that returns without a declared-return violation renders no label text: the
   seal-time `summarize` and the per-hop label clone are gone.
 - `ReturnObligation` is `Copy`, and `duplicate` is deleted in favour of it.
-- A declared-return mismatch and a `finalize_error` frame each name the callable in the
-  same rendered form as today, at every one of the three reader sites.
+- A declared-return mismatch and a `finalize_error` frame each name the callable by its
+  by-name identity — the function's `value_ktype` rendered through `KType::name`,
+  `:(FN (x :Number) -> Number)` — at every one of the three reader sites.
 - The recorded tail-loop baseline in [audit/README.md](../../audit/README.md) drops by the
   deferred share, and `tests/allocation_baseline.rs` is re-measured to the new figure.
 
 **Directions.**
 
-- *Callable render source — deferred to
-  [Deferred signature summaries](deferred-signature-summaries.md).* Both items need the
-  same thing: a callable's rendered signature reconstructed at error time from something
-  the write path already holds, rather than pre-rendered at seal time. That item owns the
-  fork (stored dispatch token versus opening the `SealedFunction` on the error arm); this
-  one adopts whatever it settles, so the render has one implementation.
+- *Callable render source — decided.* The obligation carries the callable's
+  `value_ktype` — the interned `TypeNode::KFunction` handle
+  ([`KFunction::value_ktype`](../../src/machine/core/kfunction.rs)) — and the error arms
+  render it through the existing `KType::name`. That is the *by-name* identity: the
+  parameter record keyed by declared names, keywords excluded — the right identity for a
+  label naming a callable that was invoked, and already rendered by every by-name
+  diagnostic. A `KType` is `Copy` and lifetime-free, so it satisfies the obligation's
+  lifetime constraint with no new render machinery, and `KFunction::summarize` loses its
+  last caller and is deleted here.
 - *Keeping the obligation lifetime-free — decided.* `ReturnObligation` deliberately names
   no region, so the tail chain carries nothing region-bound and no path downstream reopens
   a live contract. A deferred label must preserve that: whatever handle replaces the
   `String` is `Copy` and lifetime-free. Holding the contract's `SealedFunction<'home>`
   directly would thread `'home` back through the obligation and every continuation that
-  captures it, which is what makes the stored-token option in the sibling item the one
-  that composes here.
+  captures it, which is what makes the `Copy` `value_ktype` handle the one that composes
+  here.
 - *The `Arm` label — decided.* `ReturnContract::Arm`'s `kind` is already a `&'static str`,
   so its `to_string()` drops outright with no render deferral needed. Independent of the
   callable fork and the cheapest part of the item.
@@ -58,9 +62,6 @@ function's only allocation.
 
 ## Dependencies
 
-**Requires:**
-
-- [Deferred signature summaries](deferred-signature-summaries.md) — settles how a
-  callable's signature renders at error time without a pre-rendered string.
+**Requires:** none — the render source is the already-shipped `value_ktype` path.
 
 **Unblocks:** none.

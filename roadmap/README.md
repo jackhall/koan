@@ -46,6 +46,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [One kind-blind reader per shape slot](metaprogramming/one-reader-per-shape-slot.md)
 - [Parse at runtime](metaprogramming/parse-at-runtime.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [Deferred return-obligation labels](reduce_allocs/deferred-return-obligation-labels.md)
 - [Deferred signature summaries](reduce_allocs/deferred-signature-summaries.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
