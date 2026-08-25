@@ -29,6 +29,8 @@ function's only allocation.
 - A declared-return mismatch and a `finalize_error` frame each name the callable by its
   by-name identity — the function's `value_ktype` rendered through `KType::name`,
   `:(FN (x :Number) -> Number)` — at every one of the three reader sites.
+- The string `PRINT` renders and returns for a function value is that same by-name
+  identity, and `KFunction::summarize` is deleted.
 - The recorded tail-loop baseline in [audit/README.md](../../audit/README.md) drops by the
   deferred share, and `tests/allocation_baseline.rs` is re-measured to the new figure.
 
@@ -41,8 +43,16 @@ function's only allocation.
   parameter record keyed by declared names, keywords excluded — the right identity for a
   label naming a callable that was invoked, and already rendered by every by-name
   diagnostic. A `KType` is `Copy` and lifetime-free, so it satisfies the obligation's
-  lifetime constraint with no new render machinery, and `KFunction::summarize` loses its
-  last caller and is deleted here.
+  lifetime constraint with no new render machinery. Deleting `KFunction::summarize` needs
+  its other caller routed too — the bullet below.
+- *`KObject::summarize`'s function arm — decided.* `KFunction::summarize`'s other caller is
+  the `KObject::KFunction(f)` arm of `KObject::summarize`
+  ([src/machine/model/values/kobject.rs](../../src/machine/model/values/kobject.rs)) — the
+  path `PRINT` renders a function value through. It renders the callable's `value_ktype`
+  through `KType::name` as well, the same by-name identity the error arms take, so
+  `summarize` loses its last caller and is deleted here. This moves what `PRINT (f)`
+  yields — `:(FN (x :Number) -> Number)` where it rendered `fn(DOUBLE <x>)` — and `PRINT`
+  returns what it renders, so the move is observable to a program, not only to a reader.
 - *Keeping the obligation lifetime-free — decided.* `ReturnObligation` deliberately names
   no region, so the tail chain carries nothing region-bound and no path downstream reopens
   a live contract. A deferred label must preserve that: whatever handle replaces the
