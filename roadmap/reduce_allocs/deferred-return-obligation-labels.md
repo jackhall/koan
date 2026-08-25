@@ -26,9 +26,14 @@ function's only allocation.
 - A call that returns without a declared-return violation renders no label text: the
   seal-time `summarize` and the per-hop label clone are gone.
 - `ReturnObligation` is `Copy`, and `duplicate` is deleted in favour of it.
-- A declared-return mismatch and a `finalize_error` frame each name the callable by its
-  by-name identity — the function's `value_ktype` rendered through `KType::name`,
-  `:(FN (x :Number) -> Number)` — at every one of the three reader sites.
+- A declared-return mismatch and a `finalize_error` frame each identify the callable two
+  ways at every one of the three reader sites: the frame's `function` field carries the
+  **call site's source text** (the invoked expression, resolved from its span at render
+  time — a keyword call's `BOOM 1` and a bound-value call's `f {x = 7}` alike), and the frame's
+  `expression` field carries the by-name identity — the function's `value_ktype` rendered
+  through `KType::name`, `:(FN (x :Number) -> Number)` — with the frame's location
+  resolved from the same span. A contract sealed from an expression with no source extent
+  falls back to the by-name render alone.
 - The string `PRINT` renders and returns for a function value is that same by-name
   identity, and `KFunction::summarize` is deleted.
 - The recorded tail-loop baseline in [audit/README.md](../../audit/README.md) drops by the
@@ -36,15 +41,21 @@ function's only allocation.
 
 **Directions.**
 
-- *Callable render source — decided.* The obligation carries the callable's
-  `value_ktype` — the interned `TypeNode::KFunction` handle
-  ([`KFunction::value_ktype`](../../src/machine/core/kfunction.rs)) — and the error arms
-  render it through the existing `KType::name`. That is the *by-name* identity: the
-  parameter record keyed by declared names, keywords excluded — the right identity for a
-  label naming a callable that was invoked, and already rendered by every by-name
-  diagnostic. A `KType` is `Copy` and lifetime-free, so it satisfies the obligation's
-  lifetime constraint with no new render machinery. Deleting `KFunction::summarize` needs
-  its other caller routed too — the bullet below.
+- *Callable render source — decided.* The obligation carries two `Copy` handles: the
+  callable's `value_ktype` — the interned `TypeNode::KFunction` handle
+  ([`KFunction::value_ktype`](../../src/machine/core/kfunction.rs)), rendered through the
+  existing `KType::name` — and the **call site's span + file**, rendered to the invoked
+  expression's source text. The by-name identity (the parameter record keyed by declared
+  names, keywords excluded) is the right render for the function *value*: the anonymous
+  form registers no keyword and is reachable only through the name a `LET` binds, which
+  is call-site knowledge the value cannot hold. So the callable's *which-one* identity is
+  conveyed separately, by the call-site text — already minted as `Copy` span data beside
+  every contract construction site (the `WorkLabel` mint in
+  [src/machine/execute/decide/exec.rs](../../src/machine/execute/decide/exec.rs)), and
+  every parse path registers its source (`<input>` when pathless), so the span resolves.
+  Both handles are `Copy` and lifetime-free, satisfying the obligation's lifetime
+  constraint. Deleting `KFunction::summarize` needs its other caller routed too — the
+  bullet below.
 - *`KObject::summarize`'s function arm — decided.* `KFunction::summarize`'s other caller is
   the `KObject::KFunction(f)` arm of `KObject::summarize`
   ([src/machine/model/values/kobject.rs](../../src/machine/model/values/kobject.rs)) — the
@@ -63,12 +74,12 @@ function's only allocation.
 - *The `Arm` label — decided.* `ReturnContract::Arm`'s `kind` is already a `&'static str`,
   so its `to_string()` drops outright with no render deferral needed. Independent of the
   callable fork and the cheapest part of the item.
-- *Frame currency — open.* Whether the deferred label becomes a new
-  `DeferredTraceFrame` arm — reusing the retained-frame currency the dep-error channel
-  already runs on, so `finalize`'s two frame sites render through one path — or a
-  label-shaped type private to `ReturnObligation`, since the third reader spends the label
-  as a message fragment rather than as a frame. Recommended: a `DeferredTraceFrame` arm,
-  with the message reader reading through the same handle.
+- *Frame currency — decided.* The deferred label is a new `DeferredTraceFrame` arm
+  carrying the call site and the `value_ktype`, reusing the retained-frame currency the
+  dep-error channel already runs on. The considered alternative — a label-shaped type
+  private to `ReturnObligation` — rested on the third reader spending the label as a
+  message fragment, which it does not: all three readers spend it only as a
+  `TraceFrame`, so one render path serves them all.
 
 ## Dependencies
 
