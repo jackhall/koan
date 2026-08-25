@@ -29,9 +29,24 @@ body-enter continuation bumps into the fresh cart's own region.
   [`observe/alloc/terms.txt`](../../observe/alloc/terms.txt) drop by the removed boxes,
   and the affected bounds in `tests/allocation_baseline.rs` are re-measured.
 
+**Directions.**
+
+- **Where the bumped host brand comes from — open.** `erase_bumped` takes any
+  [`RegionBrand`](../../src/machine/core/arena.rs) live at the step brand, so the
+  co-location rule — the host is the region of the frame the work installs under — holds
+  by call-site discipline rather than by the type. Every site obeys it structurally
+  today (a park and an `Inherit` replace both keep the slot's cart, which is why
+  `tail_continue` reads the placement), but a sibling cart's brand would compile and
+  would dangle the moment that sibling's frame died first. This item already has to mint
+  a brand for a cart the slot does not yet stand in, so the choice is where that brand is
+  sourced from. Options: thread the host as a construction operand carrying the frame it
+  installs under, the way a yoked dest brand rides the resident type carrier, so a
+  mismatched region is a type error; or keep the ambient-brand door and state the rule in
+  prose. *Recommended:* the operand — the fresh-cart door has to name its frame anyway,
+  so the enforcement falls out of the work rather than sitting beside it.
+
 ## Dependencies
 
-**Requires:**
-
+**Requires:** none.
 
 **Unblocks:** none.
