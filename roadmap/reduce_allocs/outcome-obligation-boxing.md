@@ -29,7 +29,10 @@ captures are already `Copy`.
 - The nine re-decide sites — the birth/tail decide, the keyworded binder wait and
   post-eager-subs redispatch, the fn-value head park, the bare-type-leaf and type-call
   re-resolves, the operator-chain declared-op wait, and the builtin invoke — erase on
-  the bumped tier. (The pre-errored slot stays Boxed for its `KError`.)
+  the bumped tier. (The pre-errored slot stays Boxed for its `KError`; a
+  `FreshChild`/`FreshTail` tail decide also stays Boxed here — its host is the fresh
+  cart, whose bump door is [body-enter-continuation](body-enter-continuation.md)'s
+  fresh-cart co-location.)
 - A re-profile of `audit/shapes/tail_loop_steps100.koan` attributes no per-step term to
   any continuation-layer function; the `step` term in
   [`observe/alloc/terms.txt`](../../observe/alloc/terms.txt) drops by the boxing share,
