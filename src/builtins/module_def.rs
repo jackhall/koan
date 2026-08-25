@@ -13,9 +13,7 @@ use crate::machine::body_statement_refs;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
-use crate::machine::model::{
-    AnnouncedData, BinderSymbol, FieldNameKind, ValueSymbol, pair_list_names,
-};
+use crate::machine::model::{AnnouncedData, ValueSymbol, pair_list_names};
 use crate::machine::model::{KKind, SigSchema};
 use crate::machine::model::{Module, ModuleDraft};
 use crate::machine::model::{TypeDeclarationSurface, announced_type_declaration};
@@ -96,22 +94,8 @@ pub(super) fn announce_type_members(
                 let Some(schema) = union_schema(statement) else {
                     continue;
                 };
-                match pair_list_names(
-                    &schema,
-                    "UNION schema",
-                    FieldNameKind::Type,
-                    &registries.labels,
-                ) {
+                match pair_list_names(&schema, "UNION schema", &registries.labels) {
                     Ok(tags) => {
-                        let tags: Vec<_> = tags
-                            .into_iter()
-                            .map(|tag| {
-                                let BinderSymbol::Type(tag) = tag else {
-                                    unreachable!("FieldNameKind::Type admits only Type tokens")
-                                };
-                                tag
-                            })
-                            .collect();
                         announced.announce_binder(binder, tags);
                     }
                     Err(_) => continue,

@@ -34,7 +34,7 @@ fn part_references_any(part: ExpressionPart<'_>, param_names: &[Symbol]) -> bool
         ExpressionPart::DictLiteral(pairs) => pairs.iter().any(|(k, v)| {
             part_references_any(*k, param_names) || part_references_any(*v, param_names)
         }),
-        // Field names are literal strings, never references; scan the values
+        // A field name is the literal's own declared key, never a reference; scan the values
         // (e.g. `er` inside `Set WITH {Elt = er.Carrier}`).
         ExpressionPart::RecordLiteral(fields) => fields
             .iter()

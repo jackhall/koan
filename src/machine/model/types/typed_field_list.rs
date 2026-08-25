@@ -16,7 +16,7 @@ use crate::machine::model::ast::{
 use crate::machine::model::labels::{BinderSymbol, LabelInterner, TypeSymbol};
 use crate::machine::model::values::Carried;
 pub use crate::parse::FieldNameKind;
-use crate::parse::parse_pair_list;
+use crate::parse::{parse_pair_list, parse_type_tag_names};
 use crate::source::Spanned;
 use std::collections::HashSet;
 
@@ -483,15 +483,14 @@ fn resolve_threaded(
     }
 }
 
-/// The declared names of a `<name> <slot>` pair list, without elaborating any slot — what a
+/// The declared tags of a `<tag> <slot>` pair list, without elaborating any slot — what a
 /// declarator pre-scans to announce its window's members before walking their types, so a
-/// reference to a later-declared sibling already has a stable relative index.
+/// reference to a later-declared sibling already has a stable relative index. Every pre-scanned
+/// member is a variant tag, so the names come back classified as the `Type` tokens they are.
 pub fn pair_list_names(
     expr: &KExpression<'_>,
     context: &'static str,
-    name_kind: FieldNameKind,
     labels: &LabelInterner,
-) -> Result<Vec<BinderSymbol>, String> {
-    parse_pair_list(expr.parts, context, name_kind, labels, |_, _| Ok(()))
-        .map(|pairs| pairs.into_iter().map(|(name, ())| name).collect())
+) -> Result<Vec<TypeSymbol>, String> {
+    parse_type_tag_names(expr.parts, context, labels)
 }

@@ -12,7 +12,7 @@ use crate::witnessed::RegionHandleFamily;
 use super::{DeliveredCarried, FoldingBrand, RegionBrand, SubstrateDoor};
 use super::{KoanStorageProfile, Scope, scope_frame};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::{BinderSymbol, LabelInterner};
+use crate::machine::model::labels::{BinderSymbol, LabelInterner, ValueSymbol};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
@@ -211,19 +211,13 @@ impl KError {
                 .collect(),
             types,
         );
-        // Every label here is a fixed literal of the error shape — syntactic in the same sense a
-        // source-written field name is, so each classifies and records here and renders back
-        // through the interner.
-        let mut pairs: Vec<(String, KObject<'a>)> = fields;
-        pairs.push(("frames".to_string(), frames_list));
+        // Every label here is a name the error shape fixes in Rust source, classified where it is
+        // written; recording it hands the run's label table the spelling a rendering resolves.
+        let mut pairs: Vec<(&'static StaticName<ValueSymbol>, KObject<'a>)> = fields;
+        pairs.push((&FIELD.frames, frames_list));
         let classified: Vec<(BinderSymbol, KObject<'a>)> = pairs
             .into_iter()
-            .map(|(name, value)| {
-                let name = BinderSymbol::declared(&name, &registries.labels).unwrap_or_else(|| {
-                    unreachable!("a KError field label is value-class text: `{name}`")
-                });
-                (name, value)
-            })
+            .map(|(name, value)| (BinderSymbol::Value(registries.labels.record(name)), value))
             .collect();
         let record = KObject::record(door, &classified, types);
         // The variant name and `KError` are Type tokens of the error shape; both reach the run's
@@ -316,89 +310,108 @@ pub(crate) fn kerror_ktype(registries: &RunRegistries) -> KType {
     )
 }
 
+/// The error record's field names, each fixed in Rust source rather than written by a program. A
+/// caught error is an ordinary koan record — a handler reads `message` or `expr` off it by name —
+/// so each spelling classifies once, at its first read, and records its text where a rendering
+/// resolves it.
+struct ErrorFields {
+    arg: StaticName<ValueSymbol>,
+    candidates: StaticName<ValueSymbol>,
+    col_utf16: StaticName<ValueSymbol>,
+    expected: StaticName<ValueSymbol>,
+    expr: StaticName<ValueSymbol>,
+    frames: StaticName<ValueSymbol>,
+    got: StaticName<ValueSymbol>,
+    kind: StaticName<ValueSymbol>,
+    line: StaticName<ValueSymbol>,
+    message: StaticName<ValueSymbol>,
+    name: StaticName<ValueSymbol>,
+    path: StaticName<ValueSymbol>,
+    reason: StaticName<ValueSymbol>,
+    span_end: StaticName<ValueSymbol>,
+    span_start: StaticName<ValueSymbol>,
+}
+
+static FIELD: ErrorFields = ErrorFields {
+    arg: crate::static_name!(ValueSymbol, "arg"),
+    candidates: crate::static_name!(ValueSymbol, "candidates"),
+    col_utf16: crate::static_name!(ValueSymbol, "col_utf16"),
+    expected: crate::static_name!(ValueSymbol, "expected"),
+    expr: crate::static_name!(ValueSymbol, "expr"),
+    frames: crate::static_name!(ValueSymbol, "frames"),
+    got: crate::static_name!(ValueSymbol, "got"),
+    kind: crate::static_name!(ValueSymbol, "kind"),
+    line: crate::static_name!(ValueSymbol, "line"),
+    message: crate::static_name!(ValueSymbol, "message"),
+    name: crate::static_name!(ValueSymbol, "name"),
+    path: crate::static_name!(ValueSymbol, "path"),
+    reason: crate::static_name!(ValueSymbol, "reason"),
+    span_end: crate::static_name!(ValueSymbol, "span_end"),
+    span_start: crate::static_name!(ValueSymbol, "span_start"),
+};
+
 impl KErrorKind {
     /// `(name, fields)` for `KError::to_tagged`. `name` is the capitalized variant tag —
     /// a TRY arm catches it by name (`TypeMismatch -> …`) — and also the payload newtype's
     /// identity. Field order mirrors the variant's declaration order; `frames` is appended
     /// by the caller. Dispatcher-internal kinds flatten to `{ kind, message }` since
     /// they're only catchable via `_`.
-    fn to_struct_fields<'a>(&self, brand: RegionBrand<'a>) -> (String, Vec<(String, KObject<'a>)>) {
+    fn to_struct_fields<'a>(
+        &self,
+        brand: RegionBrand<'a>,
+    ) -> (String, Vec<(&'static StaticName<ValueSymbol>, KObject<'a>)>) {
         match self {
             KErrorKind::TypeMismatch { arg, expected, got } => (
                 "TypeMismatch".to_string(),
                 vec![
+                    (&FIELD.arg, KObject::KString(brand.allocator().text(arg))),
                     (
-                        "arg".to_string(),
-                        KObject::KString(brand.allocator().text(arg)),
-                    ),
-                    (
-                        "expected".to_string(),
+                        &FIELD.expected,
                         KObject::KString(brand.allocator().text(expected)),
                     ),
-                    (
-                        "got".to_string(),
-                        KObject::KString(brand.allocator().text(got)),
-                    ),
+                    (&FIELD.got, KObject::KString(brand.allocator().text(got))),
                 ],
             ),
             KErrorKind::MissingArg(name) => (
                 "MissingArg".to_string(),
-                vec![(
-                    "name".to_string(),
-                    KObject::KString(brand.allocator().text(name)),
-                )],
+                vec![(&FIELD.name, KObject::KString(brand.allocator().text(name)))],
             ),
             KErrorKind::UnboundName(name) => (
                 "UnboundName".to_string(),
-                vec![(
-                    "name".to_string(),
-                    KObject::KString(brand.allocator().text(name)),
-                )],
+                vec![(&FIELD.name, KObject::KString(brand.allocator().text(name)))],
             ),
             KErrorKind::ArityMismatch { expected, got } => (
                 "ArityMismatch".to_string(),
                 vec![
-                    ("expected".to_string(), KObject::Number(*expected as f64)),
-                    ("got".to_string(), KObject::Number(*got as f64)),
+                    (&FIELD.expected, KObject::Number(*expected as f64)),
+                    (&FIELD.got, KObject::Number(*got as f64)),
                 ],
             ),
             KErrorKind::AmbiguousDispatch { expr, candidates } => (
                 "AmbiguousDispatch".to_string(),
                 vec![
-                    (
-                        "expr".to_string(),
-                        KObject::KString(brand.allocator().text(expr)),
-                    ),
-                    (
-                        "candidates".to_string(),
-                        KObject::Number(*candidates as f64),
-                    ),
+                    (&FIELD.expr, KObject::KString(brand.allocator().text(expr))),
+                    (&FIELD.candidates, KObject::Number(*candidates as f64)),
                 ],
             ),
             KErrorKind::DispatchFailed { expr, reason } => (
                 "DispatchFailed".to_string(),
                 vec![
+                    (&FIELD.expr, KObject::KString(brand.allocator().text(expr))),
                     (
-                        "expr".to_string(),
-                        KObject::KString(brand.allocator().text(expr)),
-                    ),
-                    (
-                        "reason".to_string(),
+                        &FIELD.reason,
                         KObject::KString(brand.allocator().text(reason)),
                     ),
                 ],
             ),
             KErrorKind::NestedBinder { expr, .. } => (
                 "NestedBinder".to_string(),
-                vec![(
-                    "expr".to_string(),
-                    KObject::KString(brand.allocator().text(expr)),
-                )],
+                vec![(&FIELD.expr, KObject::KString(brand.allocator().text(expr)))],
             ),
             KErrorKind::ShapeError(msg) => (
                 "ShapeError".to_string(),
                 vec![(
-                    "message".to_string(),
+                    &FIELD.message,
                     KObject::KString(brand.allocator().text(msg)),
                 )],
             ),
@@ -407,9 +420,10 @@ impl KErrorKind {
                 span,
                 file,
             } => {
-                let mut fields: Vec<(String, KObject<'a>)> = Vec::with_capacity(6);
+                let mut fields: Vec<(&'static StaticName<ValueSymbol>, KObject<'a>)> =
+                    Vec::with_capacity(6);
                 fields.push((
-                    "message".to_string(),
+                    &FIELD.message,
                     KObject::KString(brand.allocator().text(message)),
                 ));
                 let (path, line, col_utf16) = match (span, file) {
@@ -427,23 +441,20 @@ impl KErrorKind {
                 // in-language consumers can pattern-match on byte ranges;
                 // resolved fields fall back to "" / 0.
                 fields.push((
-                    "span_start".to_string(),
+                    &FIELD.span_start,
                     KObject::Number(span_start.unwrap_or(0) as f64),
                 ));
                 fields.push((
-                    "span_end".to_string(),
+                    &FIELD.span_end,
                     KObject::Number(span_end.unwrap_or(0) as f64),
                 ));
                 fields.push((
-                    "path".to_string(),
+                    &FIELD.path,
                     KObject::KString(brand.allocator().text(&path.unwrap_or_default())),
                 ));
+                fields.push((&FIELD.line, KObject::Number(line.unwrap_or(0) as f64)));
                 fields.push((
-                    "line".to_string(),
-                    KObject::Number(line.unwrap_or(0) as f64),
-                ));
-                fields.push((
-                    "col_utf16".to_string(),
+                    &FIELD.col_utf16,
                     KObject::Number(col_utf16.unwrap_or(0) as f64),
                 ));
                 ("ParseError".to_string(), fields)
@@ -451,7 +462,7 @@ impl KErrorKind {
             KErrorKind::User(msg) => (
                 "User".to_string(),
                 vec![(
-                    "message".to_string(),
+                    &FIELD.message,
                     KObject::KString(brand.allocator().text(msg)),
                 )],
             ),
@@ -471,12 +482,9 @@ impl KErrorKind {
                 (
                     name.to_string(),
                     vec![
+                        (&FIELD.kind, KObject::KString(brand.allocator().text(name))),
                         (
-                            "kind".to_string(),
-                            KObject::KString(brand.allocator().text(name)),
-                        ),
-                        (
-                            "message".to_string(),
+                            &FIELD.message,
                             KObject::KString(brand.allocator().text(&format!("{self}"))),
                         ),
                     ],

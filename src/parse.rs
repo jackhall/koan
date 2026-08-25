@@ -15,4 +15,4 @@ mod triple_list;
 mod whitespace;
 
 pub use expression_tree::{parse, parse_with_path, parse_with_source};
-pub use triple_list::{FieldNameKind, parse_pair_list};
+pub use triple_list::{FieldNameKind, parse_pair_list, parse_type_tag_names};

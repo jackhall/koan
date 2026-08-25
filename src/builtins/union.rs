@@ -113,27 +113,14 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // Pre-scan the variant tags so every variant has a stable relative index before any payload
     // elaborates: a payload naming a later-declared sibling must mint the index that sibling will
     // fill. The binder itself is not a member — it denotes the union of them all.
-    let tags = match pair_list_names(
-        &schema_expr,
-        "UNION schema",
-        FieldNameKind::Type,
-        &ctx.registries.labels,
-    ) {
-        Ok(tags) => tags,
-        Err(message) => return Action::done(Err(KError::new(KErrorKind::ShapeError(message)))),
-    };
     // Every tag is the symbol its own `Type` token minted, so the window, the sealed member nodes
     // and every later diagnostic share one classified currency with no re-derivation.
+    let tags: Vec<TypeSymbol> =
+        match pair_list_names(&schema_expr, "UNION schema", &ctx.registries.labels) {
+            Ok(tags) => tags,
+            Err(message) => return Action::done(Err(KError::new(KErrorKind::ShapeError(message)))),
+        };
     let binder = name;
-    let tags: Vec<TypeSymbol> = tags
-        .into_iter()
-        .map(|tag| {
-            let BinderSymbol::Type(tag) = tag else {
-                unreachable!("FieldNameKind::Type admits only Type tokens")
-            };
-            tag
-        })
-        .collect();
     // The window this union's variants fill: the enclosing module body's, when it announced this
     // binder, else one this declaration owns — the one-binder special case of the same machinery.
     let window = match ctx.scope.own_declaration_window() {
