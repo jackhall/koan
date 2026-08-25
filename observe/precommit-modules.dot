@@ -573,7 +573,6 @@ digraph {
     "koan::machine::execute::decide::exec" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::decide::exec" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::decide::exec" -> "koan::machine::execute::decide::ctx" [label="uses", style="dashed"];
-    "koan::machine::execute::decide::exec" -> "koan::machine::execute::harness" [label="uses", style="dashed"];
     "koan::machine::execute::decide::exec" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::decide::exec" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
     "koan::machine::execute::decide::exec" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];

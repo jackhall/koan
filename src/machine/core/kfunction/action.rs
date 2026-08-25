@@ -521,6 +521,7 @@ pub type CatchContinue<'a> = Box<
 /// statement's result at finish time (a deferred-`Expression` FN return: the return-type
 /// expression rides as the last leading statement, and the lowering's finish reads the resolved
 /// type and homes it as a `PerCall` contract for `func`).
+#[derive(Clone, Copy)]
 pub enum TailContract<'a> {
     Eager(Option<ReturnContract<'a>>),
     FromLastResult {

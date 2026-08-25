@@ -7,7 +7,7 @@ use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{DispatchOutcome, KError, KErrorKind};
 use crate::source::Spanned;
 
-use super::super::nodes::{NodeWork, WorkLabel};
+use super::super::nodes::WorkLabel;
 
 use super::super::outcome::DepTerminal;
 use super::super::outcome::continue_inline;
@@ -167,7 +167,7 @@ fn redispatch_continue<'step>(
             decide_only(move |ctx: &DecideCtx<'_, 'step, '_>, _id| finish(ctx, working_expr)),
         ),
     );
-    continue_inline(NodeWork::new(continuation), label)
+    continue_inline(continuation, label)
 }
 
 /// `DispatchOutcome::Deferred` arm: stage every eager part and park on them. No pick is captured

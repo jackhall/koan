@@ -278,7 +278,7 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
         decide_tail(
             inner,
             view.current_obligation(),
-            Some(view.current_scope().brand()),
+            view.current_scope().brand(),
         ),
         label,
     )
@@ -402,22 +402,19 @@ pub(super) fn stage_all_eager_parts<'step>(
 /// classifies — the keep-first carriage of the first caller's declared return down a tail chain.
 /// `None` inherits no obligation.
 ///
-/// `host` is the region of the frame this work installs under: `Some` erases the decide onto the
-/// bumped tier (its only capture is the `Copy` working expression), `None` erases it owning, for a
-/// placement whose fresh cart is not yet reachable as a brand.
+/// `host` is the region of the frame this work installs under — the ambient brand for a kept cart
+/// or a submission, or the brand a fresh replacement's constructor mints off the cart it installs.
+/// The decide's only capture is the `Copy` working expression, so it always erases onto the bumped
+/// tier.
 pub(in crate::machine::execute) fn decide_tail<'step>(
     expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
-    host: Option<RegionBrand<'step>>,
-) -> NodeWork<'step, KoanWorkload> {
+    host: RegionBrand<'step>,
+) -> NodeContinuation<'step> {
     // A birth decide waits on no deps: it runs on first poll, classifies, and routes.
     let decide =
         decide_only(move |view: &DecideCtx<'_, 'step, '_>, _id| classify_dispatch(view, expr));
-    let call = match host {
-        Some(host) => erase_bumped(host, decide),
-        None => erase_boxed(decide),
-    };
-    NodeWork::new(NodeContinuation::new(obligation, call))
+    NodeContinuation::new(obligation, erase_bumped(host, decide))
 }
 
 /// Build a [`NodeWork`](super::nodes::NodeWork) that fails on its first poll with `error`. The node

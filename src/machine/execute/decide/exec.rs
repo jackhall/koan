@@ -6,12 +6,11 @@
 //! Kept out of `ctx.rs` (the dispatcher facade) so the dispatcher core stays thin; pure body
 //! semantics live one layer down in [`crate::machine::core::kfunction::exec`].
 
-use super::super::harness::KoanWorkload;
-
-use super::super::nodes::{ChainOp, NodeWork, WorkLabel};
+use super::super::nodes::{ChainOp, WorkLabel};
 use super::super::obligation::ReturnObligation;
 use super::super::outcome::DepTerminal;
 use super::super::outcome::Outcome;
+use super::super::outcome::Replacement;
 use super::super::{NodeContinuation, decide_only, erase_boxed, erase_bumped};
 use super::ctx::DecideCtx;
 use std::rc::Rc;
@@ -44,8 +43,12 @@ pub(super) fn invoke_continue<'step>(
     match &picked.value().body {
         Body::Builtin(_) => Outcome::Continue {
             label: WorkLabel::of(&working_expr),
-            work: builtin_work(view, picked, working_expr, view.current_obligation()),
-            frame: FramePlacement::Inherit,
+            replacement: Replacement::inherit(builtin_work(
+                view,
+                picked,
+                working_expr,
+                view.current_obligation(),
+            )),
             chain: ChainOp::Unchanged,
             block_entry: BlockEntry::None,
         },
@@ -61,8 +64,8 @@ fn builtin_work<'step>(
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
     obligation: Option<ReturnObligation>,
-) -> NodeWork<'step, KoanWorkload> {
-    NodeWork::new(NodeContinuation::new(
+) -> NodeContinuation<'step> {
+    NodeContinuation::new(
         obligation,
         erase_bumped(
             view.current_scope().brand(),
@@ -70,7 +73,7 @@ fn builtin_work<'step>(
                 invoke_builtin(view, picked, working_expr)
             }),
         ),
-    ))
+    )
 }
 
 /// Frameless (`Inherit`), so the working expression and the slot's cart are the same region here as
@@ -222,32 +225,34 @@ fn body_continue<'step>(
     label: WorkLabel,
     obligation: Option<ReturnObligation>,
 ) -> Outcome<'step> {
-    let work_frame = Rc::clone(&frame);
-    // Owning: the lowered statements and the `Rc` cart need drop glue, so the body enter stays on
-    // the boxed tier.
-    let continuation = erase_boxed(
-        move |view: &DecideCtx<'_, 'step, '_>,
-              _results: &[Result<DepTerminal<'_>, KError>],
-              _idx: NodeId| {
-            let brand = view.current_scope().brand();
-            super::run_action(
-                view,
-                Action::tail(
-                    leading
-                        .into_iter()
-                        .map(|e| WorkingExpression::from_ast(brand, e))
-                        .collect(),
-                    WorkingExpression::from_ast(brand, tail),
-                    contract,
-                    FramePlacement::Inherit,
-                    BlockEntry::FrameScope(work_frame),
-                ),
-            )
-        },
-    );
+    let replacement = Replacement::fresh_tail(&frame, |_host| {
+        let work_frame = Rc::clone(&frame);
+        // Owning: the lowered statements and the `Rc` cart need drop glue, so the body enter stays
+        // on the boxed tier.
+        let continuation = erase_boxed(
+            move |view: &DecideCtx<'_, '_, '_>,
+                  _results: &[Result<DepTerminal<'_>, KError>],
+                  _idx: NodeId| {
+                let brand = view.current_scope().brand();
+                super::run_action(
+                    view,
+                    Action::tail(
+                        leading
+                            .into_iter()
+                            .map(|e| WorkingExpression::from_ast(brand, e))
+                            .collect(),
+                        WorkingExpression::from_ast(brand, tail),
+                        contract,
+                        FramePlacement::Inherit,
+                        BlockEntry::FrameScope(work_frame),
+                    ),
+                )
+            },
+        );
+        NodeContinuation::new(obligation, continuation)
+    });
     Outcome::Continue {
-        work: NodeWork::new(NodeContinuation::new(obligation, continuation)),
-        frame: FramePlacement::FreshTail { frame },
+        replacement,
         chain: ChainOp::Unchanged,
         block_entry: BlockEntry::None,
         label,

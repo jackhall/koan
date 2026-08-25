@@ -503,12 +503,12 @@ impl<'run> Host<'run> {
                 }
             }
             Outcome::Continue {
-                work,
-                frame,
+                replacement,
                 chain,
                 block_entry,
                 label,
             } => {
+                let (work, frame) = replacement.into_parts();
                 // A tail iteration (`FreshTail`) retires this scope before the fresh cart is
                 // installed for the next; other placements keep the current scope live.
                 if matches!(frame, FramePlacement::FreshTail { .. }) {

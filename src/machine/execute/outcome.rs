@@ -15,7 +15,9 @@
 
 use crate::machine::DeliveredCarried;
 use crate::machine::core::resolve_location;
-use crate::machine::core::{BlockEntry, FramePlacement, RegionBrand, ReturnContract, ScopeId};
+use crate::machine::core::{
+    BlockEntry, CallFrame, FramePlacement, FrameStorageExt, RegionBrand, ReturnContract, ScopeId,
+};
 #[cfg(test)]
 use crate::machine::model::Carried;
 use crate::machine::model::WorkingExpression;
@@ -27,8 +29,10 @@ use crate::machine::Scope;
 use crate::machine::{KError, NodeId, TraceFrame};
 use crate::scheduler::Deps;
 use crate::scheduler::EdgeId;
+use crate::witnessed::erase_to_static;
 use crate::witnessed::reattachable;
 use crate::witnessed::{BumpAllocator, BumpVec};
+use std::rc::Rc;
 
 use super::StepCarried;
 use super::decide::{DecideCtx, DepRequest, propagate_dep_error};
@@ -48,8 +52,9 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     /// reaches (built inside its witness closure), so `finalize` seals it without an
     /// asserted-co-location bundle. The sole value terminal for both channels (object and type).
     Done(Result<StepCarried<'step>, KError>),
-    /// The node lives: install `work` and run again immediately (no park). `chain` is pre-decided at
-    /// the construction site, while the contract variant is still live.
+    /// The node lives: install `replacement`'s work under its frame placement and run again
+    /// immediately (no park). `chain` is pre-decided at the construction site, while the contract
+    /// variant is still live.
     ///
     /// A body's non-tail (leading) statements are NOT carried here — a producer with leading
     /// statements waits on them as deps (a [`BlockRequest::Body`]) and emits this `Continue` only
@@ -57,8 +62,7 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     /// declared-return obligation likewise does not ride here: it is set on `work`'s
     /// [`NodeContinuation`] at the construction site, and the next step deposits it.
     Continue {
-        work: NodeWork<'step, KoanWorkload>,
-        frame: FramePlacement,
+        replacement: Replacement,
         chain: ChainOp,
         block_entry: BlockEntry<'step>,
         /// What the next incarnation renders as if the drain deadlocks on it. Read only by the
@@ -91,15 +95,95 @@ impl<'step> Outcome<'step> {
     }
 }
 
+/// The replacement a [`Outcome::Continue`] installs: the frame placement and the work it hosts,
+/// coupled so a bumped closure's host region is definitionally the region of the frame the work
+/// installs under. The fields are private and the constructors below are the only doors; the fresh
+/// ones mint the host brand off the very frame the placement carries, so pairing a fresh placement
+/// with work hosted in a sibling cart's region is unrepresentable at a construction site.
+///
+/// The work rides **pre-erased**: a fresh constructor's host brand borrows the frame `Rc` that then
+/// moves into the placement, so the erase is what ends that borrow. The erased work is stored,
+/// never run, until the drain seals it against the slot's effective anchor — which for a fresh
+/// placement is the fresh cart itself, so the seal pins the very region hosting the bytes.
+pub(in crate::machine::execute) struct Replacement {
+    work: NodeWork<'static, KoanWorkload>,
+    frame: FramePlacement,
+}
+
+impl Replacement {
+    /// Keep the slot's cart: `work` is hosted wherever the deciding step built it — the current
+    /// brand, i.e. the kept cart or a strict ancestor, both of which outlive the slot.
+    pub(in crate::machine::execute) fn inherit(work: NodeContinuation<'_>) -> Replacement {
+        Replacement {
+            work: NodeWork::new(erase_to_static::<ContinuationFamily>(work)),
+            frame: FramePlacement::Inherit,
+        }
+    }
+
+    /// Install `frame` as the slot's TCO tail cart and host `build`'s continuation in that cart's
+    /// own region: the host brand is minted here, off the same frame the placement installs. `'f`
+    /// is the caller's borrow of its frame binding, so `'step`-typed captures shorten into `build`
+    /// by ordinary covariance.
+    pub(in crate::machine::execute) fn fresh_tail<'f, F>(
+        frame: &'f Rc<CallFrame>,
+        build: F,
+    ) -> Replacement
+    where
+        F: FnOnce(RegionBrand<'f>) -> NodeContinuation<'f>,
+    {
+        Replacement::fresh(
+            FramePlacement::FreshTail {
+                frame: Rc::clone(frame),
+            },
+            frame,
+            build,
+        )
+    }
+
+    /// [`Self::fresh_tail`]'s twin for a builtin's pre-built child cart (MATCH / TRY / EVAL).
+    pub(in crate::machine::execute) fn fresh_child<'f, F>(
+        frame: &'f Rc<CallFrame>,
+        build: F,
+    ) -> Replacement
+    where
+        F: FnOnce(RegionBrand<'f>) -> NodeContinuation<'f>,
+    {
+        Replacement::fresh(
+            FramePlacement::FreshChild {
+                frame: Rc::clone(frame),
+            },
+            frame,
+            build,
+        )
+    }
+
+    fn fresh<'f, F>(placement: FramePlacement, frame: &'f Rc<CallFrame>, build: F) -> Replacement
+    where
+        F: FnOnce(RegionBrand<'f>) -> NodeContinuation<'f>,
+    {
+        let work = build(frame.storage().brand());
+        Replacement {
+            work: NodeWork::new(erase_to_static::<ContinuationFamily>(work)),
+            frame: placement,
+        }
+    }
+
+    /// Decompose for the apply — the one reader.
+    pub(in crate::machine::execute) fn into_parts(
+        self,
+    ) -> (NodeWork<'static, KoanWorkload>, FramePlacement) {
+        (self.work, self.frame)
+    }
+}
+
 /// The dep-free re-decide-in-place `Continue`: replace the slot's work and run it again in the
 /// slot's current cart, scope, and chain.
 pub(in crate::machine::execute) fn continue_inline(
-    work: NodeWork<'_, KoanWorkload>,
+    work: NodeContinuation<'_>,
     label: WorkLabel,
 ) -> Outcome<'_> {
     Outcome::Continue {
-        work,
-        frame: FramePlacement::Inherit,
+        replacement: Replacement::inherit(work),
         chain: ChainOp::Unchanged,
         block_entry: BlockEntry::None,
         label,
@@ -137,16 +221,24 @@ pub(in crate::machine::execute) fn tail_continue<'step>(
         .current_obligation()
         .or_else(|| contract.map(ReturnObligation::seal));
     let label = WorkLabel::of(&tail);
-    // The decide's closure is hosted by the region the replacement work installs under. An
-    // `Inherit` tail stays in the slot's current cart, so its brand is in hand here; a fresh cart
-    // is only reachable through the rank-2 `with_scope` door, so those tails erase owning.
-    let host = match frame {
-        FramePlacement::Inherit => Some(view.current_scope().brand()),
-        FramePlacement::FreshChild { .. } | FramePlacement::FreshTail { .. } => None,
+    // The decide's closure is hosted by the region the replacement work installs under: an
+    // `Inherit` tail stays in the slot's current cart, whose brand is in hand here, and a fresh
+    // placement's constructor supplies the brand of the cart it installs.
+    let replacement = match frame {
+        FramePlacement::Inherit => Replacement::inherit(super::decide::decide_tail(
+            tail,
+            winner,
+            view.current_scope().brand(),
+        )),
+        FramePlacement::FreshTail { frame } => Replacement::fresh_tail(&frame, |host| {
+            super::decide::decide_tail(tail, winner, host)
+        }),
+        FramePlacement::FreshChild { frame } => Replacement::fresh_child(&frame, |host| {
+            super::decide::decide_tail(tail, winner, host)
+        }),
     };
     Outcome::Continue {
-        work: super::decide::decide_tail(tail, winner, host),
-        frame,
+        replacement,
         chain,
         block_entry,
         label,
@@ -400,7 +492,7 @@ where
 }
 
 /// Erase an owning closure onto the boxed tier — the tier for a continuation whose captures need
-/// drop glue (a `KError`, a `Vec` of lowered statements, an `Rc` frame).
+/// drop glue (a `KError`, an `Rc` frame).
 pub(in crate::machine::execute) fn erase_boxed<'step, F>(f: F) -> ContinuationCall<'step>
 where
     F: for<'view, 'd> FnOnce(

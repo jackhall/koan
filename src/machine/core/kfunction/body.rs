@@ -26,6 +26,7 @@ use crate::machine::core::carrier_witness::SealedFunction;
 /// `outer` chain for as long as its body runs (design/tail-call-optimization.md Lemma 3) — and the
 /// sealed [`ReturnObligation`](crate::machine::execute) the chain actually keeps is region-free
 /// `Copy` data resolved once, at the first read.
+#[derive(Clone, Copy)]
 pub enum ReturnContract<'a> {
     /// An FN / builtin call: check against `signature.return_type()`. The label defers — the seal
     /// keeps `site`, the call's own source extent, and the callable's `value_ktype`, and an error

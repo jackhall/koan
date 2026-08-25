@@ -1,11 +1,11 @@
-# allocation audit sweep, measured 2026-08-25 at af09c11d (uncommitted changes in the tree)
+# allocation audit sweep, measured 2026-08-25 at 773e2b13 (uncommitted changes in the tree)
 # columns: shape  allocations  symbols  bracketed
 # whole-program totals through the counting allocator; `bracketed` is the same run
 # without interpreter startup, from tests/allocation_baseline.rs, `-` where no test
 # brackets that shape. The terms differenced out of these are in terms.txt.
 # written by tools/alloc_audit.py --baseline; one file per commit swept
-builtin_call_calls40          3180     616    3171
-builtin_call_calls8           1526     424    1517
+builtin_call_calls40          3140     616    3131
+builtin_call_calls8           1518     424    1509
 empty                         1055     367       -
 operator_chain_operands128    3079     498    3070
 operator_chain_operands16     1301     386       -
@@ -13,10 +13,10 @@ scope_walk_depth10_calls40    3809     633    3800
 scope_walk_depth10_calls8     2791     569    2782
 scope_walk_depth2_calls40     2686     497    2677
 scope_walk_depth2_calls8      1666     433    1657
-tagged_construct_calls40      4225     828    4216
-tagged_construct_calls8       1802     476    1793
-tail_loop_steps10             1800     398       -
-tail_loop_steps100            6930     398    6921
+tagged_construct_calls40      4185     828    4176
+tagged_construct_calls8       1794     476    1785
+tail_loop_steps10             1789     398       -
+tail_loop_steps100            6829     398    6820
 user_fn_params1_calls40       2063     423    2054
 user_fn_params1_calls8        1336     391    1327
 user_fn_params8_calls40       2561     438    2552

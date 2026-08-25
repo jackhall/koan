@@ -166,7 +166,7 @@ fn add_with_chain_without_chain_panics() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.runtime.add_with_chain(
-        crate::machine::execute::decide::decide_tail(
+        crate::scheduler::nodes::NodeWork::new(crate::machine::execute::decide::decide_tail(
             WorkingExpression::new(
                 program.brand().region(),
                 &[Spanned::bare(WorkingPart::Ast(ExpressionPart::Literal(
@@ -174,8 +174,8 @@ fn add_with_chain_without_chain_panics() {
                 )))],
             ),
             None,
-            None,
-        ),
+            scope.brand(),
+        )),
         &[],
         scope,
         None,
