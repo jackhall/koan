@@ -16,7 +16,7 @@ use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
 use crate::machine::model::{Carried, Held, KObject};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::machine::{AdoptSeam, SplicedCell};
-use crate::source::{FileId, Span, Spanned};
+use crate::source::{FileId, SourceRef, Span, Spanned};
 
 use super::shape::{
     DispatchShape, FieldSlot, Part, PartClass, classify_dispatch_shape, operator_probe_for,
@@ -432,6 +432,13 @@ impl<'a> WorkingExpression<'a> {
             .map(|p| p.value.summarize(labels))
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    /// This expression's source extent, `Some` when both span and file are populated.
+    pub fn source_ref(&self) -> Option<SourceRef> {
+        self.span
+            .zip(self.file)
+            .map(|(span, file)| SourceRef { span, file })
     }
 }
 

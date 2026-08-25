@@ -90,14 +90,9 @@ impl AmbientContext {
         self.active_obligation.borrow_mut().take()
     }
 
-    /// Keep-first and park propagation hand copies onward while the current step keeps its own.
-    pub(in crate::machine::execute) fn current_obligation_duplicate(
-        &self,
-    ) -> Option<ReturnObligation> {
-        self.active_obligation
-            .borrow()
-            .as_ref()
-            .map(ReturnObligation::duplicate)
+    /// Keep-first and park propagation read copies onward while the current step keeps its own.
+    pub(in crate::machine::execute) fn current_obligation(&self) -> Option<ReturnObligation> {
+        *self.active_obligation.borrow()
     }
 
     pub(in crate::machine::execute) fn has_run_frame(&self) -> bool {

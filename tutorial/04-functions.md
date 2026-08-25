@@ -77,7 +77,7 @@ WRONG 5
 
 ```text
 error: type mismatch for argument '<return>': expected Str, got Number
-  in fn(WRONG <x>) (fn(WRONG <x>))
+  in :(FN (x :Number) -> Str) (WRONG 5) at <input>:2:1
 ```
 
 The indented `in …` line is the call trace that every error carries;

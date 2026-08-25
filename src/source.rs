@@ -17,6 +17,28 @@ pub struct Span {
     pub end: u32,
 }
 
+/// A resolved source extent: a span paired with the registered file it indexes
+/// into. `Copy` and lifetime-free, so a deferred diagnostic can retain one and
+/// render the underlying text only when it is spent.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SourceRef {
+    pub span: Span,
+    pub file: FileId,
+}
+
+impl SourceRef {
+    /// The trimmed source text this extent covers.
+    pub fn text(&self) -> String {
+        with(self.file, |f| {
+            f.text
+                .get(self.span.start as usize..self.span.end as usize)
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        })
+    }
+}
+
 /// 1-based source location for diagnostic rendering. `col` follows LSP convention:
 /// 1-based UTF-16 code unit count from the line start.
 #[derive(Clone, Debug, PartialEq, Eq)]

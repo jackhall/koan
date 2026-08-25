@@ -42,7 +42,7 @@ fn bound_bare_record_holding_a_home_closure_pins_and_reads_back() {
     ))
     .expect("the program evaluates without error");
     assert_eq!(
-        out, "{get = fn(), v = 5}\n",
+        out, "{get = :(FN () -> Number), v = 5}\n",
         "the pinned record reads back with its field value and captured closure intact"
     );
 }

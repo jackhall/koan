@@ -3,7 +3,7 @@
 //! lexical scope captured at definition time.
 
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
-use crate::source::Spanned;
+use crate::source::{SourceRef, Spanned};
 
 use crate::machine::core::DeliveredCarried;
 use crate::machine::core::carrier_witness::DeliveredFunction;
@@ -183,23 +183,6 @@ impl<'a> KFunction<'a> {
         self.captured
     }
 
-    /// The callable's shape for a diagnostic: keywords verbatim, each argument as its name in
-    /// angle brackets. A parameter name is a symbol, so the text resolves through the interner.
-    pub fn summarize(&self, registries: &RunRegistries) -> String {
-        let parts: Vec<String> = self
-            .signature
-            .elements()
-            .iter()
-            .map(|el| match el {
-                SignatureElement::Keyword(symbol) => render_label(symbol.symbol(), registries),
-                SignatureElement::Argument(arg) => {
-                    format!("<{}>", render_label(arg.name.symbol(), registries))
-                }
-            })
-            .collect();
-        format!("fn({})", parts.join(" "))
-    }
-
     /// Validate a positional call's `parts` against this signature: arity, keyword spellings, and
     /// each argument's type ([`slot_admits`]). Shared by [`Self::bind_args_into`] and the `exec`
     /// executor — the latter selects the call's delivery envelopes by `part_slots`, trusting the
@@ -305,11 +288,13 @@ impl<'a> KFunction<'a> {
     /// The reconstruction is the scheduler's own node: it goes straight to the eager-subs staging
     /// that dispatches the call, so it is built as a [`WorkingExpression`] in `brand`'s region, with
     /// each supplied field riding through as a [`WorkingPart::Ast`] slot and each signature keyword
-    /// bumped there as its own text.
+    /// bumped there as its own text. `site` is the invoked expression's own extent, carried onto
+    /// the reconstruction so it reports the source it stands in for rather than as location-free.
     pub fn reconstruct_positional<'b>(
         &self,
         brand: RegionBrand<'b>,
         fields: Vec<(Symbol, ExpressionPart<'b>)>,
+        site: Option<SourceRef>,
         registries: &RunRegistries,
     ) -> Result<WorkingExpression<'b>, KError> {
         let mut pairs = NamedPairs::from_fields(fields, registries)
@@ -328,7 +313,7 @@ impl<'a> KFunction<'a> {
                 registries,
             ))));
         }
-        Ok(WorkingExpression::new_from_iter(
+        Ok(WorkingExpression::build_from_iter(
             brand,
             self.signature.elements().iter().map(|el| {
                 Spanned::bare(WorkingPart::Ast(match el {
@@ -338,6 +323,8 @@ impl<'a> KFunction<'a> {
                         .expect("every named slot checked satisfiable above"),
                 }))
             }),
+            site.map(|s| s.span),
+            site.map(|s| s.file),
         ))
     }
 }

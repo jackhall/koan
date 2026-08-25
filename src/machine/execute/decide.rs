@@ -25,7 +25,7 @@ pub(in crate::machine::execute) use super::outcome::StepDeps;
 use super::outcome::{
     ParkDeps, TerminalDepFinish, continue_inline, dep_error_frame, tail_continue,
 };
-use crate::machine::model::labels::LabelInterner;
+use crate::machine::model::RunRegistries;
 use crate::scheduler::{Dep, Deps};
 use crate::witnessed::BumpAllocator;
 
@@ -203,11 +203,11 @@ pub(in crate::machine::execute) fn working_frame<'step>(
 pub(in crate::machine::execute) fn propagate_dep_error(
     e: &KError,
     frame: Option<DeferredTraceFrame<'_>>,
-    labels: &LabelInterner,
+    registries: &RunRegistries,
 ) -> KError {
     let cloned = e.clone_for_propagation();
     match frame {
-        Some(f) => cloned.with_frame(f.render(labels)),
+        Some(f) => cloned.with_frame(f.render(registries)),
         None => cloned,
     }
 }
@@ -261,10 +261,7 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
     inner: WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let label = WorkLabel::of(&inner);
-    continue_inline(
-        decide_tail(inner, view.current_obligation_duplicate()),
-        label,
-    )
+    continue_inline(decide_tail(inner, view.current_obligation()), label)
 }
 
 /// What a dispatch part walk produced — the splice / stage pass over a node's slots.
@@ -557,7 +554,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     // The return-type expression is the last leading statement, so its resolved
                     // value is the last terminal, read in place in the region it was delivered
                     // into.
-                    TailContract::FromLastResult { func } => {
+                    TailContract::FromLastResult { func, site } => {
                         let terminal = terminals[terminals.len() - 1];
                         let opened = terminal.cell.open_at();
                         let kt = match opened.value() {
@@ -581,7 +578,11 @@ pub(in crate::machine::execute) fn run_action<'step>(
                         };
                         // `KType` is a `Copy` handle, so the contract outlives the sub-dispatch's
                         // terminal without naming any region.
-                        Some(ReturnContract::PerCall { func, ret: kt })
+                        Some(ReturnContract::PerCall {
+                            func,
+                            ret: kt,
+                            site,
+                        })
                     }
                 };
                 // Against this finish's own wake-time view: the park re-deposited the established

@@ -513,10 +513,12 @@ fn apply_function<'step>(
                 .iter()
                 .map(|(name, part)| (name.symbol(), *part))
                 .collect();
-            match f
-                .value()
-                .reconstruct_positional(brand, fields, ctx.registries())
-            {
+            match f.value().reconstruct_positional(
+                brand,
+                fields,
+                expr.source_ref(),
+                ctx.registries(),
+            ) {
                 Ok(rebuilt) => install_eager_subs_track(ctx, rebuilt, f),
                 Err(e) => Outcome::Done(Err(e)),
             }

@@ -32,6 +32,7 @@ use crate::machine::{
     BindingIndex, DeclarationSite, DeliveredCarried, Installer, KError, KErrorKind,
 };
 use crate::scheduler::Deps;
+use crate::source::SourceRef;
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
 /// `Action::done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
@@ -522,7 +523,10 @@ pub type CatchContinue<'a> = Box<
 /// type and homes it as a `PerCall` contract for `func`).
 pub enum TailContract<'a> {
     Eager(Option<ReturnContract<'a>>),
-    FromLastResult { func: SealedFunction<'a> },
+    FromLastResult {
+        func: SealedFunction<'a>,
+        site: Option<SourceRef>,
+    },
 }
 
 /// What a builtin body (or a wake-time finish) returns: the binding-table writes it decided on,

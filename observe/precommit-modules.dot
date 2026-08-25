@@ -478,12 +478,14 @@ digraph {
     "koan::machine::core::kfunction::action" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::action" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::block_tail" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::body" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::exec" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::exec" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::exec" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
@@ -536,7 +538,6 @@ digraph {
     "koan::machine::execute::decide" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::execute::decide" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::decide::apply_callable" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::apply_callable" -> "koan::machine" [label="uses", style="dashed"];
@@ -667,6 +668,7 @@ digraph {
     "koan::machine::execute::finalize" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::execute::harness" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
+    "koan::machine::execute::finalize" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::harness" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::harness" -> "koan::machine" [label="uses", style="dashed"];
@@ -708,7 +710,7 @@ digraph {
     "koan::machine::execute::outcome" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::execute::outcome" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::execute::outcome" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::producer_id" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::step_carried" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::step_carried" -> "koan::machine" [label="uses", style="dashed"];

@@ -1060,7 +1060,7 @@ impl<'a> KObject<'a> {
                 format!("{{{}}}", parts.join(", "))
             }
             KObject::KExpression(e) => e.summarize(&registries.labels),
-            KObject::KFunction(f) => f.summarize(registries),
+            KObject::KFunction(f) => f.value_ktype().name(registries),
             KObject::Tagged { tag, value, .. } => {
                 format!(
                     "{}({})",

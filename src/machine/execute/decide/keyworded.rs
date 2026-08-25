@@ -163,7 +163,7 @@ fn redispatch_continue<'step>(
 ) -> Outcome<'step> {
     let label = WorkLabel::of(&working_expr);
     let continuation = with_obligation(
-        view.current_obligation_duplicate(),
+        view.current_obligation(),
         ignore_results(Box::new(move |ctx, _id| finish(ctx, working_expr))),
     );
     continue_inline(NodeWork::new(continuation), label)

@@ -3,6 +3,17 @@
 # sweep file of the same SHA; `fixed` is the empty program's own absolute total —
 # startup and builtin seeding, which every shape carries
 # managed by tools/alloc_audit.py --baseline; newest first, capped to 5 sweeps
+2026-08-25 7640acaa+ fixed 1055.00 367.00
+2026-08-25 7640acaa+ step 84.00 0.00
+2026-08-25 7640acaa+ dispatch 22.88 1.00
+2026-08-25 7640acaa+ scope_walk_depth2 40.91 2.00
+2026-08-25 7640acaa+ scope_walk_depth10 40.84 2.00
+2026-08-25 7640acaa+ scope_walk_scope -0.01 0.00
+2026-08-25 7640acaa+ builtin_call 62.69 6.00
+2026-08-25 7640acaa+ user_fn_params1 28.72 1.00
+2026-08-25 7640acaa+ user_fn_params8 39.66 1.00
+2026-08-25 7640acaa+ user_fn_parameter 1.56 0.00
+2026-08-25 7640acaa+ tagged_construct 90.72 11.00
 2026-08-25 b2227eca+ fixed 1055.00 367.00
 2026-08-25 b2227eca+ step 92.00 0.00
 2026-08-25 b2227eca+ dispatch 22.88 1.00

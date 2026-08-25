@@ -39,8 +39,8 @@ pub use carrier_witness::{
     SealedOperatorGroup, SplicedCell,
 };
 pub(crate) use carrier_witness::{GroupSeal, OverloadSeal, product_reaches_region, read_resting};
-pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
+pub(crate) use kerror::{kerror_ktype, resolve_location};
 pub(crate) use kfunction::action::{
     Action, ActionKind, AwaitContinue, BlockEntry, BlockRequest, BodyCtx, BodyPlacement, BoundArgs,
     CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx, FramePlacement, SubDispatch,

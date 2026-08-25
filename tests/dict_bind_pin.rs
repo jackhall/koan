@@ -44,7 +44,7 @@ fn bound_bare_dict_holding_a_home_closure_pins_and_reads_back() {
     ))
     .expect("the program evaluates without error");
     assert_eq!(
-        out, "{\"f\": fn()}\n",
+        out, "{\"f\": :(FN () -> Number)}\n",
         "the pinned dict reads back with its captured closure intact"
     );
 }

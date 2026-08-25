@@ -475,7 +475,7 @@ impl<'run> Host<'run> {
                     .cloned()
                     .expect("a step always runs against a cart");
                 let obligation = (!step_frame.non_dying())
-                    .then(|| self.ambient.current_obligation_duplicate())
+                    .then(|| self.ambient.current_obligation())
                     .flatten();
                 match result {
                     Ok(carrier) => {
@@ -493,9 +493,11 @@ impl<'run> Host<'run> {
                     }
                     // An error finalizes bare (no value, no witness); the frame-gated obligation
                     // still labels it with the callee's trace frame.
-                    Err(error) => {
-                        StepVerdict::Done(Err(finalize_error(error, obligation.as_ref())))
-                    }
+                    Err(error) => StepVerdict::Done(Err(finalize_error(
+                        error,
+                        obligation.as_ref(),
+                        self.ambient.registries(),
+                    ))),
                 }
             }
             Outcome::Continue {
@@ -590,7 +592,7 @@ impl<'run> Host<'run> {
                         let error = super::decide::propagate_dep_error(
                             dep_error,
                             park_error_frame,
-                            &self.ambient.registries().labels,
+                            self.ambient.registries(),
                         );
                         return self.apply(
                             sched,
@@ -627,8 +629,7 @@ impl<'run> Host<'run> {
                 // Carry the ambient obligation across the park so the resumed step's
                 // declared-return check still fires. The wrap sits on the outermost closure, so
                 // every variant — including the dep-error short-circuit — runs under it.
-                let continuation =
-                    with_obligation(self.ambient.current_obligation_duplicate(), continuation);
+                let continuation = with_obligation(self.ambient.current_obligation(), continuation);
                 // The degenerate replace: same cart, scope, and chain, so no anchor swaps in —
                 // and with it the slot keeps the `WorkLabel` its submission minted.
                 replace_verdict(NodeWork::new(continuation), None)
@@ -644,7 +645,7 @@ impl<'run> Host<'run> {
                 // claim its binder may have retired in the meantime.
                 let installed = sched.install_edge_from(source);
                 anchor.own_edges([installed.edge_id()]);
-                let Some(obligation) = self.ambient.current_obligation_duplicate() else {
+                let Some(obligation) = self.ambient.current_obligation() else {
                     return match installed {
                         InstalledEdge::Filled(edge) => StepVerdict::Forward(edge),
                         InstalledEdge::Parked(_) => StepVerdict::Alias(source),

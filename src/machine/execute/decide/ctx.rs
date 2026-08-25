@@ -212,13 +212,11 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
         self.ambient.deposit_obligation(obligation)
     }
 
-    /// Duplicate the chain's established obligation without removing it — keep-first and park
-    /// propagation read it to wrap the replacement continuation, and `enter_user_fn` asks
+    /// Read the chain's established obligation without removing it — keep-first and park
+    /// propagation copy it to wrap the replacement continuation, and `enter_user_fn` asks
     /// `.is_some()` of it to detect a tail call within an established chain.
-    pub(in crate::machine::execute) fn current_obligation_duplicate(
-        &self,
-    ) -> Option<ReturnObligation> {
-        self.ambient.current_obligation_duplicate()
+    pub(in crate::machine::execute) fn current_obligation(&self) -> Option<ReturnObligation> {
+        self.ambient.current_obligation()
     }
 
     /// Build the per-part `bare_outcomes` cache: one [`resolve_name`] per bare-name part, `None`

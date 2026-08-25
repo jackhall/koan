@@ -7,6 +7,7 @@ use crate::machine::{DeliveredCarried, KError, KErrorKind};
 
 use super::harness::Host;
 use super::obligation::ReturnObligation;
+use super::outcome::DeferredTraceFrame;
 use crate::machine::model::RunRegistries;
 
 /// How a finished value disposes against its declared return, decided by a single read pass over the
@@ -97,7 +98,7 @@ impl NodeFinalize for Host<'_> {
             Disposition::Mismatch(got) => Err(return_type_mismatch(
                 declared,
                 per_call,
-                obligation.label(),
+                obligation.frame(),
                 got,
                 registries,
             )),
@@ -124,15 +125,10 @@ impl NodeFinalize for Host<'_> {
 pub(in crate::machine::execute) fn finalize_error(
     error: KError,
     contract: Option<&ReturnObligation>,
+    registries: &RunRegistries,
 ) -> KError {
     match contract {
-        Some(obligation) => {
-            let label = obligation.label();
-            error.with_frame(crate::machine::TraceFrame::bare(
-                label.to_string(),
-                label.to_string(),
-            ))
-        }
+        Some(obligation) => error.with_frame(obligation.frame().render(registries)),
         None => error,
     }
 }
@@ -150,7 +146,6 @@ pub(in crate::machine::execute) fn check_spliced_return(
     let Some((declared, per_call)) = obligation.declared() else {
         return Ok(());
     };
-    let label = obligation.label();
     let matched = match carried {
         Carried::Object(object) => declared.matches_value(object, registries),
         Carried::Type(t) => declared.matches_type(t, types),
@@ -166,18 +161,23 @@ pub(in crate::machine::execute) fn check_spliced_return(
         Carried::UnresolvedType(ti) => crate::machine::model::render_label(ti.symbol(), registries),
     };
     Err(return_type_mismatch(
-        declared, per_call, label, got, registries,
+        declared,
+        per_call,
+        obligation.frame(),
+        got,
+        registries,
     ))
 }
 
 #[cfg(test)]
 mod tests;
 
-/// The labelled `TypeMismatch` a failed declared-return check raises.
+/// The framed `TypeMismatch` a failed declared-return check raises. The obligation's retained
+/// frame renders here — the one point this contract's trace text is built.
 fn return_type_mismatch(
     declared: KType,
     per_call: bool,
-    label: &str,
+    frame: DeferredTraceFrame<'static>,
     got: String,
     registries: &RunRegistries,
 ) -> KError {
@@ -191,8 +191,5 @@ fn return_type_mismatch(
         expected,
         got,
     })
-    .with_frame(crate::machine::TraceFrame::bare(
-        label.to_string(),
-        label.to_string(),
-    ))
+    .with_frame(frame.render(registries))
 }

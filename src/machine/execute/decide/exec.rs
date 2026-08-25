@@ -42,7 +42,7 @@ pub(super) fn invoke_continue<'step>(
     match &picked.value().body {
         Body::Builtin(_) => Outcome::Continue {
             label: WorkLabel::of(&working_expr),
-            work: builtin_work(picked, working_expr, view.current_obligation_duplicate()),
+            work: builtin_work(picked, working_expr, view.current_obligation()),
             frame: FramePlacement::Inherit,
             chain: ChainOp::Unchanged,
             block_entry: BlockEntry::None,
@@ -133,9 +133,12 @@ fn enter_user_fn<'step>(
     // An established contract chain is exactly one with a live obligation, so the duplicate's
     // presence answers both reads: a deferred-return FN dispatched as a tail call inside one skips
     // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
-    let obligation = view.current_obligation_duplicate();
+    let obligation = view.current_obligation();
     let in_chain = obligation.is_some();
     let label = WorkLabel::of(&working_expr);
+    // The call's own extent, retained `Copy` so a contract's error arm can render the invoked
+    // expression's text without the success path paying for it.
+    let site = working_expr.source_ref();
     match run_user_fn(
         function,
         &named_carriers,
@@ -148,10 +151,14 @@ fn enter_user_fn<'step>(
             // stamped at the lift boundary like any FN return, so a recursive deferred body stays
             // TCO-flat.
             let contract = match ret {
-                PerCallReturn::FromSignature => ReturnContract::Function(picked.reseal()),
+                PerCallReturn::FromSignature => ReturnContract::Function {
+                    func: picked.reseal(),
+                    site,
+                },
                 PerCallReturn::Resolved(ret) => ReturnContract::PerCall {
                     func: picked.reseal(),
                     ret,
+                    site,
                 },
             };
             body_continue(
@@ -180,6 +187,7 @@ fn enter_user_fn<'step>(
                 *tail,
                 TailContract::FromLastResult {
                     func: picked.reseal(),
+                    site,
                 },
                 label,
                 obligation,

@@ -12,7 +12,7 @@ BOOM 1
 
 ```text
 error: unbound name 'mystery'
-  in fn(BOOM <x>) (fn(BOOM <x>))
+  in :(FN (x :Number) -> Str) (BOOM 1) at <input>:2:1
 ```
 
 The `in …` lines are the call trace, innermost first. An error raised at the top

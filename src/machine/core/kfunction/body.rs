@@ -5,6 +5,7 @@
 use crate::machine::model::{ExpressionPart, KExpression};
 
 use crate::machine::model::KType;
+use crate::source::SourceRef;
 
 use crate::machine::core::carrier_witness::SealedFunction;
 
@@ -14,7 +15,8 @@ use crate::machine::core::carrier_witness::SealedFunction;
 /// declared type directly, `Function` reads it off the callee's signature.
 ///
 /// Sealed into a `ReturnObligation` — pure `Copy` data
-/// (the declared type plus a trace label) that rides the tail chain as a continuation capture. A
+/// (the declared type plus a deferred trace frame) that rides the tail chain as a continuation
+/// capture. A
 /// tail chain keeps the **first** contract (the keep-first rule at the `Outcome::Continue`
 /// construction sites in the execute harness, which wraps each replacement continuation with the
 /// established obligation), so the check fires against the original caller's declared return, not the
@@ -27,8 +29,13 @@ use crate::machine::core::carrier_witness::SealedFunction;
 /// sealed [`ReturnObligation`](crate::machine::execute) the chain actually keeps is region-free
 /// `Copy` data resolved once, at the first read.
 pub enum ReturnContract<'a> {
-    /// An FN / builtin call: check against `signature.return_type()`, label via `summarize()`.
-    Function(SealedFunction<'a>),
+    /// An FN / builtin call: check against `signature.return_type()`. The label defers — the seal
+    /// keeps `site`, the call's own source extent, and the callable's `value_ktype`, and an error
+    /// arm renders the pair.
+    Function {
+        func: SealedFunction<'a>,
+        site: Option<SourceRef>,
+    },
     /// A MATCH / TRY arm's `-> :T`: check the lifted value against `ret`, label with `kind`. `ret`
     /// is a `Copy` handle, so this arm names no region at all.
     Arm { ret: KType, kind: &'static str },
@@ -40,6 +47,7 @@ pub enum ReturnContract<'a> {
     PerCall {
         func: SealedFunction<'a>,
         ret: KType,
+        site: Option<SourceRef>,
     },
 }
 

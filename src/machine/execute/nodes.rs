@@ -261,7 +261,7 @@ impl ChainOp {
             return ChainOp::Unchanged;
         };
         match contract {
-            Some(ReturnContract::Function(_) | ReturnContract::PerCall { .. }) => {
+            Some(ReturnContract::Function { .. } | ReturnContract::PerCall { .. }) => {
                 ChainOp::AssembleBody { body_index }
             }
             _ => ChainOp::PushBlock {

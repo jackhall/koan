@@ -6,7 +6,7 @@ use crate::machine::model::{
     KKind, KType, RecursiveGroupWindow, RelativeSchema, StaticName, TypeMemberMap, TypeRegistry,
     TypeSymbol,
 };
-use crate::source::{self, FileId, SourceLoc, Span};
+use crate::source::{self, FileId, SourceLoc, SourceRef, Span};
 use crate::witnessed::RegionHandleFamily;
 
 use super::{DeliveredCarried, FoldingBrand, RegionBrand, SubstrateDoor};
@@ -97,9 +97,10 @@ pub enum KErrorKind {
     },
 }
 
-/// One entry in an error's call-stack trace. `function` and `expression` are
-/// `summarize()` text; `location` is `Some` when the originating expression
-/// had both `span` and `file` populated.
+/// One entry in an error's call-stack trace. `function` names the frame — a call site's source
+/// text, or a fixed scheduler-internal tag; `expression` renders what ran there — an expression's
+/// `summarize()` text, or a callable's by-name type. `location` is `Some` when the originating
+/// expression had both `span` and `file` populated.
 #[derive(Clone)]
 pub struct TraceFrame {
     pub function: String,
@@ -132,17 +133,20 @@ impl TraceFrame {
     }
 }
 
-fn location_from_expr(expr: &WorkingExpression<'_>) -> Option<SourceLoc> {
-    expr.span.zip(expr.file).map(|(span, file)| {
-        source::with(file, |f| {
-            let (line, col_utf16) = f.resolve(span.start);
-            SourceLoc {
-                path: f.path.clone(),
-                line,
-                col_utf16,
-            }
-        })
+/// Resolve a source extent to the 1-based location its start sits at.
+pub(crate) fn resolve_location(site: SourceRef) -> SourceLoc {
+    source::with(site.file, |f| {
+        let (line, col_utf16) = f.resolve(site.span.start);
+        SourceLoc {
+            path: f.path.clone(),
+            line,
+            col_utf16,
+        }
     })
+}
+
+fn location_from_expr(expr: &WorkingExpression<'_>) -> Option<SourceLoc> {
+    expr.source_ref().map(resolve_location)
 }
 
 impl KError {

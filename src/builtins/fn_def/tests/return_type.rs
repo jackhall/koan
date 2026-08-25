@@ -148,8 +148,15 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     }
     assert!(
         err.frames.iter().any(|f| f.function.contains("LIE")),
-        "expected a frame mentioning LIE, got {:?}",
+        "expected a frame naming the call site LIE, got {:?}",
         err.frames.iter().map(|f| &f.function).collect::<Vec<_>>(),
+    );
+    assert!(
+        err.frames
+            .iter()
+            .any(|f| f.expression.contains(":(FN () -> Number)")),
+        "the same frame carries the callable's by-name identity, got {:?}",
+        err.frames.iter().map(|f| &f.expression).collect::<Vec<_>>(),
     );
 }
 
@@ -247,11 +254,12 @@ fn user_fn_with_any_return_type_accepts_anything() {
 
 /// Keep-first across a cross-function tail chain: `OUTER`'s declared `-> Number` governs the whole
 /// chain, so a violation introduced only by the chain's *final* tail value still errors against
-/// `OUTER`'s contract — and the error's trace label names `OUTER` (the first call), not the inner
+/// `OUTER`'s contract — and the error's trace frame names `OUTER` (the first call), not the inner
 /// callee that produced the offending value. `MIDDLE` and `INNER` declare `-> Any` (FN registration
 /// requires a `-> Type`), so their own contracts would *accept* the `Str`; the mismatch fires only
 /// because keep-first keeps `OUTER`'s `-> Number` across both hops (`OUTER -> MIDDLE -> INNER`) and
-/// carries its precomputed label. This exercises the invoke-continue/redispatch keep-first over a
+/// carries its retained frame, rendered at error time from `OUTER`'s call site and signature. This
+/// exercises the invoke-continue/redispatch keep-first over a
 /// two-deep cross-function chain, not self-recursion.
 #[test]
 fn keep_first_across_tail_chain_errors_against_outer_contract() {
@@ -295,8 +303,20 @@ fn keep_first_across_tail_chain_errors_against_outer_contract() {
     }
     assert!(
         err.frames.iter().any(|f| f.function.contains("OUTER")),
-        "the kept-first contract's precomputed trace label names OUTER (the first call), got {:?}",
+        "the kept-first contract's frame names the first call site, OUTER, got {:?}",
         err.frames.iter().map(|f| &f.function).collect::<Vec<_>>(),
+    );
+    assert!(
+        err.frames
+            .iter()
+            .any(|f| f.expression.contains(":(FN () -> Number)")),
+        "the frame's by-name identity is OUTER's own signature, got {:?}",
+        err.frames.iter().map(|f| &f.expression).collect::<Vec<_>>(),
+    );
+    assert!(
+        !err.frames.iter().any(|f| f.expression.contains("-> Any")),
+        "no callee's -> Any signature reaches the frame — keep-first from both directions, got {:?}",
+        err.frames.iter().map(|f| &f.expression).collect::<Vec<_>>(),
     );
 }
 
@@ -350,8 +370,15 @@ fn spliced_bare_name_tail_checks_declared_return() {
     }
     assert!(
         err.frames.iter().any(|f| f.function.contains("WRAP")),
-        "the splice check labels the mismatch with the obligation's FN (WRAP), got {:?}",
+        "the splice check frames the mismatch at the obligation's call site (WRAP), got {:?}",
         err.frames.iter().map(|f| &f.function).collect::<Vec<_>>(),
+    );
+    assert!(
+        err.frames
+            .iter()
+            .any(|f| f.expression.contains(":(FN () -> Number)")),
+        "and carries WRAP's by-name identity beside it, got {:?}",
+        err.frames.iter().map(|f| &f.expression).collect::<Vec<_>>(),
     );
 
     // Matching: the bare-name tail forwards a Number; the splice check passes and the value arrives.
