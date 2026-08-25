@@ -2,8 +2,8 @@
 # (the four scoring columns are total cost / fixed denominator D=1000;
 #  root-loc is the absolute subtree LOC, tracked for context only)
 # managed by `tools/modgraph score|regen --baseline`; newest first, capped to 5 entries
+2026-08-25 14ace348+ 6781.70 2532.11 1731.54 2518.05 25454
 2026-08-25 0db62d08+ 6771.63 2528.21 1728.90 2514.52 25421
 2026-08-25 773e2b13+ 6768.92 2527.15 1728.18 2513.59 25412
 2026-08-25 c24f5e37+ 6749.00 2519.95 1723.84 2505.21 25341
 2026-08-25 fcba29db+ 6749.00 2519.95 1723.84 2505.21 25341
-2026-08-25 1baca19c+ 6748.98 2519.95 1723.84 2505.19 25341

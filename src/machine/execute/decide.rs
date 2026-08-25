@@ -17,6 +17,7 @@ use crate::machine::core::{
 use crate::machine::model::{Carried, ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId};
 use crate::source::Spanned;
+use std::rc::Rc;
 
 use super::harness::KoanWorkload;
 use super::nodes::{NodeWork, WorkLabel};
@@ -560,20 +561,37 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     body_index,
                 );
             }
-            // Leading statements become owned siblings in the block, and the slot parks on them so
-            // they run — and reclaim — before the tail continues. `block_entry` names where they
-            // bind: the block frame's own scope, or an overlay under the inherited call-site cart.
-            let placement = match &block_entry {
-                BlockEntry::FrameScope(frame) => BodyPlacement::Frame(std::rc::Rc::clone(frame)),
-                BlockEntry::Overlay(overlay) => BodyPlacement::Overlay(overlay),
-                BlockEntry::None => unreachable!("a leading-carrying tail enters a block"),
+            // Decompose the placement pair here, before the park: the finish's capture set is then
+            // `Copy` data plus the one block-frame `Rc` that keeps the block alive across it —
+            // nothing else holds the frame — and the pair is rebuilt from those locals at wake.
+            // `FreshTail` installs its cart only at apply time, after the leading statements would
+            // already have fanned out, so a leading-carrying tail cannot ride it.
+            let (fresh_child, block_frame, overlay) = match (frame_placement, block_entry) {
+                (FramePlacement::FreshChild { frame }, BlockEntry::FrameScope(entry)) => {
+                    debug_assert!(
+                        Rc::ptr_eq(&frame, &entry),
+                        "a FreshChild block is the fresh frame's own scope"
+                    );
+                    (true, Some(entry), None)
+                }
+                (FramePlacement::Inherit, BlockEntry::FrameScope(entry)) => {
+                    (false, Some(entry), None)
+                }
+                (FramePlacement::Inherit, BlockEntry::Overlay(overlay)) => {
+                    (false, None, Some(overlay))
+                }
+                _ => unreachable!(
+                    "a leading-carrying tail is a FreshChild frame, an Inherit cart, or an overlay"
+                ),
             };
-            // `FreshTail` installs its cart only at apply time — after the leading statements would
-            // already have fanned out — so a leading-carrying tail cannot ride it.
-            debug_assert!(
-                !matches!(frame_placement, FramePlacement::FreshTail { .. }),
-                "a leading-carrying tail is a FreshChild frame, an Inherit cart, or an overlay"
-            );
+            // Leading statements become owned siblings in the block, and the slot parks on them so
+            // they run — and reclaim — before the tail continues. The block frame or the overlay
+            // names where they bind.
+            let placement = match (&block_frame, overlay) {
+                (Some(frame), _) => BodyPlacement::Frame(Rc::clone(frame)),
+                (None, Some(overlay)) => BodyPlacement::Overlay(overlay),
+                (None, None) => unreachable!("a leading-carrying tail enters a block"),
+            };
             let finish = move |view: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
                 let contract = match contract {
                     TailContract::Eager(contract) => contract,
@@ -609,6 +627,24 @@ pub(in crate::machine::execute) fn run_action<'step>(
                             ret: kt,
                             site,
                         })
+                    }
+                };
+                let (frame_placement, block_entry) = match (block_frame, overlay) {
+                    (Some(frame), _) => (
+                        if fresh_child {
+                            FramePlacement::FreshChild {
+                                frame: Rc::clone(&frame),
+                            }
+                        } else {
+                            FramePlacement::Inherit
+                        },
+                        BlockEntry::FrameScope(frame),
+                    ),
+                    (None, Some(overlay)) => {
+                        (FramePlacement::Inherit, BlockEntry::Overlay(overlay))
+                    }
+                    (None, None) => {
+                        unreachable!("the pre-park decomposition emits a block frame or an overlay")
                     }
                 };
                 // Against this finish's own wake-time view: the park re-deposited the established
