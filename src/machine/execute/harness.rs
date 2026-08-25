@@ -48,7 +48,9 @@ use super::lift::relocate_seam;
 use super::nodes::{ChainOp, NodePayload, NodeScope, NodeWork, SlotFrame, WorkLabel};
 use super::outcome::{Await, Continuation, DepTerminal, Outcome, ParkDeps, dep_error_frame};
 use super::step_carried::StepCarried;
-use super::{ContinuationCall, ContinuationFamily, NodeContinuation, erase_boxed, gated_once};
+use super::{ContinuationCall, ContinuationFamily, NodeContinuation, erase_bumped, gated};
+#[cfg(test)]
+use super::{erase_boxed, gated_once};
 
 /// The Koan instantiation of the scheduler's [`Workload`] interface — the marker that binds the
 /// opaque scheduler types to their concrete Koan forms.
@@ -1218,11 +1220,13 @@ impl<'run> Host<'run> {
     pub(in crate::machine::execute) fn submit_dep_finish_witnessed_in_own_scope<'a>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
+        host: RegionBrand<'a>,
         deps: Deps<NodeId>,
-        finish: impl for<'view, 'd> FnOnce(
+        finish: impl for<'view, 'd> Fn(
             &DecideCtx<'_, 'a, 'view>,
             &[DepTerminal<'d>],
         ) -> Result<StepCarried<'a>, KError>
+        + Copy
         + 'a,
     ) -> NodeId {
         let payload = self
@@ -1234,12 +1238,10 @@ impl<'run> Host<'run> {
         let anchor = SlotFrame::new(cart, payload.scope, payload.chain, WorkLabel::None);
         let work = NodeWork::new(NodeContinuation::new(
             None,
-            erase_boxed(gated_once(
-                Some(dep_error_frame()),
-                move |view: &DecideCtx<'_, 'a, '_>, terminals: &[DepTerminal<'_>]| {
-                    Outcome::Done(finish(view, terminals))
-                },
-            )),
+            erase_bumped(
+                host,
+                gated(Some(dep_error_frame()), super::sealed_done(finish)),
+            ),
         ));
         let (sources, minted) =
             self.named_sources(sched, &anchor, deps, Global, |_host, _sched, producer| {

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use smallvec::SmallVec;
 
 use crate::machine::core::{
-    FoldingBrand, KoanRegionExt, KoanStorageProfile, RegionBrand, SubstrateDoor,
+    FoldingBrand, KoanRegionExt, KoanStorageProfile, RegionBrand, SplicedCell, SubstrateDoor,
 };
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::{Carried, Held, KKey, KObject, TypeRegistry};
@@ -40,16 +40,19 @@ struct AggBuildFamily;
 reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [Held<'r>]));
 
 /// One cell of a list / dict / record literal. A `Static` cell is wrapped into a delivery envelope
-/// **at its source**, so the layout is lifetime-free and every cell folds uniformly, each carrying
-/// the frame owner its value lives under. A `Dep` cell carries no index: the classifier appends one
-/// dep per such cell as it walks the rows, so cell order *is* dep order and the finish's walk reads
-/// results off a [`ResultFeed`] cursor.
-enum Slot {
-    Static(DeliveredCarried),
+/// **at its source** and then rested into the realizing frame's region, so it rides the row plan as
+/// the same `Copy`, Drop-free [`SplicedCell`] a resolved dep terminal carries — the rest lodges the
+/// envelope's whole coverage in that region's union bundle, keeping the value readable for the
+/// region's life. A `Dep` cell carries no index: the classifier appends one dep per such cell as it
+/// walks the rows, so cell order *is* dep order and the finish's walk reads results off a
+/// [`ResultFeed`] cursor.
+#[derive(Clone, Copy)]
+enum Slot<'a> {
+    Static(SplicedCell<'a>),
     Dep,
 }
 
-impl Slot {
+impl Slot<'_> {
     fn spawned(deps: &mut Deps<NodeId>, id: NodeId) -> Self {
         deps.request(id);
         Slot::Dep
@@ -77,16 +80,16 @@ impl<'t, 'd> ResultFeed<'t, 'd> {
 }
 
 /// The relocation needs the reach *owned* — it moves each cell into the aggregate's region while
-/// minting its reach and residence host onto the product's carrier — so the dep arm lifts the
-/// terminal's resident into an envelope rather than pairing a read-out value with a separately-read
+/// minting its reach and residence host onto the product's carrier — so both arms lift their
+/// resting cell back into an envelope rather than pairing a read-out value with a separately-read
 /// reach.
 fn cell_carrier(
-    slot: Slot,
+    slot: Slot<'_>,
     terminals: &mut ResultFeed<'_, '_>,
     scope: &Scope<'_>,
 ) -> DeliveredCarried {
     match slot {
-        Slot::Static(delivered) => delivered,
+        Slot::Static(cell) => scope.lift_spliced(&cell),
         Slot::Dep => scope.lift_spliced(&terminals.pop().cell),
     }
 }
@@ -142,15 +145,15 @@ fn fold_cells(
 /// rejected outright, no walk over the value. [`KKey`] then admits only `String` / `Number` /
 /// `Bool`, so the two together leave a borrow-carrying key unrepresentable downstream.
 fn scalar_key(
-    slot: &Slot,
+    slot: &Slot<'_>,
     terminals: &mut ResultFeed<'_, '_>,
     registries: &RunRegistries,
 ) -> Result<PendingKey, String> {
     // Each arm answers the reach probe and the key read inside its own borrow.
     let (borrows, key) = match slot {
-        Slot::Static(delivered) => (
-            delivered.open_at().has_reach_members(),
-            delivered.open(|c| key_from_carried(c, registries)),
+        Slot::Static(cell) => (
+            cell.open_at().has_reach_members(),
+            cell.open(|c| key_from_carried(c, registries)),
         ),
         Slot::Dep => {
             let cell = &terminals.pop().cell;
@@ -205,43 +208,46 @@ impl PendingKey {
 }
 
 /// One layout row of an aggregate literal: the value cell, plus — for a dict — the key slot resolved
-/// to a scalar [`KKey`] at finish time (list and record rows carry no key).
-struct AggRow {
-    key: Option<Slot>,
-    value: Slot,
+/// to a scalar [`KKey`] at finish time (list and record rows carry no key). `Copy`, so the whole row
+/// plan rides the finish as a region slice.
+#[derive(Clone, Copy)]
+struct AggRow<'a> {
+    key: Option<Slot<'a>>,
+    value: Slot<'a>,
 }
-
-/// Finish-side assemble hook — the keys are empty unless the rows carry key slots. Boxed
-/// higher-ranked so the record variant can capture its field names and each shape builds its own
-/// `KObject` at the substrate door.
-type AggAssemble = Box<
-    dyn for<'r, 'h> FnOnce(
-        SubstrateDoor<'r, 'h>,
-        Vec<PendingKey>,
-        &'r [Held<'r>],
-        &TypeRegistry,
-    ) -> KObject<'r>,
->;
 
 impl<'step> Host<'step> {
     /// Schedule an aggregate literal's element deps and its assembling fold. A non-scalar dict key
     /// errors before the fold, under the dict-literal frame (only a dict row carries a key slot), and
     /// `assemble` runs inside the witness closure so the aggregate names every region it reaches by
     /// construction.
-    fn schedule_aggregate(
+    fn schedule_aggregate<'a, A>(
         &mut self,
         sched: &mut Scheduler<KoanWorkload>,
+        host: RegionBrand<'a>,
         deps: Deps<NodeId>,
-        rows: Vec<AggRow>,
-        assemble: AggAssemble,
-    ) -> NodeId {
-        let finish = move |view: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
+        rows: Vec<AggRow<'a>>,
+        assemble: A,
+    ) -> NodeId
+    where
+        A: for<'r, 'h> Fn(
+                SubstrateDoor<'r, 'h>,
+                Vec<PendingKey>,
+                &'r [Held<'r>],
+                &TypeRegistry,
+            ) -> KObject<'r>
+            + Copy
+            + 'a,
+    {
+        // The row plan crosses the park inside the finish, so it lands in the host frame region.
+        let rows: &'a [AggRow<'a>] = host.allocator().slice(&rows);
+        let finish = move |view: &DecideCtx<'_, 'a, '_>, terminals: &[DepTerminal<'_>]| {
             let n = rows.len();
             // Keys stay scalar (reaching no region): read out eagerly, erroring before the fold.
             let mut keys: Vec<PendingKey> = Vec::new();
             let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(n);
             let mut feed = ResultFeed::new(terminals);
-            for row in rows {
+            for row in rows.iter().copied() {
                 if let Some(key_slot) = row.key {
                     let kkey =
                         scalar_key(&key_slot, &mut feed, view.registries()).map_err(|msg| {
@@ -283,7 +289,7 @@ impl<'step> Host<'step> {
             );
             Ok(StepCarried::born_delivered(built))
         };
-        self.submit_dep_finish_witnessed_in_own_scope(sched, deps, finish)
+        self.submit_dep_finish_witnessed_in_own_scope(sched, host, deps, finish)
     }
 
     /// Schedule a list-literal materialization as a witnessed dep-finish over its element producers.
@@ -301,12 +307,9 @@ impl<'step> Host<'step> {
             let value = self.classify_aggregate_part(sched, brand, part, &mut deps);
             rows.push(AggRow { key: None, value });
         }
-        self.schedule_aggregate(
-            sched,
-            deps,
-            rows,
-            Box::new(|door, _keys, cells, types| KObject::list_of_held(door, cells, types)),
-        )
+        self.schedule_aggregate(sched, brand, deps, rows, |door, _keys, cells, types| {
+            KObject::list_of_held(door, cells, types)
+        })
     }
 
     /// Schedule a dict-literal materialization as a witnessed dep-finish over its key/value producers.
@@ -330,16 +333,17 @@ impl<'step> Host<'step> {
         }
         self.schedule_aggregate(
             sched,
+            brand,
             deps,
             rows,
-            Box::new(|door, keys, value_helds, types| {
+            |door, keys, value_helds, types| {
                 let map: HashMap<KKey, Held<'_>> = keys
                     .iter()
                     .map(PendingKey::as_key)
                     .zip(value_helds.iter().copied())
                     .collect();
                 KObject::dict_of_held(door, map, types)
-            }),
+            },
         )
     }
 
@@ -352,27 +356,30 @@ impl<'step> Host<'step> {
         brand: RegionBrand<'a>,
         fields: &[(BinderSymbol, ExpressionPart<'a>)],
     ) -> NodeId {
-        let mut names: Vec<BinderSymbol> = Vec::with_capacity(fields.len());
         let mut deps = Deps::new();
         let mut rows = Vec::with_capacity(fields.len());
-        for &(name, value) in fields {
+        for &(_, value) in fields {
             let value = self.classify_aggregate_part(sched, brand, value, &mut deps);
-            names.push(name);
             rows.push(AggRow { key: None, value });
         }
+        // The names cross the park inside the finish, so they land in the host frame region.
+        let names: &'a [BinderSymbol] = brand
+            .allocator()
+            .slice_from_iter(fields.iter().map(|(name, _)| *name));
         self.schedule_aggregate(
             sched,
+            brand,
             deps,
             rows,
-            Box::new(move |door, _keys, value_helds, types| {
-                // The field pairs are assembled in the destination region's own construction
-                // storage: the schedule-time name slice zipped against the delivered cells, with
-                // no owned record in between.
+            move |door, _keys, value_helds, types| {
+                // The field pairs are assembled in the destination region's own construction storage:
+                // the schedule-time name slice zipped against the delivered cells, with no owned record
+                // in between.
                 let mut pairs: BumpVec<'_, (BinderSymbol, Held<'_>)> =
                     BumpVec::with_capacity_in(names.len(), door.allocator());
                 pairs.extend(names.iter().copied().zip(value_helds.iter().copied()));
                 KObject::record_of_held(door, &pairs, types)
-            }),
+            },
         )
     }
 
@@ -383,7 +390,7 @@ impl<'step> Host<'step> {
         brand: RegionBrand<'a>,
         part: ExpressionPart<'a>,
         deps: &mut Deps<NodeId>,
-    ) -> Slot {
+    ) -> Slot<'a> {
         let part = match stage_eager_part(brand, part) {
             Ok(dep) => return Slot::spawned(deps, self.realize_dep(sched, brand, dep)),
             Err(part) => part,
@@ -413,9 +420,10 @@ impl<'step> Host<'step> {
                 // included — so the cell is built **inside** a zero-dep fold, born co-located with
                 // that frame as its reach.
                 let frame = current_dest_frame(&self.ambient);
-                Slot::Static(KoanRegion::fold_witnessed(frame, move |brand| {
-                    Carried::Object(brand.alloc_object_folded(other.resolve_region_pure(*brand)))
-                }))
+                let built = KoanRegion::fold_witnessed(frame, move |fold| {
+                    Carried::Object(fold.alloc_object_folded(other.resolve_region_pure(*fold)))
+                });
+                Slot::Static(built.rest_in(brand.handle()))
             }
         }
     }
@@ -431,7 +439,7 @@ impl<'step> Host<'step> {
         brand: RegionBrand<'a>,
         part: &ExpressionPart<'a>,
         deps: &mut Deps<NodeId>,
-    ) -> Slot {
+    ) -> Slot<'a> {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         // `Resolution` is lifetime-free, so the whole result escapes the branded-scope closure and
         // the `&mut self` fallback runs after the read closes.
@@ -439,7 +447,7 @@ impl<'step> Host<'step> {
             resolve_name(s, part, active_chain, self.ambient.registries())
         });
         match resolved {
-            Resolution::Resolved(cell) => Slot::Static(cell),
+            Resolution::Resolved(cell) => Slot::Static(cell.rest_in(brand.handle())),
             Resolution::Parked(source) => {
                 deps.on(source.scheduler_edge());
                 Slot::Dep
