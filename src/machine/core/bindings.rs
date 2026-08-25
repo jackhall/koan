@@ -1012,10 +1012,10 @@ impl<'a> Bindings<'a> {
         let mut tables = self.tables.borrow_mut();
         for (key, slots) in functions {
             // The key is re-homed into *this* table's region. It buys no independence from the
-            // source region and is not trying to: everything else a replayed entry carries — the sealed carrier, the
-            // dispatch token — stays a borrow into the source, which is sound for the
-            // reason stated at the snapshot above, and is why re-homing the key is symmetry rather
-            // than a guard. The relation is held by **retention, not by `'a`**: `'a` covers both
+            // source region and is not trying to: everything else a replayed entry carries — the
+            // sealed carrier, the dispatch token — stays a borrow into the source, which is sound
+            // for the reason stated at the snapshot above, and is why re-homing the key is symmetry
+            // rather than a guard. The relation is held by **retention, not by `'a`**: `'a` covers both
             // regions and orders neither, but the view module escaping
             // [`Scope::alloc_module_view`](crate::machine::core::Scope) composes the source
             // module's reach into its own region, so the source is pinned for as long as the view

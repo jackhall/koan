@@ -462,9 +462,9 @@ storage and contents alike
 `hashbrown` map built over its scope's own `BumpAllocator`, so its bucket array
 lands in the region's chunks; a name key is a bumped `&str`, a dispatch bucket key
 is a bumped run of elements, an overload bucket is a vec over the same allocator,
-and the entry payloads that used to own heap — the overload summary, the operator
-declaration, the dispatch token — are bumped text and bumped `Copy` runs. What
-that buys is stated as a compile-time fact rather than a claim: `Bindings` carries
+and the entry payloads own no heap of their own: an operator declaration is bumped
+text, a dispatch token a bumped `Copy` run. What that buys is stated as a
+compile-time fact rather than a claim: `Bindings` carries
 no drop glue at all, asserted where it is declared, so dropping a table frees
 nothing, runs no per-entry glue, and frame death walks O(scopes) rather than
 O(entries). Each table's construction door repeats the assert over its own key and
