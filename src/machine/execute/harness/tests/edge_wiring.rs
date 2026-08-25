@@ -29,6 +29,9 @@ use crate::machine::{KError, KErrorKind};
 /// whole park out.
 #[test]
 fn park_on_errored_producer_propagates_producer_error() {
+    // Declared ahead of the storages so its borrow outlives the run: the bumped tier takes `Copy`
+    // captures, and a shared reference is the `Copy` handle to a flag the resume can set.
+    let resumed: Cell<bool> = Cell::new(false);
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -55,13 +58,11 @@ fn park_on_errored_producer_propagates_producer_error() {
         "the errored producer terminalized before the park is wired",
     );
 
-    // Leaked so the flag is a `Copy` capture: the resume erases on the bumped tier, whose
-    // closures are `Copy` by construction.
-    let resumed: &'static Cell<bool> = Box::leak(Box::new(Cell::new(false)));
     let frame = DeferredTraceFrame::Bare {
         function: "<test-park>",
         expression: "park on two producers",
     };
+    let resumed_flag: &Cell<bool> = &resumed;
     let consumer = runtime.add(
         NodeWork::new(NodeContinuation::new(
             None,
@@ -74,7 +75,7 @@ fn park_on_errored_producer_propagates_producer_error() {
                     Some(frame),
                     view,
                     move |_view: &DecideCtx<'_, '_, '_>, _id| {
-                        resumed.set(true);
+                        resumed_flag.set(true);
                         Outcome::Done(Err(KError::new(KErrorKind::ShapeError(
                             "resume ran".into(),
                         ))))
