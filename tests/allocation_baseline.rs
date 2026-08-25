@@ -79,7 +79,7 @@ fn allocations_for(source: &str, path: &str) -> u64 {
 /// see one allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
-    const BOUND: u64 = 10_500;
+    const BOUND: u64 = 9_700;
     let delta = allocations_for(
         include_str!("../audit/shapes/tail_loop_steps100.koan"),
         "audit/shapes/tail_loop_steps100.koan",
@@ -171,7 +171,7 @@ fn per_dispatch_cost_does_not_grow_with_scope_walk_depth() {
 /// difference by — so one re-introduced per-call allocation fails it.
 #[test]
 fn the_builtin_call_shape_stays_within_its_per_call_bound() {
-    const BOUND: u64 = 2_101;
+    const BOUND: u64 = 2_037;
     let marginal = allocations_for(
         include_str!("../audit/shapes/builtin_call_calls40.koan"),
         "audit/shapes/builtin_call_calls40.koan",
@@ -196,8 +196,10 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 /// This is the frame bind's own axis. A user call binds each parameter into the fresh per-call
 /// scope, and the name it binds under comes straight off the signature's parameter schema — which
 /// carries the classified symbol the binding table keys by, so the bind reaches no interner and
-/// builds no string. What remains in the slope is per-*argument* cost the bind does not own: the
-/// extra source the call site parses, and the delivery carrier each argument travels in.
+/// builds no string. Nor does the call's declared-return contract: it seals a `Copy` call site and
+/// the callable's interned type handle, and renders trace text only on the error arm that spends
+/// it. What remains in the slope is per-*argument* cost the bind does not own: the extra source
+/// the call site parses, and the delivery carrier each argument travels in.
 ///
 /// The recorded figures are the `user_fn_params1`, `user_fn_params8` and `user_fn_parameter`
 /// terms in `observe/alloc/terms.txt`. About one allocation per call at eight parameters is an
@@ -211,8 +213,8 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 /// one fails the second by ≈224.
 #[test]
 fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
-    const PER_CALL_BOUND: u64 = 1_206;
-    const PER_PARAMETER_BOUND: u64 = 861;
+    const PER_CALL_BOUND: u64 = 950;
+    const PER_PARAMETER_BOUND: u64 = 381;
     let arity1 = allocations_for(
         include_str!("../audit/shapes/user_fn_params1_calls40.koan"),
         "audit/shapes/user_fn_params1_calls40.koan",
@@ -263,7 +265,7 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
 /// re-introduced per-construction allocation fails it.
 #[test]
 fn the_tagged_construct_shape_stays_within_its_per_construction_bound() {
-    const BOUND: u64 = 2_998;
+    const BOUND: u64 = 2_934;
     let marginal = allocations_for(
         include_str!("../audit/shapes/tagged_construct_calls40.koan"),
         "audit/shapes/tagged_construct_calls40.koan",
