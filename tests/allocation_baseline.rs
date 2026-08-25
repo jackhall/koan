@@ -63,7 +63,7 @@ fn allocations_for(source: &str, path: &str) -> u64 {
 }
 
 /// 100 tail-recursive steps, 92.0 allocations each — exactly linear, measured flat at
-/// 10/50/100/200. Measured 2026-08-24 at 11 934. ≈1 of those per step is an arena chunk rather
+/// 10/50/100/200. Measured 2026-08-24 at 10 463. ≈1 of those per step is an arena chunk rather
 /// than a heap object: a step's frame does not fit bumpalo's 496-byte first chunk, so the region
 /// takes a second one. That term tracks the byte size of what a frame holds — `Scope` above all —
 /// and moves by one per step whenever a layout change carries the frame across the boundary, in
@@ -73,7 +73,7 @@ fn allocations_for(source: &str, path: &str) -> u64 {
 /// cannot see one allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
-    const BOUND: u64 = 11_971;
+    const BOUND: u64 = 10_500;
     let delta = allocations_for(
         include_str!("../audit/shapes/tail_loop.koan"),
         "audit/shapes/tail_loop.koan",
@@ -88,13 +88,13 @@ fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
 
 /// A 128-operand `+` chain, so 127 dispatches at ≈23 allocations each — mildly superlinear,
 /// with marginal cost rising across the 16→32 … 128→256 operand doublings. Measured 2026-08-24
-/// at 5 429. A `+` chain reaches no ATTR overload, so the per-dispatch term is unmoved by one being
+/// at 3 965. A `+` chain reaches no ATTR overload, so the per-dispatch term is unmoved by one being
 /// registered; what such a registration moves is the startup constant every shape here carries. The
 /// bound is the measurement plus 36, under the 127 a single new per-dispatch allocation would add.
 /// Same headroom rule as the loop.
 #[test]
 fn the_operator_chain_shape_stays_within_its_dispatch_churn_bound() {
-    const BOUND: u64 = 5_465;
+    const BOUND: u64 = 4_001;
     let delta = allocations_for(
         include_str!("../audit/shapes/operator_chain.koan"),
         "audit/shapes/operator_chain.koan",

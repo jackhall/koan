@@ -87,21 +87,21 @@ reads the allocations column; the symbol terms are quoted in the prose below.
 
 | shape | what it exercises | allocations | symbols | scaling term |
 |---|---|---|---|---|
-| `shapes/tail_loop.koan` | 100 tail-recursive steps | 11 943 | 398 | 92.0 per step, linear |
-| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 5 438 | 498 | ≈23 per dispatch, mildly superlinear |
-| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 3 353 | 433 | — |
-| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 4 950 | 497 | 49.9 per dispatch |
-| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 4 741 | 569 | — |
-| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 6 336 | 633 | 49.8 per dispatch |
-| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 3 098 | 424 | — |
-| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 5 168 | 616 | 64.7 per call |
-| `shapes/user_fn_params1_calls8.koan` | 8 one-parameter user-function calls | 2 927 | 391 | — |
-| `shapes/user_fn_params1_calls40.koan` | 40 one-parameter user-function calls | 4 102 | 423 | 36.7 per call |
-| `shapes/user_fn_params8_calls8.koan` | 8 eight-parameter user-function calls | 3 210 | 406 | — |
-| `shapes/user_fn_params8_calls40.koan` | 40 eight-parameter user-function calls | 5 215 | 438 | 62.7 per call, 3.70 per parameter |
-| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 3 410 | 476 | — |
-| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 6 377 | 828 | 92.7 per cycle |
-| *(empty program)* | interpreter startup and builtin seeding | 2 519 | 367 | — |
+| `shapes/tail_loop.koan` | 100 tail-recursive steps | 10 472 | 398 | 92.0 per step, linear |
+| `shapes/operator_chain.koan` | 128-operand `+` chain, 127 dispatches | 3 974 | 498 | ≈23 per dispatch, mildly superlinear |
+| `shapes/scope_walk_depth2_calls8.koan` | 8 dispatches down a 2-deep scope walk | 1 854 | 433 | — |
+| `shapes/scope_walk_depth2_calls40.koan` | 40 dispatches down a 2-deep scope walk | 3 451 | 497 | 49.9 per dispatch |
+| `shapes/scope_walk_depth10_calls8.koan` | 8 dispatches down a 10-deep scope walk | 3 123 | 569 | — |
+| `shapes/scope_walk_depth10_calls40.koan` | 40 dispatches down a 10-deep scope walk | 4 718 | 633 | 49.8 per dispatch |
+| `shapes/builtin_call_calls8.koan` | 8 three-parameter builtin calls | 1 634 | 424 | — |
+| `shapes/builtin_call_calls40.koan` | 40 three-parameter builtin calls | 3 704 | 616 | 64.7 per call |
+| `shapes/user_fn_params1_calls8.koan` | 8 one-parameter user-function calls | 1 456 | 391 | — |
+| `shapes/user_fn_params1_calls40.koan` | 40 one-parameter user-function calls | 2 631 | 423 | 36.7 per call |
+| `shapes/user_fn_params8_calls8.koan` | 8 eight-parameter user-function calls | 1 724 | 406 | — |
+| `shapes/user_fn_params8_calls40.koan` | 40 eight-parameter user-function calls | 3 729 | 438 | 62.7 per call, 3.70 per parameter |
+| `shapes/tagged_construct_calls8.koan` | 8 construct-and-match cycles over a two-variant `UNION` | 1 946 | 476 | — |
+| `shapes/tagged_construct_calls40.koan` | 40 construct-and-match cycles over a two-variant `UNION` | 4 913 | 828 | 92.7 per cycle |
+| *(empty program)* | interpreter startup and builtin seeding | 1 055 | 367 | — |
 
 No shape can use comments: koan has none, and `#` is reserved for quoting. The prose
 that would have headed each file is here instead.
@@ -158,52 +158,44 @@ is how the whole frame packs, so its direction does not follow the direction of 
 that deletion *shrank* `Scope`, 464 bytes to 448.
 
 The **fixed** figure the four axes are read against is the empty program's own: interpreter
-startup and builtin seeding, at **2 519**, down 11. Seeding registers every builtin overload, and
-each registration writes a bucket key and a dispatch token; both hold a keyword's symbol rather
-than its text, so the seeding pass now copies no keyword bytes at all. The 11 is arena chunks:
-registration re-homed each keyword's normalized spelling into the signature's own region, one
-per keyword element of every builtin signature, and those bumps are gone. The figure is otherwise
-inert to the symbol work — an empty program names nothing — but it is not inert to the *count* of
-overloads: registering the two dynamic `ATTR` reads costs 38, and since every run pays seeding
-once, that 38 lands on every shape in the table alike.
+startup and builtin seeding, at **1 055**, down 1 464. Registering a callable renders no signature
+text. A registration used to summarize its own signature at seal time — a `Vec` of per-element
+renderings, a `String` per element, the joined result, and a bump copy of that text into the bucket
+entry's region — so seeding paid a rendering for every builtin overload, all of it for a
+`DuplicateOverload` diagnostic that a correct program never sees. The diagnostic renders from the
+standing entry's stored dispatch token on the error arm instead, and the entry stores no text at
+all. The figure stays inert to what a program *names* — an empty program names nothing — and stays
+proportional to the *count* of registered overloads, which every run pays once at seeding and every
+shape in this table therefore carries.
 
-The marginal terms move the other way, and it is the same four that moved last time: the step term
-91.0 to 92.0, the walk term 48.9/48.8 to 49.9/49.8, the eight-parameter call term 61.7 to 62.7, the
-cycle term 91.7 to 92.7. Each is one 496-byte arena chunk per repetition — the same unit and the
-same four frames, which straddle the boundary and so move together whichever way a layout change
-pushes them. The terms that do not move are the ones whose frames are nowhere near it: a
-one-parameter call at 36.7, a builtin call at 64.7, and the operator chain, whose `+` opens no frame
-of its own.
+The same rendering was paid at every user `FN` and `OP`, so a shape falls by its own declarations on
+top of the seeding constant: **7 per declared one-slot overload** — the element `Vec`, the keyword's
+rendering, two strings per argument slot, the join and the format that wraps it — and 22 for the
+eight-parameter one, where the per-slot pair dominates. It lands as 7 on the tail loop's single step
+function and on the one-parameter call shapes, 22 on the eight-parameter ones, and 35 and 154 across
+the scope-walk grid's 5 and 21 declared overloads; the depth-10 grid falls 7 further than its 21
+declarations account for, and what drives that residue is unmeasured. It is a *declaration* cost, so
+the 8- and 40-repetition variants of a pair fall by the same amount.
 
-One shape moves further than the seeding constant: the operator chain falls 25, and the 14 beyond
-the constant is the **peel's**. `peel_redundant` rebuilds every node it walks, and refilling that
-node's structural cache meant a second bump of its bucket key. The rebuild door carries the
-survivor's cache instead, since the peel preserves the part-kind sequence and every keyword symbol
-the cache reads. What it saves grows with the node's part count — 1 for a three-part node, 5 at
-15 parts, 14 for the chain's 255 — because a longer key crosses more arena chunk doublings on its
-way into the region.
+No marginal term moves. Registration is a per-shape constant, so every differencing pair cancels it
+exactly: 1 597 and 1 595 for the two walk depths, 2 070 for the builtin call, 1 175 and 2 005 for the
+two user-call arities, 2 967 for the tagged cycle — each unchanged. The four terms that straddle
+bumpalo's 496-byte first chunk are where a *layout* change shows up instead: the step term at 92.0,
+the walk term at 49.9/49.8, the eight-parameter call term at 62.7, the cycle term at 92.7, each
+moving by one chunk per repetition whichever way the frame packs. The terms nowhere near the
+boundary are a one-parameter call at 36.7, a builtin call at 64.7, and the operator chain, whose `+`
+opens no frame of its own.
 
-Every shape that *declares* a parameter or a field falls by a small constant, and no marginal
-term falls with it. A declaration used to render its names back out of the interner: an FN
-parameter was rendered twice — once by the scan that collects parameter names before any
-elaboration, once by the parameter-list parse itself — and a field list built a `String` per name
-to run its dedup on. Both are gone, so the drop is **2 per declared FN parameter** and it lands
-wherever a shape's declarations sit: 2 on the tail loop's one-parameter step function and on the
-one-parameter call shapes, 16 on the eight-parameter ones, 10 and 42 across the scope-walk grid's
-5 and 21 declared parameters. The tagged shape declares a field list rather than a parameter
-list — its two variant tags never carried the second render — and falls 3. It is a *declaration*
-cost, so the 8- and 40-repetition variants of a pair fall by the same amount and every
-differencing term above is untouched.
-
-Every other movement in this column is the seeding constant or a chunk crossing: the symbol work
-opens no new allocation site on a per-step, per-dispatch or per-call path. A crossing is
-still one more call to the allocator per repetition — what it is not is traffic a marginal path
-newly makes, which is why the same four terms move in both directions as layouts change.
+Every other movement in this column is the seeding constant or a chunk crossing: no new allocation
+site opens on a per-step, per-dispatch or per-call path. A crossing is still one more call to the
+allocator per repetition — what it is not is traffic a marginal path newly makes, which is why the
+same four terms move in both directions as layouts change.
 
 ### Symbol mints
 
 The symbols column reads the same way: a fixed term the empty program sets, and a marginal term
-each differencing pair leaves behind.
+each differencing pair leaves behind. Nothing in it moves with the allocations column above:
+rendering a signature resolved its labels through the interner's display path, which mints nothing.
 
 The **fixed** symbol figure is **367**, down 251. Seeding is where almost all of a run's mints are,
 because every builtin overload registers a signature and every parameter slot, bucket key and
@@ -280,7 +272,7 @@ always wrote; what moves that column here is frame layout and overload count, ab
 ## The regression test
 
 `tests/allocation_baseline.rs` asserts the two absolute shapes' bracketed counts against a
-stated bound — 11 971 for the loop, 5 465 for the chain, carrying 37 and 36 allocations of
+stated bound — 10 500 for the loop, 4 001 for the chain, carrying 37 and 36 allocations of
 headroom — and each differencing pair's marginal count against its measurement plus 31: 2 101
 for the builtin call, 1 206 for the one-parameter user call, 861 for the seven-parameter slope,
 2 998 for the tagged construction.
