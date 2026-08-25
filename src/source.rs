@@ -27,14 +27,18 @@ pub struct SourceRef {
 }
 
 impl SourceRef {
-    /// The trimmed source text this extent covers.
+    /// The source text this extent covers, as a single diagnostic line: interior whitespace runs
+    /// collapse to one space. A trace prints one frame per line and a caught error's `frames`
+    /// reaches the program as a `List<Str>`, so an extent spanning a wrapped call must not carry
+    /// the wrap into either.
     pub fn text(&self) -> String {
         with(self.file, |f| {
             f.text
                 .get(self.span.start as usize..self.span.end as usize)
                 .unwrap_or_default()
-                .trim()
-                .to_string()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
         })
     }
 }
@@ -229,6 +233,16 @@ mod tests {
             assert_eq!(current(), Some(inner));
         }
         assert_eq!(current(), Some(outer));
+    }
+
+    #[test]
+    fn source_ref_text_is_one_line_for_a_wrapped_extent() {
+        let file = register(SourceFile::new("<t>", "  WIDE\n  1\n  2  ".to_string()));
+        let extent = SourceRef {
+            span: Span { start: 0, end: 16 },
+            file,
+        };
+        assert_eq!(extent.text(), "WIDE 1 2");
     }
 
     #[test]
