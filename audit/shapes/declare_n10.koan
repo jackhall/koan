@@ -1,0 +1,28 @@
+UNION Big = (Tag1 :Number Tag2 :Number Tag3 :Number Tag4 :Number Tag5 :Number Tag6 :Number Tag7 :Number Tag8 :Number Tag9 :Number Tag10 :Number)
+NEWTYPE Record = :{f1 :Number, f2 :Number, f3 :Number, f4 :Number, f5 :Number, f6 :Number, f7 :Number, f8 :Number, f9 :Number, f10 :Number}
+SIG Wide = (
+  VAL v1 :Number
+  VAL v2 :Number
+  VAL v3 :Number
+  VAL v4 :Number
+  VAL v5 :Number
+  VAL v6 :Number
+  VAL v7 :Number
+  VAL v8 :Number
+  VAL v9 :Number
+  VAL v10 :Number
+)
+MODULE store = (
+  LET m1 = 1
+  LET m2 = 2
+  LET m3 = 3
+  LET m4 = 4
+  LET m5 = 5
+  LET m6 = 6
+  LET m7 = 7
+  LET m8 = 8
+  LET m9 = 9
+  LET m10 = 10
+)
+FN (WIDEN p1 :Number p2 :Number p3 :Number p4 :Number p5 :Number p6 :Number p7 :Number p8 :Number p9 :Number p10 :Number) -> Number = (p1)
+PRINT 1

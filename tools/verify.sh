@@ -13,7 +13,7 @@
 # Pass `KOAN_VERBOSE=1` to replay every step's output, passing or not.
 #
 # The modgraph, coverage, and allocation-audit steps print current readings. They
-# rebaseline `observe/complexity.txt` / `observe/coverage.txt` / `observe/alloc/` only when invoked with
+# rebaseline `observe/complexity.txt` / `observe/coverage.txt` / `observe/alloc.txt` only when invoked with
 # `KOAN_REBASELINE` set — pre-commit sets it; manual runs leave it unset,
 # since the trend logs should record one entry per commit, not one per
 # local sanity-check. Either way the reading is reported beside its delta.

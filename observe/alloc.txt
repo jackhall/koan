@@ -1,0 +1,8 @@
+# whole-program totals through the counting allocator, one row per commit swept. The
+# marginal terms are derived from these on read, not stored — a term is a difference of
+# two columns divided by the gap in `n`, so storing it would round away the exact
+# per-shape figure the row is here to keep.
+# managed by tools/alloc_audit.py --baseline; newest first, capped to 5 sweeps
+#                        empty   wide_n10  wide_n100 deep_n10  deep_n100 declare_n10 declare_n100
+# date       short-sha alloc sym alloc sym alloc sym alloc sym alloc sym  alloc  sym  alloc   sym
+  2026-08-26 7a1f6158+  1047 367  8813 668 60677 758  9663 669 85343 759   2104  527   8942  1697

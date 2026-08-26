@@ -1,3 +1,0 @@
-FN (LOOP n :Number) -> Number =
-  MATCH (n < 1) -> :Number WITH (true -> (0) false -> (LOOP (n - 1)))
-PRINT (LOOP 10)

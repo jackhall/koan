@@ -1,14 +1,15 @@
 """Difference two dhat heap profiles into per-unit allocation-site attribution.
 
 The attribution half of the allocation audit: `tools/alloc_audit.py` prices a term
-(allocations per step / dispatch / call), this names the sites the term is made of.
+(allocations per step / per live frame / per declared name), this names the sites
+the term is made of.
 Run one shape at two sizes under the `dhat` cargo feature and difference the block
 counts per allocation site — a site whose count scales with the size difference is
 on the per-unit path; constant-cost sites (startup, seeding) cancel.
 
-    cargo run --features dhat -- audit/shapes/tail_loop_steps10.koan
+    cargo run --features dhat -- audit/shapes/wide_n10.koan
     mv dhat-heap.json small.json
-    cargo run --features dhat -- audit/shapes/tail_loop_steps100.koan
+    cargo run --features dhat -- audit/shapes/wide_n100.koan
     mv dhat-heap.json big.json
     python3 tools/dhat_diff.py small.json big.json 90
     python3 tools/dhat_diff.py small.json big.json 90 --detail 'arm_tail|run_action'

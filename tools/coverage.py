@@ -5,10 +5,11 @@ trend log (newest first, capped to 5 entries) and print a delta against
 the prior top entry. Without `--baseline`, print a delta against the
 prior top entry without modifying the file (read-only).
 
-Trend-log format mirrors `observe/complexity.txt`:
+Trend-log format mirrors `observe/complexity.txt`, rendered by
+`tools/trendlog.py` so each column's name sits over its own column:
 
-    # columns: date  short-sha  line-pct  function-pct
-    2026-05-16 5d882a1+ 86.06 89.62
+    # date       short-sha line-pct function-pct
+      2026-05-16 5d882a1+     86.06        89.62
 
 `+` on the SHA marks a dirty working tree. Entries whose SHA (with any
 trailing `+` stripped) is no longer an ancestor of HEAD are pruned.
@@ -25,11 +26,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from trendlog import render  # noqa: E402  (needs the path above)
 
-HEADER = (
-    "# columns: date  short-sha  line-pct  function-pct\n"
-    "# managed by tools/coverage.py --baseline; newest first, capped to 5 entries\n"
-)
+
+NOTES = ["managed by tools/coverage.py --baseline; newest first, capped to 5 entries"]
+COLUMNS = ["date", "short-sha", "line-pct", "function-pct"]
 
 
 def parse_lcov(text: str) -> tuple[float, float]:
@@ -94,7 +96,7 @@ def update_baseline(path: Path, line_pct: float, fn_pct: float) -> None:
     sha_field = f"{sha}+" if _working_tree_dirty() else sha
     today = datetime.date.today().isoformat()
 
-    kept: list[str] = []
+    kept: list[list[str]] = []
     for line in (path.read_text().splitlines() if path.exists() else []):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
@@ -102,16 +104,19 @@ def update_baseline(path: Path, line_pct: float, fn_pct: float) -> None:
         parsed = _parse_entry(stripped)
         if parsed is None:
             continue
-        _, entry_sha, _, _ = parsed
+        entry_date, entry_sha, entry_line, entry_fn = parsed
         bare_sha = entry_sha[:-1] if entry_sha.endswith("+") else entry_sha
         if not _is_ancestor(bare_sha):
             continue
-        kept.append(stripped)
+        # Re-rendered from the parsed fields rather than kept as written: the column
+        # widths are recomputed over the whole table on every write, so a row carried
+        # through has to be re-padded to the widths this write settles on.
+        kept.append([entry_date, entry_sha, f"{entry_line:.2f}", f"{entry_fn:.2f}"])
 
-    prior = _parse_entry(kept[0]) if kept else None
-    kept.insert(0, f"{today} {sha_field} {line_pct:.2f} {fn_pct:.2f}")
+    prior = _parse_entry(" ".join(kept[0])) if kept else None
+    kept.insert(0, [today, sha_field, f"{line_pct:.2f}", f"{fn_pct:.2f}"])
     del kept[5:]
-    path.write_text(HEADER + "\n".join(kept) + "\n")
+    path.write_text(render(NOTES, COLUMNS, kept))
 
     if prior is None:
         print(f"\ncoverage: line {line_pct:.2f}% — first run (recorded to {path}).")

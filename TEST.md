@@ -60,6 +60,11 @@ first, capped to five entries. A refactor should either reduce the score
 by more than rounding noise, reduce code duplication, or enforce some
 invariant using the type system.
 
+It shares its layout with [`observe/coverage.txt`](observe/coverage.txt) and
+[`observe/alloc.txt`](observe/alloc.txt): all three are rendered by
+`tools/trendlog.py`, which puts each column's name directly over its own column
+rather than listing the names in a header a reader has to count against the row.
+
 `tools/modgraph regen --baseline observe/complexity.txt` manages the file end-to-end:
 it prunes entries whose commit isn't reachable from HEAD (covers `git
 checkout`, `git reset --hard`, rebase drops) and every prior dirty-snapshot
@@ -147,10 +152,10 @@ cargo run --features alloc-count -- program.koan        # one program's totals, 
 cargo test --test allocation_baseline                   # the bounded regression test
 ```
 
-The sweep is the recorder. It runs every shape through the counted binary,
-differences the readings into the marginal terms, and writes both to
-[`observe/alloc/`](observe/alloc) — one file per sweep, named for the commit it
-was taken on, plus `terms.txt` trending the terms across the last five sweeps.
+The sweep is the recorder. It runs every shape through the counted binary and writes
+the readings to [`observe/alloc.txt`](observe/alloc.txt) — one row per commit swept,
+newest first, capped to the last five, with the marginal terms derived from each row
+on read rather than stored beside it.
 `tools/verify.sh` runs it
 every slate, read-only unless `KOAN_REBASELINE` is set, and the pre-commit hook
 sets it and stages the result — so the record and the change that moved it land
@@ -182,7 +187,7 @@ expects it.
 
 The `alloc-count` feature carries a second reading beside the allocation tally: the
 process's `Symbol` mint count, printed as `symbols_minted: N` and recorded beside the
-allocation figure in `observe/alloc/`. Hashing takes no allocation, so
+allocation figure in `observe/alloc.txt`. Hashing takes no allocation, so
 this is the only instrument that sees a mint leave a per-call path
 ([audit/README.md § Symbol mints](audit/README.md#symbol-mints)).
 

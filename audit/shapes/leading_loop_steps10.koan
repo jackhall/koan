@@ -1,5 +1,0 @@
-FN (LOOP n :Number) -> Number = (
-  (LET m = (n - 1))
-  (MATCH (n < 1) -> :Number WITH (true -> (0) false -> (LOOP m)))
-)
-PRINT (LOOP 10)

@@ -1,0 +1,208 @@
+UNION Big = (Tag1 :Number Tag2 :Number Tag3 :Number Tag4 :Number Tag5 :Number Tag6 :Number Tag7 :Number Tag8 :Number Tag9 :Number Tag10 :Number Tag11 :Number Tag12 :Number Tag13 :Number Tag14 :Number Tag15 :Number Tag16 :Number Tag17 :Number Tag18 :Number Tag19 :Number Tag20 :Number Tag21 :Number Tag22 :Number Tag23 :Number Tag24 :Number Tag25 :Number Tag26 :Number Tag27 :Number Tag28 :Number Tag29 :Number Tag30 :Number Tag31 :Number Tag32 :Number Tag33 :Number Tag34 :Number Tag35 :Number Tag36 :Number Tag37 :Number Tag38 :Number Tag39 :Number Tag40 :Number Tag41 :Number Tag42 :Number Tag43 :Number Tag44 :Number Tag45 :Number Tag46 :Number Tag47 :Number Tag48 :Number Tag49 :Number Tag50 :Number Tag51 :Number Tag52 :Number Tag53 :Number Tag54 :Number Tag55 :Number Tag56 :Number Tag57 :Number Tag58 :Number Tag59 :Number Tag60 :Number Tag61 :Number Tag62 :Number Tag63 :Number Tag64 :Number Tag65 :Number Tag66 :Number Tag67 :Number Tag68 :Number Tag69 :Number Tag70 :Number Tag71 :Number Tag72 :Number Tag73 :Number Tag74 :Number Tag75 :Number Tag76 :Number Tag77 :Number Tag78 :Number Tag79 :Number Tag80 :Number Tag81 :Number Tag82 :Number Tag83 :Number Tag84 :Number Tag85 :Number Tag86 :Number Tag87 :Number Tag88 :Number Tag89 :Number Tag90 :Number Tag91 :Number Tag92 :Number Tag93 :Number Tag94 :Number Tag95 :Number Tag96 :Number Tag97 :Number Tag98 :Number Tag99 :Number Tag100 :Number)
+NEWTYPE Record = :{f1 :Number, f2 :Number, f3 :Number, f4 :Number, f5 :Number, f6 :Number, f7 :Number, f8 :Number, f9 :Number, f10 :Number, f11 :Number, f12 :Number, f13 :Number, f14 :Number, f15 :Number, f16 :Number, f17 :Number, f18 :Number, f19 :Number, f20 :Number, f21 :Number, f22 :Number, f23 :Number, f24 :Number, f25 :Number, f26 :Number, f27 :Number, f28 :Number, f29 :Number, f30 :Number, f31 :Number, f32 :Number, f33 :Number, f34 :Number, f35 :Number, f36 :Number, f37 :Number, f38 :Number, f39 :Number, f40 :Number, f41 :Number, f42 :Number, f43 :Number, f44 :Number, f45 :Number, f46 :Number, f47 :Number, f48 :Number, f49 :Number, f50 :Number, f51 :Number, f52 :Number, f53 :Number, f54 :Number, f55 :Number, f56 :Number, f57 :Number, f58 :Number, f59 :Number, f60 :Number, f61 :Number, f62 :Number, f63 :Number, f64 :Number, f65 :Number, f66 :Number, f67 :Number, f68 :Number, f69 :Number, f70 :Number, f71 :Number, f72 :Number, f73 :Number, f74 :Number, f75 :Number, f76 :Number, f77 :Number, f78 :Number, f79 :Number, f80 :Number, f81 :Number, f82 :Number, f83 :Number, f84 :Number, f85 :Number, f86 :Number, f87 :Number, f88 :Number, f89 :Number, f90 :Number, f91 :Number, f92 :Number, f93 :Number, f94 :Number, f95 :Number, f96 :Number, f97 :Number, f98 :Number, f99 :Number, f100 :Number}
+SIG Wide = (
+  VAL v1 :Number
+  VAL v2 :Number
+  VAL v3 :Number
+  VAL v4 :Number
+  VAL v5 :Number
+  VAL v6 :Number
+  VAL v7 :Number
+  VAL v8 :Number
+  VAL v9 :Number
+  VAL v10 :Number
+  VAL v11 :Number
+  VAL v12 :Number
+  VAL v13 :Number
+  VAL v14 :Number
+  VAL v15 :Number
+  VAL v16 :Number
+  VAL v17 :Number
+  VAL v18 :Number
+  VAL v19 :Number
+  VAL v20 :Number
+  VAL v21 :Number
+  VAL v22 :Number
+  VAL v23 :Number
+  VAL v24 :Number
+  VAL v25 :Number
+  VAL v26 :Number
+  VAL v27 :Number
+  VAL v28 :Number
+  VAL v29 :Number
+  VAL v30 :Number
+  VAL v31 :Number
+  VAL v32 :Number
+  VAL v33 :Number
+  VAL v34 :Number
+  VAL v35 :Number
+  VAL v36 :Number
+  VAL v37 :Number
+  VAL v38 :Number
+  VAL v39 :Number
+  VAL v40 :Number
+  VAL v41 :Number
+  VAL v42 :Number
+  VAL v43 :Number
+  VAL v44 :Number
+  VAL v45 :Number
+  VAL v46 :Number
+  VAL v47 :Number
+  VAL v48 :Number
+  VAL v49 :Number
+  VAL v50 :Number
+  VAL v51 :Number
+  VAL v52 :Number
+  VAL v53 :Number
+  VAL v54 :Number
+  VAL v55 :Number
+  VAL v56 :Number
+  VAL v57 :Number
+  VAL v58 :Number
+  VAL v59 :Number
+  VAL v60 :Number
+  VAL v61 :Number
+  VAL v62 :Number
+  VAL v63 :Number
+  VAL v64 :Number
+  VAL v65 :Number
+  VAL v66 :Number
+  VAL v67 :Number
+  VAL v68 :Number
+  VAL v69 :Number
+  VAL v70 :Number
+  VAL v71 :Number
+  VAL v72 :Number
+  VAL v73 :Number
+  VAL v74 :Number
+  VAL v75 :Number
+  VAL v76 :Number
+  VAL v77 :Number
+  VAL v78 :Number
+  VAL v79 :Number
+  VAL v80 :Number
+  VAL v81 :Number
+  VAL v82 :Number
+  VAL v83 :Number
+  VAL v84 :Number
+  VAL v85 :Number
+  VAL v86 :Number
+  VAL v87 :Number
+  VAL v88 :Number
+  VAL v89 :Number
+  VAL v90 :Number
+  VAL v91 :Number
+  VAL v92 :Number
+  VAL v93 :Number
+  VAL v94 :Number
+  VAL v95 :Number
+  VAL v96 :Number
+  VAL v97 :Number
+  VAL v98 :Number
+  VAL v99 :Number
+  VAL v100 :Number
+)
+MODULE store = (
+  LET m1 = 1
+  LET m2 = 2
+  LET m3 = 3
+  LET m4 = 4
+  LET m5 = 5
+  LET m6 = 6
+  LET m7 = 7
+  LET m8 = 8
+  LET m9 = 9
+  LET m10 = 10
+  LET m11 = 11
+  LET m12 = 12
+  LET m13 = 13
+  LET m14 = 14
+  LET m15 = 15
+  LET m16 = 16
+  LET m17 = 17
+  LET m18 = 18
+  LET m19 = 19
+  LET m20 = 20
+  LET m21 = 21
+  LET m22 = 22
+  LET m23 = 23
+  LET m24 = 24
+  LET m25 = 25
+  LET m26 = 26
+  LET m27 = 27
+  LET m28 = 28
+  LET m29 = 29
+  LET m30 = 30
+  LET m31 = 31
+  LET m32 = 32
+  LET m33 = 33
+  LET m34 = 34
+  LET m35 = 35
+  LET m36 = 36
+  LET m37 = 37
+  LET m38 = 38
+  LET m39 = 39
+  LET m40 = 40
+  LET m41 = 41
+  LET m42 = 42
+  LET m43 = 43
+  LET m44 = 44
+  LET m45 = 45
+  LET m46 = 46
+  LET m47 = 47
+  LET m48 = 48
+  LET m49 = 49
+  LET m50 = 50
+  LET m51 = 51
+  LET m52 = 52
+  LET m53 = 53
+  LET m54 = 54
+  LET m55 = 55
+  LET m56 = 56
+  LET m57 = 57
+  LET m58 = 58
+  LET m59 = 59
+  LET m60 = 60
+  LET m61 = 61
+  LET m62 = 62
+  LET m63 = 63
+  LET m64 = 64
+  LET m65 = 65
+  LET m66 = 66
+  LET m67 = 67
+  LET m68 = 68
+  LET m69 = 69
+  LET m70 = 70
+  LET m71 = 71
+  LET m72 = 72
+  LET m73 = 73
+  LET m74 = 74
+  LET m75 = 75
+  LET m76 = 76
+  LET m77 = 77
+  LET m78 = 78
+  LET m79 = 79
+  LET m80 = 80
+  LET m81 = 81
+  LET m82 = 82
+  LET m83 = 83
+  LET m84 = 84
+  LET m85 = 85
+  LET m86 = 86
+  LET m87 = 87
+  LET m88 = 88
+  LET m89 = 89
+  LET m90 = 90
+  LET m91 = 91
+  LET m92 = 92
+  LET m93 = 93
+  LET m94 = 94
+  LET m95 = 95
+  LET m96 = 96
+  LET m97 = 97
+  LET m98 = 98
+  LET m99 = 99
+  LET m100 = 100
+)
+FN (WIDEN p1 :Number p2 :Number p3 :Number p4 :Number p5 :Number p6 :Number p7 :Number p8 :Number p9 :Number p10 :Number p11 :Number p12 :Number p13 :Number p14 :Number p15 :Number p16 :Number p17 :Number p18 :Number p19 :Number p20 :Number p21 :Number p22 :Number p23 :Number p24 :Number p25 :Number p26 :Number p27 :Number p28 :Number p29 :Number p30 :Number p31 :Number p32 :Number p33 :Number p34 :Number p35 :Number p36 :Number p37 :Number p38 :Number p39 :Number p40 :Number p41 :Number p42 :Number p43 :Number p44 :Number p45 :Number p46 :Number p47 :Number p48 :Number p49 :Number p50 :Number p51 :Number p52 :Number p53 :Number p54 :Number p55 :Number p56 :Number p57 :Number p58 :Number p59 :Number p60 :Number p61 :Number p62 :Number p63 :Number p64 :Number p65 :Number p66 :Number p67 :Number p68 :Number p69 :Number p70 :Number p71 :Number p72 :Number p73 :Number p74 :Number p75 :Number p76 :Number p77 :Number p78 :Number p79 :Number p80 :Number p81 :Number p82 :Number p83 :Number p84 :Number p85 :Number p86 :Number p87 :Number p88 :Number p89 :Number p90 :Number p91 :Number p92 :Number p93 :Number p94 :Number p95 :Number p96 :Number p97 :Number p98 :Number p99 :Number p100 :Number) -> Number = (p1)
+PRINT 1

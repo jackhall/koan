@@ -4,13 +4,15 @@ whole-program allocation and symbol-mint totals, difference them into the
 marginal terms the roadmap cites, and check the bounds in
 `tests/allocation_baseline.rs` still have the headroom they claim.
 
-With `--baseline`, the readings are recorded into `observe/alloc/`: one file per
-sweep, named for the commit it was taken on (`<short-sha>.txt`, every shape in
-it), plus `terms.txt`, the trend log of the derived terms across the last 5
-sweeps. Without it the sweep is read-only and prints a delta against the newest
-recorded sweep. That record is the figure of reference: nothing quotes a number
-at it from prose, so a reader never has to re-measure a base revision to learn
-what HEAD costs.
+With `--baseline`, the readings are recorded into `observe/alloc.txt`: one row per
+commit swept, newest first, capped to the last 5. Without it the sweep is read-only
+and prints a delta against the newest recorded row. That record is the figure of
+reference: nothing quotes a number at it from prose, so a reader never has to
+re-measure a base revision to learn what HEAD costs.
+
+The row stores the shape readings and nothing else; the marginal terms are derived
+from them on read. A term is a difference of two columns over the gap in `n`, so a
+stored term would round away the exact per-shape figure the row exists to keep.
 
 Three readings, from two builds:
 
@@ -21,9 +23,10 @@ Three readings, from two builds:
   * **bracketed** — `tests/allocation_baseline.rs` brackets one interpret call
     per shape and prints `bracketed <path> <n>` under `--nocapture`. Startup is
     outside the bracket, which is why it sits a little under the whole-program
-    figure and why the bounds are stated against it.
-  * **terms** — a marginal cost per step, dispatch, call, or cycle, differenced
-    over a pair of whole-program readings so parse and startup cancel.
+    figure and why the bounds are stated against it. Measured fresh every run and
+    not recorded: it is read to check a bound's headroom, never differenced.
+  * **terms** — a marginal cost per step, per live frame, or per declared name,
+    differenced over a pair of whole-program readings so parse and startup cancel.
 
 Debug profile, matching every other measurement in the repo: a release build
 inlines enough to move the count, and these shapes exist to compare against each
@@ -43,42 +46,43 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from trendlog import render  # noqa: E402  (needs the path above)
+
 
 REPO = Path(__file__).resolve().parent.parent
 SHAPES_DIR = REPO / "audit" / "shapes"
-RECORD_DIR = REPO / "observe" / "alloc"
+RECORD = REPO / "observe" / "alloc.txt"
 BOUNDS_TEST = REPO / "tests" / "allocation_baseline.rs"
 KEEP_ENTRIES = 5
 
-def run_header(date: str, sha: str) -> str:
-    """The stamp and column key at the head of one sweep's file."""
-    tree = " (uncommitted changes in the tree)" if sha.endswith("+") else ""
-    return (
-        f"# allocation audit sweep, measured {date} at {sha.rstrip('+')}{tree}\n"
-        "# columns: shape  allocations  symbols  bracketed\n"
-        "# whole-program totals through the counting allocator; `bracketed` is the same run\n"
-        "# without interpreter startup, from tests/allocation_baseline.rs, `-` where no test\n"
-        "# brackets that shape. The terms differenced out of these are in terms.txt.\n"
-        "# written by tools/alloc_audit.py --baseline; one file per commit swept\n"
-    )
-
-
-TERMS_HEADER = (
-    "# columns: date  short-sha  term  allocations  symbols\n"
-    "# marginal cost of one unit of each term, differenced over the shape readings in the\n"
-    "# sweep file of the same SHA; `fixed` is the empty program's own absolute total —\n"
-    "# startup and builtin seeding, which every shape carries\n"
-    "# managed by tools/alloc_audit.py --baseline; newest first, capped to 5 sweeps\n"
+# The record's column order, and the shape set a sweep expects to find on disk. Declared
+# rather than globbed so a row's positional columns mean the same thing in every entry.
+SHAPES = (
+    "empty",
+    "wide_n10", "wide_n100",
+    "deep_n10", "deep_n100",
+    "declare_n10", "declare_n100",
 )
+
+NOTES = [
+    "whole-program totals through the counting allocator, one row per commit swept. The",
+    "marginal terms are derived from these on read, not stored — a term is a difference of",
+    "two columns divided by the gap in `n`, so storing it would round away the exact",
+    "per-shape figure the row is here to keep.",
+    "managed by tools/alloc_audit.py --baseline; newest first, capped to 5 sweeps",
+]
+COLUMNS = ["date", "short-sha"] + ["alloc", "sym"] * len(SHAPES)
+GROUPS = [(shape, 2) for shape in SHAPES]
 
 
 @dataclass(frozen=True)
 class Term:
     """One marginal cost, as `(minuend - subtrahend) / units`.
 
-    `minuend` and `subtrahend` name either a shape or an earlier term — a term over
-    terms is how the per-parameter slope and the per-scope walk growth are read.
-    `subtrahend` is None for `fixed`, which is an absolute reading.
+    `minuend` and `subtrahend` name either a shape or an earlier term, so a term can
+    be differenced out of two others. `subtrahend` is None for `fixed`, which is an
+    absolute reading.
     """
 
     name: str
@@ -90,29 +94,12 @@ class Term:
 
 TERMS = (
     Term("fixed", "empty", None, 1, "interpreter startup and builtin seeding"),
-    Term("step", "tail_loop_steps100", "tail_loop_steps10", 90, "per tail-recursive step"),
-    Term("leading_loop", "leading_loop_steps100", "leading_loop_steps10", 90,
-         "per leading-carrying tail step"),
-    Term("try_loop", "try_loop_steps100", "try_loop_steps10", 90,
-         "per TRY-carrying tail step"),
-    Term("dispatch", "operator_chain_operands128", "operator_chain_operands16", 112,
-         "per operator dispatch"),
-    Term("scope_walk_depth2", "scope_walk_depth2_calls40", "scope_walk_depth2_calls8", 32,
-         "per dispatch down a 2-deep scope walk"),
-    Term("scope_walk_depth10", "scope_walk_depth10_calls40", "scope_walk_depth10_calls8", 32,
-         "per dispatch down a 10-deep scope walk"),
-    Term("scope_walk_scope", "scope_walk_depth10", "scope_walk_depth2", 8,
-         "per extra scope walked, per dispatch"),
-    Term("builtin_call", "builtin_call_calls40", "builtin_call_calls8", 32,
-         "per three-parameter builtin call"),
-    Term("user_fn_params1", "user_fn_params1_calls40", "user_fn_params1_calls8", 32,
-         "per one-parameter user-function call"),
-    Term("user_fn_params8", "user_fn_params8_calls40", "user_fn_params8_calls8", 32,
-         "per eight-parameter user-function call"),
-    Term("user_fn_parameter", "user_fn_params8", "user_fn_params1", 7,
-         "per extra parameter, per user-function call"),
-    Term("tagged_construct", "tagged_construct_calls40", "tagged_construct_calls8", 32,
-         "per tagged construct-and-match cycle"),
+    Term("wide_step", "wide_n100", "wide_n10", 90,
+         "per tail-recursive step through the wide body"),
+    Term("deep_frame", "deep_n100", "deep_n10", 90,
+         "per live frame, averaged over depth 10 to 100"),
+    Term("declare_name", "declare_n100", "declare_n10", 90,
+         "per declared name, across five declaration forms"),
 )
 
 
@@ -134,26 +121,14 @@ class Bound:
 
 
 BOUNDS = (
-    Bound("the_tail_loop_shape_stays_within_its_step_churn_bound", "BOUND",
-          ("tail_loop_steps100",), 100),
-    Bound("the_leading_loop_shape_stays_within_its_step_churn_bound", "BOUND",
-          ("leading_loop_steps100",), 100),
-    Bound("the_try_loop_shape_stays_within_its_step_churn_bound", "BOUND",
-          ("try_loop_steps100",), 100),
-    Bound("the_operator_chain_shape_stays_within_its_dispatch_churn_bound", "BOUND",
-          ("operator_chain_operands128",), 127),
-    Bound("per_dispatch_cost_does_not_grow_with_scope_walk_depth", "BOUND",
-          (("scope_walk_depth10_calls40", "scope_walk_depth10_calls8"),
-           ("scope_walk_depth2_calls40", "scope_walk_depth2_calls8")), 256),
-    Bound("the_builtin_call_shape_stays_within_its_per_call_bound", "BOUND",
-          (("builtin_call_calls40", "builtin_call_calls8"),), 32),
-    Bound("the_user_fn_call_shape_stays_within_its_per_parameter_bound", "PER_CALL_BOUND",
-          (("user_fn_params1_calls40", "user_fn_params1_calls8"),), 32),
-    Bound("the_user_fn_call_shape_stays_within_its_per_parameter_bound", "PER_PARAMETER_BOUND",
-          (("user_fn_params8_calls40", "user_fn_params8_calls8"),
-           ("user_fn_params1_calls40", "user_fn_params1_calls8")), 224),
-    Bound("the_tagged_construct_shape_stays_within_its_per_construction_bound", "BOUND",
-          (("tagged_construct_calls40", "tagged_construct_calls8"),), 32),
+    Bound("the_empty_program_stays_within_its_startup_bound", "BOUND",
+          ("empty",), 32),
+    Bound("the_wide_shape_stays_within_its_per_step_bound", "BOUND",
+          ("wide_n100",), 100),
+    Bound("the_deep_shape_stays_within_its_per_frame_bound", "BOUND",
+          ("deep_n100",), 100),
+    Bound("the_declare_shape_stays_within_its_per_name_bound", "BOUND",
+          (("declare_n100", "declare_n10"),), 450),
 )
 
 
@@ -282,8 +257,16 @@ def _is_ancestor(sha: str) -> bool:
     return _git("merge-base", "--is-ancestor", bare, "HEAD").returncode == 0
 
 
+def _display(path: Path) -> str:
+    """A path as written in a report: repo-relative when it is under the repo."""
+    try:
+        return str(path.relative_to(REPO))
+    except ValueError:
+        return str(path)
+
+
 def _entries(path: Path) -> list[list[str]]:
-    """A file's data lines, in order, as whitespace-split fields."""
+    """The record's data lines, in order, as whitespace-split fields."""
     if not path.exists():
         return []
     rows = []
@@ -294,97 +277,45 @@ def _entries(path: Path) -> list[list[str]]:
     return rows
 
 
-def _display(path: Path) -> str:
-    """A path as written in a report: repo-relative when it is under the repo."""
-    try:
-        return str(path.relative_to(REPO))
-    except ValueError:
-        return str(path)
-
-
-def _run_path(record_dir: Path, sha: str) -> Path:
-    """One sweep's file. The dirty marker is part of the stamp, not the name — a
-    second sweep at one commit replaces that commit's file rather than adding one."""
-    return record_dir / f"{sha.rstrip('+')}.txt"
-
-
-def record_run(readings: dict[str, tuple[int, int]], bracketed: dict[str, int],
-               date: str, sha: str, record_dir: Path) -> Path:
-    """Write this sweep's file: every shape's readings under one stamp."""
-    width = max(len(shape) for shape in readings)
+def read_rows(record: Path) -> list[tuple[str, str, dict[str, tuple[int, int]]]]:
+    """The recorded sweeps as `(date, sha, {shape: (allocations, symbols)})`, newest
+    first. A row shorter than the column key is skipped rather than read short: the
+    columns are positional, so a row written under a different shape set carries no
+    reading this one can name."""
+    width = 2 + 2 * len(SHAPES)
     rows = []
-    for shape, (allocations, symbols) in sorted(readings.items()):
-        bracket = bracketed.get(shape)
-        rows.append(f"{shape:<{width}} {allocations:>7} {symbols:>7} "
-                    f"{bracket if bracket is not None else '-':>7}")
-    path = _run_path(record_dir, sha)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(run_header(date, sha) + "\n".join(rows) + "\n")
-    return path
+    for fields in _entries(record):
+        if len(fields) != width:
+            continue
+        readings = {shape: (int(fields[2 + 2 * i]), int(fields[3 + 2 * i]))
+                    for i, shape in enumerate(SHAPES)}
+        rows.append((fields[0], fields[1], readings))
+    return rows
 
 
-def record_terms(terms: dict[str, tuple[float, float]], date: str, sha: str,
-                 record_dir: Path) -> None:
-    """Prepend this sweep's terms to the trend log, replacing any entry already
-    recorded at this SHA, dropping entries whose SHA has left HEAD's history, and
-    capping it at `KEEP_ENTRIES` sweeps."""
-    kept = [row for row in _entries(record_dir / "terms.txt")
-            if row[1] != sha and _is_ancestor(row[1])]
-    shas: list[str] = []
-    for row in kept:
-        if row[1] not in shas:
-            shas.append(row[1])
-    kept = [row for row in kept if row[1] in shas[:KEEP_ENTRIES - 1]]
-
-    rows = [f"{date} {sha} {name} {alloc:.2f} {symbols:.2f}"
-            for name, (alloc, symbols) in terms.items()]
-    path = record_dir / "terms.txt"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(TERMS_HEADER + "\n".join(rows + [" ".join(row) for row in kept]) + "\n")
-
-
-def prune_runs(record_dir: Path) -> list[Path]:
-    """Delete sweep files the trend log no longer carries, so the two stay one
-    record: a sweep is in `observe/alloc/` exactly when its terms are in terms.txt."""
-    live = {row[1].rstrip("+") for row in _entries(record_dir / "terms.txt")}
-    dropped = []
-    for path in sorted(record_dir.glob("*.txt")):
-        if path.name != "terms.txt" and path.stem not in live:
-            path.unlink()
-            dropped.append(path)
-    return dropped
-
-
-def run_order(record_dir: Path) -> list[tuple[str, str]]:
-    """The recorded sweeps as `(date, sha)`, newest first, per the trend log."""
-    order: list[tuple[str, str]] = []
-    for row in _entries(record_dir / "terms.txt"):
-        stamp = (row[0], row[1])
-        if stamp not in order:
-            order.append(stamp)
-    return order
-
-
-def read_run(record_dir: Path, sha: str) -> dict[str, tuple[int, int]]:
-    """One recorded sweep's shape readings, `{shape: (allocations, symbols)}`."""
-    return {row[0]: (int(row[1]), int(row[2]))
-            for row in _entries(_run_path(record_dir, sha)) if len(row) >= 3}
-
-
-def prior_sweep(record_dir: Path, exclude: str | None = None) -> tuple[str, str] | None:
-    """The sweep a reading is reported against — the newest recorded one, skipping
-    the SHA this run is about to overwrite."""
-    for date, sha in run_order(record_dir):
+def prior_row(record: Path, exclude: str | None = None):
+    """The sweep a reading is reported against — the newest recorded one, skipping the
+    SHA this run is about to overwrite."""
+    for date, sha, readings in read_rows(record):
         if exclude is None or sha != exclude:
-            return date, sha
+            return date, sha, readings
     return None
 
 
-def prior_terms(record_dir: Path, sha: str) -> dict[str, tuple[float, float]]:
-    """One recorded sweep's terms, `{term: (allocations, symbols)}`."""
-    return {row[2]: (float(row[3]), float(row[4]))
-            for row in _entries(record_dir / "terms.txt")
-            if row[1] == sha and len(row) >= 5}
+def record_row(readings: dict[str, tuple[int, int]], date: str, sha: str,
+               record: Path) -> None:
+    """Prepend this sweep to the record, replacing any entry already at this SHA,
+    dropping entries whose SHA has left HEAD's history, and capping the file at
+    `KEEP_ENTRIES` sweeps."""
+    kept = [fields for fields in _entries(record)
+            if len(fields) >= 2 and fields[1] != sha and _is_ancestor(fields[1])]
+    row = [date, sha]
+    for shape in SHAPES:
+        allocations, symbols = readings.get(shape, (0, 0))
+        row += [str(allocations), str(symbols)]
+    rows = [row] + kept[:KEEP_ENTRIES - 1]
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(render(NOTES, COLUMNS, rows, GROUPS))
 
 
 # --- reporting --------------------------------------------------------------
@@ -434,11 +365,12 @@ def _summary(shapes: int, moved_shapes: int, moved_terms: int,
 
 
 def report(readings: dict[str, tuple[int, int]], bracketed: dict[str, int],
-           terms: dict[str, tuple[float, float]], record_dir: Path,
-           against: tuple[str, str] | None,
-           quiet: bool = False) -> tuple[int, int, list[str]]:
+           terms: dict[str, tuple[float, float]], record: Path,
+           against, quiet: bool = False) -> tuple[int, int, list[str]]:
     """Print the sweep, each figure beside its delta against the recorded sweep
-    `against` — the newest one on record, or none when the record is empty.
+    `against` — the newest row on record as `(date, sha, readings)`, or none when the
+    record is empty. The row's terms are derived from its shape readings here rather
+    than read back, so a comparison is always between two terms computed the same way.
 
     Under `quiet`, a row whose figures both match that sweep is dropped, and a
     table left with no rows is not printed at all: a sweep that has not moved
@@ -450,8 +382,8 @@ def report(readings: dict[str, tuple[int, int]], bracketed: dict[str, int],
             lines.append("no recorded sweep to compare against")
         else:
             lines.append(f"against the sweep recorded {against[0]} at {against[1]} "
-                         f"({_display(_run_path(record_dir, against[1]))})")
-    recorded = read_run(record_dir, against[1]) if against else {}
+                         f"({_display(record)})")
+    recorded = against[2] if against else {}
 
     shape_rows = []
     for shape, (allocations, symbols) in sorted(readings.items()):
@@ -464,7 +396,7 @@ def report(readings: dict[str, tuple[int, int]], bracketed: dict[str, int],
                            f"{symbols:>8} {symbol_delta:>6} "
                            f"{bracket if bracket is not None else '-':>10}"))
 
-    recorded_terms = prior_terms(record_dir, against[1]) if against else {}
+    recorded_terms = derive_terms(recorded) if recorded else {}
     term_rows = []
     for term in TERMS:
         if term.name not in terms:
@@ -538,25 +470,24 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--baseline", action="store_true",
                         help="record this sweep into the trend logs (default: read-only)")
-    parser.add_argument("--dir", type=Path, default=RECORD_DIR,
-                        help=f"where the record lives (default: {_display(RECORD_DIR)})")
+    parser.add_argument("--file", type=Path, default=RECORD, dest="record",
+                        help=f"where the record lives (default: {_display(RECORD)})")
     parser.add_argument("--quiet", action="store_true",
                         help="print one summary line, plus only the rows that moved "
                              "against the recorded sweep and the bounds that drifted")
     parser.add_argument("--no-bounds", action="store_true",
-                        help="skip the bracketed run behind the bound check; not for a "
-                             "recording sweep, whose entry carries that reading")
+                        help="skip the bracketed run behind the bound check")
     args = parser.parse_args()
-    args.dir = args.dir.resolve()
-
-    # A recorded entry carries the bracketed column, so recording without measuring it
-    # would write a `-` over a figure the prior entry has.
-    if args.baseline and args.no_bounds:
-        parser.error("--no-bounds cannot be combined with --baseline")
+    args.record = args.record.resolve()
 
     readings = sweep_shapes()
     if not readings:
         print("no shapes measured", file=sys.stderr)
+        return 1
+    missing = [shape for shape in SHAPES if shape not in readings]
+    if missing:
+        print(f"shapes named in the record's columns but not measured: {', '.join(missing)}",
+              file=sys.stderr)
         return 1
     bracketed = {} if args.no_bounds else bracket_shapes()
     terms = derive_terms(readings)
@@ -564,8 +495,8 @@ def main() -> int:
     date, sha = _stamp()
     # A recording sweep reports against the newest sweep it is not about to replace;
     # a read-only one reports against the newest on record, its own commit included.
-    against = prior_sweep(args.dir, exclude=sha if args.baseline else None)
-    moved_shapes, moved_terms, lines = report(readings, bracketed, terms, args.dir,
+    against = prior_row(args.record, exclude=sha if args.baseline else None)
+    moved_shapes, moved_terms, lines = report(readings, bracketed, terms, args.record,
                                               against, args.quiet)
     drifted, bound_lines = (0, []) if args.no_bounds else report_bounds(bracketed, args.quiet)
     if args.quiet:
@@ -575,12 +506,8 @@ def main() -> int:
         print(line)
 
     if args.baseline:
-        path = record_run(readings, bracketed, date, sha, args.dir)
-        record_terms(terms, date, sha, args.dir)
-        dropped = prune_runs(args.dir)
-        print(f"\nrecorded {date} {sha} to {_display(path)}")
-        for gone in dropped:
-            print(f"pruned {_display(gone)}")
+        record_row(readings, date, sha, args.record)
+        print(f"\nrecorded {date} {sha} to {_display(args.record)}")
     return 0
 
 

@@ -1,0 +1,36 @@
+UNION Maybe = (Some :Number None :Null)
+NEWTYPE Point = :{x :Number, y :Number}
+NEWTYPE Meters = Number
+SIG Scaled = (VAL factor :Number)
+MODULE geometry = (
+  LET factor = 2
+  LET scale = ,
+    FN (SCALE p :Point k :Number) -> Point = (Point {x = (p.x * k), y = (p.y * k)})
+)
+LET scaled = (geometry :! Scaled)
+FN (BUMP a :Number b :Number) -> Number = (a + b)
+FN (BUMP s :Str) -> Str = (s)
+FN (PICK r :{u :Number, v :Str}) -> Number = (1)
+FN (PICK r :{u :Number, w :Str}) -> Number = (0)
+
+FN (DEEP n :Number) -> Number = (
+  (LET point = (Point {x = n, y = (n + 1)}))
+  (LET grown = (USING geometry SCOPE (SCALE point factor)))
+  (LET tag = (Maybe (Some (grown.x))))
+  (LET picked = (MATCH (tag) -> :Number WITH (Some -> (it) None -> (0))))
+  (LET chain = (1 + 2 + 3 + picked + (BUMP n 4) + geometry.factor + scaled.factor))
+  (LET record = {u = chain, v = "v", w = "w"})
+  (LET narrowed = (PICK ((u v) FROM record)))
+  (LET guarded = (TRY (chain / (BUMP n 1)) -> :Number WITH (Ok -> (it) _ -> (0))))
+  (LET result = (CATCH (guarded + narrowed)))
+  (LET unwrapped = (MATCH (result) -> :Number WITH (Ok -> (it) Error -> (0))))
+  (LET quoted = ($(#(unwrapped + 1))))
+  (LET measured = (Meters quoted))
+  (LET Kind = (TYPE OF measured))
+  (LET items = [quoted, 1, 2])
+  (LET table = {"k": quoted})
+  (LET anon = (FN :{a :Number} -> Number = (a + 1)))
+  (LET applied = (anon {a = quoted}))
+  (MATCH (n < 1) -> :Number WITH (true -> (applied) false -> ((DEEP (n - 1)) + 0)))
+)
+PRINT (DEEP 10)

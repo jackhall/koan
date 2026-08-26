@@ -4,7 +4,7 @@
 # Runs the miri-slate drift check, then the verify slate (instrumented
 # tests via cargo llvm-cov, clippy, doclinks, modgraph score, allocation
 # audit), then rebaselines `observe/complexity.txt` and the allocation
-# record in `observe/alloc/` against today's measurement.
+# record in `observe/alloc.txt` against today's measurement.
 #
 # The pre-commit hook owns its own copies of the regenerated DOT and lcov
 # files (prefixed with `precommit-`) so they don't clobber the canonical
@@ -43,4 +43,4 @@ step "verify: llvm-cov + clippy + doclinks + coverage + modgraph (rebaseline)"
 KOAN_DOT="$DOT" KOAN_LCOV="$LCOV" KOAN_REBASELINE=1 tools/verify.sh
 
 step "stage refreshed observability artifacts"
-git add observe/complexity.txt observe/coverage.txt observe/alloc "$DOT" "$LCOV"
+git add observe/complexity.txt observe/coverage.txt observe/alloc.txt "$DOT" "$LCOV"
