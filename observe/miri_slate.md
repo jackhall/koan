@@ -32,6 +32,11 @@ no — the test is redundant; **delete it** rather than whitelist. Do not whitel
 group just to silence the stale-anchor check.
 
 <!-- slate-audit-whitelist:start -->
+- `src/builtins/branch_walk.rs` — the by-type selector stages its candidate slates on the step
+  scratch, the one arena the drain *resets* rather than drops; every other slate group pins region
+  *death* ordering, so the reset-under-a-live-read shape is distinct and unpinned elsewhere. The
+  file carries no `unsafe` of its own — koan-side `src/` carries none at all — and the backing
+  `unsafe` is `BumpAllocator`'s in `witnessed.rs`, reached through `BumpVec`.
 - `src/machine/core/arena.rs` — arena.rs split into `arena/{frame,step_allocator}` child
   modules. Its groups (CallFrame lifetime erasure, the record substrate door, MATCH-Tagged /
   TRY-WITH TCO, per-call frame
@@ -344,6 +349,18 @@ under plain `cargo test`; tree borrows is the only check that the wake's reads s
 region.
 
 - `leading_statements_ride_the_fresh_carts_region_across_a_self_tail_loop`
+
+**MATCH arm slates on the step scratch** ([src/builtins/branch_walk.rs](../src/builtins/branch_walk.rs)) —
+the by-type selector stages its two candidate slates (the exact pre-pass and the typed tournament)
+as `BumpVec`s on the step scratch, the arena the drain resets at every pop. Nothing the selection
+hands back may point into them: the winning body is a region slice owned by the branch expression's
+own host, and a slate entry carries only the head spelling an ambiguity diagnostic would name. A
+self-recursive tail loop over a boolean-headed MATCH is what makes the placement observable — each
+hop resets the scratch under the arm the previous hop selected, so a body or a head read back out
+of a slate would be read out of reset bytes. Reaching the base arm is the observable half under
+plain `cargo test`; tree borrows is what confirms no read crosses the reset.
+
+- `a_boolean_match_selects_across_a_self_tail_loop_without_outliving_the_scratch`
 
 **MATCH / TRY-WITH branch frames inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
 MATCH and TRY build their per-branch frame and seed the `it` bind through

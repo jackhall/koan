@@ -615,3 +615,35 @@ fn leading_statements_ride_the_fresh_carts_region_across_a_self_tail_loop() {
         result.ktype().name(test_run.registries()),
     );
 }
+
+/// **A boolean-headed MATCH selects off the step scratch across a self-recursive tail loop.** The
+/// two candidate slates the by-type selector stages are decide-local, so they live on the step
+/// scratch — the arena the drain resets at every pop. Nothing the selection returns may point into
+/// them: the winning body is a region slice the scrutinee's own host owns, and the slates carry
+/// only the head spellings needed to name an ambiguity. The loop is what makes that observable —
+/// each hop resets the scratch under the arm the previous hop chose, so a body or a head read back
+/// out of a slate would be read out of reset bytes. Tree borrows is the check that it never is.
+#[test]
+fn a_boolean_match_selects_across_a_self_tail_loop_without_outliving_the_scratch() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+
+    test_run.run(
+        "FN (LOOP n :Number) -> Number = (MATCH (n < 1) -> :Number WITH (\
+             true -> (0)\
+             false -> (LOOP (n - 1))\
+         ))\n\
+         LET out = (LOOP 4)",
+    );
+
+    let result = test_run
+        .scope
+        .lookup("out")
+        .expect("the loop binds its result");
+    assert!(
+        matches!(result, crate::machine::model::KObject::Number(n) if *n == 0.0),
+        "the loop's tail must resolve to the true arm's value, got {}",
+        result.ktype().name(test_run.registries()),
+    );
+}
