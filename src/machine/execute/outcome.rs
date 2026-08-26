@@ -140,7 +140,7 @@ impl Replacement {
         )
     }
 
-    /// [`Self::fresh_tail`]'s twin for a builtin's pre-built child cart (MATCH / TRY / EVAL).
+    /// [`Self::fresh_tail`]'s twin for a builtin's pre-built child cart (EVAL's UAF guard).
     pub(in crate::machine::execute) fn fresh_child<'f, F>(
         frame: &'f Rc<CallFrame>,
         build: F,

@@ -334,17 +334,20 @@ nothing branded crosses the step boundary.
   classify paths reach it through `with_node_scope` / `with_current_node_scope`,
   copying out a scalar (an id, a region) where they need no live scope — so no
   `&Scope` rides up a `&mut self` path.
-- **Seed-side binds** fold onto `open` too: the MATCH / TRY arm `it`-bind, the
-  user-fn param-bind, and the deferred-return-type elaboration each open the child
-  scope at the brand through `CallFrame::with_scope` and **relocate** their
-  caller-`'a` value into the opened scope's own region through the substrate
+- **Seed-side binds** fold onto `open` too: the user-fn param-bind and the
+  deferred-return-type elaboration each open the child scope at the brand through
+  `CallFrame::with_scope` and **relocate** their caller-`'a` value into the opened
+  scope's own region through the substrate
   ([`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs), which relocates
   the value into the frame region at a fold brand, the composition minting and
   retaining what the copy still reaches rather than assuming purity — see
   [memory-model.md § Move-in residence](memory-model.md#move-in-residence)
-  — for the `it` / param binds; the deferred return re-homing its elaborated `KType`
+  — for the param bind; the deferred return re-homing its elaborated `KType`
   into the captured-scope region) before binding it, so the value lands at the brand
-  and the seed fabricates no free `&'a`.
+  and the seed fabricates no free `&'a`. The MATCH / TRY arm `it`-bind takes the same
+  relocation without an open: its block is a bump-allocated overlay child of the
+  call-site scope, so the seed already holds it at the caller's `'a` and the value is
+  rebuilt in the enclosing cart's region.
 
 Two driver accessors copy out inside the brand — a value read
 ([`read_result_with`](../workgraph/src/scheduler.rs)) and a borrow-free error probe

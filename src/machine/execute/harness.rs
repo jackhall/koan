@@ -492,8 +492,8 @@ impl<'run> Host<'run> {
                             obligation.as_ref(),
                         ))
                     }
-                    // An error finalizes bare (no value, no witness); the frame-gated obligation
-                    // still labels it with the callee's trace frame.
+                    // An error finalizes bare (no value, no witness); the obligation still labels
+                    // it with the callee's trace frame.
                     Err(error) => StepVerdict::Done(Err(finalize_error(
                         error,
                         obligation.as_ref(),

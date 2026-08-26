@@ -228,12 +228,6 @@ pub struct CallFrame {
     /// read off it: the envelope's members are one flat antichain in which a value's home is an
     /// ordinary member, so the frame's own storage is not recoverable from it by identity.
     storage: Rc<FrameStorage>,
-    /// True only for the scheduler-owned run frame, which carries the top-level run scope and
-    /// never drops mid-run. Its `region` is empty (top-level values live in the externally-owned
-    /// run region, reached via `scope.region`), so there is nothing to lift out of it: the Done
-    /// boundary skips the lift for a non-dying frame (lift exists to rescue values from a *dying*
-    /// per-call region). Every per-call frame is `false`.
-    non_dying: bool,
     /// The run's lookup state — the type registry and the label interner — `Some` only on the run
     /// frame ([`Self::adopting`]). Per-call frames reach it through the execution context rather
     /// than owning one, so a verdict recorded or a label interned anywhere in the run is visible
@@ -283,7 +277,6 @@ impl CallFrame {
         Rc::new(CallFrame {
             envelope,
             storage,
-            non_dying: false,
             run_registries: None,
             writer: None,
         })
@@ -292,8 +285,9 @@ impl CallFrame {
     /// The scheduler-owned **run frame**: a frame that *carries an already-built run scope*
     /// rather than minting a child. Top-level execution runs against this frame so `active_frame`
     /// is never `None`, which makes a body's re-dispatch-against-its-own-scope uniformly framed
-    /// (Yoked) at every depth — top level included. Marked `non_dying` so the Done boundary skips
-    /// the (pointless) self-lift of top-level results.
+    /// (Yoked) at every depth — top level included. It never drops mid-run, and its `region` is
+    /// empty — top-level values live in the externally-owned run region, reached via
+    /// `scope.region` — so a Done against it has nothing to lift.
     ///
     /// The storage this frame adopts is **derived** from `scope`, not taken: the run root's own
     /// region owner is by definition the storage that owns the run region, so this frame's
@@ -318,7 +312,6 @@ impl CallFrame {
         Rc::new(CallFrame {
             envelope,
             storage: scope_frame(scope),
-            non_dying: true,
             run_registries: Some(RunRegistries::with_labels(labels)),
             writer: Some(RunWriter::new(out)),
         })
@@ -335,12 +328,6 @@ impl CallFrame {
     /// (`AmbientContext::writer`), and handed to a builtin body as `BodyCtx::out`.
     pub(crate) fn writer(&self) -> Option<&RunWriter> {
         self.writer.as_ref()
-    }
-
-    /// True only for the scheduler-owned run frame (see [`Self::adopting`]). The Done boundary
-    /// reads this to skip the self-lift that a never-dying frame would otherwise perform.
-    pub fn non_dying(&self) -> bool {
-        self.non_dying
     }
 
     /// This frame's own `FrameStorage` — the owner of the region its child scope lives in, which
@@ -364,8 +351,8 @@ impl CallFrame {
 
     /// Run `f` with this frame's child scope opened at a `for<'b>` brand, folded onto `open` like the
     /// decide channel. Both the frame-side reads (scope id, the arg reach-set
-    /// fold) and the seed-side binds (the MATCH / TRY arm `it`-bind, the user-fn param-bind, the
-    /// deferred-return-type elaboration) take this read: a seed relocates its caller-`'a` value into
+    /// fold) and the seed-side binds (the user-fn param-bind, the deferred-return-type elaboration)
+    /// take this read: a seed relocates its caller-`'a` value into
     /// the opened scope's own region through the substrate (a witnessed shortening) before binding it,
     /// so nothing fabricates a free `&'a`. The carrier opens against this frame's own storage `Rc`
     /// (the pin), and the rank-2 brand keeps the `&Scope<'b>` from escaping the call, so no scope

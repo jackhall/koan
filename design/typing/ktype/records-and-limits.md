@@ -92,11 +92,13 @@ static shape (see [type-language-via-dispatch.md § Record-type sigil](../type-l
   checked at runtime — the slot's `ReturnContract` carrier is replaced at TCO
   time. A nested `MATCH` / `TRY` arm whose body tail-calls a function is checked
   against the callee's contract, not the arm's `-> :T`.
-- **Value-returning builtins are not runtime-checked.** They return through
-  a `Done` value with no slot frame, so the runtime check has nowhere to
-  attach; their declared return types are honest but unenforced. `MATCH` / `TRY`
-  are the exception — they return through an `Action::Tail` carrying a
-  `ReturnContract::Arm`, so their `-> :T` is enforced.
+- **Value-returning builtins are not runtime-checked.** They return a `Done`
+  value carrying no `ReturnContract`, so no obligation is sealed and the runtime
+  check — which fires on the obligation's presence at the Done boundary — has
+  nothing to read; their declared return types are honest but unenforced.
+  `MATCH` / `TRY` are the exception: they return through an `Action::Tail`
+  carrying a `ReturnContract::Arm`, so their `-> :T` is enforced wherever the arm
+  runs, top level included.
 The two-phase execution work in [open-work.md](../open-work.md) closes both
 uniformly.
 

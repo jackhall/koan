@@ -336,16 +336,19 @@ never a reach narrowed against what some destination already pins. Acyclicity co
 and eternal rules instead
 ([reach.md § Composition](../workgraph/design/reach.md#composition-minting-a-description-and-retaining-its-pins)).
 
-The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params, the deferred-return-type
+The per-call frame's seed binds (`KFunction::invoke` params, the deferred-return-type
 elaboration) open the child scope at a `for<'b>` brand through
 [`CallFrame::with_scope`](../src/machine/core/arena.rs) and **relocate** their caller value into the
-opened scope's own region through the substrate before binding it — the `it`-bind and param-bind via
+opened scope's own region through the substrate before binding it — the param-bind via
 [`Scope::adopt_for_binding`](../src/machine/core/scope/reach.rs) (which relocates the value into the
 frame region at a fold brand, the fold's composition minting and retaining what the copy still
 reaches, rather than assuming purity — see
 [§ Move-in residence](#move-in-residence)), the deferred return re-homing
 its elaborated `KType` into the captured-scope region — so the
-seed fabricates no free `&'a`. The store
+seed fabricates no free `&'a`. A MATCH / TRY arm's `it`-bind takes the same
+`adopt_for_binding` relocation with no open in front of it: the arm's block is a bump-allocated
+overlay child of the call-site scope, so the seed holds it at the caller's own `'a` and the value is
+rebuilt in the enclosing cart's region rather than an arm's own. The store
 side carries no `unsafe` at all: forgetting a scope reference's lifetime for storage routes the safe
 `erase_to_static`, and a region-resident holder's embedded `&Scope` re-anchors with the whole value on
 read, both deferring every fabrication hazard to the witnessed retype.

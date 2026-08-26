@@ -19,7 +19,7 @@ from the slot's live frame at read, never re-anchored at a free `'run`:
 - `YokedChild(SealedExtern<ScopeRefFamily>)` holds a `&'static Scope` carrier to a block scope a
   builtin allocated in a region the cart holds a pin claim on — its own, an ancestor along the
   `FrameStorage.outer` chain, or the eternal run root. That covers an `InScope` body (MODULE / SIG /
-  TRY) and a USING overlay alike. It is opened at read through the rank-2 `SealedExtern::open` at a
+  TRY) and an overlay block — a `USING` body or a MATCH / TRY arm — alike. It is opened at read through the rank-2 `SealedExtern::open` at a
   `for<'b>` brand against the slot's frame `Rc`, sound because the claim holds for as long as the
   slot holds the cart. It differs from `Yoked` only in that the child scope differs from the cart's
   own scope, so it needs a stored carrier.
@@ -59,15 +59,18 @@ sink, lifting to the run `'a` only at the `lift_kobject` Done boundary.
 
 ## Seed-side re-anchor
 
-The MATCH / TRY arm seeds and [`run_user_fn`](../../src/machine/core/kfunction/exec.rs)
-bind their `it` / parameters — values whose type carries the caller's `'a`, deep-cloned into the
-frame region — inside [`CallFrame::with_scope`](../../src/machine/core/arena.rs), which opens the
-child scope at a `for<'b>` brand. Each arrives as a **delivery envelope**, which is the whole route:
+[`run_user_fn`](../../src/machine/core/kfunction/exec.rs) binds its parameters — values whose type
+carries the caller's `'a`, deep-cloned into the frame region — inside
+[`CallFrame::with_scope`](../../src/machine/core/arena.rs), which opens the child scope at a
+`for<'b>` brand. The MATCH / TRY arm seed binds `it` the same way but needs no open: its block is a
+bump-allocated overlay child of the call-site scope, already at the caller's own `'a`, so the seed
+takes it directly. Each value arrives as a **delivery envelope**, which is the whole route:
 a bare caller-`'a` reference names a lifetime the opened scope has no relation to and cannot cross
 the signature at all, while an envelope crosses as the witnessed shortening every other delivered
-value takes. The bind then **relocates** the value into the opened scope's own region — rebuilt at
-the destination brand, which is where the caller lifetime is dropped — so the value lands at the
-brand and the seed fabricates no free `&'a`. A region-pure argument (a literal) is enveloped at the
+value takes. The bind then **relocates** the value into the block scope's own region — the frame
+region for a parameter, the enclosing cart's for an arm's `it` — rebuilt at the destination brand,
+which is where the caller lifetime is dropped, so the value lands at the brand and the seed
+fabricates no free `&'a`. A region-pure argument (a literal) is enveloped at the
 call site through [`Scope::deliver_pure_value`](../../src/machine/core/scope/reach.rs) before it
 gets here, so there is one seed tier rather than two. The envelope is also the *whole* argument
 currency: `run_user_fn` takes one record of envelopes keyed by parameter name — not a record of

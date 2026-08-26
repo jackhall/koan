@@ -43,6 +43,20 @@ a miss, and folds the region's retention on that same miss.
 - **The empty description** (reaches nothing; residence only) is a
   per-region interned singleton shared by every region-pure value and
   every owned-data run.
+- **Two storage tiers, one table.** The get-or-mint rule, the key and
+  the retention fold are one for both; only where an entry sits differs.
+  A region holds its first entries in `OnceCell` slots on the region
+  itself (`Region::inline_reach`, `INLINE_REACH_ENTRIES` of them) and
+  spills the rest to a `FrozenMap` — so a per-call region, which hosts
+  just its own region-pure description and typically one adopted value's,
+  records its reach without allocating, and a tail hop's fresh region
+  pays no map, key or box for entries that die with it. Both tiers hand
+  back a `&` fixed for the region's life: a `OnceCell` never
+  re-initializes, and the map owns the same guarantee through its box.
+  Slots fill in order and never empty, so a key reaches the map only once
+  every slot is taken and can never live in both tiers — the
+  one-description-and-one-fold-per-distinct-reach invariant above holds
+  across the pair exactly as it did across the map alone.
 
 ## Sectioned storage
 

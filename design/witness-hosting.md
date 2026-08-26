@@ -91,6 +91,11 @@ consumer binds the delivered value into a scope. There is no second escape chann
   obligation rides the tail chain keep-first and the check fires once, at the
   chain's end, exactly as
   [tail-call-optimization.md](tail-call-optimization.md) schedules it.
+  The Done boundary reads the **obligation itself** to decide whether it is
+  standing at a contracted return: a slot carries one only as its tail chain's
+  winner, so holding one at `Done` *is* the contract's boundary. No frame stands
+  in for that — a MATCH / TRY arm runs frameless in its caller's cart, and a
+  top-level arm's `-> :T` is checked on the same read as any other.
 - An **undeclared return** ends the same way: the value stays in its producer
   frame, whose lifetime delivery decides per destination — copied out at
   finalize, or the frame transferred into the destination region's union bundle

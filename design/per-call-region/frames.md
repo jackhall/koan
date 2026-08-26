@@ -72,10 +72,12 @@ Three reshapes:
   untouched.
 - **`AssembleBody { body_index }`** — an FN-body invoke (a `Function` or `PerCall`
   contract). [`assemble_body_chain`](../../src/machine/core/lexical_frame.rs)
-  rebuilds the chain from the body scope's lexical `outer` walk, read through
+  assembles the chain from the body scope's lexical `outer` walk, read through
   `CallFrame::with_scope` against the body frame, so depth tracks source-level
   nesting rather than call depth and a recursive tail chain's stored chain does
-  not grow per hop.
+  not grow per hop. Any suffix the call-site chain already spells the same way
+  is shared by `Rc` rather than re-minted — pointer equality against the
+  standing sub-chain, so a steady tail loop's whole suffix is one clone.
 - **`PushBlock { scope_id, body_index }`** — a block entry under any other
   contract (a MATCH / TRY arm, a `USING` overlay): prepend one frame, with
   `body_index` positioning it for multi-statement tail-into-last.
@@ -112,20 +114,23 @@ therefore chains nothing (TCO recursion stays bounded), while a closure
 capturing a per-call frame chains it so that frame survives the hop that
 retires the caller.
 
-The builtins that build their own per-call frame — MATCH and TRY through
-`branch_walk.rs`'s `arm_tail`, EVAL directly:
+`eval.rs` is the one builtin that builds its own per-call frame: EVAL
+mints one for the evaluated expression, so bindings the quoted body
+introduces die with it.
 
-- `match_case.rs` — MATCH constructs a frame whose child scope's
-  `outer` is the **call-site** scope so free names in the arm body
-  resolve against the surrounding call.
-- `try_with.rs` — TRY-WITH dispatches each branch under a frame
-  chained to the TRY call site so the branch body's free names
-  resolve through the surrounding call.
-- `eval.rs` — EVAL builds a per-call frame for the evaluated
-  expression.
-
-(MODULE builds no per-call frame — its declarations are a same-region
-child of the call site, so nothing chains.)
+MATCH and TRY build none. `branch_walk.rs`'s `arm_tail` runs the selected
+arm under `FramePlacement::Inherit` in a **same-region overlay child** of
+the call-site scope (`Scope::alloc_child_under`, bump-allocated), the tier
+`USING`'s block sits at — so the arm's free names resolve against the
+surrounding call by the overlay's ordinary `outer` walk, and the arm costs
+no frame, no region and no chunk of its own. Nested arms stack overlays,
+so `it` shadowing falls out of that same walk. The overlay's bytes belong
+to whatever region the call site's scope lives in, so they are reclaimed
+with the enclosing cart; arms entered directly under the run frame bump
+into the run region and stay for the run, bounded by how many arms one
+frame's lifetime executes — the same residency a `USING` block has. MODULE likewise builds no
+per-call frame — its declarations are a same-region child of the call
+site, so nothing chains.
 
 Field declaration order on `FrameStorage`
 is load-bearing: `region` is declared before `outer`, so the

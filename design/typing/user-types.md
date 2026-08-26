@@ -182,7 +182,7 @@ same [`ExpressionSignature::most_specific`](../../src/machine/model/types/signat
 tournament that resolves ordinary overload buckets, so the strictly most-specific
 admitting arm wins and two arms with no strict winner are an ambiguity error (ruling
 F1/F3). A head naming no type over a variant scrutinee errors listing the scrutinee's
-variants. The winner's `it` reaches the arm frame through the same single-copy carrier
+variants. The winner's `it` reaches the arm's overlay scope through the same single-copy carrier
 door `TRY`'s success arm uses — the scrutinee (or, for a variant/tag arm, its wrapped
 payload) copied once at bind time, with no MATCH-specific bind site. See
 [unions and match-by-type](type-language-via-dispatch.md#anonymous-union-sigil).

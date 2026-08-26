@@ -52,7 +52,7 @@ in-step reset could not.
 ## Region liveness by node lifetime
 
 A node mints a per-call region only when its incarnation opens a new allocating
-lexical scope (a FN-body invoke, a MATCH/TRY arm). The mint is **lazy** — the
+lexical scope (a FN-body invoke, an EVAL). The mint is **lazy** — the
 library creates an incarnation's region on its first allocation, not at reinstall —
 so an incarnation that opens no such scope mints nothing:
 
@@ -60,8 +60,8 @@ so an incarnation that opens no such scope mints nothing:
   unwrap re-dispatches the inner expression, inheriting the ambient scope.
 - **Bare-name forwards** — a slot that is just a name binding to an existing
   producer is spliced out; it holds no value of its own.
-- **`USING` overlay entries** — the body runs in a caller-allocated overlay scope,
-  owning no region.
+- **`USING` overlay entries and MATCH / TRY arms** — the body runs in a
+  caller-allocated overlay scope, owning no region.
 - **Top-level / run producers** — top-level statements adopt the non-dying run
   region, which outlives the program.
 

@@ -117,9 +117,9 @@ fn with_scope_opens_child_scope_at_brand() {
 }
 
 /// The seed-side re-anchor: a caller-lifetime value crossing into the frame brand region as a
-/// delivery envelope, whose bind relocates it there. The MATCH / TRY `it`-bind and the user-fn
-/// param-bind take this shape — a bare caller-`'a` reference cannot cross `with_scope`'s `for<'b>`
-/// signature at all, so the envelope is the whole route. Pins the relocate-into-the-brand-and-bind
+/// delivery envelope, whose bind relocates it there. The user-fn param-bind takes this shape — a
+/// bare caller-`'a` reference cannot cross `with_scope`'s `for<'b>` signature at all, so the
+/// envelope is the whole route. Pins the relocate-into-the-brand-and-bind
 /// aliasing under tree borrows.
 #[test]
 fn with_scope_relocates_seed_value_into_brand() {
