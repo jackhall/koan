@@ -547,11 +547,10 @@ impl<'a> KExpression<'a> {
     }
 
     /// True when this expression is a statement block: two or more parts, all of them
-    /// `Expression`. The single definition the body splitters ([`split_body_statements`] /
+    /// `Expression`. The single definition the body splitters (`split_leading_tail` /
     /// [`body_statement_refs`]) and the binder-install aggregation share, so the multi-statement
     /// cutoff is stated once.
     ///
-    /// [`split_body_statements`]: crate::machine::split_body_statements
     /// [`body_statement_refs`]: crate::machine::body_statement_refs
     pub fn is_statement_block(&self) -> bool {
         self.parts.len() >= 2

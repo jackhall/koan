@@ -807,11 +807,11 @@ impl<'run> Host<'run> {
             BlockRequest::Body {
                 statements,
                 placement: BodyPlacement::Frame(frame),
-            } => self.dispatch_body(sched, &frame, &statements, scratch),
+            } => self.dispatch_body(sched, &frame, statements, scratch),
             BlockRequest::Body {
                 statements,
                 placement: BodyPlacement::Overlay(overlay),
-            } => self.enter_block(sched, overlay.id, &statements, overlay, scratch),
+            } => self.enter_block(sched, overlay.id, statements, overlay, scratch),
             // A declaration builtin's body splits into its top-level statements against the child
             // scope it minted (MODULE, SIG).
             BlockRequest::InScope { body, scope } => {
@@ -874,7 +874,7 @@ impl<'run> Host<'run> {
 }
 
 /// Split a body block into the statements it fans out to, one working node apiece. The
-/// scheduler-side peer of [`split_body_statements`](crate::machine::split_body_statements): a block
+/// scheduler-side peer of the body splitters in `machine::core::kfunction::body`: a block
 /// (two or more parts, every one an expression) yields its children, and any other body is the one
 /// statement it already is.
 fn split_working_body<'a>(

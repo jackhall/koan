@@ -559,7 +559,7 @@ impl<'a> Action<'a> {
 
     /// Tail-replace into `tail`. See [`ActionKind::Tail`].
     pub fn tail(
-        leading: Vec<WorkingExpression<'a>>,
+        leading: &'a [WorkingExpression<'a>],
         tail: WorkingExpression<'a>,
         contract: TailContract<'a>,
         frame_placement: FramePlacement,
@@ -632,7 +632,7 @@ pub enum ActionKind<'a> {
     /// enters (see [`BlockEntry`]); the harness derives the body-statement chains and the tail's
     /// `body_index` from it + `leading`.
     Tail {
-        leading: Vec<WorkingExpression<'a>>,
+        leading: &'a [WorkingExpression<'a>],
         tail: WorkingExpression<'a>,
         contract: TailContract<'a>,
         frame_placement: FramePlacement,
@@ -731,7 +731,7 @@ pub enum BlockRequest<'a> {
     /// into a fresh per-call frame's own scope; a leading-carrying USING binds into an
     /// inherited-cart overlay.
     Body {
-        statements: Vec<WorkingExpression<'a>>,
+        statements: &'a [WorkingExpression<'a>],
         placement: BodyPlacement<'a>,
     },
     /// A body expression dispatched against `scope`, split into its top-level statements there — a

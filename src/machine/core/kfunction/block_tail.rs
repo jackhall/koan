@@ -6,13 +6,13 @@
 
 use std::rc::Rc;
 
+use crate::machine::ReturnContract;
 use crate::machine::Scope;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::bindings::WriteGate;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{KExpression, WorkingExpression};
+use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression};
 use crate::machine::{Action, BlockEntry, FramePlacement, TailContract};
-use crate::machine::{ReturnContract, split_body_statements};
 
 /// How the body maps onto the tail.
 pub(crate) enum BlockBody<'a> {
@@ -105,17 +105,31 @@ where
             BlockEntry::Overlay(overlay)
         }
     };
+    // A body that is not a statement block splits to itself, so both no-split shapes take the same
+    // lowering: an empty leading run — which borrows nothing and so allocates nothing — and the whole
+    // expression as the tail. Only a real statement block reaches the split.
     let (leading, tail) = match body {
-        BlockBody::Single(expr) => (Vec::new(), WorkingExpression::from_ast(brand, expr)),
+        BlockBody::Single(expr) => (&[][..], WorkingExpression::from_ast(brand, expr)),
+        BlockBody::Block(body) if !body.is_statement_block() => {
+            (&[][..], WorkingExpression::from_ast(brand, body))
+        }
         BlockBody::Block(body) => {
-            let mut statements: Vec<WorkingExpression<'a>> = split_body_statements(body)
-                .into_iter()
-                .map(|statement| WorkingExpression::from_ast(brand, statement))
-                .collect();
-            let tail = statements
-                .pop()
-                .expect("split_body_statements always yields at least one");
-            (statements, tail)
+            // The statements are frozen straight into `brand`'s region: a statement block's parts are
+            // all expressions, so the run's length is the parts run's and the copies land in the
+            // region the working expressions themselves name.
+            let statements: &'a [WorkingExpression<'a>] =
+                brand
+                    .allocator()
+                    .slice_from_iter(body.parts.iter().map(|part| {
+                        let ExpressionPart::Expression(statement) = part.value else {
+                            unreachable!("a statement block's parts are all expressions");
+                        };
+                        WorkingExpression::from_ast(brand, *statement)
+                    }));
+            let (tail, leading) = statements
+                .split_last()
+                .expect("a statement block carries at least two statements");
+            (leading, *tail)
         }
     };
     Action::tail(

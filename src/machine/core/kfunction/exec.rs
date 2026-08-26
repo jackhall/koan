@@ -20,7 +20,7 @@ use crate::machine::model::KExpression;
 use crate::machine::model::{DeferredReturn, KType, ReturnType, TypeResolution};
 
 use super::KFunction;
-use super::body::{Body, body_statement_refs};
+use super::body::{Body, LeadingStatements, split_leading_tail};
 use crate::machine::model::{
     BindKind, BinderSymbol, RunRegistries, TypeSymbol, render_label, wrong_binder_class,
 };
@@ -45,7 +45,7 @@ pub enum ExecOutcome<'ast> {
     /// result. `ret` is the return contract the scheduler stamps on the tail-replace, so a recursive
     /// body stays TCO-flat.
     Tail {
-        leading: Vec<&'ast KExpression<'ast>>,
+        leading: LeadingStatements<'ast>,
         tail: &'ast KExpression<'ast>,
         ret: PerCallReturn,
     },
@@ -55,7 +55,7 @@ pub enum ExecOutcome<'ast> {
     /// under keep-first, so the recursion stays TCO-flat.
     DeferredExprTail {
         type_expr: KExpression<'ast>,
-        leading: Vec<&'ast KExpression<'ast>>,
+        leading: LeadingStatements<'ast>,
         tail: &'ast KExpression<'ast>,
     },
 }
@@ -265,16 +265,4 @@ fn arg_channel(delivered: &DeliveredCarried) -> ArgChannel {
         Carried::Type(kt) => ArgChannel::Type(kt),
         Carried::UnresolvedType(ti) => ArgChannel::Unresolved(ti),
     })
-}
-
-/// Split a body into its leading (non-tail) statements and the terminal `tail` whose value is the
-/// body's result. Always yields at least the tail.
-fn split_leading_tail<'ast>(
-    body_expr: &'ast KExpression<'ast>,
-) -> (Vec<&'ast KExpression<'ast>>, &'ast KExpression<'ast>) {
-    let mut leading = body_statement_refs(body_expr);
-    let tail = leading
-        .pop()
-        .expect("body_statement_refs always yields at least one");
-    (leading, tail)
 }

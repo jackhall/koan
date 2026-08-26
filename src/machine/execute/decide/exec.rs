@@ -19,7 +19,7 @@ use crate::machine::core::BoundArgs;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::{Body, CallFrame, KFunction, OpenedFunction};
-use crate::machine::core::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
+use crate::machine::core::{ExecFrame, ExecOutcome, LeadingStatements, PerCallReturn, run_user_fn};
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
 use crate::machine::{DeliveredCarried, KError, KErrorKind, NodeId};
 use crate::witnessed::BumpVec;
@@ -174,7 +174,7 @@ fn enter_user_fn<'step>(
             };
             body_continue(
                 frame,
-                &leading,
+                leading,
                 None,
                 *tail,
                 TailContract::Eager(Some(contract)),
@@ -193,7 +193,7 @@ fn enter_user_fn<'step>(
             // terminal — subsequent calls skip resolution, so the recursion stays TCO-flat.
             body_continue(
                 frame,
-                &leading,
+                leading,
                 Some(type_expr),
                 *tail,
                 TailContract::FromLastResult {
@@ -224,7 +224,7 @@ fn enter_user_fn<'step>(
 /// it so the lowering fans any leading statements into it.
 fn body_continue<'step>(
     frame: Rc<CallFrame>,
-    leading: &[&KExpression<'step>],
+    leading: LeadingStatements<'step>,
     extra: Option<KExpression<'step>>,
     tail: KExpression<'step>,
     contract: TailContract<'step>,
@@ -234,7 +234,7 @@ fn body_continue<'step>(
     let replacement = Replacement::fresh_tail(&frame, |host| {
         let mut run =
             BumpVec::with_capacity_in(leading.len() + extra.is_some() as usize, host.allocator());
-        run.extend(leading.iter().map(|statement| **statement));
+        run.extend(leading.iter().copied());
         run.extend(extra);
         let leading: &[KExpression<'_>] = run.leak();
         let call = erase_bumped(
@@ -249,10 +249,11 @@ fn body_continue<'step>(
                 super::run_action(
                     view,
                     Action::tail(
-                        leading
-                            .iter()
-                            .map(|statement| WorkingExpression::from_ast(brand, *statement))
-                            .collect(),
+                        brand.allocator().slice_from_iter(
+                            leading
+                                .iter()
+                                .map(|statement| WorkingExpression::from_ast(brand, *statement)),
+                        ),
                         WorkingExpression::from_ast(brand, tail),
                         contract,
                         FramePlacement::Inherit,

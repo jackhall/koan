@@ -3,6 +3,7 @@
 //! user-defined `KExpression`).
 
 use crate::machine::model::{ExpressionPart, KExpression};
+use crate::source::Spanned;
 
 use crate::machine::model::KType;
 use crate::source::SourceRef;
@@ -50,28 +51,57 @@ pub enum ReturnContract<'a> {
     },
 }
 
-/// Split an FN / MATCH-arm / TRY-arm body into top-level statements. The single source of
-/// truth for the all-`Expression` multi-statement detection: any non-`Expression` part or
-/// fewer than two parts leaves the body as a single statement. Always returns at least one
-/// element. The harness's `InScope` body fan-out (the park apply's dep realization) routes through
-/// here before `enter_block`, so the scheduler never inspects AST shape itself.
-pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpression<'a>> {
-    if body.is_statement_block() {
-        body.parts
-            .iter()
-            .filter_map(|p| match p.value {
-                ExpressionPart::Expression(e) => Some(*e),
-                _ => None,
-            })
-            .collect()
-    } else {
-        vec![body]
+/// A body's leading (non-tail) statements, borrowed where they already sit. A statement block's
+/// leading run **is** its parts run minus the last part, so naming that borrow costs nothing; a
+/// body that is not a statement block has no leading statements at all. `Copy`, so a split hands
+/// one back without a container.
+#[derive(Clone, Copy)]
+pub struct LeadingStatements<'a>(&'a [Spanned<ExpressionPart<'a>>]);
+
+impl<'a> LeadingStatements<'a> {
+    /// A body with no leading statements.
+    pub(crate) const NONE: Self = LeadingStatements(&[]);
+
+    pub(crate) fn len(self) -> usize {
+        self.0.len()
+    }
+
+    /// The statements in declaration order. Exact-length, so a caller sizes a run off it directly.
+    pub(crate) fn iter(self) -> impl ExactSizeIterator<Item = &'a KExpression<'a>> {
+        self.0.iter().map(|part| {
+            let ExpressionPart::Expression(statement) = part.value else {
+                unreachable!("a statement block's parts are all expressions");
+            };
+            statement.reference()
+        })
     }
 }
 
-/// Borrowing twin of [`split_body_statements`]: yields the body's top-level statements as
-/// references into the parts run rather than by value. Same
-/// multi-statement detection. The borrow lifetime is independent of the expression's own `'a`, so a
+/// Split an FN / MATCH-arm / TRY-arm body into its leading statements and the terminal `tail`
+/// whose value is the body's result. The single source of truth for the all-`Expression`
+/// multi-statement detection lives on [`KExpression::is_statement_block`]: any non-`Expression`
+/// part or fewer than two parts leaves the body as a single statement, which is then the tail with
+/// nothing leading it.
+pub(crate) fn split_leading_tail<'a>(
+    body: &'a KExpression<'a>,
+) -> (LeadingStatements<'a>, &'a KExpression<'a>) {
+    if body.is_statement_block() {
+        let (tail, leading) = body
+            .parts
+            .split_last()
+            .expect("a statement block carries at least two parts");
+        let ExpressionPart::Expression(tail) = tail.value else {
+            unreachable!("a statement block's parts are all expressions");
+        };
+        (LeadingStatements(leading), tail.reference())
+    } else {
+        (LeadingStatements::NONE, body)
+    }
+}
+
+/// A body's top-level statements as references into the parts run, tail included — the whole-body
+/// scan behind the declaration builtins (GROUP, MODULE), where [`split_leading_tail`] would say
+/// nothing about the last statement they need to read. Same multi-statement detection. The borrow lifetime is independent of the expression's own `'a`, so a
 /// caller holding the body by value can scan it in place (`GROUP` reads its members off the
 /// unevaluated body block this way).
 pub(crate) fn body_statement_refs<'ast, 'a>(
@@ -105,7 +135,8 @@ pub enum Body<'a> {
 mod tests {
     use super::*;
 
-    /// Pins the parser invariant [`split_body_statements`]'s `len() >= 2` guard relies on: a
+    /// Pins the parser invariant [`KExpression::is_statement_block`]'s `len() >= 2` guard relies
+    /// on: a
     /// real, parser-produced body is never a lone `[Expression(_)]`. That shape is the one case
     /// where `len() >= 2` would treat a body differently from an `!is_empty()` guard, so were it
     /// reachable the guard would mis-split a single-statement body. It is unreachable because
