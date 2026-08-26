@@ -8,6 +8,7 @@
 
 use std::rc::Rc;
 
+use super::super::region::INLINE_REACH_ENTRIES;
 use super::super::*;
 
 /// The library-only profile the intern slate runs over. A region's reach table is independent of
@@ -230,4 +231,49 @@ fn key_precedes_the_self_rule_strip() {
     assert!(!std::ptr::eq(borrows_home, region_pure));
     assert_eq!(metrics.reach_interned, 2);
     assert_eq!(metrics.reach_intern_hits, 0);
+}
+
+/// The table's **two tiers are one table**: a region holding more distinct reaches than it has
+/// inline slots spills the rest to its map, and get-or-mint reads identically across the seam.
+/// Every entry keeps its own identity, and re-minting any of them — inline or spilled — hits the
+/// standing entry rather than freezing a second description for the same member set.
+#[test]
+fn entries_past_the_inline_tier_spill_without_changing_the_semantics() {
+    let home = frame();
+    let members: Vec<Rc<InternFrame>> = (0..=INLINE_REACH_ENTRIES).map(|_| frame()).collect();
+    // The empty member set plus one singleton each: two more distinct reaches than fit inline.
+    let sets: Vec<Vec<&Rc<InternFrame>>> = std::iter::once(Vec::new())
+        .chain(members.iter().map(|member| vec![member]))
+        .collect();
+
+    let (first, minted) = reach_delta(|| {
+        sets.iter()
+            .map(|set| mint_over(&home, set))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(minted.reach_interned, sets.len());
+    assert_eq!(minted.reach_intern_hits, 0);
+    for (position, one) in first.iter().enumerate() {
+        for other in &first[position + 1..] {
+            assert!(
+                !std::ptr::eq(*one, *other),
+                "distinct member sets keep distinct entries across the tier seam",
+            );
+        }
+    }
+
+    let (again, reminted) = reach_delta(|| {
+        sets.iter()
+            .map(|set| mint_over(&home, set))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(reminted.reach_interned, 0);
+    assert_eq!(reminted.reach_intern_hits, sets.len());
+    assert!(
+        first
+            .iter()
+            .zip(&again)
+            .all(|(one, two)| std::ptr::eq(*one, *two)),
+        "a spilled entry is found again by the same key its inline neighbours are",
+    );
 }

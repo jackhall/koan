@@ -124,7 +124,7 @@ pub struct ReachDescription<F: PinsRegion> {
 /// This shrinks an allocation *count*; it moves nothing. A description stays heap-owned and
 /// `Drop`-bearing whatever its arity — its members are `Weak`, whose counts must be released at
 /// region death — which is what keeps it out of the region's bump.
-type ReachSet<T> = SmallVec<[T; 2]>;
+pub(in crate::witnessed) type ReachSet<T> = SmallVec<[T; 2]>;
 
 impl<F: PinsRegion> ReachDescription<F> {
     /// The sole builder: a description's members always mirror some [`PinBundle`]'s antichain,

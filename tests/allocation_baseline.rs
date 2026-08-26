@@ -72,9 +72,9 @@ fn allocations_for(source: &str, path: &str) -> u64 {
 }
 
 /// 100 tail-recursive steps, at the `step` term in `observe/alloc/terms.txt` — exactly linear,
-/// flat across the sizes swept. Two allocations per step are arena chunks rather than heap objects:
-/// a step mints two regions, and each takes its whole residency in the one chunk
-/// workgraph's `FIRST_CHUNK_BYTES` sizes for it. That pair is flat in the byte size of what a frame
+/// flat across the sizes swept. One allocation per step is an arena chunk rather than a heap object:
+/// a step mints one region, and it takes its whole residency in the single chunk
+/// workgraph's `FIRST_CHUNK_BYTES` sizes for it. That one is flat in the byte size of what a frame
 /// holds, because the chunk is sized well clear of the measured spread — a layout change moves this
 /// term only by changing how many objects a step allocates, not how large they are.
 /// The constant term is the run's seeding, so registering a builtin overload moves this and every
@@ -83,7 +83,7 @@ fn allocations_for(source: &str, path: &str) -> u64 {
 /// see one allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
-    const BOUND: u64 = 4_780;
+    const BOUND: u64 = 2_670;
     let delta = allocations_for(
         include_str!("../audit/shapes/tail_loop_steps100.koan"),
         "audit/shapes/tail_loop_steps100.koan",
@@ -104,7 +104,7 @@ fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
 /// same headroom rule as the loop.
 #[test]
 fn the_leading_loop_shape_stays_within_its_step_churn_bound() {
-    const BOUND: u64 = 5_520;
+    const BOUND: u64 = 3_800;
     let delta = allocations_for(
         include_str!("../audit/shapes/leading_loop_steps100.koan"),
         "audit/shapes/leading_loop_steps100.koan",
@@ -124,7 +124,7 @@ fn the_leading_loop_shape_stays_within_its_step_churn_bound() {
 /// less than the 100 a single new per-step allocation would add.
 #[test]
 fn the_try_loop_shape_stays_within_its_step_churn_bound() {
-    const BOUND: u64 = 5_900;
+    const BOUND: u64 = 3_380;
     let delta = allocations_for(
         include_str!("../audit/shapes/try_loop_steps100.koan"),
         "audit/shapes/try_loop_steps100.koan",
@@ -216,7 +216,7 @@ fn per_dispatch_cost_does_not_grow_with_scope_walk_depth() {
 /// difference by — so one re-introduced per-call allocation fails it.
 #[test]
 fn the_builtin_call_shape_stays_within_its_per_call_bound() {
-    const BOUND: u64 = 1_325;
+    const BOUND: u64 = 1_170;
     let marginal = allocations_for(
         include_str!("../audit/shapes/builtin_call_calls40.koan"),
         "audit/shapes/builtin_call_calls40.koan",
@@ -258,7 +258,7 @@ fn the_builtin_call_shape_stays_within_its_per_call_bound() {
 /// one fails the second by ≈224.
 #[test]
 fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
-    const PER_CALL_BOUND: u64 = 655;
+    const PER_CALL_BOUND: u64 = 530;
     const PER_PARAMETER_BOUND: u64 = 381;
     let arity1 = allocations_for(
         include_str!("../audit/shapes/user_fn_params1_calls40.koan"),
@@ -310,7 +310,7 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
 /// re-introduced per-construction allocation fails it.
 #[test]
 fn the_tagged_construct_shape_stays_within_its_per_construction_bound() {
-    const BOUND: u64 = 1_675;
+    const BOUND: u64 = 1_525;
     let marginal = allocations_for(
         include_str!("../audit/shapes/tagged_construct_calls40.koan"),
         "audit/shapes/tagged_construct_calls40.koan",

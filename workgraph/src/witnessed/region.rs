@@ -26,13 +26,14 @@
 //! [design/reach.md § Retention model](../../design/reach.md#retention-model)
 //! for how an escaped value's region stays alive.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
 
 use bumpalo::Bump;
 use elsa::FrozenMap;
 
+use super::reach::ReachSet;
 use super::{
     BumpAllocator, Carrier, Delivered, DropFree, Erased, FoldedPlacement, PinBundle, PinsRegion,
     ReachDescription, Reattachable, ReferenceFamily, RegionOwner, Retained, SealedExtern,
@@ -49,6 +50,17 @@ pub trait StorageProfile: Sized {
     type FrameOwner: PinsRegion + 'static;
 }
 
+/// One entry of a region's inline reach tier: the canonical member-set key and the description it
+/// names — the pair a [`FrozenMap`] entry spends a boxed key and a boxed value on.
+type InlineReachEntry<W> = (
+    ReachSet<usize>,
+    ReachDescription<<W as StorageProfile>::FrameOwner>,
+);
+
+/// How many reach descriptions a region holds inline before spilling to its map tier — two, sized
+/// to the shapes a per-call region actually hosts ([`Region::inline_reach`]).
+pub(in crate::witnessed) const INLINE_REACH_ENTRIES: usize = 2;
+
 /// Run-lifetime allocation frame. Lives for one program run (or one per-call frame). Its values
 /// live in the bump, born at the caller's own lifetime.
 pub struct Region<W: StorageProfile> {
@@ -61,11 +73,31 @@ pub struct Region<W: StorageProfile> {
     /// region; what keeps those members alive is [`retained_reach`](Self::retained_reach) below,
     /// folded by the same act that interned the entry.
     ///
+    /// The **spill tier**, reached once [`inline_reach`](Self::inline_reach) is full.
     /// `elsa::FrozenMap` is what makes get-or-mint expressible through `&self`: it inserts through a
     /// shared borrow and hands back a `&` to the boxed entry valid for the region's whole life. The
     /// map owns that fixed-address guarantee, so a carrier can share a thin reference into it with
-    /// no `Drop`-order, dangling, or hand-audited-pointer hazard.
-    reach_table: FrozenMap<Box<[usize]>, Box<ReachDescription<W::FrameOwner>>>,
+    /// no `Drop`-order, dangling, or hand-audited-pointer hazard. Keyed on the same inline-up-to-two
+    /// [`ReachSet`] the members use rather than a `Box<[usize]>`: a key is owned storage already, so
+    /// boxing it buys the map nothing and costs an allocation — two, at the arity a key has, since
+    /// the collect that builds the box over-reserves and the shrink to an exact length reallocates.
+    reach_table: FrozenMap<ReachSet<usize>, Box<ReachDescription<W::FrameOwner>>>,
+    /// The **inline tier** of the same table: the first [`INLINE_REACH_ENTRIES`] entries minted
+    /// here, held in the region itself so a fresh region records its reach without allocating.
+    ///
+    /// Two slots is where the shapes are, the same argument [`ReachSet`] holds two members inline
+    /// on: a per-call region hosts its own region-pure description (the empty member set) and
+    /// typically one adopted value's, and a tail hop mints a whole fresh region — so a single-tier
+    /// table pays a map, a key and a description per hop for entries used once and dropped with the
+    /// region that minted them.
+    ///
+    /// A slot's `&` is stable for the region's life on the same ground the map's box is: a
+    /// [`OnceCell`] never re-initializes, so the entry's address is fixed once written, and it lives
+    /// in the region, which outlives every borrow taken through `&'a self`. Slots fill in order and
+    /// never empty, so a key reaches the spill tier only once every slot is taken and can never live
+    /// in both tiers — the one-description-per-distinct-reach invariant the retention proof rests on
+    /// holds across the pair exactly as it did across the map alone.
+    inline_reach: [OnceCell<InlineReachEntry<W>>; INLINE_REACH_ENTRIES],
     /// The region's **bump**: the storage home for every `Drop`-free value that names the region's
     /// own lifetime, reached as a [`BumpAllocator`] over this field. Bumped rather than arena'd
     /// because the allocator itself is lifetime-free, so `'a` enters only at the allocating call —
@@ -152,6 +184,7 @@ impl<W: StorageProfile> Region<W> {
     pub(crate) fn new(host: Weak<W::FrameOwner>) -> Self {
         Self {
             reach_table: FrozenMap::new(),
+            inline_reach: std::array::from_fn(|_| OnceCell::new()),
             bump: Bump::with_capacity(FIRST_CHUNK_BYTES),
             retained_reach: RefCell::new(PinBundle::empty()),
             host,
@@ -181,8 +214,12 @@ impl<W: StorageProfile> Region<W> {
     /// region's life — so the description a carrier references outlives every read pinned by this
     /// region's owner.
     ///
-    /// The probe key is built in the caller's own frame and boxed **only on the miss**, where the
-    /// map takes ownership of it: a hit costs a hash and a compare, not an allocation.
+    /// Two tiers, [`inline_reach`](Self::inline_reach) then [`reach_table`](Self::reach_table), and
+    /// the choice is storage alone — the get-or-mint rule, the key, and the fold are one for both.
+    /// The probe key is built in the caller's own frame and, at the arity a key has, never leaves
+    /// it: a hit costs a compare, and a miss the region's first two times costs the move into a
+    /// slot. Only a region hosting a third distinct reach reaches the map, and only a key past the
+    /// inline width allocates at all.
     pub(crate) fn intern_reach_retained(
         &self,
         composed: PinBundle<W::FrameOwner>,
@@ -193,21 +230,44 @@ impl<W: StorageProfile> Region<W> {
         // The key comes off `composed` *before* the self-rule strip, so it matches the description's
         // membership rather than the retained bundle's — which is what orders the lines below.
         let key = composed.intern_key();
-        if let Some(hit) = self.reach_table.get(&key[..]) {
+        if let Some(hit) = self.find_reach(&key) {
             #[cfg(any(test, feature = "test-hooks"))]
             super::host::note_reach_intern_hit();
             return hit;
         }
         #[cfg(any(test, feature = "test-hooks"))]
         super::host::note_reach_interned();
-        let description = self.reach_table.insert(
-            key.into_boxed_slice(),
-            Box::new(composed.describe(self.host())),
-        );
+        let description = self.store_reach(key, composed.describe(self.host()));
         let mut retained = composed;
         retained.remove_region(self);
         self.retain_reach(retained);
         description
+    }
+
+    /// The two tiers' shared probe: the description already interned under `key`, inline slots
+    /// first. A key lives in at most one tier ([`inline_reach`](Self::inline_reach)), so the order
+    /// is a cost preference, not a precedence rule.
+    fn find_reach(&self, key: &[usize]) -> Option<&ReachDescription<W::FrameOwner>> {
+        self.inline_reach
+            .iter()
+            .filter_map(OnceCell::get)
+            .find(|(stored, _)| stored[..] == *key)
+            .map(|(_, description)| description)
+            .or_else(|| self.reach_table.get(key))
+    }
+
+    /// Freeze a missed `description` under `key` into the first free inline slot, or into the map
+    /// once every slot is taken. Called only after [`find_reach`](Self::find_reach) missed, so the
+    /// slot written here is the sole entry for that key and `get_or_init` cannot find one standing.
+    fn store_reach(
+        &self,
+        key: ReachSet<usize>,
+        description: ReachDescription<W::FrameOwner>,
+    ) -> &ReachDescription<W::FrameOwner> {
+        match self.inline_reach.iter().find(|slot| slot.get().is_none()) {
+            Some(slot) => &slot.get_or_init(|| (key, description)).1,
+            None => self.reach_table.insert(key, Box::new(description)),
+        }
     }
 
     /// This region's bump as a [`BumpAllocator`] — the write surface for its bytes, carrying both
