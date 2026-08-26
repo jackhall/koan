@@ -42,8 +42,11 @@ pub enum Dep<R> {
 /// wired *inside* a step passes the drain's scratch handle instead
 /// ([`Step::scratch`](super::Step::scratch)), so the list dies with the pop that built it. Each
 /// constructor comes in a pair: the bare name fixes `Global`, the `_in` suffix takes the allocator.
-/// Prefer [`with_capacity_in`](Self::with_capacity_in) on a bump — a bump-hosted vector that grows
-/// abandons its old buffer.
+/// On a bump, a list that grows abandons its old buffer as dead region bytes, so the reservation
+/// wants to be the final capacity. The `from_*` constructors get that for free — they take an
+/// [`ExactSizeIterator`] and reserve its length — and [`with_capacity_in`](Self::with_capacity_in)
+/// is the route for a caller that knows the count some other way. [`new_in`](Self::new_in) with
+/// [`on`](Self::on)/[`request`](Self::request) accumulates instead, and owns that cost.
 pub struct Deps<R, A: Allocator = Global> {
     entries: AllocVec<Dep<R>, A>,
 }
@@ -53,11 +56,15 @@ impl<R> Deps<R> {
         Deps::new_in(Global)
     }
 
-    pub fn from_producers(ids: impl IntoIterator<Item = EdgeId>) -> Self {
+    pub fn from_producers(
+        ids: impl IntoIterator<Item = EdgeId, IntoIter: ExactSizeIterator>,
+    ) -> Self {
         Deps::from_producers_in(ids, Global)
     }
 
-    pub fn from_requests(entries: impl IntoIterator<Item = R>) -> Self {
+    pub fn from_requests(
+        entries: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
+    ) -> Self {
         Deps::from_requests_in(entries, Global)
     }
 }
@@ -91,18 +98,53 @@ impl<R, A: Allocator> Deps<R, A> {
         pos
     }
 
-    pub fn from_producers_in(ids: impl IntoIterator<Item = EdgeId>, alloc: A) -> Self {
+    /// Build a dep list from every producer `ids` names, reserving the whole list up front.
+    ///
+    /// [`ExactSizeIterator`] is what makes that reservation the final capacity rather than a
+    /// starting guess: a general iterator's `size_hint` lower bound may be zero, and a bump-hosted
+    /// list that grows abandons its old buffer as dead region bytes. A caller whose length is not
+    /// known up front reaches for [`new_in`](Self::new_in) and [`on`](Self::on) instead, and owns
+    /// that cost deliberately.
+    pub fn from_producers_in(
+        ids: impl IntoIterator<Item = EdgeId, IntoIter: ExactSizeIterator>,
+        alloc: A,
+    ) -> Self {
         let ids = ids.into_iter();
-        let mut deps = Deps::with_capacity_in(ids.size_hint().0, alloc);
+        let mut deps = Deps::with_capacity_in(ids.len(), alloc);
         for id in ids {
             deps.on(id);
         }
         deps
     }
 
-    pub fn from_requests_in(entries: impl IntoIterator<Item = R>, alloc: A) -> Self {
+    /// Build a dep list from every request `entries` names, reserving the whole list up front. Same
+    /// exact-length contract as [`from_producers_in`](Self::from_producers_in), for the same reason:
+    /// the reservation is the final capacity, so the list never grows off its first buffer.
+    ///
+    /// A slice walk carries its length, so it is admitted:
+    ///
+    /// ```
+    /// use workgraph::scheduler::Deps;
+    ///
+    /// let ids = [1u32, 2, 3];
+    /// let deps: Deps<u32> = Deps::from_requests(ids.iter().copied().map(|id| id * 2));
+    /// assert_eq!(deps.len(), 3);
+    /// ```
+    ///
+    /// A filter does not, and is rejected at the call rather than silently reserving zero:
+    ///
+    /// ```compile_fail
+    /// use workgraph::scheduler::Deps;
+    ///
+    /// let ids = [1u32, 2, 3];
+    /// let deps: Deps<u32> = Deps::from_requests(ids.iter().copied().filter(|id| id % 2 == 1));
+    /// ```
+    pub fn from_requests_in(
+        entries: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
+        alloc: A,
+    ) -> Self {
         let entries = entries.into_iter();
-        let mut deps = Deps::with_capacity_in(entries.size_hint().0, alloc);
+        let mut deps = Deps::with_capacity_in(entries.len(), alloc);
         for entry in entries {
             deps.request(entry);
         }

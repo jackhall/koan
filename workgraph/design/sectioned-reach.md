@@ -183,6 +183,23 @@ hooks, and the born-borrowing seeds. Everything else — grouping into
 runs, interning, pin folding, the value-level union, the weight total —
 is workgraph's.
 
+**The door streams, and allocates nothing off the region.** Inputs arrive
+as an exact-length iterator and are consumed one cell at a time, so an
+embedder feeds its per-cell chain straight in rather than staging it in a
+buffer of its own. Only the order *within* one cell is a law — whatever
+the embedder must do before its verdict is exact, then the verdict, then
+the store; across cells the run partition and the interning are
+order-insensitive, so the embedder's per-cell work interleaving with the
+door's own loop changes nothing either side observes. The exact length is
+what lets the door's two working buffers reserve their region bytes once
+up front: one cell slot per input, and runs at the same count, since a
+run boundary costs a cell (runs ≤ cells). Neither buffer can grow, and
+that bound is load-bearing rather than a tuning choice — the embedder is
+bumping into the same region as it streams, so a buffer that grew
+mid-build would abandon its reservation as dead region bytes. Those
+reserved buffers *are* the container's stored slices, left in place at
+the end rather than copied out, so the whole build touches no heap.
+
 ## Weight
 
 Beside each cell's reach verdict the door takes its **weight**: a `u64`

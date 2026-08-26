@@ -177,6 +177,22 @@ only outlive the finish call, and continuations are higher-ranked over that
 lifetime. Nothing stores the reference beyond the call that received it, which
 is what keeps ownership sitting on the run frame alone.
 
+The node table sits behind a `RefCell`, and **no borrow of it ever crosses caller
+code** — the rule that keeps a read from colliding with an intern the same call
+reaches. Two reader shapes keep it. A handle read hands back an owned clone of
+the node rather than a reference into the table, so the borrow ends inside the read; a
+node is shallow — scalar payload plus child handles — so the clone never copies a type
+subtree. A reader on an allocation-sensitive path instead asks the registry the
+question itself: a per-query verb (`is_union`, `union_variant_target`,
+`union_member_named` on
+[`registry.rs`](../../src/machine/model/types/registry.rs)) walks the outer node and
+the members it names by reference under one borrow and answers with `Copy` data, so a
+probe that needs a verdict rather than a node pays no clone at all. Both shapes confine
+the borrow to the registry, and confine it by construction. A closure accessor handed a
+handle and a callback would not: it runs caller code under a live borrow, which turns
+any intern reached from inside it into a runtime panic — a discipline audited at run
+time where these two are checked by the signature.
+
 `&TypeRegistry` stays the currency for these readers — every pure type-structure
 question answers without label text. A consumer takes the wider `&RunRegistries`
 only when it renders text or constructs a record, which keeps the label interner off
