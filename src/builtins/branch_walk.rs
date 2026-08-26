@@ -124,30 +124,29 @@ pub(crate) fn arm_tail<'a>(
 ) -> crate::machine::Action<'a> {
     use crate::machine::FramePlacement;
     use crate::machine::{BindingIndex, CallFrame};
-    use crate::machine::{BlockBody, BlockScope, BlockSeed, block_tail};
+    use crate::machine::{BlockBody, BlockScope, block_seed, block_tail};
     let frame: Rc<CallFrame> = CallFrame::new(root);
-    let seed: BlockSeed<'a> = Box::new(move |child, registries, gate| {
-        // Fused copy + bind of `it` at idx 0 in the fresh arm frame: one structural copy made
-        // directly into the arm frame's region inside the envelope's pinned open, the binding
-        // storing the copy's derived reach (a residence-only host is dropped, so a tail loop's
-        // retiring frame does not ride the arm's binding). The projection is identity — the
-        // envelope already names exactly what `it` binds — and a later read of `it` rebuilds its
-        // carrier from the stored reach.
-        let it = registries.labels.record(&IT);
-        let _ = child.bind_delivered_direct(
-            it,
-            &it_carrier,
-            BindingIndex::value(0),
-            |carried| Ok(carried.object()),
-            registries,
-            gate,
-        );
-    });
     block_tail(
         root.brand(),
         FramePlacement::FreshChild { frame },
         BlockScope::FrameOwn,
-        Some(seed),
+        Some(block_seed(move |child, registries, gate| {
+            // Fused copy + bind of `it` at idx 0 in the fresh arm frame: one structural copy made
+            // directly into the arm frame's region inside the envelope's pinned open, the binding
+            // storing the copy's derived reach (a residence-only host is dropped, so a tail loop's
+            // retiring frame does not ride the arm's binding). The projection is identity — the
+            // envelope already names exactly what `it` binds — and a later read of `it` rebuilds
+            // its carrier from the stored reach.
+            let it = registries.labels.record(&IT);
+            let _ = child.bind_delivered_direct(
+                it,
+                &it_carrier,
+                BindingIndex::value(0),
+                |carried| Ok(carried.object()),
+                registries,
+                gate,
+            );
+        })),
         BlockBody::Block(body_expr),
         Some(contract),
         registries,

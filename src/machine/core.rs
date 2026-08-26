@@ -47,7 +47,7 @@ pub(crate) use kfunction::action::{
     TailContract, require_bare_type_name, require_identifier_name, require_kexpression,
     require_ktype, scope_frame,
 };
-pub(crate) use kfunction::block_tail::{BlockBody, BlockScope, BlockSeed, block_tail};
+pub(crate) use kfunction::block_tail::{BlockBody, BlockScope, NoSeed, block_seed, block_tail};
 pub(crate) use kfunction::body::{ReturnContract, body_statement_refs, split_body_statements};
 pub(crate) use kfunction::exec::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
 pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction};

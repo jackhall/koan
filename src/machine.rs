@@ -13,10 +13,10 @@ pub use core::kfunction::KFunction;
 #[cfg(any(test, feature = "region-audit"))]
 pub use core::reach_audit;
 pub(crate) use core::{
-    Action, ActionFn, AwaitContinue, BlockBody, BlockEntry, BlockRequest, BlockScope, BlockSeed,
-    BodyCtx, BoundArgs, CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx,
-    FoldingBrand, FramePlacement, GroupSeal, OverloadSeal, ReturnContract, StepAllocator,
-    SubDispatch, TailContract, block_tail, body_statement_refs, kerror_ktype,
+    Action, ActionFn, AwaitContinue, BlockBody, BlockEntry, BlockRequest, BlockScope, BodyCtx,
+    BoundArgs, CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx, FoldingBrand,
+    FramePlacement, GroupSeal, NoSeed, OverloadSeal, ReturnContract, StepAllocator, SubDispatch,
+    TailContract, block_seed, block_tail, body_statement_refs, kerror_ktype,
     require_bare_type_name, require_identifier_name, require_kexpression, require_ktype,
     split_body_statements,
 };

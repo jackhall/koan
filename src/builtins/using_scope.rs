@@ -47,7 +47,7 @@ crate::slots! { SLOTS { body, m } }
 /// surfaced members take no cutoff and are visible throughout the block.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::{Action, FramePlacement, require_kexpression};
-    use crate::machine::{BlockBody, BlockScope, block_tail};
+    use crate::machine::{BlockBody, BlockScope, NoSeed, block_tail};
 
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", &SLOTS.body));
     // `m` is a value slot of a non-name-literal type, so its part is spliced before the call on
@@ -71,7 +71,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         ctx.scope.brand(),
         FramePlacement::Inherit,
         BlockScope::Overlay(block),
-        None,
+        None::<NoSeed>,
         BlockBody::Block(body_expr),
         None,
         ctx.registries,

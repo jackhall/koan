@@ -20,7 +20,7 @@ crate::slots! { SLOTS { expr } }
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::model::KObject;
     use crate::machine::{Action, FramePlacement};
-    use crate::machine::{BlockBody, BlockScope, block_tail};
+    use crate::machine::{BlockBody, BlockScope, NoSeed, block_tail};
     use crate::machine::{KError, KErrorKind};
     let inner = match ctx.args.object(&SLOTS.expr) {
         Some(KObject::KExpression(e)) => e.node(),
@@ -42,7 +42,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         ctx.scope.brand(),
         FramePlacement::FreshChild { frame },
         BlockScope::None,
-        None,
+        None::<NoSeed>,
         BlockBody::Single(inner),
         None,
         ctx.registries,
