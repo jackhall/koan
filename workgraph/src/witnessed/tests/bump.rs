@@ -12,6 +12,7 @@ use std::rc::Rc;
 use allocator_api2::vec::Vec as BumpVec;
 use hashbrown::{DefaultHashBuilder, HashMap};
 
+use super::super::region::FIRST_CHUNK_BYTES;
 use super::super::*;
 
 /// The profile the bump slate runs over: **no families at all**. A region still holds its bump, its
@@ -218,17 +219,17 @@ fn a_repeat_reach_interns_and_folds_no_second_retention() {
     assert_eq!(dest.region().retained_reach_len(), 1);
 }
 
-/// The figure is **reserved chunk capacity**: it covers at least what was stored, it never shrinks,
-/// and a door call that bumps nothing reserves nothing. Asserted as lower bounds rather than exact
-/// totals — chunk sizing is the allocator's own policy, and the whole point of the figure is that it
-/// includes the padding and unused tail a pin would retain along with the live bytes.
+/// The figure is **reserved chunk capacity**: it opens at the region's own first-chunk reservation,
+/// covers at least what was stored, never shrinks, and a door call that bumps nothing reserves
+/// nothing beyond it. Asserted as lower bounds rather than exact totals — chunk sizing past the
+/// first is the allocator's own policy, and the whole point of the figure is that it includes the
+/// padding and unused tail a pin would retain along with the live bytes.
 #[test]
 fn bump_capacity_reports_reserved_chunks() {
     let dest = frame();
-    assert_eq!(
-        dest.region().bump_capacity(),
-        0,
-        "a fresh bump reserves no chunk"
+    assert!(
+        dest.region().bump_capacity() >= FIRST_CHUNK_BYTES,
+        "a fresh region already reserves the chunk its mint asked for"
     );
 
     placement(&dest).fold_and_bump::<SpanFamily, WordFamily, BumpFrame>(&[], |bump, _| {
@@ -503,16 +504,21 @@ fn a_fill_may_allocate_from_the_bump_it_is_filling() {
 
 /// [`BumpAllocator::slice_from_iter`] fills the run from the iterator with no owned staging run in
 /// between: the elements land in the region's own bytes, and the reserved length is the iterator's
-/// exact one.
+/// exact one. Sized past [`FIRST_CHUNK_BYTES`] so the destination has to reserve for it — inside
+/// the mint's own chunk a store is free of charge and reserved capacity says nothing about where
+/// the bytes went.
 #[test]
 fn a_computed_run_fills_the_bump_without_staging() {
     let dest = frame();
     let allocator = placement(&dest).allocator();
+    let length = FIRST_CHUNK_BYTES as u32;
 
     let before = dest.region().bump_capacity();
-    let run: &[u32] = allocator.slice_from_iter((0..8u32).map(|n| n * 3));
+    let run: &[u32] = allocator.slice_from_iter((0..length).map(|n| n * 3));
 
-    assert_eq!(run, [0, 3, 6, 9, 12, 15, 18, 21]);
+    assert_eq!(run.len(), length as usize);
+    assert_eq!(run[..8], [0, 3, 6, 9, 12, 15, 18, 21]);
+    assert_eq!(run[run.len() - 1], (length - 1) * 3);
     assert!(
         dest.region().bump_capacity() >= before + size_of_val(run),
         "the run's bytes are the destination's own"

@@ -15,6 +15,7 @@ use std::cell::Cell;
 use std::ptr;
 use std::rc::Rc;
 
+use super::super::region::FIRST_CHUNK_BYTES;
 use super::super::*;
 
 /// A stored node in the shape of koan's `Scope`: it names the region it lives in, may name a parent
@@ -81,18 +82,23 @@ fn a_same_region_value_is_bumped_naming_its_own_region() {
 
 /// Reading a stored node back **after further allocations into the same bump** is bumpalo's
 /// chunk-stability guarantee: the first node must not move under the later stores, even across the
-/// chunk growth 64 siblings force.
+/// chunk growth the siblings force. Each label is padded so the run overruns the region's own
+/// [`FIRST_CHUNK_BYTES`] several times over — a growth the guarantee has to survive, and the only
+/// way reserved capacity reports that the siblings landed at all.
 #[test]
 fn an_earlier_node_reads_back_after_its_siblings_are_stored() {
     let dest = frame();
 
     let first = bumped_root(&dest, "first");
     let before = dest.region().bump_capacity();
+    let padding = "-".repeat(FIRST_CHUNK_BYTES / 8);
     for index in 0..64 {
         let handle = RegionHandle::from_owner(&*dest);
         handle.allocator().in_place(Node {
             home: handle.region(),
-            label: handle.allocator().text(&format!("sibling-{index}")),
+            label: handle
+                .allocator()
+                .text(&format!("sibling-{index}{padding}")),
             parent: None,
             mark: Cell::new(None),
         });

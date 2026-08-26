@@ -222,7 +222,10 @@ whole-region figure,
 [`Region::bump_capacity`](../src/witnessed/region.rs) — the allocator's
 **reserved chunk capacity**, padding and the newest chunk's unused tail
 included. A chunk's floor under a small region is the honest price, because a
-pin retains chunks whole; and reading the figure off the allocator rather than
+pin retains chunks whole — and that floor is a whole frame wide: a fresh region
+asks its bump up front for enough to hold a frame's entire residency
+(`FIRST_CHUNK_BYTES`), so the common case is one chunk taken at the mint rather
+than a doubling ladder climbed as the frame fills. Reading the figure off the allocator rather than
 tallying it at the doors means an allocation that reaches the bump without a
 door call — a collection built over it through `allocator-api2` — is priced like
 any other. There is no per-family breakdown, because the copy-versus-pin

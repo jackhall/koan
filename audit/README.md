@@ -201,15 +201,15 @@ text only on the error arm that spends it. What stands in the slope is per-*argu
 bind does not own: the extra source the call site parses, and the delivery carrier each argument
 travels in.
 
-Some terms straddle a chunk boundary. bumpalo's first chunk is 496 bytes, and a frame that does
-not fit it makes the region take a second one — one more allocation per repetition, and the only
-allocation *size* that moves anywhere in this record. The step, walk, eight-parameter call and
-tagged-cycle terms all sit within a few bytes of it, and have crossed it in both directions:
-carrying a Type token as a symbol rather than as text took the tagged cycle under, and deleting
-`ScopeKind::Module`'s write-only `name` put it back over — a deletion that *shrank* `Scope`.
-What decides a crossing is how the whole frame packs, so its direction does not follow the
-direction of the size change. The terms nowhere near the boundary are the one-parameter call,
-the builtin call, and the operator chain, whose `+` opens no frame of its own.
+No term straddles a chunk boundary. A region asks its bump for a first chunk sized to hold a
+whole frame's residency (`FIRST_CHUNK_BYTES` in
+[workgraph/src/witnessed/region.rs](../workgraph/src/witnessed/region.rs)), and the measured
+per-call high-water across these shapes — about 1 KiB at the tagged cycle and the builtin call,
+4 KiB at the eight-parameter call and the `TRY` loop, widest at the shadowing scopes of the
+10-deep walk — sits under that chunk's usable bytes. So a region takes exactly one chunk, and what a
+frame holds moves this record only by changing how many objects a step allocates, not how large
+they are. A layout change big enough to push a frame's residency past the chunk would put the
+boundary back, which is what the headroom is for.
 
 The **fixed** term is the empty program's own reading, and it is inert to what a program *names*
 — an empty program names nothing. It stays proportional to the *count* of registered overloads,
@@ -229,12 +229,10 @@ grid, whose two depths declare different numbers of shadowing overloads, is wher
 at all.
 
 Registration being a per-shape constant is what keeps every differencing pair honest: it cancels
-exactly. So the two things that move this record without any allocation being added to a marginal
-path are a change in the *count* of registered overloads, which moves the fixed term and every
-absolute figure with it, and a change to what a frame holds by *byte size*, which slides the
-boundary-straddling terms across bumpalo's first chunk. A crossing is still one more call to the
-allocator per repetition — what it is not is traffic a marginal path newly makes, which is why
-the same terms move in both directions as layouts change.
+exactly. So the one thing that moves this record without any allocation being added to a marginal
+path is a change in the *count* of registered overloads, which moves the fixed term and every
+absolute figure with it. A frame's *byte size* no longer does, the region's first chunk being
+sized past what any of these shapes holds.
 
 ### Symbol mints
 
@@ -323,10 +321,9 @@ over and flags one that has drifted: a bound under its measurement (the test fai
 enough to miss a single added allocation.
 
 What a bound defends is exactly that: **no allocation added to a marginal path.** It is not a claim
-that the absolute figure never rises. The two movements above — a registered overload, and a frame
-whose byte size crosses bumpalo's first chunk — are expected to force a rebaseline without any such
-allocation existing. When a bound moves, the question the failure message asks is which of the three
-it was. Only the first is a regression.
+that the absolute figure never rises. The movement above — a registered overload — is expected to
+force a rebaseline without any such allocation existing. When a bound moves, the question the
+failure message asks is which of the two it was. Only the first is a regression.
 
 `allocations_for` runs each shape once *outside* its bracket. The bounds are tight enough that one
 lazy static added later would break them by test order alone — whichever test reached it first would

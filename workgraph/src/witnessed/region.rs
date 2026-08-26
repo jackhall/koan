@@ -118,15 +118,41 @@ pub struct Region<W: StorageProfile> {
     host: Weak<W::FrameOwner>,
 }
 
+/// The byte capacity a fresh region asks its bump for up front, sized so a frame's whole residency
+/// lands in **one** chunk. Left to itself bumpalo reserves nothing until the first store, then
+/// takes 448 bytes and doubles on each overflow — 448, 960, 1984, 4032 — and a frame overruns the
+/// early rungs: a per-call region's high-water occupancy measures between 1 KiB and 7 KiB across
+/// the audit shapes, so the ladder is climbed three or four times per frame, reserving more in
+/// total than one right-sized chunk does and paying an allocation at every rung.
+///
+/// 4 KiB is the smallest ask that clears the whole measured spread. bumpalo rounds a sub-page
+/// request up to a power of two and a page-or-larger one up to a page, so the ask does not land
+/// where it is aimed: the largest reservation any smaller ask can reach is the 4032-byte rung,
+/// which cuts the top of the distribution off, and this ask yields 8128 usable bytes — enough that no measured frame
+/// reaches a second chunk, and enough headroom that an ordinary layout change cannot push one there.
+///
+/// Sizing the chunk to a frame is also what makes [`bump_capacity`](Region::bump_capacity) a stable
+/// price: the figure a pin is costed at stops moving with the byte size of what a frame happens to
+/// hold, because the reservation no longer tracks it.
+///
+/// Paid eagerly, but at the mint [`RegionHost::region`](super::RegionHost::region) performs on
+/// first access rather than at frame construction — so a frame that never reaches its region still
+/// allocates nothing.
+pub(super) const FIRST_CHUNK_BYTES: usize = 4096;
+
 impl<W: StorageProfile> Region<W> {
     /// The library's raw-region constructor — `pub(crate)`, so the mint point an embedder reaches
     /// is [`RegionHost::region`](super::RegionHost::region), which calls this lazily on first
     /// access. An owner sources `host` from `Rc::new_cyclic`, so a region cannot exist without
     /// naming the owner that holds it.
+    ///
+    /// Minting allocates: the bump takes its [`FIRST_CHUNK_BYTES`] chunk here rather than on the
+    /// first value written into it. That is the one allocation a region makes for itself, and the
+    /// laziness of the mint is what keeps it from being paid by a frame that stores nothing.
     pub(crate) fn new(host: Weak<W::FrameOwner>) -> Self {
         Self {
             reach_table: FrozenMap::new(),
-            bump: Bump::new(),
+            bump: Bump::with_capacity(FIRST_CHUNK_BYTES),
             retained_reach: RefCell::new(PinBundle::empty()),
             host,
         }
