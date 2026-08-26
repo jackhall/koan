@@ -24,19 +24,21 @@ TRY's finish captures are all `Copy`. The `AwaitDeps` / `AwaitBlock` finishes
 - *Statement split — decided.* `ActionKind::Tail`'s `leading` and
   `BlockRequest::Body`'s `statements` become host-region slices, and a body that is not
   a statement block takes the `Single` lowering without touching the splitter.
-- *Effects — decided.* `Action` loses its `effects` field; a builtin body or finish
-  writes each `WriteOp` through a `BodyCtx` / `FinishCtx` door into the harness-owned
-  per-step sink, whose buffer is reused across steps. Program order and the
+- *Effects — decided.* `Action` keeps its value-carried `effects` channel; the
+  container becomes a step-arena `BumpVec` (the drain scratch on harness-built paths,
+  the scope's own region as `FinishCtx::for_scope`'s fallback), and the harness sink
+  becomes a per-step scratch `BumpVec` — still minted fresh inside the step brand, so
+  "nothing crosses steps" stays a borrow-checker rule. Program order and the
   all-or-nothing apply are unchanged.
 - *Catch tier — decided.* The `Catch` finish currency goes two-tier like
   `ContinuationCall`: a `Copy` finish erases onto the bumped tier at the builtin
   construction site, the boxed twin remains for owning captures. TRY moves; CATCH moves
   if its captures audit `Copy`.
-- *Leading-statements finish — open.* Its box exists to own the block-frame `Rc`.
-  Either the frame is re-derivable at wake (the leading statements' own slots hold it
-  across the park — to confirm), putting the finish on the bumped tier, or the capture
-  is genuinely load-bearing and the box is documented as the accepted Boxed-tier
-  remainder.
+- *Leading-statements finish — decided.* `NodeContinuation`'s bare obligation field
+  generalizes to a `ParkState` (the obligation plus the block-frame `Rc`) riding the
+  park as plain data beside the call; the harness deposits it into the ambient bracket
+  at step start and the finish reads the frame back at wake, so its captures go
+  all-`Copy` and it erases onto the bumped tier.
 - *Selection walk — decided.* `find_branch_body_by_type`'s arm lists become step-scratch
   transients and arm labels render only on the diagnostic path.
 
@@ -46,10 +48,7 @@ TRY's finish captures are all `Copy`. The `AwaitDeps` / `AwaitBlock` finishes
   surface: a dhat re-profile of `audit/shapes/tail_loop_steps100.koan` and the two
   shapes below attributes no per-step term to `arm_tail`, `block_tail`,
   `find_branch_body_by_type`, the effects channel, or `run_action`'s `Tail` / `Catch`
-  lowering — except, for the leading-statements finish only, a per-step box that the
-  spike proved load-bearing and
-  [design/execution/continuations.md](../../design/execution/continuations.md)
-  documents as such.
+  lowering.
 - `audit/shapes/leading_loop_steps{10,100}.koan` (a tail loop whose FN body carries a
   leading `LET`) and `audit/shapes/try_loop_steps{10,100}.koan` (a tail loop with a TRY
   per iteration) are in the sweep, each with a term in
