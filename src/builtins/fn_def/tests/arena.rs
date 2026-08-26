@@ -179,8 +179,9 @@ fn match_driven_tail_recursion_completes() {
 }
 
 /// A MATCH arm whose body opens with a value-discarded leading `PRINT` before a tail-recursive
-/// call. The arm runs through the action harness (`branch_walk` mints a `FreshChild` frame and
-/// emits an `Action::Tail` carrying the leading statement), so this pins that the harness routes
+/// call. The arm runs through the action harness (`branch_walk` mints an overlay scope in the
+/// enclosing cart and emits an `Action::Tail` carrying the leading statement), so this pins that
+/// the harness routes
 /// arm-body leading statements through the same owned-dep park: the leading `PRINT` runs before
 /// the recursion continues, giving `hop` (the One arm) then `done` (the Zero arm) in order.
 #[test]

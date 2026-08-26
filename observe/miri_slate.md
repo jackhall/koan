@@ -362,15 +362,16 @@ plain `cargo test`; tree borrows is what confirms no read crosses the reset.
 
 - `a_boolean_match_selects_across_a_self_tail_loop_without_outliving_the_scratch`
 
-**MATCH / TRY-WITH branch frames inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
-MATCH and TRY build their per-branch frame and seed the `it` bind through
-`CallFrame::with_scope`: the matched value, deep-cloned at the caller lifetime, is relocated into
-the opened child scope's own region through the substrate (rebuilt at the destination brand, which
-is where the caller lifetime is dropped) and bound; the `FrameStorage` ancestor chain keeps the
-call-site region alive across TCO replace when a user-fn recurses through a `Tagged` parameter.
-The test drives both doors in one program — a MATCH on a `Tagged` scrutinee nested inside a TRY
-whose `Ok -> it` catch path tail-calls back through the enclosing user-fn — so the branch frame
-chain, the `it`-bind seed relocation, and the framed TCO replace are all exercised together.
+**MATCH / TRY-WITH arm overlays inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) —
+MATCH and TRY run the selected arm frameless, in a bump-allocated overlay child of the enclosing
+cart's scope, and seed the `it` bind into that overlay: the matched value, deep-cloned at the caller
+lifetime, is relocated into the enclosing cart's own region through the substrate (rebuilt at the
+destination brand, which is where the caller lifetime is dropped) and bound; the `FrameStorage`
+ancestor chain keeps the call-site region alive across TCO replace when a user-fn recurses through a
+`Tagged` parameter. The test drives both doors in one program — a MATCH on a `Tagged` scrutinee
+nested inside a TRY whose `Ok -> it` catch path tail-calls back through the enclosing user-fn — so
+the overlay's residence in the cart the replace retires, the `it`-bind seed relocation, and the
+framed TCO replace are all exercised together.
 
 - `try_inside_tco_position_preserves_frame_chain`
 

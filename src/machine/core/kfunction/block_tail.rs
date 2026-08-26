@@ -4,8 +4,6 @@
 //! seed, and how the body maps to the tail, so the shape of the
 //! [`Action::Tail`](crate::machine::Action::Tail) they produce is settled in one place.
 
-use std::rc::Rc;
-
 use crate::machine::ReturnContract;
 use crate::machine::Scope;
 use crate::machine::core::RegionBrand;
@@ -27,42 +25,24 @@ pub(crate) enum BlockBody<'a> {
 pub(crate) enum BlockScope<'a> {
     /// No lexical block push; the tail runs in the frame's own scope with the chain unchanged.
     None,
-    /// The `FreshChild` frame's own child scope is the block. The frame itself becomes `block_entry`,
-    /// and a `seed` binds into its scope through
-    /// [`CallFrame::with_scope`](crate::machine::CallFrame::with_scope).
-    FrameOwn,
     /// A caller-allocated overlay scope in a cart-ancestor region. Its `id` becomes `block_entry`, and
     /// a `seed` binds into it directly.
     Overlay(&'a Scope<'a>),
 }
 
 /// The seed type a caller that passes none names, so `None` has a type to be `None` of. A
-/// fn-pointer alias with elided lifetimes is higher-ranked, which is what [`block_tail`]'s seed
-/// bound requires; nothing is ever called through it.
+/// fn-pointer alias with elided lifetimes satisfies the seed bound at any `'a`; nothing is ever
+/// called through it.
 pub(crate) type NoSeed = fn(&Scope<'_>, &RunRegistries, &mut WriteGate);
-
-/// Bind a seed closure to its higher-ranked shape, returning it unchanged. The block scope
-/// reaches a seed as `&'b Scope<'b>` — one lifetime in two positions, and `Scope` is invariant in
-/// it — which a closure literal infers only against a named bound: annotating its parameter at the
-/// closure writes two independent lifetimes instead, and passing it straight into
-/// [`block_tail`]'s `Option` puts the bound a layer away from the closure's own type. Callers with
-/// a seed write it through here.
-pub(crate) fn block_seed<S>(seed: S) -> S
-where
-    S: for<'b> FnOnce(&'b Scope<'b>, &RunRegistries, &mut WriteGate),
-{
-    seed
-}
 
 /// Run a block and yield its last statement as the tail — the shared constructor. `brand` is the
 /// region the working copies of the body's statements are frozen into: the body arrives as raw AST
 /// and crosses to the scheduler here, at the point the tail is declared.
 ///
 /// `seed` is a step run against the block scope before the tail dispatches, taken by value as
-/// `impl FnOnce` so it stays a stack closure. `for<'b>` so it binds whether the block scope
-/// arrives as a short `with_scope` borrow (`FrameOwn`) or the `'a` overlay (`Overlay`). The run's
-/// registries arrive as a parameter rather than a capture: the seed runs before this returns, so
-/// it borrows them for that call instead of owning a share.
+/// `impl FnOnce` so it stays a stack closure. The block scope reaches it as the caller's own `'a`
+/// overlay. The run's registries arrive as a parameter rather than a capture: the seed runs before
+/// this returns, so it borrows them for that call instead of owning a share.
 ///
 /// The [`WriteGate`] arrives the same way. A seed binds into a block scope that has not dispatched
 /// a statement yet — the construction door — but the seed itself is written builtin-side, where no
@@ -78,28 +58,17 @@ pub(crate) fn block_tail<'a, S>(
     registries: &RunRegistries,
 ) -> Action<'a>
 where
-    S: for<'b> FnOnce(&'b Scope<'b>, &RunRegistries, &mut WriteGate),
+    S: FnOnce(&'a Scope<'a>, &RunRegistries, &mut WriteGate),
 {
     let block_entry = match block {
         BlockScope::None => {
             debug_assert!(seed.is_none(), "a blockless tail takes no seed");
             BlockEntry::None
         }
-        BlockScope::FrameOwn => {
-            let FramePlacement::FreshChild { frame } = &frame_placement else {
-                unreachable!("a FrameOwn block is the FreshChild frame's own scope");
-            };
-            if let Some(seed) = seed {
-                // The frame is freshly minted and its scope has run nothing, so the seed writes
-                // through the construction door.
-                frame.with_scope(|child| {
-                    seed(child, registries, &mut WriteGate::for_unpublished_scope())
-                });
-            }
-            BlockEntry::FrameScope(Rc::clone(frame))
-        }
         BlockScope::Overlay(overlay) => {
             if let Some(seed) = seed {
+                // The overlay is freshly allocated and has run nothing, so the seed writes through
+                // the construction door.
                 seed(overlay, registries, &mut WriteGate::for_unpublished_scope());
             }
             BlockEntry::Overlay(overlay)

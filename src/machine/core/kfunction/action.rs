@@ -776,9 +776,9 @@ pub enum DepRequest<'a> {
 /// a block reads its results in order and never by a banked index.
 pub enum BlockRequest<'a> {
     /// A body's non-tail statements, already split. `placement` picks where they bind (see
-    /// [`BodyPlacement`]): a deferred-return FN's first-call body and a leading-carrying arm bind
-    /// into a fresh per-call frame's own scope; a leading-carrying USING binds into an
-    /// inherited-cart overlay.
+    /// [`BodyPlacement`]): a deferred-return FN's first-call body binds into a fresh per-call
+    /// frame's own scope; a leading-carrying USING or MATCH / TRY arm binds into an inherited-cart
+    /// overlay.
     Body {
         statements: &'a [WorkingExpression<'a>],
         placement: BodyPlacement<'a>,
@@ -795,12 +795,11 @@ pub enum BlockRequest<'a> {
 /// tail chooses between.
 pub enum BodyPlacement<'a> {
     /// Dispatch as body-chain siblings in `frame`'s own scope (`KoanRuntime::dispatch_body`) — a
-    /// deferred-return FN's first-call body (its non-tail body + the return-type expression) and
-    /// MATCH / TRY arm leading statements.
+    /// deferred-return FN's first-call body (its non-tail body + the return-type expression).
     Frame(Rc<CallFrame>),
     /// Enter `overlay` as a fresh lexical block without a per-call frame (`KoanRuntime::enter_block`)
-    /// — USING's leading statements, which bind into the transparent overlay inside the inherited
-    /// call-site cart.
+    /// — USING's and a MATCH / TRY arm's leading statements, which bind into the overlay inside the
+    /// inherited call-site cart.
     Overlay(&'a Scope<'a>),
 }
 
@@ -824,12 +823,12 @@ pub enum BlockEntry<'a> {
     None,
     /// The installed frame's own scope is the block; the frame carries its own scope id
     /// (`frame.scope_id()`) for the chain push / FN-body assembly, and the lowering fans any
-    /// leading statements into the frame itself (`BodyPlacement::Frame`) — MATCH / TRY arms,
-    /// FN-body tails.
+    /// leading statements into the frame itself (`BodyPlacement::Frame`) — FN-body tails.
     FrameScope(Rc<CallFrame>),
     /// A caller-allocated overlay scope in a cart-ancestor region, entered without a fresh frame —
-    /// the tail runs in it under the inherited call-site cart (USING). Carries the overlay so the
-    /// harness fans the leading statements into it and installs it as the tail slot's scope.
+    /// the tail runs in it under the inherited call-site cart (USING, MATCH / TRY arms). Carries
+    /// the overlay so the harness fans the leading statements into it and installs it as the tail
+    /// slot's scope.
     Overlay(&'a Scope<'a>),
 }
 
@@ -848,9 +847,8 @@ pub enum FramePlacement {
     /// which installs a cart the same way but does not retire the slot's current scope.
     FreshTail { frame: Rc<CallFrame> },
     /// A **pre-built** fresh cart the builtin minted (`CallFrame::new`), handed
-    /// to the harness to install. The builtin owns construction because it may seed the cart before
-    /// the tail dispatches — MATCH/TRY bind `it` into it via `CallFrame::with_scope`; EVAL builds it
-    /// for the UAF guard.
+    /// to the harness to install: EVAL builds one for the UAF guard, so bindings the quoted body
+    /// introduces die with it.
     FreshChild { frame: Rc<CallFrame> },
     /// No new frame; continue in the slot's current cart. Frameless tails / `Done`.
     Inherit,

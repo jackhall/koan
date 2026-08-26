@@ -1,7 +1,7 @@
 //! `TRY (<expr>) -> :<T> WITH (<branches>)` — runtime error-catching dispatch.
 //!
 //! `-> :T` is the mandatory declared return type every arm agrees on, checked and
-//! re-tagged when the selected arm's value lifts (the `ReturnContract::Arm` carried on
+//! re-tagged when the selected arm's tail completes (the `ReturnContract::Arm` carried on
 //! the tail). Surface shape otherwise mirrors [`match_case`](super::match_case); arms key
 //! on `Ok`, the capitalized `KErrorKind` tag from
 //! [`KError::to_tagged`](crate::machine::KError::to_tagged), or `_` (wildcard catching

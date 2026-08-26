@@ -471,18 +471,13 @@ impl<'run> Host<'run> {
         match outcome {
             Outcome::Done(result) => {
                 anchor.close_opened_scope();
-                // The producer's per-call frame gates the return obligation: a frameless /
-                // run-frame producer folds in nothing. Retention seeds independently — the
-                // scheduler reads the slot's own anchor owner at finalize — so the gate makes no
-                // memory decision.
-                let step_frame = self
-                    .ambient
-                    .active_frame_ref()
-                    .cloned()
-                    .expect("a step always runs against a cart");
-                let obligation = (!step_frame.non_dying())
-                    .then(|| self.ambient.current_obligation())
-                    .flatten();
+                // A slot carries an obligation only as the tail chain's `winner`, so a step that
+                // Dones holding one *is* the contracted call's return boundary — frame or no
+                // frame. A MATCH / TRY arm runs frameless in its caller's cart, so the check is
+                // read off the obligation itself rather than off a dying-frame proxy. Retention
+                // seeds independently — the scheduler reads the slot's own anchor owner at
+                // finalize — so this makes no memory decision.
+                let obligation = self.ambient.current_obligation();
                 match result {
                     Ok(carrier) => {
                         // `seal_at_step` is the sole exit from the step brand: it discharges

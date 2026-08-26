@@ -20,11 +20,12 @@ crate::slots! { SLOTS { branches, return_type, value } }
 /// binds the wrapped payload to `it`; a general type head binds the scrutinee unchanged
 /// (ruling F3); a boolean head binds `Null`. `-> :T` is the mandatory declared return
 /// type every arm must agree on; the selected arm's result is checked against it (and
-/// re-tagged to it) when its value lifts, via the
+/// re-tagged to it) when the arm's tail completes, via the
 /// [`ReturnContract::Arm`](crate::machine::ReturnContract) carried
 /// on the tail. `branches` is the parens-wrapped body of repeated `<head> -> <body>`
 /// triples; the winning arm is dispatched as a tail expression with `it` bound in a
-/// per-MATCH child scope (so the binding can't leak). No admitting arm → `ShapeError`
+/// per-MATCH overlay scope, a block-local child no later call-site statement reaches on
+/// its ancestor walk (so the binding can't leak). No admitting arm → `ShapeError`
 /// naming the scrutinee's runtime type; an F1 ambiguity or malformed shape → `ShapeError`.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use super::branch_walk::{arm_tail, payload_envelope, resolve_arm_contract};
@@ -424,5 +425,32 @@ mod tests {
         );
         let s = String::from_utf8_lossy(&bytes);
         assert!(s.contains("done"), "expected 'done' to print, got {s:?}");
+    }
+
+    /// Closure escape from an arm overlay. The arm binds `it` into an overlay child of the call
+    /// site's own scope, so a closure defined in the arm captures that overlay; the escaped closure
+    /// must still read `it` after the MATCH ends. Run-root churn after the escape exercises drop
+    /// discipline (a dangling reference into a reclaimed scope surfaces under Miri).
+    #[test]
+    fn match_arm_closure_capturing_it_escapes_soundly() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 7))");
+        test_run.run(
+            "LET add = (MATCH (m) -> :Any WITH (\
+                 Some -> (FN :{n :Number} -> Number = (it + n))\
+                 None -> (FN :{n :Number} -> Number = (n))\
+             ))",
+        );
+        test_run.run("FN (NOOP) -> Number = (1)");
+        for _ in 0..10 {
+            test_run.run_one(test_run.parse_one("NOOP"));
+        }
+        let result = test_run.run_one(test_run.parse_one("add {n = 100}"));
+        assert!(
+            matches!(result, KObject::Number(n) if *n == 107.0),
+            "the escaped closure must still read the arm-bound `it` after churn",
+        );
     }
 }

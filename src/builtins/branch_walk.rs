@@ -104,10 +104,13 @@ pub(crate) fn payload_envelope(carrier: &DeliveredCarried) -> DeliveredCarried {
 }
 
 /// Build the matched-arm tail shared by the `Action`-harness `MATCH` and `TRY` bodies: the
-/// [`block_tail`](crate::machine::block_tail) configuration for an arm — a fresh per-call frame
-/// (`root`-rooted, chained onto `outer_frame`) whose own scope is the block, seeded with `it` bound
-/// at idx 0 from `it_carrier`, running the arm body split into leading statements + a tail under
-/// `contract`.
+/// [`block_tail`](crate::machine::block_tail) configuration for an arm — the arm runs in the
+/// **enclosing cart** (`FramePlacement::Inherit`) in a same-region overlay child of `root`, the
+/// tier `USING`'s block sits at, seeded with `it` bound at idx 0 from `it_carrier`, running the arm
+/// body split into leading statements + a tail under `contract`. The overlay is bump-allocated in
+/// the enclosing region, so an arm costs no frame and no region of its own; nested arms stack
+/// overlays, so `it` shadowing falls out of the ancestor walk. The arm's terminal is born in the
+/// enclosing region, so no Done-boundary lift fires for it.
 ///
 /// `it_carrier` is the delivery envelope for exactly what `it` binds — the scrutinee itself, or its
 /// payload already narrowed by [`payload_envelope`]. An envelope is what the seed's `for<'b>` brand
@@ -123,31 +126,36 @@ pub(crate) fn arm_tail<'a>(
     contract: ReturnContract<'a>,
     registries: &RunRegistries,
 ) -> crate::machine::Action<'a> {
+    use crate::machine::BindingIndex;
     use crate::machine::FramePlacement;
-    use crate::machine::{BindingIndex, CallFrame};
-    use crate::machine::{BlockBody, BlockScope, block_seed, block_tail};
-    let frame: Rc<CallFrame> = CallFrame::new(root);
+    use crate::machine::WriteGate;
+    use crate::machine::{BlockBody, BlockScope, block_tail};
+    let overlay: &'a Scope<'a> = root.alloc_child_under();
     block_tail(
         root.brand(),
-        FramePlacement::FreshChild { frame },
-        BlockScope::FrameOwn,
-        Some(block_seed(move |child, registries, gate| {
-            // Fused copy + bind of `it` at idx 0 in the fresh arm frame: one structural copy made
-            // directly into the arm frame's region inside the envelope's pinned open, the binding
-            // storing the copy's derived reach (a residence-only host is dropped, so a tail loop's
-            // retiring frame does not ride the arm's binding). The projection is identity — the
-            // envelope already names exactly what `it` binds — and a later read of `it` rebuilds
-            // its carrier from the stored reach.
-            let it = registries.labels.record(&IT);
-            let _ = child.bind_delivered_direct(
-                it,
-                &it_carrier,
-                BindingIndex::value(0),
-                |carried| Ok(carried.object()),
-                registries,
-                gate,
-            );
-        })),
+        FramePlacement::Inherit,
+        BlockScope::Overlay(overlay),
+        // The seed's parameters are spelled out: `block_tail` takes it as a generic `Option<S>`, so
+        // the bound reaches the closure a layer away from its own type and infers nothing for it.
+        Some(
+            move |child: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate| {
+                // Fused copy + bind of `it` at idx 0 in the arm's overlay scope: one structural copy
+                // made directly into the enclosing cart's region inside the envelope's pinned open, the
+                // binding storing the copy's derived reach (a residence-only host is dropped, so a tail
+                // loop's retiring frame does not ride the arm's binding). The projection is identity —
+                // the envelope already names exactly what `it` binds — and a later read of `it`
+                // rebuilds its carrier from the stored reach.
+                let it = registries.labels.record(&IT);
+                let _ = child.bind_delivered_direct(
+                    it,
+                    &it_carrier,
+                    BindingIndex::value(0),
+                    |carried| Ok(carried.object()),
+                    registries,
+                    gate,
+                );
+            },
+        ),
         BlockBody::Block(body_expr),
         Some(contract),
         registries,
