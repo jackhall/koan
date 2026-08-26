@@ -316,7 +316,11 @@ are disjoint by construction: each slot's
 [`KFunction::classify_for_pick`](../../src/machine/core/kfunction.rs) is
 the sole producer of the `ClassifiedSlots` carrier (which `Resolved` holds
 by value), so the disjointness invariant lives in one place rather than as
-comment-enforced rules across the scheduler driver.
+comment-enforced rules across the scheduler driver. Both buckets — and the
+producer list a `ParkOnProducers` outcome carries — are hosted on the step
+scratch arena the resolve walk is handed ([scheduler.md](scheduler.md)), so a
+dispatch classifies and a scope parks without a heap container; naming `'step`
+in their types is what keeps them from outliving the drain's pop.
 
 **Parks are well-founded by construction, so nothing cycle-checks.** A
 consumer can park only on a claim its lexical chain makes visible, and the
