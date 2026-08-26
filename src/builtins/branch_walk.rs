@@ -19,6 +19,7 @@ use crate::machine::ReturnContract;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{Carried, CarriedFamily, KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::witnessed::{BumpAllocator, BumpVec};
 use std::rc::Rc;
 
 // This builtin's slot spellings, minted once and read back by symbol.
@@ -248,6 +249,43 @@ enum HeadMode {
     Scope,
 }
 
+/// An arm head's spelling, kept in the form the head already had. Rendering a type name walks the
+/// interner and builds a `String`, and only the two ambiguity diagnostics below ever need one — so
+/// a selection that succeeds renders nothing.
+#[derive(Clone, Copy)]
+enum HeadLabel {
+    /// A boolean-literal head, whose spelling is fixed source syntax.
+    Boolean(&'static str),
+    /// A type-name head, rendered from the label interner on demand.
+    Type(Symbol),
+}
+
+impl HeadLabel {
+    fn render(self, registries: &RunRegistries) -> String {
+        match self {
+            HeadLabel::Boolean(text) => text.to_string(),
+            HeadLabel::Type(symbol) => crate::machine::model::render_label(symbol, registries),
+        }
+    }
+}
+
+/// The F1 ambiguity diagnostic, shared by the exact pre-pass and the typed tournament — the two
+/// differ only in which slate of arms tied. A cold path, so it renders its labels here.
+fn ambiguous_match(
+    heads: impl Iterator<Item = HeadLabel>,
+    scrutinee: &KObject<'_>,
+    registries: &RunRegistries,
+) -> String {
+    let heads: Vec<String> = heads
+        .map(|head| format!("`{}`", head.render(registries)))
+        .collect();
+    format!(
+        "ambiguous match: value of type `{}` admits arms {} with no most-specific arm",
+        scrutinee.ktype().name(registries),
+        heads.join(", ")
+    )
+}
+
 /// Resolve a bare arm-head type token against the call-site scope — the same
 /// [`Scope::resolve_type_identifier`] call [`resolve_arm_contract`] makes. A non-`Done`
 /// resolution (parked or unbound) is not a synchronously-known type.
@@ -286,6 +324,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
     scope: &Scope<'a>,
     chain: Option<Rc<LexicalFrame>>,
     registries: &RunRegistries,
+    scratch: BumpAllocator<'a>,
 ) -> Result<Option<SelectedArm<'a>>, String> {
     let parts = &branches.parts;
     if !parts.len().is_multiple_of(3) {
@@ -306,20 +345,24 @@ pub(crate) fn find_branch_body_by_type<'a>(
     // tag head equal to a `Tagged` scrutinee's own tag. An exact arm ranks strictly above every
     // typed arm, so the pre-pass below settles it without entering the tournament.
     struct ExactArm<'a> {
-        head_label: String,
+        head_label: HeadLabel,
         body: KExpression<'a>,
         binds_payload: bool,
     }
     // A typed arm carries the `KType` its head resolved to; the tournament admits it by
     // `matches_value` and ranks admitted arms by `most_specific`.
     struct TypedArm<'a> {
-        head_label: String,
+        head_label: HeadLabel,
         ktype: KType,
         body: KExpression<'a>,
         binds_payload: bool,
     }
-    let mut exact_arms: Vec<ExactArm<'a>> = Vec::new();
-    let mut typed_arms: Vec<TypedArm<'a>> = Vec::new();
+    // The candidate slates are decide-local: they never outlive this call, so they stage on the
+    // step scratch and cost the heap nothing. Each arm is one `<head> -> <body>` triple, which
+    // bounds both slates and lets each take its capacity up front rather than growing.
+    let arms = parts.len() / 3;
+    let mut exact_arms: BumpVec<'a, ExactArm<'a>> = BumpVec::with_capacity_in(arms, scratch);
+    let mut typed_arms: BumpVec<'a, TypedArm<'a>> = BumpVec::with_capacity_in(arms, scratch);
 
     let mut i = 0;
     while i < parts.len() {
@@ -352,7 +395,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
             ExpressionPart::Literal(KLiteral::Boolean(b)) => {
                 if matches!(scrutinee, KObject::Bool(sb) if *sb == b) {
                     exact_arms.push(ExactArm {
-                        head_label: if b { "true" } else { "false" }.to_string(),
+                        head_label: HeadLabel::Boolean(if b { "true" } else { "false" }),
                         body: body_expr,
                         binds_payload: false,
                     });
@@ -361,7 +404,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
             // A capitalized type name: a variant/tag match for a union-variant or tagged
             // scrutinee, else scope resolution.
             ExpressionPart::Type(token) => {
-                let label = crate::machine::model::render_label(token.symbol(), registries);
+                let label = HeadLabel::Type(token.symbol());
                 match &mode {
                     // A tag head equal to the scrutinee's own tag is an exact arm binding the
                     // payload; a non-tag head is a silent non-match (no scope resolution for a
@@ -401,14 +444,10 @@ pub(crate) fn find_branch_body_by_type<'a>(
     // Exact pre-pass: an exact arm ranks strictly above every typed arm. Two admitting exact
     // heads have no strict winner → ambiguity; exactly one wins outright and skips the tournament.
     if exact_arms.len() >= 2 {
-        let heads: Vec<String> = exact_arms
-            .iter()
-            .map(|a| format!("`{}`", a.head_label))
-            .collect();
-        return Err(format!(
-            "ambiguous match: value of type `{}` admits arms {} with no most-specific arm",
-            scrutinee.ktype().name(registries),
-            heads.join(", ")
+        return Err(ambiguous_match(
+            exact_arms.iter().map(|arm| arm.head_label),
+            scrutinee,
+            registries,
         ));
     }
     if let Some(arm) = exact_arms.into_iter().next() {
@@ -421,18 +460,17 @@ pub(crate) fn find_branch_body_by_type<'a>(
     // Typed tournament via the shared core: admit by `matches_value`, then let
     // `most_specific_ktype` pick the strictly most-specific admitting arm — the one-slot case of
     // the same tournament ordinary overload buckets resolve through, where specificity turns
-    // entirely on the head's own `KType`.
-    let admitted: Vec<TypedArm<'a>> = typed_arms
-        .into_iter()
-        .filter(|arm| arm.ktype.matches_value(scrutinee, registries))
-        .collect();
-    if admitted.is_empty() {
+    // entirely on the head's own `KType`. Non-admitting arms are dropped from the slate in place,
+    // so admission costs no second list.
+    typed_arms.retain(|arm| arm.ktype.matches_value(scrutinee, registries));
+    if typed_arms.is_empty() {
         return Ok(None);
     }
-    let heads: Vec<KType> = admitted.iter().map(|arm| arm.ktype).collect();
+    let mut heads: BumpVec<'a, KType> = BumpVec::with_capacity_in(typed_arms.len(), scratch);
+    heads.extend(typed_arms.iter().map(|arm| arm.ktype));
     match most_specific_ktype(&heads, registries) {
         Some(winner) => {
-            let arm = admitted
+            let arm = typed_arms
                 .into_iter()
                 .nth(winner)
                 .expect("winner index valid");
@@ -441,16 +479,10 @@ pub(crate) fn find_branch_body_by_type<'a>(
                 binds_payload: arm.binds_payload,
             }))
         }
-        None => {
-            let heads: Vec<String> = admitted
-                .iter()
-                .map(|arm| format!("`{}`", arm.head_label))
-                .collect();
-            Err(format!(
-                "ambiguous match: value of type `{}` admits arms {} with no most-specific arm",
-                scrutinee.ktype().name(registries),
-                heads.join(", ")
-            ))
-        }
+        None => Err(ambiguous_match(
+            typed_arms.iter().map(|arm| arm.head_label),
+            scrutinee,
+            registries,
+        )),
     }
 }

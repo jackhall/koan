@@ -48,6 +48,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         ctx.scope,
         ctx.chain.clone(),
         ctx.registries,
+        ctx.scratch,
     ) {
         Ok(Some(arm)) => arm,
         Ok(None) => {
