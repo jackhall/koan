@@ -4,7 +4,10 @@
 tail-loop step to per-hop frame and scope construction. A fresh tail hop mints a whole
 frame stack: `CallFrame::new`
 ([src/machine/core/arena/frame.rs](../../src/machine/core/arena/frame.rs), 4/step) builds
-a fresh `Rc<FrameStorage>` and the `Rc<CallFrame>` shell, and
+a fresh `Rc<FrameStorage>` and the `Rc<CallFrame>` shell — one of those mints is the arm
+frame `arm_tail` ([src/builtins/branch_walk.rs](../../src/builtins/branch_walk.rs)) makes
+unconditionally so the selected body has somewhere to bind `it`, whether or not the arm
+reads it — and
 `build_frame_child_witnessed` (6/step) mints the hop's region and bumps the child scope
 and its delivery envelope into it. The slot layer allocates alongside: every tail replace
 mints a fresh `Rc<SlotFrame>`

@@ -88,16 +88,18 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             ) -> KObject<'x> {
                 KObject::tagged(door, tag, payload, identity)
             }
-            // Build the `Result` `Tagged` **inside the witness closure** so it names every region the
-            // wrapped value reaches. The `Result` member handle crosses the build brand as a
-            // [`RegionTypeFamily`] operand, yoked into the dest region rather than paired with an
-            // asserted singleton; the handle itself borrows no region.
+            // Build the `Result` `Tagged` **inside the witness closure** so it names every
+            // region the wrapped value reaches. The `Result` member handle crosses the build
+            // brand as a
+            // [`RegionTypeFamily`] operand, yoked into the dest region rather than paired
+            // with an asserted singleton; the handle itself borrows no region.
             let frame = fctx.ctx.frame();
             let home = build_type_operand(Rc::clone(&frame), result_member);
-            // Both arms fold a delivery envelope into `home` claiming the envelope's own pins — the watched
-            // carrier for `Ok`, `to_tagged`'s freshly-born envelope (its record substrate can only be
-            // built through a fold door, so it is sealed as a delivered carrier rather than routed
-            // through the born-door move-in) for `Err` — so the two arms share one shape.
+            // Both arms fold a delivery envelope into `home` claiming the envelope's own pins
+            // — the watched carrier for `Ok`, `to_tagged`'s freshly-born envelope (its record
+            // substrate can only be built through a fold door, so it is sealed as a delivered
+            // carrier rather than routed through the born-door move-in) for `Err` — so the two
+            // arms share one shape.
             let tagged_envelope;
             let carrier = match &result {
                 Ok(carrier) => carrier,
@@ -106,16 +108,17 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                     &tagged_envelope
                 }
             };
-            // The tags are read off `result`'s own statics, whose spellings the prelude registration
-            // already recorded in this run's interner, so a rendered tag resolves back.
+            // The tags are read off `result`'s own statics, whose spellings the prelude
+            // registration already recorded in this run's interner, so a rendered tag resolves
+            // back.
             let tag = if result.is_ok() {
                 super::result::OK.symbol()
             } else {
                 super::result::ERROR.symbol()
             };
-            // The payload rides into the `Tagged` verbatim, so a payload substrate that stays foreign
-            // keeps its own stored reach as the payload cell's run; the carrier's coverage is the
-            // holder-rule proof for reading it, captured before the fold closure.
+            // The payload rides into the `Tagged` verbatim, so a payload substrate that stays
+            // foreign keeps its own stored reach as the payload cell's run; the carrier's
+            // coverage is the holder-rule proof for reading it, captured before the fold closure.
             let holder = carrier.coverage().clone();
             // The type operand is empty-reach; the transfer composes the result payload's reach and
             // homes the product in the operand's dest frame.
@@ -135,10 +138,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                     )))
                 },
             );
-            // Step-terminal seal: the transfer minted the product's description into the dest frame's
-            // own region, so that region is the product's host and enters its members whenever the
-            // payload borrows there — a fresh record does. The product's residence *is* `frame`, which
-            // the step's own seal re-pins, so only its foreign coverage rides on.
+            // Step-terminal seal: the transfer minted the product's description into the dest
+            // frame's own region, so that region is the product's host and enters its members
+            // whenever the payload borrows there — a fresh record does. The product's residence
+            // *is* `frame`, which the step's own seal re-pins, so only its foreign coverage
+            // rides on.
             Action::done(Ok(StepCarried::born_delivered(product)))
         };
     Action::catch(

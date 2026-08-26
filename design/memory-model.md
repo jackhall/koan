@@ -636,14 +636,18 @@ key), and `SigSlot` (a `VAL` slot in the nearest enclosing SIG decl scope).
 field on [`DecideCtx`](../src/machine/execute/decide/ctx.rs) with one deposit method the
 execute layer alone can reach, so a builtin (which receives a `BodyCtx`) cannot touch it. The sink
 is created per step by [`Host::step`](../src/machine/execute/harness.rs) and drained there, after
-the step's continuation has returned and before its outcome is realized. `WriteOp::apply` is the
+the step's continuation has returned and before its outcome is realized. Both the sink and the run
+a body stages on its `Action` are `BumpVec`s on the step arena, minted inside the step brand — a
+`WriteOp` carries seals branded to the step's own region, so "nothing crosses steps" is the borrow
+checker's rule here rather than a convention, and the bytes are handed back at the drain pop
+without a free. `WriteOp::apply` is the
 single interpreter: it writes against the step's own scope — which always owns its binding table,
 since even a `USING` block runs in an owned layer stacked inside the borrowed window — runs the
 builtin-shadow consult where the door asks for it, and mutates the table. Because nothing but the
 step callback reaches this point, every map borrow is a firm `borrow_mut` — there is no koan frame on
 the stack to hold a competing one, so contention is unrepresentable rather than tolerated.
 
-Ops apply in `Vec` order, which is program order within the step. On the first failure the
+Ops apply in deposit order, which is program order within the step. On the first failure the
 remaining ops are dropped and the step becomes the node's error terminal, so the ordinary finalize
 arms clear the producer's placeholders and attribute the error exactly as for an in-step error. A
 body that errors before deciding its write installs nothing at all: the writes are outcome data,

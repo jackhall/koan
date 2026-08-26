@@ -46,7 +46,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [One kind-blind reader per shape slot](metaprogramming/one-reader-per-shape-slot.md)
 - [Parse at runtime](metaprogramming/parse-at-runtime.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
-- [Builtin action continuations](reduce_allocs/builtin-action-continuations.md)
 - [Dispatch resolution allocations](reduce_allocs/dispatch-resolution-allocations.md)
 - [Frame and scope bookkeeping](reduce_allocs/frame-scope-bookkeeping.md)
 - [Tagged construction substrate](reduce_allocs/tagged-construct-substrate.md)

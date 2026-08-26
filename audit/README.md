@@ -163,15 +163,18 @@ repetitions themselves, the parse of the extra statements included.
 ### What the terms say
 
 The **step** term is exactly linear: the same per-step figure at 10, 50, 100 and 200 steps, of
-which the committed pair is two. The **leading_loop** and **try_loop** terms are the same
-countdown carrying one more thing per step, so each reads as the step term plus what that
-thing costs: a multi-statement body's split, leading-statements finish and deposited effect
-for the first, a watched sub-expression's catch finish and extra arm selection for the second.
-Reading either against `step` is how the surface those paths add is priced. The **dispatch** term is not — marginal cost rises across the
+which the committed pair is two. The **dispatch** term is not — marginal cost rises across the
 16→32, 32→64, 64→128 and 128→256 operand doublings, so a chain pays slightly more per operator
 the longer it gets. Below 16 operands the fixed cost swamps the term, so the rise is only
 readable over the larger sizes, and the committed pair spans the linear-enough middle rather
 than the tail. Whatever drives the rise is unmeasured.
+
+The **leading_loop** and **try_loop** terms are the same countdown carrying one more thing per
+step, so each is read *against* `step` rather than on its own: the difference is what that one
+thing costs. For `leading_loop` it is a multi-statement body — the statement split, the
+leading-statements finish the wake reads back, and the effect the `LET` deposits. For `try_loop`
+it is a watched sub-expression — the catch finish the `TRY` parks under, and the extra arm the
+`WITH` selects through. Both are linear in steps the same way `step` is.
 
 The walk term is **flat in depth**: `scope_walk_depth2` and `scope_walk_depth10` are
 indistinguishable, and `scope_walk_scope` — what one extra scope costs one dispatch, the two

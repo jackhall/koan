@@ -101,9 +101,9 @@ pub(crate) fn split_leading_tail<'a>(
 
 /// A body's top-level statements as references into the parts run, tail included — the whole-body
 /// scan behind the declaration builtins (GROUP, MODULE), where [`split_leading_tail`] would say
-/// nothing about the last statement they need to read. Same multi-statement detection. The borrow lifetime is independent of the expression's own `'a`, so a
-/// caller holding the body by value can scan it in place (`GROUP` reads its members off the
-/// unevaluated body block this way).
+/// nothing about the last statement they need to read. Same multi-statement detection. The borrow
+/// lifetime is independent of the expression's own `'a`, so a caller holding the body by value can
+/// scan it in place (`GROUP` reads its members off the unevaluated body block this way).
 pub(crate) fn body_statement_refs<'ast, 'a>(
     body: &'ast KExpression<'a>,
 ) -> Vec<&'ast KExpression<'a>> {

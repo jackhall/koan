@@ -19,11 +19,15 @@ tier ([`gated`](../../src/machine/execute/outcome.rs), `sealed_done`), `FnOnce` 
 boxed twin (`gated_once`) — so a combinator layer costs monomorphized code, not an
 allocation. The closure is erased exactly once, at the install envelope.
 
-The slot's declared-return obligation is not a wrapper layer: it rides beside the
-erased closure as `Copy` data
-([`ReturnObligation`](../../src/machine/execute/obligation.rs)), deposited into the
-ambient slot-step state by the step before the closure runs. A park re-carries the
-ambient obligation the same way, as data.
+Out-of-band step state is not a wrapper layer either. It rides beside the erased closure
+as a [`ParkState`](../../src/machine/execute/obligation.rs): the slot's declared-return
+`ReturnObligation` as `Copy` data, plus the block frame a leading-carrying tail keeps
+alive across its park. The step deposits that state into the ambient slot-step context
+before the closure runs, and a park carries the whole of it across the dormancy — so
+neither a declared-return checker nor a live block frame costs a wrapping closure or an
+owning capture. The frame half is a deposit/take pair, the decide depositing immediately
+before it returns its park and the finish that park wakes taking it back out; a
+`debug_assert` on the deposit pins that one-for-one pairing.
 
 ## The two-tier erase door
 
@@ -36,10 +40,10 @@ ambient obligation the same way, as data.
   freed with the region's chunks.
 - **Boxed** — a closure with an owning capture takes `Box<dyn FnOnce>` and the
   droppable reattachable tier, exactly so its captures' destructors run at slot death.
-  The owning captures are enumerable: the leading-statements finish's block-frame `Rc`
-  (load-bearing — nothing else keeps the block frame alive across that park), a
-  pre-errored slot's `KError`, a catch's recovery closure, and every builtin `Action`
-  finish (below).
+  The owning captures are enumerable and few: a pre-errored slot's `KError`
+  (`decide_error`), the ambient-chain submission's one-shot finish
+  ([`Host::awaiting`](../../src/machine/execute/harness.rs)), and the await half of the
+  builtin `Action` tier (below). Nothing on the steady execute path reaches this tier.
 
 Both tiers cross the same seal against the slot's anchor
 ([per-node-memory.md](../per-node-memory.md)); the tier decides only where the bytes
@@ -66,7 +70,8 @@ frame.
   in the closure's own region, never an owned `Vec`.
 - An owning handle whose referent an existing channel already carries is re-derived at
   wake, never captured: the body-enter cart off the slot's anchor, a finish's lexical
-  chain off the ambient node payload.
+  chain off the ambient node payload, a leading-carrying tail's block frame off the park
+  state.
 - A nested closure currency (a field-list composer, an aggregate assembler) is a generic
   parameter folded into the finish before the one erasure, not a second box inside it:
   `Fn + Copy` where the finish is bumped, `FnOnce` where it rides the boxed `Action` tier.
@@ -74,13 +79,30 @@ frame.
 ## The builtin tier
 
 Builtin bodies hand the engine their wake logic through the `Action` currency
-([`AwaitContinue` / `CatchContinue`](../../src/machine/core/kfunction/action.rs)) — an
-open composition surface where each builtin writes its own closure. Those arrive boxed
-and take the Boxed tier; the engine adds no wrapper of its own (the `FinishCtx`
-assembly and the `run_action` recursion compose in generically).
+([action.rs](../../src/machine/core/kfunction/action.rs)) — an open composition surface
+where each builtin writes its own closure. The engine adds no wrapper of its own: the
+`FinishCtx` assembly and the `run_action` recursion compose in generically, at whichever
+tier the builtin's own closure sits on.
 
-## Open work
+- A **catch** finish (`CatchFn`) is single-tier and bumped. It erases at the builtin
+  construction site into the region of the frame the park installs under; `Action::catch`
+  names that host as a `RegionBrand` rather than a bare allocator, so a step-scratch host
+  — dangling at the next drain pop — is unrepresentable. Both catching builtins
+  ([TRY](../../src/builtins/try_with.rs), [CATCH](../../src/builtins/catch.rs)) carry
+  `Copy` captures, so a recovery costs no heap allocation and there is no owning twin to
+  pick between.
+- An **await** finish (`AwaitContinue`) is the one builtin surface that stays boxed: the
+  binder finishes riding it own their staged declaration state. It fires on no steady
+  tail-loop path.
 
-- **Builtin action continuations**
-  ([roadmap/reduce_allocs/builtin-action-continuations.md](../../roadmap/reduce_allocs/builtin-action-continuations.md)):
-  moving the builtin `Action` surface off the Boxed tier.
+The rest of the `Action` surface carries no continuation of its own. A tail's leading
+statements ride as a region slice rather than an owned `Vec`; the block seed a MATCH or
+TRY arm binds `it` through is a stack `impl FnOnce` that runs before `block_tail`
+returns; and the leading-statements finish the engine synthesizes reads its block frame
+back off the park state instead of capturing it, so it is `Copy` and bumped like every
+other engine-side finish.
+
+The step's binding writes ride the same discipline: a body's `WriteOp` run is a
+`BumpVec` on the step arena, minted only once a body actually decides a write and handed
+back when the drain pops. See
+[classify-and-apply.md § The step's binding writes](classify-and-apply.md#the-steps-binding-writes).

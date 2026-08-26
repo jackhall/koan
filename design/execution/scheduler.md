@@ -12,8 +12,8 @@ one engine that serves both build-time and run-time execution. Part of the
 The scheduler models dispatch itself as a node. There is one node shape — a
 [`NodeWork`](../../src/machine/execute/nodes.rs) struct that waits on a set of deps
 and then runs a [`NodeContinuation`](../../src/machine/execute/outcome.rs) — the
-slot's declared-return obligation as `Copy` data beside one erased call target —
-over their resolved terminals. A top-level expression enters as a *dispatch decide*: a
+slot's [`ParkState`](../../src/machine/execute/obligation.rs) as plain data beside one
+erased call target — over their resolved terminals. A top-level expression enters as a *dispatch decide*: a
 `NodeWork` whose continuation classifies the expression on first poll
 ([`run_program`](../../src/machine/execute/harness.rs) collapses to "add one
 dispatch decide per top-level statement"; the rest is dynamic). At run time a
@@ -134,10 +134,10 @@ data, and a single harness method applies them. The three pieces:
   *ambient*
   state — the active per-call frame, the run frame, the
   executing slot's lexical payload (scope handle + chain, projected from the
-  slot's anchor), and the slot's declared-return obligation
+  slot's anchor), and the slot's park state — its declared-return obligation
   (`Copy` data riding beside the tail chain's continuation,
   [continuations.md](continuations.md); its presence *is* the
-  contract-chain flag) — lives on the
+  contract-chain flag) plus a leading-carrying tail's block frame — lives on the
   host ([`ambient`](../../src/machine/execute/ambient.rs)), not the scheduler,
   which is a pure DAG runtime. [`Host::step`](../../src/machine/execute/harness.rs)
   is the drain callback: it opens

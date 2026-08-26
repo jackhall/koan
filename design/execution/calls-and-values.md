@@ -172,16 +172,15 @@ statements as dispatch nodes:
 - `MODULE` and `SIG` bodies enter through the dispatch harness's `InScope`
   fan-out
   ([`Host::apply`](../../src/machine/execute/harness.rs)), which splits
-  via the shared
-  [`split_body_statements`](../../src/machine/core/kfunction/body.rs) helper and
-  submits each statement through `enter_block`. The scheduler itself never
-  inspects AST shape — `split_body_statements` is the single source of truth for
-  the split.
-- FN, MATCH-arm, and TRY-arm bodies split via that same
-  [`split_body_statements`](../../src/machine/core/kfunction/body.rs) helper
-  (the all-`Expression` rule): the body's
+  via `split_working_body` and submits each statement through `enter_block`. The
+  scheduler itself never inspects AST shape:
+  [`KExpression::is_statement_block`](../../src/machine/model/ast.rs) is the single
+  source of truth for the all-`Expression` cutoff, and every splitter consults it.
+- FN, MATCH-arm, and TRY-arm bodies split under that same rule, through
+  [`split_leading_tail`](../../src/machine/core/kfunction/body.rs): the body's
   non-tail statements ride along as the `leading` field of an
-  [`Action::Tail`](../../src/machine/core/kfunction/action.rs), and the slot
+  [`Action::Tail`](../../src/machine/core/kfunction/action.rs) — a slice into the
+  host region, not an owned run — and the slot
   waits on them as deps before tail-replacing into the last statement.
   Its `block_entry` names the body/arm scope; the harness derives the chain
   indices and the tail's `body_index` from `block_entry` + `leading`. TCO is
