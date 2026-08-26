@@ -32,8 +32,8 @@ impl<'a> Rehomed<'a> {
     /// `Tagged`'s tag rides its own substrate's region for the same reason (`KObject::tagged`
     /// re-bumped it there).
     ///
-    /// The cost is one memcpy per string per container construction — what the `String::clone` in a
-    /// cell's `deep_clone` cost at these same sites before strings moved into the region.
+    /// The cost is one memcpy per string per container construction — the bytes land where the
+    /// container's own region can release them, so nothing walks them again to free them.
     pub(crate) fn mint(door: SubstrateDoor<'a, '_>, cell: Held<'a>) -> Self {
         Rehomed(match cell {
             Held::Object(KObject::KString(s)) => {

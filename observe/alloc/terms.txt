@@ -3,6 +3,19 @@
 # sweep file of the same SHA; `fixed` is the empty program's own absolute total —
 # startup and builtin seeding, which every shape carries
 # managed by tools/alloc_audit.py --baseline; newest first, capped to 5 sweeps
+2026-08-26 775bda38+ fixed 1052.00 367.00
+2026-08-26 775bda38+ step 41.00 0.00
+2026-08-26 775bda38+ leading_loop 49.00 0.00
+2026-08-26 775bda38+ try_loop 53.00 1.00
+2026-08-26 775bda38+ dispatch 13.89 1.00
+2026-08-26 775bda38+ scope_walk_depth2 27.81 2.00
+2026-08-26 775bda38+ scope_walk_depth10 27.72 2.00
+2026-08-26 775bda38+ scope_walk_scope -0.01 0.00
+2026-08-26 775bda38+ builtin_call 43.66 6.00
+2026-08-26 775bda38+ user_fn_params1 19.69 1.00
+2026-08-26 775bda38+ user_fn_params8 28.69 1.00
+2026-08-26 775bda38+ user_fn_parameter 1.29 0.00
+2026-08-26 775bda38+ tagged_construct 54.72 11.00
 2026-08-26 1deeb4c2+ fixed 1052.00 367.00
 2026-08-26 1deeb4c2+ step 41.00 0.00
 2026-08-26 1deeb4c2+ leading_loop 49.00 0.00
@@ -55,16 +68,3 @@
 2026-08-26 0ededd14+ user_fn_params8 28.69 1.00
 2026-08-26 0ededd14+ user_fn_parameter 1.29 0.00
 2026-08-26 0ededd14+ tagged_construct 54.72 11.00
-2026-08-26 32fc2885+ fixed 1052.00 367.00
-2026-08-26 32fc2885+ step 41.00 0.00
-2026-08-26 32fc2885+ leading_loop 49.00 0.00
-2026-08-26 32fc2885+ try_loop 53.00 1.00
-2026-08-26 32fc2885+ dispatch 13.89 1.00
-2026-08-26 32fc2885+ scope_walk_depth2 27.81 2.00
-2026-08-26 32fc2885+ scope_walk_depth10 27.72 2.00
-2026-08-26 32fc2885+ scope_walk_scope -0.01 0.00
-2026-08-26 32fc2885+ builtin_call 43.66 6.00
-2026-08-26 32fc2885+ user_fn_params1 19.69 1.00
-2026-08-26 32fc2885+ user_fn_params8 28.69 1.00
-2026-08-26 32fc2885+ user_fn_parameter 1.29 0.00
-2026-08-26 32fc2885+ tagged_construct 55.72 11.00
