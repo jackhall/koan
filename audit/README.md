@@ -63,6 +63,30 @@ Three targets `#[path]`-include the one file:
 - `tests/allocation_baseline.rs`, the regression test below. It needs no feature flag, which
   is what keeps `counting_alloc.rs` in the default verify slate.
 
+## The attribution profiler
+
+The counter prices a term; the `dhat` cargo feature names the sites a term is made of. It
+installs [dhat-rs](https://docs.rs/dhat)'s allocator as the binary's global allocator, which
+records an untrimmed backtrace per allocation and writes `dhat-heap.json` after the run. Run
+one shape at two sizes and difference the block counts per site with
+`tools/dhat_diff.py` — a site whose count scales with the size difference is on the per-unit
+path, and everything constant (startup, seeding) cancels:
+
+```sh
+cargo run --features dhat -- audit/shapes/tail_loop_steps10.koan && mv dhat-heap.json small.json
+cargo run --features dhat -- audit/shapes/tail_loop_steps100.koan && mv dhat-heap.json big.json
+python3 tools/dhat_diff.py small.json big.json 90                      # site table, per step
+python3 tools/dhat_diff.py small.json big.json 90 --detail 'arm_tail'  # full stacks
+```
+
+The two instruments are deliberately separate features. The counter *wraps* mimalloc, so a
+counted build allocates through the shipped allocator and its wall-clock stays comparable; the
+dhat allocator must *own* the global slot (it delegates to the system allocator) and pays a
+backtrace per allocation, so its runs are neither count- nor time-comparable with the sweep's.
+A `compile_error!` in `src/main.rs` guards the pair. The counter's figures are the currency of
+`observe/alloc/`; a dhat profile is the instrument to reach for when a term moves and the
+question is *where*.
+
 ## The recorded figures
 
 ```sh

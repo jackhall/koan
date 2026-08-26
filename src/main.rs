@@ -13,7 +13,17 @@ use koan::machine::interpret_with_writer_path;
 #[path = "../audit/counting_alloc.rs"]
 mod counting_alloc;
 
-#[cfg(all(not(feature = "alloc-count"), not(miri)))]
+// The dhat attribution profiler must own the global allocator outright (it wraps the system
+// allocator and records a backtrace per allocation), so it cannot compose with the delegating
+// counter the way the counter composes with mimalloc.
+#[cfg(all(feature = "dhat", feature = "alloc-count"))]
+compile_error!("`dhat` and `alloc-count` both claim the global allocator; enable exactly one");
+
+#[cfg(feature = "dhat")]
+#[global_allocator]
+static GLOBAL: dhat::Alloc = dhat::Alloc;
+
+#[cfg(all(not(feature = "alloc-count"), not(miri), not(feature = "dhat")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -31,6 +41,10 @@ static GLOBAL: counting_alloc::Counting<std::alloc::System> =
 /// stdin, then parse, dispatch, and execute it via `interpret_with_writer_path` so error
 /// frames can render real `path:line:col` locations.
 fn main() -> ExitCode {
+    // Untrimmed backtraces: attribution quality over speed — a profiled run exists to name
+    // allocation sites, and trimming hides the koan frames under deep allocator plumbing.
+    #[cfg(feature = "dhat")]
+    let _profiler = dhat::Profiler::builder().trim_backtraces(None).build();
     let (source, path): (String, Option<String>) = match std::env::args().nth(1) {
         Some(path) => match std::fs::read_to_string(&path) {
             Ok(s) => (s, Some(path)),

@@ -38,6 +38,7 @@ region-audit = ["workgraph/test-hooks"]
 # unwrapped — and because the counter wraps rather than replaces, the counted build and
 # the shipped build allocate through the same allocator.
 alloc-count = []
+dhat = ["dep:dhat"]
 
 [dependencies]
 indexmap = "2"
@@ -60,6 +61,7 @@ smallvec = { version = "1.15", features = ["union"] }
 # feature swaps the default shared pointer to an atomic one, and the registry is single-threaded
 # per run frame, so it instantiates the map over `archery::RcK` instead.
 imbl = "7"
+dhat = { version = "0.3.3", optional = true }
 
 [dev-dependencies]
 workgraph = { path = "workgraph", features = ["test-hooks"] }

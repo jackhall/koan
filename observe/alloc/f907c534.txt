@@ -1,4 +1,4 @@
-# allocation audit sweep, measured 2026-08-25 at ad1c46e8 (uncommitted changes in the tree)
+# allocation audit sweep, measured 2026-08-25 at f907c534 (uncommitted changes in the tree)
 # columns: shape  allocations  symbols  bracketed
 # whole-program totals through the counting allocator; `bracketed` is the same run
 # without interpreter startup, from tests/allocation_baseline.rs, `-` where no test
