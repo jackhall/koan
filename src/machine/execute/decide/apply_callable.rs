@@ -12,7 +12,7 @@ use crate::machine::model::labels::{BinderSymbol, LabelInterner, Symbol, TypeSym
 use crate::machine::model::render_label;
 use crate::machine::model::{Carried, Record, TypeMemberMap, constructor_param_names};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
-use crate::machine::model::{KType, NodeSchema, TypeNode, TypeRegistry};
+use crate::machine::model::{KType, NodeSchema, TypeNode};
 use crate::machine::{KError, KErrorKind};
 use crate::scheduler::Deps;
 use crate::source::Spanned;
@@ -130,8 +130,8 @@ fn apply_constructor<'step>(
     let brand = ctx.current_scope().brand();
     // A user `UNION` binds an anonymous union of per-variant newtype members. `Maybe Some`
     // names the variant type; `Maybe (Some v)` newtype-constructs the named member.
-    if let TypeNode::Union { members } = ctx.types().node(identity) {
-        return apply_union_construct(ctx, members, expr);
+    if ctx.types().is_union(identity) {
+        return apply_union_construct(ctx, identity, expr);
     }
     // Named type application precedes every construction arm: on a type-constructor head the
     // record body is a type-argument list, not a value, and the two surfaces are disjoint.
@@ -395,7 +395,7 @@ fn quoted_list(names: &[&str]) -> String {
 /// symbol through the shared `TaggedByTag` path.
 fn apply_union_construct<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
-    members: Vec<KType>,
+    union: KType,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     if let [
@@ -408,9 +408,9 @@ fn apply_union_construct<'step>(
         // The token names a variant, so it probes the members by bare symbol bits — the
         // recovery door. A bare-token reference is a lookup, not a declaration, and the miss
         // renders the token through the interner the parser recorded it in.
-        return match union_member(&members, t.symbol(), ctx.types()) {
+        return match ctx.types().union_member_named(union, t.symbol()) {
             Some(member) => Outcome::Done(Ok(ctx.step_ctx().type_carried(member))),
-            None => Outcome::Done(Err(unknown_variant_error(&members, *t, ctx.registries()))),
+            None => Outcome::Done(Err(unknown_variant_error(union, *t, ctx.registries()))),
         };
     }
     // The tag names which member; the built value's `identity` is that member's own sealed handle.
@@ -420,7 +420,7 @@ fn apply_union_construct<'step>(
                 Ok(v) => v,
                 Err(e) => return Outcome::Done(Err(e)),
             };
-            match union_variant(&members, tag.symbol(), ctx.types()) {
+            match ctx.types().union_variant_target(union, tag.symbol()) {
                 Some((member, expected)) => constructors::construct_tagged(
                     ctx.current_scope().brand(),
                     member,
@@ -429,7 +429,7 @@ fn apply_union_construct<'step>(
                     value_part,
                     ctx.scratch(),
                 ),
-                None => Outcome::Done(Err(unknown_variant_error(&members, tag, ctx.registries()))),
+                None => Outcome::Done(Err(unknown_variant_error(union, tag, ctx.registries()))),
             }
         }
         Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY, &ctx.registries().labels),
@@ -437,57 +437,27 @@ fn apply_union_construct<'step>(
     }
 }
 
-/// The union member that is a **constructible tagged variant** named `name`, paired with the
-/// payload type its declaration gives the tag. A variant is a sealed `NewType` member, so its
-/// declared payload is a direct repr read — the same value a variant-schema table would map the tag
-/// to, with no table to build. A member declaring any other schema (a `NEWTYPE (Type AS Wrapper)`
-/// constructor family) names no tag payload and so is no variant: it misses here and surfaces
-/// through [`unknown_variant_error`], which lists the variants the union does admit.
-fn union_variant(members: &[KType], name: Symbol, types: &TypeRegistry) -> Option<(KType, KType)> {
-    members.iter().copied().find_map(|m| match types.node(m) {
-        TypeNode::SetMember {
-            name: member_name,
-            schema: NodeSchema::NewType(repr),
-            ..
-        } if member_name.symbol() == name => Some((m, repr)),
-        _ => None,
-    })
-}
-
-/// The union member named `name`, whatever schema it declares — the bare-token reference lane,
-/// where naming a member yields its type value and a constructor family is as referenceable as a
-/// variant. [`union_variant`] is the narrower construction-side probe. `name` probes by bare symbol
-/// bits: the token arrives from a reference site with no class attached, and the member nodes it
-/// is matched against carry the `TypeSymbol` their declaration minted.
-fn union_member(members: &[KType], name: Symbol, types: &TypeRegistry) -> Option<KType> {
-    members.iter().copied().find(|m| match types.node(*m) {
-        TypeNode::SetMember {
-            name: member_name, ..
-        } => member_name.symbol() == name,
-        _ => false,
-    })
-}
-
 /// A schema error for a name that is not one of the union's variants, listing the members. `name`
 /// is the probed tag's **source text**, so the message names what the expression spelled even when
 /// nothing interned it.
-fn unknown_variant_error(
-    members: &[KType],
-    name: TypeSymbol,
-    registries: &RunRegistries,
-) -> KError {
+fn unknown_variant_error(union: KType, name: TypeSymbol, registries: &RunRegistries) -> KError {
     KError::new(KErrorKind::ShapeError(format!(
         "`{}` is not a variant of the union (variants: {})",
         render_label(name.symbol(), registries),
-        union_member_names(members, registries),
+        union_member_names(union, registries),
     )))
 }
 
 /// Sorted, comma-joined names of the union's constructible variants — its sealed `NewType`
 /// members. A member declaring any other schema names no tag payload, so it is no variant and goes
 /// unlisted. Each name resolves through the run's label interner, which recorded it at its
-/// declaration.
-fn union_member_names(members: &[KType], registries: &RunRegistries) -> String {
+/// declaration. A cold diagnostic path, so it reads the member list out of the node by clone
+/// rather than through the construction lane's allocation-free probes.
+fn union_member_names(union: KType, registries: &RunRegistries) -> String {
+    let members = match registries.types.node(union) {
+        TypeNode::Union { members } => members,
+        _ => Vec::new(),
+    };
     let mut names: Vec<String> = members
         .iter()
         .filter_map(|m| match registries.types.node(*m) {
