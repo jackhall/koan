@@ -2,7 +2,7 @@
 //!
 //! [`Scheduler`](crate::scheduler::Scheduler) is a workload-independent DAG of dispatch/execution
 //! work, so the values that float across a single step — the active per-call frame, the run frame,
-//! the executing slot's opaque payload, the declared-return obligation — live here on the driver's
+//! the executing slot's opaque payload, the park state — live here on the driver's
 //! [`Host`](super::harness::Host), the [`KoanWorkload`](super::harness::KoanWorkload) side of the
 //! split and so free to name concrete Koan types. The host brackets this context per step
 //! ([`Host::with_slot_step`]); step code reads it back through the methods below.
@@ -18,7 +18,7 @@ use crate::machine::{CallFrame, RunWriter};
 
 use super::harness::Host;
 use super::nodes::NodePayload;
-use super::obligation::ReturnObligation;
+use super::obligation::{ParkState, ReturnObligation};
 
 /// The ambient per-step context the host carries while a decided
 /// [`Outcome`](super::outcome::Outcome) is realized.
@@ -35,10 +35,11 @@ pub(in crate::machine::execute) struct AmbientContext {
     /// The executing slot's opaque workload payload (scope handle + lexical chain). `None` between
     /// slot steps.
     active_payload: Option<NodePayload>,
-    /// The declared-return obligation the executing slot carries: the slot is a tail call *within*
-    /// an established chain exactly when this is `Some`. Held behind a `RefCell` because the
-    /// depositor reaches it through `&AmbientContext` (via [`DecideCtx`](super::decide::DecideCtx)).
-    active_obligation: RefCell<Option<ReturnObligation>>,
+    /// The park state the executing slot carries: the declared-return obligation (the slot is a
+    /// tail call *within* an established chain exactly when that is `Some`) and a leading-carrying
+    /// tail's block frame. Held behind a `RefCell` because the depositors reach it through
+    /// `&AmbientContext` (via [`DecideCtx`](super::decide::DecideCtx)).
+    active_park: RefCell<ParkState>,
 }
 
 /// The previous ambient values a slot step displaces — restored by [`Host::with_slot_step`] on
@@ -46,7 +47,7 @@ pub(in crate::machine::execute) struct AmbientContext {
 struct SlotStepSave {
     prev_frame: Option<Rc<CallFrame>>,
     prev_payload: Option<NodePayload>,
-    prev_obligation: Option<ReturnObligation>,
+    prev_park: ParkState,
 }
 
 impl AmbientContext {
@@ -81,18 +82,48 @@ impl AmbientContext {
             .expect("run frame (and its writer) established before any step")
     }
 
-    pub(in crate::machine::execute) fn deposit_obligation(&self, obligation: ReturnObligation) {
-        *self.active_obligation.borrow_mut() = Some(obligation);
+    /// Install a woken slot's whole park state — the obligation its park established and the block
+    /// frame it kept alive — as the ambient state for this step.
+    pub(in crate::machine::execute) fn deposit_park(&self, park: ParkState) {
+        *self.active_park.borrow_mut() = park;
     }
 
     /// Take the active obligation out, leaving the slot obligation-free.
     pub(in crate::machine::execute) fn take_obligation(&self) -> Option<ReturnObligation> {
-        self.active_obligation.borrow_mut().take()
+        self.active_park.borrow_mut().obligation.take()
     }
 
     /// Keep-first and park propagation read copies onward while the current step keeps its own.
     pub(in crate::machine::execute) fn current_obligation(&self) -> Option<ReturnObligation> {
-        *self.active_obligation.borrow()
+        self.active_park.borrow().obligation
+    }
+
+    /// Hand the block frame a leading-carrying tail is about to park on to the park itself, so the
+    /// finish reads it back at wake instead of capturing it. One deposit is spent by exactly one
+    /// park: the decide deposits it immediately before returning its `Outcome::Park`, and the
+    /// finish that park wakes takes it back out.
+    pub(in crate::machine::execute) fn deposit_block_frame(&self, frame: Rc<CallFrame>) {
+        let mut park = self.active_park.borrow_mut();
+        debug_assert!(
+            park.block_frame.is_none(),
+            "a deposited block frame is taken by the finish its park wakes"
+        );
+        park.block_frame = Some(frame);
+    }
+
+    /// Take the parked block frame out — read at wake by the finish the deposit was made for, and
+    /// at park install by the continuation that carries it across the dormancy.
+    pub(in crate::machine::execute) fn take_block_frame(&self) -> Option<Rc<CallFrame>> {
+        self.active_park.borrow_mut().block_frame.take()
+    }
+
+    /// The park state a replacement or a fresh park carries onward: the chain's established
+    /// obligation, plus a block frame this step's decide just deposited.
+    pub(in crate::machine::execute) fn park_state(&self) -> ParkState {
+        ParkState {
+            obligation: self.current_obligation(),
+            block_frame: self.take_block_frame(),
+        }
     }
 
     pub(in crate::machine::execute) fn has_run_frame(&self) -> bool {
@@ -124,8 +155,8 @@ impl AmbientContext {
         (cart, framed)
     }
 
-    /// Install the slot's frame/payload for one step and reset the obligation slot to empty (the
-    /// step's wrapper deposits its own), returning the displaced values.
+    /// Install the slot's frame/payload for one step and reset the park state to empty (the step's
+    /// wrapper deposits its own), returning the displaced values.
     fn install_slot_step(
         &mut self,
         node_frame: Rc<CallFrame>,
@@ -134,7 +165,7 @@ impl AmbientContext {
         SlotStepSave {
             prev_frame: self.active_frame.replace(node_frame),
             prev_payload: self.active_payload.replace(node_payload),
-            prev_obligation: self.active_obligation.get_mut().take(),
+            prev_park: std::mem::take(self.active_park.get_mut()),
         }
     }
 
@@ -142,7 +173,7 @@ impl AmbientContext {
     fn restore_slot_step(&mut self, save: SlotStepSave) {
         self.active_frame = save.prev_frame;
         self.active_payload = save.prev_payload;
-        *self.active_obligation.get_mut() = save.prev_obligation;
+        *self.active_park.get_mut() = save.prev_park;
     }
 }
 

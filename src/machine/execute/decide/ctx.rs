@@ -23,7 +23,7 @@ use crate::witnessed::{BumpAllocator, BumpVec};
 
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
-use super::super::obligation::ReturnObligation;
+use super::super::obligation::{ParkState, ReturnObligation};
 use super::resolve::{Resolution, resolve_name};
 
 /// Run `f` with a [`NodeScope`] handle's scope opened at a `for<'b>` brand. A `Yoked` slot
@@ -209,11 +209,10 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
         StepAllocator::over_frame(self.dest_frame())
     }
 
-    /// Deposit the slot's declared-return obligation into the ambient slot-step state — the reach
-    /// the step runs on its stored continuation's `obligation` field, carrying the checker down the
-    /// tail chain.
-    pub(in crate::machine::execute) fn deposit_obligation(&self, obligation: ReturnObligation) {
-        self.ambient.deposit_obligation(obligation)
+    /// Install a woken slot's whole park state as this step's ambient state — the obligation its
+    /// park established, plus a leading-carrying tail's block frame.
+    pub(in crate::machine::execute) fn deposit_park(&self, park: ParkState) {
+        self.ambient.deposit_park(park)
     }
 
     /// Read the chain's established obligation without removing it — keep-first and park
@@ -221,6 +220,19 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
     /// `.is_some()` of it to detect a tail call within an established chain.
     pub(in crate::machine::execute) fn current_obligation(&self) -> Option<ReturnObligation> {
         self.ambient.current_obligation()
+    }
+
+    /// Hand the block frame this decide is about to park on to the park itself
+    /// ([`AmbientContext::deposit_block_frame`]), so the finish reads it back at wake rather than
+    /// capturing it — the difference between an owning finish and a `Copy` one.
+    pub(in crate::machine::execute) fn deposit_block_frame(&self, frame: Rc<CallFrame>) {
+        self.ambient.deposit_block_frame(frame)
+    }
+
+    /// Take back the block frame the park that woke this finish deposited. Spent here: the frame
+    /// rides onward as the rebuilt placement pair, so nothing re-reads it.
+    pub(in crate::machine::execute) fn take_parked_block_frame(&self) -> Option<Rc<CallFrame>> {
+        self.ambient.take_block_frame()
     }
 
     /// Build the per-part `bare_outcomes` cache: one [`resolve_name`] per bare-name part, `None`

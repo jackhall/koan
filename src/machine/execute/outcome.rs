@@ -39,7 +39,7 @@ use super::decide::{DecideCtx, DepRequest, propagate_dep_error};
 use super::harness::KoanWorkload;
 use super::nodes::WorkLabel;
 use super::nodes::{ChainOp, NodeWork};
-use super::obligation::ReturnObligation;
+use super::obligation::{ParkState, ReturnObligation};
 use crate::machine::core::BlockRequest;
 
 /// What a node's step wants the harness to do — the single currency every producer and finish
@@ -421,8 +421,9 @@ impl<'step> Await<'step> {
         }
     }
 
-    /// [`Self::finish_terminal`]'s owning twin, for the finishes that stay on the boxed tier: a
-    /// builtin `Action`'s lowering and the leading-statements block frame, whose captures own drop
+    /// [`Self::finish_terminal`]'s owning twin, for the finishes that stay on the boxed tier: an
+    /// awaiting builtin `Action`'s lowering, whose
+    /// [`AwaitContinue::Boxed`](crate::machine::core::AwaitContinue) arm owns captures with drop
     /// glue.
     pub(in crate::machine::execute) fn finish_terminal_boxed<F>(self, finish: F) -> Outcome<'step>
     where
@@ -449,26 +450,40 @@ impl<'step> Await<'step> {
 pub(in crate::machine::execute) use crate::machine::core::DepTerminal;
 
 /// The one continuation every node runs when its deps resolve — the unified currency
-/// [`NodeWork`](super::nodes::NodeWork) carries: the slot's declared-return `obligation` as plain
-/// `Copy` data beside a two-tier `call` target. The step deposits the obligation into the ambient
-/// slot-step state and then runs the call, so carrying a checker down a tail chain costs a field
-/// rather than a wrapping closure.
+/// [`NodeWork`](super::nodes::NodeWork) carries: the slot's [`ParkState`] as plain data beside a
+/// two-tier `call` target. The step deposits that state into the ambient slot-step context and then
+/// runs the call, so carrying a checker down a tail chain — or a block frame across a park — costs
+/// a field rather than a wrapping closure.
 ///
 /// Dep terminals reach the call in submission order, and an errored dep is *not* short-circuited
 /// here: the closure decides. Per-family behaviour — the dep-error gate, the witnessed projection,
 /// the catch lift — composes generically at the construction site ([`gated`], [`sealed_done`],
 /// [`catching`], [`decide_only`]) and crosses into storage through a single erasure.
 pub(in crate::machine::execute) struct NodeContinuation<'a> {
-    pub(in crate::machine::execute) obligation: Option<ReturnObligation>,
+    pub(in crate::machine::execute) park: ParkState,
     pub(in crate::machine::execute) call: ContinuationCall<'a>,
 }
 
 impl<'a> NodeContinuation<'a> {
+    /// The replacement door: a continuation that carries an obligation and no block frame — only a
+    /// park keeps a frame, and a replacement rebuilds its placement from its own outcome.
     pub(in crate::machine::execute) fn new(
         obligation: Option<ReturnObligation>,
         call: ContinuationCall<'a>,
     ) -> Self {
-        NodeContinuation { obligation, call }
+        NodeContinuation {
+            park: ParkState {
+                obligation,
+                block_frame: None,
+            },
+            call,
+        }
+    }
+
+    /// The park door: the whole ambient state crosses the dormancy, so the woken step re-deposits
+    /// what its parking step established.
+    pub(in crate::machine::execute) fn parked(park: ParkState, call: ContinuationCall<'a>) -> Self {
+        NodeContinuation { park, call }
     }
 }
 

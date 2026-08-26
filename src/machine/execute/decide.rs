@@ -582,11 +582,11 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     body_index,
                 );
             }
-            // Decompose the placement pair here, before the park: the finish's capture set is then
-            // `Copy` data plus the one block-frame `Rc` that keeps the block alive across it —
-            // nothing else holds the frame — and the pair is rebuilt from those locals at wake.
-            // `FreshTail` installs its cart only at apply time, after the leading statements would
-            // already have fanned out, so a leading-carrying tail cannot ride it.
+            // Decompose the placement pair here, before the park: the block frame — the one thing
+            // keeping the block alive across the park, since nothing else holds it — rides the
+            // park's own state, leaving the finish a `Copy` capture set that rebuilds the pair from
+            // it at wake. `FreshTail` installs its cart only at apply time, after the leading
+            // statements would already have fanned out, so a leading-carrying tail cannot ride it.
             let (fresh_child, block_frame, overlay) = match (frame_placement, block_entry) {
                 (FramePlacement::FreshChild { frame }, BlockEntry::FrameScope(entry)) => {
                     debug_assert!(
@@ -613,6 +613,13 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 (None, Some(overlay)) => BodyPlacement::Overlay(overlay),
                 (None, None) => unreachable!("a leading-carrying tail enters a block"),
             };
+            // The frame crosses the dormancy as park state rather than as a capture: that is what
+            // makes the finish `Copy`, so it erases onto the bumped tier and the park costs no heap
+            // allocation. The apply takes the deposit off the ambient context when it installs the
+            // park below, and the woken step re-deposits it for the finish.
+            if let Some(frame) = &block_frame {
+                view.deposit_block_frame(Rc::clone(frame));
+            }
             let finish = move |view: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
                 let contract = match contract {
                     TailContract::Eager(contract) => contract,
@@ -650,7 +657,10 @@ pub(in crate::machine::execute) fn run_action<'step>(
                         })
                     }
                 };
-                let (frame_placement, block_entry) = match (block_frame, overlay) {
+                // The park deposited the block frame; taking it here spends the deposit, and its
+                // absence on a frame-entering tail is a wiring bug, not a case to fall back on.
+                let (frame_placement, block_entry) = match (view.take_parked_block_frame(), overlay)
+                {
                     (Some(frame), _) => (
                         if fresh_child {
                             FramePlacement::FreshChild {
@@ -665,7 +675,9 @@ pub(in crate::machine::execute) fn run_action<'step>(
                         (FramePlacement::Inherit, BlockEntry::Overlay(overlay))
                     }
                     (None, None) => {
-                        unreachable!("the pre-park decomposition emits a block frame or an overlay")
+                        unreachable!(
+                            "the pre-park decomposition deposits a block frame or names an overlay"
+                        )
                     }
                 };
                 // Against this finish's own wake-time view: the park re-deposited the established
@@ -685,7 +697,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 placement,
             })
             .error_frame(dep_error_frame())
-            .finish_terminal_boxed(finish)
+            .finish_terminal(view.current_scope().brand(), finish)
         }
 
         ActionKind::AwaitDeps { deps, finish } => {

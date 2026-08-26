@@ -426,13 +426,13 @@ impl<'run> Host<'run> {
                             host.program,
                             scratch,
                         );
-                        // The slot's declared-return obligation rides its continuation as data;
-                        // depositing it here, inside the ambient bracket and before the closure
-                        // runs, is what makes the checker visible for this step's whole extent.
-                        if let Some(obligation) = continuation.obligation {
-                            view.deposit_obligation(obligation);
-                        }
-                        let outcome = match continuation.call {
+                        // The slot's park state rides its continuation as data; depositing it here,
+                        // inside the ambient bracket and before the closure runs, is what makes the
+                        // declared-return checker — and a leading-carrying tail's block frame —
+                        // visible for this step's whole extent.
+                        let super::outcome::NodeContinuation { park, call } = continuation;
+                        view.deposit_park(park);
+                        let outcome = match call {
                             ContinuationCall::Bumped(call) => call(&view, &dep_sources, id),
                             ContinuationCall::Boxed(call) => call(&view, &dep_sources, id),
                         };
@@ -626,9 +626,10 @@ impl<'run> Host<'run> {
                         finish
                     }
                 };
-                // Carry the ambient obligation across the park as data, so the resumed step
-                // re-deposits it and its declared-return check still fires.
-                let work = NodeContinuation::new(self.ambient.current_obligation(), call);
+                // Carry the ambient park state across the park as data, so the resumed step
+                // re-deposits it: its declared-return check still fires, and a leading-carrying
+                // tail's block frame reaches the finish that rebuilds its placement.
+                let work = NodeContinuation::parked(self.ambient.park_state(), call);
                 // The degenerate replace: same cart, scope, and chain, so no anchor swaps in —
                 // and with it the slot keeps the `WorkLabel` its submission minted.
                 replace_verdict(NodeWork::new(work), None)
