@@ -51,7 +51,7 @@ pub fn reset_resolve_dispatch_entry_count() {
 /// into the call chain [`reseal`](crate::witnessed::Opened::reseal)s it back to rest.
 pub struct Resolved<'step> {
     pub function: OpenedFunction<'step>,
-    pub slots: ClassifiedSlots,
+    pub slots: ClassifiedSlots<'step>,
 }
 
 pub enum DispatchOutcome<'step> {
@@ -60,7 +60,7 @@ pub enum DispatchOutcome<'step> {
     Deferred,
     /// Distinct from `Deferred`: waits on existing producers (forward-reference placeholders, or a
     /// claim on `key`) without scheduling new work.
-    ParkOnProducers(Vec<ProducerId>),
+    ParkOnProducers(BumpVec<'step, ProducerId>),
     /// A bare-name arg resolves to nothing — no binding and no placeholder. The unbound name is the
     /// precise cause, so it surfaces here rather than as a dispatch miss.
     UnboundName(String),
@@ -76,22 +76,24 @@ impl<'step> Scope<'step> {
     /// and an empty `bare_outcomes` reverts admission to shape-only `arg.matches`.
     ///
     /// `scratch` hosts every buffer the walk builds — the per-scope overload copy-out, the opened
-    /// candidates, and the two pick buffers. None of them escapes the call, so the walk's cost is
+    /// candidates, the two pick buffers, and the outcome's own lists. It is the step's own arena
+    /// (`ctx.scratch()`), because the picked candidate's classification buckets and a park's
+    /// producer list ride out of the walk inside [`DispatchOutcome`]. The walk's cost stays
     /// independent of how many scopes it visits: the bytes are the drain's, reclaimed wholesale at
-    /// the next pop. Its lifetime is the buffers' own; nothing here needs `'step`.
+    /// the next pop.
     pub(crate) fn resolve_dispatch<'e>(
         &self,
         expr: &WorkingExpression<'e>,
         chain: Option<&LexicalFrame>,
         bare_outcomes: &[Option<Resolution>],
         registries: &RunRegistries,
-        scratch: BumpAllocator<'_>,
+        scratch: BumpAllocator<'step>,
     ) -> DispatchOutcome<'step> {
         #[cfg(test)]
         RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(c.get() + 1));
         // Which overload wins can depend on the carried type a still-finalizing producer has yet to
         // land, so committing a pick before it does would make dispatch a function of drain order.
-        let parked = parked_producers(expr, bare_outcomes);
+        let parked = parked_producers(expr, bare_outcomes, scratch);
         if !parked.is_empty() {
             return DispatchOutcome::ParkOnProducers(parked);
         }
@@ -148,12 +150,16 @@ impl<'step> Scope<'step> {
 ///
 /// A non-binder expression has no exemptions: its `Type`-token operands wait here, on exactly the
 /// producers the type-resolution walk would park on downstream.
-fn parked_producers(
+fn parked_producers<'s>(
     expr: &WorkingExpression<'_>,
     bare_outcomes: &[Option<Resolution>],
-) -> Vec<ProducerId> {
+    scratch: BumpAllocator<'s>,
+) -> BumpVec<'s, ProducerId> {
     let name_slot = expr.binder_name_slot();
-    let mut producers: Vec<ProducerId> = Vec::new();
+    // A `Parked` entry can only come from `bare_outcomes[i]`, one per part, so the deduped list
+    // never exceeds the part count — see `decide_scope` on why the reserve must be exact.
+    let mut producers: BumpVec<'s, ProducerId> =
+        BumpVec::with_capacity_in(expr.parts.len(), scratch);
     for (i, (part, outcome)) in expr.parts.iter().zip(bare_outcomes).enumerate() {
         let Some(Resolution::Parked(p)) = outcome else {
             continue;
@@ -191,7 +197,7 @@ fn decide_scope<'step, 'e>(
     expr: &WorkingExpression<'e>,
     bare_outcomes: &[Option<Resolution>],
     registries: &RunRegistries,
-    scratch: BumpAllocator<'_>,
+    scratch: BumpAllocator<'step>,
 ) -> ScopeDecision<'step> {
     // Exact capacity, filled by a push loop: a grown bump buffer abandons its old bytes as dead
     // scratch, so every scratch-hosted buffer here is built at the length it will reach.
@@ -208,8 +214,11 @@ fn decide_scope<'step, 'e>(
     // ../../../../design/typing/scheduler.md). The relaxed pass's parked producers union in so a
     // single wake re-runs the full resolution.
     if let Some(pending) = lookup.pending {
-        let mut producers = vec![pending];
-        for p in bucket.relaxed_parked_producers(expr, bare_outcomes, registries) {
+        // The pending overload slot plus at most one distinct producer per part.
+        let mut producers: BumpVec<'step, ProducerId> =
+            BumpVec::with_capacity_in(expr.parts.len() + 1, scratch);
+        producers.push(pending);
+        for p in bucket.relaxed_parked_producers(expr, bare_outcomes, registries, scratch) {
             if !producers.contains(&p) {
                 producers.push(p);
             }
@@ -222,6 +231,7 @@ fn decide_scope<'step, 'e>(
                 scope.open_function(&lookup.overloads[index]),
                 expr,
                 registries,
+                scratch,
             )))
         }
         // A tie may break once an unevaluated eager part lands: the typed `Spliced(List …)`
@@ -232,7 +242,7 @@ fn decide_scope<'step, 'e>(
             ScopeDecision::Terminal(DispatchOutcome::Deferred)
         }
         PickPass::Tie(n) => ScopeDecision::Terminal(DispatchOutcome::Ambiguous(n)),
-        PickPass::Empty => decide_relaxed(&bucket, expr, bare_outcomes, registries),
+        PickPass::Empty => decide_relaxed(&bucket, expr, bare_outcomes, registries, scratch),
     }
 }
 
@@ -245,13 +255,22 @@ fn decide_relaxed<'step, 'e>(
     expr: &WorkingExpression<'e>,
     bare_outcomes: &[Option<Resolution>],
     registries: &RunRegistries,
+    scratch: BumpAllocator<'step>,
 ) -> ScopeDecision<'step> {
-    let mut parked: Vec<ProducerId> = Vec::new();
+    // Every `Lean::Parked` names a producer read out of `bare_outcomes`, one slot each, so the
+    // deduped accumulator is bounded by the part count no matter how many candidates lean.
+    let mut parked: BumpVec<'step, ProducerId> =
+        BumpVec::with_capacity_in(expr.parts.len(), scratch);
     let mut any_eager_lean = false;
     let mut dead_name: Option<String> = None;
     for f in bucket.candidates.iter() {
-        let Some(leans) = relaxed_admits(&f.value().signature, expr, bare_outcomes, registries)
-        else {
+        let Some(leans) = relaxed_admits(
+            &f.value().signature,
+            expr,
+            bare_outcomes,
+            registries,
+            scratch,
+        ) else {
             continue;
         };
         for lean in leans {
@@ -321,16 +340,24 @@ impl OverloadBucket<'_, '_> {
     }
 
     /// Deduped so a single wake re-runs the whole resolution.
-    fn relaxed_parked_producers<'e>(
+    fn relaxed_parked_producers<'e, 's>(
         &self,
         expr: &WorkingExpression<'e>,
         bare_outcomes: &[Option<Resolution>],
         registries: &RunRegistries,
-    ) -> Vec<ProducerId> {
-        let mut producers: Vec<ProducerId> = Vec::new();
+        scratch: BumpAllocator<'s>,
+    ) -> BumpVec<'s, ProducerId> {
+        // Bounded by the part count for the same reason as `decide_relaxed`'s accumulator.
+        let mut producers: BumpVec<'s, ProducerId> =
+            BumpVec::with_capacity_in(expr.parts.len(), scratch);
         for f in self.candidates.iter() {
-            let Some(leans) = relaxed_admits(&f.value().signature, expr, bare_outcomes, registries)
-            else {
+            let Some(leans) = relaxed_admits(
+                &f.value().signature,
+                expr,
+                bare_outcomes,
+                registries,
+                scratch,
+            ) else {
                 continue;
             };
             for lean in leans {
@@ -398,17 +425,20 @@ fn signature_admits_strict<'e>(
 /// "Leaned on" = strict rejects at the slot but the assume-satisfiable relaxation passes it. A
 /// `Parked` lean can only arise on a pre-admission-park-exempt slot, the park having already
 /// pre-empted every other `Parked` part.
-fn relaxed_admits<'e>(
+fn relaxed_admits<'e, 's>(
     sig: &ExpressionSignature<'_>,
     expr: &WorkingExpression<'e>,
     bare_outcomes: &[Option<Resolution>],
     registries: &RunRegistries,
-) -> Option<Vec<Lean>> {
+    scratch: BumpAllocator<'s>,
+) -> Option<BumpVec<'s, Lean>> {
     if sig.elements().len() != expr.parts.len() {
         return None;
     }
     let has_lazy_kexpr_slot = has_lazy_kexpr_slot(sig, expr);
-    let mut leans: Vec<Lean> = Vec::new();
+    // At most one lean per slot; reserved after the length check so a rejected candidate takes
+    // no scratch.
+    let mut leans: BumpVec<'s, Lean> = BumpVec::with_capacity_in(sig.elements().len(), scratch);
     for (i, (el, part)) in sig.elements().iter().zip(expr.parts).enumerate() {
         if slot_admits_strict(
             el,
@@ -546,8 +576,9 @@ fn build_resolved<'step, 'e>(
     picked: OpenedFunction<'step>,
     expr: &WorkingExpression<'e>,
     registries: &RunRegistries,
+    scratch: BumpAllocator<'step>,
 ) -> Resolved<'step> {
-    let slots = picked.value().classify_for_pick(expr, registries);
+    let slots = picked.value().classify_for_pick(expr, registries, scratch);
     Resolved {
         function: picked,
         slots,

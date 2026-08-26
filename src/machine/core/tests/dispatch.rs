@@ -13,7 +13,6 @@ use crate::machine::model::RunRegistries;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
 use crate::machine::model::{ExpressionPart, KLiteral, WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, DispatchOutcome, LexicalFrame};
-use crate::scheduler::drive_scratch;
 use crate::source::Spanned;
 
 /// Freeze a run of raw AST parts as the working node a dispatch entry receives — the shape
@@ -71,11 +70,15 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     // ONE was registered at `scope`'s BUILTIN index (0); root the chain there one past it
     // so the registration is visible.
     let chain = LexicalFrame::root(scope.id, 1);
-    match drive_scratch(|scratch| {
-        scope.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
-    }) {
+    match scope.resolve_dispatch(
+        &expr,
+        Some(&chain),
+        &[],
+        &registries,
+        scope.brand().allocator(),
+    ) {
         DispatchOutcome::Resolved(r) => {
-            assert_eq!(r.slots.wrap_indices, vec![0]);
+            assert_eq!(&*r.slots.wrap_indices, &[0]);
         }
         _ => panic!("expected Resolved for known overload"),
     }
@@ -113,9 +116,13 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
     // NA and AN were both registered at `scope`'s BUILTIN index (0); root the chain there
     // one past it so both are visible and can tie.
     let chain = LexicalFrame::root(scope.id, 1);
-    match drive_scratch(|scratch| {
-        scope.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
-    }) {
+    match scope.resolve_dispatch(
+        &expr,
+        Some(&chain),
+        &[],
+        &registries,
+        scope.brand().allocator(),
+    ) {
         DispatchOutcome::Ambiguous(n) => assert_eq!(n, 2),
         _ => panic!("expected Ambiguous(2) for tied overloads"),
     }
@@ -168,9 +175,13 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     // past it. `outer` is never named on this chain, so `OUTER` (index 1) stays visible
     // through the unmentioned-scope "fully visible" rule.
     let chain = LexicalFrame::root(inner.id, 1);
-    match drive_scratch(|scratch| {
-        inner.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
-    }) {
+    match inner.resolve_dispatch(
+        &expr,
+        Some(&chain),
+        &[],
+        &registries,
+        inner.brand().allocator(),
+    ) {
         DispatchOutcome::Ambiguous(_) => {}
         _ => panic!("inner ambiguity must surface, not fall through to outer's unique overload"),
     }
@@ -199,13 +210,13 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
     // it so the registration is visible.
     let chain = LexicalFrame::root(scope.id, 1);
     assert!(matches!(
-        drive_scratch(|scratch| scope.resolve_dispatch(
+        scope.resolve_dispatch(
             &expr,
             Some(&chain),
             &[],
             &registries,
-            scratch
-        )),
+            scope.brand().allocator()
+        ),
         DispatchOutcome::Unmatched
     ));
 }
@@ -246,13 +257,13 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     // it so the registration is visible.
     let chain = LexicalFrame::root(scope.id, 1);
     assert!(matches!(
-        drive_scratch(|scratch| scope.resolve_dispatch(
+        scope.resolve_dispatch(
             &expr,
             Some(&chain),
             &[],
             &registries,
-            scratch
-        )),
+            scope.brand().allocator()
+        ),
         DispatchOutcome::Deferred
     ));
 }
@@ -285,10 +296,14 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     // The pending overload was installed at `scope`'s BUILTIN index (0); root the chain
     // there one past it so it is visible.
     let chain = LexicalFrame::root(scope.id, 1);
-    match drive_scratch(|scratch| {
-        scope.resolve_dispatch(&bare, Some(&chain), &[], &registries, scratch)
-    }) {
-        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![ProducerId::for_test(42)]),
+    match scope.resolve_dispatch(
+        &bare,
+        Some(&chain),
+        &[],
+        &registries,
+        scope.brand().allocator(),
+    ) {
+        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(&*ps, &[ProducerId::for_test(42)]),
         other => panic!(
             "expected ParkOnProducers([42]) for matching bucket, got {}",
             std::any::type_name_of_val(&other)
@@ -306,13 +321,13 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     );
     assert!(
         matches!(
-            drive_scratch(|scratch| scope.resolve_dispatch(
+            scope.resolve_dispatch(
                 &multi,
                 Some(&chain),
                 &[],
                 &registries,
-                scratch
-            )),
+                scope.brand().allocator()
+            ),
             DispatchOutcome::Unmatched
         ),
         "different-bucket call must not park on a lead-keyword sibling",
@@ -367,12 +382,16 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     // `inner` one past it. `outer` is never named on this chain, so its strict Pick at
     // index 1 stays visible through the unmentioned-scope "fully visible" rule.
     let chain = LexicalFrame::root(inner.id, 1);
-    match drive_scratch(|scratch| {
-        inner.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
-    }) {
+    match inner.resolve_dispatch(
+        &expr,
+        Some(&chain),
+        &[],
+        &registries,
+        inner.brand().allocator(),
+    ) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
-            ps,
-            vec![ProducerId::for_test(55)],
+            &*ps,
+            &[ProducerId::for_test(55)],
             "inner pending must shadow the outer strict Pick",
         ),
         other => panic!(
@@ -428,13 +447,13 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
     let chain = LexicalFrame::root(inner.id, 1);
     assert!(
         matches!(
-            drive_scratch(|scratch| inner.resolve_dispatch(
+            inner.resolve_dispatch(
                 &expr,
                 Some(&chain),
                 &[],
                 &registries,
-                scratch
-            )),
+                inner.brand().allocator()
+            ),
             DispatchOutcome::Deferred
         ),
         "inner eager-lean must Defer at its scope, not fall through to outer",
@@ -476,9 +495,13 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     // one past it. `outer` is never named on this chain, so `outer_id` stays visible
     // through the unmentioned-scope "fully visible" rule.
     let chain = LexicalFrame::root(inner.id, 1);
-    match drive_scratch(|scratch| {
-        inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, &registries, scratch)
-    }) {
+    match inner.resolve_dispatch(
+        &expr,
+        Some(&chain),
+        &bare_outcomes,
+        &registries,
+        inner.brand().allocator(),
+    ) {
         DispatchOutcome::Resolved(r) => assert!(
             matches!(
                 r.function.value().signature.elements().first(),
@@ -550,12 +573,16 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     // finalizing overload below lands at index 3 too; root the chain on `scope` one past
     // the highest of those so every entry stays visible across both resolves below.
     let chain = LexicalFrame::root(scope.id, 4);
-    match drive_scratch(|scratch| {
-        scope.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
-    }) {
+    match scope.resolve_dispatch(
+        &expr,
+        Some(&chain),
+        &[],
+        &registries,
+        scope.brand().allocator(),
+    ) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
-            ps,
-            vec![ProducerId::for_test(77)],
+            &*ps,
+            &[ProducerId::for_test(77)],
             "finalized Pick must park on the in-flight pending sibling",
         ),
         other => panic!(
@@ -594,9 +621,13 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         )
         .expect("register sibling overload");
 
-    match drive_scratch(|scratch| {
-        scope.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
-    }) {
+    match scope.resolve_dispatch(
+        &expr,
+        Some(&chain),
+        &[],
+        &registries,
+        scope.brand().allocator(),
+    ) {
         DispatchOutcome::Resolved(_) => {}
         other => panic!(
             "bucket must resolve once the pending sibling finalizes; got {}",
@@ -665,13 +696,17 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     // The two sibling pending overloads finalize at indices 3 and 4; root the chain on
     // `scope` one past the higher so both stay visible.
     let chain = LexicalFrame::root(scope.id, 5);
-    match drive_scratch(|scratch| {
-        scope.resolve_dispatch(&expr, Some(&chain), &[], &registries, scratch)
-    }) {
+    match scope.resolve_dispatch(
+        &expr,
+        Some(&chain),
+        &[],
+        &registries,
+        scope.brand().allocator(),
+    ) {
         DispatchOutcome::ParkOnProducers(ps) => {
             assert_eq!(
-                ps,
-                vec![ProducerId::for_test(101)],
+                &*ps,
+                &[ProducerId::for_test(101)],
                 "consumer must park on earliest-index visible pending entry",
             );
         }
@@ -717,10 +752,14 @@ fn parked_bare_name_parks_before_any_pick() {
     let producer = ProducerId::for_test(7);
     let bare_outcomes = vec![Some(Resolution::Parked(producer)), None, None];
     let chain = LexicalFrame::root(scope.id, 1);
-    match drive_scratch(|scratch| {
-        scope.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, &registries, scratch)
-    }) {
-        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![producer]),
+    match scope.resolve_dispatch(
+        &expr,
+        Some(&chain),
+        &bare_outcomes,
+        &registries,
+        scope.brand().allocator(),
+    ) {
+        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(&*ps, &[producer]),
         other => panic!(
             "a parked bare name must park before any pick; got variant {}",
             std::any::type_name_of_val(&other),
@@ -766,13 +805,13 @@ fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
     let outcomes = vec![None, parked(), None, None];
     assert!(
         !matches!(
-            drive_scratch(|scratch| scope.resolve_dispatch(
+            scope.resolve_dispatch(
                 &decl,
                 Some(&chain),
                 &outcomes,
                 &registries,
-                scratch
-            )),
+                scope.brand().allocator()
+            ),
             DispatchOutcome::ParkOnProducers(_)
         ),
         "the declaration slot owns its name; it must not park on an outer claim",
@@ -786,13 +825,13 @@ fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
     let outcomes = vec![None, parked(), None, parked()];
     assert!(
         !matches!(
-            drive_scratch(|scratch| scope.resolve_dispatch(
+            scope.resolve_dispatch(
                 &alias,
                 Some(&chain),
                 &outcomes,
                 &registries,
-                scratch
-            )),
+                scope.brand().allocator()
+            ),
             DispatchOutcome::ParkOnProducers(_)
         ),
         "a binder form's Type-token operands resolve through the binder body, not the pre-scan",
@@ -802,10 +841,14 @@ fn binder_declaration_slots_are_exempt_from_the_park_pre_scan() {
     let reference = let_form(identifier_part("x"), identifier_part("y"));
     let producer = ProducerId::for_test(11);
     let outcomes = vec![None, None, None, Some(Resolution::Parked(producer))];
-    match drive_scratch(|scratch| {
-        scope.resolve_dispatch(&reference, Some(&chain), &outcomes, &registries, scratch)
-    }) {
-        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![producer]),
+    match scope.resolve_dispatch(
+        &reference,
+        Some(&chain),
+        &outcomes,
+        &registries,
+        scope.brand().allocator(),
+    ) {
+        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(&*ps, &[producer]),
         other => panic!(
             "a binder's value-slot reference must park; got variant {}",
             std::any::type_name_of_val(&other),

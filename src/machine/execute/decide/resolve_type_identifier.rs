@@ -70,13 +70,13 @@ impl FinalizeGate<'_, '_> {
     /// Empty iff the gate admits.
     fn pending_sources(&self, kt: KType) -> Vec<ProducerId> {
         let mut pending: Vec<ProducerId> = Vec::new();
-        for UserTypeRef { scope_id, name } in user_type_refs(kt, self.types) {
+        for_each_user_type_ref(kt, self.types, &mut |UserTypeRef { scope_id, name }| {
             if let Some(node_id) = self.declared_source(scope_id, name)
                 && !pending.contains(&node_id)
             {
                 pending.push(node_id);
             }
-        }
+        });
         pending
     }
 
@@ -99,7 +99,9 @@ struct UserTypeRef {
     name: crate::machine::model::TypeSymbol,
 }
 
-/// Every top-level [`UserTypeRef`] in `kt`.
+/// Visits every top-level [`UserTypeRef`] in `kt` in pre-order, calling `found` on each. The walk
+/// recurses over child handles rather than staging them in a container, so a type-annotation read
+/// allocates nothing.
 ///
 /// **Member discipline** (load-bearing): a sealed `SetMember` is a leaf — the walk does NOT descend
 /// its schema, which holds absolute handles and may be cyclic. A sealed member is finished by
@@ -108,37 +110,44 @@ struct UserTypeRef {
 ///
 /// A `Signature` is a leaf too: the node carries no binder and no label, so two textually
 /// identical declarations are one type and there is no declaration for a consumer to park on.
-fn user_type_refs(kt: KType, types: &TypeRegistry) -> Vec<UserTypeRef> {
-    let mut found = Vec::new();
-    let mut stack = vec![kt];
-    while let Some(handle) = stack.pop() {
-        match types.node(handle) {
-            TypeNode::AbstractType { source, name, .. } => found.push(UserTypeRef {
-                scope_id: source,
-                name,
-            }),
-            TypeNode::List { element } => stack.push(element),
-            TypeNode::Dict { key, value } => {
-                stack.push(value);
-                stack.push(key);
-            }
-            TypeNode::Record { fields } => stack.extend(fields.values().copied()),
-            TypeNode::KFunction { params, ret } => {
-                stack.push(ret);
-                stack.extend(params.values().copied());
-            }
-            TypeNode::ConstructorApply {
-                constructor,
-                arguments,
-            } => {
-                stack.extend(arguments.values().rev().copied());
-                stack.push(constructor);
-            }
-            TypeNode::Union { members } => stack.extend(members.into_iter().rev()),
-            _ => {}
+fn for_each_user_type_ref(kt: KType, types: &TypeRegistry, found: &mut impl FnMut(UserTypeRef)) {
+    match types.node(kt) {
+        TypeNode::AbstractType { source, name, .. } => found(UserTypeRef {
+            scope_id: source,
+            name,
+        }),
+        TypeNode::List { element } => for_each_user_type_ref(element, types, found),
+        TypeNode::Dict { key, value } => {
+            for_each_user_type_ref(key, types, found);
+            for_each_user_type_ref(value, types, found);
         }
+        TypeNode::Record { fields } => {
+            for field in fields.values() {
+                for_each_user_type_ref(*field, types, found);
+            }
+        }
+        TypeNode::KFunction { params, ret } => {
+            for param in params.values() {
+                for_each_user_type_ref(*param, types, found);
+            }
+            for_each_user_type_ref(ret, types, found);
+        }
+        TypeNode::ConstructorApply {
+            constructor,
+            arguments,
+        } => {
+            for_each_user_type_ref(constructor, types, found);
+            for argument in arguments.values() {
+                for_each_user_type_ref(*argument, types, found);
+            }
+        }
+        TypeNode::Union { members } => {
+            for member in members {
+                for_each_user_type_ref(member, types, found);
+            }
+        }
+        _ => {}
     }
-    found
 }
 
 #[cfg(test)]

@@ -64,6 +64,13 @@ fn resolve_type_expr_user_struct_resolves_after_finalize() {
     assert_eq!(kt, kt2);
 }
 
+/// Drains the visitor into a `Vec` so a test can assert on the sequence it yields.
+fn collect_user_type_refs(kt: KType, types: &TypeRegistry) -> Vec<UserTypeRef> {
+    let mut refs = Vec::new();
+    for_each_user_type_ref(kt, types, &mut |r| refs.push(r));
+    refs
+}
+
 /// Pins the walk shape against a regression that skips nested structurals: a declared slot at any
 /// depth is a dependency the gate must see.
 #[test]
@@ -81,7 +88,7 @@ fn user_type_refs_yields_nested_declared_slots_in_order() {
     };
     // Dict<Aa, List<Bb>>
     let kt = types.dict(abstract_slot("Aa"), types.list(abstract_slot("Bb")));
-    let refs = user_type_refs(kt, types);
+    let refs = collect_user_type_refs(kt, types);
     let names: Vec<String> = refs
         .iter()
         .map(|r| crate::machine::model::render_label(r.name.symbol(), &registries))
@@ -109,7 +116,7 @@ fn user_type_refs_does_not_recurse_into_a_sealed_member() {
         types,
     );
     assert!(
-        user_type_refs(sealed, types).is_empty(),
+        collect_user_type_refs(sealed, types).is_empty(),
         "a sealed member is finished and its schema is not walked",
     );
 }
@@ -118,7 +125,7 @@ fn user_type_refs_does_not_recurse_into_a_sealed_member() {
 #[test]
 fn user_type_refs_yields_nothing_for_leaf() {
     let types = crate::machine::model::TypeRegistry::new();
-    assert!(user_type_refs(KType::NUMBER, &types).is_empty());
+    assert!(collect_user_type_refs(KType::NUMBER, &types).is_empty());
 }
 
 mod bare_leaf_resolution {

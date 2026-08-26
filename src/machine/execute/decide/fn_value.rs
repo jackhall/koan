@@ -69,7 +69,7 @@ fn install_head_park<'step>(
     view: &DecideCtx<'_, 'step, '_>,
 ) -> Outcome<'step> {
     park_resume(
-        vec![source],
+        &[source],
         view,
         move |ctx: &DecideCtx<'_, 'step, '_>, _idx| initial(ctx, expr),
     )

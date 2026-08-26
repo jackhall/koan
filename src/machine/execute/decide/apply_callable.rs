@@ -518,7 +518,7 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
     let brand = ctx.current_scope().brand();
     let wrap_indices = picked
         .value()
-        .classify_for_pick(&expr, ctx.registries())
+        .classify_for_pick(&expr, ctx.registries(), ctx.scratch())
         .wrap_indices;
     // A call whose slots are all filled stages nothing, so the node handed to the walk is the one
     // the committed call folds over — no rebuild.

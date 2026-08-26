@@ -58,7 +58,7 @@ pub(super) fn initial<'step>(
             return install_eager_only(ctx, expr);
         }
         DispatchOutcome::ParkOnProducers(sources) => {
-            return park_on_claims(sources, expr, ctx);
+            return park_on_claims(&sources, expr, ctx);
         }
     };
     // Binder name claims / pending overload slots are installed at statement submission from the
@@ -126,7 +126,7 @@ fn finish<'step>(
                 reason: "no matching function".to_string(),
             })))
         }
-        DispatchOutcome::ParkOnProducers(sources) => park_on_claims(sources, working_expr, ctx),
+        DispatchOutcome::ParkOnProducers(sources) => park_on_claims(&sources, working_expr, ctx),
         DispatchOutcome::UnboundName(name) => {
             Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
         }
@@ -139,7 +139,7 @@ fn finish<'step>(
 /// lexically-earlier binders still in flight (the binding tables' exclusive cutoff keeps a
 /// statement's own claim out of its own subtree), so the wait is always well-founded.
 fn park_on_claims<'step>(
-    sources: Vec<ProducerId>,
+    sources: &[ProducerId],
     expr: WorkingExpression<'step>,
     view: &DecideCtx<'_, 'step, '_>,
 ) -> Outcome<'step> {
@@ -271,7 +271,7 @@ fn part_walk<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
     bare_outcomes: &[Option<Resolution>],
-    slots: &crate::machine::core::ClassifiedSlots,
+    slots: &crate::machine::core::ClassifiedSlots<'_>,
 ) -> PartWalk<'step> {
     let brand = ctx.current_scope().brand();
     let parts = expr.parts;

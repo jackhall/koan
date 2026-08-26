@@ -220,7 +220,7 @@ pub(in crate::machine::execute) fn propagate_dep_error(
 /// decide on wake. The park carries no deadlock sample of its own: it keeps the slot's anchor, so
 /// the [`WorkLabel`] minted at submission is what a stuck slot renders through.
 pub(in crate::machine::execute) fn park_resume<'step, F>(
-    sources: Vec<ProducerId>,
+    sources: &[ProducerId],
     view: &DecideCtx<'_, 'step, '_>,
     resume: F,
 ) -> Outcome<'step>
@@ -236,7 +236,7 @@ where
 /// A park keeps the slot's cart, so the resume closure is hosted in the region `view` already
 /// stands in — the bumped tier, with `Copy` captures and no heap.
 pub(in crate::machine::execute) fn park_resume_labelled<'step, F>(
-    sources: Vec<ProducerId>,
+    sources: &[ProducerId],
     dep_error_frame: Option<DeferredTraceFrame<'step>>,
     view: &DecideCtx<'_, 'step, '_>,
     resume: F,

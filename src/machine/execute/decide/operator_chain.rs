@@ -457,7 +457,7 @@ fn park_on_pending_operators<'step, 'b>(
     let parked_expr = *expr;
     let frame = working_frame("<operator-chain>", expr);
     park_resume_labelled(
-        to_wait,
+        &to_wait,
         Some(frame),
         ctx,
         move |ctx: &DecideCtx<'_, 'step, '_>, _id| run(ctx, ctx.current_scope(), &parked_expr),

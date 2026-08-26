@@ -68,7 +68,7 @@ fn park_on_errored_producer_propagates_producer_error() {
             None,
             erase_boxed(decide_only(move |view: &DecideCtx<'_, '_, '_>, _id| {
                 park_resume_labelled(
-                    vec![
+                    &[
                         ProducerId::from_scheduler_edge(edge_ok),
                         ProducerId::from_scheduler_edge(edge_err),
                     ],

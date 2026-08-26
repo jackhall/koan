@@ -9,6 +9,7 @@ use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 
 use super::KFunction;
 use crate::machine::model::RunRegistries;
+use crate::witnessed::{BumpAllocator, BumpVec};
 
 /// Per-slot classification produced by [`KFunction::classify_for_pick`]:
 /// - `eager_indices`: `Some(indices)` when the picked function is a *lazy candidate* — the
@@ -21,10 +22,11 @@ use crate::machine::model::RunRegistries;
 ///   or name-data the body reads — so the token rides to the bind unresolved.
 ///
 /// The two index sets are disjoint by construction: they classify over disjoint
-/// `(SignatureElement, WorkingPart)` shapes.
-pub struct ClassifiedSlots {
-    pub eager_indices: Option<Vec<usize>>,
-    pub wrap_indices: Vec<usize>,
+/// `(SignatureElement, WorkingPart)` shapes. Both buckets are bump-hosted in the scratch
+/// arena the classifier was handed, so a classification costs no heap allocation.
+pub struct ClassifiedSlots<'s> {
+    pub eager_indices: Option<BumpVec<'s, usize>>,
+    pub wrap_indices: BumpVec<'s, usize>,
 }
 
 impl<'a> KFunction<'a> {
@@ -36,16 +38,21 @@ impl<'a> KFunction<'a> {
     /// A raw-capture slot admits only the AST shape it captures, so those arms read through
     /// [`WorkingPart::Ast`]; the scheduler's own slots (a resolved sub-result, a staging hole, a
     /// synthesized nested node) are ordinary value slots and fall to the tail arm.
-    pub fn lazy_eager_indices<'e>(
+    pub fn lazy_eager_indices<'e, 's>(
         &self,
         expr: &WorkingExpression<'e>,
         registries: &RunRegistries,
-    ) -> Option<Vec<usize>> {
+        scratch: BumpAllocator<'s>,
+    ) -> Option<BumpVec<'s, usize>> {
         let sig = &self.signature;
         if sig.elements().len() != expr.parts.len() {
             return None;
         }
-        let mut eager_indices: Vec<usize> = Vec::new();
+        // Reserved at the exact bound — at most one push per part — since a grown bump buffer
+        // abandons its old bytes as dead scratch. The reserve sits after the length check so a
+        // rejected candidate takes none.
+        let mut eager_indices: BumpVec<'s, usize> =
+            BumpVec::with_capacity_in(expr.parts.len(), scratch);
         let mut has_lazy_slot = false;
         for (i, (el, part)) in sig.elements().iter().zip(expr.parts.iter()).enumerate() {
             match (el, &part.value) {
@@ -128,13 +135,15 @@ impl<'a> KFunction<'a> {
     /// buckets of [`ClassifiedSlots`]. Disjointness is guaranteed by construction — each
     /// `(SignatureElement, WorkingPart)` shape lands in at most one bucket — and the
     /// downstream scheduler relies on it.
-    pub fn classify_for_pick<'e>(
+    pub fn classify_for_pick<'e, 's>(
         &self,
         expr: &WorkingExpression<'e>,
         registries: &RunRegistries,
-    ) -> ClassifiedSlots {
-        let eager_indices = self.lazy_eager_indices(expr, registries);
-        let mut wrap_indices: Vec<usize> = Vec::new();
+        scratch: BumpAllocator<'s>,
+    ) -> ClassifiedSlots<'s> {
+        let eager_indices = self.lazy_eager_indices(expr, registries, scratch);
+        let mut wrap_indices: BumpVec<'s, usize> =
+            BumpVec::with_capacity_in(expr.parts.len(), scratch);
         for (i, (el, part)) in self
             .signature
             .elements()

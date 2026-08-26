@@ -60,7 +60,7 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // The binder's terminal is not the type carrier (a finalize-combine returns its own
         // value), so the wake re-resolves the leaf against the now-sealed registry rather than
         // lifting that value.
-        TypeChannel::Parked(source) => park_resume(vec![source], ctx, {
+        TypeChannel::Parked(source) => park_resume(&[source], ctx, {
             move |ctx: &DecideCtx<'_, 'step, '_>, _idx| bare_type_leaf(ctx, ctx.current_scope(), t)
         }),
     }
@@ -197,7 +197,7 @@ pub(super) fn type_call<'step>(
             // A finalized binder has already installed `types[name]`, so the `Bound` arm would
             // win; reaching here means the claim still stands.
             return park_resume(
-                vec![source],
+                &[source],
                 ctx,
                 move |ctx: &DecideCtx<'_, 'step, '_>, _idx| type_call(ctx, expr),
             );
