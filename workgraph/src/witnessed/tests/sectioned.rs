@@ -184,7 +184,7 @@ fn all_owned_is_one_empty_run() {
     let ((container, value_reach), metrics) = reach_delta(|| {
         Sectioned::build(
             RegionHandle::from_owner(&*dest),
-            values.iter().copied().map(owned).collect(),
+            values.iter().copied().map(owned),
         )
     });
 
@@ -317,6 +317,39 @@ fn equal_reach_inputs_cost_one_description_and_one_fold() {
     assert_eq!(metrics.reach_retention_folds, 1);
 }
 
+/// The door consumes its inputs one cell at a time — no staging buffer stands between an embedder's
+/// iterator and the build. Each input records the region's running mint count as it is pulled, so a
+/// door that drained the iterator before minting anything would hand every cell the same reading.
+#[test]
+fn inputs_stream_into_the_build() {
+    let dest = frame();
+    let values: Vec<&u32> = (0..3).map(|v| store(&dest, v)).collect();
+    let mints_at_pull = std::cell::RefCell::new(Vec::new());
+
+    let mints = || {
+        let counters = region_metrics();
+        counters.reach_interned + counters.reach_intern_hits
+    };
+    let (container, _value_reach) = Sectioned::build(
+        RegionHandle::from_owner(&*dest),
+        values.iter().copied().map(|payload| {
+            mints_at_pull.borrow_mut().push(mints());
+            owned(payload)
+        }),
+    );
+
+    assert_eq!(container.len(), 3);
+    let readings = mints_at_pull.into_inner();
+    assert!(
+        readings[1] > readings[0],
+        "cell 0 minted before cell 1 was pulled"
+    );
+    assert!(
+        readings[2] > readings[1],
+        "cell 1 minted before cell 2 was pulled"
+    );
+}
+
 /// A container is `Copy` and `Drop`-free: both its slices are bumped into the region, so it is
 /// region state a holder *names* rather than owns. That is what lets a frame teardown release a
 /// container with the region's chunk instead of walking it.
@@ -328,7 +361,7 @@ fn a_container_is_copy_and_drop_free() {
     let values: Vec<&u32> = (0..3).map(|v| store(&dest, v)).collect();
     let (container, _value_reach) = Sectioned::build(
         RegionHandle::from_owner(&*dest),
-        values.iter().copied().map(owned).collect(),
+        values.iter().copied().map(owned),
     );
 
     assert!(!std::mem::needs_drop::<

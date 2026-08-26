@@ -8,8 +8,8 @@
 //! this module. Everything a container is made of lives in the destination region and is anchored
 //! to its `'a`: cells arrive as `&'a K::At<'a>` (content == borrow == `'a`, so a cell is already
 //! resident where the caller allocated it), each run's description is interned in that region's
-//! reach side table, and both slices are bumped into the same region
-//! ([`BumpAllocator::slice`](super::BumpAllocator::slice)). One pin therefore covers a projected
+//! reach side table, and both slices are built and left in that same region
+//! ([`BumpVec`](super::BumpVec)). One pin therefore covers a projected
 //! cell and its reach together, and a cycle among them is harmless — the region dies all at once.
 //! That is what makes a [`Sectioned`] `Copy` and **`Drop`-free**: a frame teardown never walks a
 //! container. Cell *layout* stays the embedder's — workgraph holds the mapping and the partition,
@@ -31,8 +31,8 @@ use std::marker::PhantomData;
 use std::ops::Range;
 
 use super::{
-    Carrier, DropFree, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable, Region,
-    RegionHandle, RegionOwner, StepCoverage, StorageProfile,
+    BumpVec, Carrier, DropFree, Opened, PinBundle, PinsRegion, ReachDescription, Reattachable,
+    Region, RegionHandle, RegionOwner, StepCoverage, StorageProfile,
 };
 
 /// One physical partition: the index its span starts at, paired with the interned description that
@@ -320,16 +320,28 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
     ///
     /// [`Self::weight`] folds in the same pass, so an embedder hands each cell's facts in once and
     /// runs no fold of its own.
-    pub fn build<W>(
-        dest: RegionHandle<'a, W>,
-        inputs: Vec<CellInput<'a, '_, K, F>>,
-    ) -> (Self, &'a ReachDescription<F>)
+    ///
+    /// Inputs arrive as an [`ExactSizeIterator`] and are consumed one cell at a time — an embedder
+    /// streams its cells in rather than staging them, and the exact length is what lets both
+    /// working buffers reserve their region bytes once up front. Only per-cell order matters
+    /// (mint, then verdict, then store); the run partition and the interning are order-insensitive
+    /// across cells.
+    pub fn build<'r, W, I>(dest: RegionHandle<'a, W>, inputs: I) -> (Self, &'a ReachDescription<F>)
     where
+        I: IntoIterator<Item = CellInput<'a, 'r, K, F>>,
+        I::IntoIter: ExactSizeIterator,
         W: StorageProfile<FrameOwner = F>,
         F: RegionOwner<Region = Region<W>>,
     {
-        let mut cells: Vec<&'a K::At<'a>> = Vec::with_capacity(inputs.len());
-        let mut runs: Vec<Run<'a, F>> = Vec::new();
+        let inputs = inputs.into_iter();
+        // Both working buffers are bumped in the destination region and reserved exactly once: a
+        // cell per input, and runs bounded above by the cell count. Neither can grow, which is what
+        // keeps the reservation from abandoning a buffer as dead region bytes.
+        let cell_count = inputs.len();
+        let mut cells: BumpVec<'a, &'a K::At<'a>> =
+            BumpVec::with_capacity_in(cell_count, dest.allocator());
+        let mut runs: BumpVec<'a, Run<'a, F>> =
+            BumpVec::with_capacity_in(cell_count, dest.allocator());
         let mut union = PinBundle::empty();
         let mut total_weight = 0u64;
 
@@ -340,7 +352,7 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
                 reach,
                 weight,
             },
-        ) in inputs.into_iter().enumerate()
+        ) in inputs.enumerate()
         {
             total_weight = total_weight.saturating_add(weight);
             let source = match reach {
@@ -378,11 +390,12 @@ impl<'a, K: Reattachable + 'static, F: PinsRegion + 'static> Sectioned<'a, K, F>
 
         let value_level = ReachDescription::mint_resident(dest, &[&union]);
 
-        // Bump both slices into the region: the container becomes `Copy` region state, so a frame
-        // teardown releases it with the chunk instead of walking it.
+        // Both buffers are already region bytes, so leaking them in place is the whole handoff — no
+        // copy. The container becomes `Copy` region state, and a frame teardown releases it with the
+        // chunk instead of walking it.
         let sectioned = Sectioned {
-            cells: dest.allocator().slice(&cells),
-            runs: dest.allocator().slice(&runs),
+            cells: cells.leak(),
+            runs: runs.leak(),
             weight: total_weight,
         };
         (sectioned, value_level)
