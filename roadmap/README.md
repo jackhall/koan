@@ -47,7 +47,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Parse at runtime](metaprogramming/parse-at-runtime.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Builtin action continuations](reduce_allocs/builtin-action-continuations.md)
-- [Dep-finish captures](reduce_allocs/dep-finish-captures.md)
 - [Frame and scope bookkeeping](reduce_allocs/frame-scope-bookkeeping.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)

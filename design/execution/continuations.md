@@ -13,9 +13,11 @@ Every stored continuation is a closure over
 dep values and ignores the slice; a dep-finish reads it; nothing else exists. What
 distinguishes a finish's delivery — the dep-error short-circuit and its deferred trace
 frame, a witnessed fold's `Result` projection, a catch's no-short-circuit read — is
-composed onto the closure **generically** at the construction site (`impl FnOnce` in,
-`impl FnOnce` out), so a combinator layer costs monomorphized code, not an allocation.
-The closure is erased exactly once, at the install envelope.
+composed onto the closure **generically** at the construction site: each combinator takes
+a finish and returns one at its tier's own bound — `Fn + Copy` in and out for the bumped
+tier ([`gated`](../../src/machine/execute/outcome.rs), `sealed_done`), `FnOnce` for the
+boxed twin (`gated_once`) — so a combinator layer costs monomorphized code, not an
+allocation. The closure is erased exactly once, at the install envelope.
 
 The slot's declared-return obligation is not a wrapper layer: it rides beside the
 erased closure as `Copy` data
@@ -65,9 +67,9 @@ frame.
 - An owning handle whose referent an existing channel already carries is re-derived at
   wake, never captured: the body-enter cart off the slot's anchor, a finish's lexical
   chain off the ambient node payload.
-- A nested closure currency (a field-list composer, an aggregate assembler) is an
-  `impl FnOnce` folded into the finish before the one erasure, not a second box inside
-  it.
+- A nested closure currency (a field-list composer, an aggregate assembler) is a generic
+  parameter folded into the finish before the one erasure, not a second box inside it:
+  `Fn + Copy` where the finish is bumped, `FnOnce` where it rides the boxed `Action` tier.
 
 ## The builtin tier
 
@@ -79,9 +81,6 @@ assembly and the `run_action` recursion compose in generically).
 
 ## Open work
 
-- **Dep-finish captures**
-  ([roadmap/reduce_allocs/dep-finish-captures.md](../../roadmap/reduce_allocs/dep-finish-captures.md)):
-  the engine dep-finish sites onto the bumped tier with region-slice captures.
 - **Builtin action continuations**
   ([roadmap/reduce_allocs/builtin-action-continuations.md](../../roadmap/reduce_allocs/builtin-action-continuations.md)):
   moving the builtin `Action` surface off the Boxed tier.

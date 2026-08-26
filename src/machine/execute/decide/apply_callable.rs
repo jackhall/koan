@@ -420,24 +420,15 @@ fn apply_union_construct<'step>(
                 Ok(v) => v,
                 Err(e) => return Outcome::Done(Err(e)),
             };
-            match union_member(&members, tag.symbol(), ctx.types()) {
-                // The member is the variant's own sealed handle, so its declared payload is a
-                // direct `NewType` repr read — the same value the variant schema would map the tag
-                // to, with no table to build.
-                Some(member) => match ctx.types().node(member) {
-                    TypeNode::SetMember {
-                        schema: NodeSchema::NewType(expected),
-                        ..
-                    } => constructors::construct_tagged(
-                        ctx.current_scope().brand(),
-                        member,
-                        expected,
-                        tag,
-                        value_part,
-                        ctx.scratch(),
-                    ),
-                    _ => unreachable!("a union variant is a sealed NewType member"),
-                },
+            match union_variant(&members, tag.symbol(), ctx.types()) {
+                Some((member, expected)) => constructors::construct_tagged(
+                    ctx.current_scope().brand(),
+                    member,
+                    expected,
+                    tag,
+                    value_part,
+                    ctx.scratch(),
+                ),
                 None => Outcome::Done(Err(unknown_variant_error(&members, tag, ctx.registries()))),
             }
         }
@@ -446,8 +437,27 @@ fn apply_union_construct<'step>(
     }
 }
 
-/// The union member whose sealed newtype is named `name`, if any. `name` probes by bare symbol
-/// bits: the tag arrives from a construction site with no class attached, and the member nodes it
+/// The union member that is a **constructible tagged variant** named `name`, paired with the
+/// payload type its declaration gives the tag. A variant is a sealed `NewType` member, so its
+/// declared payload is a direct repr read — the same value a variant-schema table would map the tag
+/// to, with no table to build. A member declaring any other schema (a `NEWTYPE (Type AS Wrapper)`
+/// constructor family) names no tag payload and so is no variant: it misses here and surfaces
+/// through [`unknown_variant_error`], which lists the variants the union does admit.
+fn union_variant(members: &[KType], name: Symbol, types: &TypeRegistry) -> Option<(KType, KType)> {
+    members.iter().copied().find_map(|m| match types.node(m) {
+        TypeNode::SetMember {
+            name: member_name,
+            schema: NodeSchema::NewType(repr),
+            ..
+        } if member_name.symbol() == name => Some((m, repr)),
+        _ => None,
+    })
+}
+
+/// The union member named `name`, whatever schema it declares — the bare-token reference lane,
+/// where naming a member yields its type value and a constructor family is as referenceable as a
+/// variant. [`union_variant`] is the narrower construction-side probe. `name` probes by bare symbol
+/// bits: the token arrives from a reference site with no class attached, and the member nodes it
 /// is matched against carry the `TypeSymbol` their declaration minted.
 fn union_member(members: &[KType], name: Symbol, types: &TypeRegistry) -> Option<KType> {
     members.iter().copied().find(|m| match types.node(*m) {
@@ -473,13 +483,19 @@ fn unknown_variant_error(
     )))
 }
 
-/// Sorted, comma-joined member names of an anonymous union of sealed newtype members. Each name
-/// resolves through the run's label interner, which recorded it at its declaration.
+/// Sorted, comma-joined names of the union's constructible variants — its sealed `NewType`
+/// members. A member declaring any other schema names no tag payload, so it is no variant and goes
+/// unlisted. Each name resolves through the run's label interner, which recorded it at its
+/// declaration.
 fn union_member_names(members: &[KType], registries: &RunRegistries) -> String {
     let mut names: Vec<String> = members
         .iter()
         .filter_map(|m| match registries.types.node(*m) {
-            TypeNode::SetMember { name, .. } => Some(render_label(name.symbol(), registries)),
+            TypeNode::SetMember {
+                name,
+                schema: NodeSchema::NewType(_),
+                ..
+            } => Some(render_label(name.symbol(), registries)),
             _ => None,
         })
         .collect();

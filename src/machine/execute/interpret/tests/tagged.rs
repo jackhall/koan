@@ -152,3 +152,29 @@ fn unknown_variant_reference_errors() {
         Ok(()) => panic!("expected error for an unknown variant reference"),
     }
 }
+
+/// A union member declaring a constructor family names no tag payload, so it is no tagged variant:
+/// constructing against its name is an unknown-variant shape error, not a panic, and the listed
+/// variants name only what the union does admit.
+#[test]
+fn constructor_family_member_is_not_a_constructible_variant() {
+    use crate::machine::KErrorKind;
+    use crate::machine::execute::interpret_with_writer;
+    let result = interpret_with_writer(
+        "NEWTYPE (Type AS Boxed)\n\
+         NEWTYPE Wrapped = :Number\n\
+         LET Un = :(Boxed | Wrapped)\n\
+         PRINT (Un (Boxed \"x\"))",
+        Box::new(std::io::sink()),
+    );
+    match result {
+        Err(e) => assert!(
+            matches!(&e.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("Boxed")
+                    && msg.contains("not a variant")
+                    && msg.contains("Wrapped")),
+            "expected a 'not a variant' ShapeError listing Wrapped, got {e}",
+        ),
+        Ok(()) => panic!("expected error constructing against a constructor-family member"),
+    }
+}
