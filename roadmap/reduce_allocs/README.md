@@ -44,6 +44,16 @@ re-attribution, plus the growth hazards a survey turned up:
   ([src/machine/execute/decide/resolve_dispatch.rs](../../src/machine/execute/decide/resolve_dispatch.rs)),
   and `field_list`'s `owned`
   ([src/machine/execute/decide/field_list.rs](../../src/machine/execute/decide/field_list.rs)).
+  Three deduped producer lists in
+  [resolve_dispatch.rs](../../src/machine/execute/decide/resolve_dispatch.rs) — `decide_relaxed`'s
+  `parked`, `relaxed_parked_producers`' `producers`, and `decide_scope`'s pending-branch union —
+  sit a tier weaker still: they accumulate across a loop over *candidates*, whose length the
+  overload bucket sets, so the reservation is not the enclosing loop's length at all. Their
+  `expr.parts.len()` capacity holds because a `Lean::Parked` can name no producer that is not
+  already at some `bare_outcomes[i]` — the per-decide, per-slot resolution cache every candidate
+  consults — and because the accumulator dedupes. That is a claim about the dispatch cache's
+  provenance, spanning the three functions that build, read, and dedupe it, rather than a claim
+  a reader checks against the loop in front of them.
   A `Filling<'a, T>` that owns the reservation and is the only route to a leaked bump slice
   would concentrate the discipline in one audited type instead of every author, but its
   capacity check stays runtime — so that shape is a narrowing, not a close.
