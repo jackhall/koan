@@ -115,6 +115,7 @@ mod tests;
 /// One dep's worth of construction value, in whichever form it already has: a parsed part straight
 /// out of the body, or a synthesized node for a multi-part value — so the multi-part case never has
 /// to mint an AST arm.
+#[derive(Clone, Copy)]
 enum ValueCell<'step> {
     /// A part lifted verbatim out of the construction body.
     Part(ExpressionPart<'step>),
@@ -190,7 +191,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
     };
     launch(
         brand,
-        vec![value_cell],
+        &[value_cell],
         CtorKind::NewType { identity },
         scratch,
     )
@@ -209,13 +210,12 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
     let field_names: &'step [BinderSymbol] = brand
         .allocator()
         .slice_from_iter(record_fields.iter().map(|(name, _)| *name));
-    let value_parts: Vec<ValueCell<'step>> = record_fields
-        .iter()
-        .map(|(_, p)| ValueCell::Part(*p))
-        .collect();
+    // A per-step transient, so it rests on the step scratch rather than the heap.
+    let value_cells =
+        scratch.slice_from_iter(record_fields.iter().map(|(_, p)| ValueCell::Part(*p)));
     launch(
         brand,
-        value_parts,
+        value_cells,
         CtorKind::RecordNewType {
             identity,
             field_names,
@@ -315,7 +315,7 @@ pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
     };
     launch(
         brand,
-        vec![value_cell],
+        &[value_cell],
         CtorKind::ApplyConstructor { constructor },
         scratch,
     )
@@ -378,7 +378,7 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
 ) -> Outcome<'step> {
     launch(
         brand,
-        vec![ValueCell::Part(value_part)],
+        &[ValueCell::Part(value_part)],
         CtorKind::Tagged {
             expected,
             member,
@@ -393,16 +393,19 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
 /// [`Outcome::Park`]. Dep errors propagate frameless.
 fn launch<'step>(
     brand: RegionBrand<'step>,
-    value_parts: Vec<ValueCell<'step>>,
+    value_cells: &[ValueCell<'step>],
     kind: CtorKind<'step>,
     scratch: BumpAllocator<'step>,
 ) -> Outcome<'step> {
     debug_assert!(
-        !value_parts.is_empty(),
+        !value_cells.is_empty(),
         "launch requires at least one value part (arity-zero is rejected upstream)"
     );
-    let deps: Vec<DepRequest<'step>> = value_parts
-        .into_iter()
+    // The requests stream into the dep list's scratch-backed storage, which sizes itself from the
+    // slice's exact `size_hint`.
+    let deps = value_cells
+        .iter()
+        .copied()
         .map(|cell| DepRequest::Dispatch {
             expr: match cell {
                 ValueCell::Part(part) => {
@@ -411,8 +414,7 @@ fn launch<'step>(
                 ValueCell::Synthesized(expr) => expr,
             },
             placement: DepPlacement::OwnScope,
-        })
-        .collect();
+        });
     let combine_finish = move |view: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
         finish_witnessed(view, kind, terminals).map(StepCarried::born_delivered)
     };
