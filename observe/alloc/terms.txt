@@ -3,6 +3,19 @@
 # sweep file of the same SHA; `fixed` is the empty program's own absolute total —
 # startup and builtin seeding, which every shape carries
 # managed by tools/alloc_audit.py --baseline; newest first, capped to 5 sweeps
+2026-08-25 277a3a9f+ fixed 1055.00 367.00
+2026-08-25 277a3a9f+ step 46.00 0.00
+2026-08-25 277a3a9f+ leading_loop 53.00 0.00
+2026-08-25 277a3a9f+ try_loop 60.00 1.00
+2026-08-25 277a3a9f+ dispatch 13.88 1.00
+2026-08-25 277a3a9f+ scope_walk_depth2 29.78 2.00
+2026-08-25 277a3a9f+ scope_walk_depth10 29.72 2.00
+2026-08-25 277a3a9f+ scope_walk_scope -0.01 0.00
+2026-08-25 277a3a9f+ builtin_call 44.69 6.00
+2026-08-25 277a3a9f+ user_fn_params1 20.72 1.00
+2026-08-25 277a3a9f+ user_fn_params8 31.66 1.00
+2026-08-25 277a3a9f+ user_fn_parameter 1.56 0.00
+2026-08-25 277a3a9f+ tagged_construct 64.75 11.00
 2026-08-25 6f5b6327+ fixed 1055.00 367.00
 2026-08-25 6f5b6327+ step 46.00 0.00
 2026-08-25 6f5b6327+ leading_loop 53.00 0.00
@@ -55,16 +68,3 @@
 2026-08-25 a1336ef2+ user_fn_params8 31.66 1.00
 2026-08-25 a1336ef2+ user_fn_parameter 1.56 0.00
 2026-08-25 a1336ef2+ tagged_construct 67.75 11.00
-2026-08-25 23aa9cfc+ fixed 1055.00 367.00
-2026-08-25 23aa9cfc+ step 48.00 0.00
-2026-08-25 23aa9cfc+ leading_loop 56.00 0.00
-2026-08-25 23aa9cfc+ try_loop 64.00 1.00
-2026-08-25 23aa9cfc+ dispatch 13.88 1.00
-2026-08-25 23aa9cfc+ scope_walk_depth2 29.78 2.00
-2026-08-25 23aa9cfc+ scope_walk_depth10 29.72 2.00
-2026-08-25 23aa9cfc+ scope_walk_scope -0.01 0.00
-2026-08-25 23aa9cfc+ builtin_call 46.69 6.00
-2026-08-25 23aa9cfc+ user_fn_params1 20.72 1.00
-2026-08-25 23aa9cfc+ user_fn_params8 31.66 1.00
-2026-08-25 23aa9cfc+ user_fn_parameter 1.56 0.00
-2026-08-25 23aa9cfc+ tagged_construct 67.75 11.00
