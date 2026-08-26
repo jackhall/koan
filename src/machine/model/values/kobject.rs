@@ -720,9 +720,9 @@ fn scope_coverage(owner: Weak<FrameStorage>) -> FrameCoverage {
 /// weight [`held_copy_cost`] prices. Returns the sectioned storage and the value-level union the
 /// door mints — the shared body of every container door.
 ///
-/// One pass, and no fold of its own: both facts ride the same [`CellInput`], so the container's
-/// copy cost is the sectioned storage's own [`Sectioned::weight`] rather than a total this door
-/// re-derives.
+/// One pass and no staging buffer — the input chain streams straight into the alloc door — and no
+/// fold of its own: both facts ride the same [`CellInput`], so the container's copy cost is the
+/// sectioned storage's own [`Sectioned::weight`] rather than a total this door re-derives.
 ///
 /// The re-home/verdict ordering is carried by the [`Rehomed`] token rather than by this function's
 /// statement order: `cell_reach` takes one, and only the mint produces one.
@@ -730,7 +730,7 @@ fn section_cells<'a>(
     door: SubstrateDoor<'a, '_>,
     cells: &[Held<'a>],
 ) -> (HeldCells<'a>, &'a FrameReach) {
-    let inputs: Vec<CellInput<'a, 'a, Held<'static>, FrameStorage>> = cells
+    let inputs = cells
         .iter()
         .copied()
         .map(|cell| Rehomed::mint(door, cell))
@@ -744,8 +744,7 @@ fn section_cells<'a>(
                 reach,
                 weight,
             }
-        })
-        .collect();
+        });
     Sectioned::build(door.handle(), inputs)
 }
 
