@@ -72,9 +72,10 @@ pub(crate) fn nominal_schema_action<'a>(
         )
     };
     match outcome {
-        FieldListOutcome::Done(fields) => {
-            Action::done_writing(finalize(&ctx.finish_ctx(), name, &window, fields, site))
-        }
+        FieldListOutcome::Done(fields) => Action::done_writing(
+            ctx.scratch,
+            finalize(&ctx.finish_ctx(), name, &window, fields, site),
+        ),
         FieldListOutcome::Err(msg) => Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             awaited_producers,

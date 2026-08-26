@@ -33,6 +33,7 @@ use crate::machine::{
 };
 use crate::scheduler::Deps;
 use crate::source::SourceRef;
+use crate::witnessed::{BumpAllocator, BumpVec};
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
 /// `Action::done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
@@ -372,6 +373,12 @@ pub struct BodyCtx<'program: 'a, 'a, 'c> {
     /// the struct's `'program: 'a` bound: a door reached through this brand pins its parts at
     /// program storage, so a step-allocated part cannot reach one.
     pub program: ProgramBrand<'program>,
+    /// An arena for this step's transients — what a body stages a run of binding writes on
+    /// ([`Action::with_effect`]). The drain's per-pop scratch on harness-built paths, the scope's
+    /// own region on the synchronous [`FinishCtx::for_scope`] path; either way the bytes are
+    /// reclaimed without a free. Branded at the step lifetime `'a`, so nothing staged here can
+    /// outlive the step that staged it.
+    pub scratch: BumpAllocator<'a>,
 }
 
 impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
@@ -426,6 +433,7 @@ impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
             scope: self.scope,
             ctx: self.ctx.clone(),
             registries: self.registries,
+            scratch: self.scratch,
         }
     }
 }
@@ -443,6 +451,9 @@ pub struct FinishCtx<'a, 'r> {
     /// duration of the finish call: the site building this context holds the registries and
     /// consumes the context as a short `&FinishCtx`, so `'r` is independent of the step brand `'a`.
     pub registries: &'r RunRegistries,
+    /// An arena for this step's transients — the wake-time peer of [`BodyCtx::scratch`], with the
+    /// same two sources and the same `'a` confinement.
+    pub scratch: BumpAllocator<'a>,
 }
 
 impl<'a, 'r> FinishCtx<'a, 'r> {
@@ -451,11 +462,15 @@ impl<'a, 'r> FinishCtx<'a, 'r> {
     /// combinator's `Done` arm, a unit test). `scope_frame(scope)` names the same dest frame the
     /// harness step context wraps at wake, so both allocate in the same region. A site that already
     /// holds the live step context (a builtin body) uses [`BodyCtx::finish_ctx`] instead.
+    /// The scratch it fills is the scope's own region: this path holds no drain arena, and a
+    /// synchronous finish's staged writes are read and applied within the same step, so the few
+    /// bytes they leave behind in the frame region die with the frame.
     pub fn for_scope(scope: &'a Scope<'a>, registries: &'r RunRegistries) -> Self {
         FinishCtx {
             scope,
             ctx: StepAllocator::for_scope(scope),
             registries,
+            scratch: scope.brand().allocator(),
         }
     }
 
@@ -538,8 +553,13 @@ pub enum TailContract<'a> {
 /// [`WriteOp`]; the run loop drains the step's effects after the continuation returns and applies
 /// them in program order, before finalize. An apply error becomes the node's error terminal, so
 /// per-step writes are all-or-nothing.
+///
+/// The ops ride a step-arena [`BumpVec`], minted only once a body actually decides a write — the
+/// overwhelmingly common `Action` carries `None` and names no arena at all. An `Action` is a stack
+/// transient consumed by `run_action` inside the step that built it, so the run never outlives the
+/// arena the ops sit in.
 pub struct Action<'a> {
-    pub(crate) effects: Vec<WriteOp<'a>>,
+    pub(crate) effects: Option<BumpVec<'a, WriteOp<'a>>>,
     pub next: ActionKind<'a>,
 }
 
@@ -547,7 +567,7 @@ impl<'a> Action<'a> {
     /// An `Action` writing nothing.
     pub fn from_kind(next: ActionKind<'a>) -> Self {
         Action {
-            effects: Vec::new(),
+            effects: None,
             next,
         }
     }
@@ -591,25 +611,35 @@ impl<'a> Action<'a> {
     }
 
     /// A `Done` terminal paired with the binding-table writes the body decided, or the error
-    /// terminal — the shape every binder's finalize helper returns.
+    /// terminal — the shape every binder's finalize helper returns. `scratch` is the step arena the
+    /// ops move onto ([`BodyCtx::scratch`] / [`FinishCtx::scratch`] at the call).
     pub(crate) fn done_writing(
+        scratch: BumpAllocator<'a>,
         result: Result<(StepCarried<'a>, Vec<WriteOp<'a>>), KError>,
     ) -> Self {
         match result {
-            Ok((carrier, effects)) => Action::done(Ok(carrier)).with_effects(effects),
+            Ok((carrier, effects)) => Action::done(Ok(carrier)).with_effects(scratch, effects),
             Err(error) => Action::done(Err(error)),
         }
     }
 
-    /// Attach the binding-table writes this step decided on, in program order.
-    pub(crate) fn with_effects(mut self, effects: Vec<WriteOp<'a>>) -> Self {
-        self.effects.extend(effects);
+    /// Attach the binding-table writes this step decided on, in program order. The run is minted on
+    /// `scratch` at the first write and extended in place after that, so a chain of attachments
+    /// costs the arena bytes and nothing else.
+    pub(crate) fn with_effects(
+        mut self,
+        scratch: BumpAllocator<'a>,
+        effects: impl IntoIterator<Item = WriteOp<'a>>,
+    ) -> Self {
+        self.effects
+            .get_or_insert_with(|| BumpVec::new_in(scratch))
+            .extend(effects);
         self
     }
 
     /// Attach one binding-table write.
-    pub(crate) fn with_effect(self, effect: WriteOp<'a>) -> Self {
-        self.with_effects(vec![effect])
+    pub(crate) fn with_effect(self, scratch: BumpAllocator<'a>, effect: WriteOp<'a>) -> Self {
+        self.with_effects(scratch, std::iter::once(effect))
     }
 }
 

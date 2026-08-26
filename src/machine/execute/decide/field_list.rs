@@ -334,6 +334,7 @@ impl<'a> FieldListDeferral<'a> {
                 .collect();
             let owned: Vec<Carried<'_>> = opened.iter().map(|o| o.value()).collect();
             Action::done_writing(
+                fctx.scratch,
                 rewalk
                     .run(fctx.scope, &owned, fctx.registries)
                     .and_then(|fields| finalize(fctx, rewalk.window.as_ref(), fields)),

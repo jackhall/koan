@@ -179,7 +179,7 @@ pub(super) fn await_module_body<'a>(
         Action::done(Ok(StepCarried::born_delivered(
             fctx.scope.lift_resident(sealed),
         )))
-        .with_effect(write)
+        .with_effect(fctx.scratch, write)
     })
 }
 

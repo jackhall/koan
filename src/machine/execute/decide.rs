@@ -509,6 +509,7 @@ fn wrap_await_continue<'step>(
             scope: view.current_scope(),
             ctx: view.step_ctx(),
             registries: view.registries(),
+            scratch: view.scratch(),
         };
         run_action(view, finish(&fctx, results))
     }
@@ -526,7 +527,9 @@ pub(in crate::machine::execute) fn run_action<'step>(
     // Binding-table writes travel as outcome data, so they must reach the harness-owned sink in
     // the order the bodies decided them — a chain of finishes recurses through here and so
     // contributes its writes in program order.
-    view.deposit_effects(action.effects);
+    if let Some(effects) = action.effects {
+        view.deposit_effects(effects);
+    }
     match action.next {
         ActionKind::Done(result) => Outcome::Done(result),
 
@@ -703,6 +706,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                         scope: view.current_scope(),
                         ctx: view.step_ctx(),
                         registries: view.registries(),
+                        scratch: view.scratch(),
                     };
                     run_action(view, finish(&fctx, result))
                 },

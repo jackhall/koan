@@ -53,6 +53,7 @@ fn bind_abstract_member<'a>(
     use crate::machine::Action;
     let carrier = ctx.scope.resident(Carried::Type(kt));
     Action::done(Ok(StepCarried::born(carrier))).with_effect(
+        ctx.scratch,
         crate::machine::core::bindings::WriteOp::Type {
             name,
             kt,

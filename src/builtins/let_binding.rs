@@ -158,13 +158,16 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         // copy out of the RHS envelope — so the terminal witnesses it directly and the `types`
         // write rides the outcome.
         let carrier = ctx.scope.resident(Carried::Type(kt));
-        Action::done(Ok(StepCarried::born(carrier))).with_effect(WriteOp::Type {
-            name,
-            kt,
-            site: ctx.declaration_site(),
-            policy: TypeWritePolicy::Insert,
-            builtin_shadow_guard: true,
-        })
+        Action::done(Ok(StepCarried::born(carrier))).with_effect(
+            ctx.scratch,
+            WriteOp::Type {
+                name,
+                kt,
+                site: ctx.declaration_site(),
+                policy: TypeWritePolicy::Insert,
+                builtin_shadow_guard: true,
+            },
+        )
     } else {
         // The value channel needs no seam of its own: only the `:Identifier` arm reaches here, and
         // its symbol was classified value-side at the parse.
@@ -213,7 +216,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         Action::done(Ok(StepCarried::born_delivered(
             ctx.scope.lift_resident(sealed),
         )))
-        .with_effect(write)
+        .with_effect(ctx.scratch, write)
     }
 }
 

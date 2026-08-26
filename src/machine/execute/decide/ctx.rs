@@ -89,8 +89,9 @@ pub(in crate::machine::execute) struct DecideCtx<'program: 'step, 'step, 'view> 
     /// binding writes](../../../../design/execution/classify-and-apply.md#the-steps-binding-writes).
     /// **Private**, with one `pub(in crate::machine::execute)` deposit method: a builtin receives
     /// a [`BodyCtx`](crate::machine::BodyCtx), which does not carry it, and nothing outside the
-    /// execute layer can deposit.
-    effects: &'view RefCell<Vec<WriteOp<'step>>>,
+    /// execute layer can deposit. The sink rides the step arena, minted fresh inside the step
+    /// brand, so a write that tried to cross steps would not typecheck.
+    effects: &'view RefCell<BumpVec<'step, WriteOp<'step>>>,
     /// The run's program storage capability, minted once per run and carried unchanged across every
     /// step. A builtin body reaches it through [`BodyCtx::program`](crate::machine::BodyCtx), and
     /// synthesizing a **value-channel** node (`OP`'s bridge body) builds against it. It is carried
@@ -118,7 +119,7 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
         scope: &'step Scope<'step>,
         dest_frame: Rc<FrameStorage>,
         installer: Installer,
-        effects: &'view RefCell<Vec<WriteOp<'step>>>,
+        effects: &'view RefCell<BumpVec<'step, WriteOp<'step>>>,
         program: ProgramBrand<'program>,
         scratch: BumpAllocator<'step>,
     ) -> Self {
@@ -145,7 +146,10 @@ impl<'program: 'step, 'step, 'view> DecideCtx<'program, 'step, 'view> {
 
     /// Append this step's next batch of binding writes to the harness-owned sink, preserving the
     /// order the bodies decided them in. The only way into `effects`.
-    pub(in crate::machine::execute) fn deposit_effects(&self, ops: Vec<WriteOp<'step>>) {
+    pub(in crate::machine::execute) fn deposit_effects(
+        &self,
+        ops: impl IntoIterator<Item = WriteOp<'step>>,
+    ) {
         self.effects.borrow_mut().extend(ops);
     }
 

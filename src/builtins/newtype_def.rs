@@ -160,11 +160,16 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 )
             },
             // A bare-leaf name resolved against scope bindings, not a dep terminal.
-            move |fctx, kt| Action::done_writing(finalize_newtype(fctx, name, kt, site)),
+            move |fctx, kt| {
+                Action::done_writing(fctx.scratch, finalize_newtype(fctx, name, kt, site))
+            },
             ctx.registries,
         )
     } else if let Some(repr_kt) = ctx.args.ktype(&SLOTS.repr) {
-        Action::done_writing(finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site))
+        Action::done_writing(
+            ctx.scratch,
+            finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site),
+        )
     } else if let Some(KObject::KExpression(inner)) = ctx.args.object(&SLOTS.repr) {
         defer_resolved_sigil(ctx.scope, name, *inner, site, ctx.types())
     } else {
@@ -202,7 +207,7 @@ fn defer_resolved_sigil<'a>(
         .collect();
     let wrapped = rewrite_window_refs(&wrapped, &threaded, scope, window.view(), types);
     dispatch_working_type_then(wrapped, "NEWTYPE repr slot", move |fctx, kt| {
-        Action::done_writing(finalize_newtype(fctx, name, kt, site))
+        Action::done_writing(fctx.scratch, finalize_newtype(fctx, name, kt, site))
     })
 }
 
@@ -296,13 +301,16 @@ pub fn body_constructor_family<'a>(
     // The handle names the same interned type in every region, so the terminal seals from it
     // directly and the `types` write rides the outcome, mirroring `type_decl::bind_abstract_member`.
     let carrier = ctx.scope.resident(Carried::Type(kt));
-    Action::done(Ok(StepCarried::born(carrier))).with_effect(WriteOp::Type {
-        name: member,
-        kt,
-        site: ctx.declaration_site(),
-        policy: TypeWritePolicy::Insert,
-        builtin_shadow_guard: true,
-    })
+    Action::done(Ok(StepCarried::born(carrier))).with_effect(
+        ctx.scratch,
+        WriteOp::Type {
+            name: member,
+            kt,
+            site: ctx.declaration_site(),
+            policy: TypeWritePolicy::Insert,
+            builtin_shadow_guard: true,
+        },
+    )
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {

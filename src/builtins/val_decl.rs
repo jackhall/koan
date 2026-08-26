@@ -155,10 +155,13 @@ fn finalize_val<'a>(
     Action::done(Ok(StepCarried::born(
         fctx.scope.resident(Carried::Type(declared_kt)),
     )))
-    .with_effect(crate::machine::core::bindings::WriteOp::SigSlot {
-        name,
-        kt: declared_kt,
-    })
+    .with_effect(
+        fctx.scratch,
+        crate::machine::core::bindings::WriteOp::SigSlot {
+            name,
+            kt: declared_kt,
+        },
+    )
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {

@@ -45,6 +45,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         let schema = SigSchema::project_decl(decl_scope, fctx.registries);
         let identity = fctx.types().signature(schema);
         Action::done(Ok(fctx.ctx.type_carried(identity))).with_effect(
+            fctx.scratch,
             crate::machine::core::bindings::WriteOp::Type {
                 name: name_for_finish,
                 kt: identity,

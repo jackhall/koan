@@ -287,7 +287,10 @@ fn build<'a>(
             ))),
             None => None,
         };
-        return op_action(plan.finalize(ctx.scope, operand, result, ctx.registries));
+        return op_action(
+            ctx.scratch,
+            plan.finalize(ctx.scope, operand, result, ctx.registries),
+        );
     }
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let operand = crate::try_action!(resolve_capture(
@@ -305,7 +308,10 @@ fn build<'a>(
             ))),
             None => None,
         };
-        op_action(plan.finalize(fctx.scope, operand, result, fctx.registries))
+        op_action(
+            fctx.scratch,
+            plan.finalize(fctx.scope, operand, result, fctx.registries),
+        )
     });
     Action::await_deps(deps, finish)
 }
@@ -637,11 +643,12 @@ fn bridge_body<'a>(
 /// Seal a finalize result as the slot's terminal — the operator function value, built witnessed in
 /// its declaring scope's region.
 fn op_action<'a>(
+    scratch: crate::witnessed::BumpAllocator<'a>,
     result: Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp<'a>>), KError>,
 ) -> Action<'a> {
     match result {
         Ok((witnessed, writes)) => {
-            Action::done(Ok(StepCarried::born(witnessed))).with_effects(writes)
+            Action::done(Ok(StepCarried::born(witnessed))).with_effects(scratch, writes)
         }
         Err(e) => Action::done(Err(e)),
     }

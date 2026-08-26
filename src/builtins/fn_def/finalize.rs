@@ -342,11 +342,12 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 /// (it names its captured scope's frame), so success seals as `Done(Ok)` carrying the overload
 /// registration as the step's effect.
 pub(crate) fn fn_action<'a>(
+    scratch: crate::witnessed::BumpAllocator<'a>,
     result: Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp<'a>>), KError>,
 ) -> Action<'a> {
     match result {
         Ok((witnessed, writes)) => {
-            Action::done(Ok(StepCarried::born(witnessed))).with_effects(writes)
+            Action::done(Ok(StepCarried::born(witnessed))).with_effects(scratch, writes)
         }
         Err(e) => Action::done(Err(e)),
     }
@@ -444,15 +445,18 @@ pub(crate) fn defer<'a>(
                 }
             }
         };
-        fn_action(finalize_fn_with_kind(
-            fctx.scope,
-            elements,
-            return_type,
-            body_expr,
-            kind,
-            bind_index,
-            fctx.registries,
-        ))
+        fn_action(
+            fctx.scratch,
+            finalize_fn_with_kind(
+                fctx.scope,
+                elements,
+                return_type,
+                body_expr,
+                kind,
+                bind_index,
+                fctx.registries,
+            ),
+        )
     });
     crate::machine::Action::await_deps(deps, finish)
 }

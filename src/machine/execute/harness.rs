@@ -401,10 +401,12 @@ impl<'run> Host<'run> {
             |_within: Within<'_, 'scratch>,
              continuation: super::outcome::NodeContinuation<'_>,
              scope| {
-                // The step's binding-write sink. Declared inside the step brand because a
-                // `WriteOp` carries seals branded to `scope`'s region — so "nothing crosses steps"
-                // is the borrow checker's rule here, not a convention.
-                let step_effects: RefCell<Vec<WriteOp<'_>>> = RefCell::new(Vec::new());
+                // The step's binding-write sink, minted fresh on the drain scratch. Declared
+                // inside the step brand because a `WriteOp` carries seals branded to `scope`'s
+                // region — so "nothing crosses steps" is the borrow checker's rule here, not a
+                // convention — and the arena hands the run back at the next drain pop.
+                let step_effects: RefCell<BumpVec<'_, WriteOp<'_>>> =
+                    RefCell::new(BumpVec::new_in(scratch));
                 // The whole tail — decide, effects, apply — runs inside the ambient bracket, so
                 // the apply reads the step-end frame and the deposited obligation off the ambient
                 // context directly.

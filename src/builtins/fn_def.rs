@@ -86,15 +86,18 @@ pub(crate) fn build_fn_like<'a>(
         FnPlan::Synchronous {
             elements,
             return_type,
-        } => fn_action(finalize_fn_with_kind(
-            ctx.scope,
-            elements,
-            return_type,
-            body_expr,
-            kind,
-            bind_index,
-            ctx.registries,
-        )),
+        } => fn_action(
+            ctx.scratch,
+            finalize_fn_with_kind(
+                ctx.scope,
+                elements,
+                return_type,
+                body_expr,
+                kind,
+                bind_index,
+                ctx.registries,
+            ),
+        ),
         FnPlan::Deferred(inputs) => defer(
             ctx.scope,
             signature_expr,
@@ -239,15 +242,18 @@ pub fn body_record_schema<'a>(
     ));
     let bind_index = ctx.bind_index();
     match classify(return_type_state, ParamListResult::Done(Vec::new())) {
-        FnPlan::Synchronous { return_type, .. } => fn_action(finalize_fn_with_kind(
-            ctx.scope,
-            elements,
-            return_type,
-            body_expr,
-            FnKind::Anonymous,
-            bind_index,
-            ctx.registries,
-        )),
+        FnPlan::Synchronous { return_type, .. } => fn_action(
+            ctx.scratch,
+            finalize_fn_with_kind(
+                ctx.scope,
+                elements,
+                return_type,
+                body_expr,
+                FnKind::Anonymous,
+                bind_index,
+                ctx.registries,
+            ),
+        ),
         FnPlan::Deferred(mut inputs) => {
             inputs.prebuilt_elements = Some(elements);
             defer(

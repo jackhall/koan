@@ -337,6 +337,7 @@ fn run_action_builtin<'step>(
             registries: view.registries(),
             out: view.out(),
             program: view.program(),
+            scratch: view.scratch(),
         };
         f(&body_ctx)
     };
