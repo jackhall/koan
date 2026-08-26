@@ -24,6 +24,18 @@ Allocation sites and hazards no item owns yet — the per-step ones the 2026-08-
 attribution measured, recorded so the next item starts from a claim rather than a
 re-attribution, plus the growth hazards a survey turned up:
 
+- **`FreshTail` cart mints** — the one cart a steady tail hop still mints once
+  [frame-scope-bookkeeping.md](frame-scope-bookkeeping.md) lands its arm overlay: the
+  `Rc<FrameStorage>`, `Rc<CallFrame>` shell, region chunk, and envelope of the hop's own
+  cart, plus the per-hop `Rc<SlotFrame>` anchor and the two per-hop `LexicalFrame` head
+  links — the FN-body chain head and the arm overlay's block head, fresh each hop
+  because `ScopeId`s are generative — all of which would ride the same mechanism.
+  Reuse of the hop-before-last's storage was TCO's original ping-pong, deleted by the
+  `tco-library-region-reuse` item for putting region lifetime in Koan's hands
+  ([design/scheduler-library.md](../../design/scheduler-library.md)); a revival must be a
+  workgraph-side facility of the node lifecycle, with a fresh-mint fallback when an
+  escapee pins the reuse target. Parked — history and constraints in
+  `scratch/tail-cart-recycling.md` (untracked working note).
 - **Scheduler cycle-check maps** — `Scheduler::would_create_cycle` hash-map inserts under
   `install_deps_in` ([workgraph/src/scheduler.rs](../../workgraph/src/scheduler.rs)),
   2/step.
