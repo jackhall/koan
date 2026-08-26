@@ -69,29 +69,62 @@ impl LexicalFrame {
     }
 }
 
-/// Body chain for a user-fn invoke. Walks `body_scope`'s lexical `outer` chain,
-/// stacks one frame per scope that also appears on the call-site chain, then
-/// prepends `(body_scope.id, body_index)` as the head. Depth is bounded by
-/// source-level nesting, not call depth (see module header).
+/// First frame on `chain` whose `scope_id` matches, as the sub-chain `Rc` — the frame and
+/// everything below it. Same head-first traversal as [`LexicalFrame::index_for`], returning
+/// the frame instead of its index so a caller can share the standing sub-chain outright.
+fn frame_for(chain: &Rc<LexicalFrame>, scope_id: ScopeId) -> Option<&Rc<LexicalFrame>> {
+    let mut current = chain;
+    loop {
+        if current.scope_id == scope_id {
+            return Some(current);
+        }
+        current = current.parent.as_ref()?;
+    }
+}
+
+fn same_chain(a: Option<&Rc<LexicalFrame>>, b: Option<&Rc<LexicalFrame>>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+        _ => false,
+    }
+}
+
+/// Parent chain for the scopes from `scope` outward: one frame per lexical ancestor the
+/// call-site chain names, outermost at the tail. Built on the recursion's unwind so the
+/// outermost frame is made first; when the call-site chain already holds a sub-chain whose
+/// head is this scope's hit and whose parent is the chain just built, that sub-chain is
+/// shared instead of re-minted — in a steady tail loop the whole suffix is one shared clone.
+/// Depth is source-level scope nesting, so the recursion stands in for the container a heap
+/// walk would need.
+fn assemble_parents(
+    scope: Option<&Scope<'_>>,
+    call_site_chain: &Rc<LexicalFrame>,
+) -> Option<Rc<LexicalFrame>> {
+    let scope = scope?;
+    let parent = assemble_parents(scope.outer(), call_site_chain);
+    // A scope the call-site chain never names contributes no frame; the ancestors already
+    // assembled below it still stand.
+    let Some(standing) = frame_for(call_site_chain, scope.id) else {
+        return parent;
+    };
+    if same_chain(standing.parent.as_ref(), parent.as_ref()) {
+        return Some(Rc::clone(standing));
+    }
+    Some(LexicalFrame::push(parent, scope.id, standing.index))
+}
+
+/// Body chain for a user-fn invoke. Walks `body_scope`'s lexical `outer` chain, stacks one
+/// frame per scope that also appears on the call-site chain, then prepends
+/// `(body_scope.id, body_index)` as the head. Depth is bounded by source-level nesting, not
+/// call depth (see module header), and any suffix the call-site chain already spells the same
+/// way is shared by `Rc` rather than rebuilt.
 pub fn assemble_body_chain<'a>(
     body_scope: &Scope<'a>,
     call_site_chain: Rc<LexicalFrame>,
     body_index: usize,
 ) -> Rc<LexicalFrame> {
-    let mut hits: Vec<(ScopeId, usize)> = Vec::new();
-    let mut current = body_scope.outer();
-    while let Some(s) = current {
-        if let Some(index) = call_site_chain.index_for(s.id) {
-            hits.push((s.id, index));
-        }
-        current = s.outer();
-    }
-    // Reverse so the outermost scope ends up at the tail (`parent: None`).
-    hits.reverse();
-    let mut chain: Option<Rc<LexicalFrame>> = None;
-    for (sid, idx) in hits {
-        chain = Some(LexicalFrame::push(chain, sid, idx));
-    }
+    let chain = assemble_parents(body_scope.outer(), &call_site_chain);
     // `body_index = 1` is single-statement: the lone body statement sits above the
     // `idx 0` parameters / `it`, so the strict `idx < cutoff` predicate admits them.
     // Multi-statement bodies pass `N` for the last statement so siblings at
