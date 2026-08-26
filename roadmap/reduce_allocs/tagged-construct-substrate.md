@@ -12,13 +12,18 @@ allocate once each; and the construct path clones a `TypeNode` out of
 `tagged_construct` term in [`observe/alloc/terms.txt`](../../observe/alloc/terms.txt)
 prices the whole construction; this seam is its largest share not owned by another item.
 
-**Directions.**
+**Directions.** Settled 2026-08-26; the working plan is
+`scratch/tagged-construct-substrate-plan.md` (untracked).
 
-- *Substrate build transients — open.* Whether `Sectioned::build`'s working containers
-  move to the step scratch arena or the section layout is precomputed on the type so the
-  build is a single sized bump. Attribution below `Sectioned::build` first.
-- *Registry node access — open.* `TypeRegistry::node` returning a clone on this path:
-  a borrowing accessor, or a `Copy` projection of the variants the construct path reads.
+- *Substrate build transients.* `Sectioned::build` takes its inputs as an
+  `ExactSizeIterator` and stages `cells`/`runs` as exactly-reserved `BumpVec`s in the
+  destination region, leaked into the stored slices — the idiom `alloc_record` already
+  uses; `section_cells` and `launch` stream instead of collecting. Precomputing the
+  section layout on the type is not viable: the run partition depends on per-value reach
+  verdicts the type cannot know.
+- *Registry node access.* Per-query verbs on `TypeRegistry` (`is_union`,
+  `union_variant_target`, `union_member_named`) returning `Copy` data, each confining the
+  node-table borrow inside the registry method; cold error paths keep the `node()` clone.
 
 **Acceptance criteria.**
 
