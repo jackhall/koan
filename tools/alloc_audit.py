@@ -91,6 +91,10 @@ class Term:
 TERMS = (
     Term("fixed", "empty", None, 1, "interpreter startup and builtin seeding"),
     Term("step", "tail_loop_steps100", "tail_loop_steps10", 90, "per tail-recursive step"),
+    Term("leading_loop", "leading_loop_steps100", "leading_loop_steps10", 90,
+         "per leading-carrying tail step"),
+    Term("try_loop", "try_loop_steps100", "try_loop_steps10", 90,
+         "per TRY-carrying tail step"),
     Term("dispatch", "operator_chain_operands128", "operator_chain_operands16", 112,
          "per operator dispatch"),
     Term("scope_walk_depth2", "scope_walk_depth2_calls40", "scope_walk_depth2_calls8", 32,
@@ -132,6 +136,10 @@ class Bound:
 BOUNDS = (
     Bound("the_tail_loop_shape_stays_within_its_step_churn_bound", "BOUND",
           ("tail_loop_steps100",), 100),
+    Bound("the_leading_loop_shape_stays_within_its_step_churn_bound", "BOUND",
+          ("leading_loop_steps100",), 100),
+    Bound("the_try_loop_shape_stays_within_its_step_churn_bound", "BOUND",
+          ("try_loop_steps100",), 100),
     Bound("the_operator_chain_shape_stays_within_its_dispatch_churn_bound", "BOUND",
           ("operator_chain_operands128",), 127),
     Bound("per_dispatch_cost_does_not_grow_with_scope_walk_depth", "BOUND",

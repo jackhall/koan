@@ -147,6 +147,8 @@ have headed each file is here instead.
 | shape | axis | what it exercises |
 |---|---|---|
 | `tail_loop_steps10`, `tail_loop_steps100` | step | a tail-recursive countdown. TCO holds the node table and the regions flat, so what the pair differences out is a per-*step* cost rather than a per-frame one |
+| `leading_loop_steps10`, `leading_loop_steps100` | multi-statement step | the same countdown with a leading `LET` ahead of the `MATCH` in the FN body, so each step splits its body, parks a leading-statements finish, and deposits an effect — what the tail loop pair does not reach |
+| `try_loop_steps10`, `try_loop_steps100` | catch | the same countdown with the recursive call's argument wrapped in a `TRY`, so each step parks a catch finish and selects through a `WITH` arm |
 | `operator_chain_operands16`, `operator_chain_operands128` | dispatch | one flat left fold, so every `+` is a dispatch — a bucket walk, a pick, and a working-expression rebuild |
 | `scope_walk_depth{2,10}_calls{8,40}` | scope walk | a depth × call-count grid over how far a dispatch's scope walk reaches: an innermost body of *m* `PROBE y` statements under *n* nested scopes that each shadow the `PROBE` bucket with a non-admitting same-key overload, so every dispatch strict- and hard-rejects at all *n* shadow scopes before picking at the root |
 | `builtin_call_calls{8,40}` | call arity | repetitions of one three-parameter builtin call (`MATCH … -> … WITH …`, bound as `value` / `return_type` / `branches`), an arity the binary operator chain does not reach |
@@ -161,7 +163,11 @@ repetitions themselves, the parse of the extra statements included.
 ### What the terms say
 
 The **step** term is exactly linear: the same per-step figure at 10, 50, 100 and 200 steps, of
-which the committed pair is two. The **dispatch** term is not — marginal cost rises across the
+which the committed pair is two. The **leading_loop** and **try_loop** terms are the same
+countdown carrying one more thing per step, so each reads as the step term plus what that
+thing costs: a multi-statement body's split, leading-statements finish and deposited effect
+for the first, a watched sub-expression's catch finish and extra arm selection for the second.
+Reading either against `step` is how the surface those paths add is priced. The **dispatch** term is not — marginal cost rises across the
 16→32, 32→64, 64→128 and 128→256 operand doublings, so a chain pays slightly more per operator
 the longer it gets. Below 16 operands the fixed cost swamps the term, so the rise is only
 readable over the larger sizes, and the committed pair spans the linear-enough middle rather

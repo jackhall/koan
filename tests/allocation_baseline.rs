@@ -9,8 +9,11 @@
 //! each other, so the test pins depth-independence rather than a count. The two
 //! `audit/shapes/builtin_call_calls*.koan` shapes cover a fourth — per-call cost at an arity
 //! above the binary operator — and are differenced the same way, for an absolute per-call
-//! figure. A re-introduced allocation on any of the four fails a test here rather than going
-//! unnoticed.
+//! figure. Two further tail-loop variants — `audit/shapes/leading_loop_steps*.koan`, whose FN
+//! body carries a leading `LET`, and `audit/shapes/try_loop_steps*.koan`, whose step wraps its
+//! recursive argument in a `TRY` — hold the multi-statement-body and catch paths to absolute
+//! bounds of their own. A re-introduced allocation on any of these axes fails a test here rather
+//! than going unnoticed.
 //!
 //! This test binary installs the same counter the binary's `alloc-count` feature does
 //! (`audit/counting_alloc.rs`), so it needs no feature flag and stays in the default
@@ -88,6 +91,47 @@ fn the_tail_loop_shape_stays_within_its_step_churn_bound() {
         delta <= BOUND,
         "the 100-step tail loop allocated {delta} times, over its {BOUND} bound — an \
          allocation was added to the per-step path; re-measure with \
+         `tools/alloc_audit.py` and rebaseline deliberately if the cost is intended"
+    );
+}
+
+/// 100 tail-recursive steps whose FN body carries a leading `LET` before its `MATCH`, at the
+/// `leading_loop` term in `observe/alloc/terms.txt`. Against the plain tail loop above it adds
+/// what a multi-statement body costs per step: the statement split, the leading-statements
+/// finish the wake reads back, and the effect the `LET` deposits. The bound sits over the
+/// recorded bracketed reading by less than the 100 a single new per-step allocation would add,
+/// same headroom rule as the loop.
+#[test]
+fn the_leading_loop_shape_stays_within_its_step_churn_bound() {
+    const BOUND: u64 = 60_000;
+    let delta = allocations_for(
+        include_str!("../audit/shapes/leading_loop_steps100.koan"),
+        "audit/shapes/leading_loop_steps100.koan",
+    );
+    assert!(
+        delta <= BOUND,
+        "the 100-step leading-statement loop allocated {delta} times, over its {BOUND} bound \
+         — an allocation was added to the multi-statement body path; re-measure with \
+         `tools/alloc_audit.py` and rebaseline deliberately if the cost is intended"
+    );
+}
+
+/// 100 tail-recursive steps each carrying a `TRY` around the recursive call's argument, at the
+/// `try_loop` term in `observe/alloc/terms.txt`. Against the plain tail loop above it adds what
+/// a watched sub-expression costs per step: the catch finish the `TRY` parks under and the
+/// extra arm the `WITH` selects through. The bound sits over the recorded bracketed reading by
+/// less than the 100 a single new per-step allocation would add.
+#[test]
+fn the_try_loop_shape_stays_within_its_step_churn_bound() {
+    const BOUND: u64 = 60_000;
+    let delta = allocations_for(
+        include_str!("../audit/shapes/try_loop_steps100.koan"),
+        "audit/shapes/try_loop_steps100.koan",
+    );
+    assert!(
+        delta <= BOUND,
+        "the 100-step TRY loop allocated {delta} times, over its {BOUND} bound — an \
+         allocation was added to the catch path; re-measure with \
          `tools/alloc_audit.py` and rebaseline deliberately if the cost is intended"
     );
 }
