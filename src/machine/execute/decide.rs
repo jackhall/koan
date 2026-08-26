@@ -11,8 +11,8 @@ use crate::machine::DeliveredCarried;
 use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::{
-    Action, ActionKind, AwaitContinue, BlockEntry, BlockRequest, FinishCtx, FramePlacement,
-    ReturnContract, TailContract,
+    Action, ActionKind, AwaitContinue, BlockEntry, BlockRequest, CatchFn, FinishCtx,
+    FramePlacement, ReturnContract, TailContract,
 };
 use crate::machine::model::{Carried, ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId};
@@ -515,6 +515,23 @@ fn wrap_await_continue<'step>(
     }
 }
 
+/// Project a builtin's [`CatchFn`] onto the terminal-finish delivery: assemble the wake-time
+/// [`FinishCtx`] and recurse `run_action` on the `Action` it returns — the catch twin of
+/// [`wrap_await_continue`].
+fn run_catch_finish<'step>(
+    view: &DecideCtx<'_, 'step, '_>,
+    finish: &CatchFn<'step>,
+    result: Result<DeliveredCarried, KError>,
+) -> Outcome<'step> {
+    let fctx = FinishCtx {
+        scope: view.current_scope(),
+        ctx: view.step_ctx(),
+        registries: view.registries(),
+        scratch: view.scratch(),
+    };
+    run_action(view, finish(&fctx, result))
+}
+
 /// Lower an [`Action`] into the [`Outcome`] currency, issuing no graph write of its own: an await
 /// or catch declares its deps as an [`Outcome::Park`] and the harness wires and applies. Every
 /// scheduler read the body needs is deferred into a finish, which sees its own wake-time
@@ -700,23 +717,21 @@ pub(in crate::machine::execute) fn run_action<'step>(
         ActionKind::Catch { watched, finish } => {
             // `watched` is realized (and owned) at apply time — an `InScope` watched enters a
             // fresh single-statement block, distinct from a dep-finish body's fan-out.
-            let wrapped = catching(
-                move |view: &DecideCtx<'_, 'step, '_>, result: Result<DeliveredCarried, KError>| {
-                    let fctx = FinishCtx {
-                        scope: view.current_scope(),
-                        ctx: view.step_ctx(),
-                        registries: view.registries(),
-                        scratch: view.scratch(),
-                    };
-                    run_action(view, finish(&fctx, result))
-                },
+            //
+            // The builtin's finish is `Copy`, so the wrapper assembling its wake-time ctx is too:
+            // both erase into the current frame's region, the frame the park installs under.
+            let finish = erase_bumped(
+                view.current_scope().brand(),
+                catching(
+                    move |view: &DecideCtx<'_, 'step, '_>,
+                          result: Result<DeliveredCarried, KError>| {
+                        run_catch_finish(view, finish, result)
+                    },
+                ),
             );
             Outcome::Park {
                 deps: ParkDeps::List(Deps::new_in(view.scratch())),
-                continuation: Continuation::Catch {
-                    watched,
-                    finish: erase_boxed(wrapped),
-                },
+                continuation: Continuation::Catch { watched, finish },
                 dep_error_frame: None,
             }
         }

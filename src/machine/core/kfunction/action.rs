@@ -528,9 +528,15 @@ pub type AwaitContinue<'a> =
 /// A `Catch` finish: re-entered with the watched slot's delivery envelope (value, reach, and
 /// retained producer pin as one unit, adopted or opened at the finish's own step brand) or the
 /// watched `KError`.
-pub type CatchContinue<'a> = Box<
-    dyn for<'r> FnOnce(&FinishCtx<'a, 'r>, Result<DeliveredCarried, KError>) -> Action<'a> + 'a,
->;
+///
+/// Re-entrant rather than one-shot, so a catch finish's captures are `Copy` and its bytes sit in
+/// the host frame's region — a recovery costs no heap allocation. That is the whole surface: both
+/// catching builtins ([`TRY`](crate::builtins::try_with) and [`CATCH`](crate::builtins::catch))
+/// carry `Copy` captures, so unlike the stored continuation
+/// ([`ContinuationCall`](crate::machine::execute::ContinuationCall)) and the await finish
+/// ([`AwaitContinue`]) there is no owning twin to pick between.
+pub type CatchFn<'a> =
+    dyn for<'r> Fn(&FinishCtx<'a, 'r>, Result<DeliveredCarried, KError>) -> Action<'a> + 'a;
 
 /// The return contract a [`Action::Tail`] carries — eager, or resolved from the last leading
 /// statement's result at finish time (a deferred-`Expression` FN return: the return-type
@@ -605,9 +611,22 @@ impl<'a> Action<'a> {
         Action::from_kind(ActionKind::AwaitBlock { block, finish })
     }
 
-    /// Watch `watched`, recover via `finish`. See [`ActionKind::Catch`].
-    pub fn catch(watched: DepRequest<'a>, finish: CatchContinue<'a>) -> Self {
-        Action::from_kind(ActionKind::Catch { watched, finish })
+    /// Watch `watched`, recover via `finish`. The closure erases into `host` — the region of the
+    /// frame the park installs under — so the recovery allocates nothing on the heap. `host` is a
+    /// [`RegionBrand`] rather than a bare allocator so a step-scratch host, dangling at the next
+    /// drain pop, is unrepresentable; the `T: Copy` guard on
+    /// [`BumpAllocator::value`](crate::witnessed::BumpAllocator::value) is the region's Drop-free
+    /// proof. See [`ActionKind::Catch`].
+    pub fn catch<F>(watched: DepRequest<'a>, host: RegionBrand<'a>, finish: F) -> Self
+    where
+        F: for<'r> Fn(&FinishCtx<'a, 'r>, Result<DeliveredCarried, KError>) -> Action<'a>
+            + Copy
+            + 'a,
+    {
+        Action::from_kind(ActionKind::Catch {
+            watched,
+            finish: host.allocator().value(finish),
+        })
     }
 
     /// A `Done` terminal paired with the binding-table writes the body decided, or the error
@@ -685,7 +704,7 @@ pub enum ActionKind<'a> {
     /// Watch `watched`, recover via `finish`.
     Catch {
         watched: DepRequest<'a>,
-        finish: CatchContinue<'a>,
+        finish: &'a CatchFn<'a>,
     },
 }
 

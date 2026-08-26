@@ -28,7 +28,7 @@ crate::slots! { SLOTS { branches, expr, return_type } }
 /// into the matched arm under the `-> :T` contract and re-raising on no match.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use super::branch_walk::{arm_tail, payload_envelope, resolve_arm_contract};
-    use crate::machine::{Action, CatchContinue, DepPlacement, DepRequest, require_kexpression};
+    use crate::machine::{Action, DepPlacement, DepRequest, require_kexpression};
 
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "TRY", &SLOTS.expr));
     let contract = crate::try_action!(resolve_arm_contract(ctx, "TRY"));
@@ -36,7 +36,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // Body runs in a fresh `child_under` scope so a `LET` inside it stays local and reads still
     // chain out to the call-site scope.
     let body_scope: &'a Scope<'a> = ctx.scope.alloc_child_under();
-    let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
+    // Both captures — the branches expression and the arm contract — are `Copy`, so the finish
+    // erases onto the bumped tier: a TRY costs no heap allocation for its recovery.
+    let finish = move |fctx: &crate::machine::FinishCtx<'a, '_>,
+                       result: Result<DeliveredCarried, KError>| {
         // On success `it` is the watched value, adopted from its sealed carrier at bind time. On
         // error `it` is the per-variant payload unwrapped from `KError::to_tagged` — that `Tagged`
         // now carries a fresh `Record` substrate (born through a fold door), so it travels as a
@@ -72,7 +75,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 Err(msg) => return Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
             };
         arm_tail(fctx.scope, it_carrier, body_expr, contract, fctx.registries)
-    });
+    };
     Action::catch(
         DepRequest::Dispatch {
             expr: crate::machine::model::WorkingExpression::from_ast(
@@ -81,6 +84,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             ),
             placement: DepPlacement::InScope(body_scope),
         },
+        ctx.brand(),
         finish,
     )
 }

@@ -653,19 +653,22 @@ where
 /// Adapt a catch finish onto the uniform signature: no short-circuit on an errored dep, so the
 /// closure can recover or re-raise. The watched producer's delivered resident is lifted back into
 /// an envelope owning its whole reach, which the finish adopts or opens at its own step brand.
+/// `Copy` captures in and out, so the product erases on the bumped tier.
 pub(in crate::machine::execute) fn catching<'step, F>(
     finish: F,
-) -> impl for<'view, 'd> FnOnce(
+) -> impl for<'view, 'd> Fn(
     &DecideCtx<'_, 'step, 'view>,
     &[Result<DepTerminal<'d>, KError>],
     NodeId,
 ) -> Outcome<'step>
++ Copy
 + 'step
 where
-    F: for<'view> FnOnce(
+    F: for<'view> Fn(
             &DecideCtx<'_, 'step, 'view>,
             Result<DeliveredCarried, KError>,
         ) -> Outcome<'step>
+        + Copy
         + 'step,
 {
     move |view: &DecideCtx<'_, 'step, '_>,
