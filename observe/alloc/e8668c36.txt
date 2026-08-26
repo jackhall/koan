@@ -1,4 +1,4 @@
-# allocation audit sweep, measured 2026-08-26 at 0538fc9e (uncommitted changes in the tree)
+# allocation audit sweep, measured 2026-08-26 at e8668c36 (uncommitted changes in the tree)
 # columns: shape  allocations  symbols  bracketed
 # whole-program totals through the counting allocator; `bracketed` is the same run
 # without interpreter startup, from tests/allocation_baseline.rs, `-` where no test
@@ -15,8 +15,8 @@ scope_walk_depth10_calls40    3523     633    3514
 scope_walk_depth10_calls8     2636     569    2627
 scope_walk_depth2_calls40     2488     497    2479
 scope_walk_depth2_calls8      1598     433    1589
-tagged_construct_calls40      3736     828    3727
-tagged_construct_calls8       1697     476    1688
+tagged_construct_calls40      3376     828    3367
+tagged_construct_calls8       1625     476    1616
 tail_loop_steps10             1616     398       -
 tail_loop_steps100            5306     398    5297
 try_loop_steps10              1753     415       -

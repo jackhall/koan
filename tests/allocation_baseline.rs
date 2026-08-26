@@ -297,9 +297,9 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
 /// construct-and-match cycles' marginal cost — the parse of the 32 extra statements included,
 /// since that is how the shapes differ.
 ///
-/// This is the nominal-member axis. Each cycle reads the union's `SetMember` node out of the
-/// registry (a clone per read), selects a variant out of the constructor's schema, builds the
-/// tagged value, and matches on its tag.
+/// This is the nominal-member axis. Each cycle probes the union's members through the registry —
+/// a by-reference walk under one borrow that hands back the variant and its payload type by value,
+/// no node clone — builds the tagged value, and matches on its tag.
 ///
 /// The recorded figure is the `tagged_construct` term in `observe/alloc/terms.txt`. One
 /// allocation per cycle is an arena chunk rather than heap traffic: the cycle's frame does not fit
@@ -310,7 +310,7 @@ fn the_user_fn_call_shape_stays_within_its_per_parameter_bound() {
 /// re-introduced per-construction allocation fails it.
 #[test]
 fn the_tagged_construct_shape_stays_within_its_per_construction_bound() {
-    const BOUND: u64 = 2_065;
+    const BOUND: u64 = 1_775;
     let marginal = allocations_for(
         include_str!("../audit/shapes/tagged_construct_calls40.koan"),
         "audit/shapes/tagged_construct_calls40.koan",
