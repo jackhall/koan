@@ -16,6 +16,7 @@
 use crate::machine::ProducerId;
 use crate::machine::core::{ClassifiedSlots, OpenedFunction};
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
+use crate::machine::model::labels::BinderSymbol;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 use crate::witnessed::{BumpAllocator, BumpVec};
@@ -62,8 +63,9 @@ pub enum DispatchOutcome<'step> {
     /// claim on `key`) without scheduling new work.
     ParkOnProducers(BumpVec<'step, ProducerId>),
     /// A bare-name arg resolves to nothing — no binding and no placeholder. The unbound name is the
-    /// precise cause, so it surfaces here rather than as a dispatch miss.
-    UnboundName(String),
+    /// precise cause, so it surfaces here rather than as a dispatch miss. It travels as the symbol
+    /// the lookup held; the spelling is read back where the error is built.
+    UnboundName(BinderSymbol),
     Unmatched,
 }
 
@@ -113,7 +115,7 @@ impl<'step> Scope<'step> {
                 return outcome;
             }
         }
-        let mut dead_lean: Option<String> = None;
+        let mut dead_lean: Option<BinderSymbol> = None;
         for scope in self.ancestors() {
             let lookup =
                 scope
@@ -181,7 +183,7 @@ fn parked_producers<'s>(
 /// bare name.
 enum ScopeDecision<'step> {
     Terminal(DispatchOutcome<'step>),
-    DeadLean(String),
+    DeadLean(BinderSymbol),
     Continue,
 }
 
@@ -262,7 +264,7 @@ fn decide_relaxed<'step, 'e>(
     let mut parked: BumpVec<'step, ProducerId> =
         BumpVec::with_capacity_in(expr.parts.len(), scratch);
     let mut any_eager_lean = false;
-    let mut dead_name: Option<String> = None;
+    let mut dead_name: Option<BinderSymbol> = None;
     for f in bucket.candidates.iter() {
         let Some(leans) = relaxed_admits(
             &f.value().signature,
@@ -384,10 +386,11 @@ enum PickPass {
 /// Which unresolved-slot kind the relaxed pass leaned on at a rejecting slot. `Dead` names an
 /// unbound bare name: no producer will ever bind it, so it labels the `UnboundName` terminal and
 /// never waits.
+#[derive(Clone, Copy)]
 enum Lean {
     Parked(ProducerId),
     Eager,
-    Dead(String),
+    Dead(BinderSymbol),
 }
 
 /// Strict admission against the `bare_outcomes` cache. Rule table at
@@ -458,7 +461,7 @@ fn relaxed_admits<'e, 's>(
         }
         match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
             Some(Resolution::Parked(p)) => leans.push(Lean::Parked(*p)),
-            Some(Resolution::Unbound(name)) => leans.push(Lean::Dead(name.clone())),
+            Some(Resolution::Unbound(name)) => leans.push(Lean::Dead(*name)),
             // Hard reject: no arriving input or binding can flip it.
             _ => return None,
         }

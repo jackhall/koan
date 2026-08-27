@@ -35,14 +35,15 @@ mod tests;
 
 /// Outcome of resolving a type name to a `T`, shared across layers: both model and execute
 /// use `TypeResolution<KType>` now that `KType` is a `Copy` handle. `Park` carries the binder
-/// [`ProducerId`]s a still-finalizing referent waits on; `Unbound` the miss diagnostic. The
-/// payload-free
+/// [`ProducerId`]s a still-finalizing referent waits on; `Unbound` the **name that missed** — the
+/// symbol the lookup already held, so the miss costs no rendering and the spelling is read back
+/// only where a diagnostic quotes it, through [`unknown_type_name`]. The payload-free
 /// arms let a layer lift `Done` through [`Self::and_then_done`] and forward the rest unchanged.
 #[derive(Debug)]
 pub enum TypeResolution<T> {
     Done(T),
     Park(Vec<ProducerId>),
-    Unbound(String),
+    Unbound(TypeSymbol),
 }
 
 impl<T> TypeResolution<T> {
@@ -53,7 +54,7 @@ impl<T> TypeResolution<T> {
         match self {
             TypeResolution::Done(payload) => f(payload),
             TypeResolution::Park(sources) => TypeResolution::Park(sources),
-            TypeResolution::Unbound(message) => TypeResolution::Unbound(message),
+            TypeResolution::Unbound(name) => TypeResolution::Unbound(name),
         }
     }
 }
@@ -149,30 +150,26 @@ impl<'b, 'a> Elaborator<'b, 'a> {
 /// died; that is a typed miss, never a park that would never wake.
 fn park_until_seal(
     el: &Elaborator<'_, '_>,
+    name: TypeSymbol,
     view: WindowView<'_, '_>,
-    registries: &RunRegistries,
 ) -> TypeResolution<KType> {
     let Some((owner, _)) = el.scope.nearest_declaration_window() else {
-        return TypeResolution::Unbound(
-            "a co-declared type name resolved outside the body that announced it".to_string(),
-        );
+        // Co-declared outside the body that announced it: the name resolves to nothing here, which
+        // is the same miss any unbound name is.
+        return TypeResolution::Unbound(name);
     };
     let mut producers: Vec<ProducerId> = Vec::new();
-    for (name, member_owner) in view.unfilled_members() {
-        let declarer = member_owner.unwrap_or(name);
+    for (member, member_owner) in view.unfilled_members() {
+        let declarer = member_owner.unwrap_or(member);
         match owner.bindings().type_placeholder_producer(declarer) {
             Some(node_id) => {
                 if !producers.contains(&node_id) {
                     producers.push(node_id);
                 }
             }
-            None => {
-                let declarer = render_label(declarer.symbol(), registries);
-                return TypeResolution::Unbound(format!(
-                    "type `{declarer}` is co-declared in this module body but its declaration \
-                     failed",
-                ));
-            }
+            // A declaration that died leaves its member unfilled and its placeholder gone, so the
+            // name being resolved against the window names nothing.
+            None => return TypeResolution::Unbound(name),
         }
     }
     TypeResolution::Park(producers)
@@ -208,7 +205,7 @@ pub fn elaborate_type_identifier(
                 (None, TypeResolutionMode::Declarator) => {
                     TypeResolution::Done(types.intern(TypeNode::Sibling(index)))
                 }
-                (None, TypeResolutionMode::Consumer) => park_until_seal(el, view, registries),
+                (None, TypeResolutionMode::Consumer) => park_until_seal(el, classified, view),
             };
         }
         // A binder names no single member — a `UNION`'s name denotes the union of every variant it
@@ -219,10 +216,10 @@ pub fn elaborate_type_identifier(
                 (None, TypeResolutionMode::Declarator) => {
                     match view.binder_union(classified, types) {
                         Some(kt) => TypeResolution::Done(kt),
-                        None => TypeResolution::Unbound(unknown_type_name(name, registries)),
+                        None => TypeResolution::Unbound(name),
                     }
                 }
-                (None, TypeResolutionMode::Consumer) => park_until_seal(el, view, registries),
+                (None, TypeResolutionMode::Consumer) => park_until_seal(el, classified, view),
             };
         }
         // A threaded name the window has not announced yet: a forward reference inside a declarator
@@ -252,16 +249,17 @@ pub fn elaborate_type_identifier(
     // still resolves builtin names — and then an unknown-name failure.
     match KType::from_symbol(name) {
         Some(kt) => TypeResolution::Done(kt),
-        None => TypeResolution::Unbound(unknown_type_name(name, registries)),
+        None => TypeResolution::Unbound(name),
     }
 }
 
-/// The miss diagnostic every unbound arm of [`elaborate_type_identifier`] surfaces, rendered
-/// through the run's interner.
-fn unknown_type_name(name: TypeSymbol, registries: &RunRegistries) -> String {
+/// The miss diagnostic a [`TypeResolution::Unbound`] renders to — the one wording every unbound
+/// arm shares, built where a diagnostic quotes the name and nowhere else. The spelling goes
+/// straight into the message's own buffer, so naming the miss costs that buffer alone.
+pub fn unknown_type_name(name: TypeSymbol, registries: &RunRegistries) -> String {
     format!(
         "unknown type name `{}`",
-        crate::machine::model::types::render_label(name.symbol(), registries)
+        crate::machine::model::types::display_label(name.symbol(), registries)
     )
 }
 

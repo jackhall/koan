@@ -190,7 +190,9 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
                 ctx.registries,
             )),
             TypeResolution::Unbound(name) => {
-                Action::done(Err(KError::new(KErrorKind::UnboundName(name))))
+                Action::done(Err(KError::new(KErrorKind::UnboundName(
+                    crate::machine::model::render_label(name.symbol(), ctx.registries),
+                ))))
             }
             TypeResolution::Park(producers) => {
                 Action::done(Err(KError::new(KErrorKind::ShapeError(format!(

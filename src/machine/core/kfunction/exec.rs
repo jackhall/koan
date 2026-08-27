@@ -215,8 +215,10 @@ pub fn run_user_fn<'ast>(
                                 // here rather than widening to Any is what makes `-> some_value` (a
                                 // return slot naming a value — a module included) a diagnostic
                                 // instead of a silently unconstrained return.
-                                TypeResolution::Unbound(message) => {
-                                    Err(KError::new(KErrorKind::ShapeError(message)))
+                                TypeResolution::Unbound(name) => {
+                                    Err(KError::new(KErrorKind::ShapeError(
+                                        crate::machine::model::unknown_type_name(name, registries),
+                                    )))
                                 }
                             };
                         resolved

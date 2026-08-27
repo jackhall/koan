@@ -52,7 +52,9 @@ pub(super) fn initial<'step>(
             })));
         }
         DispatchOutcome::UnboundName(name) => {
-            return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))));
+            return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
+                crate::machine::model::render_label(name.symbol(), ctx.registries()),
+            ))));
         }
         DispatchOutcome::Deferred => {
             return install_eager_only(ctx, expr);
@@ -128,7 +130,9 @@ fn finish<'step>(
         }
         DispatchOutcome::ParkOnProducers(sources) => park_on_claims(&sources, working_expr, ctx),
         DispatchOutcome::UnboundName(name) => {
-            Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
+            Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
+                crate::machine::model::render_label(name.symbol(), ctx.registries()),
+            ))))
         }
     }
 }

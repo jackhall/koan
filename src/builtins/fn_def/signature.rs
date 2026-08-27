@@ -118,10 +118,11 @@ pub(crate) fn parse_fn_param_list<'a>(
                             TypeResolution::Park(producers) => {
                                 awaited.extend(producers);
                             }
-                            TypeResolution::Unbound(msg) if first_err.is_none() => {
+                            TypeResolution::Unbound(missing) if first_err.is_none() => {
                                 first_err = Some(format!(
-                                    "{msg} in FN signature for parameter `{}`",
-                                    crate::machine::model::render_label(
+                                    "{} in FN signature for parameter `{}`",
+                                    crate::machine::model::unknown_type_name(missing, registries),
+                                    crate::machine::model::display_label(
                                         symbol.symbol(),
                                         registries
                                     ),

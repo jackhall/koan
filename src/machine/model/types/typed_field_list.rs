@@ -195,9 +195,11 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                         // parking producer in one pass.
                         Ok(KType::ANY)
                     }
-                    TypeResolution::Unbound(msg) => {
-                        Err(format!("{msg} in {context_list} for `{}`", rendered()))
-                    }
+                    TypeResolution::Unbound(missing) => Err(format!(
+                        "{} in {context_list} for `{}`",
+                        super::unknown_type_name(missing, registries),
+                        rendered()
+                    )),
                 },
                 // A co-declared sibling `rewrite_threaded_self_refs` already sealed in. The cell is a
                 // resident of the elaborating scope's own region — the walk that seals one and the walk

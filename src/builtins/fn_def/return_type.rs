@@ -107,7 +107,10 @@ pub(crate) fn classify_return_type<'a>(
                 TypeResolution::Park(producers) => Ok(ReturnTypeState::Pending { te, producers }),
                 // `resolve_type_identifier` already tries the builtin fallback internally, so an
                 // `Unbound` here is neither a type binder nor a builtin — a hard miss.
-                TypeResolution::Unbound(detail) => Err(unbound_error(label, &detail)),
+                TypeResolution::Unbound(name) => Err(unbound_error(
+                    label,
+                    &crate::machine::model::unknown_type_name(name, registries),
+                )),
             }
         }
         ReturnTypeRaw::ExprCarrier(e) => {

@@ -56,7 +56,9 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         TypeChannel::Done(kt) => {
             Outcome::Done(Ok(StepCarried::born(s.resident(Carried::Type(kt)))))
         }
-        TypeChannel::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
+        TypeChannel::Unbound(missing) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
+            crate::machine::model::render_label(missing.symbol(), ctx.registries()),
+        )))),
         // The binder's terminal is not the type carrier (a finalize-combine returns its own
         // value), so the wake re-resolves the leaf against the now-sealed registry rather than
         // lifting that value.

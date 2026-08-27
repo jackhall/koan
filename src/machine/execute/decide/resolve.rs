@@ -17,23 +17,24 @@ use std::rc::Rc;
 
 use crate::machine::ProducerId;
 use crate::machine::model::TypeResolution;
-use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
 use crate::machine::model::{ExpressionPart, KType, RunRegistries};
 use crate::machine::{DeliveredCarried, LexicalFrame, NameLookup, Scope};
 
 use crate::machine::model::Carried;
 
 /// Type-channel resolution with the park-source list already folded to a single edge, so no
-/// consumer has to choose among sources.
+/// consumer has to choose among sources. `Unbound` carries the name that missed; the spelling is
+/// read back where a diagnostic quotes it.
 pub(in crate::machine::execute) enum TypeChannel {
     Done(KType),
     Parked(ProducerId),
-    Unbound(String),
+    Unbound(TypeSymbol),
 }
 
 /// Narrow [`resolve_type_identifier`](Scope::resolve_type_identifier)'s park-source list to its
 /// first element, since a [`Resolution`] parks on exactly one edge. An empty list has no edge to
-/// park on, so it renders the miss diagnostic instead.
+/// park on, so it lands the miss instead.
 pub(in crate::machine::execute) fn type_channel(
     scope: &Scope<'_>,
     name: TypeSymbol,
@@ -42,10 +43,10 @@ pub(in crate::machine::execute) fn type_channel(
 ) -> TypeChannel {
     match scope.resolve_type_identifier(name, chain, registries) {
         TypeResolution::Done(kt) => TypeChannel::Done(kt),
-        TypeResolution::Unbound(n) => TypeChannel::Unbound(n),
+        TypeResolution::Unbound(missing) => TypeChannel::Unbound(missing),
         TypeResolution::Park(sources) => match sources.first() {
             Some(source) => TypeChannel::Parked(*source),
-            None => TypeChannel::Unbound(registries.labels.render(name.symbol())),
+            None => TypeChannel::Unbound(name),
         },
     }
 }
@@ -58,7 +59,11 @@ pub(crate) enum Resolution {
     /// and retains nothing.
     Resolved(DeliveredCarried),
     Parked(ProducerId),
-    Unbound(String),
+    /// The name that resolved to nothing — not an error arm but the ordinary "this bare name is
+    /// not a value" fall-through every keyworded dispatch takes. It carries the symbol the lookup
+    /// already held, so the miss path renders nothing; a diagnostic that quotes the name reads the
+    /// spelling back through the run's interner.
+    Unbound(BinderSymbol),
 }
 
 /// `part` must be a bare-name part (`Identifier` or leaf `Type`); anything else is unreachable.
@@ -76,7 +81,7 @@ pub(in crate::machine::execute) fn resolve_name(
             match scope.resolve_value_delivered(*name, chain.map(|c| &**c)) {
                 Some(NameLookup::Bound(delivered)) => Resolution::Resolved(delivered),
                 Some(NameLookup::Parked(source)) => Resolution::Parked(source),
-                None => Resolution::Unbound(registries.labels.render(name.symbol())),
+                None => Resolution::Unbound(BinderSymbol::Value(*name)),
             }
         }
         ExpressionPart::Type(t) => {
@@ -87,7 +92,7 @@ pub(in crate::machine::execute) fn resolve_name(
                     Resolution::Resolved(scope.deliver_resident(Carried::Type(kt)))
                 }
                 TypeChannel::Parked(source) => Resolution::Parked(source),
-                TypeChannel::Unbound(n) => Resolution::Unbound(n),
+                TypeChannel::Unbound(missing) => Resolution::Unbound(BinderSymbol::Type(missing)),
             }
         }
         _ => unreachable!("resolve_name only called on bare-name parts"),

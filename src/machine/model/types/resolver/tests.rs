@@ -36,10 +36,9 @@ fn type_token_cannot_bind_value_side() {
         type_name("Gee", types.registries()),
         types.registries(),
     ) {
-        TypeResolution::Unbound(msg) => assert!(
-            msg.contains("Gee"),
-            "expected an unknown-name miss naming `Gee`, got: {msg}",
-        ),
+        TypeResolution::Unbound(missing) => {
+            assert_eq!(missing, type_name("Gee", types.registries()))
+        }
         other => panic!("expected Unbound, got {:?}", other),
     }
 }
@@ -57,10 +56,13 @@ fn unbound_leaf_names_unknown_type() {
         type_name("NopeType", types.registries()),
         types.registries(),
     ) {
-        TypeResolution::Unbound(msg) => assert!(
-            msg.contains("unknown type name") && msg.contains("NopeType"),
-            "expected an unknown-type-name message naming `NopeType`, got: {msg}",
-        ),
+        TypeResolution::Unbound(missing) => {
+            assert_eq!(missing, type_name("NopeType", types.registries()));
+            assert!(
+                crate::machine::model::unknown_type_name(missing, types.registries())
+                    .contains("unknown type name `NopeType`")
+            );
+        }
         other => panic!("expected Unbound, got {:?}", other),
     }
 }
@@ -103,10 +105,7 @@ fn announced_member_never_lowers_to_sibling_for_a_consumer() {
     let types = parent_test_run.registry_handle();
     let mut el = Elaborator::new(child);
     match elaborate_type_identifier(&mut el, type_token("Beta"), types.registries()) {
-        TypeResolution::Unbound(msg) => assert!(
-            msg.contains("co-declared"),
-            "expected the dead-declaration miss, got {msg}",
-        ),
+        TypeResolution::Unbound(missing) => assert_eq!(missing, type_token("Beta")),
         other => panic!("a consumer must never observe a pre-seal member, got {other:?}"),
     }
 }

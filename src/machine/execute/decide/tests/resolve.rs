@@ -96,7 +96,13 @@ fn resolve_name_unbound() {
     let scope = test_run.scope;
     let part = ExpressionPart::Identifier(value_name("missing", test_run.registries()));
     match resolve_name(scope, &part, None, test_run.registries()) {
-        Resolution::Unbound(name) => assert_eq!(name, "missing"),
+        Resolution::Unbound(name) => assert_eq!(
+            name,
+            crate::machine::model::labels::BinderSymbol::Value(value_name(
+                "missing",
+                test_run.registries()
+            ))
+        ),
         _ => panic!("expected Resolution::Unbound"),
     }
 }

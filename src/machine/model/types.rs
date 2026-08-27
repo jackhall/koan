@@ -36,7 +36,7 @@ pub(crate) use registry::Relation;
 pub use registry::TypeRegistry;
 pub use resolver::{
     Elaborator, SealOutcome, TypeResolution, declarator_window, elaborate_type_identifier,
-    finalize_nominal_member, seal_writes,
+    finalize_nominal_member, seal_writes, unknown_type_name,
 };
 pub use sig_schema::{
     SigSchema, TypeMemberMap, constructor_param_names, sig_subtype, substitute_sig_members,

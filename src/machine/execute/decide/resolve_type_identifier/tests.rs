@@ -164,12 +164,8 @@ mod bare_leaf_resolution {
         let registries = RunRegistries::new();
         let leaf = type_name("Missing", &registries);
         match scope.resolve_type_identifier(leaf, None, &registries) {
-            // The bridge surfaces the elaborator's `unknown type name` diagnostic, which
-            // names the leaf rather than carrying the bare name.
-            TypeResolution::Unbound(message) => assert!(
-                message.contains("Missing"),
-                "expected an unbound message naming `Missing`, got: {message}",
-            ),
+            // The bridge surfaces the elaborator's miss, which carries the leaf's own symbol.
+            TypeResolution::Unbound(missing) => assert_eq!(missing, leaf),
             other => panic!("expected Unbound, got {:?}", outcome_tag(&other)),
         }
     }

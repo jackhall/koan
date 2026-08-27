@@ -36,15 +36,11 @@ fn non_type_result_error(slot: &str, got_kind: String) -> KError {
 pub(crate) fn classify_name_lookup(
     lookup: Option<NameLookup<KType>>,
     name: crate::machine::model::TypeSymbol,
-    registries: &crate::machine::model::RunRegistries,
 ) -> TypeResolution<KType> {
     match lookup {
         Some(NameLookup::Bound(kt)) => TypeResolution::Done(kt),
         Some(NameLookup::Parked(producer)) => TypeResolution::Park(vec![producer]),
-        None => TypeResolution::Unbound(format!(
-            "unknown type name `{}`",
-            crate::machine::model::render_label(name.symbol(), registries),
-        )),
+        None => TypeResolution::Unbound(name),
     }
 }
 
@@ -59,7 +55,10 @@ pub(crate) fn resolve_at_wake<'a>(
     match resolve(scope, registries) {
         TypeResolution::Done(kt) => Ok(kt),
         TypeResolution::Park(_) => Err(parked_after_wake_error(slot)),
-        TypeResolution::Unbound(detail) => Err(unbound_error(slot, &detail)),
+        TypeResolution::Unbound(name) => Err(unbound_error(
+            slot,
+            &crate::machine::model::unknown_type_name(name, registries),
+        )),
     }
 }
 
@@ -87,7 +86,10 @@ pub(crate) fn resolve_or_await<'a>(
             });
             Action::await_deps(deps_on(sources), finish)
         }
-        TypeResolution::Unbound(detail) => Action::done(Err(unbound_error(slot, &detail))),
+        TypeResolution::Unbound(name) => Action::done(Err(unbound_error(
+            slot,
+            &crate::machine::model::unknown_type_name(name, registries),
+        ))),
     }
 }
 

@@ -490,7 +490,11 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
         &mut crate::machine::WriteGate::for_test(),
     );
     let expr = working(region.brand(), vec![identifier_part("fwd")]);
-    let bare_outcomes = vec![Some(Resolution::Unbound("fwd".into()))];
+    let bare_outcomes = vec![Some(Resolution::Unbound(
+        crate::machine::model::labels::BinderSymbol::Value(
+            crate::builtins::test_support::value_name("fwd", &registries),
+        ),
+    ))];
     // inner_num was registered at `inner`'s BUILTIN index (0); root the chain on `inner`
     // one past it. `outer` is never named on this chain, so `outer_id` stays visible
     // through the unmentioned-scope "fully visible" rule.

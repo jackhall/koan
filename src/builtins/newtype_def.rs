@@ -152,12 +152,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         resolve_or_await(
             ctx.scope,
             "NEWTYPE repr slot",
-            move |scope, registries| {
-                classify_name_lookup(
-                    scope.resolve_type_with_chain(te, chain.as_deref()),
-                    te,
-                    registries,
-                )
+            move |scope, _registries| {
+                classify_name_lookup(scope.resolve_type_with_chain(te, chain.as_deref()), te)
             },
             // A bare-leaf name resolved against scope bindings, not a dep terminal.
             move |fctx, kt| {
