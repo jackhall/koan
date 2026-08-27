@@ -7,3 +7,4 @@ Write the plan to `scratch/<slug>-plan.md` for a roadmap item named `<slug>.md`.
 
 If you present a fork and the user does not like any of the options, invoke `/design`. Do not use the Plan mode or agent. You may only edit `design/` files with permission from the user, although you need not ask per-file. 
 
+Assume the implementer will be dumber than you.

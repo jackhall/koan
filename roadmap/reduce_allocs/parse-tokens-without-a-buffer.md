@@ -2,7 +2,7 @@
 
 **Problem.** The parse copies each token's text out of the source twice, once to accumulate
 it and once to split it, and the two copies are the largest attributed share of the
-`declare_name` term — 23 of its 57 allocations per declared name, measured by a dhat
+`declare_name` term — 25 of its 55 allocations per declared name, measured by a dhat
 difference of `audit/shapes/declare_n{10,100}.koan`.
 
 The outer copy is the tokenizer's accumulator.
@@ -17,14 +17,13 @@ characters to the next atom terminator and pushes each onto a fresh `String`, pu
 `&s` to `classify_atom`. Nothing is transformed on the way — an atom is a contiguous verbatim
 run of the token, and the reader already computes the byte offsets at both ends — so the
 `String` exists only because the reader is handed a `Peekable<CharIndices>` and not the text
-those indices address. That is 10 allocations per declared name, one per atom in every parse
+those indices address. That is 12 allocations per declared name, one per atom in every parse
 in the repo.
 
 **Acceptance criteria.**
 
-- The tokenizer's accumulator keeps its capacity across tokens: classifying one borrows the
-  buffer and empties it, so a program's token stream grows a buffer as large as its longest
-  token and no larger.
+- Tokenization builds no accumulator at all: a token is classified as a borrowed slice of
+  the masked byte stream, so no per-token or per-program buffer exists to grow.
 - `read_atom` classifies from a borrowed slice of the token it is reading, and allocates
   nothing per atom.
 - A dhat difference of `audit/shapes/declare_n{10,100}.koan` attributes no allocation to
@@ -35,14 +34,18 @@ in the repo.
 
 **Directions.**
 
-- *How the atom reader reaches its text — open.* Thread the token `&str` alongside the
-  `Peekable<CharIndices>` and slice it by the offsets the walk already computes, or replace the
-  iterator pair with a cursor type that owns both. Recommended: the extra `&str` parameter,
-  which is local to `parse_compound` and its two `read_atom` callers.
-- *Whether the accumulator can become a source slice outright — open.* Most tokens are a
-  verbatim run of the source, but not all: `build_tree` injects a `>` into the buffer on one
-  arm, so a slice-only accumulator needs somewhere for a synthesized token to live. Emptying
-  the buffer rather than taking it is the close that does not depend on settling this.
+- *How the atom reader reaches its text — decided.* Thread the token `&str` alongside the
+  `Peekable<CharIndices>` and slice it by the offsets the walk already computes; the extra
+  parameter is local to `parse_compound` and its two `read_atom` callers.
+- *The accumulator becomes a slice of the masked stream — decided,* per
+  `scratch/parse-tokens-without-a-buffer-plan.md`. Every token is a contiguous byte run of
+  the masked stream: the `>` that `build_tree` glues onto a pending `-` only glues when the
+  `>` is the next masked byte, and every JUMP marker sits at a token boundary (collapse
+  plants them only before its synthetic `(` / `)` / space / sigil bytes, and the
+  post-literal JUMP is consumed inside the quote arm, which flushes first). So the pending
+  token is a `(masked_start, masked_end, span_start)` record — the end tracked at
+  accumulation time, not read from the reader at flush — and `flush_token` classifies
+  `&masked[start..end]` directly.
 
 ## Dependencies
 
