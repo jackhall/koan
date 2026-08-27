@@ -4,10 +4,10 @@
 immediately re-pays. A steady `FreshTail` tail hop mints one whole cart — `Rc<FrameStorage>`,
 `Rc<CallFrame>` shell, region chunk, envelope — plus its `Rc<SlotFrame>` anchor and two
 `LexicalFrame` head links; the wide composite body pays the general form of the same term
-per submission: `SlotFrame::new` 58/step (plus 18/step via `replacing` / `opening`),
-`Rc<LexicalFrame>` 29/step, a `CallFrame` with region host and first chunk 21/step
-([observe/alloc.txt](../../observe/alloc.txt); re-run the dhat attribution to size the
-shares before implementing — the figures predate arm-frame elision).
+per submission: `SlotFrame::new` 61/step (plus 18/step via `replacing` / `opening`),
+`Rc<LexicalFrame>` 30/step, a `CallFrame` with region host and first chunk 21/step
+([observe/alloc.txt](../../observe/alloc.txt); shares from the 2026-08-27 dhat sweep of the
+wide pair).
 
 TCO originally recycled tail carts as a two-generation ping-pong (`FramePlacement::ReuseReserve`,
 `active_reserve` rotation, `CallFrame::try_reset_for_tail`), deleted by the retired
@@ -88,5 +88,6 @@ slate coverage is not optional.
 
 **Requires:**
 
+- [Close over](../foundation/close-over.md)
 
 **Unblocks:** none tracked yet.

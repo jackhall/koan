@@ -35,4 +35,6 @@ consolidation lever
 
 **Requires:** none — foundation.
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+
+- [Frame recycling](../reduce_allocs/frame-recycling.md)
