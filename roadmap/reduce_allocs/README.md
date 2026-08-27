@@ -25,14 +25,6 @@ Allocation sites and hazards no item owns yet — the per-step ones a 2026-08-27
 over the wide pair attributed, recorded so the next item starts from a claim rather than a
 re-attribution, plus the growth hazards a survey and the consolidated shapes turned up:
 
-- **The per-step symbol mint in a composite body** — `wide_step` and `deep_frame` each mint
-  one symbol per unit, and the mint is `Symbol::of("Ok")` in TRY's finish closure
-  ([src/builtins/try_with.rs](../../src/builtins/try_with.rs)), which re-hashes the success
-  tag on every completed non-tail TRY. Isolated 2026-08-27: a minimal loop with a non-tail
-  TRY mints exactly one symbol per step and the same loop without it mints zero — a
-  tail-position TRY runs its finish once, which is why per-construct tail loops missed it.
-  The fix is the memoized `StaticName` pattern the arm walk's own fixed tokens already use;
-  small enough to land inline, no item.
 - **Pin-cycle walk maps** — `Region::detect_pin_cycle` hash-map traffic under
   `retain_reach` ([workgraph/src/witnessed/region.rs](../../workgraph/src/witnessed/region.rs)),
   2/step on each of the adopt and rest seams — adjacent to the reach-intern door in the same

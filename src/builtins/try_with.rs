@@ -14,7 +14,7 @@ use crate::machine::WriteGate;
 
 use crate::machine::model::KKind;
 
-use crate::machine::model::{Carried, KObject, KType, Symbol};
+use crate::machine::model::{Carried, KObject, KType, Symbol, TypeSymbol};
 use crate::machine::{DeliveredCarried, KError, KErrorKind, Scope};
 
 use super::branch_walk::find_branch_body_by_tag;
@@ -23,6 +23,10 @@ use crate::machine::model::RunRegistries;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { branches, expr, return_type } }
+
+/// The success tag `Ok`, a Type token, memoized so a succeeding TRY re-mints nothing.
+static OK_TAG: crate::machine::model::StaticName<TypeSymbol> =
+    crate::static_name!(TypeSymbol, "Ok");
 
 /// Watches `expr`, then a `Catch` finish walks the arms against the `Result`, tail-replacing
 /// into the matched arm under the `-> :T` contract and re-raising on no match.
@@ -49,7 +53,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         // fixed literal of the `Result` shape and needs no intern to be compared.
         let (tag, it_carrier, original_error): (Symbol, DeliveredCarried, Option<KError>) =
             match result {
-                Ok(carrier) => (Symbol::of("Ok"), carrier, None),
+                Ok(carrier) => (OK_TAG.symbol().symbol(), carrier, None),
                 Err(e) => {
                     let envelope = e.to_tagged_delivered(fctx.scope, fctx.registries);
                     let tag = envelope.open(|carried| match carried {
