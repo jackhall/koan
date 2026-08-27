@@ -267,14 +267,14 @@ fn check_record_newtype_repr(
     registries: &RunRegistries,
 ) -> Result<(), KError> {
     let types = &registries.types;
-    let repr = match types.node(identity) {
+    let repr = types.with_node(identity, |node| match node {
         TypeNode::SetMember {
             schema: NodeSchema::NewType(repr),
             ..
-        } => repr,
+        } => *repr,
         _ => unreachable!("newtype construct ran on a non-NewType member"),
-    };
-    let matches = match types.node(repr) {
+    });
+    let matches = types.with_node(repr, |node| match node {
         TypeNode::Record {
             fields: repr_fields,
         } => repr_fields.iter().all(|(name, field_type)| {
@@ -285,7 +285,7 @@ fn check_record_newtype_repr(
                 .unwrap_or(false)
         }),
         _ => false,
-    };
+    });
     if !matches {
         return Err(KError::new(KErrorKind::TypeMismatch {
             arg: "value".to_string(),

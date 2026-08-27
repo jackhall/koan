@@ -153,19 +153,25 @@ impl<'a> Module<'a> {
 
     /// The module's self-sig schema, cloned out of its signature node.
     pub fn self_sig(&self, types: &TypeRegistry) -> SigSchema {
-        match types.node(self.ktype()) {
-            TypeNode::Signature { schema, .. } => schema,
+        self.with_self_sig(types, SigSchema::clone)
+    }
+
+    /// The module's self-sig **by reference**, for a reader that only compares against it — the
+    /// borrowing form of [`self_sig`](Self::self_sig), which copies three maps to hand one back.
+    pub fn with_self_sig<R>(&self, types: &TypeRegistry, read: impl FnOnce(&SigSchema) -> R) -> R {
+        types.with_node(self.ktype(), |node| match node {
+            TypeNode::Signature { schema, .. } => read(schema),
             _ => panic!("module `{}`'s self-sig is not a signature node", self.path),
-        }
+        })
     }
 
     /// The module's self-sig content digest — the `SigSatisfies` verdict subject key
     /// (`registry.rs`). Reads the digest the signature node computed once at intern time.
     pub fn self_sig_digest(&self, types: &TypeRegistry) -> TypeDigest {
-        match types.node(self.ktype()) {
-            TypeNode::Signature { schema_digest, .. } => schema_digest,
+        types.with_node(self.ktype(), |node| match node {
+            TypeNode::Signature { schema_digest, .. } => *schema_digest,
             _ => panic!("module `{}`'s self-sig is not a signature node", self.path),
-        }
+        })
     }
 
     /// Whether this module satisfies the interface `schema` — the admission rule a signature
@@ -193,7 +199,7 @@ impl<'a> Module<'a> {
         if let Some(hit) = types.verdict(subject, schema_digest, Relation::SigSatisfies) {
             return hit;
         }
-        let ok = sig_subtype(&self.self_sig(types), schema, registries).is_ok();
+        let ok = self.with_self_sig(types, |mine| sig_subtype(mine, schema, registries).is_ok());
         types.record_verdict(subject, schema_digest, Relation::SigSatisfies, ok);
         ok
     }

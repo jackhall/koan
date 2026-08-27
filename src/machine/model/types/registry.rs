@@ -84,10 +84,12 @@ pub(crate) enum Relation {
     SigSatisfies,
 }
 
-/// The run-scoped store of type content and subtype verdicts. Interior mutability via `RefCell`;
-/// every borrow is confined to a single method call, so no borrow spans the structural walk a
-/// verdict miss falls back to, nor an `intern` a node read might feed. Both maps are uncapped:
-/// they drop with the run frame that owns them, so growth is bounded by the run.
+/// The run-scoped store of type content and subtype verdicts. Interior mutability via `RefCell`,
+/// in two independent cells: a read of `nodes` spans the reading closure and may nest freely
+/// inside another, while `verdicts` is written under its own borrow, so a memoizing walk records
+/// its verdict without touching the read it is running under. What no read may do is intern —
+/// [`TypeRegistry::intern`] names the rule. Both maps are uncapped: they drop with the run frame
+/// that owns them, so growth is bounded by the run.
 pub struct TypeRegistry {
     nodes: RefCell<NodeMap>,
     verdicts: RefCell<HashMap<(TypeDigest, TypeDigest, Relation), bool>>,
@@ -146,34 +148,54 @@ impl TypeRegistry {
 
     // --- Content: interning and node reads ---
     //
-    // `intern`, `node`, and the per-query verbs below each take the `nodes` borrow for the length
-    // of one map operation or one walk over it and drop it before returning. No method here holds
-    // that borrow across a call that can intern, and no caller can: `node` hands back an owned
-    // clone rather than a reference into the map, and a verb answers by value.
+    // [`with_node`](Self::with_node) is the one read door; `node` and the per-query verbs below are
+    // written over it or over the same borrow. The borrow spans the reading closure, so **a read
+    // must not intern** — the single rule this section rests on, checked by
+    // [`intern`](Self::intern)'s own diagnostic below.
 
     /// Intern `node` and return its handle. Computes the node's digest, inserts it if the digest
     /// is not already present, and returns the digest as a [`KType`]. Interning the same content
     /// twice yields one node and two equal handles.
+    ///
+    /// Never reachable from inside a [`with_node`](Self::with_node) closure — the read holds the
+    /// table borrow, so an intern under one is the rule violation the `expect` below names.
     pub fn intern(&self, node: TypeNode) -> KType {
         let digest = type_digest::node_digest(&node);
-        let mut nodes = self.nodes.borrow_mut();
+        let mut nodes = self
+            .nodes
+            .try_borrow_mut()
+            .expect("a node read must not intern: the read holds the table borrow");
         if !nodes.contains_key(&digest) {
             nodes.insert(digest, node);
         }
         KType::from_digest(digest)
     }
 
-    /// The content `handle` names, cloned out of the table. A node is shallow — scalar payload
-    /// plus child handles — so the clone never copies a type subtree.
+    /// Read the content `handle` names **by reference**, under the table borrow, and hand back
+    /// whatever `read` derives from it.
+    ///
+    /// The one read door. `read`'s result type is fixed at the call site and the node's lifetime is
+    /// this call's, so no reference into the table can escape: a reader is confined to derived
+    /// data by construction, which is what lets a shape probe answer without copying the node.
+    /// Reads nest freely — the borrow is shared — but a reader must not intern.
     ///
     /// A miss is a bug, not a state: a handle is only ever produced by [`Self::intern`], and the
     /// table is insert-only.
-    pub fn node(&self, handle: KType) -> TypeNode {
+    pub fn with_node<R>(&self, handle: KType, read: impl FnOnce(&TypeNode) -> R) -> R {
         let digest = handle.digest();
-        let found = self.nodes.borrow().get(&digest).cloned();
-        found.unwrap_or_else(|| {
-            panic!("type handle 0x{:032x} names no interned node", digest.0);
-        })
+        match self.nodes.borrow().get(&digest) {
+            Some(node) => read(node),
+            None => panic!("type handle 0x{:032x} names no interned node", digest.0),
+        }
+    }
+
+    /// The content `handle` names, cloned out of the table — [`with_node`](Self::with_node) for a
+    /// caller that needs the node to outlive the read. A node is shallow — scalar payload plus
+    /// child handles — so the clone never copies a type subtree, but a variant carrying a field
+    /// record, a member list or a schema allocates, which is why a shape probe reads by reference
+    /// instead.
+    pub fn node(&self, handle: KType) -> TypeNode {
+        self.with_node(handle, TypeNode::clone)
     }
 
     /// Whether `handle` names a union. The construction lane's first probe, so it answers from the

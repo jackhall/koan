@@ -201,35 +201,39 @@ pub fn body_record_schema<'a>(
     use finalize::defer;
     use return_type::extract_return_type_raw;
 
-    let schema = match ctx.args.ktype(&SLOTS.signature) {
-        Some(kt) => match ctx.types().node(kt) {
-            TypeNode::Record { fields } => fields,
-            _ => {
-                return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",
-                    kt.name(ctx.registries),
-                )))));
-            }
-        },
-        None => {
-            return Action::done(Err(KError::new(KErrorKind::ShapeError(
-                "anonymous FN signature slot must be a record schema `:{…}`".to_string(),
-            ))));
-        }
+    let Some(schema_kt) = ctx.args.ktype(&SLOTS.signature) else {
+        return Action::done(Err(KError::new(KErrorKind::ShapeError(
+            "anonymous FN signature slot must be a record schema `:{…}`".to_string(),
+        ))));
     };
     // The schema's keys are the classified names its own field-list parse minted, so each
     // parameter's binding class rides straight into its `Argument`. The return-surface scan probes
-    // by bare symbol bits, so it reads the same keys down to their symbols.
-    let param_names: Vec<Symbol> = schema.keys().map(BinderSymbol::symbol).collect();
-    let elements: Vec<SignatureElement> = schema
-        .iter()
-        .map(|(name, ktype)| {
-            SignatureElement::Argument(Argument {
-                name,
-                ktype: *ktype,
-            })
-        })
-        .collect();
+    // by bare symbol bits, so it reads the same keys down to their symbols. Both lists are derived
+    // under the type-table borrow, so the schema is read in place rather than copied out.
+    let read = ctx.types().with_node(schema_kt, |node| match node {
+        TypeNode::Record { fields } => Some((
+            fields
+                .keys()
+                .map(BinderSymbol::symbol)
+                .collect::<Vec<Symbol>>(),
+            fields
+                .iter()
+                .map(|(name, ktype)| {
+                    SignatureElement::Argument(Argument {
+                        name,
+                        ktype: *ktype,
+                    })
+                })
+                .collect::<Vec<SignatureElement>>(),
+        )),
+        _ => None,
+    });
+    let Some((param_names, elements)) = read else {
+        return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+            "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",
+            schema_kt.name(ctx.registries),
+        )))));
+    };
     let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "FN", &SLOTS.body));
     let return_type_state = crate::try_action!(classify_return_type(

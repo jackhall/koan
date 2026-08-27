@@ -91,121 +91,129 @@ impl KType {
         if is_unconstrained_name(other) && !(is_unconstrained_name(self) || self == KType::ANY) {
             return true;
         }
-        let other_node = types.node(other);
-        match (types.node(self), other_node) {
-            (TypeNode::List { element: a }, TypeNode::List { element: b }) => {
-                a.is_more_specific_than(b, registries)
-            }
-            (TypeNode::Dict { key: ka, value: va }, TypeNode::Dict { key: kb, value: vb }) => {
-                let key_more = ka.is_more_specific_than(kb, registries);
-                let value_more = va.is_more_specific_than(vb, registries);
-                (key_more && (value_more || va == vb)) || (ka == kb && value_more)
-            }
-            // Record-value subtyping: width-superset + covariant depth (the dual of the
-            // contravariant width-drop `param_record_more_specific` for function params).
-            (TypeNode::Record { fields: a }, TypeNode::Record { fields: b }) => {
-                record_value_more_specific(&a, &b, registries)
-            }
-            // Function subtyping: contravariant params (width-subset), covariant return —
-            // see `param_record_more_specific`.
-            (
-                TypeNode::KFunction {
-                    params: pa,
-                    ret: ra,
-                },
-                TypeNode::KFunction {
-                    params: pb,
-                    ret: rb,
-                },
-            ) => param_record_more_specific(&pa, ra, &pb, rb, registries),
-            // Value role: a concrete signature type is more specific than the
-            // `:Signature` wildcard.
-            (TypeNode::Signature { .. }, TypeNode::OfKind(KKind::Signature)) => true,
-            (
-                TypeNode::Signature {
-                    schema: schema_a,
-                    schema_digest: digest_a,
-                },
-                TypeNode::Signature {
-                    schema: schema_b,
-                    schema_digest: digest_b,
-                },
-            ) => {
-                let empty = empty_schema_digest();
-                // Any non-empty signature refines the empty interface (the lattice top). Keyed on
-                // empty *content*, not the mint that produced it, so a zero-member `SIG E = ()` is
-                // the same top as `:Module`.
-                if digest_b == empty && digest_a != empty {
-                    return true;
+        // Two reads nested: the recursion below runs under both borrows, which is sound because no
+        // predicate interns.
+        types.with_node(self, |subject| {
+            types.with_node(other, |candidate| {
+                match (subject, candidate) {
+                    (TypeNode::List { element: a }, TypeNode::List { element: b }) => {
+                        a.is_more_specific_than(*b, registries)
+                    }
+                    (
+                        TypeNode::Dict { key: ka, value: va },
+                        TypeNode::Dict { key: kb, value: vb },
+                    ) => {
+                        let key_more = ka.is_more_specific_than(*kb, registries);
+                        let value_more = va.is_more_specific_than(*vb, registries);
+                        (key_more && (value_more || va == vb)) || (ka == kb && value_more)
+                    }
+                    // Record-value subtyping: width-superset + covariant depth (the dual of the
+                    // contravariant width-drop `param_record_more_specific` for function params).
+                    (TypeNode::Record { fields: a }, TypeNode::Record { fields: b }) => {
+                        record_value_more_specific(a, b, registries)
+                    }
+                    // Function subtyping: contravariant params (width-subset), covariant return —
+                    // see `param_record_more_specific`.
+                    (
+                        TypeNode::KFunction {
+                            params: pa,
+                            ret: ra,
+                        },
+                        TypeNode::KFunction {
+                            params: pb,
+                            ret: rb,
+                        },
+                    ) => param_record_more_specific(pa, *ra, pb, *rb, registries),
+                    // Value role: a concrete signature type is more specific than the
+                    // `:Signature` wildcard.
+                    (TypeNode::Signature { .. }, TypeNode::OfKind(KKind::Signature)) => true,
+                    (
+                        TypeNode::Signature {
+                            schema: schema_a,
+                            schema_digest: digest_a,
+                        },
+                        TypeNode::Signature {
+                            schema: schema_b,
+                            schema_digest: digest_b,
+                        },
+                    ) => {
+                        let empty = empty_schema_digest();
+                        // Any non-empty signature refines the empty interface (the lattice top). Keyed on
+                        // empty *content*, not the mint that produced it, so a zero-member `SIG E = ()` is
+                        // the same top as `:Module`.
+                        if *digest_b == empty && *digest_a != empty {
+                            return true;
+                        }
+                        if digest_a == digest_b {
+                            // One content is one handle — equal is not strictly more specific. (A `WITH`
+                            // specialization folds its pins into the schema, so a refinement always
+                            // lands a distinct content and takes the structural compare below —
+                            // `S WITH {A = Number} ≺ S` because the folded manifest strictly
+                            // `sig_subtype`s the abstract original.)
+                            return false;
+                        }
+                        // Two different interfaces — SIG-declared, `WITH`-specialized, or self-sig, any
+                        // combination — compare by strict structural subtyping: `a ≺ b` iff `a`'s schema
+                        // strictly `sig_subtype`s `b`'s.
+                        sig_schema_more_specific(
+                            schema_a,
+                            self.digest(),
+                            schema_b,
+                            other.digest(),
+                            registries,
+                        )
+                    }
+                    // A nominal-family kind out-specifies `OfKind(ProperType)` — `OfKind(NewType) ≺
+                    // OfKind(ProperType)`. (Against `Identifier` / `OfKind(ProperType)` the generic rule
+                    // above already fires; this covers a nominal-vs-nominal-supertype tie.)
+                    (TypeNode::OfKind(a), TypeNode::OfKind(b)) if a.strictly_below(*b) => true,
+                    // A sealed nominal member is more specific than the `OfKind` wildcard of the same
+                    // surface family — read the member's `kind` off its node.
+                    (TypeNode::SetMember { kind, .. }, TypeNode::OfKind(b)) if kind == b => true,
+                    (
+                        TypeNode::ConstructorApply {
+                            constructor: ca,
+                            arguments: aa,
+                        },
+                        TypeNode::ConstructorApply {
+                            constructor: cb,
+                            arguments: ab,
+                        },
+                    ) if ca == cb
+                        && aa.len() == ab.len()
+                        && aa.keys().all(|name| ab.get(name.symbol()).is_some()) =>
+                    {
+                        // Same constructor, same parameter names: compare each argument against its
+                        // same-named counterpart.
+                        let pairs = || {
+                            aa.iter()
+                                .map(|(name, x)| (*x, *ab.get(name.symbol()).unwrap()))
+                        };
+                        let any_more = pairs().any(|(x, y)| x.is_more_specific_than(y, registries));
+                        let all_equal_or_more =
+                            pairs().all(|(x, y)| x == y || x.is_more_specific_than(y, registries));
+                        any_more && all_equal_or_more
+                    }
+                    // Union subset: `a` refines `b` iff they are not the same set and every member of
+                    // `a` is equal to or more specific than some member of `b`. Two identical unions are
+                    // one handle, so the strictness gate is a set compare of distinct handles.
+                    (TypeNode::Union { members: a }, TypeNode::Union { members: b }) => {
+                        let same_set = a.len() == b.len() && a.iter().all(|m| b.contains(m));
+                        !same_set
+                            && a.iter().all(|x| {
+                                b.iter()
+                                    .any(|y| x == y || x.is_more_specific_than(*y, registries))
+                            })
+                    }
+                    // Each member of a union is a subtype of it: a non-union `x` is more specific than
+                    // `Union(ms)` iff it equals or refines one of the members.
+                    (_, TypeNode::Union { members }) => members
+                        .iter()
+                        .any(|m| self == *m || self.is_more_specific_than(*m, registries)),
+                    _ => false,
                 }
-                if digest_a == digest_b {
-                    // One content is one handle — equal is not strictly more specific. (A `WITH`
-                    // specialization folds its pins into the schema, so a refinement always
-                    // lands a distinct content and takes the structural compare below —
-                    // `S WITH {A = Number} ≺ S` because the folded manifest strictly
-                    // `sig_subtype`s the abstract original.)
-                    return false;
-                }
-                // Two different interfaces — SIG-declared, `WITH`-specialized, or self-sig, any
-                // combination — compare by strict structural subtyping: `a ≺ b` iff `a`'s schema
-                // strictly `sig_subtype`s `b`'s.
-                sig_schema_more_specific(
-                    &schema_a,
-                    self.digest(),
-                    &schema_b,
-                    other.digest(),
-                    registries,
-                )
-            }
-            // A nominal-family kind out-specifies `OfKind(ProperType)` — `OfKind(NewType) ≺
-            // OfKind(ProperType)`. (Against `Identifier` / `OfKind(ProperType)` the generic rule
-            // above already fires; this covers a nominal-vs-nominal-supertype tie.)
-            (TypeNode::OfKind(a), TypeNode::OfKind(b)) if a.strictly_below(b) => true,
-            // A sealed nominal member is more specific than the `OfKind` wildcard of the same
-            // surface family — read the member's `kind` off its node.
-            (TypeNode::SetMember { kind, .. }, TypeNode::OfKind(b)) if kind == b => true,
-            (
-                TypeNode::ConstructorApply {
-                    constructor: ca,
-                    arguments: aa,
-                },
-                TypeNode::ConstructorApply {
-                    constructor: cb,
-                    arguments: ab,
-                },
-            ) if ca == cb
-                && aa.len() == ab.len()
-                && aa.keys().all(|name| ab.get(name.symbol()).is_some()) =>
-            {
-                // Same constructor, same parameter names: compare each argument against its
-                // same-named counterpart.
-                let pairs = || {
-                    aa.iter()
-                        .map(|(name, x)| (*x, *ab.get(name.symbol()).unwrap()))
-                };
-                let any_more = pairs().any(|(x, y)| x.is_more_specific_than(y, registries));
-                let all_equal_or_more =
-                    pairs().all(|(x, y)| x == y || x.is_more_specific_than(y, registries));
-                any_more && all_equal_or_more
-            }
-            // Union subset: `a` refines `b` iff they are not the same set and every member of
-            // `a` is equal to or more specific than some member of `b`. Two identical unions are
-            // one handle, so the strictness gate is a set compare of distinct handles.
-            (TypeNode::Union { members: a }, TypeNode::Union { members: b }) => {
-                let same_set = a.len() == b.len() && a.iter().all(|m| b.contains(m));
-                !same_set
-                    && a.iter().all(|x| {
-                        b.iter()
-                            .any(|y| x == y || x.is_more_specific_than(*y, registries))
-                    })
-            }
-            // Each member of a union is a subtype of it: a non-union `x` is more specific than
-            // `Union(ms)` iff it equals or refines one of the members.
-            (_, TypeNode::Union { members }) => members
-                .iter()
-                .any(|m| self == *m || self.is_more_specific_than(*m, registries)),
-            _ => false,
-        }
+            })
+        })
     }
 
     /// True iff `carried` satisfies a slot declared as `self` — exact match or covariant
@@ -224,11 +232,11 @@ impl KType {
         let types = &registries.types;
         match cell {
             Held::Object(o) => self.matches_value(o, registries),
-            Held::Type(t) => match types.node(self) {
+            Held::Type(t) => types.with_node(self, |node| match node {
                 TypeNode::Any => true,
                 TypeNode::OfKind(k) => k.admits(t.kind_of(types)),
                 _ => self == *t,
-            },
+            }),
             // An aggregate cell holds a value or a resolved type; neither of the bind seam's
             // name carriers ever becomes one, so no slot classifies them.
             Held::UnresolvedType(_) | Held::Identifier(_) => false,
@@ -237,7 +245,7 @@ impl KType {
 
     pub fn matches_value(self, obj: &KObject<'_>, registries: &RunRegistries) -> bool {
         let types = &registries.types;
-        match types.node(self) {
+        types.with_node(self, |node| match node {
             TypeNode::Any => true,
             TypeNode::List { element } => match obj {
                 KObject::List(substrate, _) => substrate
@@ -248,7 +256,7 @@ impl KType {
             },
             TypeNode::Dict { key, value } => match obj {
                 KObject::Dict(substrate, _) => substrate.entries().all(|(map_key, held)| {
-                    (key == KType::ANY || key == map_key.ktype())
+                    (*key == KType::ANY || *key == map_key.ktype())
                         && value.matches_held(held, registries)
                 }),
                 _ => false,
@@ -265,7 +273,7 @@ impl KType {
                 _ => false,
             },
             TypeNode::KFunction { params, ret } => match obj {
-                KObject::KFunction(f) => function_compat(&f.signature, &params, ret, registries),
+                KObject::KFunction(f) => function_compat(&f.signature, params, *ret, registries),
                 _ => false,
             },
             // Constraint role: a signature slot is satisfied by a module value on the Object
@@ -276,7 +284,7 @@ impl KType {
                 schema,
                 schema_digest,
             } => match obj {
-                KObject::Module(m) => m.satisfies_sig_schema(&schema, schema_digest, registries),
+                KObject::Module(m) => m.satisfies_sig_schema(schema, *schema_digest, registries),
                 _ => false,
             },
             // A type-accepting slot is **type-channel-only**: no runtime `KObject` is a type
@@ -299,18 +307,18 @@ impl KType {
                     // The value's own identity is either the applied form (stamped `type_args`)
                     // or the bare member handle (erased).
                     let identity = obj.ktype();
-                    match types.node(identity) {
+                    types.with_node(identity, |identity_node| match identity_node {
                         TypeNode::ConstructorApply {
                             constructor: value_constructor,
                             arguments: value_arguments,
                         } => constructor_apply_admits(
-                            constructor,
-                            &arguments,
-                            value_constructor,
-                            &value_arguments,
+                            *constructor,
+                            arguments,
+                            *value_constructor,
+                            value_arguments,
                         ),
                         _ => {
-                            if identity != constructor {
+                            if identity != *constructor {
                                 return false;
                             }
                             match arguments.get(tag.symbol()) {
@@ -320,23 +328,25 @@ impl KType {
                                 None => true,
                             }
                         }
-                    }
+                    })
                 }
                 // An identity-wrapper value (`NEWTYPE (Type AS Wrapper)`): its `type_id` is
                 // itself a `ConstructorApply`. Match by the same constructor + per-argument rule
                 // the stamped-`type_args` `Tagged` path uses.
-                KObject::Wrapped { type_id, .. } => match types.node(*type_id) {
-                    TypeNode::ConstructorApply {
-                        constructor: value_constructor,
-                        arguments: value_arguments,
-                    } => constructor_apply_admits(
-                        constructor,
-                        &arguments,
-                        value_constructor,
-                        &value_arguments,
-                    ),
-                    _ => false,
-                },
+                KObject::Wrapped { type_id, .. } => {
+                    types.with_node(*type_id, |value_node| match value_node {
+                        TypeNode::ConstructorApply {
+                            constructor: value_constructor,
+                            arguments: value_arguments,
+                        } => constructor_apply_admits(
+                            *constructor,
+                            arguments,
+                            *value_constructor,
+                            value_arguments,
+                        ),
+                        _ => false,
+                    })
+                }
                 _ => false,
             },
             // A union slot admits a value any of its members admits.
@@ -344,7 +354,7 @@ impl KType {
             // A sealed nominal slot admits a value whose `ktype()` reports the same member
             // handle — a per-variant newtype `Wrapped` value or a `TypeConstructor` value.
             _ => self == obj.ktype(),
-        }
+        })
     }
 
     /// True iff a first-class type `t` (flowing in the type channel) satisfies this declared
@@ -359,18 +369,18 @@ impl KType {
     pub fn matches_type(self, t: KType, types: &TypeRegistry) -> bool {
         // The shallow dispatch identity a concrete slot compares against: a signature carries its
         // identity directly; every other type fills the `OfKind(ProperType)` marker.
-        let carrier_ktype = match types.node(t) {
+        let carrier_ktype = types.with_node(t, |node| match node {
             TypeNode::Signature { .. } => t,
             _ => KType::of_kind(KKind::ProperType),
-        };
-        match types.node(self) {
+        });
+        types.with_node(self, |node| match node {
             TypeNode::Any => true,
             TypeNode::Signature { .. } => false,
             TypeNode::OfKind(k) => k.admits(t.kind_of(types)),
             // A union slot is satisfied by any type its members are satisfied by.
             TypeNode::Union { members } => members.iter().any(|m| m.matches_type(t, types)),
             _ => self == carrier_ktype,
-        }
+        })
     }
 
     /// Per-value admissibility for a resolved [`Carried`] argument — the classifier the spliced
@@ -381,7 +391,7 @@ impl KType {
     /// via `satisfied_by`, never by walking its contents.
     pub fn accepts_carried<'v>(self, c: Carried<'v>, registries: &RunRegistries) -> bool {
         let types = &registries.types;
-        match types.node(self) {
+        types.with_node(self, |node| match node {
             TypeNode::Any => true,
             TypeNode::Number => matches!(c, Carried::Object(KObject::Number(_))),
             TypeNode::Str => matches!(c, Carried::Object(KObject::KString(_))),
@@ -410,7 +420,7 @@ impl KType {
             },
             TypeNode::KFunction { params, ret } => match c {
                 Carried::Object(KObject::KFunction(f)) => {
-                    function_compat(&f.signature, &params, ret, registries)
+                    function_compat(&f.signature, params, *ret, registries)
                 }
                 _ => false,
             },
@@ -449,7 +459,7 @@ impl KType {
                 schema_digest,
             } => match c {
                 Carried::Object(KObject::Module(m)) => {
-                    m.satisfies_sig_schema(&schema, schema_digest, registries)
+                    m.satisfies_sig_schema(schema, *schema_digest, registries)
                 }
                 _ => false,
             },
@@ -468,20 +478,22 @@ impl KType {
             } => match c {
                 Carried::UnresolvedType(_) => false,
                 Carried::Type(kt) => kt == self,
-                Carried::Object(obj) => match types.node(obj.ktype()) {
-                    TypeNode::ConstructorApply {
-                        constructor: value_constructor,
-                        arguments: value_arguments,
-                    } => constructor_apply_admits(
-                        slot_constructor,
-                        &slot_arguments,
-                        value_constructor,
-                        &value_arguments,
-                    ),
-                    _ => false,
-                },
+                Carried::Object(obj) => {
+                    types.with_node(obj.ktype(), |value_node| match value_node {
+                        TypeNode::ConstructorApply {
+                            constructor: value_constructor,
+                            arguments: value_arguments,
+                        } => constructor_apply_admits(
+                            *slot_constructor,
+                            slot_arguments,
+                            *value_constructor,
+                            value_arguments,
+                        ),
+                        _ => false,
+                    })
+                }
             },
-        }
+        })
     }
 
     /// Classify a spliced **cell** against this slot without adopting it — opens the delivery
@@ -508,7 +520,7 @@ impl KType {
             // staging hole awaiting its sibling's carrier. Neither denotes a value yet, and both
             // become a `Spliced` cell before anything binds, so only an `Any` slot admits one.
             WorkingPart::Expression(_) | WorkingPart::RecordType(_) | WorkingPart::StagedSlot => {
-                matches!(types.node(self), TypeNode::Any)
+                types.with_node(self, |node| matches!(node, TypeNode::Any))
             }
         }
     }
@@ -519,7 +531,7 @@ impl KType {
     /// the scheduler produced classifies through
     /// [`accepts_working_part`](Self::accepts_working_part) instead.
     pub fn accepts_part(self, part: &ExpressionPart<'_>, types: &TypeRegistry) -> bool {
-        match types.node(self) {
+        types.with_node(self, |node| match node {
             TypeNode::Any => true,
             TypeNode::Number => matches!(part, ExpressionPart::Literal(KLiteral::Number(_))),
             TypeNode::Str => matches!(part, ExpressionPart::Literal(KLiteral::String(_))),
@@ -562,7 +574,7 @@ impl KType {
             TypeNode::Sibling(_) => false,
             // Confined to a synthesized FN `ret` slot — never a free-standing argument slot.
             TypeNode::DeferredReturn(_) => false,
-        }
+        })
     }
 }
 

@@ -81,31 +81,39 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // Ambient probe: every named field must exist in the record's type map (the error arm stays
     // here). The at-brand rebuild below re-reads the same map from the operand view, so the two
     // cannot disagree on which fields the narrowed carrier keeps.
-    let record_fields = match record_obj {
-        KObject::Record(_, record_type) => match ctx.types().node(*record_type) {
-            crate::machine::model::TypeNode::Record { fields } => fields,
-            _ => unreachable!("a Record value's type is always a Record node"),
-        },
+    let record_type = match record_obj {
+        KObject::Record(_, record_type) => *record_type,
         _ => unreachable!("record_obj is shape-gated to a Record above"),
     };
-    for symbol in &names {
-        if record_fields.get(*symbol).is_none() {
+    // The projected field record is assembled under the type-table borrow: the probe and the
+    // narrowed record read the same fields by reference, and the intern below runs once the read
+    // has closed.
+    let projected = ctx.types().with_node(record_type, |node| {
+        let crate::machine::model::TypeNode::Record { fields } = node else {
+            unreachable!("a Record value's type is always a Record node")
+        };
+        names
+            .iter()
+            .map(|symbol| {
+                fields
+                    .get_key_value(*symbol)
+                    .map(|(name, ktype)| (name, *ktype))
+                    .ok_or(*symbol)
+            })
+            .collect::<Result<Record<KType>, _>>()
+    });
+    let projected = match projected {
+        Ok(projected) => projected,
+        Err(missing) => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "FROM: record has no field `{}`",
-                ctx.registries.labels.render(*symbol),
+                ctx.registries.labels.display(missing),
             )))));
         }
-    }
+    };
     // The narrowed record type — interned once here where the registry is in scope, then copied
     // into the at-brand rebuild below.
-    let narrowed_type = ctx
-        .types()
-        .record(Record::from_pairs(names.iter().map(|symbol| {
-            let (name, ktype) = record_fields
-                .get_key_value(*symbol)
-                .expect("probed ambient: field exists in the record");
-            (name, *ktype)
-        })));
+    let narrowed_type = ctx.types().record(projected);
 
     // Cross the record as the projection's lhs operand. A carrier-less lhs is region-pure by the
     // argument view's carrier contract, so it is placed into the read-site region through the

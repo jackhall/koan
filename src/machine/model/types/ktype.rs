@@ -188,11 +188,11 @@ impl KType {
     /// expectation). Applied to the type a type value carries — or a runtime value's `ktype()` —
     /// to match it against an `OfKind` slot.
     pub fn kind_of(self, types: &TypeRegistry) -> KKind {
-        match types.node(self) {
+        types.with_node(self, |node| match node {
             TypeNode::Signature { .. } => KKind::Signature,
             // A nominal carries its family on its member node; a `ConstructorApply` defers to its
             // constructor (a `TypeConstructor`-kind member, or an abstract constructor).
-            TypeNode::SetMember { kind, .. } => kind,
+            TypeNode::SetMember { kind, .. } => *kind,
             TypeNode::ConstructorApply { constructor, .. } => constructor.kind_of(types),
             // An abstract member with declared parameters is a constructor; without them it is a
             // proper type.
@@ -202,7 +202,7 @@ impl KType {
             // A union is a proper type value — it classifies against `OfKind(ProperType)` slots
             // and never against a nominal-family kind.
             _ => KKind::ProperType,
-        }
+        })
     }
 }
 
