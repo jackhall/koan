@@ -56,7 +56,7 @@ fn finalize_newtype<'a>(
     // constructor of kind `* -> *` standing unapplied is a kind error.
     if let Some(message) = crate::machine::model::unsaturated_constructor_message(
         repr,
-        &format!(
+        format_args!(
             "the representation type of NEWTYPE `{}`",
             crate::machine::model::display_label(name.symbol(), fctx.registries),
         ),

@@ -177,10 +177,10 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
             // elaborated field on the way out, so the arms below share one verdict — the
             // `KType::ANY` placeholders a `Pending` walk yields are proper and pass, and the
             // re-walk checks the resolved type they stand for.
-            let rendered = || registries.labels.render(name.symbol());
+            let rendered = || registries.labels.display(name.symbol());
             let checked = |kt: KType| match super::sig_schema::unsaturated_constructor_message(
                 kt,
-                &format!("the type of {context_member} `{}`", rendered()),
+                format_args!("the type of {context_member} `{}`", rendered()),
                 registries,
             ) {
                 Some(message) => Err(message),

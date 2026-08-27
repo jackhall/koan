@@ -207,7 +207,7 @@ pub fn constructor_param_names(kt: KType, types: &TypeRegistry) -> Option<Vec<Ty
 /// itself a type. The constructor's parameter names follow, since supplying them is the fix.
 pub fn unsaturated_constructor_message(
     kt: KType,
-    position: &str,
+    position: impl std::fmt::Display,
     registries: &RunRegistries,
 ) -> Option<String> {
     let types = &registries.types;

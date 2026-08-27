@@ -30,7 +30,7 @@ use super::return_type::{
 use super::signature::{ParamListOutcome, parse_fn_param_list};
 use crate::machine::OverloadSeal;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::render_label;
+use crate::machine::model::{display_label, render_label};
 
 /// How a finalized FN-def is wired into the scope:
 ///
@@ -207,9 +207,9 @@ fn check_value_type_kinds(
         if let SignatureElement::Argument(argument) = element
             && let Some(message) = unsaturated_constructor_message(
                 argument.ktype,
-                &format!(
+                format_args!(
                     "the type of FN parameter `{}`",
-                    render_label(argument.name.symbol(), registries)
+                    display_label(argument.name.symbol(), registries)
                 ),
                 registries,
             )
@@ -277,12 +277,12 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // First Keyword keys the data table. Dispatch is by full signature via
     // `Bindings::functions`; `Bindings::data` is for discoverability /
     // shadow-by-name, neither of which has a single right answer for a
-    // multi-token signature like `(a ADD b)`.
-    let name = elements.iter().find_map(|e| match e {
-        SignatureElement::Keyword(s) => registries.labels.resolve(s.symbol()),
+    // multi-token signature like `(a ADD b)`. The symbol is read off the signature before it
+    // moves into the draft; its spelling is resolved only on the arm that registers an overload.
+    let dispatch_keyword = elements.iter().find_map(|e| match e {
+        SignatureElement::Keyword(s) => Some(*s),
         _ => None,
     });
-
     let draft = SignatureDraft {
         return_type,
         elements,
@@ -300,6 +300,9 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     let bound_name = match kind {
         FnKind::Anonymous => None,
         FnKind::Function { bound_name } => {
+            // Rendered only here: an anonymous FN registers no overload, so it never reads back
+            // the keyword its bucket would have been keyed by.
+            let name = dispatch_keyword.and_then(|s| registries.labels.resolve(s.symbol()));
             let name = match name {
                 Some(n) => n,
                 None => {

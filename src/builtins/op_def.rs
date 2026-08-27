@@ -148,7 +148,7 @@ fn capture_type_slot<'a>(
 fn checked_value_type(kt: KType, label: &str, registries: &RunRegistries) -> Result<KType, KError> {
     match crate::machine::model::unsaturated_constructor_message(
         kt,
-        &format!("the {label}"),
+        format_args!("the {label}"),
         registries,
     ) {
         Some(message) => Err(KError::new(KErrorKind::ShapeError(message))),

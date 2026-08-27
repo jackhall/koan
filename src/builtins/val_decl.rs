@@ -144,9 +144,9 @@ fn finalize_val<'a>(
     use crate::machine::Action;
     if let Some(message) = crate::machine::model::unsaturated_constructor_message(
         declared_kt,
-        &format!(
+        format_args!(
             "the type of SIG value slot `{}`",
-            crate::machine::model::render_label(name.symbol(), fctx.registries)
+            crate::machine::model::display_label(name.symbol(), fctx.registries)
         ),
         fctx.registries,
     ) {
