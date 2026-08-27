@@ -2,7 +2,7 @@
 
 **Problem.** The parse copies each token's text out of the source twice, once to accumulate
 it and once to split it, and the two copies are the largest attributed share of the
-`declare_name` term — 23 of its 70 allocations per declared name, measured by a dhat
+`declare_name` term — 23 of its 57 allocations per declared name, measured by a dhat
 difference of `audit/shapes/declare_n{10,100}.koan`.
 
 The outer copy is the tokenizer's accumulator.

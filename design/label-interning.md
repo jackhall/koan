@@ -420,11 +420,25 @@ resolves text through the label interner reached from the execution context via
 `RunRegistries`. Pure type-structure questions (subtyping, digests, dispatch)
 continue to take the type registry alone; anything that renders text takes the
 bundle. A resolve miss renders a stable placeholder rather than failing: error
-paths stay total — that is `LabelInterner::render`, the total form every render
-path uses. Its `display` twin is the same read as a `Display` view, so a message
-that names a label writes the recorded text straight into the message's own
-buffer with no `String` in between; a diagnostic built on a path that succeeds
-costs no more than one built from a borrowed name.
+paths stay total — that is `LabelInterner::render`, the total form for a caller that
+needs an owned `String` (`resolve` is its fallible twin). The **ordinary door is
+`display`**: the same read as a `Display` view, so a message that names a label writes the
+recorded text straight into the message's own buffer with no `String` in between, and a
+`format_args!` position that carries a label passes the view rather than a rendered
+fragment. A diagnostic built that way costs its own buffer alone.
+
+Rendering happens **where a diagnostic is built and nowhere earlier**. A lookup that
+misses carries the symbol out rather than a message — `Resolution::Unbound` and
+`TypeChannel::Unbound`
+([resolve.rs](../src/machine/execute/decide/resolve.rs)), the dispatch walk's dead lean
+and its `DispatchOutcome::UnboundName`
+([resolve_dispatch.rs](../src/machine/execute/decide/resolve_dispatch.rs)), and
+`TypeResolution::Unbound` ([resolver.rs](../src/machine/model/types/resolver.rs)), whose
+one wording every unbound type-name arm shares through `unknown_type_name`. That matters
+because the value-side miss is not an error arm at all: it is the ordinary "this bare name
+is not a value" fall-through every keyworded dispatch takes, so a program that never
+prints a name never renders one. A binder builtin reads its own name back the same way —
+on the arm that quotes it, not before.
 
 Because the surface parts of an expression carry symbols rather than text,
 `summarize` — the surface rendering of a part, an expression or a trace frame —

@@ -177,26 +177,48 @@ only outlive the finish call, and continuations are higher-ranked over that
 lifetime. Nothing stores the reference beyond the call that received it, which
 is what keeps ownership sitting on the run frame alone.
 
-The node table sits behind a `RefCell`, and **no borrow of it ever crosses caller
-code** — the rule that keeps a read from colliding with an intern the same call
-reaches. Two reader shapes keep it. A handle read hands back an owned clone of
-the node rather than a reference into the table, so the borrow ends inside the read; a
-node is shallow — scalar payload plus child handles — so the clone never copies a type
-subtree. A reader on an allocation-sensitive path instead asks the registry the
-question itself: a per-query verb (`is_union`, `union_variant_target`,
-`union_member_named` on
-[`registry.rs`](../../src/machine/model/types/registry.rs)) walks the outer node and
-the members it names by reference under one borrow and answers with `Copy` data, so a
-probe that needs a verdict rather than a node pays no clone at all. Both shapes confine
-the borrow to the registry, and confine it by construction. A closure accessor handed a
-handle and a callback would not: it runs caller code under a live borrow, which turns
-any intern reached from inside it into a runtime panic — a discipline audited at run
-time where these two are checked by the signature.
-
 `&TypeRegistry` stays the currency for these readers — every pure type-structure
 question answers without label text. A consumer takes the wider `&RunRegistries`
 only when it renders text or constructs a record, which keeps the label interner off
 the type-system surface entirely.
+
+### Reading a node
+
+The registry keeps content and verdicts in two independent `RefCell`s, and the node
+table has **one read door**: `TypeRegistry::with_node(handle, |node| …)` on
+[`registry.rs`](../../src/machine/model/types/registry.rs), which holds the table borrow
+across the reading closure and hands the node **by reference**. A shape question — which
+variant, which child handles, which field types — is therefore answered without copying
+the node, which is what keeps a dispatch that matches nothing from allocating per
+candidate. The other doors are written over it or over the same borrow:
+
+- **The owning door.** `node(handle)` is `with_node(handle, TypeNode::clone)`, for a
+  caller that needs the node to outlive the read. A node is shallow — scalar payload plus
+  child handles — so the clone never copies a type subtree, but a variant carrying a field
+  record, a member list or a schema allocates to clone, which is why every reader on an
+  allocation-sensitive path takes the borrowing door instead.
+- **Per-query verbs.** `is_union`, `union_variant_target`, `union_member_named` walk the
+  outer node and the members it names under one borrow and answer with `Copy` data, so a
+  probe that wants a verdict rather than a node reads nothing back out.
+
+Two properties bound what a reader may do. **No reference into the table can escape**, and
+that is compile-enforced: the closure's result type is fixed at the call site and the
+node's lifetime is the call's, so a reader is confined to data it derives. **A reader must
+not intern**, and that is a discipline rather than a type: `intern` is the only site that
+takes the table mutably, and it names the rule in the diagnostic its `try_borrow_mut`
+raises, so a violation is a panic at the interning site rather than silent corruption. The
+predicate family the door exists for keeps the rule structurally — the specificity walk,
+the value and carried classifiers, and signature satisfaction compare types structurally
+and build no substituted type (`slot_satisfied_by` in
+[`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs) is the substituting
+comparison that deliberately materializes nothing), and the interning walk
+`substitute_sig_members` is reached only from the ascription and functor lanes, which hold
+no read.
+
+Reads nest freely, since the borrow is shared: the specificity walk reads both sides at
+once and recurses under both. Recording a verdict under a read is likewise fine — verdicts
+live in their own cell — so a memoizing predicate writes its answer without touching the
+read it is running under.
 
 ## Concurrency
 

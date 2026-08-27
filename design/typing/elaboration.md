@@ -417,8 +417,12 @@ would buy only the elaborator walk while owning an invalidation question.
 
 - [`Scope::resolve_type_identifier`](../../src/machine/execute/decide/resolve_type_identifier.rs) runs the
   elaborator against `self` on every call and returns the three-outcome
-  `TypeResolution<KType>::{Done(KType), Park(Vec<NodeId>), Unbound(String)}` — the
-  handle alone, with no stored reach beside it, since a `KType` owns all its content.
+  `TypeResolution<KType>::{Done(KType), Park(Vec<NodeId>), Unbound(TypeSymbol)}` — the
+  handle alone, with no stored reach beside it, since a `KType` owns all its content. An
+  `Unbound` carries the *name that missed*, not a message: the symbol the lookup already
+  held, so a miss renders nothing and a diagnostic that quotes the name builds its wording
+  through `unknown_type_name` ([`resolver.rs`](../../src/machine/model/types/resolver.rs))
+  where the error is raised.
   A `Done` passes a **finalize gate** first: every user-type referenced by the
   result must be fully finalized (no type-side placeholder left in the owning scope)
   or the outcome becomes `Park(producers)`. The walk is top-level only — a declaration
