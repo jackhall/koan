@@ -3,7 +3,7 @@
 //! [`KObject::value_equal`] walks two values per variant, returning `Ok(true)`/`Ok(false)` for a
 //! comparable pair and `Err` when a banned operand (a `KFunction` or a `Module`) participates at any
 //! depth. Values are acyclic by construction (see
-//! [circular-value-construction.md](../../../../../roadmap/type_language/circular-value-construction.md)),
+//! [Constructing circular values](../../../../../roadmap/foundation/circular-value-construction.md)),
 //! so the walk carries no cycle guard.
 //!
 //! The comparison is cross-lifetime (`&KObject<'a>` vs `&KObject<'b>`): the two operands reach the

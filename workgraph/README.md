@@ -34,6 +34,10 @@ crate reads as a standalone library rather than as one of koan's internals.
     two-band work queue, the drain protocol (the embedder's step callback and
     its `StepVerdict`), alias splicing, and delivery at finalize with the
     unconditional slot reclaim behind it.
+  - [liveness-matrix.md](design/liveness-matrix.md) — aspirational: frame
+    liveness as attributed bit matrices over a frame pool — handle-based
+    anchors, reach as a slot bitmask, and recycling gated on a zero row —
+    in place of reference-counted holds.
   - [cellgraph.md](design/cellgraph.md) — the computation-cell substrate
     beneath the DAG layer (working name `cellgraph`): cells with a
     continuation, a memory anchor, and inter-cell values; no acyclicity, no

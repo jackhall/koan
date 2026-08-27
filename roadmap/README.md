@@ -13,6 +13,7 @@ prerequisites and the items it unblocks.
 Work is grouped into project subdirectories, each a coherent body of work whose items
 share design constraints and ship together. Each has a README naming what the project
 buys the language and listing its ready-to-start items:
+[foundation/](foundation/README.md),
 [predicate_typing/](predicate_typing/README.md), [libraries/](libraries/README.md),
 [metaprogramming/](metaprogramming/README.md), [type_language/](type_language/README.md),
 [editor_tooling/](editor_tooling/README.md), [refactor/](refactor/README.md),
@@ -41,15 +42,18 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Raw-handle confinement](compile_safety/raw-handle-confinement.md)
 - [Tightness-audit coverage](compile_safety/tightness-audit-coverage.md)
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
+- [Constructing circular values](foundation/circular-value-construction.md)
+- [CLOSE OVER](foundation/close-over.md)
+- [Yielding iterators](foundation/yielding-iterators.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [EVAL splices in place](metaprogramming/eval-splices-in-place.md)
 - [One kind-blind reader per shape slot](metaprogramming/one-reader-per-shape-slot.md)
 - [Parse at runtime](metaprogramming/parse-at-runtime.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
+- [Frame recycling](reduce_allocs/frame-recycling.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Field reads on anonymous record values](type_language/anonymous-record-field-read.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
-- [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)
 - [Record-typed parameter list in the FN type constructor](type_language/fn-type-record-parameter-list.md)

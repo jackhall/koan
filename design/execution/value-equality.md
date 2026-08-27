@@ -27,7 +27,7 @@ carried values never share a lifetime. The `KType` predicate suite it calls into
 takes its types by owned reference and its values at an independent lifetime, so
 the comparison threads the two value lifetimes without ever unifying them. Values
 are acyclic by construction (see
-[Constructing circular values](../../roadmap/type_language/circular-value-construction.md)),
+[Constructing circular values](../../roadmap/foundation/circular-value-construction.md)),
 so the walk carries no cycle guard.
 
 Per variant:
