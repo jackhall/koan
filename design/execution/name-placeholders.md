@@ -274,10 +274,11 @@ direction — not the binding tables by producer, and not the store by name.
 That index addresses a *statement*, not a slot, and the two are not one-to-one: a
 statement's eagerly-dispatched sub-slots share its lexical chain, so the index
 alone does not say whose claims sit at it. The stamping slot is therefore marked
-as it stamps — `own_claim_edges` on the
-[`SlotFrame`](../../src/machine/execute/nodes.rs) records claim ownership beside
-the edges — and the retirement hook consults the store only for a slot that
-carries the mark. A sub-slot of a still-live binder retires its own edges and
+as it stamps — `mark_claimed` on the
+[`SlotFrame`](../../src/machine/execute/nodes.rs) records that this slot's
+statement index addresses the store, once for the statement rather than per edge,
+since a plan naming neither a name nor a bucket still addresses it — and the
+retirement hook consults the store only for a slot that carries the mark. A sub-slot of a still-live binder retires its own edges and
 leaves its statement's claims standing.
 
 Two properties make that indexing sound, and both are worth asserting rather than

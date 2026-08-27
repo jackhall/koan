@@ -77,9 +77,9 @@ impl Workload for RetireWorkload {
             )
     }
 
-    fn retiring(anchor: &RetireAnchor) -> Vec<EdgeId> {
+    fn retiring(anchor: &RetireAnchor) -> impl IntoIterator<Item = EdgeId> {
         anchor.retire_calls.set(anchor.retire_calls.get() + 1);
-        anchor.owned.borrow_mut().drain(..).collect()
+        std::mem::take(&mut *anchor.owned.borrow_mut())
     }
 }
 

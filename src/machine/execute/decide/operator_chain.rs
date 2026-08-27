@@ -25,13 +25,12 @@ use crate::machine::model::{FoldDirection, KeyElement, OperatorGroup, ReductionM
 use crate::machine::{KError, KErrorKind, ProducerId};
 use crate::scheduler::Deps;
 use crate::source::{Span, Spanned};
-use crate::witnessed::BumpVec;
+use crate::witnessed::{BumpAllocator, BumpVec};
 
 use super::super::outcome::DepTerminal;
 use super::ctx::DecideCtx;
 use super::{
-    Await, DeferredTraceFrame, DepPlacement, DepRequest, Outcome, become_dispatch,
-    park_resume_labelled, working_frame,
+    Await, DepPlacement, DepRequest, Outcome, become_dispatch, park_resume_labelled, working_frame,
 };
 
 pub(in crate::machine::execute) fn run<'step, 'b>(
@@ -39,6 +38,7 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
     s: &'b Scope<'b>,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
+    debug_assert_chain_shape(expr);
     let probe = expr
         .operator_probe()
         .expect("OperatorChain shape guarantees a cached operator probe");
@@ -46,7 +46,7 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
     match s.resolve_operator_group_delivered(probe, chain) {
         None => park_on_pending_operators(ctx, s, expr),
         Some(delivered) => {
-            let operators = chain_operator_symbols(expr);
+            let operators = chain_operator_symbols(expr, ctx.scratch());
             match delivered.open(|group| ChainPlan::of(group, &operators)) {
                 // The powerset keys mean a hit already covers the probe, so a non-cover is a
                 // registry-build bug — surface it as a clean non-match rather than a wrong fold.
@@ -105,15 +105,45 @@ impl ChainPlan {
     }
 }
 
-/// The operator keywords of the chain, in source order (with repeats).
-fn chain_operator_symbols(expr: &WorkingExpression<'_>) -> Vec<KeywordSymbol> {
-    expr.parts
-        .iter()
-        .filter_map(|part| match part.value.class() {
-            PartClass::Keyword(symbol) => Some(symbol),
-            _ => None,
-        })
-        .collect()
+/// A chain's parts alternate operand, operator, …, operand, and the shape guarantees ≥3 operands —
+/// so the run is odd-length and at least 5 long. Every reducer below indexes on that alternation
+/// rather than splitting the run into two lists of its own.
+fn debug_assert_chain_shape(expr: &WorkingExpression<'_>) {
+    debug_assert!(
+        expr.parts.len() >= 5 && expr.parts.len() % 2 == 1,
+        "OperatorChain shape guarantees ≥3 operands and one fewer operator"
+    );
+}
+
+/// The chain's operator parts, in source order — the odd positions of the alternating run.
+fn operator_parts<'a, 'step>(
+    expr: &'a WorkingExpression<'step>,
+) -> impl ExactSizeIterator<Item = Spanned<WorkingPart<'step>>> + 'a {
+    expr.parts.iter().skip(1).step_by(2).copied()
+}
+
+/// The chain's operand parts, in source order — the even positions of the alternating run.
+fn operand_parts<'a, 'step>(
+    expr: &'a WorkingExpression<'step>,
+) -> impl ExactSizeIterator<Item = Spanned<WorkingPart<'step>>> + 'a {
+    expr.parts.iter().step_by(2).copied()
+}
+
+/// The operator keywords of the chain, in source order (with repeats), on the step's scratch arena:
+/// every caller reads it and drops it inside the dispatch that built it, and its length is the
+/// program's — a chain names as many operators as it was written with. The reservation is the run's
+/// own operator count, so the fill cannot outgrow it.
+fn chain_operator_symbols<'step>(
+    expr: &WorkingExpression<'_>,
+    scratch: BumpAllocator<'step>,
+) -> BumpVec<'step, KeywordSymbol> {
+    let parts = operator_parts(expr);
+    let mut operators = BumpVec::with_capacity_in(parts.len(), scratch);
+    operators.extend(parts.map(|part| match part.value.class() {
+        PartClass::Keyword(symbol) => symbol,
+        _ => unreachable!("odd-index chain parts are keywords by shape"),
+    }));
+    operators
 }
 
 /// The chain's distinct operators as one space-joined spelling, for the two diagnostics that name
@@ -128,26 +158,6 @@ fn rendered_operators(operators: &[KeywordSymbol], labels: &LabelInterner) -> St
     spellings.sort_unstable();
     spellings.dedup();
     spellings.join(" ")
-}
-
-/// Operands (even indices) and operator keywords (odd indices), each keeping its `Spanned` wrapper
-/// so source spans survive into any error message an inner dispatch produces.
-fn split_chain_parts<'step>(
-    expr: &WorkingExpression<'step>,
-) -> (
-    Vec<Spanned<WorkingPart<'step>>>,
-    Vec<Spanned<WorkingPart<'step>>>,
-) {
-    let mut operands = Vec::with_capacity(expr.parts.len() / 2 + 1);
-    let mut operator_keywords = Vec::with_capacity(expr.parts.len() / 2);
-    for (i, part) in expr.parts.iter().enumerate() {
-        if i % 2 == 0 {
-            operands.push(*part);
-        } else {
-            operator_keywords.push(*part);
-        }
-    }
-    (operands, operator_keywords)
 }
 
 /// Wraps a built-up accumulator as an operand of the next nesting level, carrying its own span
@@ -175,29 +185,14 @@ fn reduce_fold_left<'step>(
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
-    let (operands, operators) = split_chain_parts(expr);
-    debug_assert!(
-        operands.len() >= 3 && operators.len() == operands.len() - 1,
-        "OperatorChain shape guarantees ≥3 operands and one fewer operator"
-    );
-    let mut operands = operands.into_iter();
-    let mut operators = operators.into_iter();
-
-    let first_operand = operands.next().expect("chain shape guarantees ≥3 operands");
-    let second_operand = operands.next().expect("chain shape guarantees ≥3 operands");
-    let first_operator = operators
-        .next()
-        .expect("chain shape guarantees ≥2 operators");
-
-    let mut acc = WorkingExpression::synthesized(
-        brand,
-        &[first_operand, first_operator, second_operand],
-        expr,
-    );
-    for (operator, operand) in operators.zip(operands) {
+    let parts = expr.parts;
+    // The leading `operand operator operand` is the innermost nesting level; every `operator
+    // operand` pair after it wraps what is built so far as the next level's left operand.
+    let mut acc = WorkingExpression::synthesized(brand, &parts[..3], expr);
+    for pair in parts[3..].chunks_exact(2) {
         acc = WorkingExpression::synthesized(
             brand,
-            &[wrap_as_operand(brand, acc), operator, operand],
+            &[wrap_as_operand(brand, acc), pair[0], pair[1]],
             expr,
         );
     }
@@ -212,29 +207,16 @@ fn reduce_fold_right<'step>(
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
-    let (operands, operators) = split_chain_parts(expr);
-    debug_assert!(
-        operands.len() >= 3 && operators.len() == operands.len() - 1,
-        "OperatorChain shape guarantees ≥3 operands and one fewer operator"
-    );
-    let mut operands = operands.into_iter().rev();
-    let mut operators = operators.into_iter().rev();
-
-    let last_operand = operands.next().expect("chain shape guarantees ≥3 operands");
-    let second_last_operand = operands.next().expect("chain shape guarantees ≥3 operands");
-    let last_operator = operators
-        .next()
-        .expect("chain shape guarantees ≥2 operators");
-
-    let mut acc = WorkingExpression::synthesized(
-        brand,
-        &[second_last_operand, last_operator, last_operand],
-        expr,
-    );
-    for (operator, operand) in operators.zip(operands) {
+    let parts = expr.parts;
+    let head = parts.len() - 3;
+    // Mirror of the left fold: the *trailing* three parts are the innermost level, and each
+    // `operand operator` pair before it wraps what is built so far as the next level's right
+    // operand.
+    let mut acc = WorkingExpression::synthesized(brand, &parts[head..], expr);
+    for pair in parts[..head].rchunks_exact(2) {
         acc = WorkingExpression::synthesized(
             brand,
-            &[operand, operator, wrap_as_operand(brand, acc)],
+            &[pair[0], pair[1], wrap_as_operand(brand, acc)],
             expr,
         );
     }
@@ -256,22 +238,14 @@ fn reduce_unary<'step>(
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
-    let (operands, operators) = split_chain_parts(expr);
-    debug_assert!(
-        operands.len() >= 3 && operators.len() == operands.len() - 1,
-        "OperatorChain shape guarantees ≥3 operands and one fewer operator"
-    );
-    let operator = operators
-        .into_iter()
-        .next()
-        .expect("chain shape guarantees ≥2 operators");
+    let operator = expr.parts[1];
     let PartClass::Keyword(sym) = operator.value.class() else {
         unreachable!("odd-index chain parts are keywords by shape")
     };
     // A chain is parsed syntax, so every operand is still a parser part.
     let list_items = brand
         .allocator()
-        .slice_from_iter(operands.into_iter().map(|operand| {
+        .slice_from_iter(operand_parts(expr).map(|operand| {
             operand
                 .value
                 .as_ast()
@@ -294,60 +268,37 @@ fn reduce_unary<'step>(
 /// Reduces a `Pairwise`-mode run: `f x < g y < h z` must evaluate `g y` **once**, its value feeding
 /// both the `x<y` and `y<z` pairs, so — unlike the other modes — this cannot be a pure
 /// syntactic rewrite (there every operand appears exactly once in the output tree; here a middle
-/// operand appears in two places). See [`install_pairwise_fold`] for the staging + finish mechanics.
+/// operand appears in two places).
+///
+/// Every pairwise operand is staged as its own single-part sub-dispatch — whatever its part kind,
+/// the one-part wrapper routes it through its normal dispatch lane — and the finish splices each
+/// resolved cell into the adjacent pairs it feeds, then folds the pairs through the group's
+/// combiner. The chain shape guarantees ≥3 operands and ≥2 operators, so there are always at least
+/// 2 pairs and the combiner-fold loop always runs at least once. The chain labels the synthesized
+/// combiner parts, which have no source token of their own (see [`combine`]).
 fn reduce_pairwise<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
     combiner: KeywordSymbol,
     direction: FoldDirection,
 ) -> Outcome<'step> {
-    let (operands, operators) = split_chain_parts(expr);
-    debug_assert!(
-        operands.len() >= 3 && operators.len() == operands.len() - 1,
-        "OperatorChain shape guarantees ≥3 operands and one fewer operator"
-    );
     let dep_error_frame = Some(working_frame("<operator-chain>", expr));
-    install_pairwise_fold(
-        ctx,
-        operands,
-        operators,
-        combiner,
-        direction,
-        *expr,
-        dep_error_frame,
-    )
-}
-
-/// Stage every pairwise operand as its own single-part sub-dispatch — whatever its part kind, the
-/// one-part wrapper routes it through its normal dispatch lane — then splice each resolved cell
-/// into the adjacent pairs it feeds and fold the pairs through the group's combiner.
-///
-/// The chain shape guarantees ≥3 operands and ≥2 operators, so there are always at least 2 pairs
-/// and the combiner-fold loop always runs at least once. `chain` labels the synthesized combiner
-/// parts, which have no source token of their own (see [`combine`]).
-fn install_pairwise_fold<'step>(
-    ctx: &DecideCtx<'_, 'step, '_>,
-    operands: Vec<Spanned<WorkingPart<'step>>>,
-    operators: Vec<Spanned<WorkingPart<'step>>>,
-    combiner: KeywordSymbol,
-    direction: FoldDirection,
-    chain: WorkingExpression<'step>,
-    dep_error_frame: Option<DeferredTraceFrame<'step>>,
-) -> Outcome<'step> {
+    let chain = *expr;
     let host = ctx.current_scope().brand();
     // The operator run and the operand spans cross the park inside the finish, so both land in the
     // host frame region rather than the step scratch the walk builds transients on.
     let operand_spans: &'step [Option<Span>] = host
         .allocator()
-        .slice_from_iter(operands.iter().map(|operand| operand.span));
-    let operators: &'step [Spanned<WorkingPart<'step>>] = host.allocator().slice(&operators);
-    let deps: Vec<DepRequest<'step>> = operands
-        .into_iter()
-        .map(|operand| DepRequest::Dispatch {
+        .slice_from_iter(operand_parts(&chain).map(|operand| operand.span));
+    let operators: &'step [Spanned<WorkingPart<'step>>] =
+        host.allocator().slice_from_iter(operator_parts(&chain));
+    let deps = Deps::from_requests_in(
+        operand_parts(&chain).map(|operand| DepRequest::Dispatch {
             expr: WorkingExpression::synthesized(host, &[operand], &chain),
             placement: DepPlacement::OwnScope,
-        })
-        .collect();
+        }),
+        ctx.scratch(),
+    );
     let finish = move |ctx: &DecideCtx<'_, 'step, '_>, terminals: &[DepTerminal<'_>]| {
         // Resting a shared middle operand's cell into both adjacent pairs is the splice that makes
         // evaluation once-only; the region's union bundle absorbs the repeated coverage, so a
@@ -395,7 +346,7 @@ fn install_pairwise_fold<'step>(
         };
         become_dispatch(ctx, acc)
     };
-    Await::on(Deps::from_requests_in(deps, ctx.scratch()))
+    Await::on(deps)
         .error_frame(dep_error_frame)
         .finish_terminal(host, finish)
 }
@@ -449,7 +400,7 @@ fn park_on_pending_operators<'step, 'b>(
         return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(&ctx.registries().labels),
             reason: undeclared_operator_reason(&rendered_operators(
-                &chain_operator_symbols(expr),
+                &chain_operator_symbols(expr, ctx.scratch()),
                 &ctx.registries().labels,
             )),
         })));
@@ -471,13 +422,13 @@ fn park_on_pending_operators<'step, 'b>(
 /// reads the scope's claim store, not the operator registry. Both keys an operator
 /// can be declared under are probed — binary `[Slot, Keyword(sym), Slot]` and unary
 /// `[Keyword(sym), Slot]` — since the chain cannot know the declaration's arity until it lands.
-fn pending_operator_sources<'b>(
-    ctx: &DecideCtx<'_, '_, '_>,
+fn pending_operator_sources<'step, 'b>(
+    ctx: &DecideCtx<'_, 'step, '_>,
     s: &'b Scope<'b>,
     expr: &WorkingExpression<'_>,
 ) -> Vec<ProducerId> {
     let chain = ctx.chain_deref();
-    let mut operators = chain_operator_symbols(expr);
+    let mut operators = chain_operator_symbols(expr, ctx.scratch());
     operators.sort_unstable();
     operators.dedup();
     let mut sources: Vec<ProducerId> = Vec::new();

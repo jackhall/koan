@@ -81,7 +81,7 @@ impl Workload for KoanWorkload {
     /// commit that already retired its claim costs an array index and a zero test, and no path
     /// scans a binding table. A slot that claimed nothing (a bare-name forward owning only its
     /// classification edge, every non-binder statement) reads an empty record and returns.
-    fn retiring(anchor: &SlotFrame) -> Vec<EdgeId> {
+    fn retiring(anchor: &SlotFrame) -> impl IntoIterator<Item = EdgeId> {
         if anchor.installed_claims() {
             let index = BindingIndex::value(anchor.payload.chain.index);
             with_node_scope(&anchor.payload.scope, Some(&anchor.cart), |scope| {

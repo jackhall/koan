@@ -14,7 +14,6 @@ use crate::machine::ProducerId;
 use crate::machine::model::StoredBinderKey;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{BindingIndex, KError, KErrorKind, LexicalFrame, NodeId, Scope, WriteGate};
-use crate::scheduler::EdgeId;
 
 use super::super::harness::{Host, KoanWorkload};
 use super::super::nodes::{NodeScope, SlotFrame, WorkLabel};
@@ -92,12 +91,20 @@ impl<'run> Host<'run> {
                 .region_owner()
                 .upgrade()
                 .expect("a live scope reference implies a live region owner");
-            let mut edges: Vec<EdgeId> = Vec::new();
-            let claim = |sched: &mut Scheduler<KoanWorkload>| sched.install_edge(id, &destination);
+            // The slot owns every claim it stamped, and releases the edges when it terminalizes.
+            // Installing an edge and handing it to the anchor is one act, so the stamp holds no
+            // list of its own and no claim can be installed without an owner.
+            let claim = |sched: &mut Scheduler<KoanWorkload>| {
+                let edge = sched.install_edge(id, &destination);
+                anchor.own_edges([edge]);
+                edge
+            };
+            // Recorded for the statement rather than per edge: a key naming neither a name nor a
+            // bucket still addresses the claim store at this slot's index.
+            anchor.mark_claimed();
             let mut gate = WriteGate::for_run_loop();
             if let Some(name) = key.name {
                 let edge = claim(sched);
-                edges.push(edge);
                 let _ = scope.install_placeholder(
                     name,
                     ProducerId::from_scheduler_edge(edge),
@@ -108,7 +115,6 @@ impl<'run> Host<'run> {
             }
             for bucket in key.buckets {
                 let edge = claim(sched);
-                edges.push(edge);
                 let _ = scope.install_pending_overload(
                     bucket,
                     ProducerId::from_scheduler_edge(edge),
@@ -116,9 +122,6 @@ impl<'run> Host<'run> {
                     &mut gate,
                 );
             }
-            // The slot owns every claim it stamped: it releases the edges when it terminalizes, and
-            // the same act records that this slot's statement index addresses claims in the store.
-            anchor.own_claim_edges(edges);
         }
         id
     }

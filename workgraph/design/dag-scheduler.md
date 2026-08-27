@@ -236,7 +236,10 @@ per slot, at the one point the slot stops being able to release its edges —
 after the finalize / forward reads and the splice re-point, before slab
 reclaim — and the scheduler releases the edges it returns. The exactly-once
 claim and the after-the-forward-read ordering hold by the hook's placement,
-not by per-arm discipline.
+not by per-arm discipline. The return is any `IntoIterator`, not an owned
+collection: the release path is the hook's only caller and it only iterates, so
+an anchor keeping its owned edges inline hands the record over as it sits rather
+than allocating one per retirement.
 
 When the queues empty with slots still parked, `drain` returns its deadlock
 report — the pending count plus the first parked slot's memory anchor — as its

@@ -1,6 +1,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use smallvec::SmallVec;
+
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{ScopeId, ScopeRefFamily, StatementId, assemble_body_chain};
 use crate::machine::model::ast::{DispatchShape, WorkingExpression};
@@ -63,6 +65,13 @@ impl WorkLabel {
     }
 }
 
+/// A slot's owned-edge record. The inline width is the most a slot owns without spilling: a binder
+/// stamps one name claim plus the `0..=2` bucket claims its plan names, and a bare-name forward
+/// adds the one classification edge it installs. So the width is bounded by the binder forms the
+/// language has rather than by the program — a slot that re-emits `Forward` across micro-steps can
+/// still exceed it and spill to the heap, which is correct, just no longer free.
+type OwnedEdges = SmallVec<[EdgeId; 4]>;
+
 /// Koan's `Workload::Frame` — the scheduler-held per-slot memory anchor. Wraps the shared per-call
 /// cart with the slot's own [`NodeScope`] handle and lexical chain. The scheduler holds one
 /// `Rc<SlotFrame>` per slot and projects the region owner (`FrameStorage`) through
@@ -75,7 +84,7 @@ pub(super) struct SlotFrame {
     /// `install_pending_overload`) and a bare-name forward's classification edges. Both are named
     /// after allocation, so the list fills in rather than arriving with the anchor, and a tail
     /// replace carries it over: ownership tracks the slot, not the anchor. Empty for most slots.
-    owned_edges: RefCell<Vec<EdgeId>>,
+    owned_edges: RefCell<OwnedEdges>,
     /// Whether this slot's submission **stamped claims** into its scope's claim store. A slot's
     /// lexical chain index is its statement's, which its eagerly-dispatched sub-slots share, so the
     /// index alone does not say whose claims those are; this flag does, and it is what the
@@ -118,7 +127,7 @@ impl SlotFrame {
         Rc::new(SlotFrame {
             cart,
             payload: NodePayload { scope, chain },
-            owned_edges: RefCell::new(Vec::new()),
+            owned_edges: RefCell::new(OwnedEdges::new()),
             claimed: Cell::new(false),
             statement: StatementId::next(),
             opened_scope: false,
@@ -203,11 +212,13 @@ impl SlotFrame {
         self.owned_edges.borrow_mut().extend(edges);
     }
 
-    /// [`own_edges`](Self::own_edges) for the edges a binder's submission **claimed** with, which
-    /// also records that this slot's statement index addresses claims in the store.
-    pub(super) fn own_claim_edges(&self, edges: impl IntoIterator<Item = EdgeId>) {
+    /// Record that this slot's statement index addresses claims in the store. Separate from
+    /// [`own_edges`](Self::own_edges) because the two are not one act at the stamp: a submission
+    /// owns each claim edge as it installs it, so there is no moment holding the whole set, while
+    /// the flag is set once for the statement — and a key naming neither a name nor a bucket
+    /// still addresses the store.
+    pub(super) fn mark_claimed(&self) {
         self.claimed.set(true);
-        self.own_edges(edges);
     }
 
     /// Whether this slot stamped claims — the retirement hook's gate. A slot that stamped none
@@ -224,7 +235,7 @@ impl SlotFrame {
     /// Take the slot's owned edges, leaving it holding none — so the retirement that releases them,
     /// and the tail replace that hands them to a fresh anchor, are both exactly-once by
     /// construction.
-    pub(super) fn take_owned_edges(&self) -> Vec<EdgeId> {
+    pub(super) fn take_owned_edges(&self) -> OwnedEdges {
         std::mem::take(&mut *self.owned_edges.borrow_mut())
     }
 }

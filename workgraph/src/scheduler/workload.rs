@@ -103,7 +103,12 @@ where
     /// re-point — and releases every edge it returns. The impl drains whatever owned-edge record
     /// its anchor keeps (and does its own bookkeeping for those names); a workload whose anchors
     /// own no edges takes the default.
-    fn retiring(_anchor: &Self::Frame) -> Vec<EdgeId> {
-        Vec::new()
+    ///
+    /// The return is any `IntoIterator`, so an anchor holding its edges inline hands them over
+    /// as they sit: the release path is the one caller, and it only ever iterates, so requiring
+    /// an owned collection here would buy the drain nothing and cost the anchor an allocation
+    /// per retirement.
+    fn retiring(_anchor: &Self::Frame) -> impl IntoIterator<Item = EdgeId> {
+        []
     }
 }
