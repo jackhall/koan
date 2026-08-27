@@ -97,7 +97,7 @@ TERMS = (
     Term("wide_step", "wide_n100", "wide_n10", 90,
          "per tail-recursive step through the wide body"),
     Term("deep_frame", "deep_n100", "deep_n10", 90,
-         "per live frame, averaged over depth 10 to 100"),
+         "per live frame, at recursion depth 10 to 100"),
     Term("declare_name", "declare_n100", "declare_n10", 90,
          "per declared name, across five declaration forms"),
 )

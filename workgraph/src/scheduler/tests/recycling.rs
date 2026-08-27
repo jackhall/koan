@@ -18,8 +18,8 @@
 //!   walk fills every edge, decrements every pending, and wakes the consumer whichever arm the
 //!   terminal is.
 //!
-//! What is left is one known per-iteration cost, asserted exactly so a reintroduced per-wake
-//! allocation shows up as a `+1` rather than as drift — see [`CYCLE_CHECK_ALLOCATIONS_PER_DEP`].
+//! Nothing is left: the window is asserted at exactly zero, so a reintroduced per-wake allocation
+//! shows up as a `+1` rather than as drift.
 
 use std::cell::Cell;
 
@@ -32,12 +32,6 @@ use crate::tests::allocation_count;
 const WARMUP: u32 = 16;
 /// Iterations inside the bracket.
 const MEASURED: u32 = 32;
-
-/// The one per-dep allocation left on the wiring path, and a debug-build cost only:
-/// `install_deps`' acyclicity assertion runs `would_create_cycle` per parked dep, which builds a
-/// walk stack (`vec![consumer]`) and a `HashSet` of visited slots — two allocations, released
-/// before the door returns. A release build asserts nothing and pays neither.
-const CYCLE_CHECK_ALLOCATIONS_PER_DEP: u64 = if cfg!(debug_assertions) { 2 } else { 0 };
 
 /// Fan out `width` dep-free producers over `anchor` and mint one source edge each, into the caller's
 /// reused buffer — the per-iteration upstream the consumer re-parks on.
@@ -114,22 +108,20 @@ fn steady_state_delta(width: usize) -> u64 {
     closed.get() - opened.get()
 }
 
-/// **The steady state allocates nothing of its own.** Every heap allocation left inside the window
-/// is the debug acyclicity check's, so the delta is exactly its per-dep cost times the shape — no
-/// row vector, no wiring buffer and no wake list is re-allocated once the shape has been seen.
+/// **The steady state allocates nothing at all.** No row vector, no wiring buffer, no wake list and
+/// no scratch of the debug acyclicity walk is re-allocated once the shape has been seen — including
+/// under `debug_assertions`, where that walk runs on every parked dep.
 ///
 /// Run at two dep widths so a buffer that silently reverted to per-wake reallocation cannot hide
 /// inside a width-independent constant: a row rebuilt from empty costs one allocation per growth
 /// step, so the two readings would leave this line at different rates.
 #[test]
-fn a_steady_state_park_and_wake_allocates_only_the_debug_cycle_check() {
+fn a_steady_state_park_and_wake_allocates_nothing() {
     for width in [2usize, 8] {
-        let expected = CYCLE_CHECK_ALLOCATIONS_PER_DEP * width as u64 * MEASURED as u64;
         assert_eq!(
             steady_state_delta(width),
-            expected,
-            "a {width}-dep park/wake loop allocates only its acyclicity check over {MEASURED} \
-             iterations",
+            0,
+            "a {width}-dep park/wake loop allocates nothing over {MEASURED} iterations",
         );
     }
 }

@@ -68,6 +68,47 @@ pub struct Scheduler<W: Workload> {
     pub(in crate::scheduler) deps: DepGraph<W>,
     pub(in crate::scheduler) store: NodeStore<W>,
     pub(in crate::scheduler) edges: EdgeSlab<W>,
+    /// Scratch for the acyclicity walk, which only a debug build runs. Holds slot indices and
+    /// stamps, so it is drop-free and its position in the order above carries no obligation.
+    cycle_walk: CycleWalk,
+}
+
+/// Reusable state for [`Scheduler::would_create_cycle`]. Both buffers survive the walk that grew
+/// them: the stack is emptied rather than rebuilt, and a visit is a stamp compared against the
+/// walk's own generation rather than an entry in a set minted per call. A steady-state install
+/// therefore allocates nothing to assert its invariant.
+#[derive(Default)]
+struct CycleWalk {
+    stack: Vec<NodeId>,
+    /// One stamp per slot index: equal to `generation` for a slot the current walk has reached.
+    /// Slot indices recycle through the store's free list, so this is bounded by the live table
+    /// rather than by how many nodes the run has allocated.
+    visited: Vec<u32>,
+    generation: u32,
+}
+
+impl CycleWalk {
+    /// Open a walk from `start`. Bumping the generation retires every stamp below it, so no table
+    /// is cleared per call. A wrap is the one case that must clear: a stale stamp equal to the new
+    /// generation would read as already-visited and cut the walk short of a cycle.
+    fn open(&mut self, start: NodeId) {
+        self.generation = self.generation.wrapping_add(1);
+        if self.generation == 0 {
+            self.visited.clear();
+            self.generation = 1;
+        }
+        self.stack.clear();
+        self.stack.push(start);
+    }
+
+    /// Stamp `node` for this walk and report whether the walk had already reached it.
+    fn seen(&mut self, node: NodeId) -> bool {
+        let index = node.index();
+        if self.visited.len() <= index {
+            self.visited.resize(index + 1, 0);
+        }
+        std::mem::replace(&mut self.visited[index], self.generation) == self.generation
+    }
 }
 
 impl<W: Workload> Scheduler<W> {
@@ -77,6 +118,7 @@ impl<W: Workload> Scheduler<W> {
             deps: DepGraph::new(),
             store: NodeStore::new(),
             edges: EdgeSlab::new(),
+            cycle_walk: CycleWalk::default(),
         }
     }
 
@@ -155,27 +197,35 @@ impl<W: Workload> Scheduler<W> {
     ///
     /// The walk skips released notify entries (Inv-C) and consumer-less ones — a root or placeholder
     /// edge continues no chain.
-    fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
+    ///
+    /// The stack and the visit stamps live on the scheduler ([`CycleWalk`]) rather than on this
+    /// frame, so the guard costs no allocation once a run's walks have reached their widest.
+    fn would_create_cycle(&mut self, producer: NodeId, consumer: NodeId) -> bool {
         if producer == consumer {
             return true;
         }
-        let mut stack: Vec<NodeId> = vec![consumer];
-        let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
-        while let Some(node) = stack.pop() {
-            if !visited.insert(node) {
+        let Self {
+            deps,
+            edges,
+            cycle_walk,
+            ..
+        } = self;
+        cycle_walk.open(consumer);
+        while let Some(node) = cycle_walk.stack.pop() {
+            if cycle_walk.seen(node) {
                 continue;
             }
-            for &edge in self.deps.notify_of(node) {
-                if self.edges.is_free(edge) {
+            for &edge in deps.notify_of(node) {
+                if edges.is_free(edge) {
                     continue;
                 }
-                let Some(next) = self.edges.consumer_of(edge) else {
+                let Some(next) = edges.consumer_of(edge) else {
                     continue;
                 };
                 if next == producer {
                     return true;
                 }
-                stack.push(next);
+                cycle_walk.stack.push(next);
             }
         }
         false

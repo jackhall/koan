@@ -94,6 +94,13 @@ python3 tools/alloc_audit.py              # sweep and report
 python3 tools/alloc_audit.py --baseline   # sweep and record
 ```
 
+A reading is a **debug** build's, so anything a debug build does lands in it — an assertion that
+allocates is counted per step exactly as the work it guards is. The scheduler's acyclicity guard
+([`Scheduler::would_create_cycle`](../workgraph/src/scheduler.rs)) is the one such guard on the
+per-step path, and it holds its walk stack and visit stamps on the scheduler across calls, so it
+adds nothing to any term. What is left between a debug reading and a release one is a few
+allocations per step, and both move together.
+
 The figures live in [`observe/alloc.txt`](../observe/alloc.txt), one row per commit swept,
 newest first, the last five kept — the same trend log
 [`observe/complexity.txt`](../observe/complexity.txt) and
@@ -179,13 +186,12 @@ The **wide_step** term is exactly linear: the same per-step figure at 10, 20, 50
 which the committed pair is two. That is what makes an absolute bound on `wide_n100` a statement
 about the per-step path — a movement in it is `n` times whatever was added to one step.
 
-The **deep_frame** term is not. Marginal cost rises across the 10→20, 20→50 and 50→100 depth
-spans, so something on the per-step path is proportional to the number of live frames and the
-shape is superlinear in `n`. The recorded term is that cost averaged over depth 10 to 100, which is
-stable commit to commit because the two sizes are fixed, but it is an average and not a per-frame
-constant. What drives the growth is unattributed; [`roadmap/reduce_allocs/`](../roadmap/reduce_allocs)
-owns it, and its "Unplanned work" section lists the per-step hash-map traffic that is the first
-place to look.
+The **deep_frame** term is linear in the same way, and sits a small constant above `wide_step`:
+the same per-frame figure at 10, 20, 50 and 100 depth, a few allocations more than the wide body's
+per-step one. That gap is what a standing frame costs over a retired one, and it is the whole of
+what depth adds — no path that runs once per step walks or hashes anything whose size is the number
+of live frames. A `deep_frame` that pulls away from `wide_step` is therefore this shape's own
+signal, and the only reading either recursion shape gives that the other cannot.
 
 The **declare_name** term prices the declaration side across five forms at once, so it moves when
 any of them changes what it builds per name. Registering a callable renders no signature text: a

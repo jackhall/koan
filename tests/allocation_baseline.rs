@@ -119,7 +119,7 @@ fn the_empty_program_stays_within_its_startup_bound() {
 /// allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_wide_shape_stays_within_its_per_step_bound() {
-    const BOUND: u64 = 60_740;
+    const BOUND: u64 = 35_680;
     let delta = allocations_for(
         include_str!("../audit/shapes/wide_n100.koan"),
         "audit/shapes/wide_n100.koan",
@@ -136,17 +136,16 @@ fn the_wide_shape_stays_within_its_per_step_bound() {
 /// the `deep_frame` term in `observe/alloc.txt`. Every frame is still live when the
 /// next one runs, so this is the only shape here that prices what standing frames cost.
 ///
-/// Unlike the wide shape's, this term is **not** flat in `n`: marginal cost rises across the
-/// 10→20, 20→50 and 50→100 depth spans, so something on the per-step path is proportional to
-/// the number of live frames. The recorded term is that cost averaged over depth 10 to 100,
-/// which is stable commit to commit because the two sizes are fixed. The growth itself is
-/// unattributed; `roadmap/reduce_allocs/` owns it.
+/// The recorded term is the cost averaged over depth 10 to 100, and it tracks the wide shape's
+/// per-step figure: no path that runs once per step walks or hashes anything whose size is the
+/// number of standing frames. A term that pulls away from `wide_step` is this shape's own
+/// signal — a cost that only depth can see.
 ///
 /// The bound sits over the recorded bracketed reading by less than the 100 a single new
 /// per-frame allocation would add.
 #[test]
 fn the_deep_shape_stays_within_its_per_frame_bound() {
-    const BOUND: u64 = 85_400;
+    const BOUND: u64 = 36_470;
     let delta = allocations_for(
         include_str!("../audit/shapes/deep_n100.koan"),
         "audit/shapes/deep_n100.koan",
@@ -177,7 +176,7 @@ fn the_deep_shape_stays_within_its_per_frame_bound() {
 /// declared name would cost across the 90-name gap in five forms.
 #[test]
 fn the_declare_shape_stays_within_its_per_name_bound() {
-    const BOUND: u64 = 7_100;
+    const BOUND: u64 = 6_600;
     let marginal = allocations_for(
         include_str!("../audit/shapes/declare_n100.koan"),
         "audit/shapes/declare_n100.koan",

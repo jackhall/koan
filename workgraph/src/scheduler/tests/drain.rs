@@ -455,6 +455,29 @@ fn a_cycling_park_is_loud_at_the_install_door() {
     let _ = sched.install_deps(slot, &[source]);
 }
 
+/// **The walk reaches a cycle that is not a self-park.** Three slots, each parked on the one
+/// before it, and the third park closes the ring: catching it takes two hops through the notify
+/// chain, so this is the case the walk's visit stamps and its stack both have to be right for.
+/// The two clean installs run first, so the walk that panics is reusing scratch a prior walk
+/// stamped — a stale stamp read as "already visited" would cut this walk short and lose the cycle.
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "lexically backward")]
+fn a_cycling_park_two_hops_out_is_loud_at_the_install_door() {
+    let mut sched: Scheduler<TestWorkload> = Scheduler::new();
+    let (a, a_anchor, _) = alloc_slot(&mut sched);
+    let (b, b_anchor, _) = alloc_slot(&mut sched);
+    let (c, c_anchor, _) = alloc_slot(&mut sched);
+
+    let from_a = sched.install_edge(a, a_anchor.owner());
+    let _ = sched.install_deps(b, &[from_a]);
+    let from_b = sched.install_edge(b, b_anchor.owner());
+    let _ = sched.install_deps(c, &[from_b]);
+
+    let from_c = sched.install_edge(c, c_anchor.owner());
+    let _ = sched.install_deps(a, &[from_c]);
+}
+
 /// **The step scratch arena is usable inside a step and reset at every pop.** Each step stages a
 /// `BumpVec` through `step.scratch`, reads it back (the allocator forwarding works over the
 /// scratch bump as it does over a region's), and records where the buffer landed. Every step's
