@@ -119,7 +119,7 @@ fn the_empty_program_stays_within_its_startup_bound() {
 /// allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_wide_shape_stays_within_its_per_step_bound() {
-    const BOUND: u64 = 23_380;
+    const BOUND: u64 = 22_760;
     let delta = allocations_for(
         include_str!("../audit/shapes/wide_n100.koan"),
         "audit/shapes/wide_n100.koan",
@@ -145,7 +145,7 @@ fn the_wide_shape_stays_within_its_per_step_bound() {
 /// per-frame allocation would add.
 #[test]
 fn the_deep_shape_stays_within_its_per_frame_bound() {
-    const BOUND: u64 = 24_160;
+    const BOUND: u64 = 23_540;
     let delta = allocations_for(
         include_str!("../audit/shapes/deep_n100.koan"),
         "audit/shapes/deep_n100.koan",
@@ -176,7 +176,7 @@ fn the_deep_shape_stays_within_its_per_frame_bound() {
 /// declared name would cost across the 90-name gap in five forms.
 #[test]
 fn the_declare_shape_stays_within_its_per_name_bound() {
-    const BOUND: u64 = 5_320;
+    const BOUND: u64 = 2_710;
     let marginal = allocations_for(
         include_str!("../audit/shapes/declare_n100.koan"),
         "audit/shapes/declare_n100.koan",

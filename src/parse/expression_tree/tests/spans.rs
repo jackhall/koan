@@ -267,3 +267,14 @@ fn literal_inside_call_preserves_outer_span_and_string_value() {
     };
     assert_eq!(s, "hi");
 }
+
+#[test]
+fn glued_arrow_token_carries_one_span() {
+    // `->` is assembled across two dispatch arms — the `-` opens the token, the glue
+    // arm extends it — and must reach classification as one keyword with one span.
+    let program = program_storage();
+    let exprs = top(program.brand(), "a -> b");
+    let e = &exprs[0];
+    let part_spans: Vec<_> = e.parts.iter().map(|p| p.span).collect();
+    assert_eq!(part_spans, vec![Some(s(0, 1)), Some(s(2, 4)), Some(s(5, 6))]);
+}

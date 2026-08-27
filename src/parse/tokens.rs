@@ -43,7 +43,7 @@ pub fn classify_token<'a>(
         return Ok(Spanned::at(part, token_span));
     }
     let mut chars = tok.char_indices().peekable();
-    let part = parse_compound(brand, labels, &mut chars, start, token_span)?;
+    let part = parse_compound(brand, labels, tok, &mut chars, start, token_span)?;
     if let Some(&(_, c)) = chars.peek() {
         return Err(KError::parse(
             format!("unexpected {:?} in token {:?}", c, tok),
@@ -181,11 +181,12 @@ fn classify_atom<'a>(
 fn parse_compound<'a>(
     brand: ProgramBrand<'a>,
     labels: &LabelInterner,
+    tok: &str,
     chars: &mut Peekable<CharIndices>,
     start: u32,
     token_span: Span,
 ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
-    let mut expr = read_atom(labels, chars, start, token_span)?;
+    let mut expr = read_atom(labels, tok, chars, start, token_span)?;
 
     while let Some(&(ci, c)) = chars.peek() {
         let Some(op) = find_suffix(c) else { break };
@@ -193,7 +194,7 @@ fn parse_compound<'a>(
         let trigger = trigger_span(start, ci, c);
         expr = match op {
             SuffixOp::Infix(build) => {
-                let rhs = read_atom(labels, chars, start, token_span)?;
+                let rhs = read_atom(labels, tok, chars, start, token_span)?;
                 build(brand, labels, expr, rhs, trigger)
             }
             SuffixOp::Suffix(build) => build(brand, labels, expr, trigger),
@@ -211,9 +212,12 @@ fn trigger_span(token_start: u32, ci: usize, c: char) -> Span {
     }
 }
 
-/// Errors on an empty atom — operators must have an atom between them.
+/// Errors on an empty atom — operators must have an atom between them. The atom is a
+/// verbatim contiguous run of `tok`, so classification borrows the slice between the
+/// offsets the terminator walk computes; nothing is copied.
 fn read_atom<'a>(
     labels: &LabelInterner,
+    tok: &str,
     chars: &mut Peekable<CharIndices>,
     token_start: u32,
     token_span: Span,
@@ -227,17 +231,16 @@ fn read_atom<'a>(
             ));
         }
     };
-    let mut s = String::new();
     let mut end_ci = atom_start_ci;
     while let Some(&(ci, c)) = chars.peek() {
         if is_atom_terminator(c) {
             break;
         }
-        s.push(c);
         chars.next();
         end_ci = ci + c.len_utf8();
     }
-    if s.is_empty() {
+    let atom = &tok[atom_start_ci..end_ci];
+    if atom.is_empty() {
         let next = chars.peek().map(|&(_, c)| c);
         return Err(KError::parse(
             format!("expected identifier, got {:?}", next),
@@ -248,7 +251,7 @@ fn read_atom<'a>(
         start: token_start + atom_start_ci as u32,
         end: token_start + end_ci as u32,
     };
-    classify_atom(labels, &s, token_span).map(|part| Spanned::at(part, span))
+    classify_atom(labels, atom, token_span).map(|part| Spanned::at(part, span))
 }
 
 #[cfg(test)]

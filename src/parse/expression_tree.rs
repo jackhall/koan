@@ -26,7 +26,9 @@ use crate::source::{self, CurrentFileGuard, FileId, SourceFile, Span, Spanned};
 
 use super::dict_literal::DictFrame;
 use super::frame::{BracketFrame, close_paren_to_part};
-use super::parse_stack::{ParseStack, close_collection, flush_token, open_collection};
+use super::parse_stack::{
+    ParseStack, PendingToken, close_collection, flush_token, open_collection,
+};
 
 /// Width of the UTF-8 codepoint whose leading byte is `b`. Defaults to 1 on a
 /// malformed continuation byte so corrupt input terminates rather than spinning.
@@ -213,8 +215,7 @@ pub fn build_tree<'a>(
     quotes: &HashMap<usize, String>,
 ) -> Result<KExpression<'a>, KError> {
     let mut stack = ParseStack::new(program, labels);
-    let mut buf = String::new();
-    let mut token_start: Option<u32> = None;
+    let mut pending: Option<PendingToken> = None;
     let mut reader = Reader::new(masked);
     let mut prev: Option<char> = None;
     // (sigil char, cursor of the sigil byte).
@@ -246,7 +247,7 @@ pub fn build_tree<'a>(
 
         match c {
             '#' | '$' => {
-                if !buf.is_empty() {
+                if pending.is_some() {
                     return Err(KError::parse(
                         format!(
                             "'{c}' sigil must be preceded by whitespace or '(' (got token char {prev:?})"
@@ -259,7 +260,7 @@ pub fn build_tree<'a>(
                 pending_sigil = Some((c, sigil_cursor));
             }
             '(' => {
-                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                flush_token(&mut stack, &mut pending, masked)?;
                 let span_start = reader.cursor;
                 reader.advance_byte();
                 if let Some(type_start) = pending_type_paren_cursor.take() {
@@ -296,7 +297,7 @@ pub fn build_tree<'a>(
                 }
             }
             ')' => {
-                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                flush_token(&mut stack, &mut pending, masked)?;
                 reader.advance_byte();
                 let end = reader.cursor;
                 let frame = stack.pop_top().ok_or_else(|| {
@@ -308,14 +309,14 @@ pub fn build_tree<'a>(
                 let span_start = reader.cursor;
                 open_collection(
                     &mut stack,
-                    &mut buf,
+                    &mut pending,
+                    masked,
                     '[',
                     prev,
                     BracketFrame::List {
                         items: Vec::new(),
                         span_start,
                     },
-                    &mut token_start,
                 )?;
                 reader.advance_byte();
             }
@@ -325,11 +326,11 @@ pub fn build_tree<'a>(
                 let next = peek_char_past_jumps(reader.bytes, reader.pos);
                 close_collection(
                     &mut stack,
-                    &mut buf,
+                    &mut pending,
+                    masked,
                     ']',
                     next,
                     "closed bracket without matching open bracket",
-                    &mut token_start,
                     end,
                 )?;
             }
@@ -338,7 +339,7 @@ pub fn build_tree<'a>(
                 if let Some(type_start) = pending_record_type_cursor.take() {
                     // `:{...}` record-type sigil — push directly (the `:`-glued opener
                     // bypasses the collection adjacency check, mirroring `:(`).
-                    flush_token(&mut stack, &mut buf, &mut token_start)?;
+                    flush_token(&mut stack, &mut pending, masked)?;
                     stack.push_frame(BracketFrame::RecordTypeExpr {
                         parts: Vec::new(),
                         span_start: type_start,
@@ -346,14 +347,14 @@ pub fn build_tree<'a>(
                 } else {
                     open_collection(
                         &mut stack,
-                        &mut buf,
+                        &mut pending,
+                        masked,
                         '{',
                         prev,
                         BracketFrame::Dict {
                             dict: DictFrame::new(program),
                             span_start,
                         },
-                        &mut token_start,
                     )?;
                 }
                 reader.advance_byte();
@@ -364,11 +365,11 @@ pub fn build_tree<'a>(
                 let next = peek_char_past_jumps(reader.bytes, reader.pos);
                 close_collection(
                     &mut stack,
-                    &mut buf,
+                    &mut pending,
+                    masked,
                     '}',
                     next,
                     "closed brace without matching open brace",
-                    &mut token_start,
                     end,
                 )?;
             }
@@ -386,7 +387,7 @@ pub fn build_tree<'a>(
             // failure sites ask the brace why it declined the `:`, so mixing pairing
             // styles reports the pairing rule rather than a type-position complaint.
             ':' => {
-                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                flush_token(&mut stack, &mut pending, masked)?;
                 let colon_cursor = reader.cursor;
                 reader.advance_byte();
                 let pairs_brace_entry =
@@ -486,7 +487,7 @@ pub fn build_tree<'a>(
             // Dict pair separator; whitespace-equivalent elsewhere so
             // annotation triples like `a: Number, b: Str` parse cleanly.
             ',' => {
-                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                flush_token(&mut stack, &mut pending, masked)?;
                 reader.advance_byte();
                 if let Some(d) = stack.top_dict_mut() {
                     d.accept_comma()?;
@@ -496,7 +497,7 @@ pub fn build_tree<'a>(
             // everywhere else it stays a token char (`LET x = 1`, struct / functor
             // kwargs `(x = 1)`, FN bodies). The frame gate keeps those untouched.
             '=' if stack.top_dict_mut().is_some() => {
-                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                flush_token(&mut stack, &mut pending, masked)?;
                 reader.advance_byte();
                 if let Some(d) = stack.top_dict_mut() {
                     d.accept_equals()?;
@@ -509,11 +510,18 @@ pub fn build_tree<'a>(
             // The `prev == Some('-')` carve-out keeps `->` contiguous so the arrow
             // survives as one token.
             '>' if prev == Some('-') => {
-                buf.push('>');
+                let tok = pending
+                    .as_mut()
+                    .expect("prev == Some('-') means a token is open");
+                debug_assert_eq!(
+                    reader.pos, tok.masked_end,
+                    "token bytes must be contiguous in the masked stream"
+                );
                 reader.advance_byte();
+                tok.masked_end = reader.pos;
             }
             '<' | '>' => {
-                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                flush_token(&mut stack, &mut pending, masked)?;
                 let start = reader.cursor;
                 reader.advance_byte();
                 let glued_equals = reader.peek_byte() == Some(b'=');
@@ -544,7 +552,7 @@ pub fn build_tree<'a>(
             // The trailing JUMP snaps cursor to one past the original closing
             // quote — the correct exclusive span end.
             '\'' | '"' => {
-                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                flush_token(&mut stack, &mut pending, masked)?;
                 let open_byte = b;
                 let literal_open_cursor = reader.cursor;
                 reader.advance_byte();
@@ -599,15 +607,28 @@ pub fn build_tree<'a>(
                 }
             }
             c if c.is_whitespace() => {
-                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                flush_token(&mut stack, &mut pending, masked)?;
                 reader.advance_codepoint();
             }
             _ => {
-                if buf.is_empty() {
-                    token_start = Some(reader.cursor);
+                match &pending {
+                    Some(tok) => debug_assert_eq!(
+                        reader.pos, tok.masked_end,
+                        "token bytes must be contiguous in the masked stream"
+                    ),
+                    None => {
+                        pending = Some(PendingToken {
+                            masked_start: reader.pos,
+                            masked_end: reader.pos,
+                            span_start: reader.cursor,
+                        });
+                    }
                 }
-                let consumed = reader.advance_codepoint();
-                buf.push(consumed);
+                reader.advance_codepoint();
+                pending
+                    .as_mut()
+                    .expect("opened above when None")
+                    .masked_end = reader.pos;
             }
         }
         prev = Some(c);
@@ -618,7 +639,7 @@ pub fn build_tree<'a>(
             None,
         ));
     }
-    flush_token(&mut stack, &mut buf, &mut token_start)?;
+    flush_token(&mut stack, &mut pending, masked)?;
     stack.finish()
 }
 

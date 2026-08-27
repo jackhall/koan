@@ -2,7 +2,7 @@
 //! directly on the struct so `push_part` never needs to unwrap an empty
 //! stack. Variant-aware pops and the shape-shared `open_collection` /
 //! `close_collection` helpers live here since they bind `ParseStack` and the
-//! token-buffer flush.
+//! pending-token flush.
 
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
@@ -114,20 +114,29 @@ impl<'a, 'l> ParseStack<'a, 'l> {
     }
 }
 
+/// A token in flight: the byte range it occupies in the masked stream, plus the
+/// original-source offset its span starts at. `masked_end` is recorded as each
+/// codepoint is consumed — never read back from the reader at flush time, whose
+/// position may already sit past a drained JUMP marker that follows the token.
+pub(super) struct PendingToken {
+    pub(super) masked_start: usize,
+    pub(super) masked_end: usize,
+    pub(super) span_start: u32,
+}
+
+/// Classify and push the pending token, if any. The token's text is a borrowed
+/// slice of the masked stream — classification bumps every kept name into program
+/// storage, so nothing outlives the borrow.
 pub(super) fn flush_token<'a>(
     stack: &mut ParseStack<'a, '_>,
-    buf: &mut String,
-    token_start: &mut Option<u32>,
+    pending: &mut Option<PendingToken>,
+    masked: &[u8],
 ) -> Result<(), KError> {
-    if !buf.is_empty() {
-        let tok = std::mem::take(buf);
-        let start = token_start
-            .take()
-            .expect("token_start must be set whenever buf is non-empty");
-        let part = classify_token(stack.brand(), stack.labels(), &tok, start)?;
+    if let Some(tok) = pending.take() {
+        let text = std::str::from_utf8(&masked[tok.masked_start..tok.masked_end])
+            .expect("masked stream must be valid UTF-8");
+        let part = classify_token(stack.brand(), stack.labels(), text, tok.span_start)?;
         stack.push_part(part)?;
-    } else {
-        *token_start = None;
     }
     Ok(())
 }
@@ -136,14 +145,14 @@ pub(super) fn flush_token<'a>(
 /// pending token into the parent, then push the new frame.
 pub(super) fn open_collection<'a>(
     stack: &mut ParseStack<'a, '_>,
-    buf: &mut String,
+    pending: &mut Option<PendingToken>,
+    masked: &[u8],
     opener: char,
     prev: Option<char>,
     frame: BracketFrame<'a>,
-    token_start: &mut Option<u32>,
 ) -> Result<(), KError> {
     check_open_adjacency(opener, prev)?;
-    flush_token(stack, buf, token_start)?;
+    flush_token(stack, pending, masked)?;
     stack.push_frame(frame);
     Ok(())
 }
@@ -153,11 +162,11 @@ pub(super) fn open_collection<'a>(
 /// frame into the part it produces.
 pub(super) fn close_collection<'a>(
     stack: &mut ParseStack<'a, '_>,
-    buf: &mut String,
+    pending: &mut Option<PendingToken>,
+    masked: &[u8],
     closer: char,
     next: Option<char>,
     mismatch_msg: &str,
-    token_start: &mut Option<u32>,
     end: u32,
 ) -> Result<(), KError> {
     let top_matches = stack.peek_top().is_some_and(|f| f.matches_closer(closer));
@@ -165,7 +174,7 @@ pub(super) fn close_collection<'a>(
         return Err(KError::parse(mismatch_msg, None));
     }
     check_close_adjacency(closer, next)?;
-    flush_token(stack, buf, token_start)?;
+    flush_token(stack, pending, masked)?;
     let frame = stack
         .pop_top()
         .expect("peek_top.matches_closer checked above; flush_token preserves variant");
