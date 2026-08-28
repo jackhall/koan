@@ -276,5 +276,8 @@ fn glued_arrow_token_carries_one_span() {
     let exprs = top(program.brand(), "a -> b");
     let e = &exprs[0];
     let part_spans: Vec<_> = e.parts.iter().map(|p| p.span).collect();
-    assert_eq!(part_spans, vec![Some(s(0, 1)), Some(s(2, 4)), Some(s(5, 6))]);
+    assert_eq!(
+        part_spans,
+        vec![Some(s(0, 1)), Some(s(2, 4)), Some(s(5, 6))]
+    );
 }

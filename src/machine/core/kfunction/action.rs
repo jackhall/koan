@@ -20,13 +20,13 @@ use crate::machine::model::BinderSymbol;
 use crate::machine::model::Carried;
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
+use crate::machine::model::KType;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Symbol;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::labels::TypeSymbol;
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{KType, TypeNode};
 use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{
     BindingIndex, DeclarationSite, DeliveredCarried, Installer, KError, KErrorKind,
@@ -231,8 +231,7 @@ pub fn require_identifier_name<'a>(
 /// Resolve the bare type-name in the `Type`-arm of arg `slot` — the binder name of a
 /// type-defining builtin (UNION / NEWTYPE / SIG / RECURSIVE) — or the canonical error:
 /// `MissingArg` for an absent slot, `ShapeError` for a structural type. `surface` is the keyword
-/// embedded in the diagnostic. The `Action`-side twin of
-/// [`extract_bare_type_name`](super::argument_bundle::extract_bare_type_name).
+/// embedded in the diagnostic.
 pub fn require_bare_type_name<'a>(
     args: BoundArgs<'a, '_>,
     slot: &StaticName<ValueSymbol>,
@@ -243,60 +242,21 @@ pub fn require_bare_type_name<'a>(
         // A binder name is exactly the shape the bind seam leaves unlowered: a bare user type
         // name with nothing bound to it yet, already classified and interned by the parser.
         Some(Held::UnresolvedType(ti)) => Ok(*ti),
-        // A resolved leaf handle reaches its name only as rendered text, so this arm re-declares
-        // it — the one seam where a builtin's name is minted from a string rather than a token.
-        Some(Held::Type(t)) => {
-            let name = bare_type_name(*t, slot.text(), surface, registries)?;
-            TypeSymbol::declared(&name, &registries.labels).ok_or_else(|| {
-                KError::new(KErrorKind::ShapeError(format!(
-                    "{surface} name must be a bare type name, got `{name}`",
-                )))
-            })
-        }
+        // A resolved handle answers its bare name as the symbol its node already carries (or a
+        // builtin leaf's fixed spelling); a type named by compound surface syntax has no bare
+        // name and errors.
+        Some(Held::Type(t)) => t.name_symbol(registries).ok_or_else(|| {
+            KError::new(KErrorKind::ShapeError(format!(
+                "{surface} {} must be a bare type name, got `{}`",
+                slot.text(),
+                t.render(registries),
+            )))
+        }),
         // A type-name slot is `PROPER_TYPE` / `ANY_TYPE`, which admits no raw value-name part.
         Some(Held::Identifier(_)) => unreachable!("a type-name slot never captures an identifier"),
         Some(Held::Object(_)) | None => {
             Err(KError::new(KErrorKind::MissingArg(slot.text().to_string())))
         }
-    }
-}
-
-/// Resolve a resolved `KType` to its bare type name, for the binders that read their name from a
-/// `KObject::Record` type cell. A simple / nominal leaf yields its `name()`; a structural type
-/// (List, Record, FN, …) is a `ShapeError`. `surface` is the keyword (`"NEWTYPE"`, `"UNION"`, …)
-/// embedded in the message.
-fn bare_type_name(
-    t: KType,
-    name: &str,
-    surface: &str,
-    registries: &RunRegistries,
-) -> Result<String, KError> {
-    let types = &registries.types;
-    match types.node(t) {
-        TypeNode::Number
-        | TypeNode::Str
-        | TypeNode::Bool
-        | TypeNode::Null
-        | TypeNode::Identifier
-        | TypeNode::KExpression
-        | TypeNode::SigiledTypeExpr
-        | TypeNode::RecordType
-        | TypeNode::OfKind(_)
-        | TypeNode::Any
-        | TypeNode::SetMember { .. }
-        | TypeNode::Signature { .. }
-        | TypeNode::AbstractType { .. } => Ok(t.name(registries)),
-        TypeNode::List { .. }
-        | TypeNode::Dict { .. }
-        | TypeNode::Record { .. }
-        | TypeNode::KFunction { .. }
-        | TypeNode::DeferredReturn(_)
-        | TypeNode::Sibling(_)
-        | TypeNode::Union { .. }
-        | TypeNode::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
-            "{surface} {name} must be a bare type name, got `{}`",
-            t.render(registries),
-        )))),
     }
 }
 

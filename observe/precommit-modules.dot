@@ -759,6 +759,7 @@ digraph {
     "koan::machine::model::types::declaration_window" -> "koan::machine::model::types::node" [label="uses", style="dashed"];
     "koan::machine::model::types::declaration_window" -> "koan::machine::model::types::recursive_group_window" [label="uses", style="dashed"];
     "koan::machine::model::types::declaration_window" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
+    "koan::machine::model::types::kkind" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::types::ktraits" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::registries" [label="uses", style="dashed"];

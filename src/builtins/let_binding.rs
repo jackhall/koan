@@ -9,9 +9,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{
-    BindKind, BinderSymbol, TypeSymbol, ValueSymbol, display_label, wrong_binder_class,
-};
+use crate::machine::model::{BinderSymbol, TypeSymbol, ValueSymbol, display_label};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { name, value } }
@@ -37,40 +35,22 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let mut type_classified_name = false;
     // The Type-classified `name` slot arrives either lowered (a builtin leaf name) or as the
     // unlowered surface name the bind seam leaves for the binder to own; both denote the binder.
-    // An unlowered name is already classified and interned by the parser; a lowered leaf reaches
-    // its name only as rendered text, so its binder symbol is minted from that below.
     let unlowered_name = ctx.args.unresolved_type(&SLOTS.name);
-    // The Type-classified binder as its own symbol wherever one exists: the unlowered surface name
-    // carries the one the parser minted, and a lowered leaf classifies the spelling it renders to.
+    // The Type-classified binder as its own symbol wherever one exists: the unlowered surface
+    // name carries the one the parser minted, and a lowered handle answers the symbol its node
+    // carries. A type named by compound surface syntax has no bare name to bind under.
     let type_name: Option<TypeSymbol> = match unlowered_name {
         Some(te) => Some(te),
         None => match ctx.args.ktype(&SLOTS.name) {
-            Some(name_kt)
-                if matches!(
-                    ctx.types().node(name_kt),
-                    TypeNode::List { .. }
-                        | TypeNode::Dict { .. }
-                        | TypeNode::KFunction { .. }
-                        | TypeNode::Sibling(_)
-                ) =>
-            {
-                return done_err(KError::new(KErrorKind::ShapeError(format!(
-                    "LET name must be a bare type name, got `{}`",
-                    name_kt.render(ctx.registries),
-                ))));
-            }
-            Some(name_kt) => {
-                let spelling = name_kt.name(ctx.registries);
-                match TypeSymbol::declared(&spelling, &ctx.registries.labels) {
-                    Some(binder) => Some(binder),
-                    None => {
-                        return done_err(KError::new(KErrorKind::ShapeError(wrong_binder_class(
-                            &spelling,
-                            BindKind::Type,
-                        ))));
-                    }
+            Some(name_kt) => match name_kt.name_symbol(ctx.registries) {
+                Some(binder) => Some(binder),
+                None => {
+                    return done_err(KError::new(KErrorKind::ShapeError(format!(
+                        "LET name must be a bare type name, got `{}`",
+                        name_kt.render(ctx.registries),
+                    ))));
                 }
-            }
+            },
             None => None,
         },
     };

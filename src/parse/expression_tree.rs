@@ -625,10 +625,7 @@ pub fn build_tree<'a>(
                     }
                 }
                 reader.advance_codepoint();
-                pending
-                    .as_mut()
-                    .expect("opened above when None")
-                    .masked_end = reader.pos;
+                pending.as_mut().expect("opened above when None").masked_end = reader.pos;
             }
         }
         prev = Some(c);

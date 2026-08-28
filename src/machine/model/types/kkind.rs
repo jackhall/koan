@@ -6,6 +6,8 @@
 //!
 //! See [type-language via dispatch](../../../../design/typing/type-language-via-dispatch.md).
 
+use crate::machine::model::labels::{LabelInterner, StaticName, TypeSymbol};
+
 /// Shallow kind of a type, used to admit a type value into a type-accepting slot. The kinds
 /// form one subsumption lattice:
 ///
@@ -76,12 +78,31 @@ impl KKind {
 
     /// Surface keyword rendered in diagnostics and type-name printing.
     pub fn surface_keyword(self) -> &'static str {
+        self.surface_name().text()
+    }
+
+    /// The surface keyword's [`StaticName`] — the one spelling authority
+    /// [`surface_keyword`](Self::surface_keyword) and [`surface_symbol`](Self::surface_symbol)
+    /// both read, so the rendered name and the classified symbol cannot drift apart.
+    fn surface_name(self) -> &'static StaticName<TypeSymbol> {
+        static PROPER_TYPE: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "ProperType");
+        static SIGNATURE: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Signature");
+        static ANY_TYPE: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Type");
+        static NEW_TYPE: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "NewType");
+        static TYPE_CONSTRUCTOR: StaticName<TypeSymbol> =
+            crate::static_name!(TypeSymbol, "TypeConstructor");
         match self {
-            KKind::ProperType => "ProperType",
-            KKind::Signature => "Signature",
-            KKind::AnyType => "Type",
-            KKind::NewType => "NewType",
-            KKind::TypeConstructor => "TypeConstructor",
+            KKind::ProperType => &PROPER_TYPE,
+            KKind::Signature => &SIGNATURE,
+            KKind::AnyType => &ANY_TYPE,
+            KKind::NewType => &NEW_TYPE,
+            KKind::TypeConstructor => &TYPE_CONSTRUCTOR,
         }
+    }
+
+    /// The surface keyword as its classified [`TypeSymbol`], minted once per process off the
+    /// memo and recorded under `labels` so a diagnostic naming it can render the text.
+    pub fn surface_symbol(self, labels: &LabelInterner) -> TypeSymbol {
+        labels.record(self.surface_name())
     }
 }

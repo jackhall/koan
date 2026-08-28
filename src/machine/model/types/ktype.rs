@@ -15,7 +15,7 @@
 //!
 //! Predicates live in `ktype_predicates.rs`; elaboration lives in `ktype_resolution.rs`.
 
-use crate::machine::model::labels::Symbol;
+use crate::machine::model::labels::{StaticName, Symbol, TypeSymbol};
 use crate::machine::model::registries::RunRegistries;
 
 use super::kkind::KKind;
@@ -32,6 +32,22 @@ use super::type_digest::{TypeDigest, empty_schema_digest};
 /// the digest: meaningless as a type order, useful only for canonical sorting.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct KType(TypeDigest);
+
+/// The fixed spellings of the singly-named builtin leaves — the one authority both
+/// [`KType::name`] and [`KType::name_symbol`] read, so the rendered text and the classified
+/// symbol cannot drift apart. Each mints once per process at its first symbol read.
+static NUMBER_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Number");
+static STR_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Str");
+static BOOL_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Bool");
+static NULL_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Null");
+static IDENTIFIER_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Identifier");
+static KEXPRESSION_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "KExpression");
+static SIGILED_TYPE_EXPR_NAME: StaticName<TypeSymbol> =
+    crate::static_name!(TypeSymbol, "SigiledTypeExpr");
+static RECORD_TYPE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "RecordType");
+static ANY_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Any");
+/// The empty signature's surface name — the `:Module` lattice top.
+static MODULE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Module");
 
 impl KType {
     // --- Fixed handles ---
@@ -96,15 +112,15 @@ impl KType {
     pub fn name(self, registries: &RunRegistries) -> String {
         let types = &registries.types;
         match types.node(self) {
-            TypeNode::Number => "Number".into(),
-            TypeNode::Str => "Str".into(),
-            TypeNode::Bool => "Bool".into(),
-            TypeNode::Null => "Null".into(),
-            TypeNode::Identifier => "Identifier".into(),
-            TypeNode::KExpression => "KExpression".into(),
-            TypeNode::SigiledTypeExpr => "SigiledTypeExpr".into(),
-            TypeNode::RecordType => "RecordType".into(),
-            TypeNode::Any => "Any".into(),
+            TypeNode::Number => NUMBER_NAME.text().into(),
+            TypeNode::Str => STR_NAME.text().into(),
+            TypeNode::Bool => BOOL_NAME.text().into(),
+            TypeNode::Null => NULL_NAME.text().into(),
+            TypeNode::Identifier => IDENTIFIER_NAME.text().into(),
+            TypeNode::KExpression => KEXPRESSION_NAME.text().into(),
+            TypeNode::SigiledTypeExpr => SIGILED_TYPE_EXPR_NAME.text().into(),
+            TypeNode::RecordType => RECORD_TYPE_NAME.text().into(),
+            TypeNode::Any => ANY_NAME.text().into(),
             TypeNode::OfKind(kind) => kind.surface_keyword().into(),
             TypeNode::List { element } => format!(":(LIST OF {})", element.name(registries)),
             TypeNode::Dict { key, value } => {
@@ -165,7 +181,7 @@ impl KType {
                 schema_digest,
             } => {
                 if schema_digest == empty_schema_digest() {
-                    "Module".to_string()
+                    MODULE_NAME.text().to_string()
                 } else {
                     render_sig_schema(&schema, registries)
                 }
@@ -179,6 +195,43 @@ impl KType {
     /// Stable entry point for diagnostic rendering. Reserved seam for cycle-aware printing.
     pub fn render(self, registries: &RunRegistries) -> String {
         self.name(registries)
+    }
+
+    /// The bare Type token this type names itself by, as the classified symbol — or `None` for
+    /// a type whose [`name`](Self::name) is compound surface syntax rather than one token.
+    ///
+    /// No text is hashed on any arm: a node that carries its declared name answers the symbol
+    /// stored in it, and a builtin leaf answers its fixed spelling's [`StaticName`] memo (the
+    /// same statics [`name`](Self::name) renders from, so the two doors agree by construction).
+    /// Static spellings are recorded in the run's label interner here, matching what declaring
+    /// the name from text would have recorded, so rendering resolves either way.
+    pub fn name_symbol(self, registries: &RunRegistries) -> Option<TypeSymbol> {
+        let types = &registries.types;
+        let fixed = |name: &StaticName<TypeSymbol>| Some(registries.labels.record(name));
+        match types.node(self) {
+            TypeNode::Number => fixed(&NUMBER_NAME),
+            TypeNode::Str => fixed(&STR_NAME),
+            TypeNode::Bool => fixed(&BOOL_NAME),
+            TypeNode::Null => fixed(&NULL_NAME),
+            TypeNode::Identifier => fixed(&IDENTIFIER_NAME),
+            TypeNode::KExpression => fixed(&KEXPRESSION_NAME),
+            TypeNode::SigiledTypeExpr => fixed(&SIGILED_TYPE_EXPR_NAME),
+            TypeNode::RecordType => fixed(&RECORD_TYPE_NAME),
+            TypeNode::Any => fixed(&ANY_NAME),
+            TypeNode::OfKind(kind) => Some(kind.surface_symbol(&registries.labels)),
+            TypeNode::AbstractType { name, .. } => Some(name),
+            TypeNode::SetMember { name, .. } => Some(name),
+            TypeNode::Signature { schema_digest, .. } => (schema_digest == empty_schema_digest())
+                .then(|| registries.labels.record(&MODULE_NAME)),
+            TypeNode::List { .. }
+            | TypeNode::Dict { .. }
+            | TypeNode::Record { .. }
+            | TypeNode::KFunction { .. }
+            | TypeNode::DeferredReturn(_)
+            | TypeNode::Union { .. }
+            | TypeNode::ConstructorApply { .. }
+            | TypeNode::Sibling(_) => None,
+        }
     }
 
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of

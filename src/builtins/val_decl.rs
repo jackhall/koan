@@ -49,11 +49,9 @@ fn typeexpr_from_carrier(kt: KType, registries: &RunRegistries) -> CarrierForm {
             | TypeNode::OfKind(KKind::AnyType | KKind::Signature | KKind::ProperType)
     );
     if is_leaf_builtin || kt == KType::EMPTY_SIGNATURE {
-        // A leaf handle reaches its name only as rendered text, so this re-declares it — the one
-        // seam where a builtin's name is minted from a string rather than a token.
         CarrierForm::Leaf(
-            TypeSymbol::declared(&kt.name(registries), &registries.labels)
-                .expect("a builtin leaf name is a Type token"),
+            kt.name_symbol(registries)
+                .expect("a builtin leaf names itself by a bare Type token"),
         )
     } else {
         CarrierForm::Direct(kt)
