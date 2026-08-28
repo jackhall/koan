@@ -13,7 +13,9 @@ three classes:
   (`Number`, `Str`, `KFunction`, `MyType`, `Ordered`). Type references and
   signature names share this class.
 - **Identifier** — lowercase-leading or `_`-leading names (`compare`,
-  `my_var`, `_internal`, `int_ord`).
+  `my_var`, `_internal`, `int_ord`). A bare `_` is not an identifier: with
+  no letters it is a pure-symbol token, keyword-class — the wildcard
+  TRY/MATCH match on.
 
 This split is what lets the language reserve a syntactic slot for type names
 without quoting. `FN (x :Number) -> Str = (...)` works because `Number` and

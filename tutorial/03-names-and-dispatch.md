@@ -99,7 +99,7 @@ play:
 |--------------|------------------------------------------------------------------|---------------------------|
 | **Keyword**  | a pure-symbol token, or all letters with ≥2 uppercase and no lowercase | `=`, `->`, `LET`, `MATCH` |
 | **Type**     | starts uppercase **and** has at least one lowercase letter        | `Number`, `Point`, `Maybe`|
-| **Identifier**| starts lowercase or `_`                                          | `x`, `greeting`, `my_var` |
+| **Identifier**| starts lowercase or `_`, with at least one letter                | `x`, `greeting`, `my_var` |
 
 There is a deliberate gap. A word that starts with an uppercase letter but fits
 neither the keyword shape (it has a lowercase letter, or only one capital) nor

@@ -49,10 +49,13 @@ Capture kinds:
   pinned. `_` is the universal hole token.
 - **Implicit close**: at block-scope build time, every dispatch registration
   and module binding in the per-call portion of the enclosing chain is
-  copied in, pinned with its full transitive reach. This is a build-time
-  act, not call-time outward resolution — an escaped closure's body
-  dispatches after its ancestors are dead, so nothing may resolve outward
-  later.
+  copied in, pinned with its full transitive reach. Operator registrations
+  count as dispatch registrations, and `USING` window scopes are part of the
+  walked chain — their copied entries pin the module's region. The build
+  parks on every visible in-flight claim in the chain, so what gets closed
+  over never depends on scheduling. This is a build-time act, not call-time
+  outward resolution — an escaped closure's body dispatches after its
+  ancestors are dead, so nothing may resolve outward later.
 
 A closure defined inside the block is severed by construction: its captured
 chain is the block scope, then the eternal tier.

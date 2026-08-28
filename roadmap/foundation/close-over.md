@@ -23,6 +23,10 @@ where its captured values happen to live.
   when the producer finishes.
 - Capture-list tokens are identifiers or `_`-patterns only; dispatch
   registrations are never named by a bare keyword token.
+- An escaped closure's body dispatches a per-call FN registration, applies a
+  per-call operator, and reads a module binding — `USING` window entries
+  included — after every producer frame has died; the block-scope build
+  parks on visible in-flight registrations rather than missing them.
 
 **Directions.**
 
@@ -40,8 +44,9 @@ where its captured values happen to live.
   transitively, strings re-bumped, type handles copied by value. A
   signature-shaped pattern (`(HELPER _)`, `(MAP _ USING _)`) names one full
   untyped bucket key — never a bare lead keyword — and captures that
-  registration pinned. `_` is a new first-class hole token (parser work;
-  today it would lex as an identifier).
+  registration pinned. `_` is already keyword-class (a pure-symbol token,
+  the same wildcard TRY/MATCH match on), so the pattern reader maps
+  `Keyword(_)` to a key slot; no lexer change.
 - *Implicit close of callables and modules — decided.* At block-scope build
   time, every dispatch registration and module binding in the per-call
   portion of the enclosing chain is copied into the block scope, pinned with
@@ -49,7 +54,15 @@ where its captured values happen to live.
   protocol — a pinned region retains its `FrameStorage.outer` chain and its
   binding entries' own pins. A build-time act, not call-time outward
   resolution: an escaped closure's body dispatches after its ancestors are
-  dead.
+  dead. Operator-table entries are dispatch registrations for this purpose,
+  and `USING` window scopes are part of the walked chain — their copied
+  entries pin the module's region. The build parks on every visible
+  in-flight claim in the per-call chain: deterministic, and acyclic since
+  claims name strictly earlier statements.
+- *Capture adoption seam — decided.* Data captures bind through a third
+  adoption seam that always relocates: the copy-vs-pin chooser never runs,
+  since severance is the form's purpose and the copy is priced by writing
+  the form.
 - *Severing callable captures — deferred.* Callable/module leaves ride as
   pinned borrows under today's copy verb; the transitive callable copy is
   [lazy close](lazy-close.md).
