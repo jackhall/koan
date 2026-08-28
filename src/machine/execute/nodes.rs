@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{ScopeId, ScopeRefFamily, StatementId, assemble_body_chain};
-use crate::machine::model::ast::{DispatchShape, WorkingExpression};
+use crate::machine::model::ast::{DispatchShape, KExpression, WorkingExpression};
 use crate::machine::{CallFrame, LexicalFrame};
 use crate::scheduler::EdgeId;
 use crate::source::{FileId, Span};
@@ -41,7 +41,18 @@ impl WorkLabel {
     /// A synthesized run carries the file and extent of the expression it was built out of
     /// ([`WorkingExpression::synthesized`](crate::machine::model::WorkingExpression::synthesized)),
     /// so the shape tag is the floor for a node with no origin at all rather than the normal case.
+    /// [`of_ast`](Self::of_ast) is the same read off the raw node, for a label taken before the
+    /// working copy exists.
     pub(super) fn of(expr: &WorkingExpression<'_>) -> WorkLabel {
+        match (expr.span, expr.file) {
+            (Some(span), Some(file)) => WorkLabel::Source { span, file },
+            _ => WorkLabel::Shape(expr.shape()),
+        }
+    }
+
+    /// [`of`](Self::of) against raw AST — a body labelled at the step that declares its tail, when
+    /// the freeze into working form happens later (`ActionKind::TailRaw`).
+    pub(super) fn of_ast(expr: &KExpression<'_>) -> WorkLabel {
         match (expr.span, expr.file) {
             (Some(span), Some(file)) => WorkLabel::Source { span, file },
             _ => WorkLabel::Shape(expr.shape()),
@@ -151,8 +162,8 @@ impl SlotFrame {
         debug_assert!(
             !retiring.claimed.get(),
             "a claim-owning slot never tail-replaces: block_tail's callers (MATCH / TRY arms, \
-             EVAL, USING) are no binder form, so the scope a statement's claims were installed \
-             into is the scope it retires against",
+             EVAL, USING) and CLOSE OVER are no binder form, so the scope a statement's claims \
+             were installed into is the scope it retires against",
         );
         Rc::new(SlotFrame {
             cart,
@@ -179,8 +190,8 @@ impl SlotFrame {
         debug_assert!(
             !retiring.claimed.get(),
             "a claim-owning slot never tail-replaces: block_tail's callers (MATCH / TRY arms, \
-             EVAL, USING) are no binder form, so the scope a statement's claims were installed \
-             into is the scope it retires against",
+             EVAL, USING) and CLOSE OVER are no binder form, so the scope a statement's claims \
+             were installed into is the scope it retires against",
         );
         Rc::new(SlotFrame {
             cart,

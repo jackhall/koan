@@ -3,6 +3,11 @@
 //! and each is a pure configuration of [`block_tail`]: a frame policy, a block scope, an optional
 //! seed, and how the body maps to the tail, so the shape of the
 //! [`Action::Tail`](crate::machine::Action::Tail) they produce is settled in one place.
+//!
+//! [`fresh_cart_tail`] is the sibling for a block whose cart the tail itself installs (`CLOSE
+//! OVER`). It differs only in *when* the freeze happens — the body crosses the install raw and the
+//! reinstalled step freezes it at the fresh cart's own brand — so the two live together and the
+//! statement split they share is stated once, in [`freeze_body`].
 
 use std::rc::Rc;
 
@@ -31,13 +36,6 @@ pub(crate) enum BlockScope<'a> {
     /// A caller-allocated overlay scope in a cart-ancestor region. Its `id` becomes `block_entry`, and
     /// a `seed` binds into it directly.
     Overlay(&'a Scope<'a>),
-    /// A **freshly minted per-call frame's own scope** is the block, and the frame is installed by
-    /// the paired [`FramePlacement::FreshChild`](crate::machine::FramePlacement). The frame's child
-    /// scope lives in the fresh region, which nothing but the frame `Rc` names yet, so a `seed`
-    /// binds into it through the construction door — reached under
-    /// [`CallFrame::with_scope`](crate::machine::CallFrame::with_scope), whose `for<'b>` brand is
-    /// what confines the seeded values to the block's own region. `CLOSE OVER`'s block.
-    FrameScope(Rc<CallFrame>),
 }
 
 /// The seed type a caller that passes none names, so `None` has a type to be `None` of. The binder
@@ -73,10 +71,10 @@ where
 /// gate can be minted. `block_tail` mints one for the duration of the seed call and hands it in,
 /// so the capability is the caller's to give, never the builtin's to take.
 ///
-/// The seed's scope parameter is universally quantified: a [`BlockScope::FrameScope`] block is
-/// reached only inside its frame's `with_scope` open, at a brand that outlives nothing, so a seed
-/// cannot smuggle a value out of the block region it writes into. An overlay seed satisfies the
-/// same bound — its scope is already at the caller's `'a`, which is one instantiation of the
+/// The seed's scope parameter is universally quantified: [`fresh_cart_tail`]'s block is reached
+/// only inside its frame's `with_scope` open, at a brand that outlives nothing, so a seed cannot
+/// smuggle a value out of the block region it writes into. An overlay seed satisfies the same
+/// bound — its scope is already at the caller's `'a`, which is one instantiation of the
 /// quantifier.
 pub(crate) fn block_tail<'a, S>(
     brand: RegionBrand<'a>,
@@ -103,22 +101,59 @@ where
             }
             BlockEntry::Overlay(overlay)
         }
-        BlockScope::FrameScope(frame) => {
-            if let Some(seed) = seed {
-                // The frame was minted by this call's own builtin and no node has reached its child
-                // scope, so the same "unpublished scope" premise holds — structurally, not as a
-                // claim the caller makes.
-                frame.with_scope(|scope| {
-                    seed(scope, registries, &mut WriteGate::for_unpublished_scope())
-                });
-            }
-            BlockEntry::FrameScope(frame)
-        }
     };
-    // A body that is not a statement block splits to itself, so both no-split shapes take the same
-    // lowering: an empty leading run — which borrows nothing and so allocates nothing — and the whole
-    // expression as the tail. Only a real statement block reaches the split.
-    let (leading, tail) = match body {
+    let (leading, tail) = freeze_body(brand, body);
+    Action::tail(
+        leading,
+        tail,
+        TailContract::Eager(contract),
+        frame_placement,
+        block_entry,
+    )
+}
+
+/// Run a freshly minted severed cart's block and yield its tail — the fresh-cart shape. Unlike
+/// [`block_tail`], no freeze happens here: the body crosses the install raw and the reinstalled
+/// step freezes it into the cart's own region (see
+/// [`ActionKind::TailRaw`](crate::machine::core::ActionKind::TailRaw)), so the working copies die with
+/// the cart and re-evaluating the form leaves nothing behind in any longer-lived region. There is
+/// no `brand` parameter for the same reason: the region the copies land in does not exist yet at
+/// the deciding step.
+///
+/// The seed still runs *now*, against the frame's own child scope — captures must be seeded before
+/// the block's first statement dispatches, and the frame was minted by this call's own builtin, so
+/// nothing has reached its child scope and the construction gate applies structurally rather than
+/// as a claim the caller makes. It is reached under
+/// [`CallFrame::with_scope`](crate::machine::CallFrame::with_scope), whose `for<'b>` brand is what
+/// confines the seeded values to the block's own region.
+pub(crate) fn fresh_cart_tail<'a, S>(
+    frame: Rc<CallFrame>,
+    seed: Option<S>,
+    body: KExpression<'a>,
+    contract: Option<ReturnContract<'a>>,
+    registries: &RunRegistries,
+) -> Action<'a>
+where
+    S: for<'b> FnOnce(&'b Scope<'b>, &RunRegistries, &mut WriteGate),
+{
+    if let Some(seed) = seed {
+        frame.with_scope(|scope| seed(scope, registries, &mut WriteGate::for_unpublished_scope()));
+    }
+    Action::tail_raw(body, frame, contract)
+}
+
+/// Freeze a body's raw AST into `brand`'s region as the working leading run + tail. The single
+/// statement-split rule both tail shapes read: [`block_tail`] calls it at the deciding step,
+/// `TailRaw`'s drain lowering calls it at the reinstalled one.
+///
+/// A body that is not a statement block splits to itself, so both no-split shapes take the same
+/// lowering: an empty leading run — which borrows nothing and so allocates nothing — and the whole
+/// expression as the tail. Only a real statement block reaches the split.
+pub(crate) fn freeze_body<'a>(
+    brand: RegionBrand<'a>,
+    body: BlockBody<'a>,
+) -> (&'a [WorkingExpression<'a>], WorkingExpression<'a>) {
+    match body {
         BlockBody::Single(expr) => (&[][..], WorkingExpression::from_ast(brand, expr)),
         BlockBody::Block(body) if !body.is_statement_block() => {
             (&[][..], WorkingExpression::from_ast(brand, body))
@@ -141,12 +176,5 @@ where
                 .expect("a statement block carries at least two statements");
             (leading, *tail)
         }
-    };
-    Action::tail(
-        leading,
-        tail,
-        TailContract::Eager(contract),
-        frame_placement,
-        block_entry,
-    )
+    }
 }

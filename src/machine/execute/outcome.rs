@@ -16,11 +16,12 @@
 use crate::machine::DeliveredCarried;
 use crate::machine::core::resolve_location;
 use crate::machine::core::{
-    BlockEntry, CallFrame, FramePlacement, FrameStorageExt, RegionBrand, ReturnContract, ScopeId,
+    Action, BlockBody, BlockEntry, CallFrame, FramePlacement, FrameStorageExt, RegionBrand,
+    ReturnContract, ScopeId, TailContract, freeze_body,
 };
 #[cfg(test)]
 use crate::machine::model::Carried;
-use crate::machine::model::WorkingExpression;
+use crate::machine::model::{KExpression, WorkingExpression};
 use crate::machine::model::{KType, RunRegistries};
 use crate::source::SourceRef;
 
@@ -241,6 +242,59 @@ pub(in crate::machine::execute) fn tail_continue<'step>(
         replacement,
         chain,
         block_entry,
+        label,
+    }
+}
+
+/// Tail-replace into a freshly minted severed cart whose body is still raw AST — the lowering of
+/// [`ActionKind::TailRaw`](crate::machine::core::ActionKind::TailRaw). The cart is installed by
+/// this replace, and the *woken* step — running with that cart as its own scope — is where the
+/// body freezes, so the working copies are homed in the cart's region and released when it dies.
+///
+/// The first hop carries no chain push and no block entry: the real chain push and `body_index`
+/// come from the `Action::tail` the continuation returns, through the same `(Inherit, FrameScope)`
+/// machinery every frame-entering tail uses. The obligation is keep-first, exactly as
+/// [`tail_continue`] computes it. Every capture is `Copy` so the continuation erases onto the
+/// bumped tier; the cart is re-derived from the wake-time view rather than captured.
+pub(in crate::machine::execute) fn tail_raw_continue<'step>(
+    view: &DecideCtx<'_, 'step, '_>,
+    body: KExpression<'step>,
+    frame: Rc<CallFrame>,
+    contract: Option<ReturnContract<'step>>,
+) -> Outcome<'step> {
+    let winner = view
+        .current_obligation()
+        .or_else(|| contract.map(ReturnObligation::seal));
+    let label = WorkLabel::of_ast(&body);
+    let replacement = Replacement::fresh_child(&frame, |host| {
+        let call = erase_bumped(
+            host,
+            move |view: &DecideCtx<'_, '_, '_>,
+                  _results: &[Result<DepTerminal<'_>, KError>],
+                  _idx: NodeId| {
+                let brand = view.current_scope().brand();
+                let cart = view
+                    .current_frame()
+                    .expect("a fresh-cart wake runs against the cart its replace installed");
+                let (leading, tail) = freeze_body(brand, BlockBody::Block(body));
+                super::decide::run_action(
+                    view,
+                    Action::tail(
+                        leading,
+                        tail,
+                        TailContract::Eager(contract),
+                        FramePlacement::Inherit,
+                        BlockEntry::FrameScope(cart),
+                    ),
+                )
+            },
+        );
+        NodeContinuation::new(winner, call)
+    });
+    Outcome::Continue {
+        replacement,
+        chain: ChainOp::Unchanged,
+        block_entry: BlockEntry::None,
         label,
     }
 }

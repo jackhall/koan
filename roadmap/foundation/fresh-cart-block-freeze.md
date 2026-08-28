@@ -25,13 +25,19 @@ arena without bound.
 
 **Directions.**
 
-- *Where the freeze happens — open.* The freeze currently precedes the frame
-  install, which is what forces the region choice. Two shapes reach the
-  fresh cart: freeze inside the install, so the working run is built at the
-  frame's own brand and `Action::Tail` carries it at that region's lifetime;
-  or carry the body unfrozen and let the drain freeze it once the frame is
-  installed. Both change `Action::tail`'s shape, so the choice is about
-  which lifetime the tail's statement run is quantified over.
+- *Where the freeze happens — settled (2026-08-28): the drain freezes it once
+  the frame is installed.* The body crosses the install as raw AST on a new
+  raw-body `Action` variant, and the reinstalled step — running with the
+  fresh cart as its own scope — freezes the working run at that brand, so
+  the copies live in the cart's region and die with it. This is the shape
+  the FN-call path already uses (`body_continue` in
+  [decide/exec.rs](../../src/machine/execute/decide/exec.rs) carries the
+  callee's body raw and freezes at the installed cart's brand), reached
+  through `Replacement::fresh_child` rather than `fresh_tail` so the
+  caller's cart does not retire. The alternative — freezing inside the
+  install and storing the run self-referentially in the frame — was
+  rejected: it needs new frame storage plus a branded read-back door to
+  reach the same end state.
 
 ## Dependencies
 

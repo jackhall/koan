@@ -25,7 +25,7 @@ use super::obligation::ReturnObligation;
 pub(in crate::machine::execute) use super::outcome::StepDeps;
 use super::outcome::{
     DepTerminal, NodeContinuation, ParkDeps, catching, continue_inline, decide_only,
-    dep_error_frame, erase_boxed, erase_bumped, tail_continue,
+    dep_error_frame, erase_boxed, erase_bumped, tail_continue, tail_raw_continue,
 };
 use crate::machine::model::RunRegistries;
 use crate::scheduler::{Dep, Deps};
@@ -587,22 +587,13 @@ pub(in crate::machine::execute) fn run_action<'step>(
             // park's own state, leaving the finish a `Copy` capture set that rebuilds the pair from
             // it at wake. `FreshTail` installs its cart only at apply time, after the leading
             // statements would already have fanned out, so a leading-carrying tail cannot ride it.
-            let (fresh_child, block_frame, overlay) = match (frame_placement, block_entry) {
-                (FramePlacement::FreshChild { frame }, BlockEntry::FrameScope(entry)) => {
-                    debug_assert!(
-                        Rc::ptr_eq(&frame, &entry),
-                        "a FreshChild block is the fresh frame's own scope"
-                    );
-                    (true, Some(entry), None)
-                }
-                (FramePlacement::Inherit, BlockEntry::FrameScope(entry)) => {
-                    (false, Some(entry), None)
-                }
-                (FramePlacement::Inherit, BlockEntry::Overlay(overlay)) => {
-                    (false, None, Some(overlay))
-                }
+            let (block_frame, overlay) = match (frame_placement, block_entry) {
+                (FramePlacement::Inherit, BlockEntry::FrameScope(entry)) => (Some(entry), None),
+                (FramePlacement::Inherit, BlockEntry::Overlay(overlay)) => (None, Some(overlay)),
                 _ => unreachable!(
-                    "a leading-carrying tail is a FreshChild frame, an Inherit cart, or an overlay"
+                    "a leading-carrying tail enters an Inherit cart with a frame entry, or an \
+                     overlay: a fresh cart's own block is entered by the reinstalled step \
+                     (`ActionKind::TailRaw`), which reaches here already Inherit"
                 ),
             };
             // Leading statements become owned siblings in the block, and the slot parks on them so
@@ -661,16 +652,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 // absence on a frame-entering tail is a wiring bug, not a case to fall back on.
                 let (frame_placement, block_entry) = match (view.take_parked_block_frame(), overlay)
                 {
-                    (Some(frame), _) => (
-                        if fresh_child {
-                            FramePlacement::FreshChild {
-                                frame: Rc::clone(&frame),
-                            }
-                        } else {
-                            FramePlacement::Inherit
-                        },
-                        BlockEntry::FrameScope(frame),
-                    ),
+                    (Some(frame), _) => (FramePlacement::Inherit, BlockEntry::FrameScope(frame)),
                     (None, Some(overlay)) => {
                         (FramePlacement::Inherit, BlockEntry::Overlay(overlay))
                     }
@@ -699,6 +681,12 @@ pub(in crate::machine::execute) fn run_action<'step>(
             .error_frame(dep_error_frame())
             .finish_terminal(view.current_scope().brand(), finish)
         }
+
+        ActionKind::TailRaw {
+            body,
+            frame,
+            contract,
+        } => tail_raw_continue(view, body, frame, contract),
 
         ActionKind::AwaitDeps { deps, finish } => {
             // Results come back in the order the builtin assembled the list — one per entry — so

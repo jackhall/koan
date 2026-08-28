@@ -560,6 +560,19 @@ impl<'a> Action<'a> {
         })
     }
 
+    /// Tail-replace into a fresh cart whose body is still raw AST. See [`ActionKind::TailRaw`].
+    pub fn tail_raw(
+        body: KExpression<'a>,
+        frame: Rc<CallFrame>,
+        contract: Option<ReturnContract<'a>>,
+    ) -> Self {
+        Action::from_kind(ActionKind::TailRaw {
+            body,
+            frame,
+            contract,
+        })
+    }
+
     /// Dispatch `deps`, then continue through `finish`. See [`ActionKind::AwaitDeps`].
     pub fn await_deps(deps: Deps<SubDispatch<'a>>, finish: AwaitContinue<'a>) -> Self {
         Action::from_kind(ActionKind::AwaitDeps { deps, finish })
@@ -646,6 +659,22 @@ pub enum ActionKind<'a> {
         contract: TailContract<'a>,
         frame_placement: FramePlacement,
         block_entry: BlockEntry<'a>,
+    },
+    /// Tail-replace into a freshly minted severed cart whose body is still **raw AST**. The
+    /// working copies are frozen by the reinstalled step — at the installed cart's own brand, so
+    /// they live in the cart's region and are released when it dies, leaving a re-entered form no
+    /// residue in any longer-lived region. A separate variant rather than a body enum inside
+    /// [`Tail`](Self::Tail) so the combinations that have no meaning — a raw body under an
+    /// inherited cart, or entering an overlay — are unrepresentable.
+    ///
+    /// The body maps as [`BlockBody::Block`](crate::machine::BlockBody::Block): a statement block
+    /// splits into leading + tail at the freeze, any other body is the whole tail. The cart is
+    /// installed as a [`FramePlacement::FreshChild`] — the slot's current scope does not retire —
+    /// and the block entered is the frame's own scope.
+    TailRaw {
+        body: KExpression<'a>,
+        frame: Rc<CallFrame>,
+        contract: Option<ReturnContract<'a>>,
     },
     /// Dispatch `deps`, then `finish` over their resolved values yields the next `Action`. Every
     /// entry contributes exactly one dep, so a builtin that recorded a [`Deps::request`] index reads

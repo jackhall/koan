@@ -16,8 +16,8 @@ pub(crate) use core::{
     Action, ActionFn, AwaitContinue, BlockBody, BlockEntry, BlockRequest, BlockScope, BodyCtx,
     BoundArgs, DepPlacement, DepRequest, DepTerminal, FinishCtx, FoldingBrand, FramePlacement,
     GroupSeal, NoSeed, OverloadSeal, ReturnContract, StepAllocator, SubDispatch, TailContract,
-    block_tail, body_statement_refs, kerror_ktype, require_bare_type_name, require_identifier_name,
-    require_kexpression, require_ktype, seed,
+    block_tail, body_statement_refs, fresh_cart_tail, kerror_ktype, require_bare_type_name,
+    require_identifier_name, require_kexpression, require_ktype, seed,
 };
 pub(crate) use core::{
     AdoptSeam, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, Installer,

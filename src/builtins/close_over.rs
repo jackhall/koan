@@ -7,10 +7,16 @@
 //! eternal-homed enclosing scope ([`Scope::innermost_eternal_home`]): `parent_frame_pin` declines to
 //! chain an eternal owner, so the fresh storage's `outer` is `None` and the frame's child scope's
 //! *lexical* outer is that eternal scope. Builtins and top-level definitions stay visible through
-//! the link and contribute no reach; every per-call binding must arrive as a capture. That same
-//! eternal region is where the block's statements are frozen as working copies: they are read from
-//! the block frame's cart, which severance leaves holding nothing of the caller, so a copy homed at
-//! the call site would dangle the moment the calling frame retires.
+//! the link and contribute no reach; every per-call binding must arrive as a capture.
+//!
+//! The block's statements are frozen as working copies into that same per-call region: the body
+//! crosses the cart install as raw AST and the reinstalled step, which runs with the block frame as
+//! its own cart, freezes it at that cart's brand. The copies are read from the block frame's cart,
+//! which severance leaves holding nothing of the caller, so a copy homed at the call site would
+//! dangle the moment the calling frame retires — and one homed in the eternal chain would outlive
+//! every evaluation, so a form re-entered many times would grow the run-root arena without bound.
+//! Homing them in the cart is what makes both false: the copies die with the region the block runs
+//! in.
 //!
 //! Three kinds of capture reach the block scope, seeded before its first statement dispatches:
 //!
@@ -54,9 +60,9 @@ use crate::machine::model::{
 };
 use crate::machine::{Action, AwaitContinue, CallFrame, DeliveredCarried, WriteGate};
 use crate::machine::{BindingIndex, DeclarationSite};
-use crate::machine::{BlockBody, BlockScope, block_tail, seed};
 use crate::machine::{DeliveredFunction, DeliveredOperatorGroup, Scope};
-use crate::machine::{FramePlacement, KError, KErrorKind, LexicalFrame, NameLookup, ProducerId};
+use crate::machine::{KError, KErrorKind, LexicalFrame, NameLookup, ProducerId};
+use crate::machine::{fresh_cart_tail, seed};
 
 use super::{arg, kw, sig};
 
@@ -140,27 +146,19 @@ fn build<'a>(
     );
     let frame: Rc<CallFrame> = CallFrame::new(eternal);
 
-    // The body's working copies are frozen into the **eternal** region, not the call site's: the
-    // block's statements are read from the block frame's own cart, which severance leaves with no
-    // link to the caller, so a copy homed at the call site would dangle the moment that frame
-    // retires. The eternal tier is the one region the block scope already names — its lexical outer
-    // — and it contributes no reach, so nothing the block escapes with is retained by the choice.
-    //
-    // The seed's failure travels out here rather than through the block: a capture that cannot bind
-    // is this statement's own error, and the block has not dispatched anything yet.
+    // The body crosses to the scheduler raw and is frozen by the reinstalled step, so the working
+    // copies land in the block frame's own region and are released with it. The seed's failure
+    // travels out here rather than through the block: a capture that cannot bind is this
+    // statement's own error, and the block has not dispatched anything yet.
     let mut failure: Option<KError> = None;
-    let action = block_tail(
-        eternal.brand(),
-        FramePlacement::FreshChild {
-            frame: Rc::clone(&frame),
-        },
-        BlockScope::FrameScope(frame),
+    let action = fresh_cart_tail(
+        frame,
         Some(seed(
             |block_scope, registries: &RunRegistries, gate: &mut WriteGate| {
                 failure = plan.seed_into(block_scope, registries, gate).err();
             },
         )),
-        BlockBody::Block(block),
+        block,
         None,
         registries,
     );
