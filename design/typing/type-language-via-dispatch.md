@@ -296,8 +296,8 @@ bucket and rides the bucket-keyed channel instead; the combined
 binders — and the name and buckets each declares — is read parse-statically from
 the static [`BINDER_SPECS`](../../src/machine/model/binder.rs) table; the two
 channels are the two fields of one
-[`BinderKey`](../../src/machine/model/binder.rs) record, an optional name and up
-to two bucket keys.
+[`StoredBinderKey`](../../src/machine/model/binder.rs) record, an optional name
+and up to two bucket keys.
 
 The bucket-keyed channel admits *sibling* overloads under one head
 keyword. Two `FN (PICK xs :A) ...` / `FN (PICK xs :B) ...`

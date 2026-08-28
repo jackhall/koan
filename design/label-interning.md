@@ -384,8 +384,8 @@ alone (`ExpressionPart::Identifier(ValueSymbol)`, `FieldSlot::Name(ValueSymbol)`
 reader carries it: the bind seam's `Held::Identifier` carrier — the value-channel mirror of
 `Held::UnresolvedType`, read back through `BoundArgs::identifier` and nothing else — the
 value-lookup ladder (`Scope::resolve_value_delivered`, which takes a `ValueSymbol` rather than a
-spelling), each binder builtin's own name read, and the statement's `StoredBinderKey`, whose
-`to_owned_key` mints nothing. Because no lookup re-derives a digest, a name spelled once and read
+spelling), each binder builtin's own name read, and the statement's `StoredBinderKey`, which
+mints nothing. Because no lookup re-derives a digest, a name spelled once and read
 many times is hashed once, at the parse.
 
 The consequence for the surface is that neither name class admits a bare probe. A binder builtin

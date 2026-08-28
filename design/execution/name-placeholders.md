@@ -115,7 +115,7 @@ terminalizes, so a table can never hold a name whose edge is gone.
 
 *Name-keyed binders* (`LET`, `TYPE`, `MODULE`, `GROUP`, `SIG`, `UNION`,
 `NEWTYPE`) fill the **name channel** of the
-[`BinderKey`](../../src/machine/model/binder.rs) — the to-be-bound name the
+[`StoredBinderKey`](../../src/machine/model/binder.rs) — the to-be-bound name the
 matching spec's name extractor pulls structurally out of the expression's parts.
 The
 claim stamps the binder slot's own `ProducerId` paired with its
@@ -158,10 +158,11 @@ binder: the value name and the bucket key(s) the declaration's body registers
 under. Two bucket keys is the maximum any form reaches (a `UNARY OP` declares the
 keyword-first list key plus the binary bridge key), so the record is fixed-size
 and `Copy`: a name of either class is a lifetime-free symbol, a key run is a borrow
-into the declaring node's own region, and nothing is heap-owned. `to_owned_key`
-mints nothing — both channels arrive already classified and interned. The owned twin
-[`BinderKey`](../../src/machine/model/binder.rs) is the transient currency the
-submission path hands the bindings tables.
+into the declaring node's own region, and nothing is heap-owned. Both channels
+arrive already classified and interned, so reading a statement's plan mints
+nothing. The record is the install currency end to end: the submission path
+hands the bindings tables the plan's own borrowed key runs, and the claim store
+re-homes a key into its own region only on the first claim of a shape.
 
 A combined form's two writes describe **one** `KFunction`: the finalize seals the
 callable once and duplicates that cell into a `WriteOp::Value` beside the
