@@ -32,6 +32,14 @@ no — the test is redundant; **delete it** rather than whitelist. Do not whitel
 group just to silence the stale-anchor check.
 
 <!-- slate-audit-whitelist:start -->
+- `src/builtins/close_over.rs` — the `CLOSE OVER` group pins the one seeded region that is read
+  back after every frame it was written from is gone: the severing seam's release-exact copy, and a
+  foreign-region seal rested into a fresh region whose `home` is the table the seal was read off.
+  Both shapes reach `unsafe` only through `witnessed.rs` — the `for<'b>` seed open's branded
+  re-anchor and the lift's `Weak → Rc` upgrade — and neither is pinned by another group: every other
+  frame-erasure test reads its value while the writing frame's chain is still linked, which is
+  exactly the link severance removes. Koan-side `src/` production code carries no `unsafe` of its
+  own at all.
 - `src/builtins/branch_walk.rs` — the by-type selector stages its candidate slates on the step
   scratch, the one arena the drain *resets* rather than drops; every other slate group pins region
   *death* ordering, so the reset-under-a-live-read shape is distinct and unpinned elsewhere. The
@@ -125,7 +133,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-24 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
+27 tests, grouped by the unsafe site (or the safe discipline routing it) each pins down. Names
 below are the exact test identifiers; pass them after `--` in the Miri command. A further 54 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)). The split rule: a shape
@@ -162,6 +170,22 @@ pinned coexisting there rather than by a test of their own.
 
 - `with_scope_relocates_seed_value_into_brand`
 - `born_child_scope_survives_subsequent_alloc_in_its_own_region`
+
+**`CLOSE OVER`'s seeded block region** ([src/builtins/close_over.rs](../src/builtins/close_over.rs))
+— the second caller of the `for<'b>` seed open, and the one that reads the seeded region back
+*after* every frame it was written from is gone. Two shapes ride it. The **severing** seam relocates
+a caller-lifetime capture into the block's own region, and the escaped closure reads it once the
+whole producer chain has been freed: the copy's release-exact reach is what makes that read legal,
+so a copy that left a leaf borrowing the producer is a use-after-free here rather than a wrong
+value. The **pinned** seam rests a foreign-region seal — a dispatch registration read off an
+ancestor's table — into that same fresh region, and the escaped closure dispatches it after the
+intermediate frames between the block and the registration's home have died; the lift's `home` is
+the table's own region, so a mis-named home dangles at exactly this read. Both run the program to
+completion under Miri, which is also where a retention ring between the block region and the frame
+it closed over would surface as a leak.
+
+- `a_severed_closure_still_answers_after_its_producers_die`
+- `a_captured_registration_runs_after_its_producers_die`
 
 **Record substrate door — construction, O(1) ownership, fold-shared retype** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — `FoldingBrand::alloc_substrate_folded` (the sole `RecordSubstrate` mint, routed through by
@@ -607,10 +631,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-28: 1302s — 27 tests, 0 leaks, 0 UB
+- 2026-08-28: 1256s — 27 tests, 0 leaks, 0 UB
 - 2026-08-26: 701s — 25 tests, 0 leaks, 0 UB
 - 2026-08-26: 697s — 25 tests, 0 leaks, 0 UB
 - 2026-08-25: 705s — 25 tests, 0 leaks, 0 UB
-- 2026-08-25: 644s — 24 tests, 0 leaks, 0 UB
-- 2026-08-25: 641s — 24 tests, 0 leaks, 0 UB
-- 2026-08-25: 651s — 23 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

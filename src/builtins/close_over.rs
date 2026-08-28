@@ -7,7 +7,10 @@
 //! eternal-homed enclosing scope ([`Scope::innermost_eternal_home`]): `parent_frame_pin` declines to
 //! chain an eternal owner, so the fresh storage's `outer` is `None` and the frame's child scope's
 //! *lexical* outer is that eternal scope. Builtins and top-level definitions stay visible through
-//! the link and contribute no reach; every per-call binding must arrive as a capture.
+//! the link and contribute no reach; every per-call binding must arrive as a capture. That same
+//! eternal region is where the block's statements are frozen as working copies: they are read from
+//! the block frame's cart, which severance leaves holding nothing of the caller, so a copy homed at
+//! the call site would dangle the moment the calling frame retires.
 //!
 //! Three kinds of capture reach the block scope, seeded before its first statement dispatches:
 //!
@@ -137,11 +140,17 @@ fn build<'a>(
     );
     let frame: Rc<CallFrame> = CallFrame::new(eternal);
 
+    // The body's working copies are frozen into the **eternal** region, not the call site's: the
+    // block's statements are read from the block frame's own cart, which severance leaves with no
+    // link to the caller, so a copy homed at the call site would dangle the moment that frame
+    // retires. The eternal tier is the one region the block scope already names — its lexical outer
+    // — and it contributes no reach, so nothing the block escapes with is retained by the choice.
+    //
     // The seed's failure travels out here rather than through the block: a capture that cannot bind
     // is this statement's own error, and the block has not dispatched anything yet.
     let mut failure: Option<KError> = None;
     let action = block_tail(
-        scope.brand(),
+        eternal.brand(),
         FramePlacement::FreshChild {
             frame: Rc::clone(&frame),
         },
@@ -303,17 +312,15 @@ fn resolve_pattern(
 ) -> Result<(), KError> {
     let mut found = false;
     for ancestor in scope.ancestors() {
-        let lookup = ancestor
+        let (overloads, pending) = ancestor
             .bindings()
-            .lookup_function(key, ancestor.binding_cutoff(frame));
-        if let Some(producer) = lookup.pending {
+            .lifted_overloads_for(key, ancestor.binding_cutoff(frame));
+        if let Some(producer) = pending {
             park(parked, producer);
             found = true;
         }
-        for sealed in lookup.overloads {
-            plan.functions.push(ancestor.brand().lift_resident(sealed));
-            found = true;
-        }
+        found |= !overloads.is_empty();
+        plan.functions.extend(overloads);
     }
     if found {
         return Ok(());

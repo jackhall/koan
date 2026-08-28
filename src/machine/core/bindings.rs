@@ -797,6 +797,27 @@ impl<'a> Bindings<'a> {
         }
     }
 
+    /// One bucket key's visible contribution to a `CLOSE OVER` block's explicit pattern capture:
+    /// every finalized overload registered under `key` here, lifted, plus this scope's own pending
+    /// claim on it. [`Self::visible_for_capture`]'s single-key twin, and lifted through the table's
+    /// own brand for the same reason — a `USING` window's seals live in the opened module's region,
+    /// not in the window scope's.
+    pub(crate) fn lifted_overloads_for(
+        &self,
+        key: &UntypedKey,
+        cutoff: Option<usize>,
+    ) -> (Vec<DeliveredFunction>, Option<ProducerId>) {
+        let lookup = self.lookup_function(key, cutoff);
+        (
+            lookup
+                .overloads
+                .into_iter()
+                .map(|sealed| self.brand.lift_resident(sealed))
+                .collect(),
+            lookup.pending,
+        )
+    }
+
     /// True iff `types[name]` is bound at [`BindingIndex::BUILTIN`]. The
     /// no-shadow consult gates on this — a genuine builtin, not a user type that a
     /// synthetic test happens to have placed in a root-position scope.

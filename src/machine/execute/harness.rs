@@ -799,29 +799,44 @@ impl<'run> Host<'run> {
         scratch: BumpAllocator<'a>,
         block: BlockRequest<'a>,
     ) -> (BumpVec<'a, EdgeId>, BumpVec<'a, EdgeId>) {
-        let producers = match block {
+        // A body block's statements bind in the block, so their results rest there too: the
+        // destination is the block frame's own region, not the consuming slot's cart. The two are
+        // the same region whenever the frame is already the cart (a user `FN` body), and differ for
+        // a block whose frame the tail installs only after the leading statements have run
+        // (`CLOSE OVER`) — where naming the cart would have the producer's region retain the
+        // block's while the block retains a capture back out of it, a ring neither side frees.
+        let (producers, destination) = match block {
             // A body block fans out one producer per statement: into a fresh per-call frame's own
             // scope, or — under `Inherit` — into a caller-allocated overlay (USING).
             BlockRequest::Body {
                 statements,
                 placement: BodyPlacement::Frame(frame),
-            } => self.dispatch_body(sched, &frame, statements, scratch),
+            } => (
+                self.dispatch_body(sched, &frame, statements, scratch),
+                frame.storage_rc(),
+            ),
             BlockRequest::Body {
                 statements,
                 placement: BodyPlacement::Overlay(overlay),
-            } => self.enter_block(sched, overlay.id, statements, overlay, scratch),
+            } => (
+                self.enter_block(sched, overlay.id, statements, overlay, scratch),
+                Rc::clone(anchor.owner()),
+            ),
             // A declaration builtin's body splits into its top-level statements against the child
             // scope it minted (MODULE, SIG).
             BlockRequest::InScope { body, scope } => {
                 let statements = split_working_body(scope.brand(), body, scratch);
-                self.enter_block(sched, scope.id, &statements, scope, scratch)
+                (
+                    self.enter_block(sched, scope.id, &statements, scope, scratch),
+                    Rc::clone(anchor.owner()),
+                )
             }
         };
         // Every source here is minted, so the two buffers are the same length as the fan-out.
         let mut minted: BumpVec<'a, EdgeId> = BumpVec::with_capacity_in(producers.len(), scratch);
         let mut sources: BumpVec<'a, EdgeId> = BumpVec::with_capacity_in(producers.len(), scratch);
         for producer in producers {
-            let source = self.mint_source(sched, anchor, producer, &mut minted);
+            let source = self.mint_source_at(sched, &destination, producer, &mut minted);
             sources.push(source);
         }
         (sources, minted)
@@ -838,7 +853,20 @@ impl<'run> Host<'run> {
         producer: NodeId,
         minted: &mut AllocVec<EdgeId, impl Allocator>,
     ) -> EdgeId {
-        let source = sched.install_edge(producer, anchor.owner());
+        self.mint_source_at(sched, anchor.owner(), producer, minted)
+    }
+
+    /// [`Self::mint_source`] naming the destination region explicitly — for a block whose statement
+    /// results belong somewhere other than the consuming slot's cart. Holding `destination` here is
+    /// the wiring-time proof the region is covered for the edge's life.
+    fn mint_source_at(
+        &mut self,
+        sched: &mut Scheduler<KoanWorkload>,
+        destination: &Rc<crate::machine::FrameStorage>,
+        producer: NodeId,
+        minted: &mut AllocVec<EdgeId, impl Allocator>,
+    ) -> EdgeId {
+        let source = sched.install_edge(producer, destination);
         minted.push(source);
         source
     }
