@@ -51,14 +51,14 @@ impl<'run> Host<'run> {
         // form is exempt — an eager sub-dispatch cannot install into the enclosing scope soundly,
         // and a definition whose registration silently vanished would be worse than an error. A
         // value position takes the anonymous `FN :{…} -> <Return> = (…)`, which installs nothing.
-        let installs = statement_binder_plan(&expr).map(|plan| plan.to_owned_key());
-        if let (SubmitContext::SubDispatch, Some(key)) = (ctx, &installs) {
+        let installs = statement_binder_plan(&expr);
+        if let (SubmitContext::SubDispatch, Some(plan)) = (ctx, &installs) {
             let carrier = expr.summarize(&self.ambient.registries().labels);
             // A rejected declaration that registers overloads (an `FN` / `OP` in a `LET`'s value
             // slot) has a one-statement spelling to suggest; a nested plain `LET` does not.
             let error = KError::new(KErrorKind::NestedBinder {
                 expr: carrier.clone(),
-                suggest_flat: !key.buckets.is_empty(),
+                suggest_flat: plan.buckets.is_some(),
             });
             return self.submit_pre_errored(sched, &expr, node_scope, chain, error);
         }
@@ -80,7 +80,7 @@ impl<'run> Host<'run> {
 
         // The stamp carries the SAME `BindingIndex` the finalize write does, so a consumer's
         // visibility test stays consistent across the pending → finalized transition.
-        if let Some(key) = installs {
+        if let Some(plan) = installs {
             let bind_index = BindingIndex::value(chain.index);
             // The claim's edge is destined at **this** scope's region — the scope the name is
             // being introduced into — so a consumer parking on the claim inherits that destination
@@ -103,7 +103,7 @@ impl<'run> Host<'run> {
             // bucket still addresses the claim store at this slot's index.
             anchor.mark_claimed();
             let mut gate = WriteGate::for_run_loop();
-            if let Some(name) = key.name {
+            if let Some(name) = plan.name {
                 let edge = claim(sched);
                 let _ = scope.install_placeholder(
                     name,
@@ -113,14 +113,16 @@ impl<'run> Host<'run> {
                     &mut gate,
                 );
             }
-            for bucket in key.buckets {
-                let edge = claim(sched);
-                let _ = scope.install_pending_overload(
-                    bucket,
-                    ProducerId::from_scheduler_edge(edge),
-                    bind_index,
-                    &mut gate,
-                );
+            if let Some(keys) = plan.buckets {
+                for bucket in keys.iter() {
+                    let edge = claim(sched);
+                    let _ = scope.install_pending_overload(
+                        bucket,
+                        ProducerId::from_scheduler_edge(edge),
+                        bind_index,
+                        &mut gate,
+                    );
+                }
             }
         }
         id
@@ -149,9 +151,10 @@ impl<'run> Host<'run> {
 /// declarations before any statement runs. A scheduler-synthesized node carries no plan and
 /// installs nothing: a binder is always a parsed statement.
 ///
-/// The stored (borrowed) form: every key it names is a borrow into the declaring node's own region,
-/// so reading a block's whole namespace allocates nothing. The submission path materializes the
-/// owned twin only for the statement it is actually stamping.
+/// Every key the plan names is a borrow into the declaring node's own region, so reading a block's
+/// whole namespace allocates nothing and the submission path stamps those runs into the claim
+/// store directly. The claim store re-homes a key into its own region only on the first claim of a
+/// shape.
 pub(in crate::machine::execute) fn statement_binder_plan<'a>(
     expr: &WorkingExpression<'a>,
 ) -> Option<StoredBinderKey<'a>> {

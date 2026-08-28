@@ -33,8 +33,10 @@ use std::mem::ManuallyDrop;
 
 use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
+use crate::machine::model::KeyElement;
+#[cfg(test)]
+use crate::machine::model::UntypedKey;
 use crate::machine::model::{IdentityBuildHasher, Symbol};
-use crate::machine::model::{KeyElement, UntypedKey};
 use crate::witnessed::{BumpBackedMap, BumpVec};
 
 use super::{BindingIndex, Bindings, bump_table};
@@ -180,20 +182,20 @@ impl<'a> ClaimStore<'a> {
     pub(super) fn claim_bucket(
         &mut self,
         brand: RegionBrand<'a>,
-        bucket: &UntypedKey,
+        bucket: &[KeyElement],
         claim: Claim,
     ) {
         // Probe-then-insert rather than an `entry` call: the key a miss inserts has to be re-homed
         // through the brand, which the entry API has no way to defer. The second hash is paid only
         // on the first claim of a shape.
-        if !self.by_bucket.contains_key(bucket.as_slice()) {
+        if !self.by_bucket.contains_key(bucket) {
             let key: &'a [KeyElement] = brand.allocator().slice(bucket);
             self.by_bucket
                 .insert(key, ManuallyDrop::new(BumpVec::new_in(brand.allocator())));
         }
         let (key, claims) = self
             .by_bucket
-            .get_key_value_mut(bucket.as_slice())
+            .get_key_value_mut(bucket)
             .expect("the claim run was just seeded if it was missing");
         claims.push(claim);
         let stored = *key;

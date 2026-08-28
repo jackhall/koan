@@ -26,6 +26,7 @@ use crate::machine::core::bindings::{
 };
 use crate::machine::core::carrier_witness::{DeliveredFunction, GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind};
+use crate::machine::model::KeyElement;
 use crate::machine::model::KeywordSymbol;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{
@@ -248,7 +249,7 @@ impl<'a> Scope<'a> {
     /// [`Bindings::install_pending_overload`].
     pub fn install_pending_overload(
         &self,
-        bucket: crate::machine::model::UntypedKey,
+        bucket: &[KeyElement],
         producer: ProducerId,
         index: BindingIndex,
         gate: &mut WriteGate,

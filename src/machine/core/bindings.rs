@@ -951,7 +951,7 @@ impl<'a> Bindings<'a> {
     /// the other siblings stay as wake sources.
     pub fn install_pending_overload(
         &self,
-        bucket: UntypedKey,
+        bucket: &[KeyElement],
         producer: ProducerId,
         index: BindingIndex,
         _gate: &mut WriteGate,
@@ -960,7 +960,7 @@ impl<'a> Bindings<'a> {
         self.tables
             .borrow_mut()
             .claims
-            .claim_bucket(brand, &bucket, Claim { producer, index });
+            .claim_bucket(brand, bucket, Claim { producer, index });
         Ok(())
     }
 

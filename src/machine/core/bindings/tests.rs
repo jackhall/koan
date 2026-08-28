@@ -422,7 +422,7 @@ fn a_two_bucket_binder_retires_the_key_it_did_not_seal() {
     for key in [&sealed_key, &bridge_key] {
         scope
             .install_pending_overload(
-                key.clone(),
+                key,
                 ProducerId::for_test(4),
                 BindingIndex::value(1),
                 &mut gate,
@@ -640,12 +640,7 @@ fn bump_backed_tables_full_churn() {
         let sealed_key = f.open(|f| f.signature.untyped_key());
         for claim in [ProducerId::for_test(7), ProducerId::for_test(8)] {
             scope
-                .install_pending_overload(
-                    sealed_key.clone(),
-                    claim,
-                    BindingIndex::value(1),
-                    &mut gate,
-                )
+                .install_pending_overload(&sealed_key, claim, BindingIndex::value(1), &mut gate)
                 .expect("a sibling claim appends");
         }
         scope
@@ -667,7 +662,7 @@ fn bump_backed_tables_full_churn() {
         .untyped_key();
         scope
             .install_pending_overload(
-                purged_key.clone(),
+                &purged_key,
                 ProducerId::for_test(9),
                 BindingIndex::value(2),
                 &mut gate,

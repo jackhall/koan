@@ -10,10 +10,12 @@
 use smallvec::SmallVec;
 
 use crate::machine::core::{KError, KErrorKind, RegionBrand};
+use crate::machine::model::KeyElement;
+#[cfg(test)]
+use crate::machine::model::UntypedKey;
 use crate::machine::model::ast::{Part, PartClass};
 use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner, StaticName};
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{KeyElement, UntypedKey};
 use crate::source::Spanned;
 
 /// Whether a binding — committed or an in-flight placeholder — lives in the value
@@ -89,33 +91,6 @@ impl<'a> BucketKeys<'a> {
 pub struct StoredBinderKey<'a> {
     pub name: Option<BinderSymbol>,
     pub buckets: Option<BucketKeys<'a>>,
-}
-
-impl<'a> StoredBinderKey<'a> {
-    /// The owned [`BinderKey`] this stands for — materialized where an install path needs map keys
-    /// for the bindings tables. The name copies straight through: both channels arrive already
-    /// classified and interned from the parse that read the token, so nothing is minted here. A
-    /// keyword-class token never classifies as a name in the first place, so a statement whose
-    /// name position holds one claims no name.
-    pub fn to_owned_key(self) -> BinderKey {
-        BinderKey {
-            name: self.name,
-            buckets: self
-                .buckets
-                .into_iter()
-                .flat_map(|keys| keys.iter().map(|key| key.to_vec()).collect::<Vec<_>>())
-                .collect(),
-        }
-    }
-}
-
-/// Owned twin of [`StoredBinderKey`]: the transient install currency the submission path hands the
-/// bindings tables, whose keys are owned.
-#[derive(Clone, Debug)]
-pub struct BinderKey {
-    pub name: Option<BinderSymbol>,
-    /// 0..=2 entries, in declaration order.
-    pub buckets: Vec<UntypedKey>,
 }
 
 // ---------- extractors (pure structural readers) ----------

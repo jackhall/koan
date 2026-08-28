@@ -282,7 +282,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     let bucket_single: UntypedKey = vec![key_keyword("MAKESET"), KeyElement::Slot];
     scope
         .install_pending_overload(
-            bucket_single,
+            &bucket_single,
             ProducerId::for_test(42),
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
@@ -566,7 +566,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     // In-flight pending sibling on the same bucket key, finalizing at index 3.
     scope
         .install_pending_overload(
-            expr.untyped_key(),
+            &expr.untyped_key(),
             ProducerId::for_test(77),
             BindingIndex::value(3),
             &mut crate::machine::WriteGate::for_test(),
@@ -648,7 +648,7 @@ fn scope_install_pending<'a>(
 ) {
     scope
         .install_pending_overload(
-            expr.untyped_key(),
+            &expr.untyped_key(),
             claim,
             BindingIndex::BUILTIN,
             &mut crate::machine::WriteGate::for_test(),
@@ -671,7 +671,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     let bucket: UntypedKey = vec![key_keyword("PICK"), KeyElement::Slot];
     scope
         .install_pending_overload(
-            bucket.clone(),
+            &bucket,
             ProducerId::for_test(101),
             BindingIndex::value(3),
             &mut crate::machine::WriteGate::for_test(),
@@ -679,7 +679,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
         .expect("first install");
     scope
         .install_pending_overload(
-            bucket.clone(),
+            &bucket,
             ProducerId::for_test(102),
             BindingIndex::value(4),
             &mut crate::machine::WriteGate::for_test(),

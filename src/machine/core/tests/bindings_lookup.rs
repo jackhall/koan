@@ -262,7 +262,7 @@ fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
     let key = sig.untyped_key();
     scope
         .install_pending_overload(
-            key.clone(),
+            &key,
             ProducerId::for_test(11),
             BindingIndex::value(2),
             &mut crate::machine::WriteGate::for_test(),
@@ -302,7 +302,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
     // no-op): the scope walk parks the bucket until the sibling finalizes.
     scope
         .install_pending_overload(
-            key.clone(),
+            &key,
             ProducerId::for_test(99),
             BindingIndex::value(3),
             &mut crate::machine::WriteGate::for_test(),
@@ -379,7 +379,7 @@ fn retirement_drops_every_bucket_the_statement_claimed() {
     ] {
         scope
             .install_pending_overload(
-                key.clone(),
+                key,
                 claim,
                 BindingIndex::value(idx),
                 &mut crate::machine::WriteGate::for_test(),
