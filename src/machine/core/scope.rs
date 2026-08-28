@@ -513,6 +513,27 @@ impl<'a> Scope<'a> {
         })
     }
 
+    /// The innermost enclosing scope whose region is at the **eternal tier** — `self` if it is one,
+    /// else the first ancestor [`Self::parent_frame_pin`] declines to chain. Total: every chain ends
+    /// at the run root, whose region outlives the run.
+    ///
+    /// This is the lexical outer a severed block scope takes ([`CLOSE OVER`](crate::builtins)):
+    /// builtins and top-level definitions stay visible through it, and an eternal region contributes
+    /// no reach, so a value homed in the block pins nothing through the link. Walked over
+    /// [`Self::outer`] rather than [`Self::ancestors`] because the answer is stored at `'a` and a
+    /// per-call frame is built from a parent at that same lifetime.
+    pub(crate) fn innermost_eternal_home(&'a self) -> &'a Scope<'a> {
+        let mut scope: &'a Scope<'a> = self;
+        loop {
+            if scope.parent_frame_pin().is_none() {
+                return scope;
+            }
+            scope = scope
+                .outer()
+                .expect("a per-call-homed scope has a lexical parent; every chain ends eternal");
+        }
+    }
+
     /// True iff the nearest opaque enclosing scope is a SIG decl_scope.
     pub fn is_in_sig_body(&self) -> bool {
         matches!(

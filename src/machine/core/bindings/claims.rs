@@ -279,6 +279,31 @@ impl<'a> ClaimStore<'a> {
         }
     }
 
+    /// Every producer behind a claim visible at `cutoff`, deduped — name claims and bucket claims
+    /// alike. The implicit-close scan reads it: a `CLOSE OVER` block copies the registrations and
+    /// module bindings standing in the per-call chain, so it must wait on every lexically-earlier
+    /// binder still in flight rather than close over whichever ones happened to land first. The
+    /// wait is well-founded for the same reason every other claim park is — the exclusive cutoff
+    /// keeps a statement's own claim out of its own subtree, so a source is always a strictly
+    /// earlier statement.
+    pub(super) fn visible_producers(&self, cutoff: Option<usize>) -> Vec<ProducerId> {
+        let mut producers: Vec<ProducerId> = Vec::new();
+        let mut push = |claim: &Claim| {
+            if Bindings::visible(claim.index, cutoff) && !producers.contains(&claim.producer) {
+                producers.push(claim.producer);
+            }
+        };
+        for claim in self.by_name.values() {
+            push(claim);
+        }
+        for claims in self.by_bucket.values() {
+            for claim in claims.iter() {
+                push(claim);
+            }
+        }
+        producers
+    }
+
     /// Every standing name claim, as `(name, producer)` — the hygiene probe behind
     /// [`Bindings::pending_names`].
     #[cfg(test)]

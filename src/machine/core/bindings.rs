@@ -62,11 +62,13 @@ use std::hash::BuildHasher;
 use std::mem::ManuallyDrop;
 
 use crate::machine::CarrierWitness;
+use crate::machine::DeliveredCarried;
 use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::core::StatementId;
 use crate::machine::core::carrier_witness::{
-    GroupSeal, OverloadSeal, SealedFunction, SealedOperatorGroup,
+    DeliveredFunction, DeliveredOperatorGroup, GroupSeal, OverloadSeal, SealedFunction,
+    SealedOperatorGroup,
 };
 #[cfg(test)]
 use crate::machine::model::BindKind;
@@ -252,6 +254,28 @@ pub struct FunctionLookup<'a, A: Allocator = Global> {
     /// walk.
     pub overloads: allocator_api2::vec::Vec<SealedFunction<'a>, A>,
     pub pending: Option<ProducerId>,
+}
+
+/// One scope's visible contribution to a `CLOSE OVER` block's implicit close — see
+/// [`Bindings::visible_for_capture`], which is the only producer of one. Every field is a snapshot
+/// taken under a single `tables` borrow and released before the caller re-anchors anything, so no
+/// table borrow is held across a carrier lift.
+/// Lifetime-free: every carrier is already **lifted** into a delivery envelope pinned by the
+/// table's own region owner, so the snapshot survives the borrow it was read under and the caller
+/// re-homes it wherever it likes.
+pub(crate) struct VisibleBindings {
+    /// Visible value bindings. The capture walk keeps the modules among them and drops the rest —
+    /// plain data reaches the block only by explicit capture.
+    pub(crate) data: Vec<(ValueSymbol, DeliveredCarried)>,
+    /// Every visible finalized overload, across all of this scope's buckets. The bucket key and the
+    /// dispatch token are re-derived from each callable's own signature at the destination, so the
+    /// envelope is the whole entry.
+    pub(crate) functions: Vec<DeliveredFunction>,
+    /// Visible operator-registry entries, by probe key.
+    pub(crate) operators: Vec<(KeywordSymbol, DeliveredOperatorGroup)>,
+    /// The producers behind every visible in-flight claim, name and bucket alike — what the block
+    /// build parks on so its close is independent of drain order.
+    pub(crate) claims: Vec<ProducerId>,
 }
 
 /// Lexical position of a binding's installing statement: a binding at `idx` is visible to a
@@ -731,6 +755,46 @@ impl<'a> Bindings<'a> {
                 (!sealed.is_empty()).then(|| (key.to_vec(), sealed))
             })
             .collect()
+    }
+
+    /// Everything one scope publishes into a `CLOSE OVER` block's **implicit close**, gated by the
+    /// reading statement's own visibility `cutoff` — the same predicate every resolution ladder
+    /// applies, so the block closes over exactly what a statement at that position could have
+    /// resolved.
+    ///
+    /// Four tables, one snapshot, because the walk visits each scope once and the four answers are
+    /// consumed together. `types` is deliberately absent: a nominal type name reaches the block only
+    /// as an explicit capture, and a copied registration's dispatch token holds its [`KType`]s by
+    /// value, so dispatch inside the block does not depend on the type table travelling.
+    ///
+    /// Every carrier is lifted through **this table's own brand**, which is the region hosting the
+    /// descriptions the upgrade reads. Reading it off the table rather than off the scope is what
+    /// makes a `USING` window admissible: the window scope's region is the call site's, while its
+    /// borrowed façade — and every seal in it — lives in the opened module's.
+    pub(crate) fn visible_for_capture(&self, cutoff: Option<usize>) -> VisibleBindings {
+        let tables = self.tables.borrow();
+        VisibleBindings {
+            data: tables
+                .data
+                .iter()
+                .filter(|(_, entry)| Self::visible(entry.index, cutoff))
+                .map(|(name, entry)| (*name, self.brand.lift_resident(entry.sealed.duplicate())))
+                .collect(),
+            functions: tables
+                .functions
+                .values()
+                .flat_map(|bucket| bucket.iter())
+                .filter(|entry| Self::visible(entry.index, cutoff))
+                .map(|entry| self.brand.lift_resident(entry.sealed.duplicate()))
+                .collect(),
+            operators: tables
+                .operators
+                .iter()
+                .filter(|(_, entry)| Self::visible(entry.index, cutoff))
+                .map(|(probe, entry)| (*probe, self.brand.lift_resident(entry.sealed.duplicate())))
+                .collect(),
+            claims: tables.claims.visible_producers(cutoff),
+        }
     }
 
     /// True iff `types[name]` is bound at [`BindingIndex::BUILTIN`]. The

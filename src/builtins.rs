@@ -12,6 +12,7 @@ mod attr;
 mod await_body;
 mod branch_walk;
 mod catch;
+mod close_over;
 mod equality;
 mod eval;
 mod fn_def;
@@ -151,6 +152,7 @@ pub(crate) fn seed_builtins<'a>(
     match_case::register(scope, registries, gate);
     try_with::register(scope, registries, gate);
     using_scope::register(scope, registries, gate);
+    close_over::register(scope, registries, gate);
     catch::register(scope, registries, gate);
     attr::register(scope, registries, gate);
     eval::register(scope, registries, gate);

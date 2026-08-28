@@ -24,11 +24,14 @@ use crate::machine::core::bindings::powerset_probes;
 use crate::machine::core::bindings::{
     BindingIndex, DeclarationSite, SealedValue, TypeWritePolicy, WriteGate, WriteOp,
 };
-use crate::machine::core::carrier_witness::{DeliveredFunction, GroupSeal, OverloadSeal};
+use crate::machine::core::carrier_witness::{
+    DeliveredFunction, DeliveredOperatorGroup, GroupSeal, OverloadSeal,
+};
 use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::KeyElement;
 use crate::machine::model::KeywordSymbol;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::render_untyped_key;
 use crate::machine::model::{
     BinderSymbol, Carried, KObject, KType, ReductionMode, TypeSymbol, ValueSymbol, render_label,
 };
@@ -106,6 +109,27 @@ impl<'a> Scope<'a> {
         Ok(sealed)
     }
 
+    /// [`Self::adopt_for_capture`] + [`Self::bind_value_direct`] — the construction-door spelling of
+    /// a `CLOSE OVER` **capture**. The only difference from [`Self::bind_delivered_direct`] is the
+    /// adoption seam: severing rather than binding, so the copy always runs and the entry's composed
+    /// reach names only what the rebuilt value still borrows. This is the one public constructor of
+    /// [`AdoptSeam::Severing`](super::AdoptSeam) — a caller cannot select the always-copy
+    /// disposition any other way.
+    ///
+    /// Nothing is handed back: a capture is bound and read by name from inside the block, never
+    /// lifted into the capturing step's own terminal.
+    pub(crate) fn bind_delivered_severed(
+        &'a self,
+        name: ValueSymbol,
+        cell: &DeliveredCarried,
+        index: BindingIndex,
+        registries: &RunRegistries,
+        gate: &mut WriteGate,
+    ) -> Result<(), KError> {
+        let sealed = self.adopt_for_capture(cell, |carried| Ok(carried.object()))?;
+        self.bind_value_direct(name, sealed, index, registries, gate)
+    }
+
     /// Test affordance: bind an already-arena-resident `obj` under a region-pure reach, for an
     /// assertion suite that allocated the value itself and only needs it findable by name.
     /// `#[cfg(test)]`-gated so production value binds keep going through a door that derives the
@@ -143,6 +167,79 @@ impl<'a> Scope<'a> {
             builtin_shadow_guard: true,
         }
         .apply(self, registries, gate)
+    }
+
+    /// Copy a dispatch registration into this scope **pinned** — a `CLOSE OVER` capture pattern's
+    /// install, and implicit close's. `cell` is a registration lifted at its own defining scope;
+    /// [`OverloadSeal::of_delivered`] rests it here, which lodges the envelope's whole coverage in
+    /// this region's union bundle. That lodging *is* the pin: the callable stays where it was born
+    /// and this region holds its home — and, transitively, everything its captured scope's own
+    /// bindings reach — alive for this region's life.
+    ///
+    /// The bucket key and the dispatch token are re-derived from the callable's own signature, so
+    /// the copy lands in the same bucket it came out of with no key threaded alongside it.
+    ///
+    /// A [`KErrorKind::DuplicateOverload`] is **not** an error here, it is the shadow rule: the
+    /// capture walk runs innermost-first, so an entry whose token is already installed is one an
+    /// inner scope already shadowed. Every other write failure surfaces.
+    pub(crate) fn adopt_registration(
+        &'a self,
+        cell: &DeliveredFunction,
+        registries: &RunRegistries,
+        gate: &mut WriteGate,
+    ) -> Result<(), KError> {
+        let seal = OverloadSeal::of_delivered(self, cell);
+        let name = render_untyped_key(&seal.key, registries);
+        let outcome = WriteOp::Overload {
+            name,
+            index: BindingIndex::value(0),
+            seal,
+            builtin_shadow_guard: true,
+        }
+        .apply(self, registries, gate);
+        match outcome {
+            Err(error) if matches!(error.kind, KErrorKind::DuplicateOverload { .. }) => Ok(()),
+            other => other,
+        }
+    }
+
+    /// [`Self::adopt_registration`] for the operator registry: rest the lifted group record here
+    /// under `probe`, pinning its declaring region. [`Bindings::write_operator_group`] upserts, so a
+    /// probe an inner scope already installed is a silent no-op — the same shadow rule, stated by
+    /// the table verb rather than by an error arm.
+    pub(crate) fn adopt_operator_registration(
+        &'a self,
+        probe: KeywordSymbol,
+        cell: &DeliveredOperatorGroup,
+        registries: &RunRegistries,
+        gate: &mut WriteGate,
+    ) -> Result<(), KError> {
+        WriteOp::Group {
+            probes: vec![probe],
+            seal: GroupSeal::of_delivered(self, cell),
+            index: BindingIndex::value(0),
+        }
+        .apply(self, registries, gate)
+    }
+
+    /// Copy a value binding into this scope **pinned**, without the relocation a bind normally runs:
+    /// the envelope rests here, so the value stays in its producer region and this region's bundle
+    /// holds that region alive. Implicit close's module-binding install — a module's whole member
+    /// closure lives in its child scope's region, which pinning names in one claim.
+    ///
+    /// Distinct from [`Self::bind_delivered_severed`], which is the opposite verb for the opposite
+    /// purpose: an explicit data capture copies so the producer can die, a closed-over module pins
+    /// because copying through a module is [lazy close](../../../../roadmap/foundation/lazy-close.md)'s
+    /// job, not this form's.
+    pub(crate) fn adopt_binding_pinned(
+        &'a self,
+        name: ValueSymbol,
+        cell: &DeliveredCarried,
+        registries: &RunRegistries,
+        gate: &mut WriteGate,
+    ) -> Result<(), KError> {
+        let sealed = cell.rest_in(self.brand().handle());
+        self.bind_value_direct(name, sealed, BindingIndex::value(0), registries, gate)
     }
 
     /// Construction-time type registration (strict insert-if-absent, no builtin-shadow consult):

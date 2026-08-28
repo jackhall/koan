@@ -240,6 +240,29 @@ impl<'a> RegionBrand<'a> {
     ) -> Delivered<T, CarrierWitness, FrameStorage> {
         self.0.deliver_resident(value)
     }
+
+    /// **Lift** a carrier resting in this brand's region into a delivery envelope pinned by the
+    /// region's own owner (`Sealed → Delivered`): the library [`Delivered::lift`] upgrades the
+    /// sealed description's members `Weak → Rc` under that pin, so the value's whole reach travels
+    /// owned and the envelope survives its source frame's death.
+    ///
+    /// Keyed on the brand rather than on a scope because the region is what has to be right: the
+    /// arena hosting the description is this brand's, so a caller holding the brand a seal came off
+    /// cannot lift it against the wrong home. [`Scope::lift_resident`](crate::machine::core::Scope)
+    /// is the scope-side spelling, and a borrowed binding façade — whose region is the opened
+    /// module's, not its window scope's — reaches this door through its own brand.
+    pub(crate) fn lift_resident<T: Reattachable + DropFree>(
+        self,
+        sealed: crate::witnessed::Sealed<T, CarrierWitness>,
+    ) -> Delivered<T, CarrierWitness, FrameStorage> {
+        Delivered::lift(
+            crate::witnessed::Retained::from_sealed(sealed),
+            self.0
+                .host()
+                .upgrade()
+                .expect("a live region brand implies a live region owner"),
+        )
+    }
 }
 
 /// The allocation capability inside a reach-folding closure: the enclosing combinator

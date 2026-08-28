@@ -177,6 +177,13 @@ pub fn is_type_name(tok: &str) -> bool {
     chars.any(|c| c.is_ascii_lowercase())
 }
 
+/// The universal hole token `_`: a pure-symbol token, so [`is_keyword_token`] classifies it
+/// keyword-class and it needs no lexer arm of its own. Declared once for the whole run because two
+/// unrelated surfaces read the same token — `MATCH` / `TRY`'s catch-all arm tag, and a `CLOSE OVER`
+/// capture pattern's slot position (`(HELPER _)`) — and both recognize it by comparing against this
+/// memoized symbol rather than by re-classifying the spelling.
+pub static WILDCARD: StaticName<KeywordSymbol> = crate::static_name!(KeywordSymbol, "_");
+
 /// Every classified label newtype below wraps exactly one [`Symbol`] behind a private field and is
 /// minted only through the hidden `classify` funnel or [`declared`](ValueSymbol::declared), which
 /// run the class predicate on the text. There is no raw-`Symbol` constructor: a `Symbol` alone carries no

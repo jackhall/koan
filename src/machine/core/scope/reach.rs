@@ -269,15 +269,15 @@ impl<'a> Scope<'a> {
     }
 
     /// **Lift** a binding's dormant carrier into a delivery envelope pinned by this scope's own
-    /// region owner (`Sealed → Delivered`): the library [`Delivered::lift`] upgrades the sealed
-    /// description's members `Weak → Rc` under that pin, so the value's whole reach travels owned
-    /// and the envelope survives its source frame's death. `self` must be the **binding** scope —
-    /// the region the value lives in, whose arena hosts the description the upgrade reads.
+    /// region owner (`Sealed → Delivered`) — the scope-side spelling of
+    /// [`RegionBrand::lift_resident`](crate::machine::core::RegionBrand), which owns the mechanism.
+    /// `self` must be the **binding** scope — the region the value lives in, whose arena hosts the
+    /// description the upgrade reads.
     pub(crate) fn lift_resident<T: Reattachable + DropFree>(
         &self,
         sealed: Sealed<T, CarrierWitness>,
     ) -> Delivered<T, CarrierWitness, FrameStorage> {
-        Delivered::lift(crate::witnessed::Retained::from_sealed(sealed), self.home())
+        self.brand().lift_resident(sealed)
     }
 
     /// [`Self::resident`] handed out as a delivery envelope — the same value, the same member-less
@@ -451,8 +451,9 @@ impl<'a> Scope<'a> {
     ///
     /// The seam is [`AdoptSeam::Binding`], the only one that admits the escape-seam cost chooser:
     /// the adopting scope's region union owns the minted reach for the region's life, so pinning a
-    /// record in its producer region is affordable here. [`adopt_disposition`]
-    /// picks; this door runs the mechanism:
+    /// record in its producer region is affordable here. A capture that must sever instead takes
+    /// [`Self::adopt_for_capture`], which runs the same mechanism under the severing seam.
+    /// [`adopt_disposition`] picks; this door runs the mechanism:
     ///
     /// Both arms run the same engine ([`Self::relocate_delivered`]), differing only in the verb, and
     /// both hand back a product envelope that is already dest-resident with its composed reach
@@ -475,8 +476,38 @@ impl<'a> Scope<'a> {
     where
         P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
     {
+        self.adopt_at_bind_seam(cell, project, AdoptSeam::binding())
+    }
+
+    /// [`Self::adopt_for_binding`] at the **severing** seam — the door a `CLOSE OVER` capture binds
+    /// through. Same product (a dormant [`SealedValue`] a binding entry stores) and the same engine;
+    /// the only difference is the disposition, which is `Relocate` unconditionally, so the capture's
+    /// composed reach is release-exact and a data-only capture leaves the region it came from free
+    /// to die.
+    pub(crate) fn adopt_for_capture<P>(
+        &self,
+        cell: &DeliveredCarried,
+        project: P,
+    ) -> Result<SealedValue<'a>, KError>
+    where
+        P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
+    {
+        self.adopt_at_bind_seam(cell, project, AdoptSeam::severing())
+    }
+
+    /// The shared engine under both binding-shaped adoptions: ask [`adopt_disposition`] under
+    /// `seam`, name the verb, and run the relocation, resting the product in this region.
+    fn adopt_at_bind_seam<P>(
+        &self,
+        cell: &DeliveredCarried,
+        project: P,
+        seam: AdoptSeam,
+    ) -> Result<SealedValue<'a>, KError>
+    where
+        P: for<'b> Fn(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
+    {
         let disposition = cell.open(|live| match project(&live) {
-            Ok(object) => adopt_disposition(cell, object, &AdoptSeam::binding()),
+            Ok(object) => adopt_disposition(cell, object, &seam),
             // A projection failure surfaces from the engine below, which runs `project` again under
             // the fold's own pin and smuggles its `KError` back out; either verb does, so the
             // copying one stands in.
@@ -770,19 +801,39 @@ impl<'a> Scope<'a> {
 /// [`Binding`](Self::Binding) additionally admits the record cost chooser. It carries a
 /// [`BindSeam`] admission token whose field is private to this module, so no caller outside the
 /// module can select cost-driven record pinning.
+///
+/// [`Severing`](Self::Severing) is a binding whose *purpose* is severance — a `CLOSE OVER` capture.
+/// The copy-vs-pin question is a correctness question there, not a cost one: a `Pin` outcome would
+/// leave the block's region reaching into the region the capture was taken from, which is the one
+/// thing the form exists to prevent, and the copy is priced by writing the form
+/// ([design/lazy-closures.md](../../../../design/lazy-closures.md)). So the chooser does not run and
+/// the disposition is always `Relocate`. Its [`SeverSeam`] token is gated the same way
+/// [`BindSeam`] is.
 pub(crate) enum AdoptSeam {
     Retaining,
     Binding(BindSeam),
+    Severing(SeverSeam),
 }
 
 /// Admission token for [`AdoptSeam::Binding`]: an empty struct whose field is private to this
 /// module, so the bind-seam variant is unconstructible anywhere else.
 pub(crate) struct BindSeam(());
 
+/// Admission token for [`AdoptSeam::Severing`], gated exactly as [`BindSeam`] is: the sole
+/// constructor is [`AdoptSeam::severing`], so no caller outside this module can ask for the
+/// always-copy disposition without going through the capture door
+/// ([`Scope::bind_delivered_severed`](crate::machine::core::Scope)).
+pub(crate) struct SeverSeam(());
+
 impl AdoptSeam {
     /// The bind seam — private to this module by [`BindSeam`]'s own field.
     fn binding() -> Self {
         AdoptSeam::Binding(BindSeam(()))
+    }
+
+    /// The severing seam — private to this module by [`SeverSeam`]'s own field.
+    fn severing() -> Self {
+        AdoptSeam::Severing(SeverSeam(()))
     }
 }
 
@@ -812,6 +863,8 @@ enum AdoptDisposition {
 ///   head-deferred callable survive its producing step as its carrier rather than as a copy.
 /// - [`AdoptSeam::Binding`] copies every object, except that a top-level record routes the cost
 ///   chooser.
+/// - [`AdoptSeam::Severing`] copies every object unconditionally — the chooser is not consulted at
+///   all, because a `CLOSE OVER` capture that pinned would defeat the form.
 ///
 /// The shape rules behind that table:
 ///
@@ -837,6 +890,7 @@ fn adopt_disposition(
 ) -> AdoptDisposition {
     match seam {
         AdoptSeam::Retaining => AdoptDisposition::Pin,
+        AdoptSeam::Severing(_) => AdoptDisposition::Relocate,
         AdoptSeam::Binding(_) if !projected.needs_destination_door() => AdoptDisposition::Relocate,
         AdoptSeam::Binding(_) => cell
             .open_at()

@@ -35,8 +35,8 @@ pub use bindings::{
     NameLookup, WriteGate,
 };
 pub use carrier_witness::{
-    CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, OpenedFunction, SealedFunction,
-    SealedOperatorGroup, SplicedCell,
+    CarrierWitness, DeliveredCarried, DeliveredFunction, DeliveredOperatorGroup, OpenedFunction,
+    SealedFunction, SealedOperatorGroup, SplicedCell,
 };
 pub(crate) use carrier_witness::{GroupSeal, OverloadSeal, product_reaches_region, read_resting};
 pub use kerror::{KError, KErrorKind, TraceFrame};
@@ -47,7 +47,7 @@ pub(crate) use kfunction::action::{
     TailContract, require_bare_type_name, require_identifier_name, require_kexpression,
     require_ktype, scope_frame,
 };
-pub(crate) use kfunction::block_tail::{BlockBody, BlockScope, NoSeed, block_tail};
+pub(crate) use kfunction::block_tail::{BlockBody, BlockScope, NoSeed, block_tail, seed};
 pub(crate) use kfunction::body::{LeadingStatements, ReturnContract, body_statement_refs};
 pub(crate) use kfunction::exec::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
 pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction};

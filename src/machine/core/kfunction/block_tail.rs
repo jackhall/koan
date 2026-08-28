@@ -4,6 +4,9 @@
 //! seed, and how the body maps to the tail, so the shape of the
 //! [`Action::Tail`](crate::machine::Action::Tail) they produce is settled in one place.
 
+use std::rc::Rc;
+
+use crate::machine::CallFrame;
 use crate::machine::ReturnContract;
 use crate::machine::Scope;
 use crate::machine::core::RegionBrand;
@@ -28,12 +31,33 @@ pub(crate) enum BlockScope<'a> {
     /// A caller-allocated overlay scope in a cart-ancestor region. Its `id` becomes `block_entry`, and
     /// a `seed` binds into it directly.
     Overlay(&'a Scope<'a>),
+    /// A **freshly minted per-call frame's own scope** is the block, and the frame is installed by
+    /// the paired [`FramePlacement::FreshChild`](crate::machine::FramePlacement). The frame's child
+    /// scope lives in the fresh region, which nothing but the frame `Rc` names yet, so a `seed`
+    /// binds into it through the construction door — reached under
+    /// [`CallFrame::with_scope`](crate::machine::CallFrame::with_scope), whose `for<'b>` brand is
+    /// what confines the seeded values to the block's own region. `CLOSE OVER`'s block.
+    FrameScope(Rc<CallFrame>),
 }
 
-/// The seed type a caller that passes none names, so `None` has a type to be `None` of. A
-/// fn-pointer alias with elided lifetimes satisfies the seed bound at any `'a`; nothing is ever
-/// called through it.
-pub(crate) type NoSeed = fn(&Scope<'_>, &RunRegistries, &mut WriteGate);
+/// The seed type a caller that passes none names, so `None` has a type to be `None` of. The binder
+/// is written out rather than elided: elision would relate the reference and the scope's own
+/// lifetime independently, which is not the rank-2 shape the seed bound quantifies over. Nothing is
+/// ever called through it.
+pub(crate) type NoSeed = for<'b> fn(&'b Scope<'b>, &RunRegistries, &mut WriteGate);
+
+/// Bind a seed closure literal to the rank-2 signature [`block_tail`] quantifies over. `block_tail`
+/// takes the seed as an `Option<S>`, which puts the bound a layer away from the closure's own type:
+/// inference never sees it there and settles on independent lifetimes for the reference and the
+/// scope it points at, which is not the shape the quantifier admits. Routing the literal through
+/// this identity door states the signature at the point it is written, so its parameters can stay
+/// unannotated.
+pub(crate) fn seed<S>(f: S) -> S
+where
+    S: for<'b> FnOnce(&'b Scope<'b>, &RunRegistries, &mut WriteGate),
+{
+    f
+}
 
 /// Run a block and yield its last statement as the tail — the shared constructor. `brand` is the
 /// region the working copies of the body's statements are frozen into: the body arrives as raw AST
@@ -48,6 +72,12 @@ pub(crate) type NoSeed = fn(&Scope<'_>, &RunRegistries, &mut WriteGate);
 /// a statement yet — the construction door — but the seed itself is written builtin-side, where no
 /// gate can be minted. `block_tail` mints one for the duration of the seed call and hands it in,
 /// so the capability is the caller's to give, never the builtin's to take.
+///
+/// The seed's scope parameter is universally quantified: a [`BlockScope::FrameScope`] block is
+/// reached only inside its frame's `with_scope` open, at a brand that outlives nothing, so a seed
+/// cannot smuggle a value out of the block region it writes into. An overlay seed satisfies the
+/// same bound — its scope is already at the caller's `'a`, which is one instantiation of the
+/// quantifier.
 pub(crate) fn block_tail<'a, S>(
     brand: RegionBrand<'a>,
     frame_placement: FramePlacement,
@@ -58,7 +88,7 @@ pub(crate) fn block_tail<'a, S>(
     registries: &RunRegistries,
 ) -> Action<'a>
 where
-    S: FnOnce(&'a Scope<'a>, &RunRegistries, &mut WriteGate),
+    S: for<'b> FnOnce(&'b Scope<'b>, &RunRegistries, &mut WriteGate),
 {
     let block_entry = match block {
         BlockScope::None => {
@@ -72,6 +102,17 @@ where
                 seed(overlay, registries, &mut WriteGate::for_unpublished_scope());
             }
             BlockEntry::Overlay(overlay)
+        }
+        BlockScope::FrameScope(frame) => {
+            if let Some(seed) = seed {
+                // The frame was minted by this call's own builtin and no node has reached its child
+                // scope, so the same "unpublished scope" premise holds — structurally, not as a
+                // claim the caller makes.
+                frame.with_scope(|scope| {
+                    seed(scope, registries, &mut WriteGate::for_unpublished_scope())
+                });
+            }
+            BlockEntry::FrameScope(frame)
         }
     };
     // A body that is not a statement block splits to itself, so both no-split shapes take the same

@@ -10,7 +10,7 @@ pub(crate) mod values;
 pub use labels::symbols_minted;
 pub use labels::{
     BinderSymbol, ClassifiedSymbol, KeywordSymbol, LabelInterner, StaticName, Symbol, TypeSymbol,
-    ValueSymbol, is_type_name, wrong_binder_class,
+    ValueSymbol, WILDCARD, is_type_name, wrong_binder_class,
 };
 pub use operators::{
     FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode, binary_key, unary_key,
@@ -20,7 +20,6 @@ pub(crate) use types::IdentityBuildHasher;
 pub use types::TypeRegistry;
 pub use types::builtin_types;
 pub use types::most_specific_ktype;
-pub(crate) use types::summarize_dispatch;
 pub use types::{
     AnnouncedData, AnnouncedMember, AnnouncedWindow, Argument, DeclWindow, DeferredReturn,
     DeferredReturnSurface, DispatchToken, DispatchTokenElement, ExpressionSignature, KKind, KType,
@@ -29,6 +28,7 @@ pub use types::{
     UntypedKey, WindowView, is_keyword_token,
 };
 pub use types::{display_label, render_label};
+pub(crate) use types::{render_untyped_key, summarize_dispatch};
 pub use values::{
     Carried, ContainerSubstrate, Held, KKey, KObject, PartedCell, Scalar, ValueEqualityError,
 };

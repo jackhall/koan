@@ -10,7 +10,7 @@
 
 use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
-use crate::machine::model::{KeywordSymbol, Symbol, TypeSymbol, ValueSymbol};
+use crate::machine::model::{KeywordSymbol, Symbol, TypeSymbol, ValueSymbol, WILDCARD};
 use crate::machine::model::{TypeResolution, most_specific_ktype};
 
 use crate::machine::DeliveredCarried;
@@ -36,10 +36,6 @@ static IT: crate::machine::model::StaticName<ValueSymbol> = crate::static_name!(
 /// compare against a memoized name rather than a spelling.
 static ARROW: crate::machine::model::StaticName<KeywordSymbol> =
     crate::static_name!(KeywordSymbol, "->");
-
-/// The catch-all branch tag `_`, a pure-symbol token and so keyword-class.
-static WILDCARD: crate::machine::model::StaticName<KeywordSymbol> =
-    crate::static_name!(KeywordSymbol, "_");
 
 /// Read the MATCH / TRY `-> :T` slot from `ctx.args` (resolving a forward-referenced bare name
 /// against the call-site scope/chain) into the [`ReturnContract::Arm`] both `MATCH` and `TRY`
@@ -129,16 +125,16 @@ pub(crate) fn arm_tail<'a>(
     use crate::machine::BindingIndex;
     use crate::machine::FramePlacement;
     use crate::machine::WriteGate;
-    use crate::machine::{BlockBody, BlockScope, block_tail};
+    use crate::machine::{BlockBody, BlockScope, block_tail, seed};
     let overlay: &'a Scope<'a> = root.alloc_child_under();
     block_tail(
         root.brand(),
         FramePlacement::Inherit,
         BlockScope::Overlay(overlay),
-        // The seed's parameters are spelled out: `block_tail` takes it as a generic `Option<S>`, so
-        // the bound reaches the closure a layer away from its own type and infers nothing for it.
-        Some(
-            move |child: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate| {
+        // Through `seed`, which states the rank-2 signature where the literal is written: inside
+        // `block_tail`'s `Option<S>` the bound is a layer away from the closure's own type.
+        Some(seed(
+            move |child, registries: &RunRegistries, gate: &mut WriteGate| {
                 // Fused copy + bind of `it` at idx 0 in the arm's overlay scope: one structural copy
                 // made directly into the enclosing cart's region inside the envelope's pinned open, the
                 // binding storing the copy's derived reach (a residence-only host is dropped, so a tail
@@ -155,7 +151,7 @@ pub(crate) fn arm_tail<'a>(
                     gate,
                 );
             },
-        ),
+        )),
         BlockBody::Block(body_expr),
         Some(contract),
         registries,

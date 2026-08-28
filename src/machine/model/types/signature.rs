@@ -103,6 +103,25 @@ pub(crate) fn summarize_dispatch(
     format!("fn({rendered})")
 }
 
+/// Render an untyped bucket key as the capture-pattern surface that names it — `(HELPER _)`. Slots
+/// render as the wildcard token they were written with, because that is the only spelling a key
+/// carries: the key is the *untyped* identity, so nothing about the argument types survives in it.
+///
+/// The diagnostic currency for the forms that name a whole registration rather than one overload —
+/// a `CLOSE OVER` capture pattern, and the entries implicit close copies. [`summarize_dispatch`] is
+/// the peer for a single overload's typed identity.
+pub(crate) fn render_untyped_key(key: &[KeyElement], registries: &RunRegistries) -> String {
+    let rendered = key
+        .iter()
+        .map(|element| match element {
+            KeyElement::Keyword(symbol) => render_label(symbol.symbol(), registries),
+            KeyElement::Slot => "_".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("({rendered})")
+}
+
 /// True iff `s` classifies as a keyword (fixed token). See
 /// [tokens.md](../../../../design/typing/tokens.md): pure-symbol tokens (no ASCII letters)
 /// are always keywords; alphabetic tokens are keywords iff they have ≥2 ASCII-uppercase
