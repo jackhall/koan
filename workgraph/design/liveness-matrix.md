@@ -203,7 +203,9 @@ retention pressure valve, the recycling gate — is not yet planned. Two
 koan-side primitives the design leans on are tracked:
 
 - [CLOSE OVER](../../roadmap/foundation/close-over.md) — the capture-severing
-  copy that creates consolidation chances ahead of frame death.
+  copy that creates consolidation chances ahead of frame death — and
+  [lazy close](../../roadmap/foundation/lazy-close.md), the transitive
+  callable copy this design's consolidation gate actually fires.
 - [Yielding iterators](../../roadmap/foundation/yielding-iterators.md) —
   node-backed producers that yield many values before dying, the surface
   family the admission iterator belongs to.
