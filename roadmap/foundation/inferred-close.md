@@ -1,8 +1,8 @@
 # Inferred CLOSE
 
-**Problem.** [CLOSE OVER](close-over.md) requires an explicit capture list;
-the common case is "close over exactly what the block uses," which today
-must be spelled out by hand.
+**Problem.** [CLOSE OVER](../../design/lazy-closures.md) requires an
+explicit capture list; the common case is "close over exactly what the block
+uses," which today must be spelled out by hand.
 
 **Acceptance criteria.**
 
@@ -30,6 +30,5 @@ must be spelled out by hand.
 
 **Requires:**
 
-- [CLOSE OVER](close-over.md)
 
 **Unblocks:** none.

@@ -204,9 +204,22 @@ impl<'a> Scope<'a> {
     }
 
     /// [`Self::adopt_registration`] for the operator registry: rest the lifted group record here
-    /// under `probe`, pinning its declaring region. [`Bindings::write_operator_group`] upserts, so a
-    /// probe an inner scope already installed is a silent no-op — the same shadow rule, stated by
-    /// the table verb rather than by an error arm.
+    /// under `probe`, pinning its declaring region.
+    ///
+    /// **A probe this scope already holds is skipped.** Operator resolution
+    /// ([`Scope::resolve_operator_group_delivered`]) stops at the first scope with a visible entry
+    /// for the probe — pure innermost-wins, with none of the "keep walking past a bucket that does
+    /// not match" the function ladder does — so a use site that could have reached the outer
+    /// declaration does not exist: an inner one shadows it whole. Flattening the chain therefore
+    /// keeps the innermost entry and drops the rest, which is the resolution the walk would have
+    /// given, and the two declarations never meet.
+    ///
+    /// Reaching [`Bindings::write_operator_group`] with both would be worse than lossy. That verb
+    /// admits a second write only when the entries agree by record address or by
+    /// mode-plus-member-set, and refuses a disagreement as a chaining-mode conflict — a rule about
+    /// what *one scope's own declarations* may say, which two shadowing scopes were never subject
+    /// to. Handing it a flattened chain would turn a legal shadow into an error and make the block
+    /// non-transparent: a run that reduces outside it would refuse to compile inside.
     pub(crate) fn adopt_operator_registration(
         &'a self,
         probe: KeywordSymbol,
@@ -214,6 +227,11 @@ impl<'a> Scope<'a> {
         registries: &RunRegistries,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
+        // Unfiltered: everything seeded into a block scope sits at index 0, so no cutoff can hide a
+        // standing entry from the walk that is about to shadow it.
+        if self.bindings().lookup_operator_group(probe, None).is_some() {
+            return Ok(());
+        }
         WriteOp::Group {
             probes: vec![probe],
             seal: GroupSeal::of_delivered(self, cell),

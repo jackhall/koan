@@ -19,6 +19,7 @@ the link in each section to the relevant chapter.
 | `FN :{<fields>} -> <Type> = (<body>)`      | Anonymous function: a keyword-less record-schema shape. |
 | `<keyword> <args>`                         | Call a function by writing its shape (e.g. `ECHO 21`). |
 | `<fn> {name = value, ...}`                 | Call a captured function by named arguments. |
+| `CLOSE OVER (<captures>) (<block>)`        | Run a block over a region of its own, copying the named values in; only the block's last expression escapes, and it holds copies rather than the enclosing call. |
 
 ## Data types — see [5](05-tagged-unions.md), [7](07-records.md), [8](08-newtypes.md)
 

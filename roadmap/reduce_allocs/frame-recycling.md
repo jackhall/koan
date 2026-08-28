@@ -88,6 +88,5 @@ slate coverage is not optional.
 
 **Requires:**
 
-- [Close over](../foundation/close-over.md)
 
 **Unblocks:** none tracked yet.

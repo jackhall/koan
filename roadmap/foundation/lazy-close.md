@@ -3,10 +3,11 @@
 **Problem.** The copy verb treats functions and modules as borrow leaves:
 [`relocate_object_into`](../../src/machine/model/values/kobject.rs) carries
 their references verbatim under either verb, so a copied value containing a
-closure severs nothing for it, and [CLOSE OVER](close-over.md) can only pin
-callable captures. Fat frames therefore survive every severance surface
-through callable chains, and the escape seam cannot consolidate an escaping
-closure — the exact lever the liveness matrix wants
+closure severs nothing for it, and
+[CLOSE OVER](../../design/lazy-closures.md) can only pin callable captures.
+Fat frames therefore survive every severance surface through callable
+chains, and the escape seam cannot consolidate an escaping closure — the
+exact lever the liveness matrix wants
 ([liveness-matrix.md](../../workgraph/design/liveness-matrix.md)).
 
 **Acceptance criteria.**
@@ -49,7 +50,6 @@ closure — the exact lever the liveness matrix wants
 
 **Requires:**
 
-- [CLOSE OVER](close-over.md)
 
 **Unblocks:** none directly; the liveness-matrix consolidation gate consumes
 this when that design is planned.

@@ -207,6 +207,42 @@ return type, `:(FN () -> Str)`, is the type of that function — a function that
 returns a function declares the function type it produces, and the returned
 function is checked against it.
 
+### Severing captures with `CLOSE OVER`
+
+A closure holds on to the call it was defined inside — that is what makes
+`value` readable after `CONSTANTLY` has returned. When the returned function
+outlives that call by a long way, holding the whole call is more than you
+asked for. `CLOSE OVER` runs a block over a workspace of its own and *copies*
+the values you name into it, so what escapes carries copies rather than a
+handle on the call that built it:
+
+```koan
+FN (GREETER text :Str) -> :(FN () -> Str) =
+  CLOSE OVER (text) (
+    FN :{} -> Str = (text)
+  )
+LET hi = (GREETER "hi")
+PRINT (hi {})
+```
+
+```text
+hi
+```
+
+The parentheses after `CLOSE OVER` are the **capture list**: the names copied
+in, one per name, and `CLOSE OVER ()` names none. Inside the block you can see
+the captures, anything the block itself binds, and every top-level and
+built-in definition — but *not* the rest of the enclosing call, so a value
+from the enclosing function that you did not capture is unbound there.
+Definitions are the exception: shapes defined with `FN`, operators declared
+with `OP`, and modules all come along on their own, so the block can still
+call them.
+
+A shape is not a value, so a capture list names one by its call pattern with
+`_` in each slot: `CLOSE OVER ((HELPER _)) (...)` names the `HELPER x`
+function, spelling out what the block leans on. Only the block's last
+expression escapes; anything it binds along the way stays inside.
+
 ## There are no loops
 
 Koan has no loop constructs, and no arithmetic or comparison operators either.

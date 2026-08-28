@@ -15,7 +15,8 @@ three classes:
 - **Identifier** — lowercase-leading or `_`-leading names (`compare`,
   `my_var`, `_internal`, `int_ord`). A bare `_` is not an identifier: with
   no letters it is a pure-symbol token, keyword-class — the wildcard
-  TRY/MATCH match on.
+  TRY/MATCH match on, and the hole a `CLOSE OVER` capture pattern writes in
+  each slot position ([lazy-closures.md](../lazy-closures.md)).
 
 This split is what lets the language reserve a syntactic slot for type names
 without quoting. `FN (x :Number) -> Str = (...)` works because `Number` and

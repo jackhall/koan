@@ -202,10 +202,11 @@ the lexical structure, reach-mask carriers, the admission interface, the
 retention pressure valve, the recycling gate — is not yet planned. Two
 koan-side primitives the design leans on are tracked:
 
-- [CLOSE OVER](../../roadmap/foundation/close-over.md) — the capture-severing
-  copy that creates consolidation chances ahead of frame death — and
-  [lazy close](../../roadmap/foundation/lazy-close.md), the transitive
-  callable copy this design's consolidation gate actually fires.
+- [Lazy close](../../roadmap/foundation/lazy-close.md) — the transitive
+  callable copy this design's consolidation gate actually fires. Its explicit
+  counterpart, the capture-severing `CLOSE OVER` copy that creates
+  consolidation chances ahead of frame death, is shipped
+  ([lazy-closures.md](../../design/lazy-closures.md)).
 - [Yielding iterators](../../roadmap/foundation/yielding-iterators.md) —
   node-backed producers that yield many values before dying, the surface
   family the admission iterator belongs to.

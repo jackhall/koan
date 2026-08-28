@@ -338,8 +338,8 @@ fn resolve_pattern(
 /// surfaced members and its own region is pinned by them.
 ///
 /// Innermost-first, and the write doors settle the shadow rule from there: a duplicate dispatch
-/// token, an already-registered operator probe and a standing name all mean an inner scope's entry
-/// won.
+/// token, a probe the operator registry already holds, and a standing name all mean an inner
+/// scope's entry won.
 fn close_implicitly(
     scope: &Scope<'_>,
     frame: Option<&LexicalFrame>,

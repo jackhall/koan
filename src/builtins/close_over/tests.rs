@@ -452,6 +452,39 @@ fn an_escaped_body_applies_a_per_call_operator() {
     );
 }
 
+/// Two scopes on the walked chain may declare one operator probe differently — a bare `OP` and a
+/// `GROUP` whose member set is wider — and the inner one shadows the outer whole, since operator
+/// resolution stops at the first scope holding the probe. Implicit close keeps that innermost
+/// declaration and drops the outer one: flattening both into the block's single registry would hit
+/// the one-chaining-mode-per-scope rule, which shadowing scopes were never subject to, and turn a
+/// run that reduces outside the block into an error inside it.
+#[test]
+fn a_shadowed_operator_declaration_does_not_conflict_when_flattened() {
+    let source = |body: &str| {
+        format!(
+            "GROUP ops FOLD LEFT = (\
+                 (OP #(⊕) OVER Number = (left + right))\
+                 (OP #(⊖) OVER Number = (left))\
+                 (LET seeded = (1 ⊕ 2)))\n\
+             LET mk = (FN :{{n :Number}} -> Any = (\
+                 (OP #(⊕) OVER Str = (left))\
+                 (USING ops SCOPE {body})))\n\
+             LET r = (mk {{n = 1}})\n\
+             PRINT r\n"
+        )
+    };
+    let bare = output(&source("(1 ⊕ 2 ⊕ 3)"));
+    assert_eq!(
+        bare, "6\n",
+        "the run reduces through the window's group without the block"
+    );
+    assert_eq!(
+        output(&source("(CLOSE OVER () (1 ⊕ 2 ⊕ 3))")),
+        bare,
+        "wrapping the same run in the block must not change what the probe resolves to",
+    );
+}
+
 /// A per-call **module** binding is copied in pinned, so the escaped body still reads its members.
 #[test]
 fn an_escaped_body_reads_a_per_call_module() {

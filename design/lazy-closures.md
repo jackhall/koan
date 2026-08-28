@@ -30,12 +30,14 @@ CLOSE OVER (capture1 capture2 (HELPER _) ...) (
 )
 ```
 
-The block runs over a dedicated per-call-tier region with no `outer` link;
-the tail value returns homed there, and holders pin exactly that region plus
-any callable pins. The block scope's outer is the innermost eternal-homed
-scope of the enclosing chain — builtins and top-level definitions stay
-visible and contribute no reach; every per-call binding arrives through
-capture. Block-local bindings are invisible outside; only the tail escapes.
+The form is a builtin like any other
+([close_over.rs](../src/builtins/close_over.rs)). Its block runs over a
+dedicated per-call-tier region with no `outer` link; the tail value returns
+homed there, and holders pin exactly that region plus any callable pins. The
+block scope's outer is the innermost eternal-homed scope of the enclosing
+chain — builtins and top-level definitions stay visible and contribute no
+reach; every per-call binding arrives through capture. Block-local bindings
+are invisible outside; only the tail escapes.
 
 Capture kinds:
 
@@ -57,11 +59,47 @@ Capture kinds:
   outward resolution — an escaped closure's body dispatches after its
   ancestors are dead, so nothing may resolve outward later.
 
+A `USING` window's surfaced *registrations* and *modules* close implicitly by
+that rule; a surfaced value member is data, so it is named in the capture list
+like any other datum.
+
+Flattening a chain into one scope keeps the innermost entry for each name,
+token and operator probe alike. For the operator registry that is exact, not
+lossy: resolution stops at the first scope holding the probe, so a use site
+that could have reached an outer declaration does not exist, and the two never
+meet inside the block. Handing both to the registry instead would raise its
+one-chaining-mode-per-scope conflict — a rule about what a single scope's own
+declarations may say, which shadowing scopes were never subject to — and a run
+that reduces outside the block would refuse to compile inside it.
+
 A closure defined inside the block is severed by construction: its captured
 chain is the block scope, then the eternal tier.
 
 EVAL is permitted; names resolve against the block scope, the captures, and
 the eternal chain, and fail as unbound at that boundary otherwise.
+
+### Nothing the block reads is homed in the caller
+
+Severance removes the link that would keep the caller's frame alive, so every
+piece of state the block reads *after* that frame retires must be homed
+somewhere the block still names. Two placements follow, and both are
+invariants of the form rather than incidental choices:
+
+- **The body's working copies rest in the eternal region.** A block's
+  statements arrive as raw AST and are frozen into working form
+  ([`block_tail`](../src/machine/core/kfunction/block_tail.rs)); the block's
+  tail is read back from the block frame's own cart, which holds nothing of
+  the caller, so freezing at the call site would leave that read dangling.
+  The eternal tier is the one region the block scope already names — its
+  lexical outer — and it contributes no reach, so the choice retains nothing.
+  Its cost is that the copy lives as long as the run does, one per evaluation
+  of the form.
+- **A block statement's result rests in the block's own region.** A statement
+  binds in the block, so its terminal is destined at the block frame's region
+  rather than at the consuming slot's cart
+  ([harness.rs](../src/machine/execute/harness.rs)). Naming the cart would
+  have the caller's region retain the block's while the block retains a
+  capture back out of it — a ring neither side frees.
 
 ## Lazy close: the copy verb through callables
 
@@ -93,7 +131,9 @@ empty capture, distinct from inference.
 
 ## Open work
 
-- [CLOSE OVER](../roadmap/foundation/close-over.md) — the explicit surface.
+- [Fresh-cart block freeze](../roadmap/foundation/fresh-cart-block-freeze.md)
+  — homing a severed block's frozen body at the cart its tail installs, so a
+  `CLOSE OVER` evaluated repeatedly stops growing the eternal region.
 - [Lazy close](../roadmap/foundation/lazy-close.md) — the transitive
   callable copy and its pin-not-park downgrade rule; the liveness matrix
   ([liveness-matrix.md](../workgraph/design/liveness-matrix.md)) consumes it
