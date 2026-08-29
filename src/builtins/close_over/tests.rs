@@ -11,6 +11,7 @@
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
+use crate::machine::core::KoanRegionExt;
 use crate::machine::model::KObject;
 use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::{region_metrics, reset_region_metrics};
@@ -605,5 +606,135 @@ fn the_escaped_tail_is_a_callable_value() {
     assert!(
         matches!(escaped, KObject::KFunction(..)),
         "the block's tail escapes as the closure it built",
+    );
+}
+
+// ---------- AC: the block's working copies die with the cart ----------
+
+/// Run-root bytes reserved across `EVALS` fresh top-level evaluations of `form`, after a warmup
+/// window that climbs the bump's chunk ladder.
+///
+/// `allocated_total` weighs both halves of the region — the typed sub-arena and the bump the
+/// `Drop`-free families live in — and the bump half reports *reserved* chunk capacity, which
+/// arrives in chunk-sized steps that double as the bump grows. So the shape is the one
+/// `repeated_user_fn_calls_do_not_grow_run_root_per_call` (`fn_def::tests::arena`) establishes: the
+/// warmup climbs the ladder before the baseline is taken, and the measured window is long enough
+/// that per-evaluation growth would dominate a single step.
+fn run_root_growth(form: &str) -> u64 {
+    const WARMUP: usize = 200;
+    const EVALS: usize = 4000;
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    for _ in 0..WARMUP {
+        let _ = test_run.run_one(test_run.parse_one(form));
+    }
+    let baseline = region.region().allocated_total();
+    for _ in 0..EVALS {
+        let _ = test_run.run_one(test_run.parse_one(form));
+    }
+    region.region().allocated_total() - baseline
+}
+
+/// Reserved capacity arrives in doubling chunk steps, so two windows measuring the same per-
+/// evaluation cost can still differ by a whole step. Every bound comparing one window against
+/// another admits that much before it reads a difference as a leak.
+const CHUNK_SLACK: u64 = 512 * 1024;
+
+/// The criterion's direct form. A `CLOSE OVER` evaluated over and over leaves the run-root arena
+/// flat: its block's statements are frozen into the cart the form installs, so each evaluation's
+/// copies are released with that cart instead of accumulating in the run root.
+///
+/// Two bounds, because "flat" has two readings and the block's statements have to be absent from
+/// both. Against a **plain statement** run the same number of times: whatever the harness spends
+/// per top-level dispatch, the form spends no more, so the block's own copies are not landing
+/// beside it. And across **block size**: a six-statement block costs no more than a two-statement
+/// one, which is the reading that fails outright if the statements are frozen into the run root —
+/// there the difference would be four working copies per evaluation.
+#[test]
+fn repeated_close_over_leaves_run_root_flat() {
+    let plain = run_root_growth("1");
+    let two = run_root_growth("CLOSE OVER () ((LET b = (1)) (b))");
+    let six = run_root_growth(
+        "CLOSE OVER () ((LET b = (1)) (LET c = (1)) (LET d = (1)) (LET e = (1)) (LET f = (1)) (b))",
+    );
+
+    let budget = 3 * plain + CHUNK_SLACK;
+    assert!(
+        two < budget,
+        "a repeated `CLOSE OVER` grew the run root by {two} bytes against a plain statement's \
+         {plain} (expected < {budget}) — the block is leaving residue behind",
+    );
+    let budget = two + CHUNK_SLACK;
+    assert!(
+        six < budget,
+        "run-root growth scaled with block size: {six} bytes for six statements against {two} for \
+         two (expected < {budget}) — the statements are being frozen into the run root",
+    );
+}
+
+/// A body that is not a statement block takes the no-split freeze — the whole expression is the
+/// tail and the leading run is empty — and it must land in the cart just the same.
+#[test]
+fn single_expression_close_over_leaves_run_root_flat() {
+    let plain = run_root_growth("1");
+    let single = run_root_growth("CLOSE OVER () (1)");
+    let budget = 3 * plain + CHUNK_SLACK;
+    assert!(
+        single < budget,
+        "a repeated single-expression `CLOSE OVER` grew the run root by {single} bytes against a \
+         plain statement's {plain} (expected < {budget})",
+    );
+}
+
+/// Carried through a recursion, the form is re-entered once per level while every level's frame is
+/// still live — the shape that made a run-root-homed freeze unbounded. Measured as a *depth*
+/// differential: the same countdown at depth 4 and depth 40, each run the same number of times. A
+/// per-level leak would cost the deep window roughly ten times the shallow one; a freeze homed in
+/// the cart costs the two the same, because the copies die with each level's block.
+///
+/// The countdown is the `Nat` (`Zero | Succ Nat`) unwind `fn_def::tests::tail_region_turnover`
+/// uses, with the form as a leading statement of the body so the recursion carries it.
+#[test]
+fn recursion_carried_close_over_stays_flat_in_depth() {
+    fn countdown_growth(depth: usize) -> u64 {
+        const WARMUP: usize = 20;
+        const RUNS: usize = 200;
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let mut source = String::from(
+            "UNION Nat = (Zero :Null Succ :Nat)\n\
+             FN (COUNTDOWN n :Nat) -> Str = (\
+                 (CLOSE OVER () ((LET b = (1)) (b)))\
+                 (MATCH (n) -> :Str WITH (\
+                     Zero -> (\"done\")\
+                     Succ -> (COUNTDOWN it)\
+                 ))\
+             )\n\
+             LET n0 = (Nat (Zero null))\n",
+        );
+        for level in 1..=depth {
+            source.push_str(&format!("LET n{level} = (Nat (Succ n{}))\n", level - 1));
+        }
+        test_run.run(&source);
+        let call = format!("COUNTDOWN n{depth}");
+        for _ in 0..WARMUP {
+            let _ = test_run.run_one(test_run.parse_one(&call));
+        }
+        let baseline = region.region().allocated_total();
+        for _ in 0..RUNS {
+            let _ = test_run.run_one(test_run.parse_one(&call));
+        }
+        region.region().allocated_total() - baseline
+    }
+
+    let shallow = countdown_growth(4);
+    let deep = countdown_growth(40);
+    let budget = 2 * shallow + CHUNK_SLACK;
+    assert!(
+        deep < budget,
+        "run-root growth scaled with recursion depth: {deep} bytes at depth 40 against {shallow} \
+         at depth 4 (expected < {budget}) — a carried `CLOSE OVER` is leaving residue per level",
     );
 }

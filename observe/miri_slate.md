@@ -184,6 +184,14 @@ the table's own region, so a mis-named home dangles at exactly this read. Both r
 completion under Miri, which is also where a retention ring between the block region and the frame
 it closed over would surface as a leak.
 
+Both also carry the block's **own body** through the same region. The statements are frozen as
+working copies at the installed cart's brand (`ActionKind::TailRaw`), so what the escaped closure
+runs is read out of the block region rather than out of a longer-lived one: a copy homed at the
+deciding step's brand would dangle here the moment the producer chain frees. The run-root growth
+bounds that pin the cart as the copies' home
+(`repeated_close_over_leaves_run_root_flat` and its siblings) are value asserts on the allocation
+substrate and run under plain `cargo test`; the read-after-free shape is what these two cover.
+
 - `a_severed_closure_still_answers_after_its_producers_die`
 - `a_captured_registration_runs_after_its_producers_die`
 
