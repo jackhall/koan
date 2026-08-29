@@ -24,7 +24,7 @@ use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeResolution;
-use crate::machine::model::{BinderSymbol, Carried, Module};
+use crate::machine::model::{BinderSymbol, Carried, Module, TypeSymbol};
 use crate::machine::model::{CarriedFamily, Held, KObject, KType, PartedCell, TypeNode};
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
@@ -50,17 +50,20 @@ fn route<'a>(result: Result<StepCarried<'a>, KError>) -> crate::machine::Action<
 /// The `field` member name, carried as the classification of the channel it arrived on rather
 /// than as text a consumer re-derives a class from. A member probe reads only [`Self::symbol`],
 /// so the spelling is rendered where a diagnostic quotes it and nowhere else.
-enum FieldName {
+enum FieldName<'a> {
     /// A name token the parse classified and interned. Its class *is* the channel it arrived on,
     /// which is the map a member probe keys.
     Token(BinderSymbol),
-    /// A type rendered from a handle rather than read off a token — a compound like
-    /// `List<Number>`. It binds nowhere, so it names no member and every consumer treats it as an
-    /// immediate miss reporting this text.
-    Rendered(String),
+    /// A name that classifies as neither channel: a runtime string that spells no token, or a type
+    /// rendered from a handle naming no bare token (a compound like `List<Number>`). It binds
+    /// nowhere, so it names no member and every consumer treats it as an immediate miss reporting
+    /// this text. The runtime-string producer borrows the string it read, so the read that
+    /// succeeds allocates nothing; the rendering producer is a miss by construction and owns the
+    /// text it reports.
+    Rendered(Cow<'a, str>),
 }
 
-impl FieldName {
+impl<'a> FieldName<'a> {
     /// The classification the name arrived under, or `None` for a rendering that names no member.
     fn class(&self) -> Option<BinderSymbol> {
         match self {
@@ -88,7 +91,7 @@ impl FieldName {
                 class.symbol(),
                 registries,
             )),
-            FieldName::Rendered(text) => Cow::Borrowed(text),
+            FieldName::Rendered(text) => Cow::Borrowed(text.as_ref()),
         }
     }
 }
@@ -96,10 +99,10 @@ impl FieldName {
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
 /// type-channel leaf token (resolved or rendered), else a `MissingArg`. Each channel hands over the
 /// class it arrived on, so no consumer re-derives the class by a predicate over text.
-fn read_field_name(
-    args: BoundArgs<'_, '_>,
+fn read_field_name<'a>(
+    args: BoundArgs<'a, '_>,
     registries: &RunRegistries,
-) -> Result<FieldName, KError> {
+) -> Result<FieldName<'a>, KError> {
     if let Some(v) = args.identifier(&SLOTS.field) {
         // The parse classified this token value-side, so the channel tag is settled and nothing
         // here reads a spelling.
@@ -111,9 +114,15 @@ fn read_field_name(
     if let Some(kt) = args.ktype(&SLOTS.field) {
         // The bind seam lowers a `Type`-token field only when the name is registry-known — that is,
         // a primitive (`Ordered.Str`); every user type name stays unlowered and takes the arm
-        // above. A primitive carries no interned name to recover a class from, and names no member
-        // either, so this classifies its rendering and misses.
-        return Ok(classify_derived_field(&kt.name(registries), registries));
+        // above. The handle answers its own bare name as the symbol the registry already holds, so
+        // the class is recovered with no text rendered and no digest re-derived. It names no member
+        // either way, and the miss below is what reports the name. A handle answering no bare name
+        // is compound surface syntax (`List<Number>`), which classifies as nothing and rides as the
+        // rendering only that miss reads.
+        return Ok(match kt.name_symbol(registries) {
+            Some(name) => FieldName::Token(BinderSymbol::Type(name)),
+            None => FieldName::Rendered(Cow::Owned(kt.name(registries))),
+        });
     }
     Err(KError::new(KErrorKind::MissingArg("field".to_string())))
 }
@@ -121,28 +130,28 @@ fn read_field_name(
 /// Read the `field` member name off a `:Str` slot — the dynamic read's counterpart to
 /// [`read_field_name`]. The slot's type admits no other object shape, so the string arm is the
 /// whole vocabulary.
-fn read_dynamic_field_name(
-    args: BoundArgs<'_, '_>,
+fn read_dynamic_field_name<'a>(
+    args: BoundArgs<'a, '_>,
     registries: &RunRegistries,
-) -> Result<FieldName, KError> {
+) -> Result<FieldName<'a>, KError> {
     match args.object(&SLOTS.field) {
         Some(KObject::KString(text)) => Ok(classify_derived_field(text, registries)),
         Some(_) | None => Err(KError::new(KErrorKind::MissingArg("field".to_string()))),
     }
 }
 
-/// Classify a member name that reached the read as text rather than as a token the parse minted —
-/// a rendered type handle, or the runtime string [`read_dynamic_field_name`] reads. This is the
+/// Classify a member name that reached the read as text rather than as a token the parse minted:
+/// the runtime string [`read_dynamic_field_name`] reads. This is the
 /// value channel's one derived-symbol door: [`BinderSymbol::declared`] classifies and interns in
 /// one step, so a spelling read off text keys the same symbol a bare token of that spelling would
 /// have minted. Interning here is what widens the label table past the run's source text — see
 /// [design/label-interning.md](../../design/label-interning.md). Text that classifies as neither
 /// channel names no binding, so it rides as a rendering — a digest-keyed record probe and an
 /// immediate module miss.
-fn classify_derived_field(text: &str, registries: &RunRegistries) -> FieldName {
+fn classify_derived_field<'a>(text: &'a str, registries: &RunRegistries) -> FieldName<'a> {
     match BinderSymbol::declared(text, &registries.labels) {
         Some(class) => FieldName::Token(class),
-        None => FieldName::Rendered(text.to_string()),
+        None => FieldName::Rendered(Cow::Borrowed(text)),
     }
 }
 
@@ -359,14 +368,21 @@ fn module_lhs<'a>(
 fn access_type_member<'a>(
     scope: &Scope<'a>,
     kt: KType,
-    field: &FieldName,
+    field: &FieldName<'_>,
     registries: &RunRegistries,
 ) -> Result<StepCarried<'a>, KError> {
-    let types = &registries.types;
-    match types.node(kt) {
-        // ATTR over a first-class signature value — answered from the owned schema. The
-        // projected member is a clone out of that schema, allocated fresh into the read-site
-        // scope's own region.
+    /// What the lhs node offers this read, decided under the registry borrow so the node is
+    /// read in place rather than cloned out: a signature answers the member handle it keys (or
+    /// the miss), an abstract identity answers its own name, and every other node carries no
+    /// members at all. Each arm is a `Copy` payload, so nothing borrows past the read.
+    enum Projection {
+        Signature(Option<KType>),
+        Abstract(TypeSymbol),
+        NoMembers,
+    }
+    let projection = registries.types.with_node(kt, |node| match node {
+        // ATTR over a first-class signature value — answered from the owned schema, which the
+        // read borrows rather than cloning; the member handle it names is copied out.
         TypeNode::Signature { schema, .. } => {
             // The field arrives already classified by the channel it came in on, and the schema's
             // partition is keyed by that same classification: a Type-class name can key only the
@@ -380,19 +396,25 @@ fn access_type_member<'a>(
                 Some(BinderSymbol::Value(name)) => schema.value_slots.get(&name),
                 None => None,
             };
-            match member {
-                Some(member) => Ok(StepCarried::born(scope.resident(Carried::Type(*member)))),
-                None => Err(KError::new(KErrorKind::ShapeError(format!(
-                    "signature `{}` has no member `{}`",
-                    kt.name(registries),
-                    field.text(registries)
-                )))),
-            }
+            Projection::Signature(member.copied())
         }
-        TypeNode::AbstractType { name, .. } => Err(abstract_type_has_no_members(
+        TypeNode::AbstractType { name, .. } => Projection::Abstract(*name),
+        _ => Projection::NoMembers,
+    });
+    match projection {
+        // The member type is allocated fresh into the read-site scope's own region.
+        Projection::Signature(Some(member)) => {
+            Ok(StepCarried::born(scope.resident(Carried::Type(member))))
+        }
+        Projection::Signature(None) => Err(KError::new(KErrorKind::ShapeError(format!(
+            "signature `{}` has no member `{}`",
+            kt.name(registries),
+            field.text(registries)
+        )))),
+        Projection::Abstract(name) => Err(abstract_type_has_no_members(
             &crate::machine::model::render_label(name.symbol(), registries),
         )),
-        _ => Err(KError::new(KErrorKind::TypeMismatch {
+        Projection::NoMembers => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "a type with members".to_string(),
             got: kt.name(registries),
@@ -422,7 +444,7 @@ fn abstract_type_has_no_members(name: &str) -> KError {
 /// falls to the `other` arm.
 fn wrapped_field_cell<'w>(
     target: &'w KObject<'w>,
-    field: &FieldName,
+    field: &FieldName<'_>,
     registries: &RunRegistries,
 ) -> Result<PartedCell<'w>, KError> {
     match target {
@@ -460,7 +482,7 @@ fn wrapped_field_cell<'w>(
 /// door; a type member is owned data that clones into the read site's own region.
 fn access_field<'a>(
     step: &StepAllocator<'a>,
-    field: &FieldName,
+    field: &FieldName<'_>,
     lhs: &DeliveredCarried,
     registries: &RunRegistries,
 ) -> Result<StepCarried<'a>, KError> {
@@ -518,7 +540,7 @@ fn access_field<'a>(
 /// constraint.)
 fn access_module_member<'a>(
     m: &'a Module<'a>,
-    field: &FieldName,
+    field: &FieldName<'_>,
     registries: &RunRegistries,
 ) -> Result<StepCarried<'a>, KError> {
     let module_scope = m.child_scope();
