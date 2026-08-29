@@ -64,7 +64,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             // A type-language carrier under a value-classified name is a cross-kind error. A module
             // is *not* one: it is a value, and a value-classified name is exactly where it belongs.
             let type_kind = match rhs {
-                Held::Type(kt) if matches!(ctx.types().node(*kt), TypeNode::Signature { .. }) => {
+                Held::Type(kt)
+                    if ctx
+                        .types()
+                        .with_node(*kt, |n| matches!(n, TypeNode::Signature { .. })) =>
+                {
                     Some("signature")
                 }
                 Held::Type(_) | Held::UnresolvedType(_) => Some("type"),
