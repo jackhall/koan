@@ -119,7 +119,7 @@ fn the_empty_program_stays_within_its_startup_bound() {
 /// allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_wide_shape_stays_within_its_per_step_bound() {
-    const BOUND: u64 = 22_660;
+    const BOUND: u64 = 22_560;
     let delta = allocations_for(
         include_str!("../audit/shapes/wide_n100.koan"),
         "audit/shapes/wide_n100.koan",
@@ -145,7 +145,7 @@ fn the_wide_shape_stays_within_its_per_step_bound() {
 /// per-frame allocation would add.
 #[test]
 fn the_deep_shape_stays_within_its_per_frame_bound() {
-    const BOUND: u64 = 23_440;
+    const BOUND: u64 = 23_340;
     let delta = allocations_for(
         include_str!("../audit/shapes/deep_n100.koan"),
         "audit/shapes/deep_n100.koan",

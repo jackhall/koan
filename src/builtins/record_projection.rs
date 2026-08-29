@@ -22,6 +22,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Symbol;
+use crate::witnessed::BumpVec;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { fields, record } }
@@ -40,7 +41,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // A computed field list is out of scope: each part must be a bare identifier, which arrives
     // as the symbol the parse minted for it — the same currency the narrowed record type keys by,
     // and the interner the diagnostics below render through already holds its spelling.
-    let mut names: Vec<Symbol> = Vec::with_capacity(fields_expr.parts.len());
+    //
+    // The list is read by the projection below and never leaves the step, so it stages on the step
+    // scratch. One part contributes at most one name — the loop either pushes or returns — so the
+    // part count is an exact upper bound and the capacity is taken up front rather than grown.
+    let mut names: BumpVec<'a, Symbol> =
+        BumpVec::with_capacity_in(fields_expr.parts.len(), ctx.scratch);
     for part in fields_expr.parts {
         match part.value {
             ExpressionPart::Identifier(v) => {
