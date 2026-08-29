@@ -71,7 +71,6 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     // looser overload must shadow this outer more-specific one on the ordinary walk.
     register_overload_at(
         outer,
-        "outer_specific",
         outer_sig,
         body_outer_number,
         BindingIndex::value(1),
@@ -93,7 +92,6 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     };
     register_builtin(
         inner,
-        "inner_loose",
         inner_sig,
         body_inner_any,
         &RunRegistries::new(),
@@ -141,7 +139,6 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     let scope = test_run.scope;
     register_builtin(
         scope,
-        "any_first",
         one_slot_sig("v", KType::ANY),
         body_marker_any,
         test_run.registries(),
@@ -149,7 +146,6 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     );
     register_builtin(
         scope,
-        "ident_second",
         one_slot_sig("v", KType::IDENTIFIER),
         body_identifier,
         test_run.registries(),
@@ -206,7 +202,6 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     };
     register_builtin(
         scope,
-        "FOO",
         sig,
         body_lowercase,
         &registries,

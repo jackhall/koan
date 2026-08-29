@@ -85,15 +85,13 @@ pub(crate) fn sig<'a>(return_type: KType, elements: Vec<SignatureElement>) -> Si
 /// them off the expression's cached plan.
 pub(crate) fn register_builtin<'a>(
     scope: &'a Scope<'a>,
-    name: &str,
     signature: SignatureDraft<'a>,
     body: crate::machine::ActionFn,
     registries: &RunRegistries,
     gate: &mut WriteGate,
 ) {
     let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), registries);
-    let _ =
-        scope.register_function_direct(name.into(), &cell, BindingIndex::BUILTIN, registries, gate);
+    let _ = scope.register_function_direct(&cell, BindingIndex::BUILTIN, registries, gate);
 }
 
 /// Test-only: register one overload at an explicit [`BindingIndex`]. A test uses this to
@@ -103,7 +101,6 @@ pub(crate) fn register_builtin<'a>(
 #[cfg(test)]
 pub(crate) fn register_overload_at<'a>(
     scope: &'a Scope<'a>,
-    name: &str,
     signature: SignatureDraft<'a>,
     body: crate::machine::ActionFn,
     index: BindingIndex,
@@ -112,7 +109,7 @@ pub(crate) fn register_overload_at<'a>(
 ) {
     let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), registries);
     scope
-        .register_function_direct(name.into(), &cell, index, registries, gate)
+        .register_function_direct(&cell, index, registries, gate)
         .expect("register_overload_at: user-index overload should not collide with a builtin");
 }
 

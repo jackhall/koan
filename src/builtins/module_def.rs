@@ -248,17 +248,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
+    crate::builtins::register_builtin(scope, module_sig(KType::IDENTIFIER), body, registries, gate);
     crate::builtins::register_builtin(
         scope,
-        "MODULE",
-        module_sig(KType::IDENTIFIER),
-        body,
-        registries,
-        gate,
-    );
-    crate::builtins::register_builtin(
-        scope,
-        "MODULE",
         module_sig(KType::of_kind(KKind::ProperType)),
         body_type_named,
         registries,

@@ -141,7 +141,6 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     let scope = test_run.scope;
     register_builtin(
         scope,
-        "DEFERTEST",
         SignatureDraft {
             return_type: ReturnType::Resolved(KType::STR),
             elements: vec![SignatureElement::Keyword(probe_symbol("DEFERTEST"))],

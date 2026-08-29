@@ -164,7 +164,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             arg(registries, &SLOTS.record, types.record(Record::new())),
         ],
     );
-    crate::builtins::register_builtin(scope, "FROM", signature, body, registries, gate);
+    crate::builtins::register_builtin(scope, signature, body, registries, gate);
 }
 
 #[cfg(test)]

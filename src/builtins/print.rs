@@ -39,5 +39,5 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             arg(registries, &SLOTS.msg, KType::ANY),
         ],
     );
-    crate::builtins::register_builtin(scope, "PRINT", signature, body, registries, gate);
+    crate::builtins::register_builtin(scope, signature, body, registries, gate);
 }

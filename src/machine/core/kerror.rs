@@ -77,7 +77,9 @@ pub enum KErrorKind {
         first: usize,
         second: usize,
     },
-    /// Distinct from `Rebind` — collision is per-signature within the same name's bucket.
+    /// Distinct from `Rebind` — collision is per-signature within one bucket. `name` is the
+    /// bucket's whole untyped key as a capture pattern (`(DOUBLE _)`), rendered on this arm from
+    /// the seal the write already holds; `signature` is the standing entry's typed identity.
     DuplicateOverload {
         name: String,
         signature: String,

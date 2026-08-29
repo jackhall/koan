@@ -396,28 +396,19 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         )
     };
     use crate::builtins::register_builtin;
-    register_builtin(scope, "FN", typeexpr_sig(), body, registries, gate);
-    register_builtin(scope, "FN", sigil_sig(), body, registries, gate);
+    register_builtin(scope, typeexpr_sig(), body, registries, gate);
+    register_builtin(scope, sigil_sig(), body, registries, gate);
     register_builtin(
         scope,
-        "FN",
         value_named_return_sig(),
         body_value_named_return,
         registries,
         gate,
     );
-    register_builtin(
-        scope,
-        "FN",
-        record_sig(),
-        body_record_schema,
-        registries,
-        gate,
-    );
+    register_builtin(scope, record_sig(), body_record_schema, registries, gate);
     for return_type in [KType::of_kind(KKind::ProperType), KType::SIGILED_TYPE_EXPR] {
         register_builtin(
             scope,
-            "LET",
             combined_sig(KType::IDENTIFIER, KType::KEXPRESSION, return_type),
             body_let_combined,
             registries,
@@ -426,7 +417,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     }
     register_builtin(
         scope,
-        "LET",
         combined_sig(KType::IDENTIFIER, KType::KEXPRESSION, KType::IDENTIFIER),
         body_value_named_return,
         registries,
@@ -443,7 +433,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // parenthesized value bind `LET f = (FN :{…} -> <Return> = (…))` stays the spelling.
     register_builtin(
         scope,
-        "LET",
         combined_sig(
             KType::of_kind(KKind::ProperType),
             KType::KEXPRESSION,

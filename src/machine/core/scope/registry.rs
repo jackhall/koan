@@ -31,7 +31,6 @@ use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::KeyElement;
 use crate::machine::model::KeywordSymbol;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::render_untyped_key;
 use crate::machine::model::{
     BinderSymbol, Carried, KObject, KType, ReductionMode, TypeSymbol, ValueSymbol, render_label,
 };
@@ -154,14 +153,12 @@ impl<'a> Scope<'a> {
     /// composed.
     pub(crate) fn register_function_direct(
         &'a self,
-        name: String,
         cell: &DeliveredFunction,
         index: BindingIndex,
         registries: &RunRegistries,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
         WriteOp::Overload {
-            name,
             index,
             seal: OverloadSeal::of_delivered(self, cell),
             builtin_shadow_guard: true,
@@ -188,12 +185,9 @@ impl<'a> Scope<'a> {
         registries: &RunRegistries,
         gate: &mut WriteGate,
     ) -> Result<(), KError> {
-        let seal = OverloadSeal::of_delivered(self, cell);
-        let name = render_untyped_key(&seal.key, registries);
         let outcome = WriteOp::Overload {
-            name,
             index: BindingIndex::value(0),
-            seal,
+            seal: OverloadSeal::of_delivered(self, cell),
             builtin_shadow_guard: true,
         }
         .apply(self, registries, gate);

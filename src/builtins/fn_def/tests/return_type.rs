@@ -82,8 +82,8 @@ fn return_type_only_difference_is_a_duplicate_overload() {
         Ok(()) => panic!("return-type-only overload should be rejected as a duplicate"),
     };
     assert!(
-        matches!(err.kind, KErrorKind::DuplicateOverload { ref name, .. } if name == "DOUBLE"),
-        "expected DuplicateOverload for DOUBLE, got {err}",
+        matches!(err.kind, KErrorKind::DuplicateOverload { ref name, .. } if name == "(DOUBLE _)"),
+        "expected DuplicateOverload for (DOUBLE _), got {err}",
     );
 }
 

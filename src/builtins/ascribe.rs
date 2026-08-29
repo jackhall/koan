@@ -339,15 +339,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             arg(registries, &SLOTS.s, KType::of_kind(KKind::Signature)),
         ],
     );
-    crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque, registries, gate);
-    crate::builtins::register_builtin(
-        scope,
-        ":!",
-        transparent_sig,
-        body_transparent,
-        registries,
-        gate,
-    );
+    crate::builtins::register_builtin(scope, opaque_sig, body_opaque, registries, gate);
+    crate::builtins::register_builtin(scope, transparent_sig, body_transparent, registries, gate);
 }
 
 #[cfg(test)]

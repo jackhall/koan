@@ -193,7 +193,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     use crate::builtins::register_builtin;
     register_builtin(
         scope,
-        "LIST",
         sig(
             KType::of_kind(KKind::AnyType),
             vec![
@@ -208,7 +207,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     );
     register_builtin(
         scope,
-        "MAP",
         sig(
             KType::of_kind(KKind::AnyType),
             vec![
@@ -224,7 +222,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     );
     register_builtin(
         scope,
-        "AS",
         sig(
             KType::of_kind(KKind::AnyType),
             vec![
@@ -239,7 +236,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     );
     register_builtin(
         scope,
-        "FN",
         sig(
             KType::of_kind(KKind::AnyType),
             vec![

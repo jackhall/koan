@@ -170,7 +170,6 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
     let f = cell.adopt_into(scope.brand().handle());
     scope
         .register_function_direct(
-            "FOO".to_string(),
             &cell,
             BindingIndex::value(99),
             &registries,
@@ -223,7 +222,6 @@ fn lookup_function_filters_per_overload_visibility() {
     let f_early = early.adopt_into(scope.brand().handle());
     scope
         .register_function_direct(
-            "BAR".to_string(),
             &early,
             BindingIndex::value(2),
             &registries,
@@ -232,7 +230,6 @@ fn lookup_function_filters_per_overload_visibility() {
         .unwrap();
     scope
         .register_function_direct(
-            "BAR".to_string(),
             &late,
             BindingIndex::value(7),
             &registries,
@@ -299,7 +296,6 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
     );
     scope
         .register_function_direct(
-            "FOO".to_string(),
             &f,
             BindingIndex::value(2),
             &registries,
@@ -337,7 +333,6 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
     );
     scope
         .register_function_direct(
-            "FOO".to_string(),
             &f,
             BindingIndex::value(9),
             &registries,
@@ -370,7 +365,6 @@ fn retirement_drops_every_bucket_the_statement_claimed() {
     );
     scope
         .register_function_direct(
-            "FOO".to_string(),
             &f,
             BindingIndex::value(1),
             &registries,

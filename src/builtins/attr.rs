@@ -696,26 +696,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     };
 
     use crate::builtins::register_builtin;
+    register_builtin(scope, identifier_sig(), body_identifier, registries, gate);
+    register_builtin(scope, module_field_sig(), body_module, registries, gate);
+    register_builtin(scope, newtype_sig(), body_newtype, registries, gate);
     register_builtin(
         scope,
-        "ATTR",
-        identifier_sig(),
-        body_identifier,
-        registries,
-        gate,
-    );
-    register_builtin(
-        scope,
-        "ATTR",
-        module_field_sig(),
-        body_module,
-        registries,
-        gate,
-    );
-    register_builtin(scope, "ATTR", newtype_sig(), body_newtype, registries, gate);
-    register_builtin(
-        scope,
-        "ATTR",
         dynamic_field_sig(),
         body_dynamic_field,
         registries,
@@ -723,7 +708,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     );
     register_builtin(
         scope,
-        "ATTR",
         dynamic_module_field_sig(),
         body_dynamic_module_field,
         registries,
@@ -731,7 +715,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     );
     register_builtin(
         scope,
-        "ATTR",
         type_identifier_field_sig(),
         body_type_lhs,
         registries,
@@ -739,7 +722,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     );
     register_builtin(
         scope,
-        "ATTR",
         type_type_field_sig(),
         body_type_lhs,
         registries,
@@ -747,7 +729,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     );
     register_builtin(
         scope,
-        "ATTR",
         module_type_field_sig(),
         body_module,
         registries,

@@ -195,15 +195,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         )
     };
 
-    crate::builtins::register_builtin(scope, "+", number_sig("+"), body_add, registries, gate);
-    crate::builtins::register_builtin(scope, "-", number_sig("-"), body_sub, registries, gate);
-    crate::builtins::register_builtin(scope, "*", number_sig("*"), body_mul, registries, gate);
-    crate::builtins::register_builtin(scope, "/", number_sig("/"), body_div, registries, gate);
+    crate::builtins::register_builtin(scope, number_sig("+"), body_add, registries, gate);
+    crate::builtins::register_builtin(scope, number_sig("-"), body_sub, registries, gate);
+    crate::builtins::register_builtin(scope, number_sig("*"), body_mul, registries, gate);
+    crate::builtins::register_builtin(scope, number_sig("/"), body_div, registries, gate);
 
-    crate::builtins::register_builtin(scope, "<", comparison_sig("<"), body_lt, registries, gate);
-    crate::builtins::register_builtin(scope, "<=", comparison_sig("<="), body_le, registries, gate);
-    crate::builtins::register_builtin(scope, ">", comparison_sig(">"), body_gt, registries, gate);
-    crate::builtins::register_builtin(scope, ">=", comparison_sig(">="), body_ge, registries, gate);
+    crate::builtins::register_builtin(scope, comparison_sig("<"), body_lt, registries, gate);
+    crate::builtins::register_builtin(scope, comparison_sig("<="), body_le, registries, gate);
+    crate::builtins::register_builtin(scope, comparison_sig(">"), body_gt, registries, gate);
+    crate::builtins::register_builtin(scope, comparison_sig(">="), body_ge, registries, gate);
 
     let and_sig = sig(
         KType::BOOL,
@@ -213,7 +213,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             arg(registries, &SLOTS.right, KType::BOOL),
         ],
     );
-    crate::builtins::register_builtin(scope, "AND", and_sig, body_and, registries, gate);
+    crate::builtins::register_builtin(scope, and_sig, body_and, registries, gate);
 }
 
 /// Seeds the three builtin operator groups: comparison (`< <= > >=`, pairwise, combined by

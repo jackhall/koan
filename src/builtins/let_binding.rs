@@ -268,8 +268,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
-    crate::builtins::register_builtin(scope, "LET", identifier_sig(), body, registries, gate);
-    crate::builtins::register_builtin(scope, "LET", type_sig(), body, registries, gate);
+    crate::builtins::register_builtin(scope, identifier_sig(), body, registries, gate);
+    crate::builtins::register_builtin(scope, type_sig(), body, registries, gate);
 }
 
 #[cfg(test)]

@@ -49,7 +49,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             arg(registries, &SLOTS.expr, KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, "CATCH", signature, body, registries, gate);
+    crate::builtins::register_builtin(scope, signature, body, registries, gate);
 }
 
 /// Watches the captured `expr` and recovers into a `Result` carrier

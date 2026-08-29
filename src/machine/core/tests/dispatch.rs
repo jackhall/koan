@@ -60,7 +60,6 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     let scope = run_root_bare(&region);
     register_builtin(
         scope,
-        "ONE",
         one_slot_sig("v", KType::ANY),
         body_a,
         &registries,
@@ -91,7 +90,6 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
     let scope = run_root_bare(&region);
     register_builtin(
         scope,
-        "NA",
         two_slot_sig(KType::NUMBER, KType::ANY),
         body_a,
         &registries,
@@ -99,7 +97,6 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
     );
     register_builtin(
         scope,
-        "AN",
         two_slot_sig(KType::ANY, KType::NUMBER),
         body_b,
         &registries,
@@ -139,7 +136,6 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     // this exercises the inner-ambiguity-doesn't-descend walk, not builtin authority.
     register_overload_at(
         outer,
-        "OUTER",
         two_slot_sig(KType::NUMBER, KType::NUMBER),
         body_a,
         BindingIndex::value(1),
@@ -149,7 +145,6 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     let inner = outer.alloc_child_under();
     register_builtin(
         inner,
-        "NA",
         two_slot_sig(KType::NUMBER, KType::ANY),
         body_a,
         &registries,
@@ -157,7 +152,6 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     );
     register_builtin(
         inner,
-        "AN",
         two_slot_sig(KType::ANY, KType::NUMBER),
         body_b,
         &registries,
@@ -196,7 +190,6 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
     let scope = run_root_bare(&region);
     register_builtin(
         scope,
-        "ONE_ID",
         one_slot_sig("v", KType::IDENTIFIER),
         body_a,
         &registries,
@@ -233,7 +226,6 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     let scope = run_root_bare(&region);
     register_builtin(
         scope,
-        "PLUS",
         two_slot_sig(KType::NUMBER, KType::NUMBER),
         body_a,
         &registries,
@@ -359,7 +351,6 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     // pending sibling must shadow this outer strict Pick on the ordinary walk.
     register_overload_at(
         outer,
-        "outer_mark",
         outer_sig,
         body_a,
         BindingIndex::value(1),
@@ -412,7 +403,6 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
     // Outer overload that would strictly Pick once the eager sub resolves.
     register_builtin(
         outer,
-        "outer_plus",
         two_slot_sig(KType::NUMBER, KType::NUMBER),
         body_a,
         &registries,
@@ -421,7 +411,6 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
     let inner = outer.alloc_child_under();
     register_builtin(
         inner,
-        "inner_plus",
         two_slot_sig(KType::NUMBER, KType::NUMBER),
         body_b,
         &registries,
@@ -472,7 +461,6 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     // Outer `:Identifier` overload that owns the bare name (shape-only admit).
     register_builtin(
         outer,
-        "outer_id",
         one_slot_sig("v", KType::IDENTIFIER),
         body_a,
         &registries,
@@ -483,7 +471,6 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     // inner scope's only contribution is a dead lean (must not terminate).
     register_builtin(
         inner,
-        "inner_num",
         one_slot_sig("v", KType::NUMBER),
         body_b,
         &registries,
@@ -549,7 +536,6 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         KFunction::alloc_captured(scope, pick_num, Body::Builtin(body_a), &registries);
     scope
         .register_function_direct(
-            "pick_num".to_string(),
             &pick_num_fn,
             BindingIndex::value(1),
             &registries,
@@ -617,7 +603,6 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     );
     scope
         .register_function_direct(
-            "pick_str".to_string(),
             &sibling,
             BindingIndex::value(3),
             &registries,
@@ -734,7 +719,6 @@ fn parked_bare_name_parks_before_any_pick() {
     let scope = run_root_bare(&region);
     register_builtin(
         scope,
-        "OP",
         two_slot_sig(KType::ANY, KType::ANY),
         body_a,
         &registries,

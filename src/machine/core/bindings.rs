@@ -78,7 +78,9 @@ use crate::machine::model::{
     BinderSymbol, IdentityBuildHasher, KeywordSymbol, RunRegistries, TypeSymbol, ValueSymbol,
     render_label,
 };
-use crate::machine::model::{DispatchTokenElement, KeyElement, summarize_dispatch};
+use crate::machine::model::{
+    DispatchTokenElement, KeyElement, render_untyped_key, summarize_dispatch,
+};
 use crate::machine::model::{KType, UntypedKey};
 use crate::witnessed::BumpBackedMap;
 use crate::witnessed::{BumpAllocator, Sealed};
@@ -1163,15 +1165,15 @@ impl<'a> Bindings<'a> {
     /// The `functions` write path: add `seal`'s callable to its dispatch bucket. The bucket key and
     /// dedupe token were both computed at seal time, where the callable was open — the write is
     /// pure table mutation, no carrier is opened and no bare reference crosses the door. Token
-    /// equality against a bucket sibling raises `DuplicateOverload`, whose text renders from the
-    /// standing entry's stored token, so the error arm opens nothing either; claims are in
+    /// equality against a bucket sibling raises `DuplicateOverload`, whose text renders on that arm
+    /// alone from the seal's own key and the standing entry's stored token — so the success path
+    /// resolves no label and the error arm opens nothing either; claims are in
     /// the store and don't participate in the dedupe. The write then **retires its own claim** on
     /// the same key at the same index — the sibling binders' claims stand as wake sources. Bucket
     /// order is not observable: the picker returns a unique winner or a tie that surfaces as
     /// deferred/ambiguous either way.
     pub(crate) fn write_overload(
         &self,
-        name: &str,
         index: BindingIndex,
         seal: OverloadSeal<'a>,
         registries: &RunRegistries,
@@ -1195,7 +1197,7 @@ impl<'a> Bindings<'a> {
             .find(|existing| seal.token.elements() == existing.token)
         {
             return Err(KError::new(KErrorKind::DuplicateOverload {
-                name: name.to_string(),
+                name: render_untyped_key(seal.key.as_slice(), registries),
                 signature: summarize_dispatch(existing.token, registries),
             }));
         }

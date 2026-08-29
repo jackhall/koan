@@ -177,7 +177,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // extractors to match — no name, no bucket. Its declaration slot is still
     // declaration-classified in dispatch, via the spec entry's `name_slot` cached on the
     // expression.
-    crate::builtins::register_builtin(scope, "VAL", signature, body, registries, gate);
+    crate::builtins::register_builtin(scope, signature, body, registries, gate);
 }
 
 #[cfg(test)]

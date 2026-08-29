@@ -203,7 +203,6 @@ fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>, registries: &RunRegi
     };
     crate::builtins::register_builtin(
         scope,
-        "PROBE",
         signature,
         probe_body,
         registries,

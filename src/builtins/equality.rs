@@ -98,8 +98,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
-    crate::builtins::register_builtin(scope, "==", eq_sig("=="), body_eq, registries, gate);
-    crate::builtins::register_builtin(scope, "!=", eq_sig("!="), body_ne, registries, gate);
+    crate::builtins::register_builtin(scope, eq_sig("=="), body_eq, registries, gate);
+    crate::builtins::register_builtin(scope, eq_sig("!="), body_ne, registries, gate);
 }
 
 #[cfg(test)]

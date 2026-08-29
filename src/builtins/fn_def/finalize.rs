@@ -277,12 +277,12 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // First Keyword keys the data table. Dispatch is by full signature via
     // `Bindings::functions`; `Bindings::data` is for discoverability /
     // shadow-by-name, neither of which has a single right answer for a
-    // multi-token signature like `(a ADD b)`. The symbol is read off the signature before it
-    // moves into the draft; its spelling is resolved only on the arm that registers an overload.
-    let dispatch_keyword = elements.iter().find_map(|e| match e {
-        SignatureElement::Keyword(s) => Some(*s),
-        _ => None,
-    });
+    // multi-token signature like `(a ADD b)`. Presence is all that is read: the bucket key the
+    // registration lands under is derived from the whole signature at seal time, so no spelling is
+    // resolved here.
+    let has_dispatch_keyword = elements
+        .iter()
+        .any(|e| matches!(e, SignatureElement::Keyword(_)));
     let draft = SignatureDraft {
         return_type,
         elements,
@@ -300,20 +300,13 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     let bound_name = match kind {
         FnKind::Anonymous => None,
         FnKind::Function { bound_name } => {
-            // Rendered only here: an anonymous FN registers no overload, so it never reads back
-            // the keyword its bucket would have been keyed by.
-            let name = dispatch_keyword.and_then(|s| registries.labels.resolve(s.symbol()));
-            let name = match name {
-                Some(n) => n,
-                None => {
-                    return Err(KError::new(KErrorKind::ShapeError(
-                        "FN signature must contain at least one Keyword (a fixed token to dispatch on)"
-                            .to_string(),
-                    )));
-                }
-            };
+            if !has_dispatch_keyword {
+                return Err(KError::new(KErrorKind::ShapeError(
+                    "FN signature must contain at least one Keyword (a fixed token to dispatch on)"
+                        .to_string(),
+                )));
+            }
             writes.push(WriteOp::Overload {
-                name,
                 index: bind_index,
                 seal: OverloadSeal::of_delivered(scope, &birth),
                 builtin_shadow_guard: true,

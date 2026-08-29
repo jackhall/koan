@@ -227,7 +227,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         // type-named overloads carry no binder.
         register_builtin(
             scope,
-            "GROUP",
             fold(KType::IDENTIFIER, direction),
             fold_body,
             registries,
@@ -235,7 +234,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         );
         register_builtin(
             scope,
-            "GROUP",
             pairwise(KType::IDENTIFIER, direction),
             pairwise_body,
             registries,
@@ -243,7 +241,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         );
         register_builtin(
             scope,
-            "GROUP",
             fold(KType::of_kind(KKind::ProperType), direction),
             super::module_def::body_type_named,
             registries,
@@ -251,7 +248,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         );
         register_builtin(
             scope,
-            "GROUP",
             pairwise(KType::of_kind(KKind::ProperType), direction),
             super::module_def::body_type_named,
             registries,

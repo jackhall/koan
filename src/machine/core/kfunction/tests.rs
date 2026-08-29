@@ -73,7 +73,6 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
     };
     register_builtin(
         scope,
-        "OP",
         sig,
         body_any,
         &registries,
@@ -122,7 +121,6 @@ fn classify_excludes_literal_name_slots_from_wrap() {
     };
     register_builtin(
         scope,
-        "ident_call_probe",
         sig,
         body_any,
         &registries,
@@ -208,7 +206,6 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
     };
     register_builtin(
         scope,
-        "OP",
         sig,
         body_any,
         &registries,
@@ -285,7 +282,6 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
     };
     register_builtin(
         scope,
-        "OP",
         sig,
         body_any,
         &registries,

@@ -26,6 +26,7 @@ use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{
     KType, KeywordSymbol, LabelInterner, RunRegistries, TypeSymbol, ValueSymbol, render_label,
+    render_untyped_key,
 };
 
 /// How a [`WriteOp::Type`] meets an existing `types[name]`: `Insert` is strict insert-if-absent (a
@@ -53,8 +54,11 @@ pub(crate) enum WriteOp<'a> {
     /// `builtin_shadow_guard` is false only for the operator door — a user module may declare an
     /// operator the root already declares, because dispatch consults the immutable root bucket
     /// first and shadowing is type-gated there.
+    ///
+    /// The op carries no name: `seal.key` *is* the registration's identity, so the two diagnostics
+    /// that name a colliding or shadowing overload render it from the key on their own arm and the
+    /// success path resolves no label at all.
     Overload {
-        name: String,
         index: BindingIndex,
         seal: OverloadSeal<'a>,
         builtin_shadow_guard: bool,
@@ -106,12 +110,11 @@ impl<'a> WriteOp<'a> {
                     .write_value(name, index, sealed, registries, gate)
             }
             WriteOp::Overload {
-                name,
                 index,
                 seal,
                 builtin_shadow_guard,
             } => {
-                scope.assert_open(&name);
+                scope.assert_open(&seal.key);
                 // A user overload may not join a builtin's bucket — builtins are immutable and
                 // unshadowable. The root registers its own at `BUILTIN`, so only a non-`BUILTIN`
                 // index is gated.
@@ -119,11 +122,13 @@ impl<'a> WriteOp<'a> {
                     && index != BindingIndex::BUILTIN
                     && scope.shadows_builtin_function(&seal.key)
                 {
-                    return Err(KError::new(KErrorKind::Rebind { name }));
+                    return Err(KError::new(KErrorKind::Rebind {
+                        name: render_untyped_key(&seal.key, registries),
+                    }));
                 }
                 scope
                     .bindings()
-                    .write_overload(&name, index, seal, registries, gate)
+                    .write_overload(index, seal, registries, gate)
             }
             WriteOp::Type {
                 name,

@@ -348,16 +348,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     use crate::builtins::register_builtin;
     // Scalar / bare-leaf repr (`= Number`, `= Foo`) and non-record sigil repr (`= :(LIST OF T)`)
     // share `body`; the record repr (`= :{…}`) routes to `body_record_repr`.
-    register_builtin(scope, "NEWTYPE", scalar_sig(), body, registries, gate);
-    register_builtin(scope, "NEWTYPE", sigil_sig(), body, registries, gate);
-    register_builtin(
-        scope,
-        "NEWTYPE",
-        record_sig(),
-        body_record_repr,
-        registries,
-        gate,
-    );
+    register_builtin(scope, scalar_sig(), body, registries, gate);
+    register_builtin(scope, sigil_sig(), body, registries, gate);
+    register_builtin(scope, record_sig(), body_record_repr, registries, gate);
     // Constructor-family declarator `NEWTYPE (Type AS Wrapper)`. Its keyword set is `{NEWTYPE}`
     // (no `=`), so it lands in its own dispatch bucket, disjoint from the three `{NEWTYPE, =}`
     // overloads above. The `KExpression` slot captures `(Type AS Wrapper)` raw — the inner `AS`
@@ -371,7 +364,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     );
     register_builtin(
         scope,
-        "NEWTYPE",
         constructor_family_sig,
         body_constructor_family,
         registries,

@@ -149,6 +149,10 @@ fn close_is_per_scope_open_child_still_binds() {
 #[test]
 fn register_function_dedupes_exact_signature() {
     let registries = RunRegistries::new();
+    // The collision diagnostic renders the bucket key through the run's interner, and a parse
+    // interns every keyword it classifies — the fixture mints its symbol by hand, so it feeds the
+    // spelling in the same way.
+    registries.labels.intern("FOO");
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f1 = KFunction::alloc_captured(
@@ -159,7 +163,6 @@ fn register_function_dedupes_exact_signature() {
     );
     scope
         .register_function_direct(
-            "FOO".to_string(),
             &f1,
             BindingIndex::BUILTIN,
             &registries,
@@ -174,7 +177,6 @@ fn register_function_dedupes_exact_signature() {
     );
     let err = scope
         .register_function_direct(
-            "FOO".to_string(),
             &f2,
             BindingIndex::BUILTIN,
             &registries,
@@ -182,7 +184,7 @@ fn register_function_dedupes_exact_signature() {
         )
         .unwrap_err();
     assert!(
-        matches!(&err.kind, crate::machine::core::KErrorKind::DuplicateOverload { name, .. } if name == "FOO"),
+        matches!(&err.kind, crate::machine::core::KErrorKind::DuplicateOverload { name, .. } if name == "(FOO)"),
         "expected DuplicateOverload, got {err}",
     );
 }
@@ -203,7 +205,6 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
     );
     scope
         .register_function_direct(
-            "FOO".to_string(),
             &f1,
             BindingIndex::BUILTIN,
             &registries,
@@ -304,7 +305,6 @@ fn register_function_allows_overload_with_different_arg_types() {
     let f2 = KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), &registries);
     scope
         .register_function_direct(
-            "BAR".to_string(),
             &f1,
             BindingIndex::BUILTIN,
             &registries,
@@ -313,7 +313,6 @@ fn register_function_allows_overload_with_different_arg_types() {
         .unwrap();
     scope
         .register_function_direct(
-            "BAR".to_string(),
             &f2,
             BindingIndex::BUILTIN,
             &registries,
@@ -349,7 +348,6 @@ fn register_function_coexists_with_a_value_binding() {
     );
     scope
         .register_function_direct(
-            "FOO".to_string(),
             &f,
             BindingIndex::BUILTIN,
             &registries,
@@ -391,7 +389,6 @@ fn register_function_coexists_with_same_name_type() {
     );
     scope
         .register_function_direct(
-            "Foo".to_string(),
             &f,
             BindingIndex::BUILTIN,
             &registries,

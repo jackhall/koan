@@ -49,7 +49,6 @@ fn builtin_seed_registers_a_callable_reaching_exactly_its_home_region() {
     );
     scope
         .register_function_direct(
-            "FOO".to_string(),
             &cell,
             BindingIndex::BUILTIN,
             &registries,

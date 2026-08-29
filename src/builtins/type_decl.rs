@@ -168,7 +168,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
         ],
     );
-    crate::builtins::register_builtin(scope, "TYPE", bare_signature, body_bare, registries, gate);
+    crate::builtins::register_builtin(scope, bare_signature, body_bare, registries, gate);
     let hk_signature = sig(
         KType::ANY,
         vec![
@@ -176,7 +176,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             arg(registries, &SLOTS.decl, KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, "TYPE", hk_signature, body_hk, registries, gate);
+    crate::builtins::register_builtin(scope, hk_signature, body_hk, registries, gate);
 }
 
 #[cfg(test)]

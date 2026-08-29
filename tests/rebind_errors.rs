@@ -96,7 +96,7 @@ fn exact_signature_duplicate_errors() {
         matches!(
             &err.kind,
             KErrorKind::DuplicateOverload { name, signature }
-                if name == "DOUBLE" && signature == "fn(DOUBLE :Number)"
+                if name == "(DOUBLE _)" && signature == "fn(DOUBLE :Number)"
         ),
         "expected DuplicateOverload naming the dispatch identity, got {err}",
     );
@@ -145,7 +145,7 @@ fn user_fn_over_builtin_keyword_rejected() {
     )
     .expect_err("a user FN over the builtin PRINT bucket should error");
     assert!(
-        matches!(&err.kind, KErrorKind::Rebind { name } if name == "PRINT"),
-        "expected Rebind on PRINT, got {err}",
+        matches!(&err.kind, KErrorKind::Rebind { name } if name == "(PRINT _)"),
+        "expected Rebind on (PRINT _), got {err}",
     );
 }

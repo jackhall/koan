@@ -67,7 +67,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, "SIG", signature, body, registries, gate);
+    crate::builtins::register_builtin(scope, signature, body, registries, gate);
 }
 
 #[cfg(test)]

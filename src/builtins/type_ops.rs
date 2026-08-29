@@ -35,14 +35,13 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
-    crate::builtins::register_builtin(scope, "WITH", with_sig(), with::body, registries, gate);
+    crate::builtins::register_builtin(scope, with_sig(), with::body, registries, gate);
     // `TYPE OF <value>`. Keys on the full `[TYPE, OF]` bucket, so it shares no candidate bucket
     // with the SLOTS.sig-body `TYPE <name>` declarator ([`super::type_decl`]). The `value` slot is
     // `Any` because a module and a container are both ordinary values here; the body rejects a
     // type-channel argument, which `Any` also admits.
     crate::builtins::register_builtin(
         scope,
-        "TYPE",
         sig(
             KType::of_kind(KKind::AnyType),
             vec![

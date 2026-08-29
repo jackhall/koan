@@ -406,7 +406,6 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                 let result_type = result.unwrap_or(operand);
                 let (cell, overload) = register_body(
                     scope,
-                    sym,
                     sig(result_type, elements),
                     Body::UserDefined(body_expr),
                     bind_index,
@@ -543,22 +542,10 @@ pub(super) fn register_unary_operator<'a>(
     );
     // The list body first: its function is the operator's primary value, the one an `OP`
     // declaration evaluates to.
-    let (cell, list_overload) = register_body(
-        scope,
-        sym,
-        list_signature,
-        list_body,
-        bind_index,
-        registries,
-    )?;
-    let (_, binary_overload) = register_body(
-        scope,
-        sym,
-        binary_signature,
-        binary_body,
-        bind_index,
-        registries,
-    )?;
+    let (cell, list_overload) =
+        register_body(scope, list_signature, list_body, bind_index, registries)?;
+    let (_, binary_overload) =
+        register_body(scope, binary_signature, binary_body, bind_index, registries)?;
     let record = scope.birth_operator_group(&[sym], ReductionMode::Unary);
     let mut writes = vec![list_overload, binary_overload];
     writes.push(WriteOp::Group {
@@ -582,7 +569,6 @@ pub(super) fn register_unary_operator<'a>(
 /// style: the overload lands in `functions` only, never in `data`.
 fn register_body<'a>(
     scope: &'a Scope<'a>,
-    sym: KeywordSymbol,
     signature: SignatureDraft<'a>,
     body: Body<'a>,
     bind_index: BindingIndex,
@@ -590,12 +576,6 @@ fn register_body<'a>(
 ) -> Result<(SealedValue<'a>, WriteOp<'a>), KError> {
     let cell = KFunction::alloc_captured(scope, signature, body, registries);
     let write = WriteOp::Overload {
-        // The `functions` table keys an overload by the operator's spelling, so this is the one
-        // place the glyph is resolved back — the parse that classified it interned it.
-        name: registries
-            .labels
-            .resolve(sym.symbol())
-            .expect("a parsed operator glyph is interned where it was classified"),
         index: bind_index,
         seal: OverloadSeal::of_delivered(scope, &cell),
         builtin_shadow_guard: false,
@@ -795,7 +775,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     for operand in type_carriers() {
         register_builtin(
             scope,
-            "OP",
             sig(KType::ANY, binary(operand)),
             body_binary,
             registries,
@@ -803,7 +782,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         );
         register_builtin(
             scope,
-            "LET",
             combined(registries, binary(operand)),
             body_binary_combined,
             registries,
@@ -811,7 +789,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         );
         register_builtin(
             scope,
-            "OP",
             sig(KType::ANY, unary_missing_result(operand)),
             body_unary_missing_result,
             registries,
@@ -819,7 +796,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         );
         register_builtin(
             scope,
-            "LET",
             combined(registries, unary_missing_result(operand)),
             body_unary_missing_result_combined,
             registries,
@@ -828,7 +804,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         for result in type_carriers() {
             register_builtin(
                 scope,
-                "OP",
                 sig(KType::ANY, binary_with_result(operand, result)),
                 body_binary,
                 registries,
@@ -836,7 +811,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             );
             register_builtin(
                 scope,
-                "LET",
                 combined(registries, binary_with_result(operand, result)),
                 body_binary_combined,
                 registries,
@@ -844,7 +818,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             );
             register_builtin(
                 scope,
-                "OP",
                 sig(KType::ANY, unary(operand, result)),
                 body_unary,
                 registries,
@@ -852,7 +825,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             );
             register_builtin(
                 scope,
-                "LET",
                 combined(registries, unary(operand, result)),
                 body_unary_combined,
                 registries,
