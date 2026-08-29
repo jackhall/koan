@@ -253,7 +253,7 @@ src/
     │       ├── body.rs              Body / ReturnContract
     │       ├── exec.rs              run_user_fn — innermost body executor; returns a scheduler-unaware ExecOutcome
     │       ├── action.rs            Action — the scheduler-aware currency a builtin returns: the WriteOp effects it decided plus its ActionKind continuation (types only)
-    │       ├── block_tail.rs        the one "run a block, return the tail" constructor — the sole Action::Tail site, configured by EVAL / MATCH / TRY arms / USING
+    │       ├── block_tail.rs        the "run a block, return the tail" constructors — the sole Action::Tail sites: block_tail (EVAL / MATCH / TRY arms / USING) and fresh_cart_tail (CLOSE OVER), sharing one statement-split freeze
     │       └── pick.rs              per-bucket tournament selecting the most-specific overload
     ├── execute.rs
     └── execute/

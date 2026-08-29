@@ -71,7 +71,7 @@ frame.
 - An owning handle whose referent an existing channel already carries is re-derived at
   wake, never captured: the body-enter cart off the slot's anchor, a finish's lexical
   chain off the ambient node payload, a leading-carrying tail's block frame off the park
-  state.
+  state, a fresh-cart tail's installed cart off the wake-time view.
 - A nested closure currency (a field-list composer, an aggregate assembler) is a generic
   parameter folded into the finish before the one erasure, not a second box inside it:
   `Fn + Copy` where the finish is bumped, `FnOnce` where it rides the boxed `Action` tier.
@@ -100,7 +100,10 @@ statements ride as a region slice rather than an owned `Vec`; the block seed a M
 TRY arm binds `it` through is a stack `impl FnOnce` that runs before `block_tail`
 returns; and the leading-statements finish the engine synthesizes reads its block frame
 back off the park state instead of capturing it, so it is `Copy` and bumped like every
-other engine-side finish.
+other engine-side finish. `ActionKind::TailRaw` — a body that crosses a cart install as
+raw AST and freezes at the installed cart's brand — is the same shape: the freeze
+closure is the engine's, hosted in the cart the replace installs and carrying only
+`Copy` captures.
 
 The step's binding writes ride the same discipline: a body's `WriteOp` run is a
 `BumpVec` on the step arena, minted only once a body actually decides a write and handed

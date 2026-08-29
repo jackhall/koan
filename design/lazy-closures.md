@@ -85,15 +85,19 @@ piece of state the block reads *after* that frame retires must be homed
 somewhere the block still names. Two placements follow, and both are
 invariants of the form rather than incidental choices:
 
-- **The body's working copies rest in the eternal region.** A block's
-  statements arrive as raw AST and are frozen into working form
-  ([`block_tail`](../src/machine/core/kfunction/block_tail.rs)); the block's
-  tail is read back from the block frame's own cart, which holds nothing of
-  the caller, so freezing at the call site would leave that read dangling.
-  The eternal tier is the one region the block scope already names — its
-  lexical outer — and it contributes no reach, so the choice retains nothing.
-  Its cost is that the copy lives as long as the run does, one per evaluation
-  of the form.
+- **The body's working copies rest in the block's own region.** A block's
+  statements arrive as raw AST and are frozen into working form, and the
+  block's tail is read back from the block frame's own cart, which holds
+  nothing of the caller — so freezing at the call site would leave that read
+  dangling, and freezing into the eternal tier, the one other region the
+  block scope names, would leave one copy per *evaluation* of the form alive
+  for the rest of the run. Homing them in the cart makes both false. The cart
+  does not exist yet at the step that decides the tail, so the body crosses
+  the install as raw AST
+  ([`fresh_cart_tail`](../src/machine/core/kfunction/block_tail.rs)) and the
+  reinstalled step — running with the fresh cart as its own scope — freezes
+  the working run at that cart's brand. Its cost is one extra scheduler hop
+  per evaluation.
 - **A block statement's result rests in the block's own region.** A statement
   binds in the block, so its terminal is destined at the block frame's region
   rather than at the consuming slot's cart
@@ -131,9 +135,6 @@ empty capture, distinct from inference.
 
 ## Open work
 
-- [Fresh-cart block freeze](../roadmap/foundation/fresh-cart-block-freeze.md)
-  — homing a severed block's frozen body at the cart its tail installs, so a
-  `CLOSE OVER` evaluated repeatedly stops growing the eternal region.
 - [Lazy close](../roadmap/foundation/lazy-close.md) — the transitive
   callable copy and its pin-not-park downgrade rule; the liveness matrix
   ([liveness-matrix.md](../workgraph/design/liveness-matrix.md)) consumes it
