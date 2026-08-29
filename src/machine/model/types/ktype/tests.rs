@@ -203,7 +203,7 @@ fn non_empty_signature_renders_its_members_structurally() {
 fn name_renders_union() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let t = types.union_of(vec![KType::NUMBER, KType::STR]);
+    let t = types.union_of(&[KType::NUMBER, KType::STR]);
     assert_eq!(t.name(&registries), ":(Number | Str)");
 }
 
@@ -213,7 +213,7 @@ fn name_renders_union_with_compound_member() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let list_of_number = types.list(KType::NUMBER);
-    let t = types.union_of(vec![list_of_number, KType::NULL]);
+    let t = types.union_of(&[list_of_number, KType::NULL]);
     assert_eq!(t.name(&registries), ":(:(LIST OF Number) | Null)");
 }
 
@@ -225,8 +225,8 @@ fn name_renders_union_with_compound_member() {
 fn union_identity_is_order_blind() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let forward = types.union_of(vec![KType::NUMBER, KType::STR]);
-    let reversed = types.union_of(vec![KType::STR, KType::NUMBER]);
+    let forward = types.union_of(&[KType::NUMBER, KType::STR]);
+    let reversed = types.union_of(&[KType::STR, KType::NUMBER]);
     assert_eq!(forward, reversed);
 }
 
@@ -234,8 +234,8 @@ fn union_identity_is_order_blind() {
 fn unions_of_different_members_are_distinct() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let a = types.union_of(vec![KType::NUMBER, KType::STR]);
-    let b = types.union_of(vec![KType::NUMBER, KType::BOOL]);
+    let a = types.union_of(&[KType::NUMBER, KType::STR]);
+    let b = types.union_of(&[KType::NUMBER, KType::BOOL]);
     assert_ne!(a, b);
 }
 

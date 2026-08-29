@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
 use imbl::shared_ptr::RcK;
+use smallvec::SmallVec;
 
 use crate::machine::model::labels::Symbol;
 
@@ -35,6 +36,12 @@ use super::node::{NodeSchema, TypeNode};
 use super::record::Record;
 use super::sig_schema::SigSchema;
 use super::type_digest::{self, TypeDigest, schema_content_digest};
+
+/// A union's members under construction. Inline up to four — the width that covers a hand-written
+/// `A | B | C` and the variant lists of all but the widest `UNION` declarations — so the common
+/// union costs no heap allocation to canonicalize, and none at all when the result is a node the
+/// registry already holds.
+type MemberList = SmallVec<[KType; 4]>;
 
 /// The hasher every 128-bit-digest-keyed table runs: the node table here, the label interner, and
 /// the classified scope binding tables
@@ -313,29 +320,29 @@ impl TypeRegistry {
     /// any nested union member into its members, deduplicates by handle, and collapses a single
     /// surviving member to that member (`:(A | A)` is `:A`). Callers guarantee at least one
     /// member.
-    pub fn union_of(&self, members: Vec<KType>) -> KType {
+    pub fn union_of(&self, members: &[KType]) -> KType {
         debug_assert!(!members.is_empty(), "union_of requires at least one member");
-        let mut flat: Vec<KType> = Vec::with_capacity(members.len());
-        let push_unique = |handle: KType, flat: &mut Vec<KType>| {
+        let mut flat: MemberList = MemberList::with_capacity(members.len());
+        let push_unique = |handle: KType, flat: &mut MemberList| {
             if !flat.contains(&handle) {
                 flat.push(handle);
             }
         };
         for member in members {
             // Reading the member's node drops the table borrow before the intern below.
-            match self.node(member) {
+            match self.node(*member) {
                 TypeNode::Union { members: inner } => {
                     for nested in inner {
                         push_unique(nested, &mut flat);
                     }
                 }
-                _ => push_unique(member, &mut flat),
+                _ => push_unique(*member, &mut flat),
             }
         }
         if flat.len() == 1 {
             return flat[0];
         }
-        self.intern(TypeNode::Union { members: flat })
+        self.intern_union_members(flat)
     }
 
     /// Intern a union from members that are already flat (no member is itself a `Union`) — dedup by
@@ -344,21 +351,51 @@ impl TypeRegistry {
     /// handle names a still-uninterned member of the group being sealed, so the node-reading
     /// [`Self::union_of`] flatten pass would fault on it — and a group member is always a
     /// `SetMember`, never a nested `Union`, so flattening is a no-op here anyway.
-    pub fn intern_union_flat(&self, members: Vec<KType>) -> KType {
+    pub fn intern_union_flat(&self, members: &[KType]) -> KType {
         debug_assert!(
             !members.is_empty(),
             "intern_union_flat requires at least one member"
         );
-        let mut flat: Vec<KType> = Vec::with_capacity(members.len());
+        let mut flat: MemberList = MemberList::with_capacity(members.len());
         for member in members {
-            if !flat.contains(&member) {
-                flat.push(member);
+            if !flat.contains(member) {
+                flat.push(*member);
             }
         }
         if flat.len() == 1 {
             return flat[0];
         }
-        self.intern(TypeNode::Union { members: flat })
+        self.intern_union_members(flat)
+    }
+
+    /// Intern the `Union` node over the already-canonical `flat`, probing the table before
+    /// building the node. The `Union` arm of [`node_digest`](type_digest::node_digest) *is*
+    /// [`union_digest`](type_digest::union_digest) over the node's member slice, so the digest
+    /// taken here off `flat` is equal by construction to the digest the node would key at — which
+    /// makes the node itself needed only on a miss. Both union constructors above build their
+    /// members in a stack-sized [`MemberList`], so a repeat union — the steady state inside a
+    /// loop, where every evaluation of `A | B` names one already-interned node — allocates
+    /// nothing at all. `flat` arrives owned so the miss path hands its buffer to the node rather
+    /// than copying it: a member list wide enough to have spilled is moved, not reallocated.
+    ///
+    /// Keeps [`intern`](Self::intern)'s "a node read must not intern" discipline: the probe's
+    /// shared borrow ends with the statement that takes it, before the mutable borrow below.
+    fn intern_union_members(&self, flat: MemberList) -> KType {
+        let digest = type_digest::union_digest(&flat);
+        let present = self.nodes.borrow().contains_key(&digest);
+        if !present {
+            let mut nodes = self
+                .nodes
+                .try_borrow_mut()
+                .expect("a node read must not intern: the read holds the table borrow");
+            nodes.insert(
+                digest,
+                TypeNode::Union {
+                    members: flat.into_vec(),
+                },
+            );
+        }
+        KType::from_digest(digest)
     }
 
     /// Least-upper-bound of two types. `[1, 2]` → `List<Number>`, `[1, "x"]` → `List<Any>`;

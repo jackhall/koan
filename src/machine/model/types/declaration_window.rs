@@ -213,15 +213,12 @@ impl<'a> AnnouncedWindow<'a> {
     /// it owns, each as its sibling handle.
     pub fn binder_union(&self, name: TypeSymbol, types: &TypeRegistry) -> Option<KType> {
         let binder = self.binders.iter().find(|b| b.name == name)?;
-        Some(
-            types.union_of(
-                binder
-                    .members
-                    .iter()
-                    .map(|index| types.intern(TypeNode::Sibling(*index)))
-                    .collect(),
-            ),
-        )
+        let siblings: Vec<KType> = binder
+            .members
+            .iter()
+            .map(|index| types.intern(TypeNode::Sibling(*index)))
+            .collect();
+        Some(types.union_of(&siblings))
     }
 
     /// Whether the member at `index` has had its declaration's finalize run.

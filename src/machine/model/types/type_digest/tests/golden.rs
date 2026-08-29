@@ -94,7 +94,7 @@ fn chain(types: &TypeRegistry) -> KType {
 fn recursive_union(types: &TypeRegistry) -> KType {
     singleton(
         "Tree",
-        newtype(types.union_of(vec![KType::NUMBER, sibling(types, 0)])),
+        newtype(types.union_of(&[KType::NUMBER, sibling(types, 0)])),
         types,
     )
 }

@@ -36,8 +36,8 @@ fn same_content_built_twice_digests_equal() {
     let r2 = record(types, vec![("x", KType::NUMBER), ("y", KType::STR)]);
     assert_eq!(r1.digest(), r2.digest());
 
-    let u1 = types.union_of(vec![KType::NUMBER, KType::STR]);
-    let u2 = types.union_of(vec![KType::NUMBER, KType::STR]);
+    let u1 = types.union_of(&[KType::NUMBER, KType::STR]);
+    let u2 = types.union_of(&[KType::NUMBER, KType::STR]);
     assert_eq!(u1.digest(), u2.digest());
 }
 
@@ -66,8 +66,8 @@ fn record_digest_is_order_blind_but_binds_name_to_type() {
 fn union_digest_is_order_blind() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let forward = types.union_of(vec![KType::NUMBER, KType::STR]);
-    let reversed = types.union_of(vec![KType::STR, KType::NUMBER]);
+    let forward = types.union_of(&[KType::NUMBER, KType::STR]);
+    let reversed = types.union_of(&[KType::STR, KType::NUMBER]);
     assert_eq!(forward.digest(), reversed.digest());
 }
 

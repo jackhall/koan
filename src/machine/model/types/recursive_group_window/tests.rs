@@ -339,7 +339,7 @@ fn binder_union_covers_every_owned_member() {
     assert!(window.binds(name("Maybe")));
     assert_eq!(
         window.binder_union(name("Maybe"), types),
-        Some(types.union_of(vec![sibling(types, 0), sibling(types, 1)])),
+        Some(types.union_of(&[sibling(types, 0), sibling(types, 1)])),
     );
     assert_eq!(
         window.variant_index(name("Maybe"), name("None").symbol()),
@@ -393,7 +393,7 @@ fn same_tag_under_two_binders_seals_to_distinct_members() {
     assert_eq!(sealed.binder_types.len(), 2);
     assert_eq!(
         sealed.binder_type(name("Graph")),
-        Some(types.union_of(vec![sealed.members[0]])),
+        Some(types.union_of(&[sealed.members[0]])),
     );
     // The owner orders but does not digest: `Graph Node` over Number is byte-identical to a
     // standalone `Node` over Number.

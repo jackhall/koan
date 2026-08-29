@@ -113,8 +113,8 @@ fn join_iter_mixed_yields_any() {
 fn union_of_two_distinct_members() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let u = types.union_of(vec![KType::NUMBER, KType::STR]);
-    assert_eq!(u, types.union_of(vec![KType::NUMBER, KType::STR]));
+    let u = types.union_of(&[KType::NUMBER, KType::STR]);
+    assert_eq!(u, types.union_of(&[KType::NUMBER, KType::STR]));
 }
 
 /// A single member collapses to that member (AC2's `:(A | A)` is `:A`, degenerate case).
@@ -122,7 +122,7 @@ fn union_of_two_distinct_members() {
 fn union_of_single_member_collapses() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    assert_eq!(types.union_of(vec![KType::NUMBER]), KType::NUMBER);
+    assert_eq!(types.union_of(&[KType::NUMBER]), KType::NUMBER);
 }
 
 /// Duplicate members are deduplicated; `:(Number | Number)` collapses to `:Number`.
@@ -131,7 +131,7 @@ fn union_of_dedups_to_single() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     assert_eq!(
-        types.union_of(vec![KType::NUMBER, KType::NUMBER]),
+        types.union_of(&[KType::NUMBER, KType::NUMBER]),
         KType::NUMBER
     );
 }
@@ -141,8 +141,8 @@ fn union_of_dedups_to_single() {
 fn union_of_dedups_within_set() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let u = types.union_of(vec![KType::NUMBER, KType::STR, KType::NUMBER]);
-    assert_eq!(u, types.union_of(vec![KType::NUMBER, KType::STR]));
+    let u = types.union_of(&[KType::NUMBER, KType::STR, KType::NUMBER]);
+    assert_eq!(u, types.union_of(&[KType::NUMBER, KType::STR]));
 }
 
 /// A nested `Union` member is flattened into the outer members, then deduplicated.
@@ -150,12 +150,9 @@ fn union_of_dedups_within_set() {
 fn union_of_flattens_nested_union() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    let inner = types.union_of(vec![KType::STR, KType::BOOL]);
-    let u = types.union_of(vec![KType::NUMBER, inner, KType::BOOL]);
-    assert_eq!(
-        u,
-        types.union_of(vec![KType::NUMBER, KType::STR, KType::BOOL])
-    );
+    let inner = types.union_of(&[KType::STR, KType::BOOL]);
+    let u = types.union_of(&[KType::NUMBER, inner, KType::BOOL]);
+    assert_eq!(u, types.union_of(&[KType::NUMBER, KType::STR, KType::BOOL]));
 }
 
 fn function(params: Vec<(&str, KType)>, ret: KType, types: &TypeRegistry) -> KType {

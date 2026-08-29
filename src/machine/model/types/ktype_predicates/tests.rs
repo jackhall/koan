@@ -889,8 +889,8 @@ fn union_admits_member_typed_value() {
     let region = storage.brand();
     let n: &KObject<'_> = region.alloc_scalar(Scalar::Number(7.0));
 
-    let number_or_str = types.union_of(vec![KType::NUMBER, KType::STR]);
-    let str_or_bool = types.union_of(vec![KType::STR, KType::BOOL]);
+    let number_or_str = types.union_of(&[KType::NUMBER, KType::STR]);
+    let str_or_bool = types.union_of(&[KType::STR, KType::BOOL]);
 
     assert!(number_or_str.accepts_carried(Carried::Object(n), &registries));
     assert!(!str_or_bool.accepts_carried(Carried::Object(n), &registries));
@@ -918,8 +918,8 @@ fn union_honors_memoized_list_element_type() {
         types,
     ));
 
-    let with_list = types.union_of(vec![types.list(KType::NUMBER), KType::STR]);
-    let without_list = types.union_of(vec![KType::NUMBER, KType::STR]);
+    let with_list = types.union_of(&[types.list(KType::NUMBER), KType::STR]);
+    let without_list = types.union_of(&[KType::NUMBER, KType::STR]);
 
     assert!(with_list.accepts_carried(Carried::Object(list_value), &registries));
     assert!(!without_list.accepts_carried(Carried::Object(list_value), &registries));
@@ -932,8 +932,8 @@ fn union_specificity_ordering() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let number = KType::NUMBER;
-    let number_or_str = types.union_of(vec![KType::NUMBER, KType::STR]);
-    let number_or_str_or_bool = types.union_of(vec![KType::NUMBER, KType::STR, KType::BOOL]);
+    let number_or_str = types.union_of(&[KType::NUMBER, KType::STR]);
+    let number_or_str_or_bool = types.union_of(&[KType::NUMBER, KType::STR, KType::BOOL]);
 
     // Each member is a subtype of the union.
     assert!(number.is_more_specific_than(number_or_str, &registries));
@@ -945,7 +945,7 @@ fn union_specificity_ordering() {
     assert!(number_or_str.is_more_specific_than(number_or_str_or_bool, &registries));
     assert!(!number_or_str_or_bool.is_more_specific_than(number_or_str, &registries));
     // Equal unions (order-blind) are not strictly more specific than each other.
-    let str_or_number = types.union_of(vec![KType::STR, KType::NUMBER]);
+    let str_or_number = types.union_of(&[KType::STR, KType::NUMBER]);
     assert!(!number_or_str.is_more_specific_than(str_or_number, &registries));
 }
 

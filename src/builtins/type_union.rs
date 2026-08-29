@@ -21,6 +21,7 @@ use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
 use super::op_def::OperatorForm;
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
+use crate::witnessed::BumpVec;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { left, members, right } }
@@ -38,9 +39,11 @@ const MEMBERS_SLOT: &str = "`|` members";
 fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let left = crate::try_action!(require_ktype(ctx.args, &SLOTS.left, ctx.registries));
     let right = crate::try_action!(require_ktype(ctx.args, &SLOTS.right, ctx.registries));
+    // Two members and no more, so they ride a stack array straight into the union door: the
+    // pair is read and canonicalized inside the call and never outlives it.
     Action::done(Ok(ctx
         .ctx
-        .type_carried(ctx.types().union_of(vec![left, right]))))
+        .type_carried(ctx.types().union_of(&[left, right]))))
 }
 
 /// The reduced `Unary` form `[Keyword("|"), ListLiteral([members...])]`: the members ride an
@@ -63,7 +66,10 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
             "{MEMBERS_SLOT}: a union needs at least one member",
         )))));
     }
-    let mut members: Vec<KType> = Vec::with_capacity(substrate.len());
+    // The members are read by the union door below and never leave the step, so they stage on the
+    // step scratch. One substrate cell contributes at most one member — the loop either pushes or
+    // returns — so the cell count is an exact upper bound and the capacity is taken up front.
+    let mut members: BumpVec<'a, KType> = BumpVec::with_capacity_in(substrate.len(), ctx.scratch);
     for cell in substrate.elements() {
         match cell {
             Held::Type(kt) => members.push(*kt),
@@ -75,7 +81,7 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
             }
         }
     }
-    Action::done(Ok(ctx.ctx.type_carried(ctx.types().union_of(members))))
+    Action::done(Ok(ctx.ctx.type_carried(ctx.types().union_of(&members))))
 }
 
 /// `|` seeds its triple — the reduced `Unary` form `| [members...]`, the two-member keyworded form

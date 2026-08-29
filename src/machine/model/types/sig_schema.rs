@@ -288,11 +288,13 @@ pub fn substitute_sig_members(
             let ret = substitute_sig_members(ret, sig_id, members, types);
             types.function_type(params, ret)
         }
-        TypeNode::Union { members: us } => types.union_of(
-            us.into_iter()
+        TypeNode::Union { members: us } => {
+            let substituted: Vec<KType> = us
+                .into_iter()
                 .map(|m| substitute_sig_members(m, sig_id, members, types))
-                .collect(),
-        ),
+                .collect();
+            types.union_of(&substituted)
+        }
         TypeNode::ConstructorApply {
             constructor,
             arguments,
@@ -343,12 +345,13 @@ fn canonicalize_binder(kt: KType, declared: ScopeId, types: &TypeRegistry) -> KT
             let ret = canonicalize_binder(ret, declared, types);
             types.function_type(params, ret)
         }
-        TypeNode::Union { members } => types.union_of(
-            members
+        TypeNode::Union { members } => {
+            let canonical: Vec<KType> = members
                 .into_iter()
                 .map(|m| canonicalize_binder(m, declared, types))
-                .collect(),
-        ),
+                .collect();
+            types.union_of(&canonical)
+        }
         TypeNode::ConstructorApply {
             constructor,
             arguments,

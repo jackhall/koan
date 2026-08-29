@@ -664,10 +664,10 @@ fn substitute_top_level_and_nested() {
             KType::NUMBER
         )]))
     );
-    let union = types.union_of(vec![sig_abstract(SUP_ID, "Type", &registries), KType::STR]);
+    let union = types.union_of(&[sig_abstract(SUP_ID, "Type", &registries), KType::STR]);
     assert_eq!(
         substitute_sig_members(union, SUP_ID, &map, types),
-        types.union_of(vec![KType::NUMBER, KType::STR])
+        types.union_of(&[KType::NUMBER, KType::STR])
     );
 }
 

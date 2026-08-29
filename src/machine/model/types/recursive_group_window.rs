@@ -387,14 +387,11 @@ impl RecursiveGroupWindow {
     /// through here.
     pub fn binder_union(&self, name: TypeSymbol, types: &TypeRegistry) -> Option<KType> {
         let owned = self.binder_members(name)?;
-        Some(
-            types.union_of(
-                owned
-                    .into_iter()
-                    .map(|index| types.intern(TypeNode::Sibling(index)))
-                    .collect(),
-            ),
-        )
+        let siblings: Vec<KType> = owned
+            .into_iter()
+            .map(|index| types.intern(TypeNode::Sibling(index)))
+            .collect();
+        Some(types.union_of(&siblings))
     }
 
     /// Fill member `index`'s schema and, if that was the last unfilled member, seal the window.
@@ -601,7 +598,7 @@ pub fn seal_group(
         .iter()
         .map(|binder| {
             let owned: Vec<KType> = binder.members.iter().map(|index| sealed[*index]).collect();
-            (binder.name, types.union_of(owned))
+            (binder.name, types.union_of(&owned))
         })
         .collect();
     SealedGroup {
@@ -648,11 +645,11 @@ fn rewrite_siblings(types: &TypeRegistry, kt: KType, resolve: &impl Fn(usize) ->
         // rebuild dedups and collapses without reading member nodes ([`intern_union_flat`]) — the
         // members are already flat.
         TypeNode::Union { members } => {
-            let members = members
+            let members: Vec<KType> = members
                 .into_iter()
                 .map(|m| rewrite_siblings(types, m, resolve))
                 .collect();
-            types.intern_union_flat(members)
+            types.intern_union_flat(&members)
         }
         // Leaves and already-absolute handles pass through.
         _ => kt,

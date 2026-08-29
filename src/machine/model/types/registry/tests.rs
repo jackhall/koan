@@ -206,8 +206,8 @@ fn union_of_flattens_and_deduplicates() {
     let registry = TypeRegistry::new();
     let number = registry.intern(TypeNode::Number);
     let string = registry.intern(TypeNode::Str);
-    let inner = registry.union_of(vec![number, string]);
-    let outer = registry.union_of(vec![inner, number]);
+    let inner = registry.union_of(&[number, string]);
+    let outer = registry.union_of(&[inner, number]);
     assert_eq!(
         outer, inner,
         "flattening then deduplicating recovers `inner`"
@@ -223,7 +223,7 @@ fn union_of_flattens_and_deduplicates() {
 fn union_of_collapses_to_a_lone_member() {
     let registry = TypeRegistry::new();
     let number = registry.intern(TypeNode::Number);
-    assert_eq!(registry.union_of(vec![number, number]), number);
+    assert_eq!(registry.union_of(&[number, number]), number);
 }
 
 // --- Join ---

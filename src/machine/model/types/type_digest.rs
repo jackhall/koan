@@ -277,7 +277,11 @@ fn function_digest(params: &Record<KType>, ret: TypeDigest) -> TypeDigest {
 }
 
 /// A union — order-blind, matching its set-based identity: sort the member digests.
-fn union_digest(members: &[KType]) -> TypeDigest {
+///
+/// Reachable from the registry so a union can be interned probe-first: the `Union` arm of
+/// [`node_digest`] is this call over the node's member slice, so a digest taken here off a
+/// member slice equals the digest of the node that slice would build.
+pub(super) fn union_digest(members: &[KType]) -> TypeDigest {
     let mut member_digests: Vec<TypeDigest> = members.iter().map(|m| m.digest()).collect();
     member_digests.sort_unstable();
     let mut h = DigestHasher::new(TAG_UNION);

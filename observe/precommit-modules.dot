@@ -406,6 +406,7 @@ digraph {
     "koan::builtins::type_ops::type_of" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::type_ops::with" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::type_ops::with" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::type_union" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::type_union" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::type_union" -> "koan::builtins::op_def" [label="uses", style="dashed"];
     "koan::builtins::type_union" -> "koan::machine" [label="uses", style="dashed"];

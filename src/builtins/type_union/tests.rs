@@ -31,7 +31,7 @@ fn two_member_union_lowers_to_union() {
     let types = test_run.types();
     assert_eq!(
         result,
-        types.union_of(vec![KType::NUMBER, KType::STR]),
+        types.union_of(&[KType::NUMBER, KType::STR]),
         "two-member `|` builds the union of its members",
     );
 }
@@ -47,7 +47,7 @@ fn three_member_run_builds_flat_union() {
     let types = test_run.types();
     assert_eq!(
         result,
-        types.union_of(vec![KType::NUMBER, KType::STR, KType::BOOL]),
+        types.union_of(&[KType::NUMBER, KType::STR, KType::BOOL]),
     );
 }
 
@@ -83,7 +83,7 @@ fn prefix_form_builds_union() {
     let types = test_run.types();
     assert_eq!(
         result,
-        types.union_of(vec![KType::NUMBER, KType::STR, KType::BOOL]),
+        types.union_of(&[KType::NUMBER, KType::STR, KType::BOOL]),
     );
 }
 
@@ -98,7 +98,7 @@ fn parenthesized_compound_member() {
     let types = test_run.types();
     assert_eq!(
         result,
-        types.union_of(vec![types.list(KType::NUMBER), KType::STR]),
+        types.union_of(&[types.list(KType::NUMBER), KType::STR]),
     );
 }
 
