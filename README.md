@@ -232,7 +232,7 @@ src/
     │   ├── arena/
     │   │   ├── frame.rs           FrameStorage / FrameSet / CallFrame / RunWriter — per-call allocation frame, run-root storage, the run's output sink, witnessed child-scope construction door
     │   │   └── step_allocator.rs  StepAllocator — the step-branded construction doors (alloc_carried / alloc_type_* / alloc_object_scalar)
-    │   ├── bindings.rs    Bindings façade — four-map (data/types/functions/operators) holding committed bindings only, with the firm write_value / write_type / write_operator_group primitives, the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)]); one RefCell over the four maps and the claim store, nothing else interior-mutable
+    │   ├── bindings.rs    Bindings façade — four-map (data/types/functions/operators) holding committed bindings only, with the firm write_value / write_type / write_operator_group primitives, the visibility-aware lookup_value/lookup_type/lookup_function_stored surface (raw map accessors are #[cfg(test)]); one RefCell over the four maps and the claim store, nothing else interior-mutable
     │   ├── bindings/
     │   │   ├── claims.rs  Claim / ClaimStore — the scope's in-flight binder claims (by_name / by_bucket read paths, by_statement retirement run), sized at the block fan-out
     │   │   ├── ops.rs     WriteOp / TypeWritePolicy — a binding-table write as outcome data, and the single apply interpreter the run loop drives

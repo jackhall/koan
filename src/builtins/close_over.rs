@@ -55,7 +55,7 @@ use crate::machine::execute::deps_on;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{
-    ExpressionPart, KExpression, KObject, KType, KeyElement, KeywordSymbol, TypeSymbol, UntypedKey,
+    ExpressionPart, KExpression, KObject, KType, KeyElement, KeywordSymbol, TypeSymbol,
     ValueSymbol, WILDCARD, render_label, render_untyped_key,
 };
 use crate::machine::{Action, AwaitContinue, CallFrame, DeliveredCarried, WriteGate};
@@ -63,45 +63,62 @@ use crate::machine::{BindingIndex, DeclarationSite};
 use crate::machine::{DeliveredFunction, DeliveredOperatorGroup, Scope};
 use crate::machine::{KError, KErrorKind, LexicalFrame, NameLookup, ProducerId};
 use crate::machine::{fresh_cart_tail, seed};
+use crate::witnessed::{BumpAllocator, BumpVec};
 
 use super::{arg, kw, sig};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { body, captures } }
 
-/// One entry of the capture list, as read off the slot before anything is resolved. Owned and
-/// lifetime-free so the list survives a park and is re-read verbatim at wake.
-enum Capture {
+/// One entry of the capture list, as read off the slot before anything is resolved. Staged on the
+/// step scratch, like every other transient here: a pass reads the list out of the `captures` slot
+/// it still holds, so nothing has to survive the park — the wake re-reads the same slot and gets
+/// the same list.
+enum Capture<'a> {
     /// A bare name on the value channel — `x`.
     Value(ValueSymbol),
     /// A bare name on the type channel — `Meters`.
     Type(TypeSymbol),
-    /// A signature-shaped group naming one full untyped bucket key — `(HELPER _)`.
-    Pattern(UntypedKey),
+    /// A signature-shaped group naming one full untyped bucket key — `(HELPER _)`. The key is a
+    /// scratch-staged run rather than an owned `UntypedKey`: [`KeyElement`] is `Copy`, so the run
+    /// probes the bucket tables directly through the same slice door a node's own bumped key uses.
+    Pattern(BumpVec<'a, KeyElement>),
 }
 
-/// Everything the block scope is seeded with, resolved and lifted. Lifetime-free for the same
-/// reason [`Capture`] is, and because the seed writes it inside the block frame's `for<'b>` open,
-/// where nothing at the caller's lifetime could be admitted.
-#[derive(Default)]
-struct CapturePlan {
+/// Everything the block scope is seeded with, resolved and lifted. Every carrier is a lifetime-free
+/// delivery envelope — the seed writes them inside the block frame's `for<'b>` open, where nothing
+/// at the caller's lifetime could be admitted — and the five buffers holding them are step scratch,
+/// which outlives the seed by construction: the seed runs before this builtin's body returns.
+struct CapturePlan<'a> {
     /// Explicit identifier captures on the value channel — bound through the **severing** seam.
-    values: Vec<(ValueSymbol, DeliveredCarried)>,
+    values: BumpVec<'a, (ValueSymbol, DeliveredCarried)>,
     /// Explicit identifier captures on the type channel — `Copy` handles, nothing to relocate.
-    types: Vec<(TypeSymbol, KType)>,
+    types: BumpVec<'a, (TypeSymbol, KType)>,
     /// Pattern captures and implicit close's registrations — bound **pinned**.
-    functions: Vec<DeliveredFunction>,
+    functions: BumpVec<'a, DeliveredFunction>,
     /// Implicit close's operator-registry entries — bound pinned, by probe key.
-    operators: Vec<(KeywordSymbol, DeliveredOperatorGroup)>,
+    operators: BumpVec<'a, (KeywordSymbol, DeliveredOperatorGroup)>,
     /// Implicit close's module bindings — bound pinned.
-    modules: Vec<(ValueSymbol, DeliveredCarried)>,
+    modules: BumpVec<'a, (ValueSymbol, DeliveredCarried)>,
+}
+
+impl<'a> CapturePlan<'a> {
+    fn new(scratch: BumpAllocator<'a>) -> Self {
+        Self {
+            values: BumpVec::new_in(scratch),
+            types: BumpVec::new_in(scratch),
+            functions: BumpVec::new_in(scratch),
+            operators: BumpVec::new_in(scratch),
+            modules: BumpVec::new_in(scratch),
+        }
+    }
 }
 
 /// What one resolution pass produced: a finished plan, or the set of in-flight producers the form
 /// has to wait on first. Errors take the `Result` channel around this.
-enum Pass {
-    Ready(Box<CapturePlan>),
-    Park(Vec<ProducerId>),
+enum Pass<'a> {
+    Ready(CapturePlan<'a>),
+    Park(BumpVec<'a, ProducerId>),
 }
 
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
@@ -109,26 +126,47 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
 
     let captures = crate::try_action!(require_kexpression(ctx.args, "CLOSE OVER", &SLOTS.captures));
     let block = crate::try_action!(require_kexpression(ctx.args, "CLOSE OVER", &SLOTS.body));
-    let list = crate::try_action!(read_capture_list(captures, ctx.registries));
-    build(ctx.scope, ctx.chain.clone(), list, block, ctx.registries)
+    build(
+        ctx.scope,
+        ctx.chain.clone(),
+        captures,
+        block,
+        ctx.scratch,
+        ctx.registries,
+    )
 }
 
 /// Resolve the capture list against `scope`, then hand the block its seeded region — or park and
 /// re-enter here when a capture or a visible registration is still in flight. Re-entrant by
-/// construction: `list` and `block` are the same values the synchronous pass held, and the wake-side
-/// scope is the slot's own, so the second pass resolves against exactly the chain the first did.
+/// construction: `captures` and `block` are the same `Copy` slot handles the synchronous pass held,
+/// and the wake-side scope is the slot's own, so the second pass reads the same list and resolves
+/// against exactly the chain the first did.
+///
+/// `scratch` is the *running* step's arena, never a captured one: a park's continuation carries only
+/// the two slot handles and the chain, and the wake passes its own `FinishCtx`'s scratch back in.
+/// That is what lets every transient below live on the arena — the list, the plan and the park set
+/// all die with the pop that produced them, and the wake rebuilds them on its own.
 fn build<'a>(
     scope: &'a Scope<'a>,
     chain: Option<Rc<LexicalFrame>>,
-    list: Vec<Capture>,
+    captures: KExpression<'a>,
     block: KExpression<'a>,
+    scratch: BumpAllocator<'a>,
     registries: &RunRegistries,
 ) -> Action<'a> {
-    let plan = match resolve(scope, chain.as_ref(), &list, registries) {
+    let list = crate::try_action!(read_capture_list(captures, scratch, registries));
+    let plan = match resolve(scope, chain.as_ref(), &list, scratch, registries) {
         Ok(Pass::Ready(plan)) => plan,
         Ok(Pass::Park(sources)) => {
             let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
-                build(fctx.scope, chain, list, block, fctx.registries)
+                build(
+                    fctx.scope,
+                    chain,
+                    captures,
+                    block,
+                    fctx.scratch,
+                    fctx.registries,
+                )
             });
             return Action::await_deps(deps_on(sources), finish);
         }
@@ -177,48 +215,61 @@ fn build<'a>(
 /// `HELPER _`), so the whole slot is **one** pattern capture. Otherwise its parts are the list —
 /// names on either channel, and parenthesized groups as patterns. A bare keyword inside a list is an
 /// error: a dispatch registration is named by its full bucket key, never by a lead keyword.
-fn read_capture_list(
-    slot: KExpression<'_>,
+fn read_capture_list<'a>(
+    slot: KExpression<'a>,
+    scratch: BumpAllocator<'a>,
     registries: &RunRegistries,
-) -> Result<Vec<Capture>, KError> {
+) -> Result<BumpVec<'a, Capture<'a>>, KError> {
     if slot
         .parts
         .iter()
         .any(|part| matches!(part.value, ExpressionPart::Keyword(_)))
     {
-        return Ok(vec![Capture::Pattern(read_pattern(slot, registries)?)]);
+        let mut list = BumpVec::with_capacity_in(1, scratch);
+        list.push(Capture::Pattern(read_pattern(slot, scratch, registries)?));
+        return Ok(list);
     }
-    slot.parts
-        .iter()
-        .map(|part| match part.value {
-            ExpressionPart::Identifier(name) => Ok(Capture::Value(name)),
-            ExpressionPart::Type(name) => Ok(Capture::Type(name)),
+    // One entry per part, so the buffer takes its capacity up front and never grows — a grown bump
+    // buffer abandons its old bytes until the pop.
+    let mut list = BumpVec::with_capacity_in(slot.parts.len(), scratch);
+    for part in slot.parts.iter() {
+        list.push(match part.value {
+            ExpressionPart::Identifier(name) => Capture::Value(name),
+            ExpressionPart::Type(name) => Capture::Type(name),
             ExpressionPart::Expression(group) => {
-                Ok(Capture::Pattern(read_pattern(*group, registries)?))
+                Capture::Pattern(read_pattern(*group, scratch, registries)?)
             }
-            _ => Err(shape_error(
-                "a capture is a name or a signature-shaped group like `(HELPER _)`",
-            )),
-        })
-        .collect()
+            _ => {
+                return Err(shape_error(
+                    "a capture is a name or a signature-shaped group like `(HELPER _)`",
+                ));
+            }
+        });
+    }
+    Ok(list)
 }
 
 /// Read one signature-shaped group into the untyped bucket key it names. `_` — already keyword-class
 /// as a pure-symbol token, so no lexer arm is involved — maps to a slot; every other keyword maps to
 /// itself. At least one non-wildcard keyword is required, since an all-slot key names no
 /// registration.
-fn read_pattern(group: KExpression<'_>, registries: &RunRegistries) -> Result<UntypedKey, KError> {
-    let key: UntypedKey = group
-        .parts
-        .iter()
-        .map(|part| match part.value {
-            ExpressionPart::Keyword(symbol) if symbol == WILDCARD.symbol() => Ok(KeyElement::Slot),
-            ExpressionPart::Keyword(symbol) => Ok(KeyElement::Keyword(symbol)),
-            _ => Err(shape_error(
-                "a capture pattern holds keywords and `_` holes only",
-            )),
-        })
-        .collect::<Result<_, _>>()?;
+fn read_pattern<'a>(
+    group: KExpression<'a>,
+    scratch: BumpAllocator<'a>,
+    registries: &RunRegistries,
+) -> Result<BumpVec<'a, KeyElement>, KError> {
+    let mut key: BumpVec<'a, KeyElement> = BumpVec::with_capacity_in(group.parts.len(), scratch);
+    for part in group.parts.iter() {
+        key.push(match part.value {
+            ExpressionPart::Keyword(symbol) if symbol == WILDCARD.symbol() => KeyElement::Slot,
+            ExpressionPart::Keyword(symbol) => KeyElement::Keyword(symbol),
+            _ => {
+                return Err(shape_error(
+                    "a capture pattern holds keywords and `_` holes only",
+                ));
+            }
+        });
+    }
     if !key.iter().any(|el| matches!(el, KeyElement::Keyword(_))) {
         return Err(shape_error(&format!(
             "capture pattern {} names no registration: a bucket key needs at least one keyword",
@@ -237,14 +288,15 @@ fn shape_error(detail: &str) -> KError {
 /// One resolution pass: the explicit captures, then implicit close over the per-call chain.
 /// Every in-flight producer either pass meets is collected into a single park set, so N captures
 /// and every visible claim cost one wake between them.
-fn resolve(
+fn resolve<'a>(
     scope: &Scope<'_>,
     chain: Option<&Rc<LexicalFrame>>,
-    list: &[Capture],
+    list: &[Capture<'a>],
+    scratch: BumpAllocator<'a>,
     registries: &RunRegistries,
-) -> Result<Pass, KError> {
-    let mut plan = CapturePlan::default();
-    let mut parked: Vec<ProducerId> = Vec::new();
+) -> Result<Pass<'a>, KError> {
+    let mut plan = CapturePlan::new(scratch);
+    let mut parked: BumpVec<'a, ProducerId> = BumpVec::new_in(scratch);
     let frame = chain.map(|c| &**c);
 
     for capture in list {
@@ -275,22 +327,28 @@ fn resolve(
                     }
                 }
             }
-            Capture::Pattern(key) => {
-                resolve_pattern(scope, frame, key, registries, &mut plan, &mut parked)?
-            }
+            Capture::Pattern(key) => resolve_pattern(
+                scope,
+                frame,
+                key,
+                scratch,
+                registries,
+                &mut plan,
+                &mut parked,
+            )?,
         }
     }
 
-    close_implicitly(scope, frame, &mut plan, &mut parked);
+    close_implicitly(scope, frame, scratch, &mut plan, &mut parked);
 
     Ok(if parked.is_empty() {
-        Pass::Ready(Box::new(plan))
+        Pass::Ready(plan)
     } else {
         Pass::Park(parked)
     })
 }
 
-fn park(parked: &mut Vec<ProducerId>, producer: ProducerId) {
+fn park(parked: &mut BumpVec<'_, ProducerId>, producer: ProducerId) {
     if !parked.contains(&producer) {
         parked.push(producer);
     }
@@ -300,19 +358,21 @@ fn park(parked: &mut Vec<ProducerId>, producer: ProducerId) {
 /// a *registration set*, not one overload, and dispatch's own walk keeps going past a scope whose
 /// overloads do not match — so taking the innermost scope's bucket alone would drop overloads the
 /// call site could still have reached. A visible pending claim on the key joins the park set.
-fn resolve_pattern(
+fn resolve_pattern<'a>(
     scope: &Scope<'_>,
     frame: Option<&LexicalFrame>,
-    key: &UntypedKey,
+    key: &[KeyElement],
+    scratch: BumpAllocator<'a>,
     registries: &RunRegistries,
-    plan: &mut CapturePlan,
-    parked: &mut Vec<ProducerId>,
+    plan: &mut CapturePlan<'a>,
+    parked: &mut BumpVec<'a, ProducerId>,
 ) -> Result<(), KError> {
     let mut found = false;
     for ancestor in scope.ancestors() {
-        let (overloads, pending) = ancestor
-            .bindings()
-            .lifted_overloads_for(key, ancestor.binding_cutoff(frame));
+        let (overloads, pending) =
+            ancestor
+                .bindings()
+                .lifted_overloads_for(key, ancestor.binding_cutoff(frame), scratch);
         if let Some(producer) = pending {
             park(parked, producer);
             found = true;
@@ -338,11 +398,12 @@ fn resolve_pattern(
 /// Innermost-first, and the write doors settle the shadow rule from there: a duplicate dispatch
 /// token, a probe the operator registry already holds, and a standing name all mean an inner
 /// scope's entry won.
-fn close_implicitly(
+fn close_implicitly<'a>(
     scope: &Scope<'_>,
     frame: Option<&LexicalFrame>,
-    plan: &mut CapturePlan,
-    parked: &mut Vec<ProducerId>,
+    scratch: BumpAllocator<'a>,
+    plan: &mut CapturePlan<'a>,
+    parked: &mut BumpVec<'a, ProducerId>,
 ) {
     for ancestor in scope
         .ancestors()
@@ -350,7 +411,7 @@ fn close_implicitly(
     {
         let visible = ancestor
             .bindings()
-            .visible_for_capture(ancestor.binding_cutoff(frame));
+            .visible_for_capture(ancestor.binding_cutoff(frame), scratch);
         for producer in visible.claims {
             park(parked, producer);
         }
@@ -365,9 +426,9 @@ fn close_implicitly(
 
 // ---------- seeding ----------
 
-impl CapturePlan {
+impl CapturePlan<'_> {
     /// Write the whole plan into the freshly minted block scope, under the construction gate
-    /// `block_tail` mints for the call. Explicit captures land first, so they shadow anything
+    /// `fresh_cart_tail` mints for the call. Explicit captures land first, so they shadow anything
     /// implicit close would otherwise have brought in under the same name or token.
     fn seed_into<'b>(
         self,

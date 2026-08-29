@@ -50,11 +50,12 @@
 //! [`crate::machine::core::Scope::resolve_operator_group_delivered`]).
 //!
 //! Production reads use the visibility-aware [`Bindings::lookup_value`] /
-//! [`Bindings::lookup_type`] / [`Bindings::lookup_function`], passing a
+//! [`Bindings::lookup_type`] / [`Bindings::lookup_function_stored`], passing a
 //! `chain_cutoff` computed via [`crate::machine::core::LexicalFrame::index_for`].
 //! Raw map accessors are `#[cfg(test)]`.
 
 use allocator_api2::alloc::{Allocator, Global};
+use allocator_api2::vec::Vec as AllocVec;
 #[cfg(test)]
 use std::cell::Ref;
 use std::cell::RefCell;
@@ -229,7 +230,7 @@ pub enum MemberResolution<'a> {
     },
 }
 
-/// Outcome of a per-scope `lookup_function` call. Visibility (per
+/// Outcome of a per-scope `lookup_function_stored` call. Visibility (per
 /// `chain_cutoff`) is applied inside the lookup; `overloads` holds only
 /// visible finalized overloads (may be empty) and `pending` the earliest-index
 /// visible in-flight producer (if any). Both are surfaced together so the
@@ -245,8 +246,8 @@ pub enum MemberResolution<'a> {
 /// next-earliest pending sibling.
 ///
 /// Generic in the allocator its `overloads` buffer is built over, defaulting to the global heap.
-/// The dispatch hot path passes the step's scratch handle so the buffer costs no heap traffic and
-/// dies with the pop; the untyped-key door leaves the default in place.
+/// Every reader passes the step's scratch handle instead, so the buffer costs no heap traffic and
+/// dies with the pop; the default stands for a caller that has no arena in reach.
 pub struct FunctionLookup<'a, A: Allocator = Global> {
     /// The visible finalized overloads, each a bit-copy of the bucket's dormant carrier — value and
     /// proven reach as one unit, re-anchored only by an [`open`](crate::witnessed::Sealed::open_at)
@@ -262,20 +263,21 @@ pub struct FunctionLookup<'a, A: Allocator = Global> {
 /// table borrow is held across a carrier lift.
 /// Lifetime-free: every carrier is already **lifted** into a delivery envelope pinned by the
 /// table's own region owner, so the snapshot survives the borrow it was read under and the caller
-/// re-homes it wherever it likes.
-pub(crate) struct VisibleBindings {
+/// re-homes it wherever it likes. The four buffers are built over the caller's allocator — the one
+/// caller is a builtin body, which stages them on its step scratch.
+pub(crate) struct VisibleBindings<A: Allocator> {
     /// Visible value bindings. The capture walk keeps the modules among them and drops the rest —
     /// plain data reaches the block only by explicit capture.
-    pub(crate) data: Vec<(ValueSymbol, DeliveredCarried)>,
+    pub(crate) data: AllocVec<(ValueSymbol, DeliveredCarried), A>,
     /// Every visible finalized overload, across all of this scope's buckets. The bucket key and the
     /// dispatch token are re-derived from each callable's own signature at the destination, so the
     /// envelope is the whole entry.
-    pub(crate) functions: Vec<DeliveredFunction>,
+    pub(crate) functions: AllocVec<DeliveredFunction, A>,
     /// Visible operator-registry entries, by probe key.
-    pub(crate) operators: Vec<(KeywordSymbol, DeliveredOperatorGroup)>,
+    pub(crate) operators: AllocVec<(KeywordSymbol, DeliveredOperatorGroup), A>,
     /// The producers behind every visible in-flight claim, name and bucket alike — what the block
     /// build parks on so its close is independent of drain order.
-    pub(crate) claims: Vec<ProducerId>,
+    pub(crate) claims: AllocVec<ProducerId, A>,
 }
 
 /// Lexical position of a binding's installing statement: a binding at `idx` is visible to a
@@ -585,16 +587,11 @@ impl<'a> Bindings<'a> {
     /// overloads AND the earliest-index visible pending sibling together, so the scope walk decides
     /// pending-vs-finalized precedence with both in hand.
     ///
-    /// The owned-key door, off the dispatch path: its buffer goes to the global heap, since a
-    /// caller holding an owned key has no step scratch in reach.
-    pub fn lookup_function(&self, key: &UntypedKey, cutoff: Option<usize>) -> FunctionLookup<'a> {
-        self.lookup_function_probe(key.as_slice(), cutoff, Global)
-    }
-
-    /// [`Self::lookup_function`] from a node's **own** bumped key — the dispatch hot path, which
-    /// reads the run the node already carries instead of materializing an owned key per call.
-    /// `alloc` hosts the overload buffer: both call sites are inside the scope walk, which passes
-    /// the step's scratch arena.
+    /// The key arrives as a run of `Copy` elements — a node's own bumped key on the dispatch hot
+    /// path, a scratch-staged one where a caller builds the shape it is asking about — so no reader
+    /// materializes an owned key to probe with. `alloc` hosts the overload buffer, and every caller
+    /// passes the step's scratch arena, so a lookup costs no heap traffic and its buffer dies with
+    /// the pop.
     pub fn lookup_function_stored<A: Allocator>(
         &self,
         key: &[KeyElement],
@@ -741,7 +738,7 @@ impl<'a> Bindings<'a> {
     /// Snapshot every `(UntypedKey, Vec<SealedFunction>)` pair in `functions`, ignoring per-overload
     /// visibility. Each seal is a bit-copy; the caller re-anchors what it needs under its own pin.
     /// An empty bucket is skipped — a shape whose overloads all retired publishes no dispatch
-    /// surface to snapshot. For chain-gated picks use [`Self::lookup_function`].
+    /// surface to snapshot. For chain-gated picks use [`Self::lookup_function_stored`].
     pub fn iter_functions(&self) -> Vec<(UntypedKey, Vec<SealedFunction<'a>>)> {
         self.tables
             .borrow()
@@ -771,29 +768,45 @@ impl<'a> Bindings<'a> {
     /// descriptions the upgrade reads. Reading it off the table rather than off the scope is what
     /// makes a `USING` window admissible: the window scope's region is the call site's, while its
     /// borrowed façade — and every seal in it — lives in the opened module's.
-    pub(crate) fn visible_for_capture(&self, cutoff: Option<usize>) -> VisibleBindings {
+    pub(crate) fn visible_for_capture<A: Allocator + Copy>(
+        &self,
+        cutoff: Option<usize>,
+        alloc: A,
+    ) -> VisibleBindings<A> {
         let tables = self.tables.borrow();
-        VisibleBindings {
-            data: tables
+        // Each buffer takes an upper bound on its own table up front. A bump vector that grows
+        // abandons its old bytes as dead scratch until the pop, so the capacity is worth the count.
+        let mut data = AllocVec::with_capacity_in(tables.data.len(), alloc);
+        data.extend(
+            tables
                 .data
                 .iter()
                 .filter(|(_, entry)| Self::visible(entry.index, cutoff))
-                .map(|(name, entry)| (*name, self.brand.lift_resident(entry.sealed.duplicate())))
-                .collect(),
-            functions: tables
+                .map(|(name, entry)| (*name, self.brand.lift_resident(entry.sealed.duplicate()))),
+        );
+        let overloads = tables.functions.values().map(|bucket| bucket.len()).sum();
+        let mut functions = AllocVec::with_capacity_in(overloads, alloc);
+        functions.extend(
+            tables
                 .functions
                 .values()
                 .flat_map(|bucket| bucket.iter())
                 .filter(|entry| Self::visible(entry.index, cutoff))
-                .map(|entry| self.brand.lift_resident(entry.sealed.duplicate()))
-                .collect(),
-            operators: tables
+                .map(|entry| self.brand.lift_resident(entry.sealed.duplicate())),
+        );
+        let mut operators = AllocVec::with_capacity_in(tables.operators.len(), alloc);
+        operators.extend(
+            tables
                 .operators
                 .iter()
                 .filter(|(_, entry)| Self::visible(entry.index, cutoff))
-                .map(|(probe, entry)| (*probe, self.brand.lift_resident(entry.sealed.duplicate())))
-                .collect(),
-            claims: tables.claims.visible_producers(cutoff),
+                .map(|(probe, entry)| (*probe, self.brand.lift_resident(entry.sealed.duplicate()))),
+        );
+        VisibleBindings {
+            data,
+            functions,
+            operators,
+            claims: tables.claims.visible_producers(cutoff, alloc),
         }
     }
 
@@ -802,20 +815,21 @@ impl<'a> Bindings<'a> {
     /// claim on it. [`Self::visible_for_capture`]'s single-key twin, and lifted through the table's
     /// own brand for the same reason — a `USING` window's seals live in the opened module's region,
     /// not in the window scope's.
-    pub(crate) fn lifted_overloads_for(
+    pub(crate) fn lifted_overloads_for<A: Allocator + Copy>(
         &self,
-        key: &UntypedKey,
+        key: &[KeyElement],
         cutoff: Option<usize>,
-    ) -> (Vec<DeliveredFunction>, Option<ProducerId>) {
-        let lookup = self.lookup_function(key, cutoff);
-        (
+        alloc: A,
+    ) -> (AllocVec<DeliveredFunction, A>, Option<ProducerId>) {
+        let lookup = self.lookup_function_stored(key, cutoff, alloc);
+        let mut lifted = AllocVec::with_capacity_in(lookup.overloads.len(), alloc);
+        lifted.extend(
             lookup
                 .overloads
                 .into_iter()
-                .map(|sealed| self.brand.lift_resident(sealed))
-                .collect(),
-            lookup.pending,
-        )
+                .map(|sealed| self.brand.lift_resident(sealed)),
+        );
+        (lifted, lookup.pending)
     }
 
     /// True iff `types[name]` is bound at [`BindingIndex::BUILTIN`]. The

@@ -113,7 +113,7 @@ bound to a string still reads the member named `x`.
 
 Function-bucket lookup pre-filters by per-overload visibility before the strict
 admit predicate runs — the [lookup → admit protocol](../lookup-protocol.md)'s
-Layer 2 (`Bindings::lookup_function`) applied per-overload rather than per
+Layer 2 (`Bindings::lookup_function_stored`) applied per-overload rather than per
 name. Each `functions` entry carries a per-overload
 [`BindingIndex { idx }`](../../../src/machine/core/bindings.rs) — the lexical
 statement index at which the overload was registered. The visibility predicate

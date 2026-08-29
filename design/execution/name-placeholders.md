@@ -173,7 +173,7 @@ name observes exactly what a keyworded call to it observes.
 
 One bucket key admits multiple sibling FN binders: each install adds a distinct
 claim at its own `BindingIndex`. A consumer looking up the bucket via
-[`Bindings::lookup_function`](../../src/machine/core/bindings.rs) gets the
+[`Bindings::lookup_function_stored`](../../src/machine/core/bindings.rs) gets the
 *earliest-index visible* claim in the returned `FunctionLookup`'s
 `pending` field — the most-likely-first-finalizer. On that producer's finalize,
 the seal appends to `functions[bucket]` and that binder's claim retires (the
@@ -231,7 +231,7 @@ producer surfaces as `NameLookup::Parked(ProducerId)` /
 `FunctionLookup { pending: Some(ProducerId), .. }` rather than a miss —
 [`Bindings::lookup_value`](../../src/machine/core/bindings.rs) probes
 `data[name]`, then the store; and
-[`Bindings::lookup_function`](../../src/machine/core/bindings.rs) surfaces
+[`Bindings::lookup_function_stored`](../../src/machine/core/bindings.rs) surfaces
 the visibility-filtered sealed overloads of `functions[key]` and the
 earliest-index visible claim on that same key *together* in one
 `FunctionLookup`. The dispatcher decides each scope's contribution from

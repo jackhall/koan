@@ -2,6 +2,7 @@
 //! exclusion that makes the `data`/`types` partition structural (no name in both), and the claim
 //! store a still-finalizing binder stamps beside the binding maps.
 
+use allocator_api2::alloc::Global;
 use std::rc::Rc;
 
 use super::*;
@@ -458,7 +459,10 @@ fn a_two_bucket_binder_retires_the_key_it_did_not_seal() {
         "the statement's retirement drops the claim its commit did not",
     );
     assert_eq!(
-        bindings.lookup_function(&sealed_key, None).overloads.len(),
+        bindings
+            .lookup_function_stored(&sealed_key, None, Global)
+            .overloads
+            .len(),
         1,
         "retirement touches no committed overload",
     );
@@ -674,14 +678,14 @@ fn bump_backed_tables_full_churn() {
         assert!(
             scope
                 .bindings()
-                .lookup_function(&purged_key, None)
+                .lookup_function_stored(&purged_key, None, Global)
                 .overloads
                 .is_empty()
         );
         assert_eq!(
             scope
                 .bindings()
-                .lookup_function(&sealed_key, None)
+                .lookup_function_stored(&sealed_key, None, Global)
                 .overloads
                 .len(),
             1,

@@ -1,6 +1,6 @@
 //! Unit tests for [`crate::machine::core::Bindings::lookup_value`],
 //! [`crate::machine::core::Bindings::lookup_type`], and
-//! [`crate::machine::core::Bindings::lookup_function`] — the visibility-aware
+//! [`crate::machine::core::Bindings::lookup_function_stored`] — the visibility-aware
 //! lookups the index-gated resolver walks.
 
 use crate::builtins::test_support::probe_symbol;
@@ -12,6 +12,7 @@ use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::{BindingIndex, FrameStorageExt, NameLookup, run_root_storage};
 use crate::machine::model::KObject;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
+use allocator_api2::alloc::Global;
 
 use super::{body_no_op, unit_signature};
 use crate::machine::model::RunRegistries;
@@ -177,7 +178,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         )
         .unwrap();
     let key = f.signature.untyped_key();
-    let lookup = scope.bindings().lookup_function(&key, None);
+    let lookup = scope.bindings().lookup_function_stored(&key, None, Global);
     assert_eq!(lookup.overloads.len(), 1);
     assert!(std::ptr::eq(
         scope.open_function(&lookup.overloads[0]).value(),
@@ -238,7 +239,9 @@ fn lookup_function_filters_per_overload_visibility() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let visible_early = scope.bindings().lookup_function(&key, Some(5));
+    let visible_early = scope
+        .bindings()
+        .lookup_function_stored(&key, Some(5), Global);
     assert_eq!(
         visible_early.overloads.len(),
         1,
@@ -248,7 +251,9 @@ fn lookup_function_filters_per_overload_visibility() {
         scope.open_function(&visible_early.overloads[0]).value(),
         f_early
     ));
-    let visible_both = scope.bindings().lookup_function(&key, Some(9));
+    let visible_both = scope
+        .bindings()
+        .lookup_function_stored(&key, Some(9), Global);
     assert_eq!(visible_both.overloads.len(), 2);
 }
 
@@ -268,11 +273,15 @@ fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let visible = scope.bindings().lookup_function(&key, Some(5));
+    let visible = scope
+        .bindings()
+        .lookup_function_stored(&key, Some(5), Global);
     assert!(visible.overloads.is_empty());
     assert_eq!(visible.pending, Some(ProducerId::for_test(11)));
     // Filtered out: no overloads and no visible pending — the old `None`.
-    let hidden = scope.bindings().lookup_function(&key, Some(1));
+    let hidden = scope
+        .bindings()
+        .lookup_function_stored(&key, Some(1), Global);
     assert!(hidden.overloads.is_empty());
     assert!(hidden.pending.is_none());
 }
@@ -308,7 +317,9 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let lookup = scope.bindings().lookup_function(&key, Some(9));
+    let lookup = scope
+        .bindings()
+        .lookup_function_stored(&key, Some(9), Global);
     assert_eq!(lookup.overloads.len(), 1);
     assert_eq!(lookup.pending, Some(ProducerId::for_test(99)));
 }
@@ -336,7 +347,9 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
     let key = f.open(|f| f.signature.untyped_key());
     // Empty-after-filter must surface an empty `overloads` with no pending, so
     // the dispatch walker keeps walking ancestors.
-    let lookup = scope.bindings().lookup_function(&key, Some(3));
+    let lookup = scope
+        .bindings()
+        .lookup_function_stored(&key, Some(3), Global);
     assert!(lookup.overloads.is_empty());
     assert!(lookup.pending.is_none());
 }
@@ -405,7 +418,10 @@ fn retirement_drops_every_bucket_the_statement_claimed() {
     );
     // The finalized overload sharing a key with a retired claim survives.
     assert_eq!(
-        bindings.lookup_function(&sealed_key, None).overloads.len(),
+        bindings
+            .lookup_function_stored(&sealed_key, None, Global)
+            .overloads
+            .len(),
         1
     );
 

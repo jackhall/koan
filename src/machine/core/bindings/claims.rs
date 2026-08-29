@@ -31,6 +31,9 @@
 
 use std::mem::ManuallyDrop;
 
+use allocator_api2::alloc::Allocator;
+use allocator_api2::vec::Vec as AllocVec;
+
 use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::KeyElement;
@@ -286,8 +289,15 @@ impl<'a> ClaimStore<'a> {
     /// wait is well-founded for the same reason every other claim park is — the exclusive cutoff
     /// keeps a statement's own claim out of its own subtree, so a source is always a strictly
     /// earlier statement.
-    pub(super) fn visible_producers(&self, cutoff: Option<usize>) -> Vec<ProducerId> {
-        let mut producers: Vec<ProducerId> = Vec::new();
+    ///
+    /// The buffer is built over the caller's allocator: the one caller stages it on the step
+    /// scratch, so a scan that finds nothing in flight — the common case — costs no heap traffic.
+    pub(super) fn visible_producers<A: Allocator>(
+        &self,
+        cutoff: Option<usize>,
+        alloc: A,
+    ) -> AllocVec<ProducerId, A> {
+        let mut producers: AllocVec<ProducerId, A> = AllocVec::new_in(alloc);
         let mut push = |claim: &Claim| {
             if Bindings::visible(claim.index, cutoff) && !producers.contains(&claim.producer) {
                 producers.push(claim.producer);

@@ -10,6 +10,7 @@ use crate::machine::core::{BindingIndex, program_storage, run_root_storage};
 use crate::machine::model::{
     Argument, KType, ReturnType, SignatureDraft, SignatureElement, UntypedKey,
 };
+use allocator_api2::alloc::Global;
 
 use super::body_no_op;
 
@@ -57,9 +58,10 @@ fn builtin_seed_registers_a_callable_reaching_exactly_its_home_region() {
         .unwrap();
 
     let foreign = run_root_storage();
-    let lookup = scope.bindings().lookup_function(
+    let lookup = scope.bindings().lookup_function_stored(
         &key(vec![SignatureElement::Keyword(probe_symbol("FOO"))]),
         None,
+        Global,
     );
     assert_eq!(lookup.overloads.len(), 1);
     let opened = scope.open_function(&lookup.overloads[0]);
@@ -88,12 +90,13 @@ fn fn_declaration_registers_a_callable_reaching_exactly_its_home_region() {
 
     let foreign = run_root_storage();
     let scope = test_run.scope;
-    let lookup = scope.bindings().lookup_function(
+    let lookup = scope.bindings().lookup_function_stored(
         &key(vec![
             SignatureElement::Keyword(probe_symbol("DOUBLE")),
             slot("x"),
         ]),
         None,
+        Global,
     );
     assert_eq!(lookup.overloads.len(), 1, "the FN registered its overload");
     let opened = scope.open_function(&lookup.overloads[0]);
@@ -113,13 +116,14 @@ fn op_declaration_registers_a_callable_reaching_exactly_its_home_region() {
 
     let foreign = run_root_storage();
     let scope = test_run.scope;
-    let lookup = scope.bindings().lookup_function(
+    let lookup = scope.bindings().lookup_function_stored(
         &key(vec![
             slot("left"),
             SignatureElement::Keyword(probe_symbol("MINUS")),
             slot("right"),
         ]),
         None,
+        Global,
     );
     assert_eq!(lookup.overloads.len(), 1, "the OP registered its body");
     let opened = scope.open_function(&lookup.overloads[0]);

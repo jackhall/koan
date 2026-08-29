@@ -12,6 +12,7 @@ use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
 use crate::machine::model::{Argument, KType, ReturnType, SignatureDraft, SignatureElement};
+use allocator_api2::alloc::Global;
 
 use super::{body_no_op, unit_signature};
 use crate::machine::model::RunRegistries;
@@ -224,9 +225,11 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .expect("a value bind of a callable is an ordinary bind, not an overload");
-    let lookup = scope
-        .bindings()
-        .lookup_function(&f1.open(|f| f.signature.untyped_key()), None);
+    let lookup = scope.bindings().lookup_function_stored(
+        &f1.open(|f| f.signature.untyped_key()),
+        None,
+        Global,
+    );
     assert_eq!(
         lookup.overloads.len(),
         1,
@@ -740,9 +743,11 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
         scope.lookup("f").is_some(),
         "the value binding lands in `data`",
     );
-    let lookup = scope
-        .bindings()
-        .lookup_function(&f.open(|f| f.signature.untyped_key()), None);
+    let lookup = scope.bindings().lookup_function_stored(
+        &f.open(|f| f.signature.untyped_key()),
+        None,
+        Global,
+    );
     assert!(
         lookup.overloads.is_empty(),
         "a value bind must not register a keyworded overload",

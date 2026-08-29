@@ -41,7 +41,7 @@ matching the three lookup kinds:
   [`Bindings::lookup_type`](../../src/machine/core/bindings.rs).
 - [`Scope::resolve_dispatch`](../../src/machine/execute/decide/resolve_dispatch.rs)
   — function-bucket lookup. Per-ancestor calls
-  [`Bindings::lookup_function`](../../src/machine/core/bindings.rs)
+  [`Bindings::lookup_function_stored`](../../src/machine/core/bindings.rs)
   and decides the scope's contribution from the returned
   [`FunctionLookup`](../../src/machine/core/bindings.rs): a visible pending
   producer parks the scope, otherwise the finalized overloads go to
@@ -150,7 +150,7 @@ never carries a name it would have to reject further down.
   it consults neither the builtin root nor lexical ancestors, so `m.<non-member>`
   is a missing member, not a fall-through to a builtin or outer type — and the
   cross-kind exclusion keeps a name from matching both arms.
-- [`Bindings::lookup_function`](../../src/machine/core/bindings.rs)
+- [`Bindings::lookup_function_stored`](../../src/machine/core/bindings.rs)
   answers both questions the one bucket key addresses, as a
   `FunctionLookup` struct: `overloads` is the visibility-filtered entries of
   `functions[key]` (possibly empty) and `pending` is the earliest-index visible

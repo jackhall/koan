@@ -301,6 +301,7 @@ digraph {
     "koan::builtins::catch" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::close_over" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::close_over" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::close_over" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::close_over" -> "koan::machine::execute" [label="uses", style="dashed"];
