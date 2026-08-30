@@ -7,6 +7,7 @@ use crate::machine::model::{BinderSymbol, RunRegistries, Symbol};
 use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
+use crate::witnessed::{BumpAllocator, BumpVec};
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface
 /// `Unbound` against a parameter name.
@@ -43,7 +44,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
 }
 
 pub(crate) enum ParamListOutcome<'a> {
-    Done(Vec<SignatureElement>),
+    Done(BumpVec<'a, SignatureElement>),
     /// One or more parameter slots couldn't elaborate synchronously. The caller schedules an
     /// `AwaitDeps` over `awaited_producers` and any sub-Dispatches, then re-runs
     /// `parse_fn_param_list` over the same (unmodified) `signature` with the resolved
@@ -52,7 +53,7 @@ pub(crate) enum ParamListOutcome<'a> {
     Pending {
         awaited_producers: Vec<ProducerId>,
         /// `(slot_idx_in_signature_parts, sub_expr_to_dispatch)`.
-        sub_dispatches: Vec<(usize, KExpression<'a>)>,
+        sub_dispatches: BumpVec<'a, (usize, KExpression<'a>)>,
     },
     Err(String),
 }
@@ -74,13 +75,23 @@ pub(crate) fn parse_fn_param_list<'a>(
     elaborator: &mut Elaborator<'_, 'a>,
     registries: &RunRegistries,
     resolved: Option<&[(usize, KType)]>,
+    scratch: BumpAllocator<'a>,
 ) -> ParamListOutcome<'a> {
     let parts = signature.parts;
     // Keyword tokens keep riding as `&'a str`; the mint door re-homes those at the function's own
-    // region.
-    let mut elements: Vec<SignatureElement> = Vec::with_capacity(parts.len());
+    // region. The run itself is staging: the mint copies it into the callable's region and it dies
+    // with this step, so it takes the step scratch, one push per part making the reservation exact.
+    let mut elements: BumpVec<'a, SignatureElement> =
+        BumpVec::with_capacity_in(parts.len(), scratch);
+    // `awaited` is the one buffer here that stays on the heap. It grows by `extend` over a
+    // `TypeResolution::Park`'s producer list, whose length the resolver sets rather than this
+    // loop, so no bound is available to reserve against — and a bump fill that outgrows its
+    // reservation abandons the old buffer as dead region bytes.
     let mut awaited: Vec<ProducerId> = Vec::new();
-    let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
+    // Its peer parks at most one sub-dispatch per part and is read back inside this same step, by
+    // the `defer` that schedules them, so the scratch hosts it against an exact reservation.
+    let mut sub_dispatches: BumpVec<'a, (usize, KExpression<'a>)> =
+        BumpVec::with_capacity_in(parts.len(), scratch);
     let mut first_err: Option<String> = None;
     let mut i = 0;
     while i < parts.len() {

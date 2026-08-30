@@ -9,6 +9,7 @@ use crate::machine::model::KKind;
 use crate::machine::model::TypeNode;
 use crate::machine::model::{Argument, BinderSymbol, KType, SignatureElement, Symbol, ValueSymbol};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::witnessed::BumpVec;
 
 use super::{arg, kw, sig};
 
@@ -68,6 +69,7 @@ pub(crate) fn build_fn_like<'a>(
         &mut elaborator,
         ctx.registries,
         None,
+        ctx.scratch,
     ) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
         ParamListOutcome::Err(msg) => {
@@ -82,7 +84,7 @@ pub(crate) fn build_fn_like<'a>(
         },
     };
     let bind_index = ctx.bind_index();
-    match classify(return_type_state, params) {
+    match classify(return_type_state, params, ctx.scratch) {
         FnPlan::Synchronous {
             elements,
             return_type,
@@ -90,7 +92,7 @@ pub(crate) fn build_fn_like<'a>(
             ctx.scratch,
             finalize_fn_with_kind(
                 ctx.scope,
-                elements,
+                &elements,
                 return_type,
                 body_expr,
                 kind,
@@ -209,23 +211,26 @@ pub fn body_record_schema<'a>(
     // The schema's keys are the classified names its own field-list parse minted, so each
     // parameter's binding class rides straight into its `Argument`. The return-surface scan probes
     // by bare symbol bits, so it reads the same keys down to their symbols. Both lists are derived
-    // under the type-table borrow, so the schema is read in place rather than copied out.
+    // under the type-table borrow, so the schema is read in place rather than copied out. The names
+    // die with this step, once the return-surface scan below has read them, so they stage on the
+    // step scratch; the elements run outlives it whenever the return type defers — the wake closure
+    // carries that one as `prebuilt_elements` — so it takes the frame region instead. Each list
+    // gets one entry per schema field, so both reservations are exact.
     let read = ctx.types().with_node(schema_kt, |node| match node {
-        TypeNode::Record { fields } => Some((
-            fields
-                .keys()
-                .map(BinderSymbol::symbol)
-                .collect::<Vec<Symbol>>(),
-            fields
-                .iter()
-                .map(|(name, ktype)| {
-                    SignatureElement::Argument(Argument {
-                        name,
-                        ktype: *ktype,
-                    })
+        TypeNode::Record { fields } => {
+            let mut param_names: BumpVec<'a, Symbol> =
+                BumpVec::with_capacity_in(fields.len(), ctx.scratch);
+            param_names.extend(fields.keys().map(BinderSymbol::symbol));
+            let mut elements: BumpVec<'a, SignatureElement> =
+                BumpVec::with_capacity_in(fields.len(), ctx.scope.brand().allocator());
+            elements.extend(fields.iter().map(|(name, ktype)| {
+                SignatureElement::Argument(Argument {
+                    name,
+                    ktype: *ktype,
                 })
-                .collect::<Vec<SignatureElement>>(),
-        )),
+            }));
+            Some((param_names, elements))
+        }
         _ => None,
     });
     let Some((param_names, elements)) = read else {
@@ -245,12 +250,16 @@ pub fn body_record_schema<'a>(
         ctx.registries,
     ));
     let bind_index = ctx.bind_index();
-    match classify(return_type_state, ParamListResult::Done(Vec::new())) {
+    match classify(
+        return_type_state,
+        ParamListResult::Done(BumpVec::new_in(ctx.scratch)),
+        ctx.scratch,
+    ) {
         FnPlan::Synchronous { return_type, .. } => fn_action(
             ctx.scratch,
             finalize_fn_with_kind(
                 ctx.scope,
-                elements,
+                &elements,
                 return_type,
                 body_expr,
                 FnKind::Anonymous,

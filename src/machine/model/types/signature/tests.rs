@@ -14,13 +14,11 @@ use crate::source::Spanned;
 fn one_slot(brand: RegionBrand<'_>, kt: KType) -> ExpressionSignature<'_> {
     ExpressionSignature::mint(
         brand,
-        SignatureDraft {
-            return_type: ReturnType::Resolved(KType::ANY),
-            elements: vec![SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v").expect("value token"),
-                ktype: kt,
-            })],
-        },
+        ReturnType::Resolved(KType::ANY),
+        &[SignatureElement::Argument(Argument {
+            name: crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+            ktype: kt,
+        })],
     )
 }
 
@@ -111,10 +109,8 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
     let brand = program.brand().region();
     let sig = ExpressionSignature::mint(
         brand,
-        SignatureDraft {
-            return_type: ReturnType::Resolved(KType::ANY),
-            elements: vec![SignatureElement::Keyword(probe_symbol("FOO"))],
-        },
+        ReturnType::Resolved(KType::ANY),
+        &[SignatureElement::Keyword(probe_symbol("FOO"))],
     );
     let empty: KExpression<'_> = KExpression::new(brand, &[]);
     assert!(!sig.matches(&empty, types));
@@ -176,13 +172,11 @@ fn sig_with<'a>(
 ) -> ExpressionSignature<'a> {
     ExpressionSignature::mint(
         brand,
-        SignatureDraft {
-            return_type: ret,
-            elements: vec![SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v").expect("value token"),
-                ktype: slot,
-            })],
-        },
+        ret,
+        &[SignatureElement::Argument(Argument {
+            name: crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+            ktype: slot,
+        })],
     )
 }
 
@@ -222,19 +216,11 @@ fn indistinguishable_splits_on_argument_type_and_keywords() {
     let kw = |token: &'static str| {
         ExpressionSignature::mint(
             brand,
-            SignatureDraft {
-                return_type: ReturnType::Resolved(KType::ANY),
-                elements: vec![SignatureElement::keyword(token, &labels)],
-            },
+            ReturnType::Resolved(KType::ANY),
+            &[SignatureElement::keyword(token, &labels)],
         )
     };
-    let empty = ExpressionSignature::mint(
-        brand,
-        SignatureDraft {
-            return_type: ReturnType::Resolved(KType::ANY),
-            elements: vec![],
-        },
-    );
+    let empty = ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &[]);
     assert!(kw("FOO").indistinguishable_from(&kw("FOO")));
     assert!(!kw("FOO").indistinguishable_from(&kw("BAR")));
     assert!(!kw("FOO").indistinguishable_from(&num));
@@ -275,13 +261,7 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
                 ktype: *kt,
             })
         }));
-        ExpressionSignature::mint(
-            brand,
-            SignatureDraft {
-                return_type: ReturnType::Resolved(KType::ANY),
-                elements,
-            },
-        )
+        ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &elements)
     }
 
     let program = program_storage();
@@ -293,26 +273,17 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
         // independent of `Argument::name`, so both must call these indistinguishable.
         ExpressionSignature::mint(
             brand,
-            SignatureDraft {
-                return_type: ReturnType::Resolved(KType::BOOL),
-                elements: vec![SignatureElement::Argument(Argument {
-                    name: crate::machine::model::BinderSymbol::classify("other")
-                        .expect("value token"),
-                    ktype: KType::NUMBER,
-                })],
-            },
+            ReturnType::Resolved(KType::BOOL),
+            &[SignatureElement::Argument(Argument {
+                name: crate::machine::model::BinderSymbol::classify("other").expect("value token"),
+                ktype: KType::NUMBER,
+            })],
         ),
         keyworded(brand, "TAKE", &[KType::NUMBER]),
         keyworded(brand, "TAKE", &[KType::ANY]),
         keyworded(brand, "DROP", &[KType::NUMBER]),
         keyworded(brand, "TAKE", &[KType::NUMBER, KType::NUMBER]),
-        ExpressionSignature::mint(
-            brand,
-            SignatureDraft {
-                return_type: ReturnType::Resolved(KType::ANY),
-                elements: vec![],
-            },
-        ),
+        ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &[]),
     ];
     for (i, a) in signatures.iter().enumerate() {
         for (j, b) in signatures.iter().enumerate() {
@@ -372,13 +343,7 @@ fn a_bumped_dispatch_token_matches_what_its_owned_form_does() {
                 ktype: *kt,
             })
         }));
-        ExpressionSignature::mint(
-            brand,
-            SignatureDraft {
-                return_type: ReturnType::Resolved(KType::ANY),
-                elements,
-            },
-        )
+        ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &elements)
     }
 
     let tokens: Vec<DispatchToken> = [
@@ -422,13 +387,7 @@ fn a_dispatch_token_renders_its_keywords_and_slot_types() {
                 ktype: *kt,
             })
         }));
-        ExpressionSignature::mint(
-            brand,
-            SignatureDraft {
-                return_type: ReturnType::Resolved(KType::ANY),
-                elements,
-            },
-        )
+        ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &elements)
     }
 
     let registries = RunRegistries::new();

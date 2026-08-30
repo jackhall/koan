@@ -161,7 +161,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
     let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let cell = KFunction::alloc_captured(
+    let cell = KFunction::alloc_captured_draft(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -217,8 +217,10 @@ fn lookup_function_filters_per_overload_visibility() {
     };
     let key = sig_num.untyped_key();
     debug_assert_eq!(key, sig_str.untyped_key(), "untyped keys must collide");
-    let early = KFunction::alloc_captured(scope, sig_num, Body::Builtin(body_no_op), &registries);
-    let late = KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), &registries);
+    let early =
+        KFunction::alloc_captured_draft(scope, sig_num, Body::Builtin(body_no_op), &registries);
+    let late =
+        KFunction::alloc_captured_draft(scope, sig_str, Body::Builtin(body_no_op), &registries);
     let f_early = early.adopt_into(scope.brand().handle());
     scope
         .register_function_direct(
@@ -288,7 +290,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
     let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(
+    let f = KFunction::alloc_captured_draft(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -325,7 +327,7 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
     let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(
+    let f = KFunction::alloc_captured_draft(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -357,7 +359,7 @@ fn retirement_drops_every_bucket_the_statement_claimed() {
     let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(
+    let f = KFunction::alloc_captured_draft(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),

@@ -155,7 +155,7 @@ fn register_function_dedupes_exact_signature() {
     registries.labels.intern("FOO");
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f1 = KFunction::alloc_captured(
+    let f1 = KFunction::alloc_captured_draft(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -169,7 +169,7 @@ fn register_function_dedupes_exact_signature() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let f2 = KFunction::alloc_captured(
+    let f2 = KFunction::alloc_captured_draft(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -197,7 +197,7 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
     let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f1 = KFunction::alloc_captured(
+    let f1 = KFunction::alloc_captured_draft(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -211,7 +211,7 @@ fn bind_value_direct_with_kfunction_writes_no_overload_beside_existing_fn() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let f2 = KFunction::alloc_captured(
+    let f2 = KFunction::alloc_captured_draft(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -301,8 +301,10 @@ fn register_function_allows_overload_with_different_arg_types() {
             }),
         ],
     };
-    let f1 = KFunction::alloc_captured(scope, sig_num, Body::Builtin(body_no_op), &registries);
-    let f2 = KFunction::alloc_captured(scope, sig_str, Body::Builtin(body_no_op), &registries);
+    let f1 =
+        KFunction::alloc_captured_draft(scope, sig_num, Body::Builtin(body_no_op), &registries);
+    let f2 =
+        KFunction::alloc_captured_draft(scope, sig_str, Body::Builtin(body_no_op), &registries);
     scope
         .register_function_direct(
             &f1,
@@ -340,7 +342,7 @@ fn register_function_coexists_with_a_value_binding() {
             &mut crate::machine::WriteGate::for_test(),
         )
         .unwrap();
-    let f = KFunction::alloc_captured(
+    let f = KFunction::alloc_captured_draft(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -381,7 +383,7 @@ fn register_function_coexists_with_same_name_type() {
         &registries,
         &mut crate::machine::WriteGate::for_test(),
     );
-    let f = KFunction::alloc_captured(
+    let f = KFunction::alloc_captured_draft(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -719,7 +721,7 @@ fn value_bind_of_a_callable_writes_no_dispatch_bucket() {
     let registries = RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let f = KFunction::alloc_captured(
+    let f = KFunction::alloc_captured_draft(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),

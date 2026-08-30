@@ -41,7 +41,7 @@ fn builtin_seed_registers_a_callable_reaching_exactly_its_home_region() {
     let registries = crate::machine::model::RunRegistries::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let cell = KFunction::alloc_captured(
+    let cell = KFunction::alloc_captured_draft(
         scope,
         super::unit_signature(),
         Body::Builtin(body_no_op),

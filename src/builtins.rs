@@ -90,7 +90,13 @@ pub(crate) fn register_builtin<'a>(
     registries: &RunRegistries,
     gate: &mut WriteGate,
 ) {
-    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), registries);
+    let cell = KFunction::alloc_captured(
+        scope,
+        signature.return_type,
+        &signature.elements,
+        Body::Builtin(body),
+        registries,
+    );
     let _ = scope.register_function_direct(&cell, BindingIndex::BUILTIN, registries, gate);
 }
 
@@ -107,7 +113,13 @@ pub(crate) fn register_overload_at<'a>(
     registries: &RunRegistries,
     gate: &mut WriteGate,
 ) {
-    let cell = KFunction::alloc_captured(scope, signature, Body::Builtin(body), registries);
+    let cell = KFunction::alloc_captured(
+        scope,
+        signature.return_type,
+        &signature.elements,
+        Body::Builtin(body),
+        registries,
+    );
     scope
         .register_function_direct(&cell, index, registries, gate)
         .expect("register_overload_at: user-index overload should not collide with a builtin");

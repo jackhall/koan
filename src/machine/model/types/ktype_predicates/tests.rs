@@ -811,10 +811,8 @@ fn deferred_return_admission_via_function_compat() {
     let program = crate::machine::core::program_storage();
     let candidate = ExpressionSignature::mint(
         program.brand().region(),
-        crate::machine::model::SignatureDraft {
-            return_type: ReturnType::Deferred(DeferredReturn::Type(type_token("Er"))),
-            elements: vec![],
-        },
+        ReturnType::Deferred(DeferredReturn::Type(type_token("Er"))),
+        &[],
     );
     let no_params = Record::new();
 

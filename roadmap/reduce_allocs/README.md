@@ -86,3 +86,10 @@ re-attribution, plus the growth hazards a survey and the consolidated shapes tur
   registry's read path from its intern path — a change to the table, not to the caller — which is
   why [Builtin body allocations](builtin-body-allocations.md) converts the reads around it and
   leaves this one standing.
+  `view_type_members` in [ascribe.rs](../../src/builtins/ascribe.rs) is the same shape once per
+  abstract SIG member: it clones a `TypeNode::AbstractType` to mint the view's per-call member, and
+  both arms it dispatches to intern — `RecursiveGroupWindow::seal_singleton` mints a family, and the
+  generative arm calls `intern` directly. That one carries a second requirement past the split: its
+  higher-kinded arm feeds the node's own `param_names` into the mint, so the names have to outlive
+  the read whatever the table's read path becomes, and reading in place would still owe a copy of
+  that field. The clone of the whole node is what covers both today.

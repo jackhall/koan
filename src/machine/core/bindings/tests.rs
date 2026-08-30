@@ -407,7 +407,7 @@ fn a_two_bucket_binder_retires_the_key_it_did_not_seal() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let mut gate = crate::machine::WriteGate::for_test();
-    let f = KFunction::alloc_captured(
+    let f = KFunction::alloc_captured_draft(
         scope,
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -629,7 +629,7 @@ fn bump_backed_tables_full_churn() {
 
         // A dispatch bucket claimed by two sibling binders, one of which finalizes and retires its
         // own claim while the sibling's stands.
-        let f = KFunction::alloc_captured(
+        let f = KFunction::alloc_captured_draft(
             scope,
             unit_signature(),
             Body::Builtin(body_no_op),

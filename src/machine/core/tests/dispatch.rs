@@ -533,7 +533,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         ],
     };
     let pick_num_fn =
-        KFunction::alloc_captured(scope, pick_num, Body::Builtin(body_a), &registries);
+        KFunction::alloc_captured_draft(scope, pick_num, Body::Builtin(body_a), &registries);
     scope
         .register_function_direct(
             &pick_num_fn,
@@ -595,7 +595,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
             }),
         ],
     };
-    let sibling = KFunction::alloc_captured(
+    let sibling = KFunction::alloc_captured_draft(
         scope,
         pick_str,
         Body::Builtin(super::body_no_op),

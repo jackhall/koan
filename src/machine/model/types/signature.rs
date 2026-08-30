@@ -201,7 +201,9 @@ pub enum Specificity {
 ///
 /// The fields are private because [`Self::mint`] is the only door: it is what settles the elements
 /// run and the parameter schema at the destination brand, so a signature that skipped it is
-/// unconstructible. Build one through a [`SignatureDraft`].
+/// unconstructible. The door takes the elements as a slice, so a caller hands it whatever buffer it
+/// built them in — a [`SignatureDraft`]'s heap `Vec` at registration, a bump run on a builtin's
+/// step scratch — and the copy into `brand`'s region is what settles them either way.
 #[derive(Clone, Copy)]
 pub struct ExpressionSignature<'a> {
     return_type: ReturnType<'a>,
@@ -217,8 +219,10 @@ pub struct ExpressionSignature<'a> {
     part_slots: &'a [u16],
 }
 
-/// The pre-mint form of an [`ExpressionSignature`]: the same elements in a growable buffer, before
-/// [`ExpressionSignature::mint`] settles them into the destination region.
+/// A return type bundled with the elements run that will be minted beside it, for the callers that
+/// build both in one place — builtin registration, where a `vec![]` of elements is spelled straight
+/// in Rust source. [`ExpressionSignature::mint`] takes the two apart, so a caller whose elements
+/// live somewhere a `Vec` cannot reach passes them to the door directly instead.
 ///
 /// Every element is `Copy` and lifetime-free — a keyword is its symbol, an argument its classified
 /// name and type — so the buffer holds the stored element type itself rather than a parallel owned
@@ -344,11 +348,15 @@ impl<'a> ExpressionSignature<'a> {
     /// a classified name beside its type. So the elements run is a slice copy, and what happens here
     /// and nowhere else is deriving the two positional tables — the parameter schema and the
     /// part-slot map — that every later call reads instead of re-keying its own.
-    pub fn mint(brand: RegionBrand<'a>, draft: SignatureDraft<'a>) -> Self {
-        let elements: &'a [SignatureElement] = brand.allocator().slice(&draft.elements);
+    pub fn mint(
+        brand: RegionBrand<'a>,
+        return_type: ReturnType<'a>,
+        elements: &[SignatureElement],
+    ) -> Self {
+        let settled: &'a [SignatureElement] = brand.allocator().slice(elements);
         // Both slices ride the signature's own region, so they live exactly as long as it.
         let params = brand.allocator().slice_from_iter(
-            elements
+            settled
                 .iter()
                 .filter_map(|element| match element {
                     SignatureElement::Argument(argument) => Some((argument.name, argument.ktype)),
@@ -357,7 +365,7 @@ impl<'a> ExpressionSignature<'a> {
                 .collect::<Vec<_>>(),
         );
         let part_slots = brand.allocator().slice_from_iter(
-            elements
+            settled
                 .iter()
                 .enumerate()
                 .filter_map(|(slot, element)| match element {
@@ -367,8 +375,8 @@ impl<'a> ExpressionSignature<'a> {
                 .collect::<Vec<_>>(),
         );
         ExpressionSignature {
-            return_type: draft.return_type,
-            elements,
+            return_type,
+            elements: settled,
             params,
             part_slots,
         }

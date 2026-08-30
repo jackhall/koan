@@ -12,8 +12,10 @@ use crate::machine::core::{
     FoldingBrand, KError, KErrorKind, KoanStorageProfile, RegionBrand, Scope,
 };
 use crate::machine::model::NamedPairs;
+#[cfg(test)]
+use crate::machine::model::SignatureDraft;
 use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode};
-use crate::machine::model::{ExpressionSignature, Record, SignatureDraft, SignatureElement};
+use crate::machine::model::{ExpressionSignature, Record, SignatureElement};
 use crate::witnessed::BumpVec;
 use crate::witnessed::RegionHandleFamily;
 
@@ -120,7 +122,7 @@ impl<'a> KFunction<'a> {
     /// The signature is minted **before** the merge, at the captured scope's own brand: its text is
     /// re-homed into the very region the merge targets, so it enters as a region-resident operand
     /// alongside the scope, and the `Copy` [`ExpressionSignature`] rides in the seed where the
-    /// `Vec`-holding [`SignatureDraft`] could not.
+    /// growable elements buffer it was minted from could not.
     ///
     /// The store inside the fold is the plain bump verb
     /// ([`FoldingBrand::alloc_function_folded`]): a `KFunction` is `Copy`, so it lands in the region
@@ -128,12 +130,13 @@ impl<'a> KFunction<'a> {
     /// ([value-substrates.md § Untyped arenas](../../../design/value-substrates.md#untyped-arenas-the-drop-free-end-state)).
     pub fn alloc_captured(
         captured: &'a Scope<'a>,
-        draft: SignatureDraft<'a>,
+        return_type: ReturnType<'a>,
+        elements: &[SignatureElement],
         body: Body<'a>,
         registries: &RunRegistries,
     ) -> DeliveredFunction {
         let brand = captured.brand();
-        let signature = ExpressionSignature::mint(brand, draft);
+        let signature = ExpressionSignature::mint(brand, return_type, elements);
         let value_ktype = function_value_ktype(&signature, registries);
         let seed = FunctionBirth {
             captured,
@@ -156,6 +159,25 @@ impl<'a> KFunction<'a> {
             )
     }
 
+    /// Test door for [`Self::alloc_captured`] over a bundled [`SignatureDraft`]. A fixture spells its
+    /// signature as a draft — the same `vec![]`-of-elements shape builtin registration uses — so the
+    /// unbundling happens once here rather than at every call.
+    #[cfg(test)]
+    pub(crate) fn alloc_captured_draft(
+        captured: &'a Scope<'a>,
+        draft: SignatureDraft<'a>,
+        body: Body<'a>,
+        registries: &RunRegistries,
+    ) -> DeliveredFunction {
+        Self::alloc_captured(
+            captured,
+            draft.return_type,
+            &draft.elements,
+            body,
+            registries,
+        )
+    }
+
     /// Test fixture: the witnessed birth [`Self::alloc_captured`] performs, rested into the captured
     /// scope and re-opened there, so a suite can hold the callable at `'a` directly. A resident
     /// value rests for free — the library's self rule strips its own region from what is retained —
@@ -168,7 +190,7 @@ impl<'a> KFunction<'a> {
         body: Body<'a>,
         registries: &RunRegistries,
     ) -> &'a KFunction<'a> {
-        let cell = Self::alloc_captured(captured, draft, body, registries);
+        let cell = Self::alloc_captured_draft(captured, draft, body, registries);
         let sealed = cell.rest_into(captured.brand().handle());
         captured.open_function(&sealed).value()
     }

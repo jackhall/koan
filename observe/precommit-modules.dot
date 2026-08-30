@@ -313,6 +313,7 @@ digraph {
     "koan::builtins::eval" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::fn_def" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::fn_def" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::fn_def" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::fn_def" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -330,6 +331,7 @@ digraph {
     "koan::builtins::fn_def::return_type" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::builtins::fn_def::signature" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::source" [label="uses", style="dashed"];
