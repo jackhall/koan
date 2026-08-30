@@ -12,23 +12,25 @@ crate::slots! { SLOTS { msg } }
 /// output sink, and returns the rendered string as a `KObject::KString` value.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) via
-    // `Held::summarize`.
-    let rendered = match ctx.args.held(&SLOTS.msg) {
-        Some(value) => value.summarize(ctx.registries),
-        None => return Action::done(Err(KError::new(KErrorKind::MissingArg("msg".to_string())))),
+    // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) through
+    // the cell's `Display` view.
+    let Some(value) = ctx.args.held(&SLOTS.msg) else {
+        return Action::done(Err(KError::new(KErrorKind::MissingArg("msg".to_string()))));
     };
-    // Two writes rather than one joined buffer: appending a newline is the whole job a
-    // `format!` would do here, and the run is single-threaded, so nothing can land between them.
-    ctx.out.write_out(rendered.as_bytes());
-    ctx.out.write_out(b"\n");
-    // The rendered bytes are bumped into this step's own destination region through a zero-dep fold,
-    // so the carrier reaches nothing but the region it lives in — the active frame is folded in at
-    // finalize/close, not bundled here.
+    // One render, into the bytes the returned value keeps: the view writes straight into this
+    // step's own destination region through a zero-dep fold, and the sink is handed that same
+    // slice. The carrier reaches nothing but the region it lives in — the active frame is folded
+    // in at finalize/close, not bundled here.
     let carrier = ctx.ctx.alloc_carried_with(&[], |brand, _| {
-        Carried::Object(
-            brand.alloc_object_folded(KObject::KString(brand.allocator().text(&rendered))),
-        )
+        let rendered = brand
+            .allocator()
+            .text_from_display(&value.summary(ctx.registries));
+        // Two writes rather than one joined buffer: appending a newline is the whole job a
+        // `format!` would do here, and the run is single-threaded, so nothing can land between
+        // them.
+        ctx.out.write_out(rendered.as_bytes());
+        ctx.out.write_out(b"\n");
+        Carried::Object(brand.alloc_object_folded(KObject::KString(rendered)))
     });
     Action::done(Ok(carrier))
 }

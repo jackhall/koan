@@ -13,7 +13,7 @@ use crate::machine::{
     TraceFrame,
 };
 use crate::source::Spanned;
-use crate::witnessed::{BumpVec, Delivered, RegionHandle, reattachable};
+use crate::witnessed::{BumpAllocator, BumpVec, Delivered, RegionHandle, reattachable};
 
 use super::super::StepCarried;
 use super::super::harness::{Host, KoanWorkload};
@@ -144,22 +144,23 @@ fn fold_cells(
 /// **stored envelope**: a carrier naming any reach member is
 /// rejected outright, no walk over the value. [`KKey`] then admits only `String` / `Number` /
 /// `Bool`, so the two together leave a borrow-carrying key unrepresentable downstream.
-fn scalar_key(
+fn scalar_key<'step>(
     slot: &Slot<'_>,
     terminals: &mut ResultFeed<'_, '_>,
     registries: &RunRegistries,
-) -> Result<PendingKey, String> {
+    scratch: BumpAllocator<'step>,
+) -> Result<PendingKey<'step>, String> {
     // Each arm answers the reach probe and the key read inside its own borrow.
     let (borrows, key) = match slot {
         Slot::Static(cell) => (
             cell.open_at().has_reach_members(),
-            cell.open(|c| key_from_carried(c, registries)),
+            cell.open(|c| key_from_carried(c, registries, scratch)),
         ),
         Slot::Dep => {
             let cell = &terminals.pop().cell;
             (
                 cell.open_at().has_reach_members(),
-                cell.open(|c| key_from_carried(c, registries)),
+                cell.open(|c| key_from_carried(c, registries, scratch)),
             )
         }
     };
@@ -169,30 +170,37 @@ fn scalar_key(
     key
 }
 
-fn key_from_carried(c: Carried<'_>, registries: &RunRegistries) -> Result<PendingKey, String> {
+fn key_from_carried<'step>(
+    c: Carried<'_>,
+    registries: &RunRegistries,
+    scratch: BumpAllocator<'step>,
+) -> Result<PendingKey<'step>, String> {
     match c {
-        Carried::Object(o) => KKey::try_from_kobject(o, registries).map(PendingKey::staged),
+        Carried::Object(o) => {
+            KKey::try_from_kobject(o, registries).map(|key| PendingKey::staged(key, scratch))
+        }
         Carried::Type(_) | Carried::UnresolvedType(_) => {
             Err("dict key must be a value, not a type".to_string())
         }
     }
 }
 
-/// A resolved dict key held **owned** across the gap between reading it and assembling the dict:
-/// the key is read inside its producer envelope's own open, whose lifetime ends there, and the dict
-/// is built later at a fold brand no earlier borrow can reach, so a string key's bytes have to be
-/// staged rather than carried. Transient by construction — the dict door bumps the bytes into the
-/// dict's own region — and it never reaches a region, so owning a `String` here costs no teardown.
-enum PendingKey {
-    String(String),
+/// A resolved dict key staged across the gap between reading it and assembling the dict: the key is
+/// read inside its producer envelope's own open, whose lifetime ends there, and the dict is built
+/// later at a fold brand no earlier borrow can reach, so a string key's bytes have to be re-homed
+/// rather than carried. They land in the step's scratch arena, which outlives the finish and is
+/// reset at the next drain pop — so the staging costs no heap allocation and no teardown, and the
+/// dict door bumps the bytes on into the dict's own region.
+enum PendingKey<'step> {
+    String(&'step str),
     Number(f64),
     Bool(bool),
 }
 
-impl PendingKey {
-    fn staged(key: KKey<'_>) -> PendingKey {
+impl<'step> PendingKey<'step> {
+    fn staged(key: KKey<'_>, scratch: BumpAllocator<'step>) -> PendingKey<'step> {
         match key {
-            KKey::String(s) => PendingKey::String(s.to_string()),
+            KKey::String(s) => PendingKey::String(scratch.text(s)),
             KKey::Number(n) => PendingKey::Number(n),
             KKey::Bool(b) => PendingKey::Bool(b),
         }
@@ -230,9 +238,9 @@ impl<'step> Host<'step> {
         assemble: A,
     ) -> NodeId
     where
-        A: for<'r, 'h> Fn(
+        A: for<'r, 'h, 'k> Fn(
                 SubstrateDoor<'r, 'h>,
-                Vec<PendingKey>,
+                &[PendingKey<'k>],
                 &'r [Held<'r>],
                 &TypeRegistry,
             ) -> KObject<'r>
@@ -249,8 +257,8 @@ impl<'step> Host<'step> {
             let mut feed = ResultFeed::new(terminals);
             for row in rows.iter().copied() {
                 if let Some(key_slot) = row.key {
-                    let kkey =
-                        scalar_key(&key_slot, &mut feed, view.registries()).map_err(|msg| {
+                    let kkey = scalar_key(&key_slot, &mut feed, view.registries(), view.scratch())
+                        .map_err(|msg| {
                             KError::new(KErrorKind::ShapeError(msg))
                                 .with_frame(TraceFrame::bare("<dict>", "dict literal"))
                         })?;
@@ -281,7 +289,7 @@ impl<'step> Host<'step> {
                     let region = FoldingBrand::in_fold_closure(placement);
                     Carried::Object(region.alloc_object_folded(assemble(
                         region.with_holder(&holder),
-                        keys,
+                        &keys,
                         value_helds,
                         types,
                     )))
