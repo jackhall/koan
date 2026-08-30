@@ -89,7 +89,7 @@ fn non_module_argument(ctx: &crate::machine::BodyCtx<'_, '_, '_>) -> KError {
         Some(Held::UnresolvedType(ti)) => {
             crate::machine::model::render_label(ti.symbol(), ctx.registries)
         }
-        Some(Held::Object(other)) => other.ktype().name(ctx.registries).to_string(),
+        Some(Held::Object(other)) => other.ktype().name(ctx.registries),
         // The `m` slot is `:Signature`, which admits no raw name part.
         Some(Held::Identifier(_)) => unreachable!("USING's `m` slot never captures an identifier"),
         None => return KError::new(KErrorKind::MissingArg("m".to_string())),

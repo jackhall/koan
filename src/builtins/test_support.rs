@@ -450,7 +450,7 @@ impl<'a> TestRun<'a> {
             Carried::Type(kt) => kt,
             Carried::Object(obj) => panic!(
                 "expected a type result, got value {}",
-                obj.summarize(self.registries())
+                obj.summary(self.registries())
             ),
             Carried::UnresolvedType(ti) => panic!(
                 "expected a resolved type result, got the unlowered name {}",

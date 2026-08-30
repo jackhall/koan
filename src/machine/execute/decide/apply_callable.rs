@@ -364,7 +364,7 @@ fn build_apply_args(
         }
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "`{}` takes type parameters {} — {}",
-            identity.name(registries),
+            identity.display_name(registries),
             quoted_list(&borrow(&declared)),
             problems.join(", "),
         ))));

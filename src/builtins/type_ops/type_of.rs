@@ -17,13 +17,13 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         Some(Held::Type(t)) => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`TYPE OF` takes a value; `{}` is already a type",
-                t.name(ctx.registries),
+                t.display_name(ctx.registries),
             )))));
         }
         Some(Held::UnresolvedType(ti)) => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`TYPE OF` takes a value; `{}` is already a type",
-                crate::machine::model::render_label(ti.symbol(), ctx.registries),
+                crate::machine::model::display_label(ti.symbol(), ctx.registries),
             )))));
         }
         // The `value` slot is `:Any`, which admits no raw name part.

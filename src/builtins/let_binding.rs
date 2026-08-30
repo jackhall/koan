@@ -47,7 +47,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 None => {
                     return done_err(KError::new(KErrorKind::ShapeError(format!(
                         "LET name must be a bare type name, got `{}`",
-                        name_kt.render(ctx.registries),
+                        name_kt.display_name(ctx.registries),
                     ))));
                 }
             },

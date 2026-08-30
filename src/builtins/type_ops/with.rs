@@ -14,8 +14,8 @@
 //! context for free — so the body reads `(name, Held::Type)` entries directly: no lazy
 //! binding slot, no `AwaitDeps`.
 
-use crate::machine::model::render_label;
 use crate::machine::model::{Held, KObject, KType, TypeNode, TypeSymbol};
+use crate::machine::model::{display_label, render_label};
 use crate::machine::{KError, KErrorKind};
 use crate::witnessed::BumpVec;
 
@@ -79,8 +79,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             None => {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "{} has no abstract type slot `{}`",
-                    sig_handle.name(ctx.registries),
-                    render_label(symbol, ctx.registries),
+                    sig_handle.display_name(ctx.registries),
+                    display_label(symbol, ctx.registries),
                 ))));
             }
         };
@@ -89,8 +89,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             Held::Object(other) => {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "WITH binding `{}` value must be a type, got `{}`",
-                    render_label(symbol, ctx.registries),
-                    other.ktype().name(ctx.registries),
+                    display_label(symbol, ctx.registries),
+                    other.ktype().display_name(ctx.registries),
                 ))));
             }
             Held::UnresolvedType(ti) => {
@@ -110,10 +110,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}.{}` is a manifest type member fixed to `{}`; \
                      WITH cannot re-pin it to `{}`",
-                    sig_handle.name(ctx.registries),
-                    render_label(symbol, ctx.registries),
-                    fixed.render(ctx.registries),
-                    pin_type.render(ctx.registries),
+                    sig_handle.display_name(ctx.registries),
+                    display_label(symbol, ctx.registries),
+                    fixed.display_name(ctx.registries),
+                    pin_type.display_name(ctx.registries),
                 ))));
             }
             None => pins.push((slot, pin_type)),

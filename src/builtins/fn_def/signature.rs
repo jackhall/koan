@@ -209,7 +209,7 @@ pub(crate) fn parse_fn_param_list<'a>(
             (None, other) => {
                 return ParamListOutcome::Err(format!(
                     "FN signature part `{}` is not a Keyword, Identifier, or `<name> :<Type>` pair",
-                    other.summarize(&registries.labels),
+                    other.summary(&registries.labels),
                 ));
             }
         }

@@ -478,13 +478,13 @@ fn classify_dispatch<'step>(
         DispatchShape::NonCallableHead => {
             Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(&view.registries().labels),
-                reason: format!(
-                    "head is not callable: `{}`",
-                    expr.parts
-                        .first()
-                        .map(|p| p.value.summarize(&view.registries().labels))
-                        .unwrap_or_else(|| "<empty>".into())
-                ),
+                reason: match expr.parts.first() {
+                    Some(head) => format!(
+                        "head is not callable: `{}`",
+                        head.value.summary(&view.registries().labels)
+                    ),
+                    None => "head is not callable: `<empty>`".to_string(),
+                },
             })))
         }
         DispatchShape::OperatorChain => operator_chain::run(view, view.current_scope(), &expr),

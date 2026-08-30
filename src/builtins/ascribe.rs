@@ -322,14 +322,13 @@ fn check_satisfies<'a>(
     if m.satisfies_sig_schema(schema, schema_digest, registries) {
         return Ok(());
     }
-    // The signature's spelling is rendered here rather than at the call: an ascription that holds
-    // names it nowhere, and this arm is the only reader.
-    let sig_name = signature.name(registries);
     match sig_subtype(&m.self_sig(types), schema, registries) {
         Ok(()) => unreachable!("a recorded false verdict must re-fail on the diagnostic walk"),
+        // The signature's spelling is written into the message here rather than at the call: an
+        // ascription that holds names it nowhere, and this arm is the only reader.
         Err(failure) => Err(KError::new(KErrorKind::ShapeError(format!(
             "module does not satisfy signature `{}`: {}",
-            sig_name,
+            signature.display_name(registries),
             failure.render_fragment()
         )))),
     }

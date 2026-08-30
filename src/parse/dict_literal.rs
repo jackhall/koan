@@ -255,7 +255,7 @@ impl<'a> DictFrame<'a> {
                         return Err(KError::parse(
                             format!(
                                 "record field name must be a bare identifier or Type token, got `{}`",
-                                other.summarize(labels)
+                                other.summary(labels)
                             ),
                             None,
                         ));

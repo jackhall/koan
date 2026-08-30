@@ -55,7 +55,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         Ok(None) => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "inexhaustive match = no branch for value of type `{}`",
-                value.ktype().name(ctx.registries)
+                value.ktype().display_name(ctx.registries)
             )))));
         }
         Err(msg) => return Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),

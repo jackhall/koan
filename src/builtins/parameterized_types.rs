@@ -107,14 +107,14 @@ mod action_bodies {
         let Some(param_names) = constructor_param_names(ctor, ctx.types()) else {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "right-hand side of `AS` must be a type constructor, got `{}`",
-                ctor.name(ctx.registries),
+                ctor.display_name(ctx.registries),
             )))));
         };
         let [param_name] = &param_names[..] else {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`{}` takes {} type arguments; the `AS` form supplies one, so \
                  multi-parameter application is not yet supported",
-                ctor.name(ctx.registries),
+                ctor.display_name(ctx.registries),
                 param_names.len(),
             )))));
         };

@@ -200,7 +200,7 @@ pub(crate) fn find_branch_body_by_tag<'a>(
             other => {
                 return Err(format!(
                     "branch tag must be a capitalized variant tag or boolean literal, got {}",
-                    other.summarize(labels)
+                    other.summary(labels)
                 ));
             }
         };
@@ -209,7 +209,7 @@ pub(crate) fn find_branch_body_by_tag<'a>(
             other => {
                 return Err(format!(
                     "branch separator must be `->`, got {}",
-                    other.summarize(labels)
+                    other.summary(labels)
                 ));
             }
         }
@@ -218,7 +218,7 @@ pub(crate) fn find_branch_body_by_tag<'a>(
             other => {
                 return Err(format!(
                     "branch body must be a parenthesized expression, got {}",
-                    other.summarize(labels)
+                    other.summary(labels)
                 ));
             }
         };
@@ -265,10 +265,30 @@ enum HeadLabel {
 }
 
 impl HeadLabel {
-    fn render(self, registries: &RunRegistries) -> String {
-        match self {
-            HeadLabel::Boolean(text) => text.to_string(),
-            HeadLabel::Type(symbol) => crate::machine::model::render_label(symbol, registries),
+    /// The arm's surface label as a `Display` view, so a diagnostic naming several arms writes
+    /// them into its own message and builds no label buffer of its own.
+    fn display(self, registries: &RunRegistries) -> HeadLabelDisplay<'_> {
+        HeadLabelDisplay {
+            label: self,
+            registries,
+        }
+    }
+}
+
+struct HeadLabelDisplay<'r> {
+    label: HeadLabel,
+    registries: &'r RunRegistries,
+}
+
+impl std::fmt::Display for HeadLabelDisplay<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.label {
+            HeadLabel::Boolean(text) => f.write_str(text),
+            HeadLabel::Type(symbol) => write!(
+                f,
+                "{}",
+                crate::machine::model::display_label(symbol, self.registries)
+            ),
         }
     }
 }
@@ -280,14 +300,19 @@ fn ambiguous_match(
     scrutinee: &KObject<'_>,
     registries: &RunRegistries,
 ) -> String {
-    let heads: Vec<String> = heads
-        .map(|head| format!("`{}`", head.render(registries)))
-        .collect();
-    format!(
-        "ambiguous match: value of type `{}` admits arms {} with no most-specific arm",
-        scrutinee.ktype().name(registries),
-        heads.join(", ")
-    )
+    use std::fmt::Write;
+    let mut message = format!(
+        "ambiguous match: value of type `{}` admits arms ",
+        scrutinee.ktype().display_name(registries)
+    );
+    for (index, head) in heads.enumerate() {
+        if index > 0 {
+            message.push_str(", ");
+        }
+        let _ = write!(message, "`{}`", head.display(registries));
+    }
+    message.push_str(" with no most-specific arm");
+    message
 }
 
 /// Resolve a bare arm-head type token against the call-site scope — the same
@@ -379,7 +404,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
             other => {
                 return Err(format!(
                     "branch separator must be `->`, got {}",
-                    other.summarize(&registries.labels)
+                    other.summary(&registries.labels)
                 ));
             }
         }
@@ -388,7 +413,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
             other => {
                 return Err(format!(
                     "branch body must be a parenthesized expression, got {}",
-                    other.summarize(&registries.labels)
+                    other.summary(&registries.labels)
                 ));
             }
         };
@@ -438,7 +463,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
             other => {
                 return Err(format!(
                     "branch head must be a capitalized type name or boolean literal, got {}",
-                    other.summarize(&registries.labels)
+                    other.summary(&registries.labels)
                 ));
             }
         }

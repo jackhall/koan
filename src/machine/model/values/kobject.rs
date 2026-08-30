@@ -1102,7 +1102,7 @@ impl<'a> KObject<'a> {
                 inner.payload().write_summary(f, registries)?;
                 f.write_str(")")
             }
-            KObject::Module(m) => f.write_str(&m.path),
+            KObject::Module(m) => f.write_str(m.path),
         }
     }
 

@@ -214,7 +214,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                             other => Err(format!(
                                 "{context_list} type for `{}` resolved to non-type value `{}`",
                                 rendered(),
-                                other.summarize(registries),
+                                other.summary(registries),
                             )),
                         })
                 }
@@ -227,7 +227,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                             Err(format!(
                                 "{context_list} type for `{}` resolved to non-type value `{}`",
                                 rendered(),
-                                other.summarize(registries),
+                                other.summary(registries),
                             ))
                         }
                         None if results.is_some() => Err(format!(
@@ -297,7 +297,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                             Err(format!(
                                 "{context_list} type for `{}` resolved to non-type value `{}`",
                                 rendered(),
-                                other.summarize(registries),
+                                other.summary(registries),
                             ))
                         }
                         None if results.is_some() => Err(format!(

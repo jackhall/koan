@@ -44,7 +44,7 @@ impl<'a> KKey<'a> {
             KObject::Bool(b) => Ok(KKey::Bool(*b)),
             other => Err(format!(
                 "dict key must be String, Number, or Bool; got {}",
-                other.ktype().name(registries)
+                other.ktype().display_name(registries)
             )),
         }
     }

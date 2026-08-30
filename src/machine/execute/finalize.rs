@@ -182,7 +182,10 @@ fn return_type_mismatch(
     registries: &RunRegistries,
 ) -> KError {
     let expected = if per_call {
-        format!("{} (per-call return type)", declared.name(registries))
+        format!(
+            "{} (per-call return type)",
+            declared.display_name(registries)
+        )
     } else {
         declared.name(registries)
     };

@@ -236,7 +236,7 @@ pub fn body_record_schema<'a>(
     let Some((param_names, elements)) = read else {
         return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
             "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",
-            schema_kt.name(ctx.registries),
+            schema_kt.display_name(ctx.registries),
         )))));
     };
     let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));

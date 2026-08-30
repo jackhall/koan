@@ -354,11 +354,15 @@ impl<'a> KFunction<'a> {
 /// Surface rendering of a call's parts for a diagnostic — the same text
 /// [`WorkingExpression::summarize`] produces, from the parts run alone.
 fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>], labels: &LabelInterner) -> String {
-    parts
-        .iter()
-        .map(|part| part.value.summarize(labels))
-        .collect::<Vec<_>>()
-        .join(" ")
+    use std::fmt::Write;
+    let mut out = String::new();
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        let _ = write!(out, "{}", part.value.summary(labels));
+    }
+    out
 }
 
 /// Intern the function type a `KFunction` value reports. The parameter record keys each

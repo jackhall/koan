@@ -23,8 +23,8 @@ use super::node::{NodeSchema, TypeNode};
 use super::registry::{IdentityBuildHasher, TypeRegistry};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::labels::{TypeSymbol, ValueSymbol};
-use crate::machine::model::render_label;
 use crate::machine::model::values::ModuleDraft;
+use crate::machine::model::{display_label, render_label};
 
 /// A schema's type-member table: Type-class name → the member's type, identity-hashed on the
 /// symbol's digest bits.
@@ -210,29 +210,42 @@ pub fn unsaturated_constructor_message(
     position: impl std::fmt::Display,
     registries: &RunRegistries,
 ) -> Option<String> {
+    use std::fmt::Write;
     let types = &registries.types;
     let param_names = constructor_param_names(kt, types)?;
-    let name = kt.name(registries);
     let plural = if param_names.len() == 1 { "" } else { "s" };
-    let rendered: Vec<String> = param_names
-        .iter()
-        .map(|p| render_label(p.symbol(), registries))
-        .collect();
-    let listed = rendered
-        .iter()
-        .map(|p| format!("`{p}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let applied = rendered
-        .iter()
-        .map(|p| format!("{p} = <Type>"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(format!(
-        "`{name}` is a type constructor taking {arity} type parameter{plural} ({listed}), but \
-         {position} must be a proper type — apply it, as `:({name} {{{applied}}})`",
-        arity = param_names.len(),
-    ))
+    // The message is its own buffer: the type name, every parameter name and the applied form are
+    // written into it as they are read, so naming a constructor costs no rendering allocation.
+    let mut message = String::new();
+    let _ = write!(
+        message,
+        "`{}` is a type constructor taking {} type parameter{plural} (",
+        kt.display_name(registries),
+        param_names.len(),
+    );
+    for (index, param) in param_names.iter().enumerate() {
+        if index > 0 {
+            message.push_str(", ");
+        }
+        let _ = write!(message, "`{}`", display_label(param.symbol(), registries));
+    }
+    let _ = write!(
+        message,
+        "), but {position} must be a proper type — apply it, as `:({} {{",
+        kt.display_name(registries),
+    );
+    for (index, param) in param_names.iter().enumerate() {
+        if index > 0 {
+            message.push_str(", ");
+        }
+        let _ = write!(
+            message,
+            "{} = <Type>",
+            display_label(param.symbol(), registries)
+        );
+    }
+    message.push_str("})`");
+    Some(message)
 }
 
 /// Order-blind comparison of two constructor parameter lists: identity is the name set, and

@@ -249,7 +249,7 @@ pub fn require_bare_type_name<'a>(
             KError::new(KErrorKind::ShapeError(format!(
                 "{surface} {} must be a bare type name, got `{}`",
                 slot.text(),
-                t.render(registries),
+                t.display_name(registries),
             )))
         }),
         // A type-name slot is `PROPER_TYPE` / `ANY_TYPE`, which admits no raw value-name part.

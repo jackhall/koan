@@ -98,7 +98,7 @@ pub(in crate::machine::execute) fn prepare_args<'step>(
     let shape_error = || {
         KError::new(KErrorKind::ShapeError(format!(
             "tagged-union construction = first arg must be a capitalized variant tag, got {}",
-            tag_part.value.summarize(&registries.labels)
+            tag_part.value.summary(&registries.labels)
         )))
     };
     let ExpressionPart::Type(t) = tag_part.value else {

@@ -12,7 +12,7 @@
 use crate::machine::core::RegionBrand;
 use crate::machine::model::ast::{ExpressionPart, KExpression, WorkingPart};
 
-use super::ktype::{KType, render_label};
+use super::ktype::{KType, display_label};
 use super::registry::TypeRegistry;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
@@ -76,8 +76,10 @@ impl DispatchToken {
 /// ([`ExpressionSignature::indistinguishable_from`] reads types alone). A name-keyed view of a
 /// callable is its `value_ktype`, the by-name identity.
 ///
-/// A slot renders through [`KType::name`] under `render_param_record`'s sigil convention: a leaf
-/// surface gets a `:` prefix, one that already opens a sigil (`:(LIST OF Number)`) is left as-is.
+/// A slot renders through [`KType::display_name`] under the parameter-record sigil convention: a
+/// leaf surface gets a `:` prefix, one that already opens a sigil (`:(LIST OF Number)`) is left
+/// as-is, decided by [`KType::surface_opens_sigil`]. The one `String` built is the diagnostic's
+/// own text.
 ///
 /// Free rather than a method on [`DispatchToken`], because the caller that needs it — the
 /// duplicate-overload arm — holds a bucket entry's stored run, not an owned token.
@@ -85,22 +87,26 @@ pub(crate) fn summarize_dispatch(
     elements: &[DispatchTokenElement],
     registries: &RunRegistries,
 ) -> String {
-    let rendered = elements
-        .iter()
-        .map(|el| match el {
-            DispatchTokenElement::Keyword(symbol) => render_label(symbol.symbol(), registries),
-            DispatchTokenElement::Slot(ktype) => {
-                let surface = ktype.name(registries);
-                if surface.starts_with(':') {
-                    surface
-                } else {
-                    format!(":{surface}")
-                }
+    use std::fmt::Write;
+    let mut out = String::from("fn(");
+    for (index, element) in elements.iter().enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        match element {
+            DispatchTokenElement::Keyword(symbol) => {
+                let _ = write!(out, "{}", display_label(symbol.symbol(), registries));
             }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    format!("fn({rendered})")
+            DispatchTokenElement::Slot(ktype) => {
+                if !ktype.surface_opens_sigil(registries) {
+                    out.push(':');
+                }
+                let _ = write!(out, "{}", ktype.display_name(registries));
+            }
+        }
+    }
+    out.push(')');
+    out
 }
 
 /// Render an untyped bucket key as the capture-pattern surface that names it — `(HELPER _)`. Slots
@@ -111,15 +117,21 @@ pub(crate) fn summarize_dispatch(
 /// a `CLOSE OVER` capture pattern, and the entries implicit close copies. [`summarize_dispatch`] is
 /// the peer for a single overload's typed identity.
 pub(crate) fn render_untyped_key(key: &[KeyElement], registries: &RunRegistries) -> String {
-    let rendered = key
-        .iter()
-        .map(|element| match element {
-            KeyElement::Keyword(symbol) => render_label(symbol.symbol(), registries),
-            KeyElement::Slot => "_".to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    format!("({rendered})")
+    use std::fmt::Write;
+    let mut out = String::from("(");
+    for (index, element) in key.iter().enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        match element {
+            KeyElement::Keyword(symbol) => {
+                let _ = write!(out, "{}", display_label(symbol.symbol(), registries));
+            }
+            KeyElement::Slot => out.push('_'),
+        }
+    }
+    out.push(')');
+    out
 }
 
 /// True iff `s` classifies as a keyword (fixed token). See

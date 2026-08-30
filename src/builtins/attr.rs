@@ -408,7 +408,7 @@ fn access_type_member<'a>(
         }
         Projection::Signature(None) => Err(KError::new(KErrorKind::ShapeError(format!(
             "signature `{}` has no member `{}`",
-            kt.name(registries),
+            kt.display_name(registries),
             field.text(registries)
         )))),
         Projection::Abstract(name) => Err(abstract_type_has_no_members(
@@ -455,7 +455,7 @@ fn wrapped_field_cell<'w>(
                     .expect("the index came from this substrate's own layout")),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
-                    type_id.name(registries),
+                    type_id.display_name(registries),
                     field.text(registries)
                 )))),
             },

@@ -77,7 +77,7 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
             other => {
                 return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "{MEMBERS_SLOT}: every member must be a type, got `{}`",
-                    other.summarize(ctx.registries),
+                    other.summary(ctx.registries),
                 )))));
             }
         }
