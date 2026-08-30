@@ -42,7 +42,7 @@ use crate::machine::body_statement_refs;
 use crate::machine::model::KExpression;
 use crate::machine::model::KKind;
 use crate::machine::model::KType;
-use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
+use crate::machine::model::labels::KeywordSymbol;
 use crate::machine::model::{FoldDirection, ReductionMode};
 use crate::machine::model::{OpArity, op_declaration_arity};
 use crate::machine::{Action, BodyCtx, require_identifier_name, require_kexpression};
@@ -51,6 +51,8 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::op_def::{symbol_from_parts, symbol_from_slot};
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
+use crate::machine::model::ValueSymbol;
+use crate::machine::model::display_label;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { body, combiner, name } }
@@ -80,14 +82,14 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "GROUP", &SLOTS.body));
     let mode = crate::try_action!(reduction_mode(ctx, group_mode));
-    // The scan's diagnostics quote the group by name, so the binder's spelling is read back once
-    // here and the symbol itself carries on to the binding.
-    let spelling = crate::machine::model::render_label(name.symbol(), ctx.registries);
-    let members = crate::try_action!(scan_members(&body_expr, &spelling, &ctx.registries.labels));
+    // Both scans quote the group by name, but only on the arms that fail, so the binder's symbol
+    // carries through to them unrendered and the spelling is written straight into a diagnostic's
+    // buffer there. The success path — every `GROUP` that declares — renders nothing.
+    let members = crate::try_action!(scan_members(&body_expr, name, ctx.registries));
     // A group *is* a module, so its body announces its top-level type declarations the same way.
     let announced = crate::try_action!(super::module_def::announce_type_members(
         &body_expr,
-        &spelling,
+        name,
         ctx.registries
     ));
 
@@ -133,8 +135,8 @@ fn reduction_mode(
 /// whole run as one list, so it chains with nothing and can be no group's member.
 fn scan_members(
     body: &KExpression<'_>,
-    name: &str,
-    labels: &LabelInterner,
+    name: ValueSymbol,
+    registries: &RunRegistries,
 ) -> Result<Vec<KeywordSymbol>, KError> {
     let mut members: Vec<KeywordSymbol> = Vec::new();
     for statement in body_statement_refs(body) {
@@ -142,13 +144,14 @@ fn scan_members(
             None => continue,
             Some(OpArity::Unary) => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "`GROUP {name}` declares a `UNARY OP`: a unary operator takes the whole run \
+                    "`GROUP {}` declares a `UNARY OP`: a unary operator takes the whole run \
                      as one list, so it chains with nothing and cannot be a group member",
+                    display_label(name.symbol(), registries),
                 ))));
             }
             Some(OpArity::Binary) => {
-                let symbol =
-                    symbol_from_parts(statement).map_err(|reason| reason.into_error(labels))?;
+                let symbol = symbol_from_parts(statement)
+                    .map_err(|reason| reason.into_error(&registries.labels))?;
                 if !members.contains(&symbol) {
                     members.push(symbol);
                 }
@@ -157,7 +160,8 @@ fn scan_members(
     }
     if members.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(format!(
-            "`GROUP {name}` declares no operator: a GROUP body holds at least one top-level `OP`",
+            "`GROUP {}` declares no operator: a GROUP body holds at least one top-level `OP`",
+            display_label(name.symbol(), registries),
         ))));
     }
     Ok(members)

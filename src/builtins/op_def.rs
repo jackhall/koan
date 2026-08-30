@@ -370,18 +370,31 @@ struct OpPlan<'program: 'a, 'a> {
     bound_name: Option<crate::machine::model::ValueSymbol>,
 }
 
+/// What an [`OpPlan::finalize`] hands back: the operator's own witnessed carrier, and the
+/// at-most-four binding writes its [`OpKind`] calls for — a unary operator's list overload, binary
+/// bridge and single-member group, or a binary operator's overload and its own group, plus the
+/// combined form's value binding either way.
+type FinalizedOp<'a> = (
+    Witnessed<CarriedFamily, CarrierWitness>,
+    [Option<WriteOp<'a>>; 4],
+);
+
 impl<'program: 'a, 'a> OpPlan<'program, 'a> {
     /// Synthesize the operator's `KFunction`(s) and describe the writes they imply — the function
     /// bucket overloads and, outside a group, the size-1 registry entry that makes a run of three or
     /// more operands reduce. Returns the declared function's value beside those writes, which ride
     /// the step outcome.
+    ///
+    /// The write count is fixed by the two arms: a unary operator's triple is the widest, and the
+    /// combined form's value binding sits beside it, so the four ride out as an array and land in
+    /// the action's own bump. Nothing between here and there needs a buffer of its own.
     fn finalize(
         self,
         scope: &'a Scope<'a>,
         operand: KType,
         result: Option<KType>,
         registries: &RunRegistries,
-    ) -> Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp<'a>>), KError> {
+    ) -> Result<FinalizedOp<'a>, KError> {
         let types = &registries.types;
         let OpPlan {
             sym,
@@ -392,11 +405,10 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
             program,
             bound_name,
         } = self;
-        let mut writes: Vec<WriteOp<'a>> = Vec::new();
         // The cell of the operator's *primary* function — the binary body for a binary operator,
         // the list body for a unary one. It is the value the declaration evaluates to, and, for the
         // combined form, the value the bound name reads.
-        let cell = match kind {
+        let (cell, registrations) = match kind {
             OpKind::Binary => {
                 let elements = vec![
                     arg(registries, &SLOTS.left, operand),
@@ -411,16 +423,15 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                     bind_index,
                     registries,
                 )?;
-                writes.push(overload);
-                if !in_group {
+                let group = (!in_group).then(|| {
                     let record = scope.birth_operator_group(&[sym], ReductionMode::FoldLeft);
-                    writes.push(WriteOp::Group {
+                    WriteOp::Group {
                         probes: powerset_probes(&[sym], &registries.labels),
                         seal: GroupSeal::of_delivered(scope, &record),
                         index: bind_index,
-                    });
-                }
-                cell
+                    }
+                });
+                (cell, [Some(overload), group, None])
             }
             OpKind::Unary => {
                 let result_type = result.ok_or_else(|| {
@@ -450,7 +461,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                 // `check_group_context` rejects `UNARY OP` inside a `GROUP` before the plan is
                 // built, so `in_group` cannot hold here; the door asserts that rather than take
                 // it on trust, since it writes the single-member group unconditionally.
-                let (cell, unary_writes) = register_unary_operator(
+                let (cell, [list_overload, binary_overload, group]) = register_unary_operator(
                     scope,
                     sym,
                     OperatorForm {
@@ -465,20 +476,21 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                     bind_index,
                     registries,
                 )?;
-                writes.extend(unary_writes);
-                cell
+                (
+                    cell,
+                    [Some(list_overload), Some(binary_overload), Some(group)],
+                )
             }
         };
         // One `KFunction`, two writes at the same `BindingIndex` the submission-time placeholder
         // stamps: the bound name and the registered overload are the same operator body.
-        if let Some(bound_name) = bound_name {
-            writes.push(WriteOp::Value {
-                name: bound_name,
-                index: bind_index,
-                sealed: cell.duplicate(),
-            });
-        }
-        Ok((cell.unseal(), writes))
+        let value_write = bound_name.map(|bound_name| WriteOp::Value {
+            name: bound_name,
+            index: bind_index,
+            sealed: cell.duplicate(),
+        });
+        let [first, second, third] = registrations;
+        Ok((cell.unseal(), [first, second, third, value_write]))
     }
 }
 
@@ -513,7 +525,7 @@ pub(super) fn register_unary_operator<'a>(
     in_group: bool,
     bind_index: BindingIndex,
     registries: &RunRegistries,
-) -> Result<(SealedValue<'a>, Vec<WriteOp<'a>>), KError> {
+) -> Result<(SealedValue<'a>, [WriteOp<'a>; 3]), KError> {
     let OperatorForm {
         signature: list_signature,
         body: list_body,
@@ -547,13 +559,12 @@ pub(super) fn register_unary_operator<'a>(
     let (_, binary_overload) =
         register_body(scope, binary_signature, binary_body, bind_index, registries)?;
     let record = scope.birth_operator_group(&[sym], ReductionMode::Unary);
-    let mut writes = vec![list_overload, binary_overload];
-    writes.push(WriteOp::Group {
+    let group = WriteOp::Group {
         probes: powerset_probes(&[sym], &registries.labels),
         seal: GroupSeal::of_delivered(scope, &record),
         index: bind_index,
-    });
-    Ok((cell, writes))
+    };
+    Ok((cell, [list_overload, binary_overload, group]))
 }
 
 /// Allocate one operator body as a `KFunction` capturing `scope`, and describe its bucket write
@@ -630,12 +641,11 @@ fn bridge_body<'a>(
 /// its declaring scope's region.
 fn op_action<'a>(
     scratch: crate::witnessed::BumpAllocator<'a>,
-    result: Result<(Witnessed<CarriedFamily, CarrierWitness>, Vec<WriteOp<'a>>), KError>,
+    result: Result<FinalizedOp<'a>, KError>,
 ) -> Action<'a> {
     match result {
-        Ok((witnessed, writes)) => {
-            Action::done(Ok(StepCarried::born(witnessed))).with_effects(scratch, writes)
-        }
+        Ok((witnessed, writes)) => Action::done(Ok(StepCarried::born(witnessed)))
+            .with_effects(scratch, writes.into_iter().flatten()),
         Err(e) => Action::done(Err(e)),
     }
 }

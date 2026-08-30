@@ -23,6 +23,7 @@ use crate::machine::{NameLookup, Scope};
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
+use crate::machine::model::display_label;
 use crate::machine::model::render_label;
 
 // This builtin's slot spellings, minted once and read back by symbol.
@@ -41,11 +42,10 @@ pub fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         ctx.registries
     ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", &SLOTS.body));
-    // The pre-scan's diagnostics quote the module by name, so the binder's spelling is read back
-    // once here and the symbol itself carries on to the binding.
-    let spelling = render_label(name.symbol(), ctx.registries);
-    let announced =
-        crate::try_action!(announce_type_members(&body_expr, &spelling, ctx.registries));
+    // The pre-scan quotes the module by name only on the arm that fails, so the binder's symbol
+    // carries through to it unrendered and the spelling is written straight into the diagnostic's
+    // buffer there. The success path — every `MODULE` that declares — renders nothing.
+    let announced = crate::try_action!(announce_type_members(&body_expr, name, ctx.registries));
     let child_scope = ctx.scope.alloc_child_under_module(announced);
     await_module_body(child_scope, name, body_expr, ctx.bind_index())
 }
@@ -64,7 +64,7 @@ pub fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 /// split [`body_statement_refs`] draws, the same boundary `GROUP` reads its members off.
 pub(super) fn announce_type_members(
     body: &KExpression<'_>,
-    module: &str,
+    module: ValueSymbol,
     registries: &RunRegistries,
 ) -> Result<Option<AnnouncedData>, KError> {
     let mut announced = AnnouncedData::default();
@@ -80,8 +80,9 @@ pub(super) fn announce_type_members(
         let binder = name;
         if announced.declares(binder) || announced.binds(binder) {
             return Err(KError::new(KErrorKind::ShapeError(format!(
-                "module `{module}` declares type `{}` twice",
-                crate::machine::model::render_label(binder.symbol(), registries),
+                "module `{}` declares type `{}` twice",
+                display_label(module.symbol(), registries),
+                display_label(binder.symbol(), registries),
             ))));
         }
         match surface {
