@@ -18,8 +18,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         Some(value) => value.summarize(ctx.registries),
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("msg".to_string())))),
     };
-    let line = format!("{rendered}\n");
-    ctx.out.write_out(line.as_bytes());
+    // Two writes rather than one joined buffer: appending a newline is the whole job a
+    // `format!` would do here, and the run is single-threaded, so nothing can land between them.
+    ctx.out.write_out(rendered.as_bytes());
+    ctx.out.write_out(b"\n");
     // The rendered bytes are bumped into this step's own destination region through a zero-dep fold,
     // so the carrier reaches nothing but the region it lives in — the active frame is folded in at
     // finalize/close, not bundled here.
