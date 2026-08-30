@@ -15,7 +15,7 @@ elsa = "1"
 # `allocator-api2`: turns on `impl Allocator for &Bump`, the impl `BumpAllocator` forwards to, and
 # with it the seam a `hashbrown` table is built over so its buckets land in the region's own bump
 # rather than the global heap. See `BumpAllocator` / `BumpMap` in src/witnessed/bump.rs.
-bumpalo = { version = "3.20.3", features = ["allocator-api2"] }
+bumpalo = { version = "3.20.3", features = ["allocator-api2", "collections"] }
 # The `Allocator` trait `BumpAllocator` implements, named directly because the handle is a newtype
 # over `&Bump` rather than the bare reference bumpalo's own impl covers. One version in the graph —
 # bumpalo's feature and hashbrown's default both resolve to it.

@@ -334,3 +334,26 @@ fn declared_records_the_text_under_the_symbol_it_returns() {
     assert_eq!(labels.resolve(name.symbol()), Some("Ordered".to_string()));
     assert_eq!(labels.len(), 1);
 }
+
+/// Sorted rendering arms order by the name a reader sees, and an unrecorded symbol takes the
+/// placeholder's position rather than a digest-dependent one.
+#[test]
+fn compare_texts_orders_by_recorded_text() {
+    use std::cmp::Ordering;
+    let interner = LabelInterner::new();
+    let alpha = interner.intern("alpha");
+    let beta = interner.intern("beta");
+    assert_eq!(interner.compare_texts(alpha, beta), Ordering::Less);
+    assert_eq!(interner.compare_texts(beta, alpha), Ordering::Greater);
+    assert_eq!(interner.compare_texts(alpha, alpha), Ordering::Equal);
+
+    // "<label>" sorts below every alphabetic name, and two missing symbols tie.
+    let missing = Symbol::of("never-interned");
+    let other_missing = Symbol::of("also-never-interned");
+    assert_eq!(interner.compare_texts(missing, alpha), Ordering::Less);
+    assert_eq!(interner.compare_texts(alpha, missing), Ordering::Greater);
+    assert_eq!(
+        interner.compare_texts(missing, other_missing),
+        Ordering::Equal
+    );
+}

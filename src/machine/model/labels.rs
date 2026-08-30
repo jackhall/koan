@@ -122,6 +122,20 @@ impl LabelInterner {
         }
     }
 
+    /// Order two symbols by their recorded text, without rendering either into a `String`.
+    ///
+    /// The sorted rendering arms — a record's fields, a signature's schema — order by the name a
+    /// reader sees, not by digest bits, so they need text order. This compares the recorded slices
+    /// in place under one borrow; a symbol this run never recorded compares as the same
+    /// placeholder [`display`](Self::display) writes for it, so an unrecorded name keeps a fixed
+    /// position rather than a hash-dependent one.
+    pub fn compare_texts(&self, a: Symbol, b: Symbol) -> std::cmp::Ordering {
+        let texts = self.texts.borrow();
+        let left = texts.get(&a).map_or(MISSING_LABEL, |text| text);
+        let right = texts.get(&b).map_or(MISSING_LABEL, |text| text);
+        left.cmp(right)
+    }
+
     /// How many distinct labels this run has recorded.
     pub fn len(&self) -> usize {
         self.texts.borrow().len()

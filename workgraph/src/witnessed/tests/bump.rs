@@ -524,3 +524,33 @@ fn a_computed_run_fills_the_bump_without_staging() {
         "the run's bytes are the destination's own"
     );
 }
+
+/// A rendered view lands its bytes in the destination region, not on the heap by way of a staged
+/// `String`. Sized past [`FIRST_CHUNK_BYTES`] so the capacity growth witnesses where they went.
+#[test]
+fn a_rendered_view_lands_in_the_bump() {
+    struct Repeated(usize);
+    impl std::fmt::Display for Repeated {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            for _ in 0..self.0 {
+                formatter.write_str("ab")?;
+            }
+            Ok(())
+        }
+    }
+
+    let dest = frame();
+    let allocator = placement(&dest).allocator();
+    let pairs = FIRST_CHUNK_BYTES;
+
+    let before = dest.region().bump_capacity();
+    let text: &str = allocator.text_from_display(&Repeated(pairs));
+
+    assert_eq!(text.len(), pairs * 2);
+    assert!(text.starts_with("abab"));
+    assert!(text.ends_with("abab"));
+    assert!(
+        dest.region().bump_capacity() >= before + text.len(),
+        "the rendered bytes are the destination's own"
+    );
+}

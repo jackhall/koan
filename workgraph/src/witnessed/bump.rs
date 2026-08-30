@@ -246,6 +246,21 @@ impl<'b> BumpAllocator<'b> {
         self.0.alloc_str(text)
     }
 
+    /// Render `value` straight into the region and hand back the co-located `&'b str` — the peer of
+    /// [`text`](Self::text) for text that does not exist yet.
+    ///
+    /// A caller holding a `Display` view and wanting the bytes in the region would otherwise render
+    /// into a heap `String` and copy that in, paying a heap allocation and two writes for bytes the
+    /// region ends up owning. This writes them once, into the region. Growth re-bumps and strands
+    /// the shorter run as region garbage — bytes the region releases whole, and still no heap
+    /// allocation.
+    pub fn text_from_display(self, value: &dyn std::fmt::Display) -> &'b str {
+        use std::fmt::Write;
+        let mut text = bumpalo::collections::String::new_in(self.0);
+        write!(text, "{value}").expect("writing into a bump string cannot fail");
+        text.into_bump_str()
+    }
+
     /// Build a **frozen** key→value table over this bump and place its header there too — the shape
     /// an embedder's keyed index takes when a sorted run and a binary search will not do.
     ///
