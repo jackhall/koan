@@ -18,6 +18,7 @@ use crate::machine::model::{
 use crate::machine::model::{KObject, Module, ModuleDraft};
 use crate::machine::model::{TypeMemberMap, TypeSymbol, ValueSymbol};
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
+use crate::witnessed::BumpVec;
 
 use super::{arg, kw, sig};
 use crate::machine::BoundArgs;
@@ -74,15 +75,22 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
     // A slot's tag is keyed by the slot's own name, its value by the per-call mint the abstract
     // member resolved to — the schema and the draft share the classified currency, so both keys
     // travel straight across.
-    let mut tags: Vec<(ValueSymbol, KType)> = Vec::new();
+    // The tags are read by the loop right below and never leave the step, so they stage on the
+    // step scratch. One value slot contributes at most one tag — a slot whose type is not an
+    // abstract member of the draft pushes nothing — so the slot count is an upper bound, which is
+    // what taking the capacity up front needs to rule out a regrow.
+    let mut tags: BumpVec<'a, (ValueSymbol, KType)> =
+        BumpVec::with_capacity_in(s_schema.value_slots.len(), ctx.scratch);
     for (slot_name, kt) in &s_schema.value_slots {
-        if let TypeNode::AbstractType { name: member, .. } = ctx.types().node(*kt)
-            && let Some(per_call) = draft.type_members.get(&member)
+        if let Some(member) = ctx.types().with_node(*kt, |node| match node {
+            TypeNode::AbstractType { name, .. } => Some(*name),
+            _ => None,
+        }) && let Some(per_call) = draft.type_members.get(&member)
         {
             tags.push((*slot_name, *per_call));
         }
     }
-    for (slot_name, tag) in tags {
+    for &(slot_name, tag) in tags.iter() {
         draft.slot_type_tags.insert(slot_name, tag);
     }
 
@@ -160,6 +168,10 @@ fn view_type_members(
     // `TypeConstructor` family over the slot's declared parameter names rather than the default
     // `AbstractType` arm, preserving the higher-kinded shape across the ascription barrier.
     for (name, kt) in &signature.abstract_members {
+        // The node is cloned rather than read in place. Both arms below intern through `types` —
+        // `seal_singleton` mints a family, and the generative arm interns directly — and an intern
+        // under a `with_node` closure hits the borrow that read holds. Reading this one in place
+        // waits on the registry's read/intern split.
         let minted_kt = match types.node(*kt) {
             TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => {
                 // The mint carries the SIG member's own classified name straight across: the
@@ -234,14 +246,14 @@ fn signature_schema(
     s: KType,
     types: &TypeRegistry,
 ) -> (SigSchema, crate::machine::model::TypeDigest) {
-    match types.node(s) {
+    types.with_node(s, |node| match node {
         TypeNode::Signature {
             schema,
             schema_digest,
             ..
-        } => (schema, schema_digest),
+        } => (schema.clone(), *schema_digest),
         _ => unreachable!("the `s` operand is `OfKind(Signature)`; only a signature handle admits"),
-    }
+    })
 }
 
 /// Read the `m:Module` / `s:Signature` operands from the `BodyCtx::args` record: the module off the
@@ -278,7 +290,7 @@ fn resolve_module_and_signature<'a>(
         }
     };
     let s = match args.ktype(&SLOTS.s) {
-        Some(kt) if matches!(types.node(kt), TypeNode::Signature { .. }) => kt,
+        Some(kt) if types.with_node(kt, |node| matches!(node, TypeNode::Signature { .. })) => kt,
         _ => {
             return Err(type_mismatch_or_missing(
                 args,

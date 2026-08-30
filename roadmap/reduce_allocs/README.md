@@ -75,3 +75,14 @@ re-attribution, plus the growth hazards a survey and the consolidated shapes tur
   A `Filling<'a, T>` that owns the reservation and is the only route to a leaked bump slice
   would concentrate the discipline in one audited type instead of every author, but its
   capacity check stays runtime — so that shape is a narrowing, not a close.
+- **Node clones whose consumer interns** — [`TypeRegistry::intern`](../../src/machine/model/types/registry.rs)
+  refuses to run inside a [`with_node`](../../src/machine/model/types/registry.rs) closure: the read
+  holds the table borrow, and the diagnostic on the `try_borrow_mut` names that rule. So a read whose
+  consumer interns cannot become an in-place read, and clones the whole node instead. `WITH`'s schema
+  read in [type_ops/with.rs](../../src/builtins/type_ops/with.rs) is the clearest case:
+  it clones a `TypeNode::Signature` to reach the schema, and
+  [`SigSchema::fold_pins`](../../src/machine/model/types/sig_schema.rs) interns while it reads that
+  schema, so the borrow would still be open when the intern fires. What closes it is splitting the
+  registry's read path from its intern path — a change to the table, not to the caller — which is
+  why [Builtin body allocations](builtin-body-allocations.md) converts the reads around it and
+  leaves this one standing.

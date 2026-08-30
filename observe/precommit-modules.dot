@@ -285,6 +285,7 @@ digraph {
     "koan::builtins::arithmetic" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::arithmetic" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::arithmetic" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::ascribe" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::machine::model" [label="uses", style="dashed"];
