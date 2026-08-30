@@ -100,8 +100,9 @@ above are aliases of that one wrapper, differing only in `C`, and every `C` is
   allocation rather than a table's two, and a `Symbol` being fixed-width `Copy` means
   the index holds no text at all. Field order is therefore a property of the names'
   identity, never of how the literal was written — a record *walks* symbol-sorted, and
-  `summarize` re-sorts by resolved text so it *renders* name-sorted. Equality was
-  already order-blind, so nothing semantic turns on either order.
+  the render arm re-sorts the staged symbols by their recorded text
+  ([label-interning.md § Rendering](label-interning.md#rendering)) so it *renders*
+  name-sorted. Equality was already order-blind, so nothing semantic turns on either order.
 - **`&'a BumpBackedMap<'a, KKey<'a>, usize>`** — a dict's key→index table, frozen at
   construction by [`BumpAllocator::frozen_table`](../workgraph/src/witnessed/bump.rs). Key counts are
   unbounded, so a dict does pay for a hash table; it is a `hashbrown` table whose buckets

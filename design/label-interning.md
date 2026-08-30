@@ -105,8 +105,9 @@ Insertion (declaration) order is preserved by `Record` itself and remains the
 positional-construction order for a type node's field list.
 
 Symbol order carries no meaning to a reader, so a record *value* is rendered
-name-sorted: `KObject::summarize` resolves each field's text and sorts on it before
-formatting. That is a render-path sort only — the substrate's cell layout stays
+name-sorted: the render arm stages the field symbols and orders them through
+`LabelInterner::compare_texts`, which compares the recorded slices in place, so the
+sort reads text without rendering any of it. That is a render-path sort only — the substrate's cell layout stays
 symbol-keyed, and the sort is the one place this design adds cost rather than
 removing it. It is paid where the alternative is a printed field order that varies
 with the hash.
@@ -431,6 +432,13 @@ recorded text straight into the message's own buffer with no `String` in between
 `format_args!` position that carries a label passes the view rather than a rendered
 fragment. A diagnostic built that way costs its own buffer alone.
 
+Beside them sits **`compare_texts`**, the order door: two symbols compared by their recorded
+text under one borrow. The render arms that print name-sorted — a record value's fields, a
+signature's schema members — consult it instead of rendering first and sorting the fragments,
+so a sorted arm stages symbols and the comparison touches no allocation. A symbol this run
+never recorded compares as the same placeholder `display` writes for it, so an unrecorded name
+holds a fixed position rather than a hash-dependent one.
+
 Rendering happens **where a diagnostic is built and nowhere earlier**. A lookup that
 misses carries the symbol out rather than a message — `Resolution::Unbound` and
 `TypeChannel::Unbound`
@@ -444,15 +452,45 @@ is not a value" fall-through every keyworded dispatch takes, so a program that n
 prints a name never renders one. A binder builtin reads its own name back the same way —
 on the arm that quotes it, not before.
 
-Because the surface parts of an expression carry symbols rather than text,
-`summarize` — the surface rendering of a part, an expression or a trace frame —
-takes the run's interner, and so do the parse-side walkers that quote a name in a
-diagnostic. A field or parameter list is the shape to read that against: `parse_pair_list` and
+Because the surface parts of an expression carry symbols rather than text, the surface
+rendering of a part, an expression or a trace frame takes the run's interner, and so do the
+parse-side walkers that quote a name in a diagnostic. A field or parameter list is the shape
+to read that against: `parse_pair_list` and
 `parse_type_tag_names` — the pair-list door and the variant-tag pre-scan
 ([triple_list.rs](../src/parse/triple_list.rs)) — take the interner and hand each name on as the
 symbol its own token minted, rendering only inside the message a rejected or duplicated name
 raises. The name a declaration *keeps* is never rendered — text appears on the error path and the
 print path, nowhere else.
+
+### The surface-rendering family
+
+One tier up from a label sits the rendering of a whole surface value — a `Held` or `Carried`
+cell, a `KObject`, a `KType`'s name, and the `Part` trait's per-part rendering that
+`ExpressionPart` and `WorkingPart` implement. Each is a `Display` family with the same three
+spellings:
+
+- **`write_summary(f, …)`** (`KType::write_name` for a type) is the one place the arms are
+  written. Nodes are read in place and children recurse into the *same* formatter, so a nested
+  value costs the caller's buffer and nothing else — no per-child `String`, no `Vec` to `join`.
+  It is the required method on [`Part`](../src/machine/model/ast/shape.rs), where a
+  view-returning signature would need an associated type per implementor and a formatter
+  argument stays object-safe.
+- **`summary(…)`** (`KType::display_name`) is the `Display` view — the `format!` argument a
+  diagnostic passes, so a message that names a value builds one buffer: its own.
+- **`summarize(…)`** (`KType::name`) is `summary(..).to_string()`, for the callers that *keep*
+  a rendering rather than write it somewhere: a `KError`'s stored `expr` / `got` text, a trace
+  frame, a deferred return's stored surface.
+
+Two consequences follow from the streaming shape. A renderer cannot inspect the text it has
+already written, so the parameter-record sigil convention — a leaf type surface takes a `:`
+prefix, one that already opens a sigil does not — reads the node's shape through
+[`KType::surface_opens_sigil`](../src/machine/model/types/ktype.rs) rather than the rendered
+string, and that predicate's arms are exactly the arms `write_name` opens with `:(` or `:{`.
+And bytes that must *exist* rather than be written into a message are rendered straight into a
+region: `PRINT` hands its view to
+[`BumpAllocator::text_from_display`](../workgraph/src/witnessed/bump.rs), so the slice written
+to the output sink and the bytes the returned `KString` carries are one allocation in the
+step's own destination region.
 
 
 ## Open work

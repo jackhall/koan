@@ -126,7 +126,7 @@ than a relaxation of the `Copy` bound that would admit both and everything else 
 **The verbs are defined once, on the allocator handle.**
 [`BumpAllocator<'b>`](../src/witnessed/bump.rs) is a `Copy`, brand-carrying
 wrapper over a `Bump`, and it is where `value` / `slice` /
-`slice_from_iter` / `text` live. Every surface that can reach a region's bytes — `RegionHandle::allocator`,
+`slice_from_iter` / `text` / `text_from_display` live. Every surface that can reach a region's bytes — `RegionHandle::allocator`,
 `FoldedPlacement::allocator`, an embedder's own brand veneer — hands back that
 one type rather than restating a verb set of its own, so the `Copy` guard and its
 rationale are written once. The wrapping constructor is `pub(crate)`, so a handle
@@ -153,6 +153,14 @@ That is what lets a caller build a run of region-resident elements without an
 owned staging run in between, and it is pinned by
 `a_fill_may_allocate_from_the_bump_it_is_filling` in the
 [audit slate](../observe/miri_slate.md).
+
+**Text that does not exist yet is rendered into the region, not into a `String` first.**
+`text` re-homes bytes a caller already holds; `text_from_display` takes a `Display` view and
+writes it straight into the bump, so a caller that needs the rendered bytes *in* a region pays
+one write and no heap allocation. The rendered length is unknown up front, so the fill grows:
+each regrow re-bumps and abandons the shorter run as region garbage, which the region releases
+whole at teardown — the same bounded-but-data-dependent shape `slice_from_iter`'s exact-length
+reservation avoids by type, taken here because no length is available before the render.
 
 **A frozen keyed index is a verb, not a relaxation of `value`.** A table header is
 glue-free without being `Copy`: a `hashbrown` map owns its bucket array, so it has a
