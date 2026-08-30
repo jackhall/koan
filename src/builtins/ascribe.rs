@@ -37,7 +37,6 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.registries));
     let (s_schema, s_digest) = signature_schema(s, ctx.types());
-    let s_name = s.name(ctx.registries);
 
     // Allocate the view scope, replay the source module's members into it, and seed its `types`
     // table with the view's own type members, all in one door: the scope is unreachable until the
@@ -100,7 +99,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
     let new_module: &'a Module<'a> =
         Module::alloc_at_child_scope(m.path, new_scope, draft, self_sig);
 
-    if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.registries) {
+    if let Err(e) = check_satisfies(m, &s_schema, s_digest, s, ctx.registries) {
         return Action::done(Err(e));
     }
 
@@ -128,10 +127,12 @@ pub fn body_transparent<'a>(
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.registries));
     let (s_schema, s_digest) = signature_schema(s, ctx.types());
-    let s_name = s.name(ctx.registries);
-    if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.registries) {
+    if let Err(e) = check_satisfies(m, &s_schema, s_digest, s, ctx.registries) {
         return Action::done(Err(e));
     }
+    // Rendered after the check, and for the view's own path rather than for a diagnostic: the
+    // path is part of the value this builds.
+    let s_name = s.name(ctx.registries);
     // A transparent view re-tags the source module's child scope directly (`m.child_scope()`),
     // foreign to this frame. The store door merges that scope as its source operand, so the
     // re-tagged Module and its Object-arm wrapper are both built at one fold brand in this scope's
@@ -314,13 +315,16 @@ fn check_satisfies<'a>(
     m: &Module<'a>,
     schema: &SigSchema,
     schema_digest: crate::machine::model::TypeDigest,
-    sig_name: &str,
+    signature: KType,
     registries: &RunRegistries,
 ) -> Result<(), KError> {
     let types = &registries.types;
     if m.satisfies_sig_schema(schema, schema_digest, registries) {
         return Ok(());
     }
+    // The signature's spelling is rendered here rather than at the call: an ascription that holds
+    // names it nowhere, and this arm is the only reader.
+    let sig_name = signature.name(registries);
     match sig_subtype(&m.self_sig(types), schema, registries) {
         Ok(()) => unreachable!("a recorded false verdict must re-fail on the diagnostic walk"),
         Err(failure) => Err(KError::new(KErrorKind::ShapeError(format!(

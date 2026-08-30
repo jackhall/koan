@@ -19,7 +19,8 @@ use crate::machine::{Action, require_ktype};
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
 
 use super::op_def::OperatorForm;
-use super::{arg, kw, sig};
+use super::{arg, kw};
+use crate::machine::model::ReturnType;
 use crate::machine::model::RunRegistries;
 use crate::witnessed::BumpVec;
 
@@ -90,28 +91,26 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
 /// synthesized koan AST. A single-member group must never share a group with another operator.
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let types = &registries.types;
+    let nary_elements = [
+        kw(registries, "|"),
+        arg(registries, &SLOTS.members, types.list(KType::ANY)),
+    ];
+    let binary_elements = [
+        arg(registries, &SLOTS.left, KType::of_kind(KKind::AnyType)),
+        kw(registries, "|"),
+        arg(registries, &SLOTS.right, KType::of_kind(KKind::AnyType)),
+    ];
     let (_carrier, writes) = super::op_def::register_unary_operator(
         scope,
         registries.labels.record(&UNION_OPERATOR),
         OperatorForm {
-            signature: sig(
-                KType::of_kind(KKind::AnyType),
-                vec![
-                    kw(registries, "|"),
-                    arg(registries, &SLOTS.members, types.list(KType::ANY)),
-                ],
-            ),
+            return_type: ReturnType::Resolved(KType::of_kind(KKind::AnyType)),
+            elements: &nary_elements,
             body: Body::Builtin(body_nary),
         },
         OperatorForm {
-            signature: sig(
-                KType::of_kind(KKind::AnyType),
-                vec![
-                    arg(registries, &SLOTS.left, KType::of_kind(KKind::AnyType)),
-                    kw(registries, "|"),
-                    arg(registries, &SLOTS.right, KType::of_kind(KKind::AnyType)),
-                ],
-            ),
+            return_type: ReturnType::Resolved(KType::of_kind(KKind::AnyType)),
+            elements: &binary_elements,
             body: Body::Builtin(body_binary),
         },
         // A natively seeded builtin has no group context at all.

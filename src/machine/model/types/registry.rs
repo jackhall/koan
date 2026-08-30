@@ -329,15 +329,16 @@ impl TypeRegistry {
             }
         };
         for member in members {
-            // Reading the member's node drops the table borrow before the intern below.
-            match self.node(*member) {
+            // Read in place: the flatten pass pushes handles and interns nothing, so the table
+            // borrow the read holds is closed again before the intern below opens its own.
+            self.with_node(*member, |node| match node {
                 TypeNode::Union { members: inner } => {
                     for nested in inner {
-                        push_unique(nested, &mut flat);
+                        push_unique(*nested, &mut flat);
                     }
                 }
                 _ => push_unique(*member, &mut flat),
-            }
+            });
         }
         if flat.len() == 1 {
             return flat[0];
@@ -374,9 +375,11 @@ impl TypeRegistry {
     /// taken here off `flat` is equal by construction to the digest the node would key at — which
     /// makes the node itself needed only on a miss. Both union constructors above build their
     /// members in a stack-sized [`MemberList`], so a repeat union — the steady state inside a
-    /// loop, where every evaluation of `A | B` names one already-interned node — allocates
-    /// nothing at all. `flat` arrives owned so the miss path hands its buffer to the node rather
-    /// than copying it: a member list wide enough to have spilled is moved, not reallocated.
+    /// loop, where every evaluation of `A | B` names one already-interned node — builds neither a
+    /// member buffer nor a node, and `union_digest` sorts its member digests inline, so a union
+    /// at the width one is written at allocates nothing at all. `flat` arrives owned so the miss
+    /// path hands its buffer to the node rather than copying it: a member list wide enough to
+    /// have spilled is moved, not reallocated.
     ///
     /// Keeps [`intern`](Self::intern)'s "a node read must not intern" discipline: the probe's
     /// shared borrow ends with the statement that takes it, before the mutable borrow below.

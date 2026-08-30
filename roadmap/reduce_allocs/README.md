@@ -63,8 +63,8 @@ re-attribution, plus the growth hazards a survey and the consolidated shapes tur
   provenance, spanning the three functions that build, read, and dedupe it, rather than a claim
   a reader checks against the loop in front of them.
   Weakest of all is `awaited` in
-  [fn_def/signature.rs](../../src/builtins/fn_def/signature.rs), the one buffer in `src/builtins/`
-  still staged on the heap and staged there for exactly this reason: it grows by
+  [fn_def/signature.rs](../../src/builtins/fn_def/signature.rs), the one step-transient buffer the
+  builtin bodies left on the heap, and left there for exactly this reason: it grows by
   `extend(producers)` over a `TypeResolution::Park(Vec<ProducerId>)`
   ([src/machine/model/types/resolver.rs](../../src/machine/model/types/resolver.rs)) whose length
   the resolver sets, so unlike the three above it has no candidate-count claim to rest a
@@ -74,12 +74,15 @@ re-attribution, plus the growth hazards a survey and the consolidated shapes tur
   A `Filling<'a, T>` that owns the reservation and is the only route to a leaked bump slice
   would concentrate the discipline in one audited type instead of every author, but its
   capacity check stays runtime — so that shape is a narrowing, not a close.
-- **Statement-list buffers in the machine's own helpers** —
+- **Step-transient buffers the machine hands a builtin** — a builtin body pays for a buffer it
+  neither builds nor outlives when the door it calls returns one.
   [`body_statement_refs`](../../src/machine/core/kfunction/body.rs) collects a `Vec` of statement
-  references per call, and a builtin body that scans a block pays it inside the step that drops it.
-  The builtin bodies themselves stage on `ctx.scratch`, so this is the last heap buffer on those
-  paths, and closing it means threading an allocator through a machine-level helper its callers
-  share rather than editing one body.
+  references per call, and
+  [`resolver::seal_writes`](../../src/machine/model/types/resolver.rs) returns a `Vec<WriteOp>`
+  that [union.rs](../../src/builtins/union.rs) passes straight to the action's write channel and
+  drops. Both die inside the step that called them, so both belong on `ctx.scratch`; closing either means
+  threading an allocator through a machine-level door its callers share rather than editing one
+  body, which is why the builtin-side sweep left them.
 - **Doors no recorded shape walks** — `audit/shapes/` reaches neither `A | B`, `WITH`,
   `OP` nor `GROUP`, and no shape performs a `Type.member` read or a dynamic `s."x"` read. The
   allocations removed on those paths are stated at the site and confirmed by a flat sweep rather

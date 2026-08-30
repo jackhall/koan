@@ -35,6 +35,7 @@ use super::record::Record;
 use super::registry::TypeRegistry;
 use super::sig_schema::SigSchema;
 use super::signature::DeferredReturnSurface;
+use smallvec::SmallVec;
 
 /// A `KType`'s content identity: the low 128 bits of a BLAKE3 hash of its content.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
@@ -282,7 +283,10 @@ fn function_digest(params: &Record<KType>, ret: TypeDigest) -> TypeDigest {
 /// [`node_digest`] is this call over the node's member slice, so a digest taken here off a
 /// member slice equals the digest of the node that slice would build.
 pub(super) fn union_digest(members: &[KType]) -> TypeDigest {
-    let mut member_digests: Vec<TypeDigest> = members.iter().map(|m| m.digest()).collect();
+    // The sort needs its own buffer, and the digest is taken per union evaluation rather than
+    // once at intern, so the members ride inline: the width a union is written at fits.
+    let mut member_digests: SmallVec<[TypeDigest; 8]> =
+        members.iter().map(|m| m.digest()).collect();
     member_digests.sort_unstable();
     let mut h = DigestHasher::new(TAG_UNION);
     h.count(member_digests.len());

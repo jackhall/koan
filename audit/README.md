@@ -198,8 +198,9 @@ any of them changes what it builds per name. Registering a callable renders no s
 registration used to summarize its own signature at seal time, a `Vec` of per-element renderings
 and a `String` per element and the joined result and a bump copy of that text into the bucket
 entry's region, all for a `DuplicateOverload` diagnostic a correct program never sees. The
-diagnostic renders from the standing entry's stored dispatch token on the error arm instead, and
-the entry stores no text at all.
+diagnostic renders on the error arm instead — the colliding registration's own untyped bucket key
+beside the standing entry's stored dispatch token — and neither the entry nor the write op that
+installs it holds any text.
 
 The **fixed** term is the empty program's own reading, and it is inert to what a program *names* —
 an empty program names nothing. It stays proportional to the *count* of registered overloads, which

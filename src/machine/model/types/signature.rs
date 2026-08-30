@@ -166,18 +166,24 @@ fn normalized_keyword(token: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// The bucket key a pre-mint element buffer will key once minted —
+/// [`ExpressionSignature::untyped_key`] read off the buffer rather than off a signature. A
+/// pre-mint keyword already carries the symbol of its **normalized** spelling
+/// ([`SignatureElement::keyword`]), so the key is read straight off the elements.
+pub fn untyped_key_of(elements: &[SignatureElement]) -> UntypedKey {
+    elements
+        .iter()
+        .map(|el| match el {
+            SignatureElement::Keyword(symbol) => KeyElement::Keyword(*symbol),
+            SignatureElement::Argument(_) => KeyElement::Slot,
+        })
+        .collect()
+}
+
 impl SignatureDraft<'_> {
-    /// The bucket key this draft will key once minted — [`ExpressionSignature::untyped_key`] read off
-    /// the pre-mint buffer. A draft keyword already carries the symbol of its **normalized**
-    /// spelling ([`SignatureElement::keyword`]), so the key is read straight off the elements.
+    /// The bucket key this draft will key once minted.
     pub fn untyped_key(&self) -> UntypedKey {
-        self.elements
-            .iter()
-            .map(|el| match el {
-                SignatureElement::Keyword(symbol) => KeyElement::Keyword(*symbol),
-                SignatureElement::Argument(_) => KeyElement::Slot,
-            })
-            .collect()
+        untyped_key_of(&self.elements)
     }
 }
 

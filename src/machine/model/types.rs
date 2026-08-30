@@ -50,7 +50,7 @@ pub use signature::{
     ExpressionSignature, KeyElement, ReturnType, SignatureDraft, SignatureElement, UntypedKey,
     is_keyword_token,
 };
-pub(crate) use signature::{render_untyped_key, summarize_dispatch};
+pub(crate) use signature::{render_untyped_key, summarize_dispatch, untyped_key_of};
 pub(crate) use type_digest::{TypeDigest, empty_schema_digest};
 pub use typed_field_list::{
     FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed, pair_list_names,

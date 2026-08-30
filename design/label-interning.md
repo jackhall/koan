@@ -400,10 +400,14 @@ consulted and never written.
 
 The **derived-symbol door** is the exception, and there is exactly one on each
 side of the name partition. On the value side it is
-[`classify_derived_field`](../src/builtins/attr.rs), which every member name that
-reaches `ATTR` as text rather than as a parse-minted token funnels through — a
-rendered type handle, or the runtime string the dynamic `ATTR <s> <field :Str>`
-overloads read. It classifies through `BinderSymbol::declared`, so a spelling read
+[`classify_derived_field`](../src/builtins/attr.rs), which the one member name that
+reaches `ATTR` as text rather than as a parse-minted token funnels through: the
+runtime string the dynamic `ATTR <s> <field :Str>` overloads read. A `Type`-channel
+field arrives as a handle, not as text, and recovers its class straight off the
+handle through [`KType::name_symbol`](../src/machine/model/types/ktype.rs) — the
+symbol the registry already holds — so it renders nothing and interns nothing; a
+handle answering no bare name is compound surface syntax, which names no member and
+rides as a rendering. It classifies through `BinderSymbol::declared`, so a spelling read
 off text keys the same symbol a bare token of that spelling would have minted, and
 `s."x"` and `s.x` reach one member. Classifying through `declared` means it also
 **interns**: a computed member name is recorded, so interner growth is bounded by

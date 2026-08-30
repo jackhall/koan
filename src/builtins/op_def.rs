@@ -76,8 +76,10 @@ enum OpKind {
 // operators the same way.
 
 use crate::machine::BoundArgs;
+use crate::machine::model::ReturnType;
 pub(super) use crate::machine::model::symbol_from_parts;
 use crate::machine::model::symbol_from_quote_body;
+use crate::machine::model::untyped_key_of;
 use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{GroupSeal, OverloadSeal};
 
@@ -410,7 +412,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
         // combined form, the value the bound name reads.
         let (cell, registrations) = match kind {
             OpKind::Binary => {
-                let elements = vec![
+                let elements = [
                     arg(registries, &SLOTS.left, operand),
                     SignatureElement::Keyword(sym),
                     arg(registries, &SLOTS.right, operand),
@@ -418,7 +420,8 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                 let result_type = result.unwrap_or(operand);
                 let (cell, overload) = register_body(
                     scope,
-                    sig(result_type, elements),
+                    ReturnType::Resolved(result_type),
+                    &elements,
                     Body::UserDefined(body_expr),
                     bind_index,
                     registries,
@@ -439,25 +442,19 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                         "UNARY OP requires an explicit `-> Result`".to_string(),
                     ))
                 })?;
-                let list_signature = sig(
-                    result_type,
-                    vec![
-                        SignatureElement::Keyword(sym),
-                        arg(registries, &SLOTS.operands, types.list(operand)),
-                    ],
-                );
+                let list_elements = [
+                    SignatureElement::Keyword(sym),
+                    arg(registries, &SLOTS.operands, types.list(operand)),
+                ];
                 // The binary bridge: `a ~ b` names one keyword, so it dispatches as a plain
                 // keyworded call, not an operator chain — without a two-operand body it would
                 // simply miss. Its body is the AST `sym [left right]`, the shape a reduced run
                 // takes, so both surfaces land on the one list body the user wrote.
-                let bridge_signature = sig(
-                    result_type,
-                    vec![
-                        arg(registries, &SLOTS.left, operand),
-                        SignatureElement::Keyword(sym),
-                        arg(registries, &SLOTS.right, operand),
-                    ],
-                );
+                let bridge_elements = [
+                    arg(registries, &SLOTS.left, operand),
+                    SignatureElement::Keyword(sym),
+                    arg(registries, &SLOTS.right, operand),
+                ];
                 // `check_group_context` rejects `UNARY OP` inside a `GROUP` before the plan is
                 // built, so `in_group` cannot hold here; the door asserts that rather than take
                 // it on trust, since it writes the single-member group unconditionally.
@@ -465,11 +462,13 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                     scope,
                     sym,
                     OperatorForm {
-                        signature: list_signature,
+                        return_type: ReturnType::Resolved(result_type),
+                        elements: &list_elements,
                         body: Body::UserDefined(body_expr),
                     },
                     OperatorForm {
-                        signature: bridge_signature,
+                        return_type: ReturnType::Resolved(result_type),
+                        elements: &bridge_elements,
                         body: Body::UserDefined(bridge_body(program, &registries.labels, sym)),
                     },
                     in_group,
@@ -496,8 +495,11 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
 
 /// One dispatchable form of an operator: the signature naming a surface, and the body that surface
 /// reaches. A unary operator is registered from two — the list form and the binary form.
-pub(super) struct OperatorForm<'a> {
-    pub signature: SignatureDraft<'a>,
+pub(super) struct OperatorForm<'a, 'e> {
+    pub return_type: ReturnType<'a>,
+    /// The pre-mint element buffer, borrowed from the caller's own frame — a signature is minted
+    /// from it inside the door and the buffer is dead the moment the call returns.
+    pub elements: &'e [SignatureElement],
     pub body: Body<'a>,
 }
 
@@ -520,29 +522,31 @@ pub(super) struct OperatorForm<'a> {
 pub(super) fn register_unary_operator<'a>(
     scope: &'a Scope<'a>,
     sym: KeywordSymbol,
-    list: OperatorForm<'a>,
-    binary: OperatorForm<'a>,
+    list: OperatorForm<'a, '_>,
+    binary: OperatorForm<'a, '_>,
     in_group: bool,
     bind_index: BindingIndex,
     registries: &RunRegistries,
 ) -> Result<(SealedValue<'a>, [WriteOp<'a>; 3]), KError> {
     let OperatorForm {
-        signature: list_signature,
+        return_type: list_return,
+        elements: list_elements,
         body: list_body,
     } = list;
     let OperatorForm {
-        signature: binary_signature,
+        return_type: binary_return,
+        elements: binary_elements,
         body: binary_body,
     } = binary;
     let spelling = registries.labels.display(sym.symbol());
     assert_eq!(
-        list_signature.untyped_key(),
+        untyped_key_of(list_elements),
         unary_key(sym),
         "unary operator `{spelling}`: the list-form signature must key the bucket a reduced run or \
          a prefix use computes",
     );
     assert_eq!(
-        binary_signature.untyped_key(),
+        untyped_key_of(binary_elements),
         binary_key(sym),
         "unary operator `{spelling}`: the binary-form signature must key the bucket a two-operand \
          use computes",
@@ -554,10 +558,22 @@ pub(super) fn register_unary_operator<'a>(
     );
     // The list body first: its function is the operator's primary value, the one an `OP`
     // declaration evaluates to.
-    let (cell, list_overload) =
-        register_body(scope, list_signature, list_body, bind_index, registries)?;
-    let (_, binary_overload) =
-        register_body(scope, binary_signature, binary_body, bind_index, registries)?;
+    let (cell, list_overload) = register_body(
+        scope,
+        list_return,
+        list_elements,
+        list_body,
+        bind_index,
+        registries,
+    )?;
+    let (_, binary_overload) = register_body(
+        scope,
+        binary_return,
+        binary_elements,
+        binary_body,
+        bind_index,
+        registries,
+    )?;
     let record = scope.birth_operator_group(&[sym], ReductionMode::Unary);
     let group = WriteOp::Group {
         probes: powerset_probes(&[sym], &registries.labels),
@@ -580,18 +596,13 @@ pub(super) fn register_unary_operator<'a>(
 /// style: the overload lands in `functions` only, never in `data`.
 fn register_body<'a>(
     scope: &'a Scope<'a>,
-    signature: SignatureDraft<'a>,
+    return_type: ReturnType<'a>,
+    elements: &[SignatureElement],
     body: Body<'a>,
     bind_index: BindingIndex,
     registries: &RunRegistries,
 ) -> Result<(SealedValue<'a>, WriteOp<'a>), KError> {
-    let cell = KFunction::alloc_captured(
-        scope,
-        signature.return_type,
-        &signature.elements,
-        body,
-        registries,
-    );
+    let cell = KFunction::alloc_captured(scope, return_type, elements, body, registries);
     let write = WriteOp::Overload {
         index: bind_index,
         seal: OverloadSeal::of_delivered(scope, &cell),

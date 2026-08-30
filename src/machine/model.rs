@@ -28,7 +28,7 @@ pub use types::{
     UntypedKey, WindowView, is_keyword_token,
 };
 pub use types::{display_label, render_label};
-pub(crate) use types::{render_untyped_key, summarize_dispatch};
+pub(crate) use types::{render_untyped_key, summarize_dispatch, untyped_key_of};
 pub use values::{
     Carried, ContainerSubstrate, Held, KKey, KObject, PartedCell, Scalar, ValueEqualityError,
 };
