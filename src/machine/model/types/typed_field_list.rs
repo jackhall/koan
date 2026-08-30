@@ -11,7 +11,7 @@ use crate::machine::Scope;
 use crate::machine::model::Record;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{
-    ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart,
+    ExpressionPart, FieldSlot, KExpression, Part, WorkingExpression, WorkingPart, part_summary,
 };
 use crate::machine::model::labels::{BinderSymbol, LabelInterner, TypeSymbol};
 use crate::machine::model::values::Carried;
@@ -346,7 +346,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                 FieldSlot::Name(_) | FieldSlot::Other => Err(format!(
                     "{context_list} type for `{}` must be a type name token, got {}",
                     rendered(),
-                    Part::summarize(part, &registries.labels)
+                    part_summary(part, &registries.labels)
                 )),
             }
         },

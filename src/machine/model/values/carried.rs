@@ -13,7 +13,7 @@
 //! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
 
 use crate::machine::model::labels::{TypeSymbol, ValueSymbol};
-use crate::machine::model::types::{KKind, KType, TypeRegistry, render_label};
+use crate::machine::model::types::{KKind, KType, TypeRegistry, display_label};
 use crate::witnessed::reattachable;
 
 use super::KObject;
@@ -71,14 +71,33 @@ impl<'a> Carried<'a> {
         }
     }
 
-    /// Surface rendering of any arm — an object's `summarize`, a type's `name`, or the
-    /// unlowered name's surface form.
-    pub fn summarize(&self, registries: &RunRegistries) -> String {
+    /// Surface rendering of any arm, written straight into `f` — an object's summary, a type's
+    /// name, or the unlowered name's surface form.
+    pub fn write_summary(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        registries: &RunRegistries,
+    ) -> std::fmt::Result {
         match self {
-            Carried::Object(o) => o.summarize(registries),
-            Carried::Type(t) => t.name(registries),
-            Carried::UnresolvedType(ti) => render_label(ti.symbol(), registries),
+            Carried::Object(o) => o.write_summary(f, registries),
+            Carried::Type(t) => t.write_name(f, registries),
+            Carried::UnresolvedType(ti) => {
+                write!(f, "{}", display_label(ti.symbol(), registries))
+            }
         }
+    }
+
+    /// [`write_summary`](Self::write_summary) as a `Display` view.
+    pub fn summary<'x>(&'x self, registries: &'x RunRegistries) -> CarriedSummary<'x, 'a> {
+        CarriedSummary {
+            carried: self,
+            registries,
+        }
+    }
+
+    /// The carried value's surface as an owned `String`.
+    pub fn summarize(&self, registries: &RunRegistries) -> String {
+        self.summary(registries).to_string()
     }
 
     /// The shallow type tag of the carried value: an object's `ktype()`, or a type-channel
@@ -186,15 +205,56 @@ impl<'a> Held<'a> {
         }
     }
 
-    /// Surface rendering of any arm — an object's `summarize`, a type's `name`, or the
-    /// unlowered name's surface form.
-    pub fn summarize(&self, registries: &RunRegistries) -> String {
+    /// Surface rendering of any arm, written straight into `f` — an object's summary, a type's
+    /// name, or the unlowered name's surface form.
+    pub fn write_summary(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        registries: &RunRegistries,
+    ) -> std::fmt::Result {
         match self {
-            Held::Object(o) => o.summarize(registries),
-            Held::Type(t) => t.name(registries),
-            Held::UnresolvedType(ti) => render_label(ti.symbol(), registries),
-            Held::Identifier(v) => render_label(v.symbol(), registries),
+            Held::Object(o) => o.write_summary(f, registries),
+            Held::Type(t) => t.write_name(f, registries),
+            Held::UnresolvedType(ti) => write!(f, "{}", display_label(ti.symbol(), registries)),
+            Held::Identifier(v) => write!(f, "{}", display_label(v.symbol(), registries)),
         }
+    }
+
+    /// [`write_summary`](Self::write_summary) as a `Display` view.
+    pub fn summary<'x>(&'x self, registries: &'x RunRegistries) -> HeldSummary<'x, 'a> {
+        HeldSummary {
+            held: self,
+            registries,
+        }
+    }
+
+    /// The cell's surface as an owned `String`.
+    pub fn summarize(&self, registries: &RunRegistries) -> String {
+        self.summary(registries).to_string()
+    }
+}
+
+/// A [`Carried::summary`] view: one borrowed cell plus the registries it resolves through.
+pub struct CarriedSummary<'x, 'a> {
+    carried: &'x Carried<'a>,
+    registries: &'x RunRegistries,
+}
+
+impl std::fmt::Display for CarriedSummary<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.carried.write_summary(f, self.registries)
+    }
+}
+
+/// A [`Held::summary`] view: one owned cell plus the registries it resolves through.
+pub struct HeldSummary<'x, 'a> {
+    held: &'x Held<'a>,
+    registries: &'x RunRegistries,
+}
+
+impl std::fmt::Display for HeldSummary<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.held.write_summary(f, self.registries)
     }
 }
 

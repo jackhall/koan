@@ -77,9 +77,37 @@ pub trait Part<'a>: Copy {
     /// This part read as a field-list position. See [`FieldSlot`].
     fn field_slot(&self) -> FieldSlot<'a>;
 
-    /// Surface rendering, for the field walker's shape diagnostics. Takes the run's interner
-    /// because a symbol-carrying part renders its text through it.
-    fn summarize(&self, labels: &LabelInterner) -> String;
+    /// Surface rendering, for the field walker's shape diagnostics, written straight into `f`.
+    /// Takes the run's interner because a symbol-carrying part renders its text through it.
+    ///
+    /// A write signature rather than a view-returning one because the trait is used through
+    /// `&dyn`-shaped generic walkers: a borrowed view would need an associated type per
+    /// implementor, where one formatter argument stays object-safe and composes the same.
+    fn write_summary(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        labels: &LabelInterner,
+    ) -> std::fmt::Result;
+}
+
+/// A [`Part::write_summary`] view — the `format!`-embeddable form the field walker's diagnostics
+/// use, so a part's surface lands in the message's own buffer.
+pub fn part_summary<'x, 'a, P: Part<'a>>(
+    part: &'x P,
+    labels: &'x LabelInterner,
+) -> PartSummary<'x, P> {
+    PartSummary { part, labels }
+}
+
+pub struct PartSummary<'x, P> {
+    part: &'x P,
+    labels: &'x LabelInterner,
+}
+
+impl<'a, P: Part<'a>> std::fmt::Display for PartSummary<'_, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.part.write_summary(f, self.labels)
+    }
 }
 
 /// Pure-structural classification of an expression into the no-keyword fast-lane shapes, the

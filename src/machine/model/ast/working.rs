@@ -19,8 +19,8 @@ use crate::machine::{AdoptSeam, SplicedCell};
 use crate::source::{FileId, SourceRef, Span, Spanned};
 
 use super::shape::{
-    DispatchShape, FieldSlot, Part, PartClass, classify_dispatch_shape, operator_probe_for,
-    stored_untyped_key,
+    DispatchShape, FieldSlot, Part, PartClass, PartSummary, classify_dispatch_shape,
+    operator_probe_for, part_summary, stored_untyped_key,
 };
 use super::{ExpressionPart, KExpression, RunIter};
 use crate::machine::model::StoredBinderKey;
@@ -87,8 +87,12 @@ impl<'a> Part<'a> for WorkingPart<'a> {
         }
     }
 
-    fn summarize(&self, labels: &LabelInterner) -> String {
-        WorkingPart::summarize(self, labels)
+    fn write_summary(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        labels: &LabelInterner,
+    ) -> std::fmt::Result {
+        WorkingPart::write_summary(self, f, labels)
     }
 }
 
@@ -104,15 +108,20 @@ fn spliced_debug(carried: Carried<'_>) -> String {
     }
 }
 
-/// [`WorkingPart::summarize`]'s rendering of a spliced cell: a type handle names no spelling the
-/// interner holds, so the type channel keeps its content digest, while an unlowered name resolves
-/// to the spelling the parser recorded.
+/// [`WorkingPart::write_summary`]'s rendering of a spliced cell, written straight into `f`: a type
+/// handle names no spelling the interner holds, so the type channel writes its content digest,
+/// while an unlowered name resolves to the spelling the parser recorded.
 ///
 /// Reached through [`read_resting`], which states the coverage a pin-less probe stands under.
-fn spliced_summary(carried: Carried<'_>, labels: &LabelInterner) -> String {
+fn write_spliced_summary(
+    carried: Carried<'_>,
+    f: &mut std::fmt::Formatter<'_>,
+    labels: &LabelInterner,
+) -> std::fmt::Result {
     match carried {
-        Carried::UnresolvedType(name) => labels.render(name.symbol()),
-        other => spliced_debug(other),
+        Carried::UnresolvedType(name) => write!(f, "{}", labels.display(name.symbol())),
+        Carried::Type(kt) => write!(f, "0x{:032x}", kt.digest().0),
+        Carried::Object(object) => write!(f, "0x{:032x}", object.ktype().digest().0),
     }
 }
 
@@ -131,17 +140,35 @@ impl<'a> std::fmt::Debug for WorkingPart<'a> {
 }
 
 impl<'a> WorkingPart<'a> {
-    /// Per-part subset of [`WorkingExpression::summarize`].
-    pub fn summarize(&self, labels: &LabelInterner) -> String {
+    /// Per-part subset of [`WorkingExpression::write_summary`], written straight into `f`.
+    pub fn write_summary(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        labels: &LabelInterner,
+    ) -> std::fmt::Result {
         match self {
-            WorkingPart::Ast(part) => part.summarize(labels),
-            WorkingPart::Expression(e) => e.summarize(labels),
-            WorkingPart::RecordType(e) => format!(":{{{}}}", e.summarize(labels)),
-            WorkingPart::Spliced { cell } => {
-                read_resting(cell, |carried| spliced_summary(carried, labels))
+            WorkingPart::Ast(part) => part.write_summary(f, labels),
+            WorkingPart::Expression(e) => e.write_summary(f, labels),
+            WorkingPart::RecordType(e) => {
+                f.write_str(":{")?;
+                e.write_summary(f, labels)?;
+                f.write_str("}")
             }
-            WorkingPart::StagedSlot => "<staged>".to_string(),
+            WorkingPart::Spliced { cell } => {
+                read_resting(cell, |carried| write_spliced_summary(carried, f, labels))
+            }
+            WorkingPart::StagedSlot => f.write_str("<staged>"),
         }
+    }
+
+    /// [`write_summary`](Self::write_summary) as a `Display` view.
+    pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> PartSummary<'x, WorkingPart<'a>> {
+        part_summary(self, labels)
+    }
+
+    /// The part's surface as an owned `String`.
+    pub fn summarize(&self, labels: &LabelInterner) -> String {
+        self.summary(labels).to_string()
     }
 
     /// The AST part this slot holds, if it holds one. The scheduler's own arms answer `None`.
@@ -424,14 +451,33 @@ impl<'a> WorkingExpression<'a> {
         self.untyped_key.to_vec()
     }
 
-    /// Surface rendering of the whole expression, resolving each symbol-carrying part through
-    /// the run's interner.
+    /// Surface rendering of the whole expression, written straight into `f`, resolving each
+    /// symbol-carrying part through the run's interner.
+    pub fn write_summary(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        labels: &LabelInterner,
+    ) -> std::fmt::Result {
+        for (index, part) in self.parts.iter().enumerate() {
+            if index > 0 {
+                f.write_str(" ")?;
+            }
+            part.value.write_summary(f, labels)?;
+        }
+        Ok(())
+    }
+
+    /// [`write_summary`](Self::write_summary) as a `Display` view.
+    pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> WorkingSummary<'x, 'a> {
+        WorkingSummary {
+            expression: self,
+            labels,
+        }
+    }
+
+    /// The expression's surface as an owned `String`.
     pub fn summarize(&self, labels: &LabelInterner) -> String {
-        self.parts
-            .iter()
-            .map(|p| p.value.summarize(labels))
-            .collect::<Vec<_>>()
-            .join(" ")
+        self.summary(labels).to_string()
     }
 
     /// This expression's source extent, `Some` when both span and file are populated.
@@ -439,6 +485,19 @@ impl<'a> WorkingExpression<'a> {
         self.span
             .zip(self.file)
             .map(|(span, file)| SourceRef { span, file })
+    }
+}
+
+/// A [`WorkingExpression::summary`] view: one expression plus the interner its symbols resolve
+/// through.
+pub struct WorkingSummary<'x, 'a> {
+    expression: &'x WorkingExpression<'a>,
+    labels: &'x LabelInterner,
+}
+
+impl std::fmt::Display for WorkingSummary<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.expression.write_summary(f, self.labels)
     }
 }
 

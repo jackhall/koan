@@ -23,10 +23,10 @@ pub mod working;
 
 pub use program::{ProgramExpression, ProgramNode};
 pub use shape::{
-    DispatchShape, FieldSlot, Part, PartClass, classify_dispatch_shape, operator_probe_for,
-    stored_untyped_key,
+    DispatchShape, FieldSlot, Part, PartClass, PartSummary, classify_dispatch_shape,
+    operator_probe_for, part_summary, stored_untyped_key,
 };
-pub use working::{WorkingExpression, WorkingPart};
+pub use working::{WorkingExpression, WorkingPart, WorkingSummary};
 
 #[cfg(test)]
 mod tests;
@@ -124,8 +124,12 @@ impl<'a> Part<'a> for ExpressionPart<'a> {
         }
     }
 
-    fn summarize(&self, labels: &LabelInterner) -> String {
-        ExpressionPart::summarize(self, labels)
+    fn write_summary(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        labels: &LabelInterner,
+    ) -> std::fmt::Result {
+        ExpressionPart::write_summary(self, f, labels)
     }
 }
 
@@ -160,43 +164,83 @@ impl<'a> ExpressionPart<'a> {
         ExpressionPart::Expression(brand.nested_node_from_iter(parts))
     }
 
-    /// Per-part subset of [`KExpression::summarize`].
-    pub fn summarize(&self, labels: &LabelInterner) -> String {
+    /// Per-part subset of [`KExpression::write_summary`], written straight into `f`.
+    pub fn write_summary(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        labels: &LabelInterner,
+    ) -> std::fmt::Result {
         match self {
-            ExpressionPart::Keyword(symbol) => labels.render(symbol.symbol()),
-            ExpressionPart::Identifier(v) => labels.render(v.symbol()),
-            ExpressionPart::Type(t) => labels.render(t.symbol()),
-            ExpressionPart::Expression(e) => e.summarize(labels),
-            ExpressionPart::SigiledTypeExpr(e) => format!(":({})", e.summarize(labels)),
-            ExpressionPart::RecordType(e) => format!(":{{{}}}", e.summarize(labels)),
-            ExpressionPart::QuotedExpression(e) => format!("#({})", e.summarize(labels)),
+            ExpressionPart::Keyword(symbol) => write!(f, "{}", labels.display(symbol.symbol())),
+            ExpressionPart::Identifier(v) => write!(f, "{}", labels.display(v.symbol())),
+            ExpressionPart::Type(t) => write!(f, "{}", labels.display(t.symbol())),
+            ExpressionPart::Expression(e) => e.write_summary(f, labels),
+            ExpressionPart::SigiledTypeExpr(e) => {
+                f.write_str(":(")?;
+                e.write_summary(f, labels)?;
+                f.write_str(")")
+            }
+            ExpressionPart::RecordType(e) => {
+                f.write_str(":{")?;
+                e.write_summary(f, labels)?;
+                f.write_str("}")
+            }
+            ExpressionPart::QuotedExpression(e) => {
+                f.write_str("#(")?;
+                e.write_summary(f, labels)?;
+                f.write_str(")")
+            }
             ExpressionPart::ListLiteral(items) => {
-                let inner: Vec<String> = items.iter().map(|p| p.summarize(labels)).collect();
-                format!("[{}]", inner.join(" "))
+                f.write_str("[")?;
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(" ")?;
+                    }
+                    item.write_summary(f, labels)?;
+                }
+                f.write_str("]")
             }
             ExpressionPart::DictLiteral(pairs) => {
-                let inner: Vec<String> = pairs
-                    .iter()
-                    .map(|(k, v)| format!("{}: {}", k.summarize(labels), v.summarize(labels)))
-                    .collect();
-                format!("{{{}}}", inner.join(", "))
+                f.write_str("{")?;
+                for (index, (k, v)) in pairs.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    k.write_summary(f, labels)?;
+                    f.write_str(": ")?;
+                    v.write_summary(f, labels)?;
+                }
+                f.write_str("}")
             }
             ExpressionPart::RecordLiteral(pairs) => {
-                let inner: Vec<String> = pairs
-                    .iter()
-                    .map(|(k, v)| {
-                        format!("{} = {}", labels.render(k.symbol()), v.summarize(labels))
-                    })
-                    .collect();
-                format!("{{{}}}", inner.join(", "))
+                f.write_str("{")?;
+                for (index, (k, v)) in pairs.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{} = ", labels.display(k.symbol()))?;
+                    v.write_summary(f, labels)?;
+                }
+                f.write_str("}")
             }
             ExpressionPart::Literal(lit) => match lit {
-                KLiteral::Number(n) => n.to_string(),
-                KLiteral::String(s) => (*s).to_string(),
-                KLiteral::Boolean(b) => b.to_string(),
-                KLiteral::Null => "null".to_string(),
+                KLiteral::Number(n) => write!(f, "{n}"),
+                KLiteral::String(s) => f.write_str(s),
+                KLiteral::Boolean(b) => write!(f, "{b}"),
+                KLiteral::Null => f.write_str("null"),
             },
         }
+    }
+
+    /// [`write_summary`](Self::write_summary) as a `Display` view — what a `format!` argument
+    /// naming a part uses.
+    pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> PartSummary<'x, ExpressionPart<'a>> {
+        part_summary(self, labels)
+    }
+
+    /// The part's surface as an owned `String`.
+    pub fn summarize(&self, labels: &LabelInterner) -> String {
+        self.summary(labels).to_string()
     }
 
     /// Slot-aware resolve producing an owned [`Held`] cell, run at [`KFunction::bind_args`] time. A
@@ -622,14 +666,45 @@ impl<'a> KExpression<'a> {
         }
     }
 
-    /// Surface rendering of the whole expression, resolving each symbol-carrying part through
-    /// the run's interner.
+    /// Surface rendering of the whole expression, written straight into `f`, resolving each
+    /// symbol-carrying part through the run's interner.
+    pub fn write_summary(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        labels: &LabelInterner,
+    ) -> std::fmt::Result {
+        for (index, part) in self.parts.iter().enumerate() {
+            if index > 0 {
+                f.write_str(" ")?;
+            }
+            part.value.write_summary(f, labels)?;
+        }
+        Ok(())
+    }
+
+    /// [`write_summary`](Self::write_summary) as a `Display` view.
+    pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> ExpressionSummary<'x, 'a> {
+        ExpressionSummary {
+            expression: self,
+            labels,
+        }
+    }
+
+    /// The expression's surface as an owned `String`.
     pub fn summarize(&self, labels: &LabelInterner) -> String {
-        self.parts
-            .iter()
-            .map(|p| p.value.summarize(labels))
-            .collect::<Vec<_>>()
-            .join(" ")
+        self.summary(labels).to_string()
+    }
+}
+
+/// A [`KExpression::summary`] view: one expression plus the interner its symbols resolve through.
+pub struct ExpressionSummary<'x, 'a> {
+    expression: &'x KExpression<'a>,
+    labels: &'x LabelInterner,
+}
+
+impl std::fmt::Display for ExpressionSummary<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.expression.write_summary(f, self.labels)
     }
 }
 

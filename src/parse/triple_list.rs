@@ -6,7 +6,7 @@
 //! validation and duplicate-name detection live here; the per-slot interpretation is
 //! supplied by a `parse_slot` closure.
 
-use crate::machine::model::ast::{FieldSlot, Part};
+use crate::machine::model::ast::{FieldSlot, Part, part_summary};
 use crate::machine::model::labels::{BinderSymbol, LabelInterner, TypeSymbol};
 use crate::source::Spanned;
 
@@ -60,13 +60,13 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
             (_, FieldNameKind::Type) => {
                 return Err(format!(
                     "{context} variant tag must be a capitalized type name, got {}",
-                    parts[i].value.summarize(labels),
+                    part_summary(&parts[i].value, labels),
                 ));
             }
             _ => {
                 return Err(format!(
                     "{context} name must be a bare identifier, got {}",
-                    parts[i].value.summarize(labels),
+                    part_summary(&parts[i].value, labels),
                 ));
             }
         };
@@ -106,7 +106,7 @@ pub fn parse_type_tag_names<'a, P: Part<'a>>(
         let FieldSlot::Type(tag) = parts[i].value.field_slot() else {
             return Err(format!(
                 "{context} variant tag must be a capitalized type name, got {}",
-                parts[i].value.summarize(labels),
+                part_summary(&parts[i].value, labels),
             ));
         };
         if out.contains(&tag) {

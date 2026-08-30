@@ -8,9 +8,10 @@ use crate::machine::core::{
 use crate::machine::model::ast::{KExpression, ProgramExpression};
 use crate::machine::model::labels::{BinderSymbol, Symbol, TypeSymbol};
 use crate::machine::model::registries::RunRegistries;
-use crate::machine::model::types::render_label;
+use crate::machine::model::types::display_label;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
 use crate::witnessed::{BumpVec, CellInput, CellReach, Sectioned};
+use smallvec::SmallVec;
 
 use super::container_substrate::{
     HeldCells, ListLayout, PayloadLayout, RecordLayout, held_copy_cost,
@@ -1036,63 +1037,98 @@ impl<'a> Parseable for KObject<'a> {
 }
 
 impl<'a> KObject<'a> {
-    /// Canonical surface rendering of a value. Carried types render through the registry, and
-    /// record field labels resolve through the interner beside it.
-    pub fn summarize(&self, registries: &RunRegistries) -> String {
+    /// Canonical surface rendering of a value, written straight into `f`. Carried types render
+    /// through the registry, and record field labels resolve through the interner beside it.
+    pub fn write_summary(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        registries: &RunRegistries,
+    ) -> std::fmt::Result {
         match self {
-            KObject::Number(n) => n.to_string(),
-            KObject::KString(s) => (*s).to_string(),
-            KObject::Bool(b) => b.to_string(),
+            KObject::Number(n) => write!(f, "{n}"),
+            KObject::KString(s) => f.write_str(s),
+            KObject::Bool(b) => write!(f, "{b}"),
             KObject::List(substrate, _) => {
-                let parts: Vec<String> = substrate
-                    .elements()
-                    .iter()
-                    .map(|i| i.summarize(registries))
-                    .collect();
-                format!("[{}]", parts.join(", "))
+                f.write_str("[")?;
+                for (index, item) in substrate.elements().iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    item.write_summary(f, registries)?;
+                }
+                f.write_str("]")
             }
             KObject::Dict(substrate, _) => {
-                let parts: Vec<String> = substrate
-                    .entries()
-                    .map(|(k, v)| format!("{}: {}", k.summarize(), v.summarize(registries)))
-                    .collect();
-                format!("{{{}}}", parts.join(", "))
+                f.write_str("{")?;
+                for (index, (key, value)) in substrate.entries().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{key}: ")?;
+                    value.write_summary(f, registries)?;
+                }
+                f.write_str("}")
             }
-            KObject::KExpression(e) => e.summarize(&registries.labels),
-            KObject::KFunction(f) => f.value_ktype().name(registries),
+            KObject::KExpression(e) => e.write_summary(f, &registries.labels),
+            KObject::KFunction(function) => function.value_ktype().write_name(f, registries),
             KObject::Tagged { tag, value, .. } => {
-                format!(
-                    "{}({})",
-                    render_label(tag.symbol(), registries),
-                    value.payload().summarize(registries)
-                )
+                write!(f, "{}(", display_label(tag.symbol(), registries))?;
+                value.payload().write_summary(f, registries)?;
+                f.write_str(")")
             }
             KObject::Record(substrate, _) => {
                 // The substrate lays cells out in symbol order, which carries no meaning to a
-                // reader; rendering re-sorts by the resolved text so a printed record reads in
+                // reader; rendering re-sorts by field text so a printed record reads in
                 // field-name order. A render-path sort only — the layout itself stays symbol-keyed.
-                let mut fields: Vec<(String, String)> = substrate
-                    .fields()
-                    .map(|(field, value)| {
-                        (render_label(field, registries), value.summarize(registries))
-                    })
-                    .collect();
-                fields.sort_by(|left, right| left.0.cmp(&right.0));
-                let parts: Vec<String> = fields
-                    .into_iter()
-                    .map(|(name, value)| format!("{name} = {value}"))
-                    .collect();
-                format!("{{{}}}", parts.join(", "))
+                // The staged run holds symbols and cells, compared through the interner; eight
+                // fields inline covers the records the tree builds, a wider one spills to the heap
+                // for the length of the write.
+                let mut fields: SmallVec<[(Symbol, &Held<'a>); 8]> = substrate.fields().collect();
+                fields.sort_by(|left, right| registries.labels.compare_texts(left.0, right.0));
+                f.write_str("{")?;
+                for (index, (name, value)) in fields.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{} = ", display_label(*name, registries))?;
+                    value.write_summary(f, registries)?;
+                }
+                f.write_str("}")
             }
-            KObject::Null => "null".to_string(),
+            KObject::Null => f.write_str("null"),
             KObject::Wrapped { inner, type_id } => {
-                format!(
-                    "{}({})",
-                    type_id.name(registries),
-                    inner.payload().summarize(registries)
-                )
+                type_id.write_name(f, registries)?;
+                f.write_str("(")?;
+                inner.payload().write_summary(f, registries)?;
+                f.write_str(")")
             }
-            KObject::Module(m) => m.path.to_string(),
+            KObject::Module(m) => f.write_str(&m.path),
         }
+    }
+
+    /// [`write_summary`](Self::write_summary) as a `Display` view — what a `format!` argument
+    /// naming a value uses, so the surface lands in the message's own buffer.
+    pub fn summary<'x>(&'x self, registries: &'x RunRegistries) -> ObjectSummary<'x, 'a> {
+        ObjectSummary {
+            object: self,
+            registries,
+        }
+    }
+
+    /// The value's surface as an owned `String`.
+    pub fn summarize(&self, registries: &RunRegistries) -> String {
+        self.summary(registries).to_string()
+    }
+}
+
+/// A [`KObject::summary`] view: one value plus the registries its types and labels resolve through.
+pub struct ObjectSummary<'x, 'a> {
+    object: &'x KObject<'a>,
+    registries: &'x RunRegistries,
+}
+
+impl std::fmt::Display for ObjectSummary<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.object.write_summary(f, self.registries)
     }
 }
