@@ -17,6 +17,7 @@
 use crate::machine::model::render_label;
 use crate::machine::model::{Held, KObject, KType, TypeNode, TypeSymbol};
 use crate::machine::{KError, KErrorKind};
+use crate::witnessed::BumpVec;
 
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
@@ -58,7 +59,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // re-pin, which normalizes away (never folded), so `S WITH {Tag = Number}` and
     // `(S WITH {A = Number}) WITH {A = Number}` keep their source's signature identity; an
     // unequal re-pin is a type error.
-    let mut pins: Vec<(TypeSymbol, KType)> = Vec::new();
+    // The pins are read by the fold below and never leave the step, so they stage on the step
+    // scratch. One binding field contributes at most one pin — an equal re-pin of a manifest
+    // member normalizes away and pushes nothing — so the field count is an upper bound, which is
+    // what taking the capacity up front needs to rule out a regrow.
+    let mut pins: BumpVec<'a, (TypeSymbol, KType)> =
+        BumpVec::with_capacity_in(bindings.len(), ctx.scratch);
     for (symbol, value) in bindings.fields() {
         // A pin arrives as a raw record-field symbol, which carries no evidence of its token
         // class. The schema's member maps are keyed by classified `TypeSymbol`s and admit a
