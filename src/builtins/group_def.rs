@@ -53,6 +53,7 @@ use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ValueSymbol;
 use crate::machine::model::display_label;
+use crate::witnessed::{BumpAllocator, BumpVec};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { body, combiner, name } }
@@ -85,7 +86,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
     // Both scans quote the group by name, but only on the arms that fail, so the binder's symbol
     // carries through to them unrendered and the spelling is written straight into a diagnostic's
     // buffer there. The success path — every `GROUP` that declares — renders nothing.
-    let members = crate::try_action!(scan_members(&body_expr, name, ctx.registries));
+    let members = crate::try_action!(scan_members(&body_expr, name, ctx.scratch, ctx.registries));
     // A group *is* a module, so its body announces its top-level type declarations the same way.
     let announced = crate::try_action!(super::module_def::announce_type_members(
         &body_expr,
@@ -133,13 +134,18 @@ fn reduction_mode(
 ///
 /// A `UNARY OP` is refused here rather than at the member's own dispatch: a unary operator takes the
 /// whole run as one list, so it chains with nothing and can be no group's member.
-fn scan_members(
+fn scan_members<'s>(
     body: &KExpression<'_>,
     name: ValueSymbol,
+    scratch: BumpAllocator<'s>,
     registries: &RunRegistries,
-) -> Result<Vec<KeywordSymbol>, KError> {
-    let mut members: Vec<KeywordSymbol> = Vec::new();
-    for statement in body_statement_refs(body) {
+) -> Result<BumpVec<'s, KeywordSymbol>, KError> {
+    // The list is read by `alloc_group_child` and dropped inside this step, so it rides the step
+    // scratch. One statement declares at most one member, which is the reservation.
+    let statements = body_statement_refs(body);
+    let mut members: BumpVec<'s, KeywordSymbol> =
+        BumpVec::with_capacity_in(statements.len(), scratch);
+    for statement in statements {
         match op_declaration_arity(statement) {
             None => continue,
             Some(OpArity::Unary) => {

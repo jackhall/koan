@@ -206,9 +206,10 @@ impl KType {
     /// Static spellings are recorded in the run's label interner here, matching what declaring
     /// the name from text would have recorded, so rendering resolves either way.
     pub fn name_symbol(self, registries: &RunRegistries) -> Option<TypeSymbol> {
-        let types = &registries.types;
         let fixed = |name: &StaticName<TypeSymbol>| Some(registries.labels.record(name));
-        match types.node(self) {
+        // Read in place: every arm answers a stored symbol or a static memo, so nothing here
+        // needs the node to outlive the read, and a `Signature` node's schema is never copied.
+        registries.types.with_node(self, |node| match node {
             TypeNode::Number => fixed(&NUMBER_NAME),
             TypeNode::Str => fixed(&STR_NAME),
             TypeNode::Bool => fixed(&BOOL_NAME),
@@ -219,9 +220,9 @@ impl KType {
             TypeNode::RecordType => fixed(&RECORD_TYPE_NAME),
             TypeNode::Any => fixed(&ANY_NAME),
             TypeNode::OfKind(kind) => Some(kind.surface_symbol(&registries.labels)),
-            TypeNode::AbstractType { name, .. } => Some(name),
-            TypeNode::SetMember { name, .. } => Some(name),
-            TypeNode::Signature { schema_digest, .. } => (schema_digest == empty_schema_digest())
+            TypeNode::AbstractType { name, .. } => Some(*name),
+            TypeNode::SetMember { name, .. } => Some(*name),
+            TypeNode::Signature { schema_digest, .. } => (*schema_digest == empty_schema_digest())
                 .then(|| registries.labels.record(&MODULE_NAME)),
             TypeNode::List { .. }
             | TypeNode::Dict { .. }
@@ -231,7 +232,7 @@ impl KType {
             | TypeNode::Union { .. }
             | TypeNode::ConstructorApply { .. }
             | TypeNode::Sibling(_) => None,
-        }
+        })
     }
 
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of

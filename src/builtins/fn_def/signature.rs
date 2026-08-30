@@ -11,9 +11,14 @@ use crate::witnessed::{BumpAllocator, BumpVec};
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface
 /// `Unbound` against a parameter name.
-pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) -> Vec<Symbol> {
+pub(crate) fn collect_param_names_from_signature<'s>(
+    signature: &KExpression<'_>,
+    scratch: BumpAllocator<'s>,
+) -> BumpVec<'s, Symbol> {
     let parts = &signature.parts;
-    let mut names: Vec<Symbol> = Vec::new();
+    // Read by the return-type classifier and dropped inside this step, so the scratch hosts it.
+    // A name takes a part and its type slot takes another, so the parts count is the upper bound.
+    let mut names: BumpVec<'s, Symbol> = BumpVec::with_capacity_in(parts.len(), scratch);
     let mut i = 0;
     while i < parts.len() {
         // The scan compares against reference leaves, which probe by bare symbol bits, so a

@@ -335,6 +335,7 @@ digraph {
     "koan::builtins::fn_def::signature" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::source" [label="uses", style="dashed"];
+    "koan::builtins::group_def" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::group_def" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::group_def" -> "koan::builtins::op_def" [label="uses", style="dashed"];
     "koan::builtins::group_def" -> "koan::machine" [label="uses", style="dashed"];

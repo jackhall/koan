@@ -37,17 +37,19 @@ fn typeexpr_from_carrier(kt: KType, registries: &RunRegistries) -> CarrierForm {
     // its `name()` is "Module" — and joins that leaf path. A user-declared signature (a non-empty
     // interface) stays `Direct`: re-resolution is by name, and an aliased user SIG reached
     // through a `LET` could miss or hit a shadow.
-    let is_leaf_builtin = matches!(
-        types.node(kt),
-        TypeNode::Number
-            | TypeNode::Str
-            | TypeNode::Bool
-            | TypeNode::Null
-            | TypeNode::Any
-            | TypeNode::Identifier
-            | TypeNode::KExpression
-            | TypeNode::OfKind(KKind::AnyType | KKind::Signature | KKind::ProperType)
-    );
+    let is_leaf_builtin = types.with_node(kt, |node| {
+        matches!(
+            node,
+            TypeNode::Number
+                | TypeNode::Str
+                | TypeNode::Bool
+                | TypeNode::Null
+                | TypeNode::Any
+                | TypeNode::Identifier
+                | TypeNode::KExpression
+                | TypeNode::OfKind(KKind::AnyType | KKind::Signature | KKind::ProperType)
+        )
+    });
     if is_leaf_builtin || kt == KType::EMPTY_SIGNATURE {
         CarrierForm::Leaf(
             kt.name_symbol(registries)
