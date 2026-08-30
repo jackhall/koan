@@ -79,8 +79,11 @@ re-attribution, plus the growth hazards a survey and the consolidated shapes tur
   [`body_statement_refs`](../../src/machine/core/kfunction/body.rs) collects a `Vec` of statement
   references per call, and
   [`resolver::seal_writes`](../../src/machine/model/types/resolver.rs) returns a `Vec<WriteOp>`
-  that [union.rs](../../src/builtins/union.rs) passes straight to the action's write channel and
-  drops. Both die inside the step that called them, so both belong on `ctx.scratch`; closing either means
+  that reaches the action's write channel and dies there — handed over directly by
+  [union.rs](../../src/builtins/union.rs), and carried through `SealOutcome::Sealed` by
+  [newtype_def.rs](../../src/builtins/newtype_def.rs), which returns it up the declarator's
+  finalize contract without ever naming the door that built it. All of them die inside the step
+  that called them, so all of them belong on `ctx.scratch`; closing either door means
   threading an allocator through a machine-level door its callers share rather than editing one
   body, which is why the builtin-side sweep left them.
 - **Doors no recorded shape walks** — `audit/shapes/` reaches neither `A | B`, `WITH`,

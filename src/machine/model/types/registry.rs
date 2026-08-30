@@ -376,10 +376,12 @@ impl TypeRegistry {
     /// makes the node itself needed only on a miss. Both union constructors above build their
     /// members in a stack-sized [`MemberList`], so a repeat union — the steady state inside a
     /// loop, where every evaluation of `A | B` names one already-interned node — builds neither a
-    /// member buffer nor a node, and `union_digest` sorts its member digests inline, so a union
-    /// at the width one is written at allocates nothing at all. `flat` arrives owned so the miss
-    /// path hands its buffer to the node rather than copying it: a member list wide enough to
-    /// have spilled is moved, not reallocated.
+    /// member buffer nor a node, and `union_digest` sorts its member digests inline. So a union up
+    /// to [`MemberList`]'s inline width allocates nothing at all. Past it the `with_capacity` above
+    /// takes a heap buffer off the *input* length, hit or miss — one allocation a wide `UNION`'s
+    /// canonicalization pays, which is what the inline width is chosen against. `flat` arrives
+    /// owned so the miss path hands its buffer to the node rather than copying it: a member list
+    /// wide enough to have spilled is moved, not reallocated.
     ///
     /// Keeps [`intern`](Self::intern)'s "a node read must not intern" discipline: the probe's
     /// shared borrow ends with the statement that takes it, before the mutable borrow below.
