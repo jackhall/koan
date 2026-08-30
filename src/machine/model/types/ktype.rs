@@ -24,6 +24,7 @@ use super::record::Record;
 use super::registry::TypeRegistry;
 use super::sig_schema::SigSchema;
 use super::type_digest::{TypeDigest, empty_schema_digest};
+use smallvec::SmallVec;
 
 /// A handle to one interned type: the content digest of its [`TypeNode`], and nothing else.
 ///
@@ -106,72 +107,92 @@ impl KType {
         self.0
     }
 
-    /// Surface-syntax rendering. The rendered form parses back to the same type through the
-    /// dispatch-driven type-language path (see
+    /// Surface-syntax rendering, straight into `f`. The rendered form parses back to the same
+    /// type through the dispatch-driven type-language path (see
     /// [type-language via dispatch](../../../../design/typing/type-language-via-dispatch.md)).
-    pub fn name(self, registries: &RunRegistries) -> String {
-        let types = &registries.types;
-        match types.node(self) {
-            TypeNode::Number => NUMBER_NAME.text().into(),
-            TypeNode::Str => STR_NAME.text().into(),
-            TypeNode::Bool => BOOL_NAME.text().into(),
-            TypeNode::Null => NULL_NAME.text().into(),
-            TypeNode::Identifier => IDENTIFIER_NAME.text().into(),
-            TypeNode::KExpression => KEXPRESSION_NAME.text().into(),
-            TypeNode::SigiledTypeExpr => SIGILED_TYPE_EXPR_NAME.text().into(),
-            TypeNode::RecordType => RECORD_TYPE_NAME.text().into(),
-            TypeNode::Any => ANY_NAME.text().into(),
-            TypeNode::OfKind(kind) => kind.surface_keyword().into(),
-            TypeNode::List { element } => format!(":(LIST OF {})", element.name(registries)),
+    ///
+    /// The one place the surface arms are written. Nodes are read in place and children recurse
+    /// into the same formatter, so a nested type costs the caller's buffer and nothing else.
+    pub fn write_name(
+        self,
+        f: &mut std::fmt::Formatter<'_>,
+        registries: &RunRegistries,
+    ) -> std::fmt::Result {
+        registries.types.with_node(self, |node| match node {
+            TypeNode::Number => f.write_str(NUMBER_NAME.text()),
+            TypeNode::Str => f.write_str(STR_NAME.text()),
+            TypeNode::Bool => f.write_str(BOOL_NAME.text()),
+            TypeNode::Null => f.write_str(NULL_NAME.text()),
+            TypeNode::Identifier => f.write_str(IDENTIFIER_NAME.text()),
+            TypeNode::KExpression => f.write_str(KEXPRESSION_NAME.text()),
+            TypeNode::SigiledTypeExpr => f.write_str(SIGILED_TYPE_EXPR_NAME.text()),
+            TypeNode::RecordType => f.write_str(RECORD_TYPE_NAME.text()),
+            TypeNode::Any => f.write_str(ANY_NAME.text()),
+            TypeNode::OfKind(kind) => f.write_str(kind.surface_keyword()),
+            TypeNode::List { element } => {
+                f.write_str(":(LIST OF ")?;
+                element.write_name(f, registries)?;
+                f.write_str(")")
+            }
             TypeNode::Dict { key, value } => {
-                format!(
-                    ":(MAP {} -> {})",
-                    key.name(registries),
-                    value.name(registries)
-                )
+                f.write_str(":(MAP ")?;
+                key.write_name(f, registries)?;
+                f.write_str(" -> ")?;
+                value.write_name(f, registries)?;
+                f.write_str(")")
             }
             // `:{x :Number y :Str}` — the braced type-sigil surface. Fields render
             // space-separated like FN params (the field-list parser accepts that).
             TypeNode::Record { fields } => {
-                format!(":{{{}}}", render_param_record(&fields, registries))
+                f.write_str(":{")?;
+                write_param_record(f, fields, registries)?;
+                f.write_str("}")
             }
-            TypeNode::KFunction { params, ret } => format!(
-                ":(FN ({}) -> {})",
-                render_param_record(&params, registries),
-                ret.name(registries)
-            ),
-            TypeNode::DeferredReturn(surface) => surface.render(registries),
-            // `:(A | B)` — members joined by ` | ` and wrapped in the type sigil. A compound
+            TypeNode::KFunction { params, ret } => {
+                f.write_str(":(FN (")?;
+                write_param_record(f, params, registries)?;
+                f.write_str(") -> ")?;
+                ret.write_name(f, registries)?;
+                f.write_str(")")
+            }
+            TypeNode::DeferredReturn(surface) => surface.write_surface(f, registries),
+            // `:(A | B)` — members separated by ` | ` and wrapped in the type sigil. A compound
             // member already opens its own sigil (`:(LIST OF Number)`), which nests fine.
             TypeNode::Union { members } => {
-                let rendered: Vec<String> = members.iter().map(|m| m.name(registries)).collect();
-                format!(":({})", rendered.join(" | "))
+                f.write_str(":(")?;
+                for (index, member) in members.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(" | ")?;
+                    }
+                    member.write_name(f, registries)?;
+                }
+                f.write_str(")")
             }
             TypeNode::ConstructorApply {
                 constructor,
                 arguments,
             } => {
-                let bindings: Vec<String> = arguments
-                    .iter()
-                    .map(|(name, kt)| {
-                        format!(
-                            "{} = {}",
-                            render_label(name.symbol(), registries),
-                            kt.name(registries)
-                        )
-                    })
-                    .collect();
-                format!(
-                    ":({} {{{}}})",
-                    constructor.name(registries),
-                    bindings.join(", ")
-                )
+                f.write_str(":(")?;
+                constructor.write_name(f, registries)?;
+                f.write_str(" {")?;
+                for (index, (name, kt)) in arguments.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{} = ", display_label(name.symbol(), registries))?;
+                    kt.write_name(f, registries)?;
+                }
+                f.write_str("})")
             }
-            TypeNode::AbstractType { name, .. } => render_label(name.symbol(), registries),
+            TypeNode::AbstractType { name, .. } => {
+                write!(f, "{}", display_label(name.symbol(), registries))
+            }
             // A sealed nominal member renders by its own member name — a bare newtype
             // (`:Wrapper`) or a per-variant member reached through its union (`:(Maybe Some)`
             // yields the `Some` member, printed as `Some`).
-            TypeNode::SetMember { name, .. } => render_label(name.symbol(), registries),
+            TypeNode::SetMember { name, .. } => {
+                write!(f, "{}", display_label(name.symbol(), registries))
+            }
             // A signature names itself by its content: the empty interface is the lattice top
             // `Module`, and any other interface renders its members structurally. There is no
             // declaration label to print — two textually identical `SIG` declarations are one
@@ -180,16 +201,48 @@ impl KType {
                 schema,
                 schema_digest,
             } => {
-                if schema_digest == empty_schema_digest() {
-                    MODULE_NAME.text().to_string()
+                if *schema_digest == empty_schema_digest() {
+                    f.write_str(MODULE_NAME.text())
                 } else {
-                    render_sig_schema(&schema, registries)
+                    write_sig_schema(f, schema, registries)
                 }
             }
             // Diagnostic only: a sibling reference is meaningful against its window and never
             // survives a seal, so nothing outside a mid-seal diagnostic can reach this.
-            TypeNode::Sibling(index) => format!("<sibling {index}>"),
+            TypeNode::Sibling(index) => write!(f, "<sibling {index}>"),
+        })
+    }
+
+    /// [`write_name`](Self::write_name) as a `Display` view — what a `format!` argument naming a
+    /// type uses, so the surface lands in the message's own buffer with nothing owned on the way.
+    pub fn display_name(self, registries: &RunRegistries) -> TypeNameDisplay<'_> {
+        TypeNameDisplay {
+            ktype: self,
+            registries,
         }
+    }
+
+    /// Whether this type's surface opens with the type sigil `:` — the predicate a parameter
+    /// position consults to decide whether to prefix one of its own, without inspecting rendered
+    /// text. True for exactly the compound arms [`write_name`](Self::write_name) opens with `:(`
+    /// or `:{`, plus a deferred return whose stored expression surface already carries it.
+    pub fn surface_opens_sigil(self, registries: &RunRegistries) -> bool {
+        registries.types.with_node(self, |node| match node {
+            TypeNode::List { .. }
+            | TypeNode::Dict { .. }
+            | TypeNode::Record { .. }
+            | TypeNode::KFunction { .. }
+            | TypeNode::Union { .. }
+            | TypeNode::ConstructorApply { .. } => true,
+            TypeNode::DeferredReturn(surface) => surface.opens_sigil(),
+            _ => false,
+        })
+    }
+
+    /// Surface-syntax rendering as an owned `String` — [`display_name`](Self::display_name) for a
+    /// caller that keeps the text rather than writing it somewhere.
+    pub fn name(self, registries: &RunRegistries) -> String {
+        self.display_name(registries).to_string()
     }
 
     /// Stable entry point for diagnostic rendering. Reserved seam for cycle-aware printing.
@@ -260,23 +313,26 @@ impl KType {
     }
 }
 
-/// Render an FN parameter record as the comma-free `name :type` group the `:(FN (...) -> _)`
+/// Write an FN parameter record as the comma-free `name :type` group the `:(FN (...) -> _)`
 /// surface re-parses. A leaf type surface gets a `:` prefix; one that already opens a sigil
-/// (`:(LIST OF Number)`) is left as-is (no `::`).
-fn render_param_record(params: &Record<KType>, registries: &RunRegistries) -> String {
-    params
-        .iter()
-        .map(|(key, kt)| {
-            let name = render_label(key.symbol(), registries);
-            let surface = kt.name(registries);
-            if surface.starts_with(':') {
-                format!("{name} {surface}")
-            } else {
-                format!("{name} :{surface}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+/// (`:(LIST OF Number)`) is left as-is (no `::`), decided by
+/// [`KType::surface_opens_sigil`] rather than by looking at text already written.
+fn write_param_record(
+    f: &mut std::fmt::Formatter<'_>,
+    params: &Record<KType>,
+    registries: &RunRegistries,
+) -> std::fmt::Result {
+    for (index, (key, kt)) in params.iter().enumerate() {
+        if index > 0 {
+            f.write_str(" ")?;
+        }
+        write!(f, "{} ", display_label(key.symbol(), registries))?;
+        if !kt.surface_opens_sigil(registries) {
+            f.write_str(":")?;
+        }
+        kt.write_name(f, registries)?;
+    }
+    Ok(())
 }
 
 /// A label's text, resolved through the run's interner. Every syntactic label is interned where it
@@ -299,28 +355,49 @@ pub fn display_label(
 /// The structural rendering of a non-empty interface: `SIG (member: Type, …)` over every member
 /// the schema names — abstract, manifest and value slot alike — in member-name order, which is
 /// the only order the schema's unordered maps admit deterministically.
-fn render_sig_schema(schema: &SigSchema, registries: &RunRegistries) -> String {
-    // Presentation order is alphabetical by the *rendered* text, so names resolve before the
-    // sort. The digest feeds sort by symbol instead — identity needs a canonical order, not a
-    // readable one.
-    let mut members: Vec<(String, KType)> = schema
+fn write_sig_schema(
+    f: &mut std::fmt::Formatter<'_>,
+    schema: &SigSchema,
+    registries: &RunRegistries,
+) -> std::fmt::Result {
+    // Presentation order is alphabetical by member *text*, compared in the interner rather than
+    // rendered first, so the staged run holds symbols. The digest feeds sort by symbol instead —
+    // identity needs a canonical order, not a readable one. Eight members inline covers every
+    // interface the tree declares; a wider one spills to the heap for the length of the write.
+    let mut members: SmallVec<[(Symbol, KType); 8]> = schema
         .abstract_members
         .iter()
         .chain(schema.manifest_members.iter())
-        .map(|(name, kt)| (render_label(name.symbol(), registries), *kt))
+        .map(|(name, kt)| (name.symbol(), *kt))
         .chain(
             schema
                 .value_slots
                 .iter()
-                .map(|(name, kt)| (render_label(name.symbol(), registries), *kt)),
+                .map(|(name, kt)| (name.symbol(), *kt)),
         )
         .collect();
-    members.sort_by(|a, b| a.0.cmp(&b.0));
-    let rendered: Vec<String> = members
-        .into_iter()
-        .map(|(name, kt)| format!("{name}: {}", kt.name(registries)))
-        .collect();
-    format!("SIG ({})", rendered.join(", "))
+    members.sort_by(|a, b| registries.labels.compare_texts(a.0, b.0));
+    f.write_str("SIG (")?;
+    for (index, (name, kt)) in members.iter().enumerate() {
+        if index > 0 {
+            f.write_str(", ")?;
+        }
+        write!(f, "{}: ", display_label(*name, registries))?;
+        kt.write_name(f, registries)?;
+    }
+    f.write_str(")")
+}
+
+/// A [`KType::display_name`] view: one type handle plus the registries its content lives in.
+pub struct TypeNameDisplay<'r> {
+    ktype: KType,
+    registries: &'r RunRegistries,
+}
+
+impl std::fmt::Display for TypeNameDisplay<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.ktype.write_name(f, self.registries)
+    }
 }
 
 /// A handle prints as its digest and nothing else: rendering content would need a registry, which

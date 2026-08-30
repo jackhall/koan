@@ -286,12 +286,26 @@ impl DeferredReturnSurface {
         }
     }
 
-    /// Surface form for diagnostics; the `Type` carrier resolves its spelling through the run's
-    /// interner.
-    pub fn render(&self, registries: &RunRegistries) -> String {
+    /// Surface form for diagnostics, written straight into `f`; the `Type` carrier resolves its
+    /// spelling through the run's interner and the `Expression` carrier writes the text it stores.
+    pub fn write_surface(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        registries: &RunRegistries,
+    ) -> std::fmt::Result {
         match self {
-            Self::Type(name) => super::render_label(name.symbol(), registries),
-            Self::Expression(s) => s.clone(),
+            Self::Type(name) => write!(f, "{}", super::display_label(name.symbol(), registries)),
+            Self::Expression(s) => f.write_str(s),
+        }
+    }
+
+    /// Whether this surface opens with the type sigil — the [`KType::surface_opens_sigil`] arm for
+    /// a deferred return. A `Type` carrier names a bare token; an `Expression` carrier answers for
+    /// the text it stores.
+    pub fn opens_sigil(&self) -> bool {
+        match self {
+            Self::Type(_) => false,
+            Self::Expression(s) => s.starts_with(':'),
         }
     }
 }

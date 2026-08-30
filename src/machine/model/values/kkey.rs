@@ -105,15 +105,22 @@ impl Parseable for KKey<'_> {
     }
 }
 
-impl KKey<'_> {
-    /// String keys are quoted so `{"1": x}` and `{1: x}` render distinctly. A key is a scalar,
-    /// so its rendering carries no type and needs no registry.
-    pub fn summarize(&self) -> String {
+/// String keys are quoted so `{"1": x}` and `{1: x}` render distinctly. A key is a scalar, so its
+/// rendering carries no type and needs no registry — which makes plain `Display` the whole view.
+impl std::fmt::Display for KKey<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            KKey::String(s) => format!("\"{}\"", s),
-            KKey::Number(n) => n.to_string(),
-            KKey::Bool(b) => b.to_string(),
+            KKey::String(s) => write!(f, "\"{s}\""),
+            KKey::Number(n) => write!(f, "{n}"),
+            KKey::Bool(b) => write!(f, "{b}"),
         }
+    }
+}
+
+impl KKey<'_> {
+    /// The rendered key as an owned `String` — the `Display` view for a caller that keeps the text.
+    pub fn summarize(&self) -> String {
+        self.to_string()
     }
 }
 
