@@ -167,13 +167,13 @@ fn match_driven_tail_recursion_completes() {
 
     test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (HOP b :Any) -> Any = (MATCH (b) -> :Str WITH (\
-             One -> (HOP (Bit (Zero null)))\
+         FN (HOP b :Any) -> Any = (MATCH (b) OVER Bit -> :Str WITH (\
+             One -> (HOP (Bit.Zero null))\
              Zero -> (PRINT \"done\")\
          ))",
     );
 
-    test_run.run("HOP (Bit (One null))");
+    test_run.run("HOP (Bit.One null)");
 
     assert_eq!(captured.borrow().as_slice(), b"done\n");
 }
@@ -192,13 +192,13 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
 
     test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (HOP b :Any) -> Any = (MATCH (b) -> :Str WITH (\
-             One -> ((PRINT \"hop\") (HOP (Bit (Zero null))))\
+         FN (HOP b :Any) -> Any = (MATCH (b) OVER Bit -> :Str WITH (\
+             One -> ((PRINT \"hop\") (HOP (Bit.Zero null)))\
              Zero -> (PRINT \"done\")\
          ))",
     );
 
-    test_run.run("HOP (Bit (One null))");
+    test_run.run("HOP (Bit.One null)");
 
     assert_eq!(
         String::from_utf8_lossy(&captured.borrow()),
@@ -284,11 +284,11 @@ fn deep_tail_chain_satisfies_arm_return_contract() {
          FN (CC) -> Any = (\"ok\")\n\
          FN (BB) -> Any = (CC)\n\
          FN (AA) -> Any = (BB)\n\
-         LET b = (Bit (One null))",
+         LET b = (Bit.One null)",
     );
     let types = test_run.registry_handle();
     let result = test_run.run_one(test_run.parse_one(
-        "MATCH (b) -> :Str WITH (\
+        "MATCH (b) OVER Bit -> :Str WITH (\
                  One -> (AA)\
                  Zero -> (\"unused\")\
              )",
@@ -315,10 +315,10 @@ fn deep_tail_chain_violates_arm_return_contract() {
          FN (CC) -> Any = (42)\n\
          FN (BB) -> Any = (CC)\n\
          FN (AA) -> Any = (BB)\n\
-         LET b = (Bit (One null))",
+         LET b = (Bit.One null)",
     );
     let err = test_run.run_one_err(test_run.parse_one(
-        "MATCH (b) -> :Str WITH (\
+        "MATCH (b) OVER Bit -> :Str WITH (\
                  One -> (AA)\
                  Zero -> (\"unused\")\
              )",
@@ -381,7 +381,7 @@ fn body_subexpression_slots_recycle_across_calls() {
 
     test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (LOOK b :Any) -> Any = (MATCH (b) -> :Str WITH (\
+         FN (LOOK b :Any) -> Any = (MATCH (b) OVER Bit -> :Str WITH (\
              One -> (PRINT \"one\")\
              Zero -> (PRINT \"zero\")\
          ))",
@@ -391,7 +391,7 @@ fn body_subexpression_slots_recycle_across_calls() {
     test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
             scope.brand(),
-            test_run.parse_one("LOOK (Bit (One null))"),
+            test_run.parse_one("LOOK (Bit.One null)"),
         ),
         scope,
     );
@@ -401,9 +401,9 @@ fn body_subexpression_slots_recycle_across_calls() {
     let n = 30;
     for i in 1..=n {
         let src = if i % 2 == 0 {
-            "LOOK (Bit (One null))"
+            "LOOK (Bit.One null)"
         } else {
-            "LOOK (Bit (Zero null))"
+            "LOOK (Bit.Zero null)"
         };
         test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
@@ -591,13 +591,13 @@ fn leading_statements_ride_the_fresh_carts_region_across_a_self_tail_loop() {
 
     test_run.run(
         "UNION Nat = (Zero :Null Succ :Nat)\n\
-         FN (COUNT n :Nat) -> Str = ((PRINT \"tick\") (PRINT \"tock\") (MATCH (n) -> :Str WITH (\
+         FN (COUNT n :Nat) -> Str = ((PRINT \"tick\") (PRINT \"tock\") (MATCH (n) OVER Nat -> :Str WITH (\
              Zero -> (\"done\")\
              Succ -> (COUNT (it))\
          )))\n\
-         LET n0 = (Nat (Zero null))\n\
-         LET n1 = (Nat (Succ n0))\n\
-         LET n2 = (Nat (Succ n1))\n\
+         LET n0 = (Nat.Zero null)\n\
+         LET n1 = (Nat.Succ n0)\n\
+         LET n2 = (Nat.Succ n1)\n\
          LET out = (COUNT n2)",
     );
 

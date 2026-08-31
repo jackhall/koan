@@ -276,10 +276,10 @@ fn value_context_union_builds_a_type_value() {
     let _ = run_capture(&program, &region, "LET number_or_string = (Number | Str)");
 }
 
-// -- Phase 3: a union schema field typed as a sibling variant via `:(Tree Leaf)` -----------
+// -- Phase 3: a union schema field typed as a sibling variant via `:(Tree.Leaf)` -----------
 
-/// AC bullet 5: a field can be typed as a sibling variant of the union being sealed via the
-/// qualified sigil `:(Tree Leaf)` — `Tree` is the binder under seal, `Leaf` one of its
+/// AC bullet 5: a field can be typed as a sibling variant of the union being sealed by
+/// projecting it, `:(Tree.Leaf)` — `Tree` is the binder under seal, `Leaf` one of its
 /// variants. The union constructs, a `Node` wrapping a nested `Leaf` matches its `Node` arm,
 /// and the whole value projects (`PRINT` renders it structurally).
 #[test]
@@ -289,9 +289,9 @@ fn sibling_variant_sigil_types_a_field() {
     let out = run_capture(
         &program,
         &region,
-        "UNION Tree = (Leaf :Number Node :(Tree Leaf))\n\
-         LET tree = (Tree (Node (Tree (Leaf 1))))\n\
-         MATCH (tree) -> :Str WITH (Node -> (PRINT \"node\") Leaf -> (PRINT \"leaf\"))",
+        "UNION Tree = (Leaf :Number Node :(Tree.Leaf))\n\
+         LET tree = (Tree.Node (Tree.Leaf 1))\n\
+         MATCH (tree) OVER Tree -> :Str WITH (Node -> (PRINT \"node\") Leaf -> (PRINT \"leaf\"))",
     );
     assert_eq!(
         out, "node\n",
@@ -303,18 +303,18 @@ fn sibling_variant_sigil_types_a_field() {
     let projected = run_capture(
         &program,
         &region,
-        "UNION Tree = (Leaf :Number Node :(Tree Leaf))\n\
-         LET tree = (Tree (Node (Tree (Leaf 1))))\n\
+        "UNION Tree = (Leaf :Number Node :(Tree.Leaf))\n\
+         LET tree = (Tree.Node (Tree.Leaf 1))\n\
          PRINT tree",
     );
     assert_eq!(
-        projected, "Node(Leaf(1))\n",
-        "the constructed sibling-typed value projects structurally — a `Tagged` variant nests its
-         payload without collapsing the inner variant's tag (ruling 13); got {projected:?}"
+        projected, "Node(1)\n",
+        "the constructed sibling-typed value projects structurally; `Node`'s declared repr *is*
+         `Leaf`, so the newtype collapse folds the redundant layer; got {projected:?}"
     );
 }
 
-/// A misspelled sibling variant `:(Tree Bogus)` is looked up against exactly the member list its
+/// A misspelled sibling variant `:(Tree.Bogus)` is looked up against exactly the member list its
 /// binder owns, so the miss names the bad tag and the binder it was sought under.
 #[test]
 fn sibling_variant_typo_references_unsealed_type() {
@@ -323,7 +323,7 @@ fn sibling_variant_typo_references_unsealed_type() {
     let err = run_expect_err(
         &program,
         &region,
-        "UNION Tree = (Leaf :Number Node :(Tree Bogus))",
+        "UNION Tree = (Leaf :Number Node :(Tree.Bogus))",
     );
     assert!(
         err.contains("`Bogus` is not a variant of `Tree`"),
@@ -331,8 +331,8 @@ fn sibling_variant_typo_references_unsealed_type() {
     );
 }
 
-/// AC bullet 5 (rejection half): a *bare* sibling tag `Node :Leaf` is NOT the qualified sigil
-/// and stays an unknown-type error — only `:(Tree Leaf)` reaches a sibling variant.
+/// AC bullet 5 (rejection half): a *bare* sibling tag `Node :Leaf` is NOT the projection
+/// and stays an unknown-type error — only `:(Tree.Leaf)` reaches a sibling variant.
 #[test]
 fn bare_sibling_tag_stays_unknown_type_error() {
     let program = program_storage();
@@ -345,7 +345,7 @@ fn bare_sibling_tag_stays_unknown_type_error() {
 }
 
 /// Two module-hosted unions may own the same bare tag. Qualified lookup is scoped by the binder's
-/// own member list, so `:(Graph Node)` and `:(Tree Node)` name different members; the owner is a
+/// own member list, so `:(Graph.Node)` and `:(Tree.Node)` name different members; the owner is a
 /// canonical-order tiebreak only, never digested, so differing shapes digest apart and both seal.
 #[test]
 fn same_tag_under_two_binders_coexists_in_one_body() {
@@ -357,14 +357,14 @@ fn same_tag_under_two_binders_coexists_in_one_body() {
         "MODULE shapes = (\n  \
            UNION Graph = (Node :Number, Edge :Number)\n  \
            UNION Tree = (Node :Str, Twig :Str)\n  \
-           NEWTYPE Pair = :{g :(Graph Node), t :(Tree Node)}\n\
+           NEWTYPE Pair = :{g :(Graph.Node), t :(Tree.Node)}\n\
          )\n\
          USING shapes SCOPE (\n  \
-           PRINT (Pair {g = (Graph (Node (1))), t = (Tree (Node (\"x\")))})\n\
+           PRINT (Pair {g = (Graph.Node 1), t = (Tree.Node \"x\")})\n\
          )",
     );
     assert_eq!(
         out, "Pair({g = Node(1), t = Node(x)})\n",
-        "each qualified sigil names its own binder's variant; got {out:?}"
+        "each projection names its own binder's variant; got {out:?}"
     );
 }

@@ -23,7 +23,7 @@
 //!
 //! A `UNION`'s variants are announced as members **owned by their binder**: never
 //! bare-name-resolvable, never written into `bindings.types`, reachable only through the binder
-//! (`:Tree`) or the qualified sigil (`:(Tree Node)`). Two binders may own the same bare tag without
+//! (`:Tree`) or the member projection (`:(Tree.Node)`). Two binders may own the same bare tag without
 //! colliding — qualified lookup is scoped by the binder's own member list, and the owner is a
 //! canonical-order tiebreak that never enters the digest.
 

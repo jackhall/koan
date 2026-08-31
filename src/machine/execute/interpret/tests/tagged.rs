@@ -16,8 +16,8 @@ fn tagged_union_full_program_via_type_token() {
     run(
         &program,
         "UNION Outcome = (Ok :Str Err :Str)\n\
-         LET r = (Outcome (Ok \"all good\"))\n\
-         MATCH (r) -> :Str WITH (Ok -> (PRINT it) Err -> (PRINT \"failed\"))",
+         LET r = (Outcome.Ok \"all good\")\n\
+         MATCH (r) OVER Outcome -> :Str WITH (Ok -> (PRINT it) Err -> (PRINT \"failed\"))",
         &region,
         captured.clone(),
     );
@@ -32,8 +32,8 @@ fn tagged_union_full_program_constructs_and_matches() {
     run(
         &program,
         "UNION Outcome = (Ok :Str Err :Str)\n\
-         LET r = (Outcome (Err \"oops\"))\n\
-         MATCH (r) -> :Str WITH (Ok -> (PRINT \"good\") Err -> (PRINT it))",
+         LET r = (Outcome.Err \"oops\")\n\
+         MATCH (r) OVER Outcome -> :Str WITH (Ok -> (PRINT \"good\") Err -> (PRINT it))",
         &region,
         captured.clone(),
     );
@@ -48,16 +48,16 @@ fn tagged_union_none_branch_runs() {
     run(
         &program,
         "UNION Maybe = (Some :Number None :Null)\n\
-         LET m = (Maybe (None null))\n\
-         MATCH (m) -> :Str WITH (Some -> (PRINT \"some-branch\") None -> (PRINT \"none-branch\"))",
+         LET m = (Maybe.None null)\n\
+         MATCH (m) OVER Maybe -> :Str WITH (Some -> (PRINT \"some-branch\") None -> (PRINT \"none-branch\"))",
         &region,
         captured.clone(),
     );
     assert_eq!(captured.borrow().as_slice(), b"none-branch\n");
 }
 
-/// Each variant is its own dispatchable type: two overloads keyed on `:(Maybe Some)` and
-/// `:(Maybe None)` select by the value's variant identity, the criterion-1/3 headline.
+/// Each variant is its own dispatchable type: two overloads keyed on `:(Maybe.Some)` and
+/// `:(Maybe.None)` select by the value's variant identity, the criterion-1/3 headline.
 #[test]
 fn variant_typed_overloads_dispatch_by_variant() {
     let program = program_storage();
@@ -66,10 +66,10 @@ fn variant_typed_overloads_dispatch_by_variant() {
     run(
         &program,
         "UNION Maybe = (Some :Number None :Null)\n\
-         FN (DESC x :(Maybe Some)) -> :Str = (\"is-some\")\n\
-         FN (DESC x :(Maybe None)) -> :Str = (\"is-none\")\n\
-         PRINT (DESC (Maybe (Some 1)))\n\
-         PRINT (DESC (Maybe (None null)))",
+         FN (DESC x :(Maybe.Some)) -> :Str = (\"is-some\")\n\
+         FN (DESC x :(Maybe.None)) -> :Str = (\"is-none\")\n\
+         PRINT (DESC (Maybe.Some 1))\n\
+         PRINT (DESC (Maybe.None null))",
         &region,
         captured.clone(),
     );
@@ -84,8 +84,8 @@ fn variant_typed_slot_rejects_other_variant() {
     use crate::machine::execute::interpret_with_writer;
     let result = interpret_with_writer(
         "UNION Maybe = (Some :Number None :Null)\n\
-         FN (ONLYSOME x :(Maybe Some)) -> :Str = (\"ok\")\n\
-         ONLYSOME (Maybe (None null))",
+         FN (ONLYSOME x :(Maybe.Some)) -> :Str = (\"ok\")\n\
+         ONLYSOME (Maybe.None null)",
         Box::new(std::io::sink()),
     );
     match result {
@@ -93,7 +93,7 @@ fn variant_typed_slot_rejects_other_variant() {
             matches!(&e.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed when a None reaches a Some-only slot, got {e}",
         ),
-        Ok(()) => panic!("expected dispatch failure for None into a :(Maybe Some) slot"),
+        Ok(()) => panic!("expected dispatch failure for None into a :(Maybe.Some) slot"),
     }
 }
 
@@ -108,14 +108,14 @@ fn union_typed_slot_admits_any_variant() {
         &program,
         "UNION Maybe = (Some :Number None :Null)\n\
          FN (ANY x :Maybe) -> :Str = (\"any-variant\")\n\
-         PRINT (ANY (Maybe (None null)))",
+         PRINT (ANY (Maybe.None null))",
         &region,
         captured.clone(),
     );
     assert_eq!(captured.borrow().as_slice(), b"any-variant\n");
 }
 
-/// `:(Maybe Some)` is a first-class type value reached through its union — the `Some` variant's
+/// `:(Maybe.Some)` is a first-class type value reached through its union — the `Some` variant's
 /// per-tag newtype `SetMember`, which renders by its own member name.
 #[test]
 fn variant_type_value_renders_member_name() {
@@ -125,39 +125,38 @@ fn variant_type_value_renders_member_name() {
     run(
         &program,
         "UNION Maybe = (Some :Number None :Null)\n\
-         PRINT :(Maybe Some)",
+         PRINT :(Maybe.Some)",
         &region,
         captured.clone(),
     );
     assert_eq!(captured.borrow().as_slice(), b"Some\n");
 }
 
-/// A bare token that is not a variant of the union is rejected at the variant-reference
-/// surface, listing the real variants.
+/// A name that is not a member of the union is rejected at the projection surface, listing the
+/// real members.
 #[test]
 fn unknown_variant_reference_errors() {
     use crate::machine::KErrorKind;
     use crate::machine::execute::interpret_with_writer;
     let result = interpret_with_writer(
         "UNION Maybe = (Some :Number None :Null)\n\
-         PRINT :(Maybe Bogus)",
+         PRINT :(Maybe.Bogus)",
         Box::new(std::io::sink()),
     );
     match result {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(msg)
-                if msg.contains("Bogus") && msg.contains("not a variant")),
-            "expected a 'not a variant' ShapeError, got {e}",
+                if msg.contains("Bogus") && msg.contains("not a member")),
+            "expected a 'not a member' ShapeError, got {e}",
         ),
         Ok(()) => panic!("expected error for an unknown variant reference"),
     }
 }
 
-/// A union member declaring a constructor family names no tag payload, so it is no tagged variant:
-/// constructing against its name is an unknown-variant shape error, not a panic, and the listed
-/// variants name only what the union does admit.
+/// A union is not itself callable, whatever its members are: applying the union name — the retired
+/// tag spelling — is a shape error naming the projection surface and listing the members.
 #[test]
-fn constructor_family_member_is_not_a_constructible_variant() {
+fn a_union_refuses_direct_application() {
     use crate::machine::KErrorKind;
     use crate::machine::execute::interpret_with_writer;
     let result = interpret_with_writer(
@@ -170,12 +169,11 @@ fn constructor_family_member_is_not_a_constructible_variant() {
     match result {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(msg)
-                if msg.contains("Boxed")
-                    && msg.contains("not a variant")
-                    && msg.contains("Wrapped")),
-            "expected a 'not a variant' ShapeError listing Wrapped, got {e}",
+                if msg.contains("a union has no direct application")
+                    && msg.contains("member projection")),
+            "expected the no-direct-application ShapeError, got {e}",
         ),
-        Ok(()) => panic!("expected error constructing against a constructor-family member"),
+        Ok(()) => panic!("expected error applying a union name"),
     }
 }
 
@@ -265,4 +263,60 @@ fn bare_projection_is_a_type_value_not_a_construction() {
         captured.clone(),
     );
     assert_eq!(captured.borrow().as_slice(), b"Some\n");
+}
+
+/// `:(Maybe.Some)` in annotation position is strictly more specific than `:Maybe`: the member
+/// refines the union, so the variant overload wins the dispatch tournament outright.
+#[test]
+fn a_variant_annotation_outranks_its_union() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+    run(
+        &program,
+        "UNION Maybe = (Some :Number None :Null)\n\
+         FN (DESC x :Maybe) -> :Str = (\"any\")\n\
+         FN (DESC x :(Maybe.Some)) -> :Str = (\"just-some\")\n\
+         PRINT (DESC (Maybe.Some 1))\n\
+         PRINT (DESC (Maybe.None null))",
+        &region,
+        captured.clone(),
+    );
+    assert_eq!(captured.borrow().as_slice(), b"just-some\nany\n");
+}
+
+/// A union schema field names a sibling variant of a union still under seal through the same
+/// projection: `:(Tree.Leaf)` lowers against the declaration window rather than sub-dispatching,
+/// which would deadlock on this very seal's producer.
+#[test]
+fn a_pre_seal_sibling_variant_is_named_by_projection() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+    run(
+        &program,
+        "UNION Tree = (Leaf :Number Node :(Tree.Leaf))\n\
+         PRINT (Tree.Node (Tree.Leaf 1))",
+        &region,
+        captured.clone(),
+    );
+    // `Node`'s declared repr *is* `Leaf`, so the newtype collapse folds the redundant layer: the
+    // sibling reference resolved, which is what this pins.
+    assert_eq!(captured.borrow().as_slice(), b"Node(1)\n");
+}
+
+/// The retired juxtaposed spelling is gone from the pre-seal position too: `:(Tree Leaf)` no longer
+/// names a sibling variant, so it falls through to ordinary elaboration and errors there.
+#[test]
+fn the_juxtaposed_pre_seal_sibling_spelling_is_retired() {
+    use crate::machine::execute::interpret_with_writer;
+    let result = interpret_with_writer(
+        "UNION Tree = (Leaf :Number Node :(Tree Leaf))\n\
+         PRINT (Tree.Leaf 1)",
+        Box::new(std::io::sink()),
+    );
+    assert!(
+        result.is_err(),
+        "expected the juxtaposed sibling spelling to no longer resolve",
+    );
 }

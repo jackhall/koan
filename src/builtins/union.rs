@@ -197,19 +197,25 @@ pub(crate) fn union_member<'a>(
     }
 }
 
-/// Every member of `union` in declaration order, rendered for a miss diagnostic: a `SetMember` by
-/// the name its declaration minted, a structural member by its type's own display name. A cold
-/// path, so it reads the member list out by clone rather than through an allocation-free probe.
+/// One union member's surface label: a `SetMember` by the name its declaration minted, a
+/// structural member by its type's own display name. A cold diagnostic path — every caller is
+/// already building a message — so it renders into an owned `String`.
+pub(crate) fn member_label(member: KType, registries: &RunRegistries) -> String {
+    registries.types.with_node(member, |node| match node {
+        TypeNode::SetMember { name, .. } => render_label(name.symbol(), registries),
+        _ => member.display_name(registries).to_string(),
+    })
+}
+
+/// Every member of `union` in declaration order, comma-joined for a miss diagnostic. Empty when
+/// `union` names no union at all — the same miss [`union_member`] reports.
 pub(crate) fn union_member_names(union: KType, registries: &RunRegistries) -> String {
     let TypeNode::Union { members } = registries.types.node(union) else {
         return String::new();
     };
     members
         .iter()
-        .map(|m| match registries.types.node(*m) {
-            TypeNode::SetMember { name, .. } => render_label(name.symbol(), registries),
-            _ => m.display_name(registries).to_string(),
-        })
+        .map(|m| member_label(*m, registries))
         .collect::<Vec<_>>()
         .join(", ")
 }

@@ -303,6 +303,7 @@ digraph {
     "koan::builtins::await_body" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::await_body" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan" [label="uses", style="dashed"];
+    "koan::builtins::branch_walk" -> "koan::builtins::union" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine::model::labels" [label="uses", style="dashed"];

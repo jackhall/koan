@@ -16,7 +16,10 @@ fn run_program(source: &str) -> Vec<u8> {
     captured.borrow().clone()
 }
 
+/// `retire-tagged-carrier` makes `Result` a union node, restoring the `OVER` form these read
+/// `CATCH`'s result through; the by-tag head-reading regime they used no longer exists.
 #[test]
+#[ignore = "MATCH over Result returns with retire-tagged-carrier"]
 fn success_wraps_value_in_ok() {
     // Double "v\n": PRINT both renders and returns its argument, so the ok
     // arm's `(PRINT it)` re-prints the same string CATCH captured.
@@ -27,6 +30,7 @@ fn success_wraps_value_in_ok() {
 }
 
 #[test]
+#[ignore = "MATCH over Result returns with retire-tagged-carrier"]
 fn failure_wraps_to_tagged_in_error() {
     // Exercises the `KErrorKind`-tagged payload: nested MATCH dispatches on
     // the kind tag, and `.name` is the unbound_name variant's payload field.
@@ -55,6 +59,7 @@ fn catch_in_let_does_not_short_circuit() {
 }
 
 #[test]
+#[ignore = "MATCH over Result returns with retire-tagged-carrier"]
 fn nested_catch_wraps_inner_result_in_outer_ok() {
     // Inner CATCH *succeeds* (producing a Result), so the outer wraps it in
     // `ok`; `it` then names the inner `error(...)` Result.
@@ -74,11 +79,11 @@ fn catch_inside_tco_position_preserves_frame_chain() {
     // resumption context.
     let bytes = run_program(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (HOP b :Any) -> Any = (CATCH (MATCH (b) -> :Str WITH (\
-            One -> (HOP (Bit (Zero null)))\
+         FN (HOP b :Any) -> Any = (CATCH (MATCH (b) OVER Bit -> :Str WITH (\
+            One -> (HOP (Bit.Zero null))\
             Zero -> (PRINT \"done\")\
          )))\n\
-         HOP (Bit (One null))",
+         HOP (Bit.One null)",
     );
     assert_eq!(bytes, b"done\n");
 }

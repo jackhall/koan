@@ -446,12 +446,17 @@ fn resolve_inferred<'a>(
     for name in inference.types.iter().copied() {
         // The tier decides whether to capture; a per-call hit then resolves through the same ladder
         // the written-out list uses, so both forms capture the identical handle under the identical
-        // finalize gate. A name with no `types` hit at all is left alone rather than reported: a
-        // Type token the block spells is not always a bare-resolvable type name — a `UNION`'s
-        // variant tag reaches its arm through its binder — and one that really is missing raises
-        // its own error at the use site inside the block.
-        if let Some((HitTier::PerCall, _)) = scope.resolve_type_tiered(name, frame) {
-            resolve_type_capture(scope, chain, name, registries, plan, parked)?;
+        // finalize gate. A no-hit is unbound at the form, exactly as in the value loop: every name
+        // the walk reports is a genuine type-channel use, because the surfaces that spell a Type
+        // token which is *not* a scope name — a union member as a `MATCH … OVER` arm head, an error
+        // kind as a `TRY` arm head, an `ATTR` field — are the ones the walk skips.
+        match scope.resolve_type_tiered(name, frame) {
+            Some((HitTier::PerCall, _)) => {
+                resolve_type_capture(scope, chain, name, registries, plan, parked)?;
+            }
+            // Eternal-homed (every builtin type): visible through the block's own outer link.
+            Some((HitTier::Eternal, _)) => {}
+            None => return Err(unbound(name, registries)),
         }
     }
     Ok(())

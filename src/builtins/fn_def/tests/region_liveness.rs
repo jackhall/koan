@@ -107,13 +107,13 @@ fn every_call_shape_leaves_no_live_region() {
         (
             "tail loop",
             "UNION Nat = (Zero :Null Succ :Nat)\n\
-             FN (COUNTDOWN n :Nat) -> Str = (MATCH (n) -> :Str WITH (\
+             FN (COUNTDOWN n :Nat) -> Str = (MATCH (n) OVER Nat -> :Str WITH (\
                  Zero -> (\"done\")\
                  Succ -> (COUNTDOWN it)\
              ))\n\
-             LET n0 = (Nat (Zero null))\n\
-             LET n1 = (Nat (Succ n0))\n\
-             LET n2 = (Nat (Succ n1))\n\
+             LET n0 = (Nat.Zero null)\n\
+             LET n1 = (Nat.Succ n0)\n\
+             LET n2 = (Nat.Succ n1)\n\
              LET out = (COUNTDOWN n2)\n",
         ),
     ];
@@ -147,14 +147,14 @@ fn splicing_countdown(depth: usize) -> String {
     let mut source = String::from(
         "UNION Nat = (Zero :Null Succ :Nat)\n\
          FN (PASS x :Nat) -> Nat = (x)\n\
-         FN (COUNTDOWN n :Nat) -> Str = (MATCH (n) -> :Str WITH (\
+         FN (COUNTDOWN n :Nat) -> Str = (MATCH (n) OVER Nat -> :Str WITH (\
              Zero -> (\"done\")\
              Succ -> (COUNTDOWN (PASS it))\
          ))\n\
-         LET n0 = (Nat (Zero null))\n",
+         LET n0 = (Nat.Zero null)\n",
     );
     for i in 1..=depth {
-        source.push_str(&format!("LET n{i} = (Nat (Succ n{}))\n", i - 1));
+        source.push_str(&format!("LET n{i} = (Nat.Succ n{})\n", i - 1));
     }
     source.push_str(&format!("LET out = (COUNTDOWN n{depth})\n"));
     source

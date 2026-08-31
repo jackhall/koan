@@ -709,15 +709,15 @@ fn recursion_carried_close_over_stays_flat_in_depth() {
             "UNION Nat = (Zero :Null Succ :Nat)\n\
              FN (COUNTDOWN n :Nat) -> Str = (\
                  (CLOSE OVER () ((LET b = (1)) (b)))\
-                 (MATCH (n) -> :Str WITH (\
+                 (MATCH (n) OVER Nat -> :Str WITH (\
                      Zero -> (\"done\")\
                      Succ -> (COUNTDOWN it)\
                  ))\
              )\n\
-             LET n0 = (Nat (Zero null))\n",
+             LET n0 = (Nat.Zero null)\n",
         );
         for level in 1..=depth {
-            source.push_str(&format!("LET n{level} = (Nat (Succ n{}))\n", level - 1));
+            source.push_str(&format!("LET n{level} = (Nat.Succ n{})\n", level - 1));
         }
         test_run.run(&source);
         let call = format!("COUNTDOWN n{depth}");

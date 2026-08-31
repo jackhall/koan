@@ -2,16 +2,24 @@
 //!
 //! `TRY` selects an arm by **string tag** — [`find_branch_body_by_tag`] matches a
 //! dispatched value's error/success tag and opts into wildcard `_` matching for
-//! dispatcher-internal error kinds. `MATCH` selects an arm by **type** —
-//! [`find_branch_body_by_type`] resolves each arm head to a `KType`, admits the arms
-//! whose type matches the scrutinee value, and runs the most-specific-wins tournament
-//! (ruling F1). [`resolve_arm_contract`] builds the `-> :T` return contract both arms
-//! enforce on their result.
+//! dispatcher-internal error kinds.
+//!
+//! `MATCH` has two head-reading regimes, and which one runs is a property of the form's
+//! **syntax** alone — never of the runtime scrutinee. `MATCH … WITH` reads every head as a
+//! **type test**: [`find_branch_body_by_type`] resolves each head through the reading scope,
+//! admits the arms whose type matches the scrutinee, runs the most-specific-wins tournament
+//! (ruling F1), and binds `it` to the scrutinee unchanged. `MATCH … OVER <U> WITH` reads every
+//! head as a **member name of `U`**: [`find_branch_body_by_member`] looks each head up in `U`'s
+//! member list (no scope walk — a member never binds in the enclosing scope), requires the arm
+//! set to cover `U` exactly, runs the same tournament over the admitted members, and binds `it`
+//! to the matched member's payload.
+//!
+//! [`resolve_arm_contract`] builds the `-> :T` return contract every arm enforces on its result.
 
 use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::{KeywordSymbol, Symbol, TypeSymbol, WILDCARD};
-use crate::machine::model::{TypeResolution, most_specific_ktype};
+use crate::machine::model::{TypeNode, TypeResolution, most_specific_ktype};
 
 use crate::machine::DeliveredCarried;
 use crate::machine::LexicalFrame;
@@ -38,32 +46,37 @@ pub(crate) fn resolve_arm_contract<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
     kind: &'static str,
 ) -> Result<ReturnContract<'a>, KError> {
-    let ret_kt = if let Some(te) = ctx.args.unresolved_type(&SLOTS.return_type) {
-        match ctx
+    let ret_kt = resolve_type_slot(ctx, &SLOTS.return_type, kind, "return type")?;
+    Ok(ReturnContract::Arm { ret: ret_kt, kind })
+}
+
+/// Read a type-channel slot off `ctx.args` into a settled [`KType`], resolving a forward-referenced
+/// bare name against the call-site scope/chain. `kind` names the form and `role` the slot, so one
+/// door serves `MATCH`'s `-> :T` contract and its `OVER <U>` operand with the diagnostic each
+/// deserves.
+pub(crate) fn resolve_type_slot(
+    ctx: &crate::machine::BodyCtx<'_, '_, '_>,
+    slot: &crate::machine::model::StaticName<crate::machine::model::ValueSymbol>,
+    kind: &'static str,
+    role: &'static str,
+) -> Result<KType, KError> {
+    if let Some(te) = ctx.args.unresolved_type(slot) {
+        return match ctx
             .scope
             .resolve_type_identifier(te, ctx.chain.clone(), ctx.registries)
         {
-            TypeResolution::Done(kt) => kt,
+            TypeResolution::Done(kt) => Ok(kt),
             // The builtin fallback is already tried inside `resolve_type_identifier`; a
             // non-`Done` arm here (parked or unbound) is not a synchronously-known type.
-            _ => {
-                return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "{kind} return type `{}` is not a known type",
-                    crate::machine::model::render_label(te.symbol(), ctx.registries)
-                ))));
-            }
-        }
-    } else {
-        match ctx.args.ktype(&SLOTS.return_type) {
-            Some(other) => other,
-            None => {
-                return Err(KError::new(KErrorKind::MissingArg(
-                    "return_type".to_string(),
-                )));
-            }
-        }
-    };
-    Ok(ReturnContract::Arm { ret: ret_kt, kind })
+            _ => Err(KError::new(KErrorKind::ShapeError(format!(
+                "{kind} {role} `{}` is not a known type",
+                crate::machine::model::render_label(te.symbol(), ctx.registries)
+            )))),
+        };
+    }
+    ctx.args
+        .ktype(slot)
+        .ok_or_else(|| KError::new(KErrorKind::MissingArg(role.to_string())))
 }
 
 /// Narrow `carrier` onto the payload of a `Tagged` / `Wrapped` value (ruling F3's variant/tag arm),
@@ -237,18 +250,6 @@ pub(crate) struct SelectedArm<'a> {
     pub binds_payload: bool,
 }
 
-/// How a `MATCH` scrutinee resolves its type-name arm heads.
-enum HeadMode {
-    /// A tagged value (a user-`UNION` variant or a builtin `Result`, both `KObject::Tagged`): a
-    /// head admits by symbol equality against the value's own tag, and `it` binds the wrapped
-    /// payload (F3). A union's sibling variants need no resolution — the value carries its own tag,
-    /// so a non-matching head is a silent non-match, and the arm slate settles exhaustiveness.
-    TaggedByTag { value_tag: TypeSymbol },
-    /// Any other value: a head resolves through the scope and admits via
-    /// [`KType::matches_value`]; `it` binds the scrutinee unchanged (F3).
-    Scope,
-}
-
 /// An arm head's spelling, kept in the form the head already had. Rendering a type name walks the
 /// interner and builds a `String`, and only the two ambiguity diagnostics below ever need one — so
 /// a selection that succeeds renders nothing.
@@ -329,16 +330,16 @@ fn resolve_head_type<'a>(
     }
 }
 
-/// `MATCH`'s arm selector (ruling F1 + F3). Classifies each `<head> -> <body>` triple, admits
-/// the arms that match `scrutinee`, and returns the strictly most-specific admitting arm.
+/// The `OVER`-less `MATCH`'s arm selector (ruling F1 + F3): a pure **type test**. Classifies each
+/// `<head> -> <body>` triple, admits the arms that match `scrutinee`, and returns the strictly
+/// most-specific admitting arm. Every head is read through the scope whatever the scrutinee's
+/// runtime shape, so `it` always binds the scrutinee unchanged and [`SelectedArm::binds_payload`]
+/// is always clear — naming a variant and unwrapping it is the `OVER` form's job
+/// ([`find_branch_body_by_member`]).
 ///
-/// Head classification depends on the scrutinee ([`HeadMode`]):
-/// - `true` / `false` literal heads admit a `Bool` scrutinee of that value.
-/// - `Type(token)` heads over a tagged value (a user-`UNION` variant or a builtin `Result`, both
-///   `KObject::Tagged`) admit by symbol equality against the value's own tag and bind the payload;
-///   a non-matching head is a silent non-match (the value carries its own tag).
-/// - `Type(token)` heads over any other value resolve through `scope` and admit via
-///   [`KType::matches_value`].
+/// - `true` / `false` literal heads admit a `Bool` scrutinee of that value; an admitting one is an
+///   exact arm, ranking strictly above every typed arm.
+/// - `Type(token)` heads resolve through `scope` and admit via [`KType::matches_value`].
 ///
 /// `Ok(Some(arm))` selects an arm; `Ok(None)` means no arm admits (the caller raises the
 /// inexhaustive error naming the runtime type); `Err` covers a malformed shape, an
@@ -358,21 +359,12 @@ pub(crate) fn find_branch_body_by_type<'a>(
             parts.len()
         ));
     }
-    // A tagged value (a user-`UNION` variant or a builtin `Result`, both `Tagged`) resolves
-    // member-name heads by its own tag symbol; any other value — including a `NEWTYPE (T AS W)`
-    // identity wrapper or a standalone newtype — resolves heads against the scope.
-    let mode = match scrutinee {
-        KObject::Tagged { tag, .. } => HeadMode::TaggedByTag { value_tag: *tag },
-        _ => HeadMode::Scope,
-    };
-
-    // An exact arm is a boolean-literal head admitting a `Bool` scrutinee of that value, or a
-    // tag head equal to a `Tagged` scrutinee's own tag. An exact arm ranks strictly above every
-    // typed arm, so the pre-pass below settles it without entering the tournament.
+    // An exact arm is a boolean-literal head admitting a `Bool` scrutinee of that value. An exact
+    // arm ranks strictly above every typed arm, so the pre-pass below settles it without entering
+    // the tournament.
     struct ExactArm<'a> {
         head_label: HeadLabel,
         body: KExpression<'a>,
-        binds_payload: bool,
     }
     // A typed arm carries the `KType` its head resolved to; the tournament admits it by
     // `matches_value` and ranks admitted arms by `most_specific`.
@@ -380,7 +372,6 @@ pub(crate) fn find_branch_body_by_type<'a>(
         head_label: HeadLabel,
         ktype: KType,
         body: KExpression<'a>,
-        binds_payload: bool,
     }
     // The candidate slates are decide-local: they never outlive this call, so they stage on the
     // step scratch and cost the heap nothing. Each arm is one `<head> -> <body>` triple, which
@@ -422,39 +413,18 @@ pub(crate) fn find_branch_body_by_type<'a>(
                     exact_arms.push(ExactArm {
                         head_label: HeadLabel::Boolean(if b { "true" } else { "false" }),
                         body: body_expr,
-                        binds_payload: false,
                     });
                 }
             }
-            // A capitalized type name: a variant/tag match for a union-variant or tagged
-            // scrutinee, else scope resolution.
+            // A capitalized type name is a type test: it names a type through the reading scope
+            // and admits by `matches_value`, whatever the scrutinee's runtime shape.
             ExpressionPart::Type(token) => {
-                let label = HeadLabel::Type(token.symbol());
-                match &mode {
-                    // A tag head equal to the scrutinee's own tag is an exact arm binding the
-                    // payload; a non-tag head is a silent non-match (no scope resolution for a
-                    // `Tagged` scrutinee).
-                    HeadMode::TaggedByTag { value_tag } => {
-                        // The head is a reference, not a declaration, so it probes the
-                        // scrutinee's classified tag by bare symbol bits — the recovery door.
-                        if token.symbol() == value_tag.symbol() {
-                            exact_arms.push(ExactArm {
-                                head_label: label,
-                                body: body_expr,
-                                binds_payload: true,
-                            });
-                        }
-                    }
-                    HeadMode::Scope => {
-                        let kt = resolve_head_type(scope, token, chain.clone(), registries)?;
-                        typed_arms.push(TypedArm {
-                            head_label: label,
-                            ktype: kt,
-                            body: body_expr,
-                            binds_payload: false,
-                        });
-                    }
-                }
+                let kt = resolve_head_type(scope, token, chain.clone(), registries)?;
+                typed_arms.push(TypedArm {
+                    head_label: HeadLabel::Type(token.symbol()),
+                    ktype: kt,
+                    body: body_expr,
+                });
             }
             other => {
                 return Err(format!(
@@ -478,7 +448,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
     if let Some(arm) = exact_arms.into_iter().next() {
         return Ok(Some(SelectedArm {
             body: arm.body,
-            binds_payload: arm.binds_payload,
+            binds_payload: false,
         }));
     }
 
@@ -501,11 +471,188 @@ pub(crate) fn find_branch_body_by_type<'a>(
                 .expect("winner index valid");
             Ok(Some(SelectedArm {
                 body: arm.body,
-                binds_payload: arm.binds_payload,
+                binds_payload: false,
             }))
         }
         None => Err(ambiguous_match(
             typed_arms.iter().map(|arm| arm.head_label),
+            scrutinee,
+            registries,
+        )),
+    }
+}
+
+/// `MATCH … OVER <U>`'s arm selector: every head names a **member of `U`**, never a scope name.
+///
+/// A union is a composite whose members are its only variant door, so a head is looked up in `U`'s
+/// member list through [`union_member`](crate::builtins::union::union_member) — the same rule ATTR
+/// projection reads by, so the two surfaces can never disagree about what names a variant. The arm
+/// set is checked before any selection runs, on every execution: an unknown head, a member named
+/// twice, and an arm set that leaves a member uncovered are each an error at the form.
+///
+/// Selection is the F1 tournament the `OVER`-less form runs, over the members rather than over
+/// scope-resolved heads: the member whose handle *is* the scrutinee's own identity wins outright,
+/// else the admitting members ([`KType::matches_value`]) compete and the strictly most-specific one
+/// wins. Its arm binds `it` to the matched member's payload when the scrutinee is a wrap of exactly
+/// that member (ruling F3); a non-wrapping member — a structural member of an inline `:(A | B)` —
+/// binds the value itself.
+pub(crate) fn find_branch_body_by_member<'a>(
+    branches: &KExpression<'a>,
+    union: KType,
+    spelling: Option<TypeSymbol>,
+    scrutinee: &KObject<'a>,
+    scope: &Scope<'a>,
+    registries: &RunRegistries,
+    scratch: BumpAllocator<'a>,
+) -> Result<SelectedArm<'a>, String> {
+    use crate::builtins::union::{member_label, union_member, union_member_names};
+
+    // A user `UNION` binds an *anonymous* union, so the node renders structurally and names nothing
+    // the source wrote. Report the operand as it was spelled when the read had a name to go on.
+    let union_name = || match spelling {
+        Some(name) => crate::machine::model::render_label(name.symbol(), registries),
+        None => union.display_name(registries).to_string(),
+    };
+    let parts = &branches.parts;
+    if !parts.len().is_multiple_of(3) {
+        return Err(format!(
+            "branches must be `<head> -> <body>` triples; got {} parts (not a multiple of 3)",
+            parts.len()
+        ));
+    }
+    // The member slate, copied out under one read so the head lookups below are free to intern.
+    // Two probes of the node table cost less than the member-list clone reading it out would.
+    let Some(member_count) = registries.types.with_node(union, |node| match node {
+        TypeNode::Union { members } => Some(members.len()),
+        _ => None,
+    }) else {
+        return Err(format!(
+            "`MATCH … OVER` operand must resolve to a union type; `{}` is not one",
+            union_name()
+        ));
+    };
+    let mut members: BumpVec<'a, KType> = BumpVec::with_capacity_in(member_count, scratch);
+    registries.types.with_node(union, |node| {
+        if let TypeNode::Union { members: declared } = node {
+            members.extend(declared.iter().copied());
+        }
+    });
+
+    /// One validated arm: the member its head named, kept alongside the head's own symbol so an
+    /// ambiguity diagnostic names the arm as the source spelled it.
+    struct MemberArm<'a> {
+        head: Symbol,
+        member: KType,
+        body: KExpression<'a>,
+    }
+    // Decide-local, like the by-type walker's slates: one entry per triple, staged on the step
+    // scratch at its final capacity.
+    let mut arms: BumpVec<'a, MemberArm<'a>> = BumpVec::with_capacity_in(parts.len() / 3, scratch);
+
+    let mut i = 0;
+    while i < parts.len() {
+        let head_part = &parts[i];
+        let arrow_part = &parts[i + 1];
+        let body_part = &parts[i + 2];
+
+        match arrow_part.value {
+            ExpressionPart::Keyword(symbol) if symbol == ARROW.symbol() => {}
+            other => {
+                return Err(format!(
+                    "branch separator must be `->`, got {}",
+                    other.summary(&registries.labels)
+                ));
+            }
+        }
+        let body_expr = match body_part.value {
+            ExpressionPart::Expression(e) => *e,
+            other => {
+                return Err(format!(
+                    "branch body must be a parenthesized expression, got {}",
+                    other.summary(&registries.labels)
+                ));
+            }
+        };
+        // A union has no boolean members, so every head here is a capitalized name; anything else
+        // is reported against the member list the form is reading against.
+        let ExpressionPart::Type(token) = head_part.value else {
+            return Err(format!(
+                "`MATCH … OVER` arm head must name a member of `{}` (members: {}), got {}",
+                union_name(),
+                union_member_names(union, registries),
+                head_part.value.summary(&registries.labels),
+            ));
+        };
+        let Some(member) = union_member(scope, union, token.symbol(), Some(token), registries)
+        else {
+            return Err(format!(
+                "`{}` is not a member of `{}` (members: {})",
+                crate::machine::model::render_label(token.symbol(), registries),
+                union_name(),
+                union_member_names(union, registries),
+            ));
+        };
+        if arms.iter().any(|arm| arm.member == member) {
+            return Err(format!(
+                "`MATCH … OVER` names member `{}` twice",
+                crate::machine::model::render_label(token.symbol(), registries),
+            ));
+        }
+        arms.push(MemberArm {
+            head: token.symbol(),
+            member,
+            body: body_expr,
+        });
+        i += 3;
+    }
+
+    // Exhaustive-only: the arm set covers every member or the form errors, so no arm order and no
+    // runtime value can leave the match without a body.
+    let missing: Vec<String> = members
+        .iter()
+        .filter(|m| !arms.iter().any(|arm| arm.member == **m))
+        .map(|m| member_label(*m, registries))
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "inexhaustive match over `{}`: no arm for {}",
+            union_name(),
+            missing.join(", "),
+        ));
+    }
+
+    // Exact pre-pass: a member whose handle *is* the scrutinee's identity wins outright, and a wrap
+    // of exactly that member is what the payload binding reads through.
+    let identity = scrutinee.ktype();
+    if let Some(arm) = arms.iter().find(|arm| arm.member == identity) {
+        return Ok(SelectedArm {
+            body: arm.body,
+            binds_payload: matches!(scrutinee, KObject::Wrapped { .. } | KObject::Tagged { .. }),
+        });
+    }
+    // No member is the scrutinee's own identity, so the tournament's winner is a member the value
+    // merely inhabits — it wraps nothing of the scrutinee, and `it` binds the value unchanged.
+    arms.retain(|arm| arm.member.matches_value(scrutinee, registries));
+    if arms.is_empty() {
+        return Err(format!(
+            "value of type `{}` inhabits no member of `{}`",
+            identity.display_name(registries),
+            union_name(),
+        ));
+    }
+    let mut heads: BumpVec<'a, KType> = BumpVec::with_capacity_in(arms.len(), scratch);
+    heads.extend(arms.iter().map(|arm| arm.member));
+    match most_specific_ktype(&heads, registries) {
+        Some(winner) => Ok(SelectedArm {
+            body: arms
+                .into_iter()
+                .nth(winner)
+                .expect("winner index valid")
+                .body,
+            binds_payload: false,
+        }),
+        None => Err(ambiguous_match(
+            arms.iter().map(|arm| HeadLabel::Type(arm.head)),
             scrutinee,
             registries,
         )),

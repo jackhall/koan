@@ -71,8 +71,8 @@ fn shape_error_arm_catches_shape_error() {
     // Inexhaustive MATCH is a deterministic ShapeError trigger.
     let bytes = run_program(
         "UNION Maybe = (Some :Number None :Null)\n\
-         LET m = (Maybe (Some 1))\n\
-         TRY (MATCH (m) -> :Number WITH (None -> (0))) -> :Str WITH (\
+         LET m = (Maybe.Some 1)\n\
+         TRY (MATCH (m) OVER Maybe -> :Number WITH (None -> (0))) -> :Str WITH (\
             ShapeError -> (PRINT it.message)\
          )",
     );
@@ -222,15 +222,15 @@ fn it_resolves_via_scope_for_eval_of_top_level_quoted_reference() {
 
 #[test]
 fn try_inside_tco_position_preserves_frame_chain() {
-    // A user-fn recursing through a `Tagged` parameter via MATCH inside TRY:
+    // A user-fn recursing through a variant parameter via MATCH inside TRY:
     // the catch path must keep the call-site frame Rc chained on the new frame.
     let bytes = run_program(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (HOP b :Any) -> Any = (TRY (MATCH (b) -> :Str WITH (\
-            One -> (HOP (Bit (Zero null)))\
+         FN (HOP b :Any) -> Any = (TRY (MATCH (b) OVER Bit -> :Str WITH (\
+            One -> (HOP (Bit.Zero null))\
             Zero -> (PRINT \"done\")\
          )) -> :Str WITH (Ok -> it))\n\
-         HOP (Bit (One null))",
+         HOP (Bit.One null)",
     );
     assert_eq!(bytes, b"done\n");
 }

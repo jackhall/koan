@@ -33,7 +33,7 @@ mod try_with;
 mod type_decl;
 mod type_ops;
 mod type_union;
-mod union;
+pub(crate) mod union;
 mod using_scope;
 mod val_decl;
 

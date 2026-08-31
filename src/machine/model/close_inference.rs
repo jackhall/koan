@@ -133,9 +133,14 @@ enum FormRule {
     /// An operator declaration: the body slot's scope is seeded with the operand names the surface
     /// fixes rather than spells ([`MACHINE_BINDERS`]).
     Operator { unary: bool, body: usize },
-    /// `MATCH` / `TRY`: the slot holds `<head> -> <body>` triples — heads are type-channel uses,
-    /// and each body's scope is seeded with the arm binder.
+    /// The `OVER`-less `MATCH`: the slot holds `<head> -> <body>` triples whose heads are type
+    /// tests — genuine type-channel uses — and each body's scope is seeded with the arm binder.
     Arms { arms: usize },
+    /// `MATCH … OVER` / `TRY`: the same triples, except each head names a **member** of the form's
+    /// own operand — a union member, an error kind, the `_` wildcard — and a member never binds in
+    /// the enclosing scope. So the heads are skipped and only the bodies are walked, seeded with
+    /// the arm binder.
+    MemberArms { arms: usize },
     /// `MODULE` / `GROUP`: the body is a statement block whose announced type declarations are
     /// visible throughout it regardless of statement order.
     ModuleBody { body: usize },
@@ -374,7 +379,21 @@ static FORM_SPECS: &[FormSpec] = &[
             Kw(&KEYWORDS.with),
             Slot,
         ],
-        rule: FormRule::Arms { arms: 5 },
+        rule: FormRule::MemberArms { arms: 5 },
+    },
+    // MATCH <scrutinee> OVER <union> -> <result type> WITH <branches>
+    FormSpec {
+        key: &[
+            Kw(&KEYWORDS.match_),
+            Slot,
+            Kw(&KEYWORDS.over),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.with),
+            Slot,
+        ],
+        rule: FormRule::MemberArms { arms: 7 },
     },
     // MODULE <name> = <body>
     FormSpec {
@@ -711,7 +730,18 @@ impl<'s> Walk<'s, '_> {
             FormRule::Arms { arms } => {
                 self.walk_unclaimed(expr, &[arms]);
                 match expr.parts.get(arms).map(|part| part.value) {
-                    Some(ExpressionPart::Expression(node)) => self.walk_arms(node.reference()),
+                    Some(ExpressionPart::Expression(node)) => {
+                        self.walk_arms(node.reference(), true)
+                    }
+                    _ => self.walk_part(expr, arms),
+                }
+            }
+            FormRule::MemberArms { arms } => {
+                self.walk_unclaimed(expr, &[arms]);
+                match expr.parts.get(arms).map(|part| part.value) {
+                    Some(ExpressionPart::Expression(node)) => {
+                        self.walk_arms(node.reference(), false)
+                    }
                     _ => self.walk_part(expr, arms),
                 }
             }
@@ -833,13 +863,15 @@ impl<'s> Walk<'s, '_> {
     /// A `<head> -> <body>` arm run: heads name types, each body runs in a scope holding the arm
     /// binder. A run the branch walker itself would reject falls back to the generic walk, which is
     /// the conservative reading — its own dispatch surfaces the real diagnostic.
-    fn walk_arms(&mut self, run: &KExpression<'_>) {
+    fn walk_arms(&mut self, run: &KExpression<'_>, heads_are_uses: bool) {
         if !run.parts.len().is_multiple_of(3) {
             return self.walk_unclaimed(run, &[]);
         }
         let arm = [BinderSymbol::Value(MACHINE_BINDERS.arm.symbol())];
         for head in (0..run.parts.len()).step_by(3) {
-            self.walk_part(run, head);
+            if heads_are_uses {
+                self.walk_part(run, head);
+            }
             self.walk_body_slot(run, head + 2, &arm);
         }
     }

@@ -104,6 +104,20 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
         ],
         slots: &[(5, CODE)],
     },
+    // MATCH <scrutinee> OVER <union> -> <result type> WITH <branches>
+    LazySlotSpec {
+        key: &[
+            Kw(&KEYWORDS.match_),
+            Slot,
+            Kw(&KEYWORDS.over),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+            Kw(&KEYWORDS.with),
+            Slot,
+        ],
+        slots: &[(7, CODE)],
+    },
     // TRY <body> -> <result type> WITH <branches>
     LazySlotSpec {
         key: &[

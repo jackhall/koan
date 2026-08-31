@@ -167,7 +167,7 @@ MODULE palette =
 PRINT
   USING palette SCOPE (
     (FN (DESCRIBE c :Color) -> Str = ("a color"))
-    (DESCRIBE (Color (Red null))))
+    (DESCRIBE (Color.Red null)))
 ```
 
 ```text

@@ -125,10 +125,12 @@ fn module_union_newtype_cycle_seals() {
            UNION Tree = (Leaf :Number, Node :Forest)\n  \
            NEWTYPE Forest = :(LIST OF Tree)\n\
          )\n\
-         USING t SCOPE (PRINT (Tree (Node (Forest [(Tree (Leaf 1))]))))",
+         USING t SCOPE (PRINT (Tree.Node (Forest [(Tree.Leaf 1)])))",
     );
     let printed = String::from_utf8(captured.borrow().clone()).expect("PRINT output is UTF-8");
-    assert_eq!(printed, "Node(Forest([Leaf(1)]))\n");
+    // `Node`'s declared repr *is* `Forest`, so the newtype collapse folds the redundant layer:
+    // wrapping a `Forest` in a variant whose repr is `Forest` adds a tag, not a second box.
+    assert_eq!(printed, "Node([Leaf(1)])\n");
 }
 
 /// Announcement is identity-neutral. A member that references no sibling digests independently, so
@@ -299,7 +301,7 @@ fn unfilled_announced_member_is_a_typed_error() {
 }
 
 /// Two unions in one body may own the same bare tag: qualified lookup is scoped by the binder's own
-/// member list, so `:(Graph Node)` and `:(Tree Node)` name different members and both seal.
+/// member list, so `:(Graph.Node)` and `:(Tree.Node)` name different members and both seal.
 #[test]
 fn two_unions_may_share_a_tag() {
     let program = program_storage();
@@ -310,14 +312,14 @@ fn two_unions_may_share_a_tag() {
            UNION Graph = (Node :Number, Edge :Number)\n  \
            UNION Tree = (Node :Str, Twig :Str)\n\
          )\n\
-         USING t SCOPE (\n  PRINT (Graph (Node (1)))\n  PRINT (Tree (Node (\"x\")))\n)",
+         USING t SCOPE (\n  PRINT (Graph.Node (1))\n  PRINT (Tree.Node (\"x\"))\n)",
     );
     let printed = String::from_utf8(captured.borrow().clone()).expect("PRINT output is UTF-8");
     assert_eq!(printed, "Node(1)\nNode(x)\n");
 }
 
 /// A co-declared `NEWTYPE` may type a field by a sibling union's variant through the qualified
-/// sigil, pre-seal: `:(Tree Node)` lowers against the announced window rather than sub-dispatching,
+/// sigil, pre-seal: `:(Tree.Node)` lowers against the announced window rather than sub-dispatching,
 /// which would deadlock on the seal's own producer.
 #[test]
 fn sibling_schema_references_a_variant_by_qualified_sigil() {
@@ -327,9 +329,9 @@ fn sibling_schema_references_a_variant_by_qualified_sigil() {
     test_run.run(
         "MODULE t = (\n  \
            UNION Tree = (Leaf :Number, Node :Number)\n  \
-           NEWTYPE Handle = :{n :(Tree Node)}\n\
+           NEWTYPE Handle = :{n :(Tree.Node)}\n\
          )\n\
-         USING t SCOPE (PRINT (Handle {n = (Tree (Node (2)))}))",
+         USING t SCOPE (PRINT (Handle {n = (Tree.Node (2))}))",
     );
     let printed = String::from_utf8(captured.borrow().clone()).expect("PRINT output is UTF-8");
     assert_eq!(printed, "Handle({n = Node(2)})\n");

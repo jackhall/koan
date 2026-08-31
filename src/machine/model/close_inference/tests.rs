@@ -64,7 +64,7 @@ fn every_claimed_slot_names_a_slot_position() {
                 std::iter::once(signature).chain(body).collect()
             }
             FormRule::Operator { body, .. } => vec![body],
-            FormRule::Arms { arms } => vec![arms],
+            FormRule::Arms { arms } | FormRule::MemberArms { arms } => vec![arms],
             FormRule::ModuleBody { body } => vec![body],
             FormRule::Attribute { field } => vec![field],
             FormRule::Projection { fields } => vec![fields],

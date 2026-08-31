@@ -273,15 +273,16 @@ fn a_mutually_recursive_module_body_needs_no_capture() {
 }
 
 /// A union's variant tags are declared names as well: named in the declaration and again in the
-/// construction, they are never free identifiers of the block. A tag is not bare-name-resolvable
-/// at all, so a walk that read either occurrence as a use would name something nothing can bind.
+/// construction, they are never free identifiers of the block. A member is not bare-name-resolvable
+/// at all, so a walk that read either occurrence as a use would name something nothing can bind —
+/// and, since the type loop now raises on a no-hit, would raise rather than pass silently.
 #[test]
 fn union_variant_tags_are_not_inferred() {
     assert_eq!(
         output(
             "LET x = (CLOSE (\
                  (UNION Maybe = (Some :Number None :Null))\
-                 (Maybe (Some 2))))\n\
+                 (Maybe.Some 2)))\n\
              PRINT x\n"
         ),
         "Some(2)\n"
@@ -529,4 +530,72 @@ fn a_nested_explicit_block_admits_both_dynamic_forms() {
 #[test]
 fn a_nested_inferred_blocks_conflict_is_its_own() {
     assert_conflict("CLOSE (CLOSE ($(#(a))))", DynamicNameForm::Eval);
+}
+
+/// A type-channel free identifier that resolves nowhere is unbound **at the form**, the same
+/// verdict the value channel gives. This is what lets the walk's type reports be trusted: every
+/// surface that spells a `Type` token which is no scope name is one the walk skips.
+#[test]
+fn an_unresolvable_type_name_is_unbound_at_the_form() {
+    let error = error_of("", "LET x = (CLOSE (FN (MAKE n :Ghost) -> Any = (n)))");
+    assert!(
+        matches!(&error.kind, KErrorKind::UnboundName(name) if name == "Ghost"),
+        "expected `Ghost` unbound at the CLOSE, got {error}",
+    );
+}
+
+/// A builtin type is eternal-homed, so it is visible through the block's own outer link and costs
+/// no capture — the no-hit raise above must not catch it.
+#[test]
+fn a_builtin_type_name_is_not_reported_unbound() {
+    assert_eq!(
+        output("LET x = (CLOSE (FN (MAKE n :Number) -> Any = (n)))\nPRINT (x {n = 4})\n"),
+        "4\n"
+    );
+}
+
+/// `MATCH … OVER` arm heads are member names, not scope names, so the walk skips them: the block
+/// infers its scrutinee and its union operand and nothing else.
+#[test]
+fn match_over_arm_heads_are_not_inferred() {
+    assert_eq!(
+        output(
+            "UNION Maybe = (Some :Number None :Null)\n\
+             LET m = (Maybe.Some 3)\n\
+             LET x = (CLOSE (MATCH (m) OVER Maybe -> :Number WITH (Some -> (it) None -> (0))))\n\
+             PRINT x\n"
+        ),
+        "3\n"
+    );
+}
+
+/// `TRY` arm heads are error kinds, read the same way — a name the scope never binds.
+#[test]
+fn try_arm_heads_are_not_inferred() {
+    assert_eq!(
+        output(
+            "UNION Maybe = (Some :Number None :Null)\n\
+             LET m = (Maybe.Some 1)\n\
+             LET x = (CLOSE (TRY (MATCH (m) OVER Maybe -> :Number WITH (None -> (0)))\
+                 -> :Str WITH (ShapeError -> (\"caught\"))))\n\
+             PRINT x\n"
+        ),
+        "caught\n"
+    );
+}
+
+/// `Maybe.Some` contributes the lhs only: ATTR's field slot is a member label the union resolves,
+/// never a name the scope does.
+#[test]
+fn a_member_projection_infers_its_union_only() {
+    assert_eq!(
+        output(
+            "LET mk = (FN :{n :Number} -> Any = (\
+                 (UNION Maybe = (Some :Number None :Null))\
+                 (CLOSE (Maybe.Some n))))\n\
+             LET esc = (mk {n = 5})\n\
+             PRINT esc\n"
+        ),
+        "Some(5)\n"
+    );
 }

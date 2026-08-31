@@ -131,8 +131,8 @@ fn apply_constructor<'step>(
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
-    // A user `UNION` binds an anonymous union of per-variant newtype members. `Maybe Some`
-    // names the variant type; `Maybe (Some v)` newtype-constructs the named member.
+    // A user `UNION` binds an anonymous union of per-variant newtype members, and a member is
+    // reached only by projection (`Maybe.Some`) — so the union name itself is uncallable.
     if ctx.types().is_union(identity) {
         return apply_union_construct(ctx, identity, expr);
     }
@@ -383,89 +383,30 @@ fn quoted_list(names: &[&str]) -> String {
         .join(", ")
 }
 
-/// Construct from an anonymous union of per-variant newtype members (a user `UNION`). `Maybe Some`
-/// (a bare `Type` token body) yields the variant member's type value, reached through its union;
-/// `Maybe (Some v)` (a paren-group body) constructs the named member as a `KObject::Tagged` —
-/// the same value shape builtin `Result` produces — so `MATCH` dispatches user unions by tag
-/// symbol through the shared `TaggedByTag` path.
+/// A union is not itself callable. Its variants are its members, reached by projection —
+/// `Maybe.Some` names the variant, `Maybe.Some 42` constructs it — so every direct application of
+/// the union name lands here as one error naming that surface. The retired juxtaposed spellings all
+/// arrive through this door: `Maybe Some` and `Maybe (Some 42)` from the `TypeCall` lane, and
+/// `:(Maybe Some)` from the sigil re-dispatch of the same expression.
 fn apply_union_construct<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     union: KType,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    if let [
-        Spanned {
-            value: WorkingPart::Ast(ExpressionPart::Type(t)),
-            ..
-        },
-    ] = &expr.parts[1..]
-    {
-        // The token names a variant, so it probes the members by bare symbol bits — the
-        // recovery door. A bare-token reference is a lookup, not a declaration, and the miss
-        // renders the token through the interner the parser recorded it in.
-        return match ctx.types().union_member_named(union, t.symbol()) {
-            Some(member) => Outcome::Done(Ok(ctx.step_ctx().type_carried(member))),
-            None => Outcome::Done(Err(unknown_variant_error(union, *t, ctx.registries()))),
-        };
-    }
-    // The tag names which member; the built value's `identity` is that member's own sealed handle.
-    match extract_call_body(expr, ctx.registries()) {
-        Ok(CallBody::Positional(parts)) => {
-            let (tag, value_part) = match constructors::prepare_args(parts, ctx.registries()) {
-                Ok(v) => v,
-                Err(e) => return Outcome::Done(Err(e)),
-            };
-            match ctx.types().union_variant_target(union, tag.symbol()) {
-                Some((member, expected)) => constructors::construct_tagged(
-                    ctx.current_scope().brand(),
-                    member,
-                    expected,
-                    tag,
-                    value_part,
-                    ctx.scratch(),
-                ),
-                None => Outcome::Done(Err(unknown_variant_error(union, tag, ctx.registries()))),
-            }
+    // A user `UNION` binds an *anonymous* union, so the node renders structurally and names nothing
+    // the source wrote. Report the head as it was spelled when the call site still carries a token.
+    let name = match expr.parts.first().map(|part| part.value) {
+        Some(WorkingPart::Ast(ExpressionPart::Type(head))) => {
+            render_label(head.symbol(), ctx.registries())
         }
-        Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY, ctx.registries()),
-        Err(e) => Outcome::Done(Err(e)),
-    }
-}
-
-/// A schema error for a name that is not one of the union's variants, listing the members. `name`
-/// is the probed tag's **source text**, so the message names what the expression spelled even when
-/// nothing interned it.
-fn unknown_variant_error(union: KType, name: TypeSymbol, registries: &RunRegistries) -> KError {
-    KError::new(KErrorKind::ShapeError(format!(
-        "`{}` is not a variant of the union (variants: {})",
-        render_label(name.symbol(), registries),
-        union_member_names(union, registries),
-    )))
-}
-
-/// Sorted, comma-joined names of the union's constructible variants — its sealed `NewType`
-/// members. A member declaring any other schema names no tag payload, so it is no variant and goes
-/// unlisted. Each name resolves through the run's label interner, which recorded it at its
-/// declaration. A cold diagnostic path, so it reads the member list out of the node by clone
-/// rather than through the construction lane's allocation-free probes.
-fn union_member_names(union: KType, registries: &RunRegistries) -> String {
-    let members = match registries.types.node(union) {
-        TypeNode::Union { members } => members,
-        _ => Vec::new(),
+        _ => union.display_name(ctx.registries()).to_string(),
     };
-    let mut names: Vec<String> = members
-        .iter()
-        .filter_map(|m| match registries.types.node(*m) {
-            TypeNode::SetMember {
-                name,
-                schema: NodeSchema::NewType(_),
-                ..
-            } => Some(render_label(name.symbol(), registries)),
-            _ => None,
-        })
-        .collect();
-    names.sort_unstable();
-    names.join(", ")
+    Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+        "a union has no direct application; reach a variant through member projection: \
+         `{name}.<Variant>` to name it, `{name}.<Variant> <value>` to construct \
+         (members: {})",
+        crate::builtins::union::union_member_names(union, ctx.registries()),
+    )))))
 }
 
 /// Apply a resolved function to its call body. A function takes `{name = value}` only; a

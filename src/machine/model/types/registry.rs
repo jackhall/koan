@@ -32,7 +32,7 @@ use crate::machine::model::labels::Symbol;
 
 use super::kkind::KKind;
 use super::ktype::KType;
-use super::node::{NodeSchema, TypeNode};
+use super::node::TypeNode;
 use super::record::Record;
 use super::sig_schema::SigSchema;
 use super::type_digest::{self, TypeDigest, schema_content_digest};
@@ -214,37 +214,10 @@ impl TypeRegistry {
         )
     }
 
-    /// The `union` member that is a **constructible tagged variant** named `name`, paired with the
-    /// payload type its declaration gives the tag. A variant is a sealed `NewType` member, so its
-    /// declared payload is a direct repr read — the same value a variant-schema table would map the
-    /// tag to, with no table to build. A member declaring any other schema (a
-    /// `NEWTYPE (Type AS Wrapper)` constructor family) names no tag payload and so is no variant: it
-    /// misses here. The outer node and every member it names are read by reference under one
-    /// borrow, so the probe costs no allocation.
-    ///
-    /// [`None`] when `union` names no union at all, which is the caller's construction-lane miss.
-    pub fn union_variant_target(&self, union: KType, name: Symbol) -> Option<(KType, KType)> {
-        let nodes = self.nodes.borrow();
-        let Some(TypeNode::Union { members }) = nodes.get(&union.digest()) else {
-            return None;
-        };
-        members
-            .iter()
-            .copied()
-            .find_map(|m| match nodes.get(&m.digest()) {
-                Some(TypeNode::SetMember {
-                    name: member_name,
-                    schema: NodeSchema::NewType(repr),
-                    ..
-                }) if member_name.symbol() == name => Some((m, *repr)),
-                _ => None,
-            })
-    }
-
-    /// The `union` member named `name`, whatever schema it declares — the bare-token reference
-    /// lane, where naming a member yields its type value and a constructor family is as
-    /// referenceable as a variant. [`Self::union_variant_target`] is the narrower construction-side
-    /// probe. `name` probes by bare symbol bits: the token arrives from a reference site with no
+    /// The `union` member named `name`, whatever schema it declares — the probe every
+    /// variant-reference surface reads through ([`union_member`](crate::builtins::union::union_member)),
+    /// where naming a member yields its type value and a constructor family is as referenceable as
+    /// a variant. `name` probes by bare symbol bits: the token arrives from a reference site with no
     /// class attached, and the member nodes it is matched against carry the `TypeSymbol` their
     /// declaration minted.
     pub fn union_member_named(&self, union: KType, name: Symbol) -> Option<KType> {

@@ -121,18 +121,18 @@ Ok(hi)
 ```
 
 The inner `PRINT` runs and returns `"hi"`, which `CATCH` wraps as `Ok`. On
-failure you get an `Error` carrying the error's payload. Rather than print that
-raw value, you typically [`MATCH`](06-pattern-matching.md) on the result:
+failure you get an `Error` carrying the error's payload:
 
 ```koan
-MATCH (CATCH (mystery)) -> :Str WITH
-  Ok -> (PRINT "succeeded"),
-  Error -> (PRINT "caught a failure")
+PRINT (CATCH (mystery))
 ```
 
 ```text
-caught a failure
+Error(UnboundName(UnboundName({frames = [], name = mystery})))
 ```
+
+Use `CATCH` when you want to hold the outcome as a value; use `TRY` when you
+want to branch on it right away.
 
 ## Result
 

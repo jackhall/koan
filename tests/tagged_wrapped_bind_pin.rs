@@ -39,7 +39,7 @@ fn run_capturing(source: &str) -> Result<String, koan::machine::KError> {
 fn bound_tagged_holding_a_home_closure_pins_and_reads_back() {
     let out = run_capturing(concat!(
         "UNION Maybe = (Some :Any None :Null)\n",
-        "FN (MAKE n :Number) -> :(Maybe) = (Maybe (Some (FN :{} -> Number = (n))))\n",
+        "FN (MAKE n :Number) -> :(Maybe) = (Maybe.Some (FN :{} -> Number = (n)))\n",
         "LET r = (MAKE 5)\n",
         "PRINT r",
     ))
@@ -59,7 +59,7 @@ fn bound_tagged_holding_a_home_closure_pins_and_reads_back() {
 fn bound_plain_data_tagged_copies_and_reads_back() {
     let out = run_capturing(concat!(
         "UNION Maybe = (Some :Number None :Null)\n",
-        "FN (MAKE n :Number) -> :(Maybe) = (Maybe (Some n))\n",
+        "FN (MAKE n :Number) -> :(Maybe) = (Maybe.Some n)\n",
         "LET r = (MAKE 5)\n",
         "PRINT r",
     ))
