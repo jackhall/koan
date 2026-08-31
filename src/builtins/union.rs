@@ -275,7 +275,7 @@ mod tests {
         let root = test_run.dispatch_in_scope(
             crate::machine::model::WorkingExpression::from_ast(
                 scope.brand(),
-                test_run.parse_one("UNION (Ok :Number Err :Str)"),
+                test_run.parse_one("UNION #(Ok :Number Err :Str)"),
             ),
             scope,
         );

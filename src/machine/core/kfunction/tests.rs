@@ -87,12 +87,8 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         ],
     );
     let f = find_match(scope, &expr, types).expect("OP <Number> should match");
-    let pick = f.classify_for_pick(
-        &WorkingExpression::from_ast(brand, expr),
-        &registries,
-        brand.allocator(),
-    );
-    assert_eq!(&*pick.wrap_indices, &[1]);
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), brand.allocator());
+    assert_eq!(&*pick, &[1]);
 }
 
 /// `<verb:Identifier> <args:KExpression>` picked against `myFn (x: 1)`: the Identifier slot is a
@@ -142,12 +138,8 @@ fn classify_excludes_literal_name_slots_from_wrap() {
     );
     let f = find_match(scope, &expr, types)
         .expect("test overload should match an Identifier-leading expression");
-    let pick = f.classify_for_pick(
-        &WorkingExpression::from_ast(brand, expr),
-        &registries,
-        brand.allocator(),
-    );
-    assert!(pick.wrap_indices.is_empty());
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), brand.allocator());
+    assert!(pick.is_empty());
 }
 
 /// LET's Identifier name slot is a literal-name slot (a *declaration* — the slot owns the name),
@@ -170,16 +162,12 @@ fn classify_excludes_binder_name_slot_from_wrap() {
         ],
     );
     let f = find_match(scope, &expr, &types).expect("LET should match");
-    let pick = f.classify_for_pick(
-        &WorkingExpression::from_ast(brand, expr),
-        types.registries(),
-        brand.allocator(),
-    );
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), brand.allocator());
     assert!(
-        pick.wrap_indices.is_empty(),
+        pick.is_empty(),
         "LET's Identifier name slot is a declaration, not a reference; \
          should not be a wrap index. Got {:?}",
-        &*pick.wrap_indices,
+        &*pick,
     );
 }
 
@@ -220,12 +208,8 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
         ],
     );
     let f = find_match(scope, &expr, types).expect("OP <ProperType> should match");
-    let pick = f.classify_for_pick(
-        &WorkingExpression::from_ast(brand, expr),
-        &registries,
-        brand.allocator(),
-    );
-    assert!(pick.wrap_indices.is_empty());
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), brand.allocator());
+    assert!(pick.is_empty());
 }
 
 /// Every `KFunction` value projects through `KObject::ktype()` as `KType::KFunction`,
@@ -296,10 +280,6 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
         ],
     );
     let f = find_match(scope, &expr, types).expect("OP <Any> should match");
-    let pick = f.classify_for_pick(
-        &WorkingExpression::from_ast(brand, expr),
-        &registries,
-        brand.allocator(),
-    );
-    assert_eq!(&*pick.wrap_indices, &[1]);
+    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), brand.allocator());
+    assert_eq!(&*pick, &[1]);
 }

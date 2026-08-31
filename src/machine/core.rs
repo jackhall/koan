@@ -52,7 +52,7 @@ pub(crate) use kfunction::block_tail::{
 };
 pub(crate) use kfunction::body::{LeadingStatements, ReturnContract, body_statement_refs};
 pub(crate) use kfunction::exec::{ExecFrame, ExecOutcome, PerCallReturn, run_user_fn};
-pub(crate) use kfunction::{ActionFn, Body, ClassifiedSlots, KFunction};
+pub(crate) use kfunction::{ActionFn, Body, KFunction, WrapIndices};
 pub use lexical_frame::{LexicalFrame, assemble_body_chain};
 pub use ref_carriers::{ModuleRefFamily, ScopeRefFamily};
 pub(crate) use scope::AdoptSeam;

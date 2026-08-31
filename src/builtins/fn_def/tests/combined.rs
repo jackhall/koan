@@ -97,9 +97,10 @@ fn combined_form_is_rejected_in_a_sig_body() {
     );
 }
 
-/// `FN :{…}` is anonymous — it registers no bucket, so there is no combined form for it: the flat
-/// spelling matches no overload, so its parenthesized value slot is staged as an eager sub-dispatch
-/// whose `n` is unbound; the parenthesized value-bind spelling stays the working one.
+/// `FN :{…}` is anonymous — it registers no bucket, so there is no combined form for it: the
+/// combined key's signature slot captures only code, so the `:{…}` there evaluates to a record type
+/// no overload admits and the flat spelling fails dispatch. The parenthesized value-bind spelling
+/// stays the working one.
 #[test]
 fn anonymous_signature_has_no_combined_form() {
     let program = program_storage();
@@ -107,8 +108,8 @@ fn anonymous_signature_has_no_combined_form() {
     let mut test_run = TestRun::silent(&program, &region);
     let err = test_run.run_one_err(test_run.parse_one("LET f = FN :{n :Number} -> Number = (n)"));
     assert!(
-        matches!(err.kind, crate::machine::KErrorKind::UnboundName(ref n) if n == "n"),
-        "expected the staged eager sub-dispatch's `n` to be unbound, got {err}",
+        matches!(err.kind, crate::machine::KErrorKind::DispatchFailed { .. }),
+        "expected the flat spelling to match no combined overload, got {err}",
     );
 
     let mut test_run = TestRun::silent(&program, &region);

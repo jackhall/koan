@@ -14,14 +14,12 @@
 //! could strict-pick the bare name as an `:Identifier` slot.
 
 use crate::machine::ProducerId;
-use crate::machine::core::{ClassifiedSlots, OpenedFunction};
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
+use crate::machine::core::{OpenedFunction, WrapIndices};
 use crate::machine::model::labels::BinderSymbol;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 use crate::witnessed::{BumpAllocator, BumpVec};
-
-use super::is_eager_working_part;
 
 use super::resolve::Resolution;
 use crate::machine::model::RunRegistries;
@@ -43,8 +41,8 @@ pub fn reset_resolve_dispatch_entry_count() {
     RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(0));
 }
 
-/// Picked function plus the per-slot classification the dispatch driver needs for auto-wrap and
-/// eager-sub scheduling.
+/// Picked function plus the auto-wrap classification the dispatch driver splices before the
+/// invoke.
 ///
 /// `function` is the pick **in use**: adopted into its own binding region, so the mint that
 /// re-anchored it named its reach there and the region retains the pins — which is what lets the
@@ -52,15 +50,14 @@ pub fn reset_resolve_dispatch_entry_count() {
 /// into the call chain [`reseal`](crate::witnessed::Opened::reseal)s it back to rest.
 pub struct Resolved<'step> {
     pub function: OpenedFunction<'step>,
-    pub slots: ClassifiedSlots<'step>,
+    pub wrap_indices: WrapIndices<'step>,
 }
 
 pub enum DispatchOutcome<'step> {
     Resolved(Resolved<'step>),
     Ambiguous(usize),
-    Deferred,
-    /// Distinct from `Deferred`: waits on existing producers (forward-reference placeholders, or a
-    /// claim on `key`) without scheduling new work.
+    /// Waits on existing producers (forward-reference placeholders, or a claim on `key`) without
+    /// scheduling new work.
     ParkOnProducers(BumpVec<'step, ProducerId>),
     /// A bare-name arg resolves to nothing — no binding and no placeholder. The unbound name is the
     /// precise cause, so it surfaces here rather than as a dispatch miss. It travels as the symbol
@@ -229,19 +226,12 @@ fn decide_scope<'step, 'e>(
     }
     match bucket.pick_strict(expr, bare_outcomes, registries, scratch) {
         PickPass::Picked(index) => {
-            ScopeDecision::Terminal(DispatchOutcome::Resolved(build_resolved(
-                scope.open_function(&lookup.overloads[index]),
-                expr,
-                registries,
-                scratch,
-            )))
-        }
-        // A tie may break once an unevaluated eager part lands: the typed `Spliced(List …)`
-        // re-dispatch is element-aware where the bare literal is shape-only. A genuine tie
-        // resurfaces as `Ambiguous` on the post-eager-subs pass.
-        PickPass::Tie(n) if expr_has_eager_part(expr) => {
-            let _ = n;
-            ScopeDecision::Terminal(DispatchOutcome::Deferred)
+            let function = scope.open_function(&lookup.overloads[index]);
+            let wrap_indices = function.value().classify_for_pick(expr, scratch);
+            ScopeDecision::Terminal(DispatchOutcome::Resolved(Resolved {
+                function,
+                wrap_indices,
+            }))
         }
         PickPass::Tie(n) => ScopeDecision::Terminal(DispatchOutcome::Ambiguous(n)),
         PickPass::Empty => decide_relaxed(&bucket, expr, bare_outcomes, registries, scratch),
@@ -250,8 +240,8 @@ fn decide_scope<'step, 'e>(
 
 /// Strict-Empty relaxed pass: one assume-every-unresolved-slot-satisfiable pass per candidate.
 ///
-/// Parked beats eager; a dead unbound lean never parks, since an unbound name never arrives, so it
-/// only records a `DeadLean` blocker.
+/// A dead unbound lean never parks, since an unbound name never arrives, so it only records a
+/// `DeadLean` blocker.
 fn decide_relaxed<'step, 'e>(
     bucket: &OverloadBucket<'_, '_>,
     expr: &WorkingExpression<'e>,
@@ -263,7 +253,6 @@ fn decide_relaxed<'step, 'e>(
     // deduped accumulator is bounded by the part count no matter how many candidates lean.
     let mut parked: BumpVec<'step, ProducerId> =
         BumpVec::with_capacity_in(expr.parts.len(), scratch);
-    let mut any_eager_lean = false;
     let mut dead_name: Option<BinderSymbol> = None;
     for f in bucket.candidates.iter() {
         let Some(leans) = relaxed_admits(
@@ -282,7 +271,6 @@ fn decide_relaxed<'step, 'e>(
                         parked.push(p);
                     }
                 }
-                Lean::Eager => any_eager_lean = true,
                 Lean::Dead(name) => {
                     if dead_name.is_none() {
                         dead_name = Some(name);
@@ -293,9 +281,6 @@ fn decide_relaxed<'step, 'e>(
     }
     if !parked.is_empty() {
         return ScopeDecision::Terminal(DispatchOutcome::ParkOnProducers(parked));
-    }
-    if any_eager_lean {
-        return ScopeDecision::Terminal(DispatchOutcome::Deferred);
     }
     match dead_name {
         Some(name) => ScopeDecision::DeadLean(name),
@@ -374,9 +359,9 @@ impl OverloadBucket<'_, '_> {
     }
 }
 
-/// Policy-free outcome of one filter→`most_specific` pass: the `Tie` → `Ambiguous` / `Deferred`
-/// translation is decided outside. `Picked` names the winner's bucket index rather than the
-/// callable, so the pick is re-anchored exactly once.
+/// Policy-free outcome of one filter→`most_specific` pass: the `Tie` → `Ambiguous` translation is
+/// decided outside. `Picked` names the winner's bucket index rather than the callable, so the pick
+/// is re-anchored exactly once.
 enum PickPass {
     Picked(usize),
     Tie(usize),
@@ -389,7 +374,6 @@ enum PickPass {
 #[derive(Clone, Copy)]
 enum Lean {
     Parked(ProducerId),
-    Eager,
     Dead(BinderSymbol),
 }
 
@@ -404,21 +388,11 @@ fn signature_admits_strict<'e>(
     if sig.elements().len() != expr.parts.len() {
         return false;
     }
-    let has_lazy_kexpr_slot = has_lazy_kexpr_slot(sig, expr);
     sig.elements()
         .iter()
         .zip(expr.parts)
         .enumerate()
-        .all(|(i, (el, part))| {
-            slot_admits_strict(
-                el,
-                &part.value,
-                i,
-                has_lazy_kexpr_slot,
-                bare_outcomes,
-                registries,
-            )
-        })
+        .all(|(i, (el, part))| slot_admits_strict(el, &part.value, i, bare_outcomes, registries))
 }
 
 /// Relaxed admission: assume every *unresolved* slot satisfiable and report which kinds were leaned
@@ -438,25 +412,11 @@ fn relaxed_admits<'e, 's>(
     if sig.elements().len() != expr.parts.len() {
         return None;
     }
-    let has_lazy_kexpr_slot = has_lazy_kexpr_slot(sig, expr);
     // At most one lean per slot; reserved after the length check so a rejected candidate takes
     // no scratch.
     let mut leans: BumpVec<'s, Lean> = BumpVec::with_capacity_in(sig.elements().len(), scratch);
     for (i, (el, part)) in sig.elements().iter().zip(expr.parts).enumerate() {
-        if slot_admits_strict(
-            el,
-            &part.value,
-            i,
-            has_lazy_kexpr_slot,
-            bare_outcomes,
-            registries,
-        ) {
-            continue;
-        }
-        // An unevaluated eager part in an *argument* slot routes through `eager_indices` post-pick;
-        // a keyword element can never be satisfied by an eager part.
-        if is_eager_working_part(&part.value) && matches!(el, SignatureElement::Argument(_)) {
-            leans.push(Lean::Eager);
+        if slot_admits_strict(el, &part.value, i, bare_outcomes, registries) {
             continue;
         }
         match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
@@ -469,28 +429,12 @@ fn relaxed_admits<'e, 's>(
     Some(leans)
 }
 
-/// Lazy-candidate gate: a `KType::KEXPRESSION` slot bound by an `ExpressionPart::Expression`
-/// relaxes the other slots to admit parts speculatively (they route through `eager_indices`
-/// post-pick), which is what lets the `FN` overloads capture an unevaluated body.
-fn has_lazy_kexpr_slot(sig: &ExpressionSignature<'_>, expr: &WorkingExpression<'_>) -> bool {
-    sig.elements()
-        .iter()
-        .zip(expr.parts)
-        .any(|(el, part)| match (el, part.value.as_ast()) {
-            (SignatureElement::Argument(arg), Some(ExpressionPart::Expression(_))) => {
-                matches!(arg.ktype, KType::KEXPRESSION)
-            }
-            _ => false,
-        })
-}
-
 /// Per-slot strict admission, shared by [`signature_admits_strict`] and [`relaxed_admits`] so the
 /// two passes cannot drift on what "strict rejects here" means.
 fn slot_admits_strict<'e>(
     el: &SignatureElement,
     slot: &WorkingPart<'e>,
     i: usize,
-    has_lazy_kexpr_slot: bool,
     bare_outcomes: &[Option<Resolution>],
     registries: &RunRegistries,
 ) -> bool {
@@ -542,18 +486,6 @@ fn slot_admits_strict<'e>(
                 }
                 _ => {}
             }
-            // Lazy-candidate relaxation (see `has_lazy_kexpr_slot`). The `:SigiledTypeExpr`
-            // and `:RecordType` slots are part-kind-strict like `:KExpression` — each admits
-            // only its own part shape, so the return-type overloads stay disjoint.
-            if has_lazy_kexpr_slot
-                && matches!(part_value, ExpressionPart::Expression(_))
-                && !matches!(
-                    arg.ktype,
-                    KType::KEXPRESSION | KType::SIGILED_TYPE_EXPR | KType::RECORD_TYPE
-                )
-            {
-                return true;
-            }
             match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
                 Some(Resolution::Resolved(delivered)) => arg
                     .ktype
@@ -565,25 +497,5 @@ fn slot_admits_strict<'e>(
                 None => arg.matches(part_value, types),
             }
         }
-    }
-}
-
-fn expr_has_eager_part(expr: &WorkingExpression<'_>) -> bool {
-    expr.parts.iter().any(|p| is_eager_working_part(&p.value))
-}
-
-/// The one place `Resolved` is built; the disjoint `(eager_indices | wrap_indices)` invariant its
-/// `slots` carries is established by
-/// [`KFunction::classify_for_pick`](crate::machine::core::KFunction::classify_for_pick).
-fn build_resolved<'step, 'e>(
-    picked: OpenedFunction<'step>,
-    expr: &WorkingExpression<'e>,
-    registries: &RunRegistries,
-    scratch: BumpAllocator<'step>,
-) -> Resolved<'step> {
-    let slots = picked.value().classify_for_pick(expr, registries, scratch);
-    Resolved {
-        function: picked,
-        slots,
     }
 }

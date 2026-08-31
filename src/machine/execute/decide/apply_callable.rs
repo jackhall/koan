@@ -516,10 +516,7 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
     // the keyword path's pre-pick `bare_outcomes` lookup — each rides `bare_identifier`'s reach
     // carrier through the eager-subs finish and reaches `accepts_part` at bind.
     let brand = ctx.current_scope().brand();
-    let wrap_indices = picked
-        .value()
-        .classify_for_pick(&expr, ctx.registries(), ctx.scratch())
-        .wrap_indices;
+    let wrap_indices = picked.value().classify_for_pick(&expr, ctx.scratch());
     // A call whose slots are all filled stages nothing, so the node handed to the walk is the one
     // the committed call folds over — no rebuild.
     let (working_expr, staged) =

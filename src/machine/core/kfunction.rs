@@ -32,7 +32,7 @@ use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::{Symbol, render_label};
 pub use action::ActionFn;
 pub use body::Body;
-pub use pick::ClassifiedSlots;
+pub use pick::WrapIndices;
 use pick::slot_admits;
 
 /// The captured scope is allocated in the same `KoanRegion` this `KFunction` lives in —

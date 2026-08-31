@@ -198,13 +198,15 @@ fn unary_operator_collects_the_run_prefix_infix_and_pair() {
 }
 
 /// The declaration surface itself: an unquoted symbol is not an `OP` shape at all — it keys no
-/// `OP` bucket, so it cannot dispatch.
+/// `OP` bucket, so it cannot dispatch. The body is a bare literal because a key that matches no
+/// builtin form stamps no lazy slot: its `(…)` evaluates first, and a body naming the operands
+/// would fail on those names before dispatch was ever reached.
 #[test]
 fn unquoted_symbol_does_not_declare_an_operator() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let error = test_run.run_one_err(test_run.parse_one("OP + OVER Number = (left)"));
+    let error = test_run.run_one_err(test_run.parse_one("OP + OVER Number = (1)"));
     assert!(
         matches!(&error.kind, KErrorKind::DispatchFailed { .. }),
         "an unquoted symbol keys no OP overload, got {error}",

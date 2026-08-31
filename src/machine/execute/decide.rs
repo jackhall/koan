@@ -14,6 +14,7 @@ use crate::machine::core::{
     Action, ActionKind, AwaitContinue, BlockEntry, BlockRequest, CatchFn, FinishCtx,
     FramePlacement, ReturnContract, TailContract,
 };
+use crate::machine::model::lazy_slots::LazyKinds;
 use crate::machine::model::{Carried, ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NodeId};
 use crate::source::Spanned;
@@ -63,7 +64,7 @@ pub(in crate::machine::execute) use ctx::{DecideCtx, with_node_scope};
 pub(crate) use field_list::FieldListDeferral;
 pub(crate) use resolve::Resolution;
 pub(super) use resolve::{TypeChannel, type_channel};
-pub use resolve_dispatch::{DispatchOutcome, Resolved};
+pub use resolve_dispatch::DispatchOutcome;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 
@@ -112,6 +113,31 @@ pub(in crate::machine::execute) fn is_eager_working_part(part: &WorkingPart<'_>)
         WorkingPart::RecordType(_) => true,
         WorkingPart::Ast(ast) => is_eager_part(ast),
         WorkingPart::Spliced { .. } | WorkingPart::StagedSlot => false,
+    }
+}
+
+/// Whether the part at `index` stays raw instead of being submitted — true only in a lazy slot of
+/// a fixed builtin form, where the node's seal-time stamp names this part's kind. Every other
+/// eager-shaped part evaluates before its parent dispatches, so a user signature never receives a
+/// raw unquoted group. A quote is data already and never stages, but reads as raw here too, so the
+/// two spellings of a builtin lazy body stay one.
+///
+/// See [`lazy_slots`](crate::machine::model::lazy_slots) for where the stamp comes from.
+pub(in crate::machine::execute) fn stays_raw(
+    origin: &WorkingExpression<'_>,
+    index: usize,
+    part: &WorkingPart<'_>,
+) -> bool {
+    let kinds = origin.lazy_kinds_at(index);
+    match part.as_ast() {
+        Some(ExpressionPart::Expression(_) | ExpressionPart::QuotedExpression(_)) => {
+            kinds.contains(LazyKinds::CODE)
+        }
+        Some(ExpressionPart::SigiledTypeExpr(_)) => kinds.contains(LazyKinds::TYPE_EXPR),
+        Some(ExpressionPart::RecordType(_)) => kinds.contains(LazyKinds::RECORD_TYPE),
+        // A node the scheduler synthesized and a slot it already filled are past this question;
+        // no other part shape stages at all.
+        _ => false,
     }
 }
 
@@ -339,7 +365,8 @@ impl<'step> StagedSubs<'step> {
 }
 
 /// Walk raw parts emitting a [`StagedSlot`](WorkingPart::StagedSlot) marker at every eager slot
-/// and a parallel staged-subs Vec; non-eager parts pass through unchanged.
+/// the node's lazy-slot stamp does not keep raw, and a parallel staged-subs Vec; every other part
+/// passes through unchanged.
 ///
 /// `wrap_indices` names bare-name value slots (from
 /// [`KFunction::classify_for_pick`](crate::machine::core::KFunction::classify_for_pick)) to
@@ -370,6 +397,9 @@ pub(super) fn stage_all_eager_parts<'step>(
                     placement: DepPlacement::OwnScope,
                 },
             );
+            continue;
+        }
+        if stays_raw(origin, i, &part.value) {
             continue;
         }
         if let Ok(dep) = stage_eager_working_part(brand, part.value) {

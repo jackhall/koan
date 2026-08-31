@@ -557,6 +557,7 @@ digraph {
     "koan::machine::execute::decide" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::decide" -> "koan::machine::model::lazy_slots" [label="uses", style="dashed"];
     "koan::machine::execute::decide" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::decide::apply_callable" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::apply_callable" -> "koan::machine" [label="uses", style="dashed"];
@@ -656,7 +657,6 @@ digraph {
     "koan::machine::execute::decide::resolve_dispatch" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_dispatch" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_dispatch" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::execute::decide::resolve_dispatch" -> "koan::machine::execute::decide" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_dispatch" -> "koan::machine::execute::decide::resolve" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_dispatch" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_dispatch" -> "koan::machine::model::labels" [label="uses", style="dashed"];

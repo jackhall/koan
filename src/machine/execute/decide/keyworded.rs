@@ -14,17 +14,46 @@ use super::super::outcome::continue_inline;
 use super::super::{NodeContinuation, decide_only, erase_bumped};
 use super::ctx::DecideCtx;
 use super::{
-    Await, Outcome, PartWalk, Resolution, Resolved, StagedSubs, park_resume_labelled,
-    stage_eager_part, staged_slot_placeholder, working_frame,
+    Await, Outcome, PartWalk, Resolution, StagedSubs, park_resume_labelled, working_frame,
 };
 
-/// Entry from the dispatch router. Resolution failures are slot-terminal (TRY-catchable), uniform
-/// with the bare-identifier and head-deferred lanes; `ParkOnProducers` re-runs this function on
-/// wake and `Deferred` re-resolves through [`finish`] once its eager subs land.
+/// Entry from the dispatch router.
+///
+/// Staging runs **first**: every eager-shaped part the node's lazy-slot stamp does not keep raw is
+/// submitted as a sub-dispatch before any overload is considered. So by the time resolution runs,
+/// each of those children has already evaluated and dispatch selects on landed values, never on
+/// which overload would have left a child unevaluated. The subs' finish re-enters here, where the
+/// spliced run stages nothing further and falls through to resolution.
+///
+/// Resolution failures are slot-terminal (TRY-catchable), uniform with the bare-identifier and
+/// head-deferred lanes; `ParkOnProducers` re-runs this function on wake.
 pub(super) fn initial<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
+    let brand = ctx.current_scope().brand();
+    match super::stage_all_eager_parts(brand, &expr, &[], ctx.scratch()) {
+        PartWalk::Respliced {
+            expr: staged_expr,
+            staged,
+        } => install_eager_subs(ctx, staged_expr, staged, None),
+        PartWalk::Unchanged => resolve_and_invoke(ctx, expr),
+    }
+}
+
+/// Resolve `expr` against the lexical scope chain and route the outcome. Every child that
+/// evaluates has landed by now, so this is the single dispatch resolution: one pick, then the
+/// invoke.
+fn resolve_and_invoke<'step>(
+    ctx: &DecideCtx<'_, 'step, '_>,
+    expr: WorkingExpression<'step>,
+) -> Outcome<'step> {
+    debug_assert!(
+        expr.parts.iter().enumerate().all(|(i, part)| {
+            !super::is_eager_working_part(&part.value) || super::stays_raw(&expr, i, &part.value)
+        }),
+        "every eager part the stamp leaves eager is staged before dispatch resolves",
+    );
     let bare_outcomes = ctx.build_bare_outcomes(expr.parts);
     let chain = ctx.chain_deref();
     // Resolving against the cart scope puts the pick at the cart `'step` lifetime, so it reaches
@@ -56,85 +85,15 @@ pub(super) fn initial<'step>(
                 crate::machine::model::render_label(name.symbol(), ctx.registries()),
             ))));
         }
-        DispatchOutcome::Deferred => {
-            return install_eager_only(ctx, expr);
-        }
         DispatchOutcome::ParkOnProducers(sources) => {
             return park_on_claims(&sources, expr, ctx);
         }
     };
     // Binder name claims / pending overload slots are installed at statement submission from the
     // enclosing statement's parse-time aggregate (see `submit_expression`); nothing installs here.
-    walk_and_invoke(ctx, resolved, expr, &bare_outcomes)
-}
-
-/// Shared [`DispatchOutcome::Resolved`] tail for [`initial`] and [`finish`]. A walk that staged
-/// eager subs discards the speculative pick, because the post-subs re-resolve ([`finish`]) picks
-/// again against the spliced expression. Otherwise this is the synchronous call — the common path
-/// for builtins and simple calls.
-fn walk_and_invoke<'step>(
-    ctx: &DecideCtx<'_, 'step, '_>,
-    resolved: Resolved<'step>,
-    expr: WorkingExpression<'step>,
-    bare_outcomes: &[Option<Resolution>],
-) -> Outcome<'step> {
-    match part_walk(ctx, &expr, bare_outcomes, &resolved.slots) {
-        PartWalk::Unchanged => super::exec::invoke_continue(ctx, resolved.function, expr),
-        PartWalk::Respliced {
-            expr: new_expr,
-            staged,
-        } => {
-            if staged.is_empty() {
-                return super::exec::invoke_continue(ctx, resolved.function, new_expr);
-            }
-            let _ = resolved; // discard the speculative pick.
-            install_eager_subs(ctx, new_expr, staged, None)
-        }
-    }
-}
-
-/// Re-resolve dispatch against `working_expr` once its eager subs have spliced back in.
-///
-/// The re-resolve runs the same `bare_outcomes` cache + [`walk_and_invoke`] tail [`initial`] does,
-/// because every arm that routes here commits **no** pick and so carries no wrap-slot mask to
-/// splice a bare-name argument by. A bare name sharing an expression with an eager part
-/// (`(a ⊕ b) ⊕ c`, what a fold-left run of three named operands reduces to) therefore reaches this
-/// point unresolved; the pick made here against the spliced expression is what classifies it, and
-/// the walk splices it before the invoke. A `Deferred` outcome is an error here, not another
-/// eager-subs round, so the two resolves cannot ping-pong.
-fn finish<'step>(
-    ctx: &DecideCtx<'_, 'step, '_>,
-    working_expr: WorkingExpression<'step>,
-) -> Outcome<'step> {
-    let bare_outcomes = ctx.build_bare_outcomes(working_expr.parts);
-    let scope = ctx.current_scope();
-    match scope.resolve_dispatch(
-        &working_expr,
-        ctx.chain_deref(),
-        &bare_outcomes,
-        ctx.registries(),
-        ctx.scratch(),
-    ) {
-        DispatchOutcome::Resolved(r) => walk_and_invoke(ctx, r, working_expr, &bare_outcomes),
-        DispatchOutcome::Ambiguous(n) => {
-            Outcome::Done(Err(KError::new(KErrorKind::AmbiguousDispatch {
-                expr: working_expr.summarize(&ctx.registries().labels),
-                candidates: n,
-            })))
-        }
-        DispatchOutcome::Deferred | DispatchOutcome::Unmatched => {
-            Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-                expr: working_expr.summarize(&ctx.registries().labels),
-                reason: "no matching function".to_string(),
-            })))
-        }
-        DispatchOutcome::ParkOnProducers(sources) => park_on_claims(&sources, working_expr, ctx),
-        DispatchOutcome::UnboundName(name) => {
-            Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
-                crate::machine::model::render_label(name.symbol(), ctx.registries()),
-            ))))
-        }
-    }
+    let expr =
+        splice_wrap_slots(ctx, &expr, &bare_outcomes, &resolved.wrap_indices).unwrap_or(expr);
+    super::exec::invoke_continue(ctx, resolved.function, expr)
 }
 
 /// Park on the claims dispatch resolution leaned on — a still-finalizing bare-name producer from
@@ -156,8 +115,9 @@ fn park_on_claims<'step>(
     )
 }
 
-/// Fold the post-eager-subs re-resolve into a dep-free decide that re-runs [`finish`] on the next
-/// pop. The re-resolve slot holds no contract of its own, so the continuation carries the ambient
+/// Fold the post-eager-subs re-entry into a dep-free decide that re-runs [`initial`] on the next
+/// pop. The spliced run stages nothing further, so the re-entry is the resolution the staging pass
+/// deferred. The slot holds no contract of its own, so the continuation carries the ambient
 /// obligation and the declared-return checker survives the hop.
 fn redispatch_continue<'step>(
     view: &DecideCtx<'_, 'step, '_>,
@@ -168,31 +128,10 @@ fn redispatch_continue<'step>(
         view.current_obligation(),
         erase_bumped(
             view.current_scope().brand(),
-            decide_only(move |ctx: &DecideCtx<'_, 'step, '_>, _id| finish(ctx, working_expr)),
+            decide_only(move |ctx: &DecideCtx<'_, 'step, '_>, _id| initial(ctx, working_expr)),
         ),
     );
     continue_inline(continuation, label)
-}
-
-/// `DispatchOutcome::Deferred` arm: stage every eager part and park on them. No pick is captured
-/// and no wrap set exists, so no bare-name slot is pre-resolved here — [`finish`] re-resolves.
-fn install_eager_only<'step>(
-    ctx: &DecideCtx<'_, 'step, '_>,
-    expr: WorkingExpression<'step>,
-) -> Outcome<'step> {
-    let brand = ctx.current_scope().brand();
-    let (new_expr, staged) = match super::stage_all_eager_parts(brand, &expr, &[], ctx.scratch()) {
-        PartWalk::Respliced { expr, staged } => (expr, staged),
-        PartWalk::Unchanged => {
-            debug_assert!(
-                false,
-                "install_eager_only invoked from Deferred arm; \
-                 resolve_dispatch contract requires at least one eager part",
-            );
-            (expr, StagedSubs::new_in(ctx.scratch()))
-        }
-    };
-    install_eager_subs(ctx, new_expr, staged, None)
 }
 
 /// Park each staged eager dep, then rebuild `working_expr` with the resolved carriers in its
@@ -249,7 +188,7 @@ pub(super) fn install_eager_subs<'step>(
         .finish_terminal(host, finish)
 }
 
-/// Route a fully-spliced eager-subs `working_expr` to its continuation. Under `None` the re-resolve
+/// Route a fully-spliced eager-subs `working_expr` to its continuation. Under `None` the resolution
 /// sees the element types the subs revealed, so a `Spliced(_)` no candidate satisfies surfaces
 /// there as a slot-terminal `DispatchFailed` rather than as a bind-time error.
 fn finish_eager_subs<'step>(
@@ -263,73 +202,44 @@ fn finish_eager_subs<'step>(
     }
 }
 
-/// Splice / eager-sub walk over `expr`'s parts. Pure: no dep realization — the caller decides
-/// whether to park on the staged subs. Infallible: dispatch resolution parks on a still-finalizing
-/// bare name and admission rejects an unbound one before any pick, so every bare name the pick's
-/// wrap set names is `Resolved` in `bare_outcomes` by the time the walk runs.
+/// Splice each wrap slot of `expr` with the carrier its bare name resolved to, returning the
+/// rebuilt node — `None` when the pick named no wrap slot and the run is already the one to invoke
+/// over.
 ///
-/// Staging runs as its own pass first, because the second way a slot moves — being an eager part —
-/// is only known once the stager has classified it, while the wrap set is known up front. A walk
-/// that moves nothing therefore answers [`PartWalk::Unchanged`] having built no run at all.
-fn part_walk<'step>(
+/// No staging happens here: [`initial`] stages before it resolves, so by the time a pick exists
+/// every child that evaluates has landed and the only slot still to move is a bare name the pick
+/// classified. Infallible for the same reason resolution is: admission rejects an unbound name and
+/// parks on a still-finalizing one before any pick, so every name the wrap set names is `Resolved`
+/// in `bare_outcomes`.
+fn splice_wrap_slots<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: &WorkingExpression<'step>,
     bare_outcomes: &[Option<Resolution>],
-    slots: &crate::machine::core::ClassifiedSlots<'_>,
-) -> PartWalk<'step> {
+    wrap_indices: &[usize],
+) -> Option<WorkingExpression<'step>> {
+    if wrap_indices.is_empty() {
+        return None;
+    }
     let brand = ctx.current_scope().brand();
-    let parts = expr.parts;
-    let wrap_set = &slots.wrap_indices;
-    let eager_filter = slots.eager_indices.as_deref();
-    let mut staged = StagedSubs::new_in(ctx.scratch());
-    for (i, part) in parts.iter().enumerate() {
-        // A wrap slot splices inline below rather than staging, so it is never offered to the
-        // stager.
-        if wrap_set.contains(&i) {
-            continue;
-        }
-        let in_eager_filter = eager_filter.is_none_or(|idxs| idxs.contains(&i));
-        if let Some(Ok(dep)) = part
-            .value
-            .as_ast()
-            .filter(|_| in_eager_filter)
-            .map(|a| stage_eager_part(brand, a))
-        {
-            staged.push(i, dep);
-        }
-    }
-    if wrap_set.is_empty() && staged.is_empty() {
-        return PartWalk::Unchanged;
-    }
-    // Staging ran in slot order, so a single ascending cursor over the staged indices places every
-    // hole in one pass.
-    let expr = {
-        let mut holes = staged.slots().peekable();
-        expr.respliced(
-            brand,
-            parts.iter().enumerate().map(|(i, part)| {
-                if wrap_set.contains(&i) {
-                    // A name bound in this region rests for free (the self rule strips this region from
-                    // what is retained); one bound further out lodges its binding scope's coverage,
-                    // which is what keeps the read live.
-                    let Some(Resolution::Resolved(cell)) =
-                        bare_outcomes.get(i).and_then(|o| o.as_ref())
-                    else {
-                        unreachable!("a picked wrap slot's bare name has a Resolved cache entry");
-                    };
-                    return Spanned {
-                        value: WorkingPart::Spliced {
-                            cell: ctx.current_scope().rest_delivered(cell),
-                        },
-                        span: part.span,
-                    };
-                }
-                if holes.next_if_eq(&i).is_some() {
-                    return staged_slot_placeholder();
-                }
-                *part
-            }),
-        )
-    };
-    PartWalk::Respliced { expr, staged }
+    Some(expr.respliced(
+        brand,
+        expr.parts.iter().enumerate().map(|(i, part)| {
+            if !wrap_indices.contains(&i) {
+                return *part;
+            }
+            // A name bound in this region rests for free (the self rule strips this region from
+            // what is retained); one bound further out lodges its binding scope's coverage, which
+            // is what keeps the read live.
+            let Some(Resolution::Resolved(cell)) = bare_outcomes.get(i).and_then(|o| o.as_ref())
+            else {
+                unreachable!("a picked wrap slot's bare name has a Resolved cache entry");
+            };
+            Spanned {
+                value: WorkingPart::Spliced {
+                    cell: ctx.current_scope().rest_delivered(cell),
+                },
+                span: part.span,
+            }
+        }),
+    ))
 }

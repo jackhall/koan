@@ -77,7 +77,7 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
         scope.brand().allocator(),
     ) {
         DispatchOutcome::Resolved(r) => {
-            assert_eq!(&*r.slots.wrap_indices, &[0]);
+            assert_eq!(&*r.wrap_indices, &[0]);
         }
         _ => panic!("expected Resolved for known overload"),
     }
@@ -214,52 +214,6 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
     ));
 }
 
-/// `((deep_call) + 1)` returns `Deferred` rather than `Unmatched`: the typed
-/// overload can't match the nested `Expression` strictly or tentatively, but
-/// eager evaluation of `(deep_call)` may produce a `Spliced(Number)` that a
-/// post-Bind re-dispatch picks. The scheduler routes `Deferred` into its
-/// eager-sub loop instead of erroring.
-#[test]
-fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
-    let registries = RunRegistries::new();
-    let region = run_root_storage();
-    let scope = run_root_bare(&region);
-    register_builtin(
-        scope,
-        two_slot_sig(KType::NUMBER, KType::NUMBER),
-        body_a,
-        &registries,
-        &mut crate::machine::WriteGate::for_test(),
-    );
-    let brand = region.brand();
-    let program = program_storage();
-    let inner = ExpressionPart::expression(
-        program.brand(),
-        &[Spanned::bare(identifier_part("deep_call"))],
-    );
-    let expr = working(
-        brand,
-        vec![
-            inner,
-            kw_part("OP"),
-            ExpressionPart::Literal(KLiteral::Number(1.0)),
-        ],
-    );
-    // PLUS was registered at `scope`'s BUILTIN index (0); root the chain there one past
-    // it so the registration is visible.
-    let chain = LexicalFrame::root(scope.id, 1);
-    assert!(matches!(
-        scope.resolve_dispatch(
-            &expr,
-            Some(&chain),
-            &[],
-            &registries,
-            scope.brand().allocator()
-        ),
-        DispatchOutcome::Deferred
-    ));
-}
-
 /// A pending overload sits in the *full* bucket it resolves into. A slot in `(MAKESET _)`
 /// parks `(MAKESET <bare>)` but must not park `(MAKESET <bare> USING <bare>)` —
 /// sharing a lead keyword is not enough to collide.
@@ -390,63 +344,6 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
             std::any::type_name_of_val(&other),
         ),
     }
-}
-
-/// An inner-scope candidate that is strict-Empty but admits once its eager part
-/// evaluates (`:Number` slot against a nested `Expression`) shadows an outer
-/// strict Pick: the inner scope `Deferred`s rather than letting the outer win.
-#[test]
-fn inner_scope_eager_lean_shadows_outer_strict_pick() {
-    let registries = RunRegistries::new();
-    let region = run_root_storage();
-    let outer = run_root_bare(&region);
-    // Outer overload that would strictly Pick once the eager sub resolves.
-    register_builtin(
-        outer,
-        two_slot_sig(KType::NUMBER, KType::NUMBER),
-        body_a,
-        &registries,
-        &mut crate::machine::WriteGate::for_test(),
-    );
-    let inner = outer.alloc_child_under();
-    register_builtin(
-        inner,
-        two_slot_sig(KType::NUMBER, KType::NUMBER),
-        body_b,
-        &registries,
-        &mut crate::machine::WriteGate::for_test(),
-    );
-    let brand = region.brand();
-    let program = program_storage();
-    let nested = ExpressionPart::expression(
-        program.brand(),
-        &[Spanned::bare(identifier_part("deep_call"))],
-    );
-    let expr = working(
-        brand,
-        vec![
-            nested,
-            kw_part("OP"),
-            ExpressionPart::Literal(KLiteral::Number(1.0)),
-        ],
-    );
-    // inner_plus was registered at `inner`'s BUILTIN index (0); root the chain on `inner`
-    // one past it. `outer` is never named on this chain, so `outer_plus` stays visible
-    // through the unmentioned-scope "fully visible" rule.
-    let chain = LexicalFrame::root(inner.id, 1);
-    assert!(
-        matches!(
-            inner.resolve_dispatch(
-                &expr,
-                Some(&chain),
-                &[],
-                &registries,
-                inner.brand().allocator()
-            ),
-            DispatchOutcome::Deferred
-        ),
-        "inner eager-lean must Defer at its scope, not fall through to outer",
-    );
 }
 
 /// A dead (unbound) bare-name lean at an inner scope must NOT pre-empt an outer

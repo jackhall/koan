@@ -424,12 +424,14 @@ impl KType {
                 }
                 _ => false,
             },
-            // Part-shape-only slots (identifier / expression / type-expr / record-type) admit a
-            // parser part shape, never a resolved value.
-            TypeNode::Identifier
-            | TypeNode::KExpression
-            | TypeNode::SigiledTypeExpr
-            | TypeNode::RecordType => false,
+            // A `:KExpression` parameter of a user signature is an ordinary eager value slot: a
+            // `#(…)` literal arrives as a part shape, and every other expression producing code
+            // arrives here as the value it evaluated to. A builtin's lazy slot never reaches this
+            // arm — the stamp keeps its part raw, so it classifies through `accepts_part`.
+            TypeNode::KExpression => matches!(c, Carried::Object(KObject::KExpression(_))),
+            // The remaining part-shape-only slots are builtin raw-capture slots and nothing else,
+            // so they admit a parser part shape and never a resolved value.
+            TypeNode::Identifier | TypeNode::SigiledTypeExpr | TypeNode::RecordType => false,
             // Type-accepting slot, type-channel-only, by shallow kind via `kind_of` subsumption:
             // a first-class type value is admitted iff the slot kind subsumes the value's
             // `kind_of`, so `Any` takes every type value (signatures included), `ProperType`
