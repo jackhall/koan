@@ -21,7 +21,10 @@ PRINT (ECHO 21)
 ```
 
 You call a function by writing its shape with values in the slots — here,
-the `ECHO` keyword followed by a number. A parameter slot is always
+the `ECHO` keyword followed by a number. Every slot is filled with a *value*:
+each argument evaluates before the call it belongs to, so a shape you define
+cannot leave one of its arguments unrun. A shape that wants code takes it as a
+quoted value — see [Quoting and evaluating](10-quoting.md#passing-code-to-a-function-you-wrote). A parameter slot is always
 `name :Type`, with the `:` glued to the type (see
 [the `:` sigil](02-values-and-types.md#writing-a-type-the--sigil)). Both the
 parameter types and the return type are required; a bare `x` with no `:Type` is

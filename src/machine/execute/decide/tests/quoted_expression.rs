@@ -47,8 +47,8 @@ fn quote_inside_a_list_literal_becomes_an_element_value() {
     assert_eq!(run_program("LET xs = [#(1) #(2)]\nPRINT xs"), b"[1, 2]\n");
 }
 
-/// A `:KExpression` parameter admits a quoted part and captures it raw — the lazy-candidate rule
-/// that keeps the body from sub-dispatching before the callee sees it.
+/// A `:KExpression` parameter admits a quoted part and captures it raw: a quote is data already, so
+/// it never stages and the callee sees the body un-dispatched.
 #[test]
 fn kexpression_parameter_captures_a_quote_raw() {
     let bytes = run_program(

@@ -99,3 +99,19 @@ fn an_eval_spliced_quote_keeps_its_builtin_lazy_branches() {
     );
     assert_eq!(bytes, b"yes\n");
 }
+
+/// A builtin's lazy slot takes a `KExpression` *value* too. The stamp keeps a `(…)` or `#(…)` part
+/// there raw — those two spellings of the body stay one — but a bare name is neither raw nor
+/// staged, so it resolves and the slot classifies the code it carries. One rule for the slot type
+/// everywhere: a `:KExpression` slot takes code, however the code reached it. The builtin receives
+/// the same node either way.
+#[test]
+fn a_name_bound_to_a_quote_fills_a_builtin_lazy_slot() {
+    let bytes = run_program(
+        "UNION Maybe = (Some :Number None :Null)\n\
+         LET m = (Maybe (Some 1))\n\
+         LET branches = #(Some -> (PRINT \"yes\") None -> (PRINT \"NO_SHOULD_NOT_APPEAR\"))\n\
+         MATCH (m) -> :Str WITH branches",
+    );
+    assert_eq!(bytes, b"yes\n");
+}

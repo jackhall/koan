@@ -260,12 +260,11 @@ mod tests {
         );
     }
 
-    /// No anonymous `UNION (...)` form: the bare two-part shape matches no UNION
-    /// overload (the declarator is `UNION <name> = (<schema>)`, four elements), so
-    /// dispatch fails cleanly with `DispatchFailed` rather than eagerly evaluating the
-    /// `(Ok …)` operand and leaking an unbound-name miss — the relaxed admission pass
-    /// keeps it a clean miss (see
-    /// [scheduler.md § In-walk dispatch precedence](../../design/typing/scheduler.md#in-walk-dispatch-precedence)).
+    /// No anonymous `UNION (...)` form: the bare two-part shape matches no UNION overload — the
+    /// declarator is `UNION <name> = (<schema>)`, four elements. The schema is quoted here so the
+    /// miss is what the call reports: an unquoted `(…)` in a slot no builtin form stamps lazy
+    /// evaluates first, and its own error arrives instead (see
+    /// [`anonymous_union_evaluates_its_unquoted_schema`]).
     #[test]
     fn anonymous_union_fails_dispatch() {
         let program = program_storage();
@@ -287,10 +286,27 @@ mod tests {
         let err = test_run
             .runtime
             .edge_result_error(root)
-            .expect_err("a bare anonymous UNION (...) must fail dispatch");
+            .expect_err("an anonymous UNION #(...) must fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
-            "expected DispatchFailed on bare UNION (...) (matches no UNION overload); got {err}",
+            "expected DispatchFailed on anonymous UNION #(...) (matches no UNION overload); got \
+             {err}",
+        );
+    }
+
+    /// The unquoted spelling of the same shape. `UNION (…)` keys no builtin form, so nothing stamps
+    /// its slot lazy and the schema group evaluates before dispatch is reached — the variant names
+    /// inside it are unbound, and that is the error the call reports. Pinned because it is the
+    /// visible face of explicit laziness on a malformed declaration.
+    #[test]
+    fn anonymous_union_evaluates_its_unquoted_schema() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let error = test_run.run_one_err(test_run.parse_one("UNION (Ok :Number Err :Str)"));
+        assert!(
+            matches!(&error.kind, KErrorKind::UnboundName(name) if name == "Ok"),
+            "expected the evaluated schema's own unbound-name error, got {error}",
         );
     }
 

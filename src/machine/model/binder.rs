@@ -249,9 +249,9 @@ impl SymbolError {
 }
 
 /// The operator symbol a quote body carries: exactly one `Keyword` part. The `symbol` slot is
-/// typed `:KExpression`, so a `QuotedExpression` part arrives raw and un-dispatched (it makes the
-/// declaration a lazy candidate) and its body is read here as data. A multi-part body, a
-/// non-keyword token, or a reserved symbol is a shape error.
+/// typed `:KExpression`, and a quote is data already — it never stages — so the part arrives raw
+/// and un-dispatched, and its body is read here as data. A multi-part body, a non-keyword token, or
+/// a reserved symbol is a shape error.
 pub(crate) fn symbol_from_quote_body(
     inner: &KExpression<'_>,
 ) -> Result<KeywordSymbol, SymbolError> {

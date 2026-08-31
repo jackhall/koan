@@ -34,11 +34,12 @@ concurrent siblings deterministic around a splice.
   other way: a name bound to a quote, a call returning an expression value, any
   computed sub-expression. Its content does not exist until evaluation, so
   nothing about it is readable parse-statically.
-- **Lazy `:KExpression` slot** — a builtin parameter typed `:KExpression`. A
-  literal expression part in such a slot is captured **raw** — handed to the
-  builtin un-dispatched
-  ([`pick.rs`](../src/machine/core/kfunction/pick.rs)) — so the builtin decides
-  what its content means. See
+- **Lazy `:KExpression` slot** — a slot of a fixed builtin form, stamped
+  lazy on the node at `KExpression::seal`. A literal expression part in such
+  a slot is captured **raw** — handed to the builtin un-dispatched — so the
+  builtin decides what its content means. Only builtins have lazy slots; a
+  user parameter typed `:KExpression` is an ordinary eager value parameter.
+  See
   [expressions-and-parsing.md § Lazy slots](expressions-and-parsing.md#lazy-slots).
 - **Shape slot** — a lazy `:KExpression` slot whose content a declaration
   surface reads as *shape data*, never runs: `FN`'s signature, `OP`'s symbol,
@@ -66,7 +67,9 @@ meaning where evaluation is already suppressed.
 The quote *matters* only in eager position — anywhere an unquoted expression
 would evaluate. `LET ast = #(1 + 2)` binds the AST of `1 + 2`; `LET three =
 (1 + 2)` binds `3`. That is the quote's entire job: suppress evaluation where
-evaluation is the default.
+evaluation is the default. A user signature is always eager position — code
+reaches an `FN` only as a `KExpression` value, so at a user call site the
+quote is the one literal spelling that passes a group unrun.
 
 Consequently every declaration surface accepts both spellings uniformly:
 

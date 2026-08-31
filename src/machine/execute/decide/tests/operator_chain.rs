@@ -122,9 +122,9 @@ fn pairwise_undeclared_combiner_errors_at_the_use_site() {
 }
 
 /// A fold-left run over *named* operands. The rewrite nests the run into `[(a ⊙ b), ⊙, c]`, whose
-/// trailing bare name shares the expression with an eager sub-expression: no candidate strict-picks
-/// against an unevaluated operand, so the pick — and with it the bare name's splice — happens on the
-/// post-eager-subs re-resolve (`keyworded::finish`).
+/// trailing bare name shares the expression with an eager sub-expression. That sub-expression
+/// stages before dispatch resolves, so the pick — and with it the bare name's splice — happens on
+/// the re-entry the staged subs' finish schedules (`keyworded::initial`).
 #[test]
 fn fold_left_run_over_named_operands_resolves_the_trailing_name() {
     let program = program_storage();

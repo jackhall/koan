@@ -77,9 +77,8 @@ walks visible scopes innermost-first and decides each scope's contribution
 from its [`FunctionLookup`](../../src/machine/core/bindings.rs) — finalized
 overloads and the earliest-visible in-flight pending producer, surfaced
 together. The innermost scope that reaches a *terminal* decision wins, so
-lexical shadowing holds: an inner overload — finalized, pending, or
-admitting-once-its-eager-part-evaluates — shadows outer-scope overloads
-regardless of finalize or evaluation order. The per-scope precedence:
+lexical shadowing holds: an inner overload — finalized or pending — shadows
+outer-scope overloads regardless of finalize order. The per-scope precedence:
 
 1. **Visible pending ⇒ park.** A pending sibling on this scope's bucket key
    would shadow any finalized overload here once it finalizes, so the scope
@@ -90,17 +89,19 @@ regardless of finalize or evaluation order. The per-scope precedence:
 2. **Strict Pick / Tie.** Over the finalized overloads, the strict gate
    [`OverloadBucket::pick_strict`](../../src/machine/execute/decide/resolve_dispatch.rs)
    Picks the most-specific admitting candidate (`Resolved`), or surfaces a
-   genuine tie as `Ambiguous` — except a tie with an unevaluated eager part
-   `Defer`s, since the eager value may break it.
+   genuine tie as `Ambiguous`. Resolution runs only after every child the
+   node's lazy-slot stamp left eager has evaluated
+   ([execution/classify-and-apply.md](../execution/classify-and-apply.md)), so
+   a tie here is a tie over landed values and is decided for good.
 3. **Strict-Empty ⇒ one relaxed-admission pass per candidate.** When no
    finalized overload strictly admits, each candidate runs a single relaxed
    pass that assumes every *unresolved* slot satisfiable and records which kind
-   it leaned on: a `Parked` bare name (a producer exists), an unevaluated eager
-   part, or a `Dead` unbound bare name (no producer will ever bind it). A
+   it leaned on: a `Parked` bare name (a producer exists), or a `Dead` unbound
+   bare name (no producer will ever bind it). A
    candidate that rejects on a hard already-resolved / literal / keyword slot
    admits nothing even relaxed and contributes nothing. The leaned-on kinds
-   resolve by precedence: a **parked** lean ⇒ `ParkOnProducers`; otherwise an
-   **eager** lean ⇒ `Deferred`; otherwise a **dead** lean records an
+   resolve by precedence: a **parked** lean ⇒ `ParkOnProducers`; otherwise a
+   **dead** lean records an
    `UnboundName` blocker without terminating the walk.
 
 Only two outcomes are decided *post-walk*, after every scope reported
@@ -113,18 +114,18 @@ Only two outcomes are decided *post-walk*, after every scope reported
   Pick.
 - **`Unmatched`** when no scope contributed even a dead lean.
 
-**One relaxed pass covers parked and eager slots uniformly.** The relaxed pass
-([`relaxed_admits`](../../src/machine/execute/decide/resolve_dispatch.rs))
-treats a parked bare name as just an eager part whose value arrives from a
-producer instead of a sub-Dispatch, so both kinds flow through the same
-per-candidate classification. The dead-slot arm only labels the `UnboundName`
-terminal — an unbound name never arrives, so it never triggers a wait. This
-keeps the deferral honest: when no candidate can admit even relaxed — the
-failure is a hard slot, e.g. a non-record operand to
-[`FROM`](../../src/builtins/record_projection.rs) or a bare anonymous
-`UNION (…)` — the walk surfaces the precise `UnboundName` / `Unmatched`
-diagnostic at the call rather than eagerly evaluating an unrelated operand and
-leaking its error.
+**The relaxed pass classifies only unresolved bare names.** Every eager child
+has already evaluated by the time
+[`relaxed_admits`](../../src/machine/execute/decide/resolve_dispatch.rs) runs,
+so the one thing a candidate can still lean on is a name: a parked one (a
+producer exists, so the scope waits) or a dead one (no producer will ever bind
+it, so it only labels the `UnboundName` terminal — an unbound name never
+arrives and never triggers a wait). When no candidate can admit even relaxed —
+the failure is a hard slot, e.g. a non-record operand to
+[`FROM`](../../src/builtins/record_projection.rs) — the walk surfaces the
+precise `UnboundName` / `Unmatched` diagnostic at the call. `Unmatched` carries
+a quote hint when the bucket types some slot `:KExpression` and the expression
+landed a non-code value there, which is the shape of a forgotten `#(…)`.
 
 **Decision 5: a bucket key carrying both a finalized overload and a claim parks
 until finalize.**

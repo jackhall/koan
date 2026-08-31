@@ -526,10 +526,11 @@ fn slot_admits_strict<'e>(
         },
         (SignatureElement::Argument(arg), Some(part_value)) => {
             let part_value = &part_value;
-            // A declaration slot owns the name, so admission is shape-only. `ProperType` still
-            // admits SigiledTypeExpr / RecordType speculatively, since they sub-dispatch to a
-            // type-side carrier; `Identifier` stays part-kind-exact, so a `:{…}` return type is
-            // never mistaken for a value-named one.
+            // A declaration slot owns the name, so admission is shape-only. `ProperType` admits a
+            // `:(…)` / `:{…}` part on shape alone — whether that part reaches the declarator raw or
+            // as a resolved type-side carrier is the node's lazy-slot stamp's call, not this
+            // predicate's. `Identifier` stays part-kind-exact, so a `:{…}` return type is never
+            // mistaken for a value-named one.
             if matches!(arg.ktype, KType::PROPER_TYPE) {
                 if matches!(
                     part_value,

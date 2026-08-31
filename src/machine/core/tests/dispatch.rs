@@ -603,10 +603,9 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     }
 }
 
-/// A still-finalizing bare name parks dispatch resolution before any pick — even sharing the
-/// expression with an eager part, the shape whose speculative pick used to reach the splice walk
-/// and drop the staged sub on the park. The park carries the name's producer, nothing is staged,
-/// and the wake re-resolves against the landed value.
+/// A still-finalizing bare name parks dispatch resolution before any pick, even sharing the
+/// expression with an eager part. The park carries the name's producer, nothing is staged, and the
+/// wake re-resolves against the landed value.
 #[test]
 fn parked_bare_name_parks_before_any_pick() {
     let registries = RunRegistries::new();

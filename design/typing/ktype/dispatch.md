@@ -44,20 +44,18 @@ admits accordingly. The forms:
   [`KType::accepts_carried`](../../../src/machine/model/types/ktype_predicates.rs)
   against the carried value (an object or a `Type` arm — no clone). A bare name whose value has the
   wrong carrier type strict-rejects the overload; the call surfaces as `DispatchFailed`
-  rather than a bind-time `TypeMismatch`. Binder (`Identifier` / `OfKind(Proper)`) and
-  lazy (`KExpression`) slots skip the cache and admit shape-only — the slot
-  owns the name, so admission can't depend on whether `x` happens to be
-  bound or parked.
+  rather than a bind-time `TypeMismatch`. Binder (`Identifier` / `OfKind(Proper)`)
+  slots skip the cache and admit shape-only — the slot owns the name, so
+  admission can't depend on whether `x` happens to be bound or parked. A
+  `:KExpression` slot does consult the cache, because code is an ordinary
+  value: a name bound to a quote carries a `KExpression` and admits.
 - **Literal** (`DESCRIBE [1 2 3]`) — the cache entry is `None` (literals
   aren't bare names) and admission runs `arg.matches(part)` shape-only.
-  Both element-typed overloads admit and the strict pass *ties*. The
-  dispatch driver treats a strict tie whose argument carries unevaluated
-  eager parts as `Deferred` rather than `AmbiguousDispatch`; the literal
-  evaluates and the re-dispatch on the resulting typed `Future` is
-  element-aware. A tie that survives evaluation (e.g. an empty list
-  against two concrete-element overloads, both admitted vacuously)
-  carries no eager parts on the second pass and surfaces as
-  `AmbiguousDispatch`.
+  A literal is staged as its own sub-`Dispatch` before resolution runs, so
+  what a typed slot actually admits is the resulting `Future`, element-aware
+  and specific enough to break what the bare shape would have tied. A tie
+  that survives evaluation (e.g. an empty list against two concrete-element
+  overloads, both admitted vacuously) surfaces as `AmbiguousDispatch`.
 
 A `Placeholder` (forward reference) cache outcome pre-empts admission
 entirely: resolution parks on the binder's producer before any candidate

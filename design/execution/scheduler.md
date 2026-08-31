@@ -320,14 +320,14 @@ values back exactly as it does for any dep-finish, learning nothing about
 `Spliced` cells. The assembled `Spliced`-laden expression then goes through
 `resolve_dispatch` as if it had been written with literals.
 
-**A walk that moves nothing splices nothing.** The part walk that produces those
-staging holes reports either `Respliced` — a re-frozen node plus its staged deps —
-or `Unchanged`. A walk that splices no wrap slot and stages no eager sub provably
-produced the run it was handed, so it builds no run at all and the caller invokes
-on the node it already holds: no parts run re-bumped, no bucket key re-bumped, no
-structural cache recomputed. That is the whole of a call like `PRINT "hi"`, where
-every slot passes through. Staging therefore runs as its own pass ahead of the
-rebuild, so the decision is known before any region byte is spent.
+**A walk that moves nothing splices nothing.** The staging pass that produces
+those holes reports either `Respliced` — a re-frozen node plus its staged deps —
+or `Unchanged`, and the wrap-slot splice that runs after the pick rebuilds only
+when the pick named a slot. A node that stages no eager sub and carries no wrap
+slot is therefore the run it was handed at both doors: no parts run re-bumped, no
+bucket key re-bumped, no structural cache recomputed. That is the whole of a call
+like `PRINT "hi"`, where every slot passes through. Each pass decides before it
+spends a region byte.
 
 (This *expression* splice — rewriting `parts` to `Spliced` cells — is distinct
 from the *slot* splice of [Bare-name forward splice](#bare-name-forward-splice),

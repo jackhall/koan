@@ -291,14 +291,34 @@ of execute makes them ready before the parent runs. See
 
 ## Lazy slots
 
-A builtin can opt out of eager evaluation for specific slot positions: it
-declares the slot as lazy at registration, the scheduler hands it the
-unevaluated `KExpression` instead of a value, and the builtin emits a fresh
-`Dispatch` for the chosen branch only. Two mechanisms exist:
+Only the fixed builtin forms opt out of eager evaluation, and which of their
+slots are lazy is a parse-static fact: `KExpression::seal` stamps the node's
+lazy slots from the [`LAZY_SLOT_SPECS`](../src/machine/model/lazy_slots.rs)
+table, keyed by the unshadowable builtin keys — the same probe pattern that
+fills `binder_plan`, written in the bucket-key vocabulary both spec tables
+share ([key_spec.rs](../src/machine/model/key_spec.rs)) — and the scheduler
+reads the stamp to know which children not to submit. Dispatch never decides
+evaluation — by the time an expression dispatches, every child the stamp
+left eager has already evaluated. The builtin receives the unevaluated
+`KExpression` in each stamped slot and emits a fresh `Dispatch` for the
+chosen branch only. Two mechanisms exist:
 [`KoanRuntime::dispatch_in_scope`](../src/machine/execute/harness.rs) submits a child
 node directly, while [`Action::Tail`](../src/machine/core/kfunction/action.rs) — used
 by `MATCH` — tail-returns the chosen branch so the scheduler dispatches it in
 place.
+
+The stamp records which part *kinds* stay raw at each slot index rather than a
+per-index boolean, because one bucket mixes raw capture and eager
+sub-dispatch at the same index across its overloads: `NEWTYPE <name> =
+<repr>` captures a `:(…)` type expression or a `:{…}` record type raw while a
+bare `(…)` in that position evaluates. Index `i` of bucket `k` carries kind
+`K` exactly when some builtin overload registered under `k` types slot `i`
+with `K`'s raw-capture slot type, and a spec⟺registration consistency test
+pins the table to the live signatures in both directions.
+
+User signatures have no lazy slots: a `:KExpression` parameter on an `FN` is
+an ordinary eager value parameter, satisfied by a `#(…)` literal or any
+expression that evaluates to a `KExpression` value — the next two sections.
 
 ## Extending the surface
 
@@ -310,18 +330,26 @@ FN (LOOP body :KExpression) -> Any = (...)
 
 defines a new dispatchable signature: keyword `LOOP`, slot `body`. The parser
 already classifies `LOOP` as a keyword (all-caps, no lowercase), and
-`body` as a slot. So the call site `LOOP (PRINT "x")` is parsed and dispatched
-the same way a builtin would be — the dispatch table doesn't distinguish
-user-defined from built-in functions when scoring matches.
+`body` as a slot, so the call site keys and scores the same way a builtin's
+would — the dispatch table doesn't distinguish user-defined from built-in
+functions when scoring matches. What a user form cannot do is suppress
+evaluation: the call site is `LOOP #(PRINT "x")`, and `body` receives the
+quoted `KExpression` *value*. A bare `LOOP (PRINT "x")` evaluates the group
+first (printing once) and then dispatches on the result — which matches the
+`:KExpression` slot only if that result is itself an expression value. Code
+reaches a function as a value; only the fixed builtin forms are syntax with
+lazy slots.
 
 There is no macro system. The dispatch table **is** the language's extension
-mechanism. Two consequences:
+mechanism. Three consequences:
 
 - New "syntax" cannot rewrite the parser. It can only introduce new dispatchable
   shapes within the existing token grammar.
 - A user-defined function competes with builtins on slot-specificity, so a
   more-specific user signature can override a more-general builtin where the
   shapes overlap.
+- A user form that takes code says so at every call site — the `#(…)`
+  argument is the reader's local proof that the group does not run here.
 
 See [functional-programming.md](functional-programming.md) for how the body
 binds parameters into a per-call scope and what `Action::Tail` does at
@@ -332,10 +360,11 @@ the slot.
 Two prefix sigils give surface to the lazy/eager split: `#(expr)` *quotes* —
 captures the body's AST as a `KObject::KExpression` value with no evaluation —
 and `$(expr)` *evals* — resolves its operand and, if the result is a
-`KObject::KExpression`, dispatches the captured AST. Together they let user
-code thread raw ASTs through eager-evaluating contexts (dict values, list
-elements, function args) and thread `KExpression` values back through lazy
-slots that would otherwise consume raw AST.
+`KObject::KExpression`, dispatches the captured AST. Together they carry
+code across the eager default: the quote is the one spelling that keeps a
+literal group from running outside a builtin lazy slot — it is how an AST
+reaches a user signature — and `$` threads a captured expression value back
+into evaluation.
 
 The sigils are **expression-level operators** in
 [expression_tree.rs](../src/parse/expression_tree.rs), not entries in the

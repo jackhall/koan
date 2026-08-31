@@ -125,6 +125,9 @@ literals, and sub-expressions that fill the gaps between the keywords.
 
 A keyword is not a name. You can't look one up, bind it, or pass it around, and
 a keyword on its own means nothing — it's only meaningful as part of a shape.
+Nor does a keyword change how the slots around it are read: every slot of a
+shape you define holds a value the caller already computed (to hand one a
+*group* of code instead, [quote it](10-quoting.md#passing-code-to-a-function-you-wrote)).
 Identifiers are the opposite: a bare identifier in a value position is a name
 lookup. So in `PRINT answer`, `PRINT` is a keyword that selects a shape, and
 `answer` is a slot that resolves to a value.

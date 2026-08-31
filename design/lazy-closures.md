@@ -149,7 +149,10 @@ domain is a structured error — the free identifiers cannot be identified and
 The inference domain is the walked region of the block: `#(...)` quote bodies
 are excluded as data, and the blocks of nested `CLOSE OVER` / `CLOSE` forms
 are excluded as severed — a nested `CLOSE` polices its own block when it
-evaluates. `CLOSE OVER ()` is an empty capture, distinct from inference.
+evaluates. Outside those excluded regions the walk is exact: only the fixed
+builtin forms have lazy slots, so every remaining group in the domain
+evaluates in the block's chain and structural freeness coincides with
+resolution. `CLOSE OVER ()` is an empty capture, distinct from inference.
 
 ## Open work
 

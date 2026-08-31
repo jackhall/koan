@@ -53,7 +53,7 @@ compiles to code in which every call site lands on one of three tiers:
 
 1. **Direct call.** Dispatch resolved during the build phase; the
    generator emits a call to the compiled target, with argument slots
-   bound per the picked overload (including its lazy `:KExpression`
+   bound per the picked overload (including any seal-stamped lazy
    slots, which compile to thunks of the raw operand).
 2. **Table dispatch.** Sites whose argument types are not
    build-time-known (untyped or `:Any`-flowing slots) compile to calls

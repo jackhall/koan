@@ -401,9 +401,10 @@ neither state is a `Resolution` variant admission must screen.
 or `KType::OfKind(KKind::ProperType)` owns the name (`x` in `LET x = …`, `Ty` in
 `NEWTYPE Ty = …`), so admission must be shape-only regardless of whether
 the name happens to be bound elsewhere. A `SigiledTypeExpr` or `RecordType`
-part still admits speculatively in such a slot — it sub-dispatches to a
-type-side carrier downstream. The same shape-only-on-binder-slot rule covers
-`KExpression` slots: the slot owns its body, not a name lookup.
+part that the form's lazy-slot stamp keeps raw admits shape-only in such a
+slot — it reaches the declarator un-dispatched, which elaborates it to a
+type-side carrier. The same shape-only rule covers a raw `KExpression` part in
+a builtin lazy slot: the slot owns its body, not a name lookup.
 
 Elaboration carries no cache tier. Bind-time builtin lowering
 ([`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) →

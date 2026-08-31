@@ -49,6 +49,7 @@ the link in each section to the relevant chapter.
 |---------------|------------------------------------------------------|
 | `#(<expr>)`   | Quote: capture an expression as a value, unevaluated. |
 | `$(<expr>)`   | Evaluate a quoted-expression value in the current scope. |
+| `<name> :KExpression`  | A parameter taking code as a value; call sites pass `#(…)`. |
 
 ## Modules — see [11](11-modules.md), [12](12-functors.md)
 

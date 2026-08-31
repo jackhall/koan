@@ -23,7 +23,24 @@ from the dispatch entry. The `Keyworded` variant — produced only when a real
 keyword is present — falls into the chain-walked resolution plus eager
 name-resolve plus dep-schedule pipeline below.
 
-The keyworded pipeline runs in three steps. Step 1 builds the bare-name
+The keyworded pipeline runs in four steps, and the first is not a lookup at
+all. **Step 0 stages the eager children.** Every eager-shaped part the node's
+lazy-slot stamp does not keep raw is submitted as its own sub-`Dispatch`
+*before* any overload is considered
+([`stage_all_eager_parts`](../../src/machine/execute/decide.rs), gated by its
+`stays_raw` predicate); the slot parks on those subs and re-enters
+[`keyworded::initial`](../../src/machine/execute/decide/keyworded.rs) once they
+have spliced back in, where the spliced run stages nothing further and falls
+through to Step 1. Which slots stay raw is a fact of the node's bucket key,
+stamped at `KExpression::seal` from the static table in
+[`lazy_slots.rs`](../../src/machine/model/lazy_slots.rs) and read off the node
+— see [expressions-and-parsing.md § Lazy
+slots](../expressions-and-parsing.md#lazy-slots). Only the fixed builtin forms
+have such slots, so every argument of a user-defined shape has evaluated by
+Step 2 and dispatch selects over landed values, never over which overload would
+have left a child unrun.
+
+Step 1 builds the bare-name
 outcome cache: one
 [`resolve_name`](../../src/machine/execute/decide/resolve.rs) call per
 bare-name part of `expr` (`Identifier` or leaf `Type`) into
@@ -63,17 +80,16 @@ rather than a bind-time `TypeMismatch`. An `Unbound` cache entry rejects at
 every typed value slot; its precise `UnboundName` diagnostic rides the
 relaxed pass's dead lean. The
 match on [`DispatchOutcome`](../../src/machine/execute/decide/resolve_dispatch.rs) is:
-`Resolved(r)` continues into Step 3 with the strict-picked function plus
-the per-slot index buckets `r.slots` carries (`wrap_indices`,
-`eager_indices`); `Ambiguous(n)` surfaces as an
-`AmbiguousDispatch` error; `Unmatched` surfaces as `DispatchFailed`;
-`Deferred` (the candidate may match after sub-evaluation yields a typed
-`Future(_)`) routes to `KeywordedState::install_eager_only`, which declares every
-eager-shaped part as a dep-finish dependency and parks this slot on them;
-the splice finish re-resolves dispatch against the spliced expression at
-dep completion;
+`Resolved(r)` continues into Step 3 with the strict-picked function plus the
+`wrap_indices` set it carries; `Ambiguous(n)` surfaces as an
+`AmbiguousDispatch` error; `Unmatched { quote_hint }` surfaces as
+`DispatchFailed`, and the reason names the missing quote when `quote_hint` is
+set — some overload in the bucket types a slot `:KExpression` and the
+expression carries an evaluated non-code value there, the failure mode where
+the argument ran, its side effects happened, and only then did nothing match.
 `ParkOnProducers(_)` and `UnboundName(_)` are decided by the pre-scan and
-the scope walk as described below.
+the scope walk as described below. There is no deferral arm: Step 0 already
+evaluated every child that evaluates, so a resolution is final.
 
 `resolve_dispatch` decides each visible scope's contribution as
 it walks innermost-first, from the finalized overloads and the visible
@@ -86,12 +102,12 @@ The innermost scope to reach a terminal outcome wins; only `UnboundName` and
    resolves nothing until it does, even over a same-scope finalized
    strict-Pick. The wake re-dispatches against the now-registered overload.
 2. Otherwise the strict gate Picks the most-specific admitting overload
-   (`Resolved`), surfaces a genuine tie (`Ambiguous`), or — on a tie with an
-   unevaluated eager part that may break it — `Deferred`.
+   (`Resolved`) or surfaces a genuine tie (`Ambiguous`). A tie is decided here
+   for good: the values that could break it have already landed.
 3. Otherwise (strict-Empty) one relaxed-admission pass per candidate assumes
    every unresolved slot satisfiable and resolves by what each leaned on: a
-   `Parked` bare name (a producer exists) ⇒ `ParkOnProducers`; otherwise an
-   unevaluated eager part ⇒ `Deferred`; otherwise a `Dead` unbound bare name
+   `Parked` bare name (a producer exists) ⇒ `ParkOnProducers`; otherwise a
+   `Dead` unbound bare name
    records an `UnboundName` blocker without terminating — an unbound name
    never arrives, so it never parks, and holding it back lets an outer scope
    still strict-Pick the bare name shape-only as an `:Identifier` / `:Any`
@@ -247,32 +263,16 @@ The rails the dispatch driver feeds:
   uniformly (the slot owns its token — a declaration's name, or name-data the
   body reads), and the pre-scan's binder exemptions read the expression's
   cached spec-table facts.
-- **Fused splice / eager-sub walk** (Step 3). One iteration over
-  `expr.parts` co-handles the two per-slot rails the strict pick
-  carries: wrap-slot splice (`resolved.slots.wrap_indices`) and eager
-  sub-Dispatch scheduling (filtered by `resolved.slots.eager_indices` when
-  the picked function is a lazy candidate, otherwise every eager-shaped part
-  schedules). Per part, exactly one arm fires. The walk is infallible and
-  installs no parks: dispatch resolution parked on every still-finalizing
-  bare name and admission rejected every unbound one before the pick, so
-  each wrap slot's cache entry is `Resolved` by the time the walk reads it.
-  Per-arm behavior:
-
-  - **Wrap slot.** Splices the slot's `Resolved(cell)` cache entry — the
-    sealed binding-scope carrier, value and reach as one unit — inline as
-    `WorkingPart::Spliced { cell }`, rested into the consuming scope's own
-    region.
-  - **Literal-name slot.** Keeps the bare token; the body reads it as data
-    at bind time.
-  - **Eager-sub slot.** `Expression` parts sub-Dispatch; `SigiledTypeExpr`
-    and `RecordType` parts wrap into a single-part `WorkingExpression` and
-    sub-Dispatch (the sub-Dispatch enters `classify_dispatch`'s matching shape arm —
-    `SigiledTypeExpr` tail-replaces with the inner dispatch, `RecordType` folds
-    to `KType::Record`); `ListLiteral` and `DictLiteral`
-    route through `schedule_list_literal` / `schedule_dict_literal` for the
-    aggregate dep-finish; any other shape rides through unchanged. Lazy
-    `Expression` parts in `KExpression` slots are filtered out by
-    `eager_indices` and the receiving builtin dispatches them itself.
+- **Staging arms** (Step 0). `Expression` parts sub-Dispatch;
+  `SigiledTypeExpr` and `RecordType` parts wrap into a single-part
+  `WorkingExpression` and sub-Dispatch (the sub-Dispatch enters
+  `classify_dispatch`'s matching shape arm — `SigiledTypeExpr` tail-replaces
+  with the inner dispatch, `RecordType` folds to `KType::Record`);
+  `ListLiteral` and `DictLiteral` route through `schedule_list_literal` /
+  `schedule_dict_literal` for the aggregate dep-finish; any other shape rides
+  through unchanged. A part at a slot the node's stamp keeps raw is skipped by
+  `stays_raw` and reaches the receiving builtin un-dispatched, which is the
+  only way an `Expression` part survives to a `:KExpression` slot.
 
   Multi-name forward references compose as one combined pre-pick park
   rather than N independent sub-Dispatches: the pre-scan's
@@ -283,22 +283,24 @@ The rails the dispatch driver feeds:
 
   The driver installs each staged `DepRequest`:
   `Dispatch { .. }` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
-  for the aggregate. With no subs to schedule the driver binds the picked
-  function directly: the decide folds the resolved call into a dep-free
+  for the aggregate. With nothing staged the pipeline runs straight through to
+  the bind: the decide folds the resolved call into a dep-free
   `Outcome::Continue` (via [`decide::exec`](../../src/machine/execute/decide/exec.rs)'s
   `invoke_continue`) — a user-fn call builds the callee's cart and binds its
   arguments in this same step (`enter_user_fn`), leaving only the body
   lowering for the reinstalled step
-  (a wrap-slot-only call like `MAKESET int_ord` resolves bare names in Step 3,
-  leaves no eager parts, and binds in one step — no dep-finish detour). Otherwise
-  the decide returns an `Outcome::Park` with a `Continuation::Ready`
-  declaring the fresh subs as deps with a splice finish; the harness parks the
-  slot as a dep-finish carrying the finish. At dep completion the finish
-  re-resolves the spliced `working_expr` and folds it into a `Continue` — via
-  `invoke_continue` on the speculatively-picked function, or via
-  `redispatch_continue` (re-running
-  [`keyworded::finish`](../../src/machine/execute/decide/keyworded.rs)) when
-  none was pre-picked.
+  (a wrap-slot-only call like `MAKESET int_ord` stages nothing at Step 0,
+  resolves its bare names in Step 3, and binds in one step — no dep-finish
+  detour). Otherwise Step 0's decide returns an `Outcome::Park` with a
+  `Continuation::Ready` declaring the fresh subs as deps with a splice finish;
+  the harness parks the slot as a dep-finish carrying the finish. At dep
+  completion `redispatch_continue` folds the spliced `working_expr` into a
+  `Continue` that re-enters
+  [`keyworded::initial`](../../src/machine/execute/decide/keyworded.rs) — the
+  same entry, now over a run that stages nothing, so it resolves and invokes.
+  The `FunctionValueCall` lane, whose head already names the callable, keeps
+  its own staged-subs finish and binds `picked` without resolving
+  ([`apply_callable::install_eager_subs_track`](../../src/machine/execute/decide/apply_callable.rs)).
 
   List, dict, and record literals (`classify_aggregate_part` in
   [`decide/literal.rs`](../../src/machine/execute/decide/literal.rs))
@@ -310,13 +312,29 @@ The rails the dispatch driver feeds:
   appends one dep per such cell, so the finish's walk over the same rows reads
   each result off a cursor in dep order.
 
-`Resolved.slots`'s two index vectors (`wrap_indices` / `eager_indices`)
-are disjoint by construction: each slot's
-`(SignatureElement, ExpressionPart)` shape lands in at most one bucket.
-[`KFunction::classify_for_pick`](../../src/machine/core/kfunction.rs) is
-the sole producer of the `ClassifiedSlots` carrier (which `Resolved` holds
-by value), so the disjointness invariant lives in one place rather than as
-comment-enforced rules across the scheduler driver. Both buckets — and the
+- **Wrap-slot splice** (Step 3). The pick carries one per-slot rail,
+  `resolved.wrap_indices`, and
+  [`splice_wrap_slots`](../../src/machine/execute/decide/keyworded.rs) is the
+  walk that applies it: each named slot's `Resolved(cell)` cache entry — the
+  sealed binding-scope carrier, value and reach as one unit — is spliced inline
+  as `WorkingPart::Spliced { cell }`, rested into the consuming scope's own
+  region, and every other part rides through. A literal-name slot keeps its
+  bare token (`classify_for_pick` never names one), so the body reads it as
+  data at bind time. Nothing stages here: Step 0 already submitted every child
+  that evaluates, so the only slot still to move once a pick exists is a bare
+  name the pick classified. The walk is infallible and installs no parks —
+  dispatch resolution parked on every still-finalizing bare name and admission
+  rejected every unbound one before the pick, so each wrap slot's cache entry
+  is `Resolved` by the time the walk reads it. A pick that names no wrap slot
+  rebuilds nothing and invokes over the run it was handed.
+
+`Resolved` carries exactly one index vector, `wrap_indices`, produced solely by
+[`KFunction::classify_for_pick`](../../src/machine/core/kfunction.rs) — a
+signature-shape read with no registry lookup, since the only question left at
+pick time is which bare names auto-wrap. Whether a child evaluates is settled
+a step earlier and off the pick entirely, by the node's own stamp, so the pick
+carries no second rail and no cross-rail disjointness invariant has to hold.
+That vector — and the
 producer list a `ParkOnProducers` outcome carries — are hosted on the step
 scratch arena the resolve walk is handed ([scheduler.md](scheduler.md)), so a
 dispatch classifies and a scope parks without a heap container; naming `'step`
@@ -472,14 +490,14 @@ against the now-populated scope:
   wrap-slot splice fires `Future(obj)` on the second pass.
 - A keyworded **overload** park carries the original (unspliced) expression and
   re-runs the resolve against the now-sealed slots of the `functions` bucket.
-  **Eager subs never park here**: a `Deferred`/eager-subs resolve returns an
+  **Eager subs never park here**: Step 0's staging returns an
   `Outcome::Park` with a `Continuation::Ready` and parks on a node whose
-  dep-finish continuation re-resolves the spliced expression — so a
-  keyworded resume never re-enters for them. Re-resolve in the finish is
-  authoritative: an element-typed `Future(_)` that narrows a typed-slot
-  admission rules a speculative initial pick out, and the call surfaces
-  `DispatchFailed` (non-match) rather than committing to a bind-time
-  `TypeMismatch`.
+  dep-finish continuation re-enters `keyworded::initial` over the spliced
+  expression — so a keyworded resume never re-enters for them. That re-entry
+  is where the one resolution happens, and it is authoritative because the
+  element types the subs revealed are already in the run: a `Spliced(_)` no
+  candidate admits surfaces as a slot-terminal `DispatchFailed` (non-match)
+  rather than as a bind-time `TypeMismatch`.
 - A **`FunctionValueCall`** head-placeholder park (`fn_value::install_head_park`)
   carries the original call expression and re-runs the fast lane once
   `scope.resolve_with_chain` lands in the `NameLookup::Bound` arm. Its eager
@@ -502,4 +520,3 @@ source expression labels by extent (`path:line:col` plus the text it spans); a
 run the machine assembled from no origin labels by its `DispatchShape`; a slot
 with no expression behind it — a dep-finish, a block fan-out — falls back to a
 generic `<wait>` tag.
-
