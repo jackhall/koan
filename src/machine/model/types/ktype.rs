@@ -188,7 +188,7 @@ impl KType {
                 write!(f, "{}", display_label(name.symbol(), registries))
             }
             // A sealed nominal member renders by its own member name — a bare newtype
-            // (`:Wrapper`) or a per-variant member reached through its union (`:(Maybe Some)`
+            // (`:Wrapper`) or a per-variant member reached through its union (`:(Maybe.Some)`
             // yields the `Some` member, printed as `Some`).
             TypeNode::SetMember { name, .. } => {
                 write!(f, "{}", display_label(name.symbol(), registries))

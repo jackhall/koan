@@ -385,8 +385,8 @@ fn quoted_list(names: &[&str]) -> String {
 
 /// A union is not itself callable. Its variants are its members, reached by projection —
 /// `Maybe.Some` names the variant, `Maybe.Some 42` constructs it — so every direct application of
-/// the union name lands here as one error naming that surface. The retired juxtaposed spellings all
-/// arrive through this door: `Maybe Some` and `Maybe (Some 42)` from the `TypeCall` lane, and
+/// the union name lands here as one error naming that surface. Every juxtaposed spelling arrives
+/// through this door: `Maybe Some` and `Maybe (Some 42)` from the `TypeCall` lane, and
 /// `:(Maybe Some)` from the sigil re-dispatch of the same expression.
 fn apply_union_construct<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,

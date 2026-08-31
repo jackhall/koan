@@ -75,8 +75,10 @@ MATCH (m) OVER Maybe -> :Str WITH (Some -> (PRINT "got"))
 error: shape error: inexhaustive match over `Maybe`: no arm for None
 ```
 
-Cover every variant the union declares. (For catching *errors* with a
-wildcard, see [`TRY`](09-errors.md), which is a different construct.)
+Cover every variant the union declares. An `OVER`-less match is checked against
+the value instead: it errors when no branch's type admits what it was handed.
+(For catching *errors* with a wildcard, see [`TRY`](09-errors.md), which is a
+different construct.)
 
 ## Writing branches across lines
 

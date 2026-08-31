@@ -121,18 +121,20 @@ Ok(hi)
 ```
 
 The inner `PRINT` runs and returns `"hi"`, which `CATCH` wraps as `Ok`. On
-failure you get an `Error` carrying the error's payload:
+failure you get an `Error` carrying the error's payload instead, and the
+program keeps running:
 
 ```koan
-PRINT (CATCH (mystery))
+LET outcome = (CATCH (mystery))
+PRINT "still going"
 ```
 
 ```text
-Error(UnboundName(UnboundName({frames = [], name = mystery})))
+still going
 ```
 
-Use `CATCH` when you want to hold the outcome as a value; use `TRY` when you
-want to branch on it right away.
+Use `CATCH` when you want to hold the outcome as a value and hand it on; use
+`TRY` when you want to branch on it right away.
 
 ## Result
 

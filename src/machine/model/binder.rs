@@ -752,7 +752,7 @@ pub(crate) fn announced_type_declaration(
 /// A `NEWTYPE` announces one standalone member. A `UNION` announces one member per statically
 /// scannable variant tag, each **owned** by the union's binder: a variant is never
 /// bare-name-resolvable and never lands in `bindings.types`, so it is reached only through the
-/// binder or the qualified sigil. A `UNION` whose schema does not scan announces nothing at all —
+/// binder or by member projection off it (`:(Tree.Node)`). A `UNION` whose schema does not scan announces nothing at all —
 /// its own dispatch surfaces the real diagnostic.
 ///
 /// Nested and computed declarations are untouched by construction: the scan sees only the statement

@@ -246,7 +246,7 @@ A statement announces iff its own parse-time binder key is the `NEWTYPE <Name> =
 head keyword is excluded. A `UNION` announces one member per variant tag, owned by its
 binder: an owned member never reaches `bindings.types` and is therefore absent from
 `Module::type_members`, since a variant is constructed through its binder
-(`Tree (Node …)`) or named through the qualified sigil (`:(Tree Node)`), never as a
+(`Tree.Node …`) or named through member projection (`:(Tree.Node)`), never as a
 module member of its own. The whole group's `types` writes land when the last
 announced member fills; a member the body never fills is a typed `ShapeError` at the
 module's finish, not a hang. The type-side mechanics — window representations, the

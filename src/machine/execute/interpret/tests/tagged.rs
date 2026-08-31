@@ -153,8 +153,8 @@ fn unknown_variant_reference_errors() {
     }
 }
 
-/// A union is not itself callable, whatever its members are: applying the union name — the retired
-/// tag spelling — is a shape error naming the projection surface and listing the members.
+/// A union is not itself callable, whatever its members are: applying the union name is a shape
+/// error naming the projection surface and listing the members.
 #[test]
 fn a_union_refuses_direct_application() {
     use crate::machine::KErrorKind;
@@ -305,8 +305,8 @@ fn a_pre_seal_sibling_variant_is_named_by_projection() {
     assert_eq!(captured.borrow().as_slice(), b"Node(1)\n");
 }
 
-/// The retired juxtaposed spelling is gone from the pre-seal position too: `:(Tree Leaf)` no longer
-/// names a sibling variant, so it falls through to ordinary elaboration and errors there.
+/// The juxtaposed spelling names no sibling variant in the pre-seal position either: `:(Tree Leaf)`
+/// falls through to ordinary elaboration and errors there.
 #[test]
 fn the_juxtaposed_pre_seal_sibling_spelling_is_retired() {
     use crate::machine::execute::interpret_with_writer;

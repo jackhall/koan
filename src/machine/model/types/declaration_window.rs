@@ -23,8 +23,8 @@
 //!
 //! A `UNION`'s variants are announced as members **owned by their binder**: never
 //! bare-name-resolvable, never written into `bindings.types`, reachable only through the binder
-//! (`:Tree`) or the member projection (`:(Tree.Node)`). Two binders may own the same bare tag without
-//! colliding — qualified lookup is scoped by the binder's own member list, and the owner is a
+//! (`:Tree`) or by member projection off it (`:(Tree.Node)`). Two binders may own the same bare
+//! tag without colliding — qualified lookup is scoped by the binder's own member list, and the owner is a
 //! canonical-order tiebreak that never enters the digest.
 
 use std::cell::Cell;
@@ -448,7 +448,7 @@ impl<'v, 'a> WindowView<'v, 'a> {
 
     /// Every announced member name a declarator threads, so a sub-dispatched sigil body resolves
     /// co-declared references against this window before it leaves for the standalone dispatcher.
-    /// Owned members are excluded: a variant is reached only through the qualified sigil, which the
+    /// Owned members are excluded: a variant is reached only by member projection, which the
     /// field walker lowers in place.
     pub fn threadable_names(self) -> Vec<TypeSymbol> {
         match self {

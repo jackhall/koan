@@ -103,34 +103,43 @@ member sub-dispatches — via a `:KExpression` slot that also admits the reduced
 The run has no precedence: `:(LIST OF Number | Str)` does not chain (it is not
 slot/keyword-alternating) and must be parenthesized, `:((LIST OF Number) | Str)`.
 
+A Type-classified `LET` aliases the union it names — `LET Distance = :(Meters |
+Feet)` writes the folded handle into `bindings.types` — and the alias is the *same
+type* as any other spelling of the join, since the fold is order-blind and
+deduplicating. A named `UNION` differs only in minting: it declares fresh members
+reachable only through it, where an alias references members that keep their own
+scope names.
+
 Untagged union *values* need no construction: a `Number` **is** a valid
 `:(Number | Str)` — the builtin constructs only the union *type*. A union-typed slot
 admits any value one of its members admits, and a union used as an FN or arm return
 type validates but never re-tags, so the value keeps its own runtime type for
 downstream type-dispatch (ruling F4,
-[finalize.rs](../../src/machine/execute/finalize.rs)). `MATCH` eliminates a union by
-that runtime type: each arm head resolves to a `KType`, the admitting arms compete in
-the same most-specific-wins tournament
+[finalize.rs](../../src/machine/execute/finalize.rs)). `MATCH` eliminates a union
+either by member coverage (`MATCH … OVER U`, exhaustive over `U`'s members) or by
+type test in the `OVER`-less form: each arm head resolves to a `KType`, the
+admitting arms compete in the same most-specific-wins tournament
 ([`ExpressionSignature::most_specific`](../../src/machine/model/types/signature.rs)) that
-resolves ordinary overload buckets — boolean-literal and `Result`-tag heads settle first
+resolves ordinary overload buckets — boolean-literal heads settle first
 through an exact pre-pass ranked above every typed arm — and the winner runs (ruling F1,
-[find_branch_body_by_type](../../src/builtins/branch_walk.rs)).
+[branch_walk.rs](../../src/builtins/branch_walk.rs)); see
+[user-types.md § Unions dissolve into per-variant newtypes](user-types.md#unions-dissolve-into-per-variant-newtypes).
 
-## Variant-reference sigil
+## Variant reference
 
-A single `UNION` variant is named through its union: `:(Maybe Some)` — a
-union head followed by a bare variant `Type` token, resolving to the variant's member
-handle ([apply_callable.rs](../../src/machine/execute/decide/apply_callable.rs)).
-The same `(Union Tag …)` head-call shape constructs (`Maybe (Some 42)`); the two
-are disambiguated by body shape — a bare `Type`-token body with no payload is the
-variant *reference*, a paren-group payload (`(Some 42)`) newtype-constructs that
-member. An unknown variant name at either surface is a schema error listing the
-union's members. There is no global `:Some` name and no `.` path operator; the variant
-is reachable only through its union. The same sigil names a *sibling* variant of a union
-still under seal when it types one of that union's own schema fields (`Node :(Tree Leaf)`):
-the elaborator folds the `(Binder Tag)` pair straight to a relative `Sibling` reference
-instead of sub-dispatching, since the producer it would otherwise park on is the seal
-awaiting this field; a bare sibling tag (`Node :Leaf`) stays an unknown-type error. See
+A single `UNION` variant is named through its union by member projection —
+`Maybe.Some` in expression position, `:(Maybe.Some)` under the type sigil — the
+same ATTR type-member projection a signature member uses
+([attr.rs](../../src/builtins/attr.rs)). The projection yields the variant's member
+handle, and applying the projected member constructs (`Maybe.Some 42`). An unknown
+member name at either surface is a schema error listing the union's members. There
+is no global `:Some` name; the variant is reachable only through its union, so two
+unions may own the same tag. The same projection names a *sibling* variant of a
+union still under seal when it types one of that union's own schema fields
+(`Node :(Tree.Leaf)`): the elaborator folds the projection straight to a relative
+`Sibling` reference instead of sub-dispatching, since the producer it would
+otherwise park on is the seal awaiting this field; a bare sibling tag (`Node :Leaf`)
+stays an unknown-type error. See
 [user-types.md § Unions dissolve into per-variant newtypes](user-types.md#unions-dissolve-into-per-variant-newtypes).
 
 ## Record-type sigil
@@ -213,8 +222,8 @@ inner expression's parts decide its shape:
   [elaboration.md § Layers](elaboration.md#layers) § Layer 4 for the
   shared resolver bridge.
 - `TypeCall` for a leaf-Type head with non-empty rest — routes a
-  newtype, union, or `Result` head through its construction primitive
-  (`:(MyStruct {x = 1})`, `:(Maybe (Some 42))`) via the shared
+  newtype head, or a projected union member, through its construction primitive
+  (`:(MyStruct {x = 1})`, `:(Maybe.Some 42)`) via the shared
   apply-a-callable tail. A constructible `SetMember` identity is the only invocable
   type; `bindings.types` holds no callable, so there is no function-application arm
   here.

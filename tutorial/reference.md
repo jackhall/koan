@@ -27,8 +27,9 @@ the link in each section to the relevant chapter.
 | Form                                       | Meaning                                  |
 |--------------------------------------------|------------------------------------------|
 | `UNION <Name> = (<Tag> :<Type> ...)`       | Declare a tagged union (sum type).       |
-| `(<Union> (<Tag> <value>))`                | Construct a tagged value.                |
-| `:(<Union> <Tag>)`                         | A slot type admitting one variant.       |
+| `<Union>.<Tag>`                            | Name one variant as a type value.        |
+| `<Union>.<Tag> <value>`                    | Construct a tagged value.                |
+| `:(<Union>.<Tag>)`                         | A slot type admitting one variant.       |
 | `NEWTYPE <Name> = <Type>`                  | Declare a nominal type over a representation. |
 | `NEWTYPE <Name> = :{<field> :<Type>, ...}` | Declare a record type (named fields).    |
 | `(<Type> {field = value, ...})`            | Construct a record value.                |
@@ -39,7 +40,8 @@ the link in each section to the relevant chapter.
 
 | Form                                              | Meaning                           |
 |---------------------------------------------------|-----------------------------------|
-| `MATCH (<value>) -> :<Type> WITH (<Tag> -> (<body>) ...)` | Branch on a union tag or boolean; `it` is the payload. |
+| `MATCH (<value>) OVER <Union> -> :<Type> WITH (<Tag> -> (<body>) ...)` | Branch on a union's variants; every variant must have an arm and `it` is the payload. |
+| `MATCH (<value>) -> :<Type> WITH (<Type> -> (<body>) ...)` | Branch on the value's runtime type or on `true` / `false`; `it` is the value unchanged. |
 | `TRY (<expr>) -> :<Type> WITH (<Tag> -> (<body>) ... )`   | Catch errors; arms are `Ok`, error-kind tags, and `_`. |
 | `CATCH (<expr>)`                                   | Run an expression, returning a `Result` value. |
 | `Result`, `Ok`, `Error`                           | Built-in result union and its variants. |

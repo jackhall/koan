@@ -275,7 +275,7 @@ fn a_mutually_recursive_module_body_needs_no_capture() {
 /// A union's variant tags are declared names as well: named in the declaration and again in the
 /// construction, they are never free identifiers of the block. A member is not bare-name-resolvable
 /// at all, so a walk that read either occurrence as a use would name something nothing can bind —
-/// and, since the type loop now raises on a no-hit, would raise rather than pass silently.
+/// and, since the type loop raises on a no-hit, would raise rather than pass silently.
 #[test]
 fn union_variant_tags_are_not_inferred() {
     assert_eq!(

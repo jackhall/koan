@@ -98,15 +98,14 @@ every dispatch admit pass runs.
 
 ## Value carriers and the type / value partition
 
-The [`KObject::Tagged`](../../src/machine/model/values/kobject.rs) carrier holds
-`{ tag, value, identity }`, where `identity` is the value's own type handle — the
-member's `SetMember` handle (or a `ConstructorApply` over it when an ascription
-stamped a parameterized union's arguments in). It backs **both** every user-`UNION`
-variant and the `TypeConstructor` family (`Result`, and the `CATCH` / `TRY` error
-machinery); `ktype()` copies `identity`, so dispatch identity is one `u128`. Newtype
-instances — scalar and record-repr — ride
-[`KObject::Wrapped`](../../src/machine/model/values/kobject.rs), which carries a
-`type_id: KType` (the member handle). A **signature** value rides the value
+Every nominal wrap rides one carrier:
+[`KObject::Wrapped`](../../src/machine/model/values/kobject.rs), which carries the
+payload and a `type_id: KType` — the member's `SetMember` handle, or a
+`ConstructorApply` over it when an ascription stamped a parameterized type's
+arguments in. That is newtype instances — scalar and record-repr — every
+user-`UNION` variant value, and the `TypeConstructor` family (`Result`, and the
+`CATCH` / `TRY` error machinery); `ktype()` copies `type_id`, so dispatch identity
+is one `u128`. A **signature** value rides the value
 channel's `Type` arm as a `Signature` handle
 ([`Carried::Type`](../../src/machine/model/values/carried.rs)); the
 identity is the carried handle itself rather than a synthesized shadow. A
@@ -133,30 +132,41 @@ to the [union](../../src/machine/model/types/registry.rs) of those two member ha
 [`FieldNameKind::Type`](../../src/parse/triple_list.rs), so a lowercase tag is a
 parse error — a variant name is a nominal type, not a field.
 
-**A variant value is a `KObject::Tagged`** carrying its variant `tag`, the wrapped
-`value`, and its member `SetMember` handle as `identity`, so its `ktype()` reports that
-member handle. A slot typed `:(Maybe Some)` is that member handle; a `:Maybe` slot
+**A variant value is a `KObject::Wrapped`** like any newtype instance, carrying its
+payload and its member `SetMember` handle as `type_id`, so its `ktype()` reports that
+member handle. A slot typed `:(Maybe.Some)` is that member handle; a `:Maybe` slot
 is the anonymous union, which admits any member via
 [`KType::matches_value`](../../src/machine/model/types/ktype_predicates.rs)'s
 per-member delegation. Each member handle is strictly more specific than the union
 (each member is a subtype of the union), so a variant-typed overload wins over a
 union-typed sibling that admits the same value.
 
-**The variant-reference surface is the union-qualified sigil `:(Maybe Some)`** —
-a variant reached through its union, with no global `:Some` name and no `.`
-path operator. The dispatcher's union constructor arm
-([apply_callable.rs](../../src/machine/execute/decide/apply_callable.rs))
-disambiguates by body shape: a bare `Type`-token body (`Maybe Some`) yields the
-member handle type value, while a payload body (`Maybe (Some 42)`) constructs the
-tagged variant value. An unknown variant name in either form is a schema error listing
-the union's members. The member handle renders as its member name (`Some`), so
-`:(Maybe Some)` round-trips.
+**The variant-reference surface is member projection through the owning union** —
+`Maybe.Some` in expression position, `:(Maybe.Some)` under the type sigil — the same
+ATTR type-member projection a signature member uses
+([attr.rs](../../src/builtins/attr.rs)). A tag is a schema member of its union the
+way a field is a schema member of its record, never a bare scope name: `:Some`
+resolves nowhere, so two binders may own the same tag. The projection yields the
+member handle as a type value, and ordinary application of it constructs —
+`Maybe.Some 42` wraps the payload under the member's identity. An unknown member
+name is a schema error listing the union's members. The member handle renders as its
+member name (`Some`).
+
+**The member-lookup rule reads the member list, never the chain**
+([union.rs](../../src/builtins/union.rs)`::union_member`) — the same probe a
+`MATCH … OVER` arm head takes, so the two surfaces can never disagree about what
+names a variant. A `SetMember` — what a `UNION` mints per tag — answers the field
+whose bare symbol bits match its declared name. A **structural** member, what an
+inline `:(Number | Str)` holds, declares no name at all: it answers only a field
+that resolves in the *reading scope* to a type whose handle is that member
+(`NumStr.Number`). A union mixing the two answers a name from whichever shape
+holds it.
 
 **A schema field can name a sibling variant of a union still under seal** through
-the same qualified sigil (`Node :(Tree Leaf)`): when `Tree` is a binder of the active
+the same member projection (`Node :(Tree.Leaf)`): when `Tree` is a binder of the active
 declaration window, the elaborator
 ([typed_field_list.rs](../../src/machine/model/types/typed_field_list.rs)) recognizes
-the sigil head and folds `(Tree Leaf)` straight to that variant's handle rather than
+the projection head and folds `Tree.Leaf` straight to that variant's handle rather than
 sub-dispatching — parking would deadlock on the very seal awaiting this field. The
 handle is relative while the window is open, and the seal rewrites it to the sibling's
 absolute member handle like any intra-window reference. Because the window is the
@@ -165,33 +175,44 @@ co-declared `NEWTYPE` may type a field by a sibling union's variant pre-seal. A 
 sibling tag (`Node :Leaf`) stays an unknown-type error: tags are never bare names, even
 in the declaring schema.
 
-**Nesting survives** because the tagged value holds its payload verbatim, so a
-recursive union variant nesting another variant (`Succ (Zero null)`) keeps every layer.
+**Nesting survives** wherever the payload's identity differs from the variant's declared
+repr: a recursive union variant wrapping another variant (`Nat.Succ (Nat.Zero null)`)
+holds its payload verbatim and keeps every layer. A variant whose repr *is* a sibling
+member (`Node :(Tree.Leaf)`) takes the ordinary re-tag instead, folding the redundant
+layer — the same peel-or-hold rule every newtype construction runs (see
+[`NEWTYPE` and the `Wrapped` carrier](#newtype-and-the-wrapped-carrier) below).
 
-**`MATCH` selects by type** ([match_case.rs](../../src/builtins/match_case.rs) via
-[`find_branch_body_by_type`](../../src/builtins/branch_walk.rs)). A user-union variant
-value and a `Result` are both `Tagged`, so a variant head admits by **tag-symbol
-equality** against the value's own tag and binds the wrapped payload to `it` — a union's
-sibling variants need no resolution, since the value carries its own tag. A general type
-head resolves through the scope and binds the scrutinee
-unchanged. Boolean-literal heads (`true ->` / `false ->`) and tag heads
-settle first through an exact pre-pass that ranks strictly above every typed arm; the
-remaining type heads admit by
-[`matches_value`](../../src/machine/model/types/ktype_predicates.rs) and compete in the
-same [`ExpressionSignature::most_specific`](../../src/machine/model/types/signature.rs)
-tournament that resolves ordinary overload buckets, so the strictly most-specific
-admitting arm wins and two arms with no strict winner are an ambiguity error (ruling
-F1/F3). A head naming no type over a variant scrutinee errors listing the scrutinee's
-variants. The winner's `it` reaches the arm's overlay scope through the same single-copy carrier
-door `TRY`'s success arm uses — the scrutinee (or, for a variant/tag arm, its wrapped
-payload) copied once at bind time, with no MATCH-specific bind site. See
+**`MATCH` has two regimes, split by the form's syntax**
+([match_case.rs](../../src/builtins/match_case.rs) via
+[branch_walk.rs](../../src/builtins/branch_walk.rs)). `MATCH <expr> OVER <U> WITH
+(…)` is *member elimination*: `U` resolves to a union type, every arm head names a
+member of `U` (an unknown head errors listing the members), and the arm set names
+every member exactly once — a missing member and a repeated one are each an error at
+the form, checked before any value is read, so no arm order and no runtime value can
+leave the match without a body. A scrutinee inhabiting no member of `U` is its own
+error naming both. The winning arm binds
+`it` to the matched member's payload — the value under the member's wrap — with a
+non-wrapping member binding the value itself. `OVER` takes any union-noded operand:
+a `UNION` binder, a `LET`-bound alias of an anonymous union, or an inline
+`:(A | B)`. An `OVER`-less `MATCH` is a *type test*: every head resolves through
+the scope, boolean-literal heads (`true ->` / `false ->`) settle first through an
+exact pre-pass that ranks strictly above every typed arm, the remaining heads admit
+by [`matches_value`](../../src/machine/model/types/ktype_predicates.rs) and compete
+in the same
+[`ExpressionSignature::most_specific`](../../src/machine/model/types/signature.rs)
+tournament that resolves ordinary overload buckets — the strictly most-specific
+admitting arm wins, and two arms with no strict winner are an ambiguity error
+(ruling F1/F3) — and the winning arm binds `it` to the scrutinee unchanged: a test,
+not an elimination. Which regime reads a head is never a property of the runtime
+scrutinee. `it` reaches the arm's overlay scope through the same single-copy carrier
+door `TRY`'s success arm uses — copied once at bind time, with no MATCH-specific
+bind site. See
 [unions and match-by-type](type-language-via-dispatch.md#anonymous-union-sigil).
 
-A `Result` value (`KKind::TypeConstructor`) carries the bare/applied ctor identity
-(member handle / `ConstructorApply`) as its `Tagged` `identity`, so `TRY` selects arms
-by error-tag symbol
-([try_with.rs](../../src/builtins/try_with.rs) via `find_branch_body_by_tag`) — the same
-tag-name dispatch a user union uses. See [error-handling.md](../error-handling.md).
+`TRY` selects arms through the same member walk with a fixed member set — `Ok` plus
+the error members, an implicit `OVER`
+([try_with.rs](../../src/builtins/try_with.rs)) — see
+[error-handling.md](../error-handling.md).
 
 ## Type-only nominal install
 
@@ -250,7 +271,7 @@ under the alias name rather than minting a fresh set — aliasing is
 type-equivalent, so a slot typed by the alias dispatches to the same overload as
 a slot typed by the original. Struct / union / module / Result / signature aliases
 all route through `register_type` (type-only). Anonymous `UNION (...)` is not a
-valid surface — every tagged value carries a real per-declaration identity.
+valid surface — every variant value carries a real per-declaration identity.
 
 ## Schemas: members fill their slot at seal
 
@@ -338,7 +359,7 @@ any statement runs.
 **Union variants are owned members.** A `UNION` announces one member per statically
 scannable variant tag, each tagged with its owning binder. An owned member is never
 bare-name-resolvable and never lands in `bindings.types`: it is reached only through
-its binder (`:Tree`) or through the qualified sigil (`:(Tree Node)`), whose lookup is
+its binder (`:Tree`) or through member projection (`:(Tree.Node)`), whose lookup is
 scoped by that binder's own member list — so two binders in one body may own the same
 bare tag. The binder itself is not a member; it denotes the union of the members it
 owns. A standalone `UNION` is the one-binder special case of the same machinery.
@@ -491,8 +512,8 @@ slot is the *node*: the slot is an [`AbstractType`](../../src/machine/model/type
 with non-empty `param_names`, which names a kind and constructs nothing, while a family is
 a `SetMember` and constructs values.
 The empty schema is the second discriminant, separating a constructor family from the
-builtin `Result`, whose non-empty variant schema routes construction down the sealed
-tagged-union path instead.
+builtin `Result`, whose members route construction down the sealed
+union-member path instead.
 
 **The family is the identity-wrapper over its argument** — `(Elem AS Wrapper)` is a newtype
 over `Elem` itself, so the applied argument *is* the representation; there is no
@@ -531,3 +552,9 @@ both the `KType::matches_value` `Wrapped` arm and the
 value's lifetime — so a FN parameter typed `:(Number AS Wrapper)` and a
 value-position match apply the identical admission. Two `Wrapper (v)` values compare `==`
 through the ordinary `Wrapped` structural-equality path.
+
+## Open work
+
+- [Retire the Tagged carrier](../../roadmap/type_language/retire-tagged-carrier.md)
+  — variant values on `Wrapped`, `Result` as a sealed two-member union, and the
+  unified member walk `TRY` shares.

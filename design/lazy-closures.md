@@ -148,19 +148,14 @@ per-call/eternal predicate implicit close walks with — and the untiered
 resolvers are *defined as* the tiered ones with the tier dropped, so `CLOSE` and
 `CLOSE OVER (<the same names>)` can never pick different bindings for a name.
 
-A **value**-channel name that resolves nowhere is an unbound-name error at the
-form, matching explicit `CLOSE OVER`. A **type**-channel name that resolves
-nowhere is skipped rather than reported: a Type token the block spells is not
-always a bare-resolvable type name. A union's variant tag is never
-bare-name-resolvable — it is reached through the qualified sigil `:(Maybe Some)`
-— yet it occupies an ordinary type position in a construction (`Maybe (Some
-42)`) and in the arm heads of a `MATCH` over a tagged value, which
-[branch_walk.rs](../src/builtins/branch_walk.rs) selects by the scrutinee's own
-tag rather than by a scope lookup. Whether an arm head is a tag or a name is
-therefore a property of the value the form receives, not of the head, so the
-walk reads every head as a type use and lets the resolution decide. A type name
-that is genuinely missing still raises its own unbound-name error at its use
-site inside the block.
+A name on **either channel** that resolves nowhere is an unbound-name error at
+the form, matching explicit `CLOSE OVER`. The type channel holds that rule
+because no type position spells a bare token that is not a chain-resolvable
+name: a union's variant tag is reached only by member projection (`Maybe.Some`),
+whose lhs is the resolvable name, and the arm heads of a `MATCH … OVER U`
+resolve against `U`'s member schema with `U` itself the captured name
+([user-types.md § Unions dissolve into per-variant
+newtypes](typing/user-types.md#unions-dissolve-into-per-variant-newtypes)).
 
 ### Freeness is position-aware
 

@@ -167,10 +167,10 @@ src/
 │   ├── fn_def/return_type.rs    return-type slot elaboration
 │   ├── fn_def/param_refs.rs     parameter-reference resolution
 │   ├── fn_def/finalize.rs       seal the function once its slots resolve
-│   ├── match_case.rs         MATCH — branch by the scrutinee's runtime type
+│   ├── match_case.rs         MATCH — branch by union member (OVER) or by the scrutinee's runtime type
 │   ├── try_with.rs           TRY (<expr>) WITH (<branches>) — catch runtime errors
 │   ├── catch.rs              CATCH — error-handling primitive
-│   ├── branch_walk.rs        MATCH's by-type arm walker + TRY's by-tag walker + shared arm-tail machinery
+│   ├── branch_walk.rs        MATCH's by-member and by-type arm walkers + TRY's by-tag walker + shared arm-tail machinery
 │   ├── result.rs             Result tagged-union builtin
 │   ├── parameterized_types.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN)
 │   ├── type_ops.rs           WITH — infix signature specialization; TYPE OF — value → type

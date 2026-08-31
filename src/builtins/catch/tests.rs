@@ -16,8 +16,9 @@ fn run_program(source: &str) -> Vec<u8> {
     captured.borrow().clone()
 }
 
-/// `retire-tagged-carrier` makes `Result` a union node, restoring the `OVER` form these read
-/// `CATCH`'s result through; the by-tag head-reading regime they used no longer exists.
+/// `Result` is a `TypeConstructor`-schema member rather than a union node, so it has no
+/// `MATCH … OVER` form to read `CATCH`'s result through. `retire-tagged-carrier` makes it a real
+/// union and restores these.
 #[test]
 #[ignore = "MATCH over Result returns with retire-tagged-carrier"]
 fn success_wraps_value_in_ok() {
