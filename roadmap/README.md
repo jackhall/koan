@@ -43,7 +43,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Tightness-audit coverage](compile_safety/tightness-audit-coverage.md)
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Constructing circular values](foundation/circular-value-construction.md)
-- [Inferred CLOSE](foundation/inferred-close.md)
 - [Lazy close](foundation/lazy-close.md)
 - [Yielding iterators](foundation/yielding-iterators.md)
 - [Files and imports](libraries/files-and-imports.md)

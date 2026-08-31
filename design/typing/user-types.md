@@ -307,7 +307,7 @@ forward-references the other, a position error.
 
 The construct is a **module body**. Before any body statement runs, `MODULE`
 pre-announces the body's top-level type declarations
-([`announce_type_members`](../../src/builtins/module_def.rs)), and that announcement is
+([`announce_type_members`](../../src/machine/model/binder.rs)), and that announcement is
 the ambient `AnnouncedWindow` the whole body elaborates against — so the two
 declarations are co-declared members of one window and each cross-reference is a
 `Sibling` back-edge:

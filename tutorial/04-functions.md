@@ -246,6 +246,49 @@ A shape is not a value, so a capture list names one by its call pattern with
 function, spelling out what the block leans on. Only the block's last
 expression escapes; anything it binds along the way stays inside.
 
+### Letting koan work out the capture list
+
+Writing the list out is often re-typing what the block already says. `CLOSE`
+with no list infers one: koan reads the block and captures exactly the names it
+uses from the enclosing call.
+
+```koan
+FN (GREETER text :Str) -> :(FN () -> Str) =
+  CLOSE (
+    FN :{} -> Str = (text)
+  )
+LET hi = (GREETER "hi")
+PRINT (hi {})
+```
+
+```text
+hi
+```
+
+The rules are the ones you would apply by hand. A name the block binds itself is
+not captured, and neither is a nested function's parameter. A name that lives at
+the top level or in the built-ins is read where it lives rather than copied. A
+name that is bound nowhere at all is an error at the `CLOSE`, just as naming it
+in a capture list would be. `CLOSE OVER ()` is still the way to say "capture
+nothing" — an empty list is a list, not an omitted one.
+
+Two forms are refused inside an inferred block:
+
+```koan
+MODULE m = (LET v = 1)
+LET x = (CLOSE (USING m SCOPE (v)))
+```
+
+```text
+error: CLOSE: `USING ... SCOPE` at <input>:2:16 surfaces module members dynamically, so the block's capture list cannot be inferred — name the captures with `CLOSE OVER (<names>) (<block>)`
+  in LET x = <staged> (<bind>) at <input>:2:1
+```
+
+`$(...)` (see [Quoting](10-quoting.md)) and `USING … SCOPE` (see
+[Modules](11-modules.md)) both work out which names they mean while the program
+runs, so reading the block's text cannot tell which names the enclosing call has
+to supply. Write the captures out with `CLOSE OVER` when you need either.
+
 ## There are no loops
 
 Koan has no loop constructs, and no arithmetic or comparison operators either.

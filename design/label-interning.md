@@ -275,11 +275,13 @@ Rust-source name and `record` hands `to_tagged` the symbol per error with no tex
 `String` built.
 
 A name the machine *binds into a program's scope* is fixed in source the same way. `it` — the
-scrutinee binder every `MATCH` and `TRY` arm opens — is a `StaticName<ValueSymbol>` declared in
-[branch_walk.rs](../src/builtins/branch_walk.rs) beside the arm tail that binds it, and read
-through `record` there. It is value-class like a parameter slot but is not one: no signature
-registers it, and the arm binds under the symbol the static already holds, so an arm taken hashes
-no text.
+scrutinee binder every `MATCH` and `TRY` arm opens — is a `StaticName<ValueSymbol>` in the
+`MACHINE_BINDERS` group ([binder.rs](../src/machine/model/binder.rs)), which collects every binder
+the surface fixes rather than spells: the arm binder beside an `OP` body's `left` / `right` and a
+`UNARY OP` body's `operands`. The builtin that installs one reads it back from there and hands it
+to `record`. They are value-class like a parameter slot but are not ones: no signature registers
+them, and a form binds under the symbol the static already holds, so an arm taken or an operator
+applied hashes no text.
 
 The mint count is measured, not bounded, in
 [audit/README.md § Symbol mints](../audit/README.md#symbol-mints).

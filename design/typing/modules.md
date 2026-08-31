@@ -224,7 +224,7 @@ newtype-with-private-fields pattern that a trait system would need.
 
 Before it runs any body statement, `MODULE` pre-scans the body's **top-level**
 statements for type declarations and announces every name it finds
-([`announce_type_members`](../../src/builtins/module_def.rs)). The announcement rides
+([`announce_type_members`](../../src/machine/model/binder.rs)). The announcement rides
 the body's child scope as its ambient declaration window
 ([`ScopeKind::Module`](../../src/machine/core/scope.rs)'s `window`), so an announced
 name is visible to every statement of the body regardless of order — which is what

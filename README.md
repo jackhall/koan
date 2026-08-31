@@ -181,7 +181,7 @@ src/
 │   ├── record_projection.rs  FROM — `(x y) FROM r` re-tags a record value's carried type to the named fields
 │   ├── nominal_schema.rs     shared Action-harness field-list elaboration for UNION / NEWTYPE record repr
 │   ├── newtype_def.rs        NEWTYPE — scalar repr, the `:{…}` record repr, and the `(Param… AS Name)` constructor-family mint
-│   ├── module_def.rs         MODULE — including the body's type-declaration announcement, which co-declares a mutually-recursive nominal group
+│   ├── module_def.rs         MODULE — the body's child scope and the declaration window it announces into, which co-declares a mutually-recursive nominal group (the announcement scan itself is model/binder.rs)
 │   ├── op_def.rs             OP / UNARY OP — declare a chainable operator over an operand type
 │   ├── group_def.rs          GROUP — a module bundling mutually chainable operators under one reduction mode
 │   ├── sig_def.rs            SIG
