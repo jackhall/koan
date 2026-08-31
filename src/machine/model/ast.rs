@@ -587,6 +587,29 @@ impl<'a> KExpression<'a> {
         self.binder_plan.copied()
     }
 
+    /// The statement this node stands for. A redundant single-`Expression` paren wrapper
+    /// (`((…))`) is the same statement as its child, so it reads through; every other shape is its
+    /// own statement.
+    pub(crate) fn statement_spine(&self) -> &KExpression<'a> {
+        if let [only] = self.parts
+            && let ExpressionPart::Expression(child) = only.value
+        {
+            return child.reference();
+        }
+        self
+    }
+
+    /// What this statement installs. The statement's *own* plan key, never anything its slots
+    /// contain — the namespace a block introduces is legible from its statement spines alone,
+    /// which is what lets the block fan-out rule on duplicate declarations before any statement
+    /// runs.
+    ///
+    /// Every key the plan names is a borrow into the declaring node's own region, so reading a
+    /// block's whole namespace allocates nothing.
+    pub(crate) fn statement_binder_plan(&self) -> Option<StoredBinderKey<'a>> {
+        self.statement_spine().binder_plan()
+    }
+
     /// The plan as the bumped borrow it is stored as, for the working copy that carries it through
     /// a splice unchanged.
     pub(crate) fn binder_plan_ref(&self) -> Option<&'a StoredBinderKey<'a>> {

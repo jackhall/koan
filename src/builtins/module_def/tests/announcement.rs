@@ -177,7 +177,7 @@ fn only_top_level_statements_announce() {
             other => panic!("expected a body slot, got {other:?}"),
         }
     }
-    let announced = super::super::announce_type_members(
+    let announced = crate::machine::model::announce_type_members(
         &body(&top_level),
         value_name("t", test_run.registries()),
         test_run.registries(),
@@ -194,7 +194,7 @@ fn only_top_level_statements_announce() {
     // so the scan announces nothing at all.
     let nested = test_run.parse_one("MODULE t = (\n  LET n = (NEWTYPE Boxed = Number)\n)");
     assert!(
-        super::super::announce_type_members(
+        crate::machine::model::announce_type_members(
             &body(&nested),
             value_name("t", test_run.registries()),
             test_run.registries()

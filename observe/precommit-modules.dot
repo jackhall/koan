@@ -98,6 +98,7 @@ digraph {
     "koan::machine::model::ast::shape" [label="koan::machine::model::ast::shape"];
     "koan::machine::model::ast::working" [label="koan::machine::model::ast::working"];
     "koan::machine::model::binder" [label="koan::machine::model::binder"];
+    "koan::machine::model::binder::signature" [label="koan::machine::model::binder::signature"];
     "koan::machine::model::key_spec" [label="koan::machine::model::key_spec"];
     "koan::machine::model::labels" [label="koan::machine::model::labels"];
     "koan::machine::model::labels::sealed" [label="koan::machine::model::labels::sealed"];
@@ -250,6 +251,7 @@ digraph {
     "koan::machine::model::ast" -> "koan::machine::model::ast::program" [label="owns", style="solid"];
     "koan::machine::model::ast" -> "koan::machine::model::ast::shape" [label="owns", style="solid"];
     "koan::machine::model::ast" -> "koan::machine::model::ast::working" [label="owns", style="solid"];
+    "koan::machine::model::binder" -> "koan::machine::model::binder::signature" [label="owns", style="solid"];
     "koan::machine::model::labels" -> "koan::machine::model::labels::sealed" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::builtin_names" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::declaration_window" [label="owns", style="solid"];
@@ -762,7 +764,12 @@ digraph {
     "koan::machine::model::binder" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::model::key_spec" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::binder" -> "koan::machine::model::registries" [label="uses", style="dashed"];
+    "koan::machine::model::binder" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::binder::signature" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::binder::signature" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::binder::signature" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::key_spec" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::key_spec" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::key_spec" -> "koan::machine::model::labels" [label="uses", style="dashed"];

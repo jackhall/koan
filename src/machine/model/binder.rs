@@ -9,7 +9,9 @@
 
 use smallvec::SmallVec;
 
-use crate::machine::core::{KError, KErrorKind, RegionBrand};
+pub(crate) mod signature;
+
+use crate::machine::core::{KError, KErrorKind, RegionBrand, body_statement_refs};
 use crate::machine::model::KeyElement;
 #[cfg(test)]
 use crate::machine::model::UntypedKey;
@@ -17,7 +19,11 @@ use crate::machine::model::ast::Part;
 #[cfg(test)]
 use crate::machine::model::key_spec::key_matches_untyped;
 use crate::machine::model::key_spec::{KEYWORDS, KeyElementSpec, key_matches_parts};
-use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner, StaticName};
+use crate::machine::model::labels::{
+    BinderSymbol, KeywordSymbol, LabelInterner, StaticName, ValueSymbol,
+};
+use crate::machine::model::registries::RunRegistries;
+use crate::machine::model::types::{AnnouncedData, display_label, pair_list_names};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
@@ -202,6 +208,32 @@ fn signature_expr_part<'a>(expr: &KExpression<'a>) -> Option<&'a KExpression<'a>
         _ => None,
     }
 }
+
+/// The names the machine itself fixes in Rust source for binders no program spells a declaration
+/// for. Each declares as a [`StaticName`] and is minted once for the process, so a form binds by
+/// loading the symbol rather than by classifying the spelling again per evaluation.
+///
+/// They live here, beside [`BINDER_SPECS`], because they answer the same question that table does
+/// — what a form binds — for the forms whose binder is implicit in the surface rather than written
+/// in it. The builtins that install them read them back from here, so there is one spelling of
+/// each.
+pub(crate) struct MachineBinders {
+    /// What every `MATCH` and `TRY` arm binds its scrutinee under.
+    pub(crate) arm: StaticName<ValueSymbol>,
+    /// The binary `OP` body's two operands, named by the surface rather than declared as
+    /// parameters.
+    pub(crate) operand_left: StaticName<ValueSymbol>,
+    pub(crate) operand_right: StaticName<ValueSymbol>,
+    /// The unary `OP` body's single parameter: the whole operand run as one list.
+    pub(crate) operands: StaticName<ValueSymbol>,
+}
+
+pub(crate) static MACHINE_BINDERS: MachineBinders = MachineBinders {
+    arm: crate::static_name!(ValueSymbol, "it"),
+    operand_left: crate::static_name!(ValueSymbol, "left"),
+    operand_right: crate::static_name!(ValueSymbol, "right"),
+    operands: crate::static_name!(ValueSymbol, "operands"),
+};
 
 /// Symbols the `OP` / `GROUP` surface spells with, plus the two ascription sigils. Declaring an
 /// operator under one of these would make its own declaration form unreadable. Every other
@@ -710,6 +742,71 @@ pub(crate) fn announced_type_declaration(
         BinderSurface::NewTypeDef => Some(TypeDeclarationSurface::NewType),
         BinderSurface::UnionDef => Some(TypeDeclarationSurface::Union),
         BinderSurface::OperatorDef | BinderSurface::Other => None,
+    }
+}
+
+/// Pre-scan `body`'s **top-level** statements for the type declarations the body announces, so
+/// every one of their names is visible to every statement regardless of order — which is what lets
+/// a plain module host a mutually-recursive group.
+///
+/// A `NEWTYPE` announces one standalone member. A `UNION` announces one member per statically
+/// scannable variant tag, each **owned** by the union's binder: a variant is never
+/// bare-name-resolvable and never lands in `bindings.types`, so it is reached only through the
+/// binder or the qualified sigil. A `UNION` whose schema does not scan announces nothing at all —
+/// its own dispatch surfaces the real diagnostic.
+///
+/// Nested and computed declarations are untouched by construction: the scan sees only the statement
+/// split [`body_statement_refs`] draws, the same boundary `GROUP` reads its members off.
+pub(crate) fn announce_type_members(
+    body: &KExpression<'_>,
+    module: ValueSymbol,
+    registries: &RunRegistries,
+) -> Result<Option<AnnouncedData>, KError> {
+    let mut announced = AnnouncedData::default();
+    for statement in body_statement_refs(body) {
+        let Some(surface) = announced_type_declaration(statement) else {
+            continue;
+        };
+        let Some(name) = statement.binder_name_from_type_part() else {
+            continue;
+        };
+        // The parser classified and interned the binder token, so the window, the members it
+        // seals and every diagnostic naming one already share one currency.
+        let binder = name;
+        if announced.declares(binder) || announced.binds(binder) {
+            return Err(KError::new(KErrorKind::ShapeError(format!(
+                "module `{}` declares type `{}` twice",
+                display_label(module.symbol(), registries),
+                display_label(binder.symbol(), registries),
+            ))));
+        }
+        match surface {
+            TypeDeclarationSurface::NewType => {
+                announced.announce(binder);
+            }
+            TypeDeclarationSurface::Union => {
+                // The variant tags are the union's announced members. A schema this scan cannot
+                // read is left entirely unannounced rather than half-announced.
+                let Some(schema) = union_schema(statement) else {
+                    continue;
+                };
+                match pair_list_names(&schema, "UNION schema", registries) {
+                    Ok(tags) => {
+                        announced.announce_binder(binder, tags);
+                    }
+                    Err(_) => continue,
+                }
+            }
+        }
+    }
+    Ok((!announced.is_empty()).then_some(announced))
+}
+
+/// The schema expression of a `UNION <name> = (<schema>)` statement — its final slot.
+fn union_schema<'a>(statement: &KExpression<'a>) -> Option<KExpression<'a>> {
+    match statement.parts.last()?.value {
+        ExpressionPart::Expression(schema) => Some(*schema),
+        _ => None,
     }
 }
 
