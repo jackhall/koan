@@ -24,6 +24,7 @@ use super::shape::{
 };
 use super::{ExpressionPart, KExpression, RunIter};
 use crate::machine::model::StoredBinderKey;
+use crate::machine::model::lazy_slots::{LazyKinds, LazySlotSpec};
 
 #[cfg(test)]
 mod tests;
@@ -256,7 +257,9 @@ impl<'a> WorkingPart<'a> {
 /// made from one, since the cache is invariant under splice, and computed outright for a node the
 /// scheduler synthesized — except the two binder caches (the plan and the declared-name position),
 /// which are copied over and never computed here: a binder is always parsed AST, so a synthesized
-/// node carries `None` for both and installs nothing.
+/// node carries `None` for both and installs nothing. The lazy-slot stamp is filled at every door,
+/// synthesized runs included: it is a fact about the bucket key, which a synthesized run carries as
+/// plainly as a parsed one.
 #[derive(Clone, Copy)]
 pub struct WorkingExpression<'a> {
     pub parts: &'a [Spanned<WorkingPart<'a>>],
@@ -266,6 +269,7 @@ pub struct WorkingExpression<'a> {
     shape: DispatchShape,
     operator_probe: Option<KeywordSymbol>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
+    lazy_slots: Option<&'static LazySlotSpec>,
     binder_name_slot: Option<usize>,
 }
 
@@ -362,6 +366,7 @@ impl<'a> WorkingExpression<'a> {
             shape,
             operator_probe: operator_probe_for(parts, shape),
             binder_plan: None,
+            lazy_slots: crate::machine::model::lazy_slots::lazy_slot_spec_for(parts),
             binder_name_slot: None,
         }
     }
@@ -383,6 +388,7 @@ impl<'a> WorkingExpression<'a> {
             shape: ast.shape(),
             operator_probe: ast.operator_probe(),
             binder_plan: ast.binder_plan_ref(),
+            lazy_slots: ast.lazy_slots(),
             binder_name_slot: ast.binder_name_slot(),
         }
     }
@@ -413,6 +419,7 @@ impl<'a> WorkingExpression<'a> {
             shape: classify_dispatch_shape(parts),
             operator_probe: self.operator_probe,
             binder_plan: self.binder_plan,
+            lazy_slots: self.lazy_slots,
             binder_name_slot: self.binder_name_slot,
         }
     }
@@ -432,6 +439,14 @@ impl<'a> WorkingExpression<'a> {
     /// statement.
     pub fn binder_plan(&self) -> Option<StoredBinderKey<'a>> {
         self.binder_plan.copied()
+    }
+
+    /// The kinds of part that stay raw at slot `index` — the seal-time lazy-slot stamp, empty at
+    /// every slot of every form that has none. See
+    /// [`lazy_slots`](crate::machine::model::lazy_slots).
+    pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
+        self.lazy_slots
+            .map_or(LazyKinds::EMPTY, |spec| spec.kinds_at(index))
     }
 
     /// The declared-name position of the binder form this node matches — see

@@ -1,6 +1,8 @@
 pub mod ast;
 pub(crate) mod binder;
+pub(crate) mod key_spec;
 pub(crate) mod labels;
+pub(crate) mod lazy_slots;
 pub mod operators;
 pub(crate) mod registries;
 pub(crate) mod types;

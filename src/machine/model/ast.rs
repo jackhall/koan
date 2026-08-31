@@ -13,6 +13,7 @@ use crate::machine::core::{ProgramBrand, RegionBrand};
 use crate::machine::model::labels::{
     BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol,
 };
+use crate::machine::model::lazy_slots::{LazyKinds, LazySlotSpec};
 use crate::machine::model::{Held, KObject, Parseable, StoredBinderKey};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::witnessed::reattachable;
@@ -401,6 +402,7 @@ pub struct KExpression<'a> {
     operator_probe: Option<KeywordSymbol>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
     binder_name_slot: Option<usize>,
+    lazy_slots: Option<&'static LazySlotSpec>,
 }
 
 // Lifetimes do not affect layout, so this retype is a no-op transmute. The witness's `'b: 'w` bound
@@ -541,6 +543,7 @@ impl<'a> KExpression<'a> {
             operator_probe: cache.operator_probe,
             binder_plan: None,
             binder_name_slot: None,
+            lazy_slots: crate::machine::model::lazy_slots::lazy_slot_spec_for(parts),
         };
         // One spec-table probe fills both binder caches. The plan is bumped behind a reference
         // rather than stored inline: it is the widest thing a node would carry, and `KExpression`
@@ -581,6 +584,18 @@ impl<'a> KExpression<'a> {
     /// a splice unchanged.
     pub(crate) fn binder_plan_ref(&self) -> Option<&'a StoredBinderKey<'a>> {
         self.binder_plan
+    }
+
+    /// This node's lazy-slot stamp — the [`LazySlotSpec`] its bucket key matches, `None` for every
+    /// form with no lazy slot. Read by the scheduler to decide which children submit.
+    pub(crate) fn lazy_slots(&self) -> Option<&'static LazySlotSpec> {
+        self.lazy_slots
+    }
+
+    /// The kinds of part that stay raw at slot `index`, empty when the slot evaluates.
+    pub fn lazy_kinds_at(&self, index: usize) -> LazyKinds {
+        self.lazy_slots
+            .map_or(LazyKinds::EMPTY, |spec| spec.kinds_at(index))
     }
 
     /// The declared-name position of the binder form this node's bucket key matches
@@ -634,35 +649,6 @@ impl<'a> KExpression<'a> {
         match &self.parts.get(1)?.value {
             ExpressionPart::Type(t) => Some(*t),
             _ => None,
-        }
-    }
-
-    /// If every part is `Expression(_)`, return the inner expressions; otherwise `None`. The
-    /// returned `Vec` encodes the all-`Expression` shape — callers iterate the nodes directly
-    /// without re-matching the variant.
-    pub fn borrow_inner_expressions(&self) -> Option<Vec<KExpression<'a>>> {
-        let mut out = Vec::with_capacity(self.parts.len());
-        for part in self.parts {
-            match &part.value {
-                ExpressionPart::Expression(inner) => out.push(**inner),
-                _ => return None,
-            }
-        }
-        Some(out)
-    }
-
-    /// Right-fold counterpart of [`Self::borrow_inner_expressions`]: `(preceding, last)` with both
-    /// unwrapped from [`ExpressionPart::Expression`]. On any shape mismatch returns `self` back so
-    /// the caller can pass through.
-    pub fn try_split_inner_expressions(
-        self,
-    ) -> Result<(Vec<KExpression<'a>>, KExpression<'a>), Self> {
-        let Some(mut inner) = self.borrow_inner_expressions() else {
-            return Err(self);
-        };
-        match inner.pop() {
-            Some(last) => Ok((inner, last)),
-            None => Err(self),
         }
     }
 

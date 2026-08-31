@@ -13,7 +13,10 @@ use crate::machine::core::{KError, KErrorKind, RegionBrand};
 use crate::machine::model::KeyElement;
 #[cfg(test)]
 use crate::machine::model::UntypedKey;
-use crate::machine::model::ast::{Part, PartClass};
+use crate::machine::model::ast::Part;
+#[cfg(test)]
+use crate::machine::model::key_spec::key_matches_untyped;
+use crate::machine::model::key_spec::{KEYWORDS, KeyElementSpec, key_matches_parts};
 use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner, StaticName};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
@@ -182,58 +185,6 @@ fn next_is_type_slot(parts: &[Spanned<ExpressionPart<'_>>], index: usize) -> boo
     })
 }
 
-/// The fixed tokens the binder-introducing forms are spelled with, each declared once and minted
-/// once. Every spec-table entry names its keywords out of this group, and the reserved-symbol list
-/// and the `FN` / `UNARY` position reads compare against the same memoized symbols, so the spelling
-/// of a surface token is written in exactly one place.
-struct SurfaceKeywords {
-    let_: StaticName<KeywordSymbol>,
-    type_: StaticName<KeywordSymbol>,
-    module: StaticName<KeywordSymbol>,
-    group: StaticName<KeywordSymbol>,
-    fold: StaticName<KeywordSymbol>,
-    left: StaticName<KeywordSymbol>,
-    right: StaticName<KeywordSymbol>,
-    pairwise: StaticName<KeywordSymbol>,
-    equals: StaticName<KeywordSymbol>,
-    sig: StaticName<KeywordSymbol>,
-    union: StaticName<KeywordSymbol>,
-    newtype: StaticName<KeywordSymbol>,
-    fn_: StaticName<KeywordSymbol>,
-    arrow: StaticName<KeywordSymbol>,
-    op: StaticName<KeywordSymbol>,
-    over: StaticName<KeywordSymbol>,
-    unary: StaticName<KeywordSymbol>,
-    val: StaticName<KeywordSymbol>,
-    /// The pattern-guard sigil `:|`.
-    guard: StaticName<KeywordSymbol>,
-    /// The otherwise-guard sigil `:!`.
-    otherwise: StaticName<KeywordSymbol>,
-}
-
-static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
-    let_: crate::static_name!(KeywordSymbol, "LET"),
-    type_: crate::static_name!(KeywordSymbol, "TYPE"),
-    module: crate::static_name!(KeywordSymbol, "MODULE"),
-    group: crate::static_name!(KeywordSymbol, "GROUP"),
-    fold: crate::static_name!(KeywordSymbol, "FOLD"),
-    left: crate::static_name!(KeywordSymbol, "LEFT"),
-    right: crate::static_name!(KeywordSymbol, "RIGHT"),
-    pairwise: crate::static_name!(KeywordSymbol, "PAIRWISE"),
-    equals: crate::static_name!(KeywordSymbol, "="),
-    sig: crate::static_name!(KeywordSymbol, "SIG"),
-    union: crate::static_name!(KeywordSymbol, "UNION"),
-    newtype: crate::static_name!(KeywordSymbol, "NEWTYPE"),
-    fn_: crate::static_name!(KeywordSymbol, "FN"),
-    arrow: crate::static_name!(KeywordSymbol, "->"),
-    op: crate::static_name!(KeywordSymbol, "OP"),
-    over: crate::static_name!(KeywordSymbol, "OVER"),
-    unary: crate::static_name!(KeywordSymbol, "UNARY"),
-    val: crate::static_name!(KeywordSymbol, "VAL"),
-    guard: crate::static_name!(KeywordSymbol, ":|"),
-    otherwise: crate::static_name!(KeywordSymbol, ":!"),
-};
-
 /// The signature slot of an `FN` declaration: the part right after the `FN` keyword. Read by
 /// position relative to that keyword rather than at a fixed index, so the bare form and the
 /// combined `LET <name> = FN …` statement share one extractor. A `RecordType` there is the
@@ -384,41 +335,6 @@ fn stored_unary_key<'a>(brand: RegionBrand<'a>, symbol: KeywordSymbol) -> &'a [K
 
 // ---------- the spec table ----------
 
-/// One element of a [`BinderSpec`] bucket key: a fixed keyword token or a slot. The spec table is
-/// `static`, so a keyword rests as one of the [`KEYWORDS`] names and matching compares its memoized
-/// symbol against the symbol a part carries — a spec probe is a table walk over short runs that
-/// hashes nothing past each name's first touch.
-pub enum KeyElementSpec {
-    Keyword(&'static StaticName<KeywordSymbol>),
-    Slot,
-}
-
-impl KeyElementSpec {
-    /// True iff `part` fills this position: a spec keyword against the part's own symbol, a
-    /// spec slot against any non-keyword part — the same classification
-    /// [`stored_untyped_key`](crate::machine::model::ast::stored_untyped_key) reads.
-    fn matches_part<'a, P: Part<'a>>(&self, part: &P) -> bool {
-        match (self, part.class()) {
-            (KeyElementSpec::Keyword(name), PartClass::Keyword(symbol)) => name.symbol() == symbol,
-            (KeyElementSpec::Keyword(_), _) | (_, PartClass::Keyword(_)) => false,
-            (KeyElementSpec::Slot, _) => true,
-        }
-    }
-
-    /// Owned-key peer of [`Self::matches_part`], for the consistency test that pins the spec table
-    /// against the live registration keys.
-    #[cfg(test)]
-    fn matches(&self, element: &KeyElement) -> bool {
-        match (self, element) {
-            (KeyElementSpec::Keyword(name), KeyElement::Keyword(symbol)) => {
-                name.symbol() == *symbol
-            }
-            (KeyElementSpec::Slot, KeyElement::Slot) => true,
-            _ => false,
-        }
-    }
-}
-
 /// Which declaration surface a spec entry belongs to. Binder discovery itself never branches on
 /// this; it exists so a consumer outside binder discovery can recognize a surface by *full bucket
 /// key*, a structural read that a statement merely spelling one of the surface's keywords cannot
@@ -475,23 +391,13 @@ impl BinderSpec {
     /// True iff this spec's key matches the runtime bucket key element-for-element.
     #[cfg(test)]
     pub fn matches_key(&self, key: &UntypedKey) -> bool {
-        self.key.len() == key.len()
-            && self
-                .key
-                .iter()
-                .zip(key.iter())
-                .all(|(spec, element)| spec.matches(element))
+        key_matches_untyped(self.key, key)
     }
 
     /// [`Self::matches_key`] read straight off an expression's parts, materializing no key at all —
     /// the parts already carry every token this compares.
     pub fn matches_parts<'a, P: Part<'a>>(&self, parts: &[Spanned<P>]) -> bool {
-        self.key.len() == parts.len()
-            && self
-                .key
-                .iter()
-                .zip(parts.iter())
-                .all(|(spec, part)| spec.matches_part(&part.value))
+        key_matches_parts(self.key, parts)
     }
 }
 
