@@ -178,3 +178,91 @@ fn constructor_family_member_is_not_a_constructible_variant() {
         Ok(()) => panic!("expected error constructing against a constructor-family member"),
     }
 }
+
+/// Construction is ordinary application of the projected member: `Maybe.Some 42` evaluates the
+/// ATTR head to the variant's newtype identity and wraps the trailing value through the same door
+/// a standalone `NEWTYPE` takes. There is no union-application form behind it.
+#[test]
+fn projected_member_constructs_by_application() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+    run(
+        &program,
+        "UNION Maybe = (Some :Number None :Null)\n\
+         PRINT (Maybe.Some 42)",
+        &region,
+        captured.clone(),
+    );
+    assert_eq!(captured.borrow().as_slice(), b"Some(42)\n");
+}
+
+/// A recursive union keeps its layers: the payload's identity differs from the member's repr, so
+/// the peel-or-hold rule holds the nested variant rather than collapsing it.
+#[test]
+fn projected_member_construction_keeps_nested_layers() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+    run(
+        &program,
+        "UNION Nat = (Zero :Null Succ :Nat)\n\
+         PRINT (Nat.Succ (Nat.Zero null))",
+        &region,
+        captured.clone(),
+    );
+    assert_eq!(captured.borrow().as_slice(), b"Succ(Zero(null))\n");
+}
+
+/// A record-repr variant takes the record body the same way a record-repr `NEWTYPE` does.
+#[test]
+fn projected_member_constructs_a_record_repr_variant() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+    run(
+        &program,
+        "UNION Shape = (Circle :{r :Number} Square :{s :Number})\n\
+         PRINT (Shape.Circle {r = 2})",
+        &region,
+        captured.clone(),
+    );
+    assert_eq!(captured.borrow().as_slice(), b"Circle({r = 2})\n");
+}
+
+/// The member's declared payload type is the construction's contract: a mismatched payload is a
+/// type error at the wrap, not a silently retyped value.
+#[test]
+fn projected_member_construction_checks_the_payload_type() {
+    use crate::machine::KErrorKind;
+    use crate::machine::execute::interpret_with_writer;
+    let result = interpret_with_writer(
+        "UNION Maybe = (Some :Number None :Null)\n\
+         LET m = (Maybe.Some \"x\")",
+        Box::new(std::io::sink()),
+    );
+    match result {
+        Err(e) => assert!(
+            matches!(&e.kind, KErrorKind::TypeMismatch { .. }),
+            "expected a payload TypeMismatch, got {e}",
+        ),
+        Ok(()) => panic!("expected a payload type error"),
+    }
+}
+
+/// A bare projection with no body is the member's *type value*, not a construction — the two are
+/// told apart by whether the application has trailing parts at all.
+#[test]
+fn bare_projection_is_a_type_value_not_a_construction() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+    run(
+        &program,
+        "UNION Maybe = (Some :Number None :Null)\n\
+         PRINT (Maybe.Some)",
+        &region,
+        captured.clone(),
+    );
+    assert_eq!(captured.borrow().as_slice(), b"Some\n");
+}

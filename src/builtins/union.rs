@@ -5,8 +5,10 @@ use crate::machine::FinishCtx;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::FieldListContext;
 use crate::machine::model::KType;
+use crate::machine::model::TypeResolution;
 use crate::machine::model::{DeclWindow, RecursiveGroupWindow};
 use crate::machine::model::{FieldNameKind, pair_list_names, seal_writes};
+use crate::machine::model::{Symbol, TypeNode};
 use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
 use crate::machine::{StepCarried, seal_type_identity};
 
@@ -156,6 +158,60 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         error_frame,
         finalize_union,
     )
+}
+
+/// The `union` member a reference names, by the rule every variant-reference surface shares —
+/// ATTR projection (`Maybe.Some`) and a `MATCH … OVER` arm head. A union is a composite whose
+/// members are its only variant door: a member never binds in the enclosing scope, so the name is
+/// read against the member list, not walked up the chain.
+///
+/// Two member shapes answer, in order. A `SetMember` — what a user `UNION` mints per tag — matches
+/// when its declared name carries `name`'s bits; the reference arrives from a use site with no
+/// class attached, so the probe is by bare symbol bits (the recovery door). A **structural** member
+/// — what an inline `:(Number | Str)` holds — declares no name at all, so it answers only when
+/// `token` resolves in the reading scope to a type whose handle *is* that member. A union mixing
+/// the two answers a name from whichever shape holds it.
+///
+/// [`None`] is the miss the caller reports with [`union_member_names`]; it also covers `union`
+/// naming no union at all.
+pub(crate) fn union_member<'a>(
+    scope: &Scope<'a>,
+    union: KType,
+    name: Symbol,
+    token: Option<TypeSymbol>,
+    registries: &RunRegistries,
+) -> Option<KType> {
+    if let Some(member) = registries.types.union_member_named(union, name) {
+        return Some(member);
+    }
+    // The structural fallback resolves first and compares handles: identity is the digest, so a
+    // member is named by any spelling that resolves to it.
+    let token = token?;
+    let TypeResolution::Done(resolved) = scope.resolve_type_identifier(token, None, registries)
+    else {
+        return None;
+    };
+    match registries.types.node(union) {
+        TypeNode::Union { members } => members.into_iter().find(|m| *m == resolved),
+        _ => None,
+    }
+}
+
+/// Every member of `union` in declaration order, rendered for a miss diagnostic: a `SetMember` by
+/// the name its declaration minted, a structural member by its type's own display name. A cold
+/// path, so it reads the member list out by clone rather than through an allocation-free probe.
+pub(crate) fn union_member_names(union: KType, registries: &RunRegistries) -> String {
+    let TypeNode::Union { members } = registries.types.node(union) else {
+        return String::new();
+    };
+    members
+        .iter()
+        .map(|m| match registries.types.node(*m) {
+            TypeNode::SetMember { name, .. } => render_label(name.symbol(), registries),
+            _ => m.display_name(registries).to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {

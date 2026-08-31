@@ -195,6 +195,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
             TypeResolution::Done(kt) => route(access_type_member(
                 ctx.scope,
                 kt,
+                Some(te),
                 &field_name,
                 ctx.registries,
             )),
@@ -231,6 +232,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
     route(access_type_member(
         ctx.scope,
         s_kt,
+        None,
         &field_name,
         ctx.registries,
     ))
@@ -361,13 +363,15 @@ fn module_lhs<'a>(
 
 /// Project `field` off a Type-channel lhs. A signature answers directly from its owned schema —
 /// a manifest or abstract type member first, then a declared value slot's type — with no
-/// decl-scope reverse-lookup; an abstract identity carries no receiver and errors. A module rides
-/// the value channel, so a module lhs lands in [`body_module`] instead. A nominal type handle
-/// (struct / union name) carries no members and falls through to the same TypeMismatch a static
-/// struct field access produces.
+/// decl-scope reverse-lookup; a union answers the variant `field` names, which is the one door to
+/// a variant (`Maybe.Some` names it, `Maybe.Some 42` constructs through it); an abstract identity
+/// carries no receiver and errors. A module rides the value channel, so a module lhs lands in
+/// [`body_module`] instead. A nominal record handle carries no members here and falls through to
+/// the same TypeMismatch a static struct field access produces.
 fn access_type_member<'a>(
     scope: &Scope<'a>,
     kt: KType,
+    spelling: Option<TypeSymbol>,
     field: &FieldName<'_>,
     registries: &RunRegistries,
 ) -> Result<StepCarried<'a>, KError> {
@@ -377,6 +381,9 @@ fn access_type_member<'a>(
     /// members at all. Each arm is a `Copy` payload, so nothing borrows past the read.
     enum Projection {
         Signature(Option<KType>),
+        /// A union node: its variants are its members, and the lookup rule needs the reading
+        /// scope, so this arm carries the decision out of the borrow rather than answering under it.
+        Union,
         Abstract(TypeSymbol),
         NoMembers,
     }
@@ -398,6 +405,7 @@ fn access_type_member<'a>(
             };
             Projection::Signature(member.copied())
         }
+        TypeNode::Union { .. } => Projection::Union,
         TypeNode::AbstractType { name, .. } => Projection::Abstract(*name),
         _ => Projection::NoMembers,
     });
@@ -411,6 +419,32 @@ fn access_type_member<'a>(
             kt.display_name(registries),
             field.text(registries)
         )))),
+        // A variant reference reads against the member list — the same rule a `MATCH … OVER` arm
+        // head reads by — so the two surfaces can never disagree about what names a variant.
+        Projection::Union => match crate::builtins::union::union_member(
+            scope,
+            kt,
+            field.symbol(),
+            match field.class() {
+                Some(BinderSymbol::Type(name)) => Some(name),
+                _ => None,
+            },
+            registries,
+        ) {
+            Some(member) => Ok(StepCarried::born(scope.resident(Carried::Type(member)))),
+            None => Err(KError::new(KErrorKind::ShapeError(format!(
+                "`{}` is not a member of `{}` (members: {})",
+                field.text(registries),
+                match spelling {
+                    // A user `UNION` binds an *anonymous* union, so the node renders structurally
+                    // and names nothing the source wrote. Report the lhs as it was spelled when
+                    // the read had a name to go on.
+                    Some(name) => crate::machine::model::render_label(name.symbol(), registries),
+                    None => kt.display_name(registries).to_string(),
+                },
+                crate::builtins::union::union_member_names(kt, registries),
+            )))),
+        },
         Projection::Abstract(name) => Err(abstract_type_has_no_members(
             &crate::machine::model::render_label(name.symbol(), registries),
         )),
@@ -1119,6 +1153,75 @@ mod tests {
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("Boxed") && msg.contains("`z`")),
             "expected ShapeError naming Boxed and z on Wrapped fall-through, got {err}",
+        );
+    }
+    /// `Maybe.Some` — ATTR with a union-typed lhs — projects the variant's member handle as a type
+    /// value. Member projection is the one door to a variant, so it is the surface both a
+    /// reference and a construction go through.
+    #[test]
+    fn attr_projects_a_union_variant_member() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("UNION Maybe = (Some :Number None :Null)");
+        let kt = test_run.run_one_type(test_run.parse_one("Maybe.Some"));
+        assert_eq!(kt.name(test_run.registries()), "Some");
+    }
+
+    /// A `LET`-bound alias installs the identical union node, so the alias projects the same
+    /// members its binder does — the lhs is read by node, never by the name that reached it.
+    #[test]
+    fn attr_projects_a_variant_through_a_union_alias() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("UNION Maybe = (Some :Number None :Null)\nLET Perhaps = Maybe");
+        let kt = test_run.run_one_type(test_run.parse_one("Perhaps.None"));
+        assert_eq!(kt.name(test_run.registries()), "None");
+    }
+
+    /// An inline `:(A | B)` holds *structural* members, which declare no name of their own. Such a
+    /// member answers the field that resolves in the reading scope to its own handle.
+    #[test]
+    fn attr_projects_a_structural_member_of_an_inline_union() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("LET NumStr = :(Number | Str)");
+        let kt = test_run.run_one_type(test_run.parse_one("NumStr.Number"));
+        assert_eq!(kt, KType::NUMBER);
+    }
+
+    /// An unknown member lists the union's members, and names the lhs as the source spelled it —
+    /// a user `UNION` binds an anonymous union, whose own rendering names nothing that was written.
+    #[test]
+    fn attr_unknown_union_member_lists_the_members() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("UNION Maybe = (Some :Number None :Null)");
+        let err = test_run.run_one_err(test_run.parse_one("Maybe.Bogus"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg == "`Bogus` is not a member of `Maybe` (members: Some, None)"),
+            "expected the member-list miss naming the lhs as spelled, got {err}",
+        );
+    }
+
+    /// A Value-class field takes the same miss: a member name is a `Type` token, so the casing
+    /// mistake reads off the member list.
+    #[test]
+    fn attr_value_class_field_on_a_union_takes_the_member_miss() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("UNION Maybe = (Some :Number None :Null)");
+        let err = test_run.run_one_err(test_run.parse_one("Maybe.some"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("`some` is not a member of `Maybe`")
+                    && msg.contains("Some, None")),
+            "expected the member-list miss for a value-class field, got {err}",
         );
     }
 }
