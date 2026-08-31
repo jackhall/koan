@@ -99,6 +99,7 @@ digraph {
     "koan::machine::model::ast::working" [label="koan::machine::model::ast::working"];
     "koan::machine::model::binder" [label="koan::machine::model::binder"];
     "koan::machine::model::binder::signature" [label="koan::machine::model::binder::signature"];
+    "koan::machine::model::close_inference" [label="koan::machine::model::close_inference"];
     "koan::machine::model::key_spec" [label="koan::machine::model::key_spec"];
     "koan::machine::model::labels" [label="koan::machine::model::labels"];
     "koan::machine::model::labels::sealed" [label="koan::machine::model::labels::sealed"];
@@ -241,6 +242,7 @@ digraph {
     "koan::machine::execute::decide" -> "koan::machine::execute::decide::submit" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::ast" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::binder" [label="owns", style="solid"];
+    "koan::machine::model" -> "koan::machine::model::close_inference" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::key_spec" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::labels" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::lazy_slots" [label="owns", style="solid"];
@@ -481,6 +483,7 @@ digraph {
     "koan::machine::core::kerror" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::kerror" -> "koan::machine::model::close_inference" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan" [label="uses", style="dashed"];
@@ -770,6 +773,14 @@ digraph {
     "koan::machine::model::binder::signature" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::binder::signature" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::binder::signature" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::machine::model::binder" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::machine::model::key_spec" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::machine::model::lazy_slots" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::key_spec" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::key_spec" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::key_spec" -> "koan::machine::model::labels" [label="uses", style="dashed"];

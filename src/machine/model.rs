@@ -1,5 +1,6 @@
 pub mod ast;
 pub(crate) mod binder;
+pub(crate) mod close_inference;
 pub(crate) mod key_spec;
 pub(crate) mod labels;
 pub(crate) mod lazy_slots;
@@ -45,6 +46,8 @@ pub(crate) use binder::signature::{SignaturePosition, SignatureScan};
 pub use binder::{BindKind, BinderBucketFn, BinderNameFn, BinderSurface};
 pub(crate) use binder::{OpArity, op_declaration_arity};
 pub(crate) use binder::{StoredBinderKey, symbol_from_parts, symbol_from_quote_body};
+pub use close_inference::DynamicNameForm;
+pub(crate) use close_inference::infer_close_captures;
 pub(crate) use types::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
     SealOutcome, SigSchema, TypeMemberMap, TypeResolution, constructor_param_names,

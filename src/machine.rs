@@ -20,8 +20,8 @@ pub(crate) use core::{
     require_identifier_name, require_kexpression, require_ktype, seed,
 };
 pub(crate) use core::{
-    AdoptSeam, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, Installer,
-    KoanRegion, LexicalFrame, MemberResolution, NameLookup, RegionTypeFamily, RunWriter,
+    AdoptSeam, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameCoverage, HitTier,
+    Installer, KoanRegion, LexicalFrame, MemberResolution, NameLookup, RegionTypeFamily, RunWriter,
     TraceFrame,
 };
 pub use core::{

@@ -56,6 +56,7 @@ pub(crate) use kfunction::{ActionFn, Body, KFunction, WrapIndices};
 pub use lexical_frame::{LexicalFrame, assemble_body_chain};
 pub use ref_carriers::{ModuleRefFamily, ScopeRefFamily};
 pub(crate) use scope::AdoptSeam;
+pub(crate) use scope::HitTier;
 pub use scope::Scope;
 pub use scope_id::ScopeId;
 pub use statement_id::StatementId;

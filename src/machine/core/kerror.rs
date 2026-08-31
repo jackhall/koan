@@ -12,6 +12,7 @@ use crate::witnessed::RegionHandleFamily;
 use super::{DeliveredCarried, FoldingBrand, RegionBrand, SubstrateDoor};
 use super::{KoanStorageProfile, Scope, scope_frame};
 use crate::machine::model::RunRegistries;
+use crate::machine::model::close_inference::DynamicNameForm;
 use crate::machine::model::labels::{BinderSymbol, ValueSymbol};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
@@ -99,6 +100,17 @@ pub enum KErrorKind {
     TypeClassBindingExpectsType {
         name: String,
         got: String,
+    },
+    /// A form that resolves names dynamically sits inside a `CLOSE (<block>)`, so the block's free
+    /// identifiers — the capture list the form would otherwise derive — are not readable off the
+    /// text. `CLOSE OVER` is the form that admits one: its captures are written out, so the block
+    /// needs no inference at all.
+    ///
+    /// `location` is where the offending form sits; see
+    /// [`DispatchFailed`](KErrorKind::DispatchFailed) for why an error about a form owns one.
+    DynamicNamesUnderInferredClose {
+        form: DynamicNameForm,
+        location: Option<SourceLoc>,
     },
     /// Scheduler drained its work queues with nodes still parked on
     /// dependencies that can no longer fire (dependency cycle).
@@ -336,6 +348,7 @@ struct ErrorFields {
     col_utf16: StaticName<ValueSymbol>,
     expected: StaticName<ValueSymbol>,
     expr: StaticName<ValueSymbol>,
+    form: StaticName<ValueSymbol>,
     frames: StaticName<ValueSymbol>,
     got: StaticName<ValueSymbol>,
     kind: StaticName<ValueSymbol>,
@@ -354,6 +367,7 @@ static FIELD: ErrorFields = ErrorFields {
     col_utf16: crate::static_name!(ValueSymbol, "col_utf16"),
     expected: crate::static_name!(ValueSymbol, "expected"),
     expr: crate::static_name!(ValueSymbol, "expr"),
+    form: crate::static_name!(ValueSymbol, "form"),
     frames: crate::static_name!(ValueSymbol, "frames"),
     got: crate::static_name!(ValueSymbol, "got"),
     kind: crate::static_name!(ValueSymbol, "kind"),
@@ -425,6 +439,13 @@ impl KErrorKind {
             KErrorKind::NestedBinder { expr, .. } => (
                 "NestedBinder".to_string(),
                 vec![(&FIELD.expr, KObject::KString(brand.allocator().text(expr)))],
+            ),
+            KErrorKind::DynamicNamesUnderInferredClose { form, .. } => (
+                "DynamicNamesUnderInferredClose".to_string(),
+                vec![(
+                    &FIELD.form,
+                    KObject::KString(brand.allocator().text(form.surface())),
+                )],
             ),
             KErrorKind::ShapeError(msg) => (
                 "ShapeError".to_string(),
@@ -567,6 +588,16 @@ impl fmt::Display for KErrorKind {
                 write!(f, "dispatch failed for {expr}")?;
                 write_location(f, location.as_ref())?;
                 write!(f, ": {reason}")
+            }
+            KErrorKind::DynamicNamesUnderInferredClose { form, location } => {
+                write!(f, "CLOSE: `{}`", form.surface())?;
+                write_location(f, location.as_ref())?;
+                write!(
+                    f,
+                    " {}, so the block's capture list cannot be inferred — name the captures with \
+                     `CLOSE OVER (<names>) (<block>)`",
+                    form.reason()
+                )
             }
             KErrorKind::NestedBinder { expr, suggest_flat } => {
                 write!(

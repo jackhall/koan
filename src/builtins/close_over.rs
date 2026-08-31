@@ -1,5 +1,9 @@
-//! `CLOSE OVER (<captures>) (<block>)` — explicit severance. See
+//! `CLOSE OVER (<captures>) (<block>)` and `CLOSE (<block>)` — severance with the captures written
+//! out, and severance with them inferred. See
 //! [design/lazy-closures.md](../../design/lazy-closures.md).
+//!
+//! The two forms differ only in where the capture list comes from ([`Captures`]); everything below
+//! that — resolution, parking, the severed frame, the seed — is one spine.
 //!
 //! The block runs over a dedicated **per-call-tier region with no `outer` storage link**, so a value
 //! homed there pins that one region and whatever its captures still borrow — never the chain of
@@ -45,15 +49,28 @@
 //! statement's own claim out of its own subtree), and `CLOSE OVER` installs no binder plan of its
 //! own, so nothing can wait on it.
 //!
-//! `EVAL` inside the block is permitted and needs no arm here: a name resolves against the block
-//! scope, its captures and the eternal chain, and the ancestor walk simply ends at the eternal
-//! scope's own outer, landing `UnboundName`.
+//! `EVAL` inside an explicitly-captured block is permitted and needs no arm here: a name resolves
+//! against the block scope, its captures and the eternal chain, and the ancestor walk simply ends at
+//! the eternal scope's own outer, landing `UnboundName`. Under `CLOSE` it is a
+//! [`DynamicNamesUnderInferredClose`](crate::machine::KErrorKind::DynamicNamesUnderInferredClose)
+//! error instead: what a form resolves at evaluation cannot be read off the text beforehand, and
+//! `CLOSE OVER` is the spelling that admits one.
+//!
+//! ## Which names an inferred capture list holds
+//!
+//! [`infer_close_captures`] hands back every name the block would resolve outward for; this file
+//! decides which of them to *copy*. A name that resolves in the **per-call** portion of the chain
+//! must be captured — its home dies while the block's value lives. One that resolves in the
+//! **eternal** portion is skipped: it stays visible through the severed block's own outer link, so a
+//! copy buys nothing. [`HitTier`] is that split, read off the same resolution that found the
+//! binding, so `CLOSE` and `CLOSE OVER (<the same names>)` capture the identical bindings.
 
 use std::rc::Rc;
 
 use crate::machine::execute::deps_on;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeResolution;
+use crate::machine::model::infer_close_captures;
 use crate::machine::model::{
     ExpressionPart, KExpression, KObject, KType, KeyElement, KeywordSymbol, TypeSymbol,
     ValueSymbol, WILDCARD, render_label, render_untyped_key,
@@ -61,7 +78,7 @@ use crate::machine::model::{
 use crate::machine::{Action, AwaitContinue, CallFrame, DeliveredCarried, WriteGate};
 use crate::machine::{BindingIndex, DeclarationSite};
 use crate::machine::{DeliveredFunction, DeliveredOperatorGroup, Scope};
-use crate::machine::{KError, KErrorKind, LexicalFrame, NameLookup, ProducerId};
+use crate::machine::{HitTier, KError, KErrorKind, LexicalFrame, NameLookup, ProducerId};
 use crate::machine::{fresh_cart_tail, seed};
 use crate::witnessed::{BumpAllocator, BumpVec};
 
@@ -69,6 +86,16 @@ use super::{arg, kw, sig};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { body, captures } }
+
+/// Where a form's capture list comes from. The one thing the two `CLOSE` overloads differ in — a
+/// `Copy` handle either way, so a park's continuation carries it back into the same spine.
+#[derive(Clone, Copy)]
+enum Captures<'a> {
+    /// `CLOSE OVER (<captures>) (<block>)`: the slot the form spells its captures in, still raw.
+    Listed(KExpression<'a>),
+    /// `CLOSE (<block>)`: derived from the block's free identifiers, per evaluation.
+    Inferred,
+}
 
 /// One entry of the capture list, as read off the slot before anything is resolved. Staged on the
 /// step scratch, like every other transient here: a pass reads the list out of the `captures` slot
@@ -129,7 +156,23 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
     build(
         ctx.scope,
         ctx.chain.clone(),
-        captures,
+        Captures::Listed(captures),
+        block,
+        ctx.scratch,
+        ctx.registries,
+    )
+}
+
+/// `CLOSE (<block>)` — the same severance with the capture list derived from the block instead of
+/// spelled. Shares [`build`] whole; only the [`Captures`] source differs.
+pub fn body_inferred<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
+    use crate::machine::require_kexpression;
+
+    let block = crate::try_action!(require_kexpression(ctx.args, "CLOSE", &SLOTS.body));
+    build(
+        ctx.scope,
+        ctx.chain.clone(),
+        Captures::Inferred,
         block,
         ctx.scratch,
         ctx.registries,
@@ -144,18 +187,18 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> Action<'a> {
 ///
 /// `scratch` is the *running* step's arena, never a captured one: a park's continuation carries only
 /// the two slot handles and the chain, and the wake passes its own `FinishCtx`'s scratch back in.
-/// That is what lets every transient below live on the arena — the list, the plan and the park set
-/// all die with the pop that produced them, and the wake rebuilds them on its own.
+/// That is what lets every transient below live on the arena — the list (or the inference that
+/// stands in for it), the plan and the park set all die with the pop that produced them, and the
+/// wake rebuilds them on its own.
 fn build<'a>(
     scope: &'a Scope<'a>,
     chain: Option<Rc<LexicalFrame>>,
-    captures: KExpression<'a>,
+    captures: Captures<'a>,
     block: KExpression<'a>,
     scratch: BumpAllocator<'a>,
     registries: &RunRegistries,
 ) -> Action<'a> {
-    let list = crate::try_action!(read_capture_list(captures, scratch, registries));
-    let plan = match resolve(scope, chain.as_ref(), &list, scratch, registries) {
+    let plan = match resolve(scope, chain.as_ref(), captures, block, scratch, registries) {
         Ok(Pass::Ready(plan)) => plan,
         Ok(Pass::Park(sources)) => {
             let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
@@ -285,13 +328,14 @@ fn shape_error(detail: &str) -> KError {
 
 // ---------- resolving ----------
 
-/// One resolution pass: the explicit captures, then implicit close over the per-call chain.
-/// Every in-flight producer either pass meets is collected into a single park set, so N captures
+/// One resolution pass: the form's captures, then implicit close over the per-call chain.
+/// Every in-flight producer either half meets is collected into a single park set, so N captures
 /// and every visible claim cost one wake between them.
 fn resolve<'a>(
     scope: &Scope<'_>,
     chain: Option<&Rc<LexicalFrame>>,
-    list: &[Capture<'a>],
+    captures: Captures<'a>,
+    block: KExpression<'a>,
     scratch: BumpAllocator<'a>,
     registries: &RunRegistries,
 ) -> Result<Pass<'a>, KError> {
@@ -299,44 +343,25 @@ fn resolve<'a>(
     let mut parked: BumpVec<'a, ProducerId> = BumpVec::new_in(scratch);
     let frame = chain.map(|c| &**c);
 
-    for capture in list {
-        match capture {
-            Capture::Value(name) => match scope.resolve_value_delivered(*name, frame) {
-                Some(NameLookup::Bound(delivered)) => plan.values.push((*name, delivered)),
-                Some(NameLookup::Parked(producer)) => park(&mut parked, producer),
-                None => {
-                    return Err(KError::new(KErrorKind::UnboundName(render_label(
-                        name.symbol(),
-                        registries,
-                    ))));
-                }
-            },
-            Capture::Type(name) => {
-                match scope.resolve_type_identifier(*name, chain.cloned(), registries) {
-                    TypeResolution::Done(kt) => plan.types.push((*name, kt)),
-                    TypeResolution::Park(sources) => {
-                        for producer in sources {
-                            park(&mut parked, producer);
-                        }
-                    }
-                    TypeResolution::Unbound(missing) => {
-                        return Err(KError::new(KErrorKind::UnboundName(render_label(
-                            missing.symbol(),
-                            registries,
-                        ))));
-                    }
-                }
-            }
-            Capture::Pattern(key) => resolve_pattern(
-                scope,
-                frame,
-                key,
-                scratch,
-                registries,
-                &mut plan,
-                &mut parked,
-            )?,
-        }
+    match captures {
+        Captures::Listed(slot) => resolve_listed(
+            scope,
+            chain,
+            &read_capture_list(slot, scratch, registries)?,
+            scratch,
+            registries,
+            &mut plan,
+            &mut parked,
+        )?,
+        Captures::Inferred => resolve_inferred(
+            scope,
+            chain,
+            block,
+            scratch,
+            registries,
+            &mut plan,
+            &mut parked,
+        )?,
     }
 
     close_implicitly(scope, frame, scratch, &mut plan, &mut parked);
@@ -346,6 +371,122 @@ fn resolve<'a>(
     } else {
         Pass::Park(parked)
     })
+}
+
+/// The written-out list: every entry resolves, and a name that resolves nowhere is this statement's
+/// error. No tier test — naming a capture explicitly says to copy it whatever it resolves to.
+#[allow(clippy::too_many_arguments)]
+fn resolve_listed<'a>(
+    scope: &Scope<'_>,
+    chain: Option<&Rc<LexicalFrame>>,
+    list: &[Capture<'a>],
+    scratch: BumpAllocator<'a>,
+    registries: &RunRegistries,
+    plan: &mut CapturePlan<'a>,
+    parked: &mut BumpVec<'a, ProducerId>,
+) -> Result<(), KError> {
+    let frame = chain.map(|c| &**c);
+    for capture in list {
+        match capture {
+            Capture::Value(name) => match scope.resolve_value_delivered(*name, frame) {
+                Some(NameLookup::Bound(delivered)) => plan.values.push((*name, delivered)),
+                Some(NameLookup::Parked(producer)) => park(parked, producer),
+                None => return Err(unbound(*name, registries)),
+            },
+            Capture::Type(name) => {
+                resolve_type_capture(scope, chain, *name, registries, plan, parked)?;
+            }
+            Capture::Pattern(key) => {
+                resolve_pattern(scope, frame, key, scratch, registries, plan, parked)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The derived list: walk `block` for its free identifiers, then keep the ones whose home will not
+/// survive the block's value.
+///
+/// A dynamic-name form anywhere in the inference domain fails the whole form before any resolution,
+/// so the error is the same whichever order the names would have resolved in.
+fn resolve_inferred<'a>(
+    scope: &Scope<'_>,
+    chain: Option<&Rc<LexicalFrame>>,
+    block: KExpression<'a>,
+    scratch: BumpAllocator<'a>,
+    registries: &RunRegistries,
+    plan: &mut CapturePlan<'a>,
+    parked: &mut BumpVec<'a, ProducerId>,
+) -> Result<(), KError> {
+    let inference = infer_close_captures(&block, scratch, registries);
+    if let Some(conflict) = inference.conflict {
+        return Err(KError::new(KErrorKind::DynamicNamesUnderInferredClose {
+            form: conflict.form,
+            location: match (conflict.span, conflict.file) {
+                (Some(span), Some(file)) => Some(crate::machine::core::resolve_location(
+                    crate::source::SourceRef { span, file },
+                )),
+                _ => None,
+            },
+        }));
+    }
+    let frame = chain.map(|c| &**c);
+    for name in inference.values.iter().copied() {
+        match scope.resolve_value_tiered(name, frame) {
+            Some((HitTier::PerCall, NameLookup::Bound(delivered))) => {
+                plan.values.push((name, delivered));
+            }
+            Some((HitTier::PerCall, NameLookup::Parked(producer))) => park(parked, producer),
+            // Eternal-homed: still visible through the block's own outer link, so a copy buys
+            // nothing and the block reads it where it lives.
+            Some((HitTier::Eternal, _)) => {}
+            None => return Err(unbound(name, registries)),
+        }
+    }
+    for name in inference.types.iter().copied() {
+        // The tier decides whether to capture; a per-call hit then resolves through the same ladder
+        // the written-out list uses, so both forms capture the identical handle under the identical
+        // finalize gate. A name with no `types` hit at all is left alone rather than reported: a
+        // Type token the block spells is not always a bare-resolvable type name — a `UNION`'s
+        // variant tag reaches its arm through its binder — and one that really is missing raises
+        // its own error at the use site inside the block.
+        if let Some((HitTier::PerCall, _)) = scope.resolve_type_tiered(name, frame) {
+            resolve_type_capture(scope, chain, name, registries, plan, parked)?;
+        }
+    }
+    Ok(())
+}
+
+/// One type-channel capture, resolved through the elaborator and its finalize gate.
+fn resolve_type_capture<'a>(
+    scope: &Scope<'_>,
+    chain: Option<&Rc<LexicalFrame>>,
+    name: TypeSymbol,
+    registries: &RunRegistries,
+    plan: &mut CapturePlan<'a>,
+    parked: &mut BumpVec<'a, ProducerId>,
+) -> Result<(), KError> {
+    match scope.resolve_type_identifier(name, chain.cloned(), registries) {
+        TypeResolution::Done(kt) => plan.types.push((name, kt)),
+        TypeResolution::Park(sources) => {
+            for producer in sources {
+                park(parked, producer);
+            }
+        }
+        TypeResolution::Unbound(missing) => return Err(unbound(missing, registries)),
+    }
+    Ok(())
+}
+
+/// The one `UnboundName` spelling both channels and both forms report through.
+fn unbound(
+    name: impl crate::machine::model::ClassifiedSymbol,
+    registries: &RunRegistries,
+) -> KError {
+    KError::new(KErrorKind::UnboundName(render_label(
+        name.symbol(),
+        registries,
+    )))
 }
 
 fn park(parked: &mut BumpVec<'_, ProducerId>, producer: ProducerId) {
@@ -472,7 +613,7 @@ impl CapturePlan<'_> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
-    let signature = sig(
+    let listed = sig(
         KType::ANY,
         vec![
             kw(registries, "CLOSE"),
@@ -481,7 +622,17 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ],
     );
-    crate::builtins::register_builtin(scope, signature, body, registries, gate);
+    crate::builtins::register_builtin(scope, listed, body, registries, gate);
+    // A distinct bucket key, so `CLOSE OVER () (<block>)` stays the explicit "capture nothing" form
+    // rather than an inferred one.
+    let inferred = sig(
+        KType::ANY,
+        vec![
+            kw(registries, "CLOSE"),
+            arg(registries, &SLOTS.body, KType::KEXPRESSION),
+        ],
+    );
+    crate::builtins::register_builtin(scope, inferred, body_inferred, registries, gate);
 }
 
 #[cfg(test)]

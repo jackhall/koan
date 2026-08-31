@@ -18,6 +18,7 @@ mod registry;
 mod resolve;
 
 pub(crate) use reach::AdoptSeam;
+pub(crate) use resolve::HitTier;
 
 /// Lexical environment, resident in its region's **bump**.
 ///

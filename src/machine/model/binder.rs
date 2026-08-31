@@ -803,7 +803,7 @@ pub(crate) fn announce_type_members(
 }
 
 /// The schema expression of a `UNION <name> = (<schema>)` statement — its final slot.
-fn union_schema<'a>(statement: &KExpression<'a>) -> Option<KExpression<'a>> {
+pub(crate) fn union_schema<'a>(statement: &KExpression<'a>) -> Option<KExpression<'a>> {
     match statement.parts.last()?.value {
         ExpressionPart::Expression(schema) => Some(*schema),
         _ => None,

@@ -131,6 +131,11 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
         key: &[Kw(&KEYWORDS.close), Kw(&KEYWORDS.over), Slot, Slot],
         slots: &[(2, CODE), (3, CODE)],
     },
+    // CLOSE <body> — the inferred-capture form.
+    LazySlotSpec {
+        key: &[Kw(&KEYWORDS.close), Slot],
+        slots: &[(1, CODE)],
+    },
     // <field list> FROM <record>
     LazySlotSpec {
         key: &[Slot, Kw(&KEYWORDS.from), Slot],
