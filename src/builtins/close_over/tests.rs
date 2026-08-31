@@ -9,6 +9,8 @@
 //! is a dispatch registration, which implicit close pins on purpose; an anonymous one is a plain
 //! value binding, so a chain of them isolates the lexical-frame retention the form exists to cut.
 
+mod inferred;
+
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::core::KoanRegionExt;
