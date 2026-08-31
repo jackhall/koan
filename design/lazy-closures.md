@@ -127,11 +127,29 @@ unconstructible.
 
 ## Inferred capture
 
-`CLOSE (block)` infers the capture list: the block's free value identifiers,
-callables and modules being implicit already. `$(...)` inside such a block
-is a structured error — EVAL resolves names dynamically, so inference is
-impossible; `CLOSE OVER` is the EVAL-friendly form. `CLOSE OVER ()` is an
-empty capture, distinct from inference.
+`CLOSE (block)` infers the capture list: the block's free identifiers on both
+channels — value names and type names — callables and modules being implicit
+already. Freeness is position-aware, mirroring the strict `idx < cutoff`
+visibility rule: a use lexically before a `LET` of the same name is free. A
+free identifier that resolves in the per-call portion of the enclosing chain
+is captured exactly as if written in a `CLOSE OVER` list (an in-flight claim
+parks the build); one that resolves only in the eternal tier is read through
+the block's outer link rather than copied; one that resolves nowhere is an
+unbound-name error at the form.
+
+Two forms surface names dynamically, so their presence in the inference
+domain is a structured error — the free identifiers cannot be identified and
+`CLOSE OVER` remains the form that admits them:
+
+- `$(...)`: EVAL resolves names against the scope at the evaluation site.
+- `USING … SCOPE (…)`: the window surfaces its module's members at run time,
+  so a syntactic walk cannot tell a member reference from a name the
+  enclosing chain must supply.
+
+The inference domain is the walked region of the block: `#(...)` quote bodies
+are excluded as data, and the blocks of nested `CLOSE OVER` / `CLOSE` forms
+are excluded as severed — a nested `CLOSE` polices its own block when it
+evaluates. `CLOSE OVER ()` is an empty capture, distinct from inference.
 
 ## Open work
 
