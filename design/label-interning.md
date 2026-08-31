@@ -453,14 +453,14 @@ prints a name never renders one. A binder builtin reads its own name back the sa
 on the arm that quotes it, not before.
 
 Because the surface parts of an expression carry symbols rather than text, the surface
-rendering of a part, an expression or a trace frame takes the run's interner, and so do the
-parse-side walkers that quote a name in a diagnostic. A field or parameter list is the shape
+rendering of a part, an expression or a trace frame resolves through the run's registries, and so
+do the walkers that quote a name in a diagnostic. A field or parameter list is the shape
 to read that against: `parse_pair_list` and
 `parse_type_tag_names` — the pair-list door and the variant-tag pre-scan
-([triple_list.rs](../src/parse/triple_list.rs)) — take the interner and hand each name on as the
-symbol its own token minted, rendering only inside the message a rejected or duplicated name
-raises. The name a declaration *keeps* is never rendered — text appears on the error path and the
-print path, nowhere else.
+([triple_list.rs](../src/parse/triple_list.rs)) — take the run bundle, read labels through it, and
+hand each name on as the symbol its own token minted, rendering only inside the message a rejected
+or duplicated name raises. The name a declaration *keeps* is never rendered — text appears on the
+error path and the print path, nowhere else.
 
 ### The surface-rendering family
 
@@ -480,6 +480,48 @@ spellings:
 - **`summarize(…)`** (`KType::name`) is `summary(..).to_string()`, for the callers that *keep*
   a rendering rather than write it somewhere: a `KError`'s stored `expr` / `got` text, a trace
   frame, a deferred return's stored surface.
+
+The `Part` family renders through the whole run bundle rather than the interner alone, because it
+names types rather than spellings. A [`WorkingPart`](../src/machine/model/ast/working.rs) summary is
+read inside a diagnostic explaining a dispatch outcome, so every argument slot renders **the type
+dispatch matched it on** — not the value the slot holds, and not the spelling that produced it. A
+slot is matched on its type alone, so the type is the whole of what the decision saw. What pays for
+dropping the echo is the site: `KErrorKind::DispatchFailed` and `AmbiguousDispatch` each carry the
+offending expression's resolved location and render it beside the expression, in the same
+`at <path>:<line>:<col>` shape a trace frame uses. Owning it rather than borrowing an enclosing
+call's frame is what makes a top-level statement — which nothing encloses — locate at all.
+
+The arms mirror `KType::accepts_working_part`, which is what decided the outcome.
+`KType::slot_ktype` answers an unevaluated AST slot — the inverse of `KType::accepts_part`, read as
+a function instead of a predicate — and `Carried::ktype` answers a resolved `Spliced` cell. Neither
+reports a stand-in for the slot's *shape*: a container literal types its own contents, recursing
+through `slot_ktype` and joining the results with `TypeRegistry::join_iter`, the same join
+`KObject::list_of_held` applies once those elements have evaluated, so `[1 2 3]` answers
+`:(LIST OF Number)` whether or not it has run yet. One consequence is that a slot reads the same
+either way: `RUNLATER 3` and `RUNLATER (1 + 2)` both render `RUNLATER Number`, because dispatch saw
+the same type in both.
+
+A bare name reports the type of the value it is *bound to*, which takes one step of care. The
+pre-dispatch scan resolves every bare-name part into `bare_outcomes`, a parallel array beside the
+parts run, and the success path splices the picked wrap set back into the expression. A miss has no
+pick, so `splice_resolved_names`
+([keyworded.rs](../src/machine/execute/decide/keyworded.rs)) splices the lot before the diagnostic
+summarizes: without it the miss would render the parts run as it stood *before* resolution, where a
+name is still its own token, and report the token's type rather than the bound value's.
+
+Two positions stay off the type rule. A binder's name slot (`binder_name_slot`) keeps its spelling
+through `WorkingPart::write_spelling`, because nothing dispatches on it — it is the name being
+installed, and naming its type would render every `LET` alike. And the scheduler's own unfilled
+arms — a synthesized node it will dispatch, a hole awaiting a sibling's carrier — hold no value
+yet, so only an `Any` slot admits one and none of them narrowed the candidate set that missed; they
+render `<staged>` rather than name a type they do not have.
+
+The two expression families differ in signature here: `ExpressionPart`'s inherent `summary` keeps a
+bare `&LabelInterner` and renders surface spelling, which is what a *parse*-time shape error wants
+(a record literal's rejected field name, in
+[dict_literal.rs](../src/parse/dict_literal.rs)) — and parse renders it while still *filling* the
+interner a run frame has yet to adopt, so the bundle is not available to it. Its `Part` impl narrows
+the bundle down to that interner.
 
 Two consequences follow from the streaming shape. A renderer cannot inspect the text it has
 already written, so the parameter-record sigil convention — a leaf type surface takes a `:`

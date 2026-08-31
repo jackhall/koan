@@ -11,6 +11,7 @@
 //!   value-channel callable surfaces a type-shaped `TypeMismatch`.
 
 use crate::machine::core::DepPlacement;
+use crate::machine::core::location_from_expr;
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind};
@@ -96,7 +97,7 @@ fn park_on_head<'step>(
                 let head = ctx
                     .current_scope()
                     .adopt_carried(&head_delivered, AdoptSeam::Retaining);
-                match classify_head(head, type_only, ctx.registries()) {
+                match classify_head(head, type_only, &expr, ctx.registries()) {
                     Ok(c) => c,
                     Err(e) => return Outcome::Done(Err(e)),
                 }
@@ -124,6 +125,7 @@ fn park_on_head<'step>(
 fn classify_head<'step>(
     head: Carried<'step>,
     type_only: bool,
+    expr: &WorkingExpression<'step>,
     registries: &RunRegistries,
 ) -> Result<ResolvedCallable<'step>, KError> {
     match head {
@@ -136,6 +138,7 @@ fn classify_head<'step>(
             other => Err(KError::new(KErrorKind::DispatchFailed {
                 expr: other.summarize(registries),
                 reason: "head evaluates to a non-callable value".to_string(),
+                location: location_from_expr(expr),
             })),
         },
         // A head is resolved before it is classified, so an unlowered name names no callable.

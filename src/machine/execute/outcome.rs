@@ -350,9 +350,7 @@ pub(in crate::machine::execute) enum DeferredTraceFrame<'step> {
 impl DeferredTraceFrame<'_> {
     pub(in crate::machine::execute) fn render(&self, registries: &RunRegistries) -> TraceFrame {
         match self {
-            Self::Working { function, expr } => {
-                TraceFrame::from_expr(*function, expr, &registries.labels)
-            }
+            Self::Working { function, expr } => TraceFrame::from_expr(*function, expr, registries),
             Self::Bare {
                 function,
                 expression,

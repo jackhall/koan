@@ -12,7 +12,7 @@ use crate::witnessed::RegionHandleFamily;
 use super::{DeliveredCarried, FoldingBrand, RegionBrand, SubstrateDoor};
 use super::{KoanStorageProfile, Scope, scope_frame};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::{BinderSymbol, LabelInterner, ValueSymbol};
+use crate::machine::model::labels::{BinderSymbol, ValueSymbol};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
@@ -36,13 +36,22 @@ pub enum KErrorKind {
         got: usize,
     },
     /// Multiple registered functions matched with equal specificity.
+    ///
+    /// `location` is where the offending expression sits. A dispatch summary names the *type* each
+    /// argument slot matched on, never its spelling, so the location is how a reader gets the
+    /// spelling back — and unlike a [`TraceFrame`], it is present even when nothing encloses the
+    /// expression. Display-only, like [`NestedBinder`](KErrorKind::NestedBinder)'s `suggest_flat`.
     AmbiguousDispatch {
         expr: String,
         candidates: usize,
+        location: Option<SourceLoc>,
     },
+    /// `location` carries the offending expression's site; see
+    /// [`AmbiguousDispatch`](KErrorKind::AmbiguousDispatch) for why a dispatch error owns one.
     DispatchFailed {
         expr: String,
         reason: String,
+        location: Option<SourceLoc>,
     },
     /// A binder-introducing form (LET, FN, OP, TYPE, …) appeared in an eagerly evaluated
     /// sub-expression — a user-call or builtin argument, an operator operand, a literal element, a
@@ -125,11 +134,11 @@ impl TraceFrame {
     pub fn from_expr(
         function: impl Into<String>,
         expr: &WorkingExpression<'_>,
-        labels: &LabelInterner,
+        registries: &RunRegistries,
     ) -> TraceFrame {
         TraceFrame {
             function: function.into(),
-            expression: expr.summarize(labels),
+            expression: expr.summarize(registries),
             location: location_from_expr(expr),
         }
     }
@@ -147,7 +156,8 @@ pub(crate) fn resolve_location(site: SourceRef) -> SourceLoc {
     })
 }
 
-fn location_from_expr(expr: &WorkingExpression<'_>) -> Option<SourceLoc> {
+/// Where an expression sits in source, `None` for a node the scheduler synthesized.
+pub(crate) fn location_from_expr(expr: &WorkingExpression<'_>) -> Option<SourceLoc> {
     expr.source_ref().map(resolve_location)
 }
 
@@ -393,14 +403,16 @@ impl KErrorKind {
                     (&FIELD.got, KObject::Number(*got as f64)),
                 ],
             ),
-            KErrorKind::AmbiguousDispatch { expr, candidates } => (
+            KErrorKind::AmbiguousDispatch {
+                expr, candidates, ..
+            } => (
                 "AmbiguousDispatch".to_string(),
                 vec![
                     (&FIELD.expr, KObject::KString(brand.allocator().text(expr))),
                     (&FIELD.candidates, KObject::Number(*candidates as f64)),
                 ],
             ),
-            KErrorKind::DispatchFailed { expr, reason } => (
+            KErrorKind::DispatchFailed { expr, reason, .. } => (
                 "DispatchFailed".to_string(),
                 vec![
                     (&FIELD.expr, KObject::KString(brand.allocator().text(expr))),
@@ -500,14 +512,19 @@ impl KErrorKind {
     }
 }
 
+/// A resolved site in the `at <path>:<line>:<col>` shape a trace frame uses, so a location reads
+/// the same wherever it appears.
+fn write_location(f: &mut fmt::Formatter<'_>, location: Option<&SourceLoc>) -> fmt::Result {
+    let Some(loc) = location else { return Ok(()) };
+    write!(f, " at {}:{}:{}", loc.path, loc.line, loc.col_utf16)
+}
+
 impl fmt::Display for KError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.kind)?;
         for frame in &self.frames {
             write!(f, "\n  in {} ({})", frame.expression, frame.function)?;
-            if let Some(loc) = &frame.location {
-                write!(f, " at {}:{}:{}", loc.path, loc.line, loc.col_utf16)?;
-            }
+            write_location(f, frame.location.as_ref())?;
         }
         Ok(())
     }
@@ -530,12 +547,26 @@ impl fmt::Display for KErrorKind {
                     "arity mismatch = expected {expected} arguments, got {got}"
                 )
             }
-            KErrorKind::AmbiguousDispatch { expr, candidates } => write!(
-                f,
-                "ambiguous dispatch: {candidates} candidates match {expr} with equal specificity",
-            ),
-            KErrorKind::DispatchFailed { expr, reason } => {
-                write!(f, "dispatch failed for {expr}: {reason}")
+            KErrorKind::AmbiguousDispatch {
+                expr,
+                candidates,
+                location,
+            } => {
+                write!(
+                    f,
+                    "ambiguous dispatch: {candidates} candidates match {expr}"
+                )?;
+                write_location(f, location.as_ref())?;
+                f.write_str(" with equal specificity")
+            }
+            KErrorKind::DispatchFailed {
+                expr,
+                reason,
+                location,
+            } => {
+                write!(f, "dispatch failed for {expr}")?;
+                write_location(f, location.as_ref())?;
+                write!(f, ": {reason}")
             }
             KErrorKind::NestedBinder { expr, suggest_flat } => {
                 write!(

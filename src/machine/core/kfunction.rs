@@ -28,7 +28,6 @@ pub mod exec;
 pub mod pick;
 
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::LabelInterner;
 use crate::machine::model::{Symbol, render_label};
 pub use action::ActionFn;
 pub use body::Body;
@@ -233,15 +232,19 @@ impl<'a> KFunction<'a> {
                             registries.labels.display(t.symbol()),
                         );
                         return Err(KError::new(KErrorKind::DispatchFailed {
-                            expr: summarize_parts(parts, &registries.labels),
+                            expr: summarize_parts(parts, registries),
                             reason: format!("expected keyword '{s}', got '{t}'"),
+                            // A parts run carries spans but no file, and validation runs inside a
+                            // call already being bound, so the enclosing frame locates this.
+                            location: None,
                         }));
                     }
                     _ => {
                         let s = registries.labels.display(s.symbol());
                         return Err(KError::new(KErrorKind::DispatchFailed {
-                            expr: summarize_parts(parts, &registries.labels),
+                            expr: summarize_parts(parts, registries),
                             reason: format!("expected keyword '{s}'"),
+                            location: None,
                         }));
                     }
                 },
@@ -250,7 +253,7 @@ impl<'a> KFunction<'a> {
                         return Err(KError::new(KErrorKind::TypeMismatch {
                             arg: render_label(arg.name.symbol(), registries),
                             expected: arg.ktype.name(registries),
-                            got: part.value.summarize(&registries.labels),
+                            got: part.value.summarize(registries),
                         }));
                     }
                 }
@@ -353,14 +356,14 @@ impl<'a> KFunction<'a> {
 
 /// Surface rendering of a call's parts for a diagnostic — the same text
 /// [`WorkingExpression::summarize`] produces, from the parts run alone.
-fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>], labels: &LabelInterner) -> String {
+fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>], registries: &RunRegistries) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     for (index, part) in parts.iter().enumerate() {
         if index > 0 {
             out.push(' ');
         }
-        let _ = write!(out, "{}", part.value.summary(labels));
+        let _ = write!(out, "{}", part.value.summary(registries));
     }
     out
 }

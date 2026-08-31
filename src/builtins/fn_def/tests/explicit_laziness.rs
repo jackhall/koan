@@ -115,3 +115,132 @@ fn a_name_bound_to_a_quote_fills_a_builtin_lazy_slot() {
     );
     assert_eq!(bytes, b"yes\n");
 }
+
+/// The miss names each argument slot by the type dispatch matched it on, not by the value it
+/// evaluated to. The error carries the offending expression's site, so the spelling is recoverable
+/// from source without the message echoing it.
+#[test]
+fn a_missed_dispatch_renders_an_evaluated_argument_by_type() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let (mut test_run, _captured) = TestRun::with_buf(&program, &region);
+    test_run.run("FN (RUNLATER body :KExpression) -> Any = ($(body))");
+    let error = test_run.run_one_err(test_run.parse_one("RUNLATER (1 + 2)"));
+    let KErrorKind::DispatchFailed { expr, .. } = &error.kind else {
+        panic!("expected a dispatch miss, got {error}");
+    };
+    assert_eq!(expr, "RUNLATER Number");
+}
+
+/// The rendering tracks the dispatch axis and nothing else: two values of one type read alike,
+/// because dispatch cannot tell them apart either, while two types read apart.
+#[test]
+fn the_rendering_tracks_the_type_not_the_value() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let (mut test_run, _captured) = TestRun::with_buf(&program, &region);
+    test_run.run("FN (RUNLATER body :KExpression) -> Any = ($(body))");
+    let mut render = |source: &str| {
+        let error = test_run.run_one_err(test_run.parse_one(source));
+        let KErrorKind::DispatchFailed { expr, .. } = &error.kind else {
+            panic!("expected a dispatch miss, got {error}");
+        };
+        expr.clone()
+    };
+    assert_eq!(render("RUNLATER (1 + 2)"), "RUNLATER Number");
+    assert_eq!(
+        render("RUNLATER (2 + 2)"),
+        "RUNLATER Number",
+        "two values of one type share a rendering — dispatch cannot tell them apart either",
+    );
+    assert_eq!(render("RUNLATER (\"hi\")"), "RUNLATER Str");
+    assert_eq!(render("RUNLATER ([1 2 3])"), "RUNLATER :(LIST OF Number)");
+}
+
+/// A slot renders the same whether or not it happened to evaluate: an unevaluated literal and a
+/// group evaluating to the same type read alike, because dispatch matched them on the same type.
+/// The evaluated/unevaluated split is a scheduling detail, not something a diagnostic reports.
+#[test]
+fn an_evaluated_slot_and_an_unevaluated_one_of_a_type_read_alike() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let (mut test_run, _captured) = TestRun::with_buf(&program, &region);
+    test_run.run("FN (RUNLATER body :KExpression) -> Any = ($(body))");
+    let mut render = |source: &str| {
+        let error = test_run.run_one_err(test_run.parse_one(source));
+        let KErrorKind::DispatchFailed { expr, .. } = &error.kind else {
+            panic!("expected a dispatch miss, got {error}");
+        };
+        expr.clone()
+    };
+    assert_eq!(render("RUNLATER 3"), render("RUNLATER (1 + 2)"));
+    assert_eq!(render("RUNLATER 3"), "RUNLATER Number");
+    // A raw type token and a group evaluating to a type both denote a proper type.
+    assert_eq!(render("RUNLATER Number"), render("RUNLATER (Number)"));
+    assert_eq!(render("RUNLATER Number"), "RUNLATER ProperType");
+}
+
+/// A keyword fills no slot, so it keeps its own spelling — the rendering names types only where
+/// dispatch was matching one.
+#[test]
+fn a_keyword_keeps_its_spelling() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let (mut test_run, _captured) = TestRun::with_buf(&program, &region);
+    test_run.run("FN (RUNLATER body :KExpression) -> Any = ($(body))");
+    let error = test_run.run_one_err(test_run.parse_one("RUNLATER (1 + 2)"));
+    let KErrorKind::DispatchFailed { expr, .. } = &error.kind else {
+        panic!("expected a dispatch miss, got {error}");
+    };
+    assert!(
+        expr.starts_with("RUNLATER "),
+        "the dispatch keyword renders as itself, got {expr}",
+    );
+}
+
+/// A binder name slot is not a dispatch axis — it is the name being declared — so it keeps its
+/// spelling even once the name already resolves in scope. The miss path's resolution splice skips
+/// that slot for exactly this reason; splicing there would render the bound value's type in place
+/// of the name.
+#[test]
+fn a_binder_name_keeps_its_spelling_once_bound() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let (mut test_run, _captured) = TestRun::with_buf(&program, &region);
+    test_run.run("LET greet = \"hi\"");
+    let error = test_run.run_one_err(test_run.parse_one("MODULE greet = 5"));
+    let KErrorKind::DispatchFailed { expr, .. } = &error.kind else {
+        panic!("expected a dispatch miss, got {error}");
+    };
+    assert_eq!(
+        expr, "MODULE greet = Number",
+        "the declared name spells itself; only the value slot names a type",
+    );
+}
+
+/// A miss carries the offending expression's site itself, not only via an enclosing call's trace
+/// frame — so a top-level statement, which nothing encloses, still locates. That is what pays for
+/// the summary naming types instead of echoing the source.
+#[test]
+fn a_top_level_miss_carries_its_own_location() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let (mut test_run, _captured) = TestRun::with_buf(&program, &region);
+    test_run.run("FN (RUNLATER body :KExpression) -> Any = ($(body))");
+    let error = test_run.run_one_err(test_run.parse_one("RUNLATER (\"hi\")"));
+    assert!(
+        error.frames.is_empty(),
+        "nothing encloses a top-level statement"
+    );
+    let KErrorKind::DispatchFailed { location, .. } = &error.kind else {
+        panic!("expected a dispatch miss, got {error}");
+    };
+    let location = location.as_ref().expect("a parsed statement has a site");
+    assert!(
+        format!("{error}").contains(&format!(
+            "at {}:{}:{}",
+            location.path, location.line, location.col_utf16
+        )),
+        "the site renders into the message, got {error}",
+    );
+}

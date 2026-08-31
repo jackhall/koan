@@ -195,7 +195,7 @@ PICK both
 ```
 
 ```text
-error: ambiguous dispatch: 2 candidates match PICK both with equal specificity
+error: ambiguous dispatch: 2 candidates match PICK :{x :Number y :Str z :Str} at <input>:4:1 with equal specificity
 ```
 
 `(<fields>) FROM <record>` resolves this by *projecting* a record to exactly the

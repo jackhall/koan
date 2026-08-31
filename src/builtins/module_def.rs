@@ -95,7 +95,7 @@ pub(super) fn announce_type_members(
                 let Some(schema) = union_schema(statement) else {
                     continue;
                 };
-                match pair_list_names(&schema, "UNION schema", &registries.labels) {
+                match pair_list_names(&schema, "UNION schema", registries) {
                     Ok(tags) => {
                         announced.announce_binder(binder, tags);
                     }

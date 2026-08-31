@@ -3,6 +3,7 @@
 
 use crate::machine::ProducerId;
 use crate::machine::core::OpenedFunction;
+use crate::machine::core::location_from_expr;
 use crate::machine::model::{WorkingExpression, WorkingPart};
 use crate::machine::{DispatchOutcome, KError, KErrorKind};
 use crate::source::Spanned;
@@ -69,15 +70,19 @@ fn resolve_and_invoke<'step>(
     let resolved = match outcome {
         DispatchOutcome::Resolved(r) => r,
         DispatchOutcome::Ambiguous(n) => {
+            let named = splice_resolved_names(ctx, &expr, &bare_outcomes).unwrap_or(expr);
             return Outcome::Done(Err(KError::new(KErrorKind::AmbiguousDispatch {
-                expr: expr.summarize(&ctx.registries().labels),
+                expr: named.summarize(ctx.registries()),
                 candidates: n,
+                location: location_from_expr(&named),
             })));
         }
         DispatchOutcome::Unmatched { quote_hint } => {
+            let named = splice_resolved_names(ctx, &expr, &bare_outcomes).unwrap_or(expr);
             return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-                expr: expr.summarize(&ctx.registries().labels),
+                expr: named.summarize(ctx.registries()),
                 reason: unmatched_reason(quote_hint),
+                location: location_from_expr(&named),
             })));
         }
         DispatchOutcome::UnboundName(name) => {
@@ -94,6 +99,55 @@ fn resolve_and_invoke<'step>(
     let expr =
         splice_wrap_slots(ctx, &expr, &bare_outcomes, &resolved.wrap_indices).unwrap_or(expr);
     super::exec::invoke_continue(ctx, resolved.function, expr)
+}
+
+/// Resplice every bare name the pre-dispatch scan resolved *except* the binder name, for a miss the
+/// caller is about to render. [`splice_wrap_slots`] does the same for the picked wrap set on the
+/// success path; a miss has no pick, so it splices the rest of the lot.
+///
+/// Without this a diagnostic renders the parts run as it stood before resolution, where a bare name
+/// is still its own token — so a summary that names the type dispatch matched each slot on would
+/// report the *token's* type (`Identifier`) rather than the type of the value the name is bound to.
+/// The resolution has already happened by then; it just lives beside the parts, in `bare_outcomes`.
+///
+/// A binder name slot is the one position dispatch does not match on a type: it is the name being
+/// declared, and a summary spells it out. Splicing there would replace the spelling the render
+/// wants with a value the position never denoted — so the exclusion mirrors the wrap
+/// classification's, which skips the same slot on the success path.
+fn splice_resolved_names<'step>(
+    ctx: &DecideCtx<'_, 'step, '_>,
+    expr: &WorkingExpression<'step>,
+    bare_outcomes: &[Option<Resolution>],
+) -> Option<WorkingExpression<'step>> {
+    let binder_name_slot = expr.binder_name_slot();
+    let splices = |index: usize, outcome: &Option<Resolution>| {
+        Some(index) != binder_name_slot && matches!(outcome, Some(Resolution::Resolved(_)))
+    };
+    if !bare_outcomes
+        .iter()
+        .enumerate()
+        .any(|(index, outcome)| splices(index, outcome))
+    {
+        return None;
+    }
+    let brand = ctx.current_scope().brand();
+    Some(expr.respliced(
+        brand,
+        expr.parts.iter().enumerate().map(|(i, part)| {
+            let Some(outcome) = bare_outcomes.get(i).filter(|o| splices(i, o)) else {
+                return *part;
+            };
+            let Some(Resolution::Resolved(cell)) = outcome else {
+                return *part;
+            };
+            Spanned {
+                value: WorkingPart::Spliced {
+                    cell: ctx.current_scope().rest_delivered(cell),
+                },
+                span: part.span,
+            }
+        }),
+    ))
 }
 
 /// Why nothing matched. A slot typed `:KExpression` in the bucket that took an evaluated value

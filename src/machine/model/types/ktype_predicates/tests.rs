@@ -2,6 +2,7 @@ use super::*;
 use crate::builtins::test_support::lookup_type;
 use crate::builtins::test_support::{spliced_part, type_name, type_token, value_name};
 use crate::machine::core::SubstrateDoor;
+use crate::machine::model::BinderSymbol;
 use crate::machine::model::Carried;
 use crate::machine::model::ModuleDraft;
 use crate::machine::model::Record;
@@ -1266,4 +1267,91 @@ fn is_more_specific_identifier_ranking_otherwise_intact() {
     assert!(KType::EMPTY_SIGNATURE.is_more_specific_than(KType::IDENTIFIER, &registries));
     assert!(KType::IDENTIFIER.is_more_specific_than(KType::ANY, &registries));
     assert!(KType::NUMBER.is_more_specific_than(KType::IDENTIFIER, &registries));
+}
+
+/// [`KType::slot_ktype`] reads as the inverse of [`KType::accepts_part`], so the two must agree:
+/// the type a part reports must be one that admits that part. Covers every `ExpressionPart` arm,
+/// so adding an arm to either without the other fails here rather than silently rendering a type
+/// dispatch would not have matched.
+#[test]
+fn slot_ktype_round_trips_through_accepts_part() {
+    let registries = RunRegistries::new();
+    let program = crate::machine::program_storage();
+    let brand = program.brand();
+    let node = brand.nested_node(&[]);
+    let parts = [
+        ExpressionPart::Literal(KLiteral::Number(1.0)),
+        ExpressionPart::Literal(KLiteral::String("s")),
+        ExpressionPart::Literal(KLiteral::Boolean(true)),
+        ExpressionPart::Literal(KLiteral::Null),
+        ExpressionPart::ListLiteral(&[]),
+        ExpressionPart::DictLiteral(&[]),
+        ExpressionPart::RecordLiteral(&[]),
+        ExpressionPart::Identifier(value_name("x", &registries)),
+        ExpressionPart::Type(type_name("Ty", &registries)),
+        ExpressionPart::Expression(node),
+        ExpressionPart::QuotedExpression(node),
+        ExpressionPart::SigiledTypeExpr(node),
+        ExpressionPart::RecordType(node),
+    ];
+    for part in parts {
+        let slot = KType::slot_ktype(&part, &registries.types)
+            .unwrap_or_else(|| panic!("every non-keyword part reports a slot type: {part:?}"));
+        assert!(
+            slot.accepts_part(&part, &registries.types),
+            "slot_ktype({part:?}) = {} must be a type accepts_part admits",
+            slot.name(&registries),
+        );
+        // `Any` admits everything, so the round trip alone would pass an arm that gave up and
+        // reported it. The point of the door is a type dispatch actually matched on.
+        assert_ne!(
+            slot,
+            KType::ANY,
+            "slot_ktype({part:?}) must report the part's own type, not a stand-in",
+        );
+    }
+}
+
+/// A container's slot type is derived from its contents, so its element (or key/value, or field)
+/// types are the join of what the literal holds — not a stand-in the round trip would wave through.
+#[test]
+fn a_container_slot_type_carries_its_contents() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let numbers = [
+        ExpressionPart::Literal(KLiteral::Number(1.0)),
+        ExpressionPart::Literal(KLiteral::Number(2.0)),
+    ];
+    assert_eq!(
+        KType::slot_ktype(&ExpressionPart::ListLiteral(&numbers), types),
+        Some(types.list(KType::NUMBER)),
+    );
+
+    let pairs = [(
+        ExpressionPart::Literal(KLiteral::String("k")),
+        ExpressionPart::Literal(KLiteral::Boolean(true)),
+    )];
+    assert_eq!(
+        KType::slot_ktype(&ExpressionPart::DictLiteral(&pairs), types),
+        Some(types.dict(KType::STR, KType::BOOL)),
+    );
+
+    let field = BinderSymbol::Value(value_name("x", &registries));
+    let fields = [(field, ExpressionPart::Literal(KLiteral::Number(1.0)))];
+    assert_eq!(
+        KType::slot_ktype(&ExpressionPart::RecordLiteral(&fields), types),
+        Some(types.record(Record::from_pairs([(field, KType::NUMBER)]))),
+    );
+}
+
+/// A keyword fills no slot, so it reports no type — the arm the summary path renders as its own
+/// spelling instead.
+#[test]
+fn a_keyword_reports_no_slot_type() {
+    let registries = RunRegistries::new();
+    let keyword = ExpressionPart::Keyword(
+        crate::machine::model::KeywordSymbol::declared("PRINT", &registries.labels)
+            .expect("a fixture keyword"),
+    );
+    assert!(KType::slot_ktype(&keyword, &registries.types).is_none());
 }

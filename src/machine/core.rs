@@ -40,7 +40,7 @@ pub use carrier_witness::{
 };
 pub(crate) use carrier_witness::{GroupSeal, OverloadSeal, product_reaches_region, read_resting};
 pub use kerror::{KError, KErrorKind, TraceFrame};
-pub(crate) use kerror::{kerror_ktype, resolve_location};
+pub(crate) use kerror::{kerror_ktype, location_from_expr, resolve_location};
 pub(crate) use kfunction::action::{
     Action, ActionKind, AwaitContinue, BlockEntry, BlockRequest, BodyCtx, BodyPlacement, BoundArgs,
     CatchFn, DepPlacement, DepRequest, DepTerminal, FinishCtx, FramePlacement, SubDispatch,

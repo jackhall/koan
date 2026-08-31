@@ -18,6 +18,7 @@
 
 use crate::machine::core::RegionBrand;
 use crate::machine::core::Scope;
+use crate::machine::core::location_from_expr;
 use crate::machine::model::Part;
 use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
 use crate::machine::model::{ExpressionPart, PartClass, WorkingExpression, WorkingPart};
@@ -51,11 +52,12 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
                 // The powerset keys mean a hit already covers the probe, so a non-cover is a
                 // registry-build bug — surface it as a clean non-match rather than a wrong fold.
                 None => Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-                    expr: expr.summarize(&ctx.registries().labels),
+                    expr: expr.summarize(ctx.registries()),
                     reason: cross_group_reason(&rendered_operators(
                         &operators,
                         &ctx.registries().labels,
                     )),
+                    location: location_from_expr(expr),
                 }))),
                 Some(ChainPlan::FoldLeft) => reduce_fold_left(ctx, expr),
                 Some(ChainPlan::FoldRight) => reduce_fold_right(ctx, expr),
@@ -398,11 +400,12 @@ fn park_on_pending_operators<'step, 'b>(
     let to_wait = pending_operator_sources(ctx, s, expr);
     if to_wait.is_empty() {
         return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-            expr: expr.summarize(&ctx.registries().labels),
+            expr: expr.summarize(ctx.registries()),
             reason: undeclared_operator_reason(&rendered_operators(
                 &chain_operator_symbols(expr, ctx.scratch()),
                 &ctx.registries().labels,
             )),
+            location: location_from_expr(expr),
         })));
     }
     let parked_expr = *expr;

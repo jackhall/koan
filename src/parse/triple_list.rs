@@ -6,8 +6,9 @@
 //! validation and duplicate-name detection live here; the per-slot interpretation is
 //! supplied by a `parse_slot` closure.
 
+use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{FieldSlot, Part, part_summary};
-use crate::machine::model::labels::{BinderSymbol, LabelInterner, TypeSymbol};
+use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
 use crate::source::Spanned;
 
 /// Which token shapes are accepted as a field/parameter *name* by [`parse_pair_list`].
@@ -34,7 +35,7 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
     parts: &'a [Spanned<P>],
     context: &str,
     name_kind: FieldNameKind,
-    labels: &LabelInterner,
+    registries: &RunRegistries,
     mut parse_slot: impl FnMut(&P, BinderSymbol) -> Result<T, String>,
 ) -> Result<Vec<(BinderSymbol, T)>, String> {
     if !parts.len().is_multiple_of(2) {
@@ -60,20 +61,20 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
             (_, FieldNameKind::Type) => {
                 return Err(format!(
                     "{context} variant tag must be a capitalized type name, got {}",
-                    part_summary(&parts[i].value, labels),
+                    part_summary(&parts[i].value, registries),
                 ));
             }
             _ => {
                 return Err(format!(
                     "{context} name must be a bare identifier, got {}",
-                    part_summary(&parts[i].value, labels),
+                    part_summary(&parts[i].value, registries),
                 ));
             }
         };
         if out.iter().any(|(n, _)| *n == name) {
             return Err(format!(
                 "duplicate name `{}` in {context}",
-                labels.render(name.symbol()),
+                registries.labels.render(name.symbol()),
             ));
         }
         let slot = parse_slot(&parts[i + 1].value, name)?;
@@ -92,7 +93,7 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
 pub fn parse_type_tag_names<'a, P: Part<'a>>(
     parts: &'a [Spanned<P>],
     context: &str,
-    labels: &LabelInterner,
+    registries: &RunRegistries,
 ) -> Result<Vec<TypeSymbol>, String> {
     if !parts.len().is_multiple_of(2) {
         return Err(format!(
@@ -106,13 +107,13 @@ pub fn parse_type_tag_names<'a, P: Part<'a>>(
         let FieldSlot::Type(tag) = parts[i].value.field_slot() else {
             return Err(format!(
                 "{context} variant tag must be a capitalized type name, got {}",
-                part_summary(&parts[i].value, labels),
+                part_summary(&parts[i].value, registries),
             ));
         };
         if out.contains(&tag) {
             return Err(format!(
                 "duplicate name `{}` in {context}",
-                labels.render(tag.symbol()),
+                registries.labels.render(tag.symbol()),
             ));
         }
         out.push(tag);
@@ -126,7 +127,7 @@ mod tests {
     use super::*;
     use crate::machine::core::{RegionBrand, program_storage};
     use crate::machine::model::ast::{ExpressionPart, KExpression};
-    use crate::machine::model::labels::ValueSymbol;
+    use crate::machine::model::labels::{LabelInterner, ValueSymbol};
     use crate::source::Spanned;
 
     /// `[name, slot]` parts where the name rides as a `Type` token (e.g. a capitalized
@@ -149,13 +150,14 @@ mod tests {
     #[test]
     fn identifier_or_type_accepts_type_token_name() {
         let program = program_storage();
-        let labels = LabelInterner::new();
-        let expr = type_named_pair(program.brand().region(), &labels);
+        let registries = RunRegistries::new();
+        let labels = &registries.labels;
+        let expr = type_named_pair(program.brand().region(), labels);
         let out = parse_pair_list(
             expr.parts,
             "FN parameters",
             FieldNameKind::IdentifierOrType,
-            &labels,
+            &registries,
             |p, _| match p {
                 ExpressionPart::Type(t) => Ok(labels.render(t.symbol())),
                 _ => Err("unexpected slot".to_string()),
@@ -165,7 +167,7 @@ mod tests {
         assert_eq!(
             out,
             vec![(
-                BinderSymbol::Type(declared("Ty", &labels)),
+                BinderSymbol::Type(declared("Ty", labels)),
                 "Signature".to_string()
             )]
         );
@@ -176,28 +178,29 @@ mod tests {
     #[test]
     fn type_tag_names_are_classified_type_tokens() {
         let program = program_storage();
-        let labels = LabelInterner::new();
-        let expr = type_named_pair(program.brand().region(), &labels);
-        let tags = parse_type_tag_names(expr.parts, "UNION schema", &labels)
+        let registries = RunRegistries::new();
+        let labels = &registries.labels;
+        let expr = type_named_pair(program.brand().region(), labels);
+        let tags = parse_type_tag_names(expr.parts, "UNION schema", &registries)
             .expect("a Type-token tag is admitted");
-        assert_eq!(tags, vec![declared("Ty", &labels)]);
+        assert_eq!(tags, vec![declared("Ty", labels)]);
     }
 
     #[test]
     fn type_tag_names_reject_an_identifier_tag() {
         let program = program_storage();
-        let labels = LabelInterner::new();
+        let registries = RunRegistries::new();
+        let labels = &registries.labels;
         let expr = KExpression::new(
             program.brand().region(),
             &[
                 Spanned::bare(ExpressionPart::Identifier(
-                    ValueSymbol::declared("some", &labels)
-                        .expect("a fixture name is a value token"),
+                    ValueSymbol::declared("some", labels).expect("a fixture name is a value token"),
                 )),
-                Spanned::bare(ExpressionPart::Type(declared("Number", &labels))),
+                Spanned::bare(ExpressionPart::Type(declared("Number", labels))),
             ],
         );
-        let result = parse_type_tag_names(expr.parts, "UNION schema", &labels);
+        let result = parse_type_tag_names(expr.parts, "UNION schema", &registries);
         assert!(
             matches!(&result, Err(msg) if msg.contains("capitalized type name")),
             "a lowercase tag must be rejected, got {result:?}",
@@ -207,18 +210,19 @@ mod tests {
     #[test]
     fn type_tag_names_reject_a_duplicate_tag() {
         let program = program_storage();
-        let labels = LabelInterner::new();
+        let registries = RunRegistries::new();
+        let labels = &registries.labels;
         let region = program.brand().region();
         let expr = KExpression::new(
             region,
             &[
-                Spanned::bare(ExpressionPart::Type(declared("Ty", &labels))),
-                Spanned::bare(ExpressionPart::Type(declared("Number", &labels))),
-                Spanned::bare(ExpressionPart::Type(declared("Ty", &labels))),
-                Spanned::bare(ExpressionPart::Type(declared("Str", &labels))),
+                Spanned::bare(ExpressionPart::Type(declared("Ty", labels))),
+                Spanned::bare(ExpressionPart::Type(declared("Number", labels))),
+                Spanned::bare(ExpressionPart::Type(declared("Ty", labels))),
+                Spanned::bare(ExpressionPart::Type(declared("Str", labels))),
             ],
         );
-        let result = parse_type_tag_names(expr.parts, "UNION schema", &labels);
+        let result = parse_type_tag_names(expr.parts, "UNION schema", &registries);
         assert!(
             matches!(&result, Err(msg) if msg.contains("duplicate name")),
             "a repeated tag must be rejected, got {result:?}",
@@ -228,13 +232,14 @@ mod tests {
     #[test]
     fn identifier_only_rejects_type_token_name() {
         let program = program_storage();
-        let labels = LabelInterner::new();
-        let expr = type_named_pair(program.brand().region(), &labels);
+        let registries = RunRegistries::new();
+        let labels = &registries.labels;
+        let expr = type_named_pair(program.brand().region(), labels);
         let result = parse_pair_list(
             expr.parts,
             "STRUCT schema",
             FieldNameKind::Identifier,
-            &labels,
+            &registries,
             |_, _| Ok::<_, String>(()),
         );
         assert!(

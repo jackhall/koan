@@ -527,6 +527,64 @@ impl KType {
         }
     }
 
+    /// The type dispatch matches `part` on — the inverse of
+    /// [`accepts_part`](Self::accepts_part), read as a function instead of a predicate. A
+    /// diagnostic naming a slot renders this, because it is the whole of what dispatch saw there.
+    ///
+    /// `None` for a keyword, which is fixed syntax filling no slot. A raw type token answers
+    /// `ProperType` — the kind a parser type name denotes, not the type it names. A container
+    /// literal types its own contents: elements recurse through here and
+    /// [`TypeRegistry::join_iter`] joins them, the same rule
+    /// [`KObject::list_of_held`](crate::machine::model::KObject::list_of_held) applies once those
+    /// elements have evaluated, so `[1 2 3]` answers `:(LIST OF Number)` whether or not it has run
+    /// yet.
+    ///
+    /// Kept beside `accepts_part` because the two must agree: the type reported here must be one
+    /// `accepts_part` admits, which `slot_ktype_round_trips_through_accepts_part` pins for every
+    /// part shape.
+    pub fn slot_ktype(part: &ExpressionPart<'_>, types: &TypeRegistry) -> Option<KType> {
+        Some(match part {
+            ExpressionPart::Keyword(_) => return None,
+            ExpressionPart::Literal(KLiteral::Number(_)) => KType::NUMBER,
+            ExpressionPart::Literal(KLiteral::String(_)) => KType::STR,
+            ExpressionPart::Literal(KLiteral::Boolean(_)) => KType::BOOL,
+            ExpressionPart::Literal(KLiteral::Null) => KType::NULL,
+            ExpressionPart::ListLiteral(items) => {
+                let element = types.join_iter(
+                    items
+                        .iter()
+                        .map(|i| KType::slot_ktype(i, types).unwrap_or(KType::ANY)),
+                );
+                types.list(element)
+            }
+            ExpressionPart::DictLiteral(pairs) => {
+                let key = types.join_iter(
+                    pairs
+                        .iter()
+                        .map(|(k, _)| KType::slot_ktype(k, types).unwrap_or(KType::ANY)),
+                );
+                let value = types.join_iter(
+                    pairs
+                        .iter()
+                        .map(|(_, v)| KType::slot_ktype(v, types).unwrap_or(KType::ANY)),
+                );
+                types.dict(key, value)
+            }
+            ExpressionPart::RecordLiteral(fields) => {
+                types.record(Record::from_pairs(fields.iter().map(|(name, value)| {
+                    (*name, KType::slot_ktype(value, types).unwrap_or(KType::ANY))
+                })))
+            }
+            ExpressionPart::Identifier(_) => KType::IDENTIFIER,
+            ExpressionPart::Expression(_) | ExpressionPart::QuotedExpression(_) => {
+                KType::KEXPRESSION
+            }
+            ExpressionPart::SigiledTypeExpr(_) => KType::SIGILED_TYPE_EXPR,
+            ExpressionPart::RecordType(_) => KType::RECORD_TYPE,
+            ExpressionPart::Type(_) => KType::PROPER_TYPE,
+        })
+    }
+
     /// Per-[`ExpressionPart`] admissibility for argument slots: a shape check on raw parser syntax.
     /// Unevaluated container literals admit shape-only (element types unknown until evaluation).
     /// Non-satisfying containers fall through the scope walk rather than failing the bind. A part

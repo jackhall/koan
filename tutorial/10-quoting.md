@@ -98,8 +98,13 @@ TWICE greeting
 ```
 
 ```text
-error: dispatch failed for TWICE greeting: no matching function: an argument evaluated before dispatch; write #(…) to pass the code itself
+error: dispatch failed for TWICE Str at <input>:6:1: no matching function: an argument evaluated before dispatch; write #(…) to pass the code itself
 ```
+
+The diagnostic names each argument by the *type* dispatch matched it on, not by
+its spelling — `greeting` had already evaluated to a `Str`, and a `Str` is what
+failed to match a `:KExpression` slot. The site after the expression is where to
+read the spelling back.
 
 Hence the rule for calling a form that takes code: **quote what must not run.**
 

@@ -115,11 +115,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     // fill. The binder itself is not a member — it denotes the union of them all.
     // Every tag is the symbol its own `Type` token minted, so the window, the sealed member nodes
     // and every later diagnostic share one classified currency with no re-derivation.
-    let tags: Vec<TypeSymbol> =
-        match pair_list_names(&schema_expr, "UNION schema", &ctx.registries.labels) {
-            Ok(tags) => tags,
-            Err(message) => return Action::done(Err(KError::new(KErrorKind::ShapeError(message)))),
-        };
+    let tags: Vec<TypeSymbol> = match pair_list_names(&schema_expr, "UNION schema", ctx.registries)
+    {
+        Ok(tags) => tags,
+        Err(message) => return Action::done(Err(KError::new(KErrorKind::ShapeError(message)))),
+    };
     let binder = name;
     // The window this union's variants fill: the enclosing module body's, when it announced this
     // binder, else one this declaration owns — the one-binder special case of the same machinery.

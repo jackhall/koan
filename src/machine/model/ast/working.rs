@@ -13,7 +13,7 @@
 
 use crate::machine::core::{RegionBrand, read_resting};
 use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
-use crate::machine::model::{Carried, Held, KObject};
+use crate::machine::model::{Carried, Held, KObject, RunRegistries};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::machine::{AdoptSeam, SplicedCell};
 use crate::source::{FileId, SourceRef, Span, Spanned};
@@ -91,14 +91,16 @@ impl<'a> Part<'a> for WorkingPart<'a> {
     fn write_summary(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        labels: &LabelInterner,
+        registries: &RunRegistries,
     ) -> std::fmt::Result {
-        WorkingPart::write_summary(self, f, labels)
+        WorkingPart::write_summary(self, f, registries)
     }
 }
 
-/// Interner-free rendering of a spliced cell's carried value, for `Debug`, which carries no run
-/// state to resolve a name through. Every arm renders a content digest — the value's own identity.
+/// Registry-free rendering of a spliced cell's carried value, for `Debug`, which carries no run
+/// state to resolve a name or a type node through. Every arm renders a bare handle — a type's own
+/// digest, an unlowered name's symbol, an object's *type* digest — so two values of one type read
+/// alike here. `Debug` is the only path that renders one; the summary path names the type.
 ///
 /// Reached through [`read_resting`], which states the coverage a pin-less probe stands under.
 fn spliced_debug(carried: Carried<'_>) -> String {
@@ -106,23 +108,6 @@ fn spliced_debug(carried: Carried<'_>) -> String {
         Carried::Type(kt) => format!("0x{:032x}", kt.digest().0),
         Carried::UnresolvedType(name) => format!("0x{:032x}", name.symbol().0),
         Carried::Object(object) => format!("0x{:032x}", object.ktype().digest().0),
-    }
-}
-
-/// [`WorkingPart::write_summary`]'s rendering of a spliced cell, written straight into `f`: a type
-/// handle names no spelling the interner holds, so the type channel writes its content digest,
-/// while an unlowered name resolves to the spelling the parser recorded.
-///
-/// Reached through [`read_resting`], which states the coverage a pin-less probe stands under.
-fn write_spliced_summary(
-    carried: Carried<'_>,
-    f: &mut std::fmt::Formatter<'_>,
-    labels: &LabelInterner,
-) -> std::fmt::Result {
-    match carried {
-        Carried::UnresolvedType(name) => write!(f, "{}", labels.display(name.symbol())),
-        Carried::Type(kt) => write!(f, "0x{:032x}", kt.digest().0),
-        Carried::Object(object) => write!(f, "0x{:032x}", object.ktype().digest().0),
     }
 }
 
@@ -142,34 +127,79 @@ impl<'a> std::fmt::Debug for WorkingPart<'a> {
 
 impl<'a> WorkingPart<'a> {
     /// Per-part subset of [`WorkingExpression::write_summary`], written straight into `f`.
+    ///
+    /// Every argument slot renders **the type dispatch matched it on**, never the value nor the
+    /// spelling that produced it: a summary is read inside a diagnostic explaining a dispatch
+    /// outcome, and the type is the whole of what that decision saw. The dispatch error kinds own
+    /// the expression's site — not only the trace frames an enclosing call pushes — so a reader
+    /// locates the spelling from the rendered site rather than from an echo here.
+    ///
+    /// The arms mirror [`KType::accepts_working_part`], which is what decided the outcome being
+    /// explained. A keyword fills no slot, so it stays its own spelling.
+    /// [`KType::slot_ktype`] answers the AST arm and [`Carried::ktype`] the resolved one; the
+    /// scheduler's own unfilled arms denote no value yet — only an `Any` slot admits one — so they
+    /// say that rather than name a type they do not have.
+    ///
+    /// Naming a type is what widens this path from the interner to the whole bundle:
+    /// [`KType::write_name`] reads the type registry.
     pub fn write_summary(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        registries: &RunRegistries,
+    ) -> std::fmt::Result {
+        match self {
+            WorkingPart::Ast(part) => {
+                match crate::machine::model::KType::slot_ktype(part, &registries.types) {
+                    Some(slot) => slot.write_name(f, registries),
+                    // A keyword is fixed syntax filling no slot — it renders as itself.
+                    None => part.write_summary(f, &registries.labels),
+                }
+            }
+            // Reached through `read_resting`, which states the coverage a pin-less probe stands
+            // under.
+            WorkingPart::Spliced { cell } => read_resting(cell, |carried| {
+                carried.ktype(&registries.types).write_name(f, registries)
+            }),
+            // A node the scheduler synthesized and will dispatch, and a hole awaiting a sibling's
+            // carrier, both denote no value yet — only an `Any` slot admits one, so neither
+            // narrowed the candidate set that missed. They say so rather than name a type they do
+            // not have.
+            WorkingPart::Expression(_) | WorkingPart::RecordType(_) | WorkingPart::StagedSlot => {
+                f.write_str("<staged>")
+            }
+        }
+    }
+
+    /// The part's own surface spelling, for a position that is **not** an argument slot and so was
+    /// never matched on a type — a binder's name. Every other position renders through
+    /// [`write_summary`](Self::write_summary), which names the type instead.
+    pub fn write_spelling(
         &self,
         f: &mut std::fmt::Formatter<'_>,
         labels: &LabelInterner,
     ) -> std::fmt::Result {
         match self {
             WorkingPart::Ast(part) => part.write_summary(f, labels),
-            WorkingPart::Expression(e) => e.write_summary(f, labels),
-            WorkingPart::RecordType(e) => {
-                f.write_str(":{")?;
-                e.write_summary(f, labels)?;
-                f.write_str("}")
-            }
-            WorkingPart::Spliced { cell } => {
-                read_resting(cell, |carried| write_spliced_summary(carried, f, labels))
-            }
-            WorkingPart::StagedSlot => f.write_str("<staged>"),
+            // A name is an AST token wherever a binder declares one; the scheduler's own arms reach
+            // here only if a synthesized node claims a name slot, which nothing does.
+            WorkingPart::Expression(_)
+            | WorkingPart::RecordType(_)
+            | WorkingPart::Spliced { .. }
+            | WorkingPart::StagedSlot => f.write_str("<staged>"),
         }
     }
 
     /// [`write_summary`](Self::write_summary) as a `Display` view.
-    pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> PartSummary<'x, WorkingPart<'a>> {
-        part_summary(self, labels)
+    pub fn summary<'x>(
+        &'x self,
+        registries: &'x RunRegistries,
+    ) -> PartSummary<'x, WorkingPart<'a>> {
+        part_summary(self, registries)
     }
 
     /// The part's surface as an owned `String`.
-    pub fn summarize(&self, labels: &LabelInterner) -> String {
-        self.summary(labels).to_string()
+    pub fn summarize(&self, registries: &RunRegistries) -> String {
+        self.summary(registries).to_string()
     }
 
     /// The AST part this slot holds, if it holds one. The scheduler's own arms answer `None`.
@@ -467,32 +497,39 @@ impl<'a> WorkingExpression<'a> {
     }
 
     /// Surface rendering of the whole expression, written straight into `f`, resolving each
-    /// symbol-carrying part through the run's interner.
+    /// symbol-carrying part through the run's registries.
     pub fn write_summary(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        labels: &LabelInterner,
+        registries: &RunRegistries,
     ) -> std::fmt::Result {
         for (index, part) in self.parts.iter().enumerate() {
             if index > 0 {
                 f.write_str(" ")?;
             }
-            part.value.write_summary(f, labels)?;
+            // A binder's name slot is not an argument: nothing dispatches on it, it is the name
+            // being installed. Naming its type would render every `LET` alike, so it keeps its
+            // spelling; every other slot renders the type dispatch matched it on.
+            if Some(index) == self.binder_name_slot {
+                part.value.write_spelling(f, &registries.labels)?;
+            } else {
+                part.value.write_summary(f, registries)?;
+            }
         }
         Ok(())
     }
 
     /// [`write_summary`](Self::write_summary) as a `Display` view.
-    pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> WorkingSummary<'x, 'a> {
+    pub fn summary<'x>(&'x self, registries: &'x RunRegistries) -> WorkingSummary<'x, 'a> {
         WorkingSummary {
             expression: self,
-            labels,
+            registries,
         }
     }
 
     /// The expression's surface as an owned `String`.
-    pub fn summarize(&self, labels: &LabelInterner) -> String {
-        self.summary(labels).to_string()
+    pub fn summarize(&self, registries: &RunRegistries) -> String {
+        self.summary(registries).to_string()
     }
 
     /// This expression's source extent, `Some` when both span and file are populated.
@@ -503,16 +540,16 @@ impl<'a> WorkingExpression<'a> {
     }
 }
 
-/// A [`WorkingExpression::summary`] view: one expression plus the interner its symbols resolve
+/// A [`WorkingExpression::summary`] view: one expression plus the registries its parts resolve
 /// through.
 pub struct WorkingSummary<'x, 'a> {
     expression: &'x WorkingExpression<'a>,
-    labels: &'x LabelInterner,
+    registries: &'x RunRegistries,
 }
 
 impl std::fmt::Display for WorkingSummary<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.expression.write_summary(f, self.labels)
+        self.expression.write_summary(f, self.registries)
     }
 }
 

@@ -31,7 +31,7 @@ PRINT (LET doubled = 42)
 ```
 
 ```text
-error: binder declaration in an eagerly evaluated sub-expression `LET doubled = 42`; a binder must be a statement or a lazily-captured body
+error: binder declaration in an eagerly evaluated sub-expression `LET doubled = Number`; a binder must be a statement or a lazily-captured body
   in PRINT <staged> (<bind>) at <input>:1:1
 ```
 

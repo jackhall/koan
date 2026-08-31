@@ -14,7 +14,7 @@ use crate::machine::model::labels::{
     BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol,
 };
 use crate::machine::model::lazy_slots::{LazyKinds, LazySlotSpec};
-use crate::machine::model::{Held, KObject, Parseable, StoredBinderKey};
+use crate::machine::model::{Held, KObject, Parseable, RunRegistries, StoredBinderKey};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::witnessed::reattachable;
 
@@ -125,12 +125,15 @@ impl<'a> Part<'a> for ExpressionPart<'a> {
         }
     }
 
+    /// The AST view renders through the interner alone, so the bundle narrows here. Parse fills
+    /// that interner before a run frame exists, which is why the inherent method below keeps the
+    /// narrower parameter rather than matching its working-family peer.
     fn write_summary(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        labels: &LabelInterner,
+        registries: &RunRegistries,
     ) -> std::fmt::Result {
-        ExpressionPart::write_summary(self, f, labels)
+        ExpressionPart::write_summary(self, f, &registries.labels)
     }
 }
 
@@ -235,8 +238,12 @@ impl<'a> ExpressionPart<'a> {
 
     /// [`write_summary`](Self::write_summary) as a `Display` view — what a `format!` argument
     /// naming a part uses.
-    pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> PartSummary<'x, ExpressionPart<'a>> {
-        part_summary(self, labels)
+    ///
+    /// Its own view rather than the generic [`PartSummary`], which resolves through the whole run
+    /// bundle: parse renders a part here — a record literal's field-name error names the token it
+    /// rejected — while still filling the interner a run frame has yet to adopt.
+    pub fn summary<'x>(&'x self, labels: &'x LabelInterner) -> AstPartSummary<'x, 'a> {
+        AstPartSummary { part: self, labels }
     }
 
     /// The part's surface as an owned `String`.
@@ -679,6 +686,19 @@ impl<'a> KExpression<'a> {
     /// The expression's surface as an owned `String`.
     pub fn summarize(&self, labels: &LabelInterner) -> String {
         self.summary(labels).to_string()
+    }
+}
+
+/// An [`ExpressionPart::summary`] view: one AST part plus the interner its symbols resolve
+/// through.
+pub struct AstPartSummary<'x, 'a> {
+    part: &'x ExpressionPart<'a>,
+    labels: &'x LabelInterner,
+}
+
+impl std::fmt::Display for AstPartSummary<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.part.write_summary(f, self.labels)
     }
 }
 

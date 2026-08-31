@@ -486,7 +486,6 @@ digraph {
     "koan::machine::core::kfunction" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::core::kfunction" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::action" -> "koan::machine" [label="uses", style="dashed"];
@@ -959,6 +958,7 @@ digraph {
     "koan::parse::tokens" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::parse::tokens" -> "koan::parse::operators" [label="uses", style="dashed"];
     "koan::parse::tokens" -> "koan::source" [label="uses", style="dashed"];
+    "koan::parse::triple_list" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::parse::triple_list" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::parse::triple_list" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::parse::triple_list" -> "koan::source" [label="uses", style="dashed"];

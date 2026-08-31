@@ -12,7 +12,8 @@ use smallvec::SmallVec;
 use crate::machine::SplicedCell;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::KeyElement;
-use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol, ValueSymbol};
+use crate::machine::model::RunRegistries;
+use crate::machine::model::labels::{KeywordSymbol, TypeSymbol, ValueSymbol};
 use crate::source::Spanned;
 
 use super::KExpression;
@@ -78,7 +79,15 @@ pub trait Part<'a>: Copy {
     fn field_slot(&self) -> FieldSlot<'a>;
 
     /// Surface rendering, for the field walker's shape diagnostics, written straight into `f`.
-    /// Takes the run's interner because a symbol-carrying part renders its text through it.
+    /// Takes the whole run bundle, not just its interner: a resolved
+    /// [`Spliced`](super::WorkingPart::Spliced) slot renders the *type* of the argument it
+    /// carries, and a type names itself through the type registry.
+    ///
+    /// The AST family renders through the interner alone, so
+    /// [`ExpressionPart::write_summary`](super::ExpressionPart::write_summary) keeps that narrower
+    /// signature and its impl here forwards `&registries.labels`. Parse reaches that inherent view
+    /// before a run frame exists — the interner it fills is the one the run frame later adopts —
+    /// so the AST view cannot take the bundle.
     ///
     /// A write signature rather than a view-returning one because the trait is used through
     /// `&dyn`-shaped generic walkers: a borrowed view would need an associated type per
@@ -86,7 +95,7 @@ pub trait Part<'a>: Copy {
     fn write_summary(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        labels: &LabelInterner,
+        registries: &RunRegistries,
     ) -> std::fmt::Result;
 }
 
@@ -94,19 +103,19 @@ pub trait Part<'a>: Copy {
 /// use, so a part's surface lands in the message's own buffer.
 pub fn part_summary<'x, 'a, P: Part<'a>>(
     part: &'x P,
-    labels: &'x LabelInterner,
+    registries: &'x RunRegistries,
 ) -> PartSummary<'x, P> {
-    PartSummary { part, labels }
+    PartSummary { part, registries }
 }
 
 pub struct PartSummary<'x, P> {
     part: &'x P,
-    labels: &'x LabelInterner,
+    registries: &'x RunRegistries,
 }
 
 impl<'a, P: Part<'a>> std::fmt::Display for PartSummary<'_, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.part.write_summary(f, self.labels)
+        self.part.write_summary(f, self.registries)
     }
 }
 

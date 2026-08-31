@@ -1234,8 +1234,8 @@ fn non_callable_list_head_errors() {
         .expect_err("a non-callable head must finalize the slot with an error");
     match &err.kind {
         KErrorKind::DispatchFailed { reason, .. } => assert!(
-            reason.contains("head is not callable") && reason.contains("[1 2 3]"),
-            "expected a non-callable-head DispatchFailed with the head summary, got {reason}",
+            reason.contains("head is not callable") && reason.contains(":(LIST OF Number)"),
+            "expected a non-callable-head DispatchFailed naming the head's type, got {reason}",
         ),
         _ => panic!("expected DispatchFailed, got {err}"),
     }

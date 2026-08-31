@@ -10,6 +10,7 @@
 use crate::machine::DeliveredCarried;
 use crate::machine::ProducerId;
 use crate::machine::core::RegionBrand;
+use crate::machine::core::location_from_expr;
 use crate::machine::core::{
     Action, ActionKind, AwaitContinue, BlockEntry, BlockRequest, CatchFn, FinishCtx,
     FramePlacement, ReturnContract, TailContract,
@@ -507,14 +508,15 @@ fn classify_dispatch<'step>(
         // drive abort.
         DispatchShape::NonCallableHead => {
             Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-                expr: expr.summarize(&view.registries().labels),
+                expr: expr.summarize(view.registries()),
                 reason: match expr.parts.first() {
                     Some(head) => format!(
                         "head is not callable: `{}`",
-                        head.value.summary(&view.registries().labels)
+                        head.value.summary(view.registries())
                     ),
                     None => "head is not callable: `<empty>`".to_string(),
                 },
+                location: location_from_expr(&expr),
             })))
         }
         DispatchShape::OperatorChain => operator_chain::run(view, view.current_scope(), &expr),

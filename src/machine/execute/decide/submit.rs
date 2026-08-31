@@ -53,7 +53,7 @@ impl<'run> Host<'run> {
         // value position takes the anonymous `FN :{…} -> <Return> = (…)`, which installs nothing.
         let installs = statement_binder_plan(&expr);
         if let (SubmitContext::SubDispatch, Some(plan)) = (ctx, &installs) {
-            let carrier = expr.summarize(&self.ambient.registries().labels);
+            let carrier = expr.summarize(self.ambient.registries());
             // A rejected declaration that registers overloads (an `FN` / `OP` in a `LET`'s value
             // slot) has a one-statement spelling to suggest; a nested plain `LET` does not.
             let error = KError::new(KErrorKind::NestedBinder {

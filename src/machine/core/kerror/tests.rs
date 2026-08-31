@@ -49,10 +49,45 @@ fn display_ambiguous_dispatch() {
     let s = render(KErrorKind::AmbiguousDispatch {
         expr: "(F 1)".into(),
         candidates: 2,
+        location: None,
     });
     assert_eq!(
         s,
         "ambiguous dispatch: 2 candidates match (F 1) with equal specificity"
+    );
+}
+
+/// A dispatch summary names types, not spellings, so the site is what a reader follows to recover
+/// the source. It reads in the same `at <path>:<line>:<col>` shape a trace frame uses, and sits
+/// beside the expression it locates rather than trailing the reason.
+#[test]
+fn display_dispatch_error_carries_its_site() {
+    let located = |location| {
+        render(KErrorKind::DispatchFailed {
+            expr: "(G 1)".into(),
+            reason: "no matching function".into(),
+            location,
+        })
+    };
+    assert_eq!(
+        located(Some(SourceLoc {
+            path: "main.koan".into(),
+            line: 7,
+            col_utf16: 3,
+        })),
+        "dispatch failed for (G 1) at main.koan:7:3: no matching function",
+    );
+    assert_eq!(
+        render(KErrorKind::AmbiguousDispatch {
+            expr: "(F 1)".into(),
+            candidates: 2,
+            location: Some(SourceLoc {
+                path: "main.koan".into(),
+                line: 7,
+                col_utf16: 3,
+            }),
+        }),
+        "ambiguous dispatch: 2 candidates match (F 1) at main.koan:7:3 with equal specificity",
     );
 }
 
@@ -61,6 +96,7 @@ fn display_dispatch_failed() {
     let s = render(KErrorKind::DispatchFailed {
         expr: "(G 1)".into(),
         reason: "no overload accepts Number".into(),
+        location: None,
     });
     assert_eq!(s, "dispatch failed for (G 1): no overload accepts Number");
 }
