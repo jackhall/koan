@@ -16,6 +16,7 @@
 use crate::machine::ProducerId;
 use crate::machine::core::{FunctionLookup, LexicalFrame, Scope};
 use crate::machine::core::{OpenedFunction, WrapIndices};
+use crate::machine::model::KeyElement;
 use crate::machine::model::labels::BinderSymbol;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
@@ -63,7 +64,11 @@ pub enum DispatchOutcome<'step> {
     /// precise cause, so it surfaces here rather than as a dispatch miss. It travels as the symbol
     /// the lookup held; the spelling is read back where the error is built.
     UnboundName(BinderSymbol),
-    Unmatched,
+    /// No candidate admits the expression. `quote_hint` is set when a forgotten `#(…)` explains
+    /// the miss — see [`quote_would_help`].
+    Unmatched {
+        quote_hint: bool,
+    },
 }
 
 impl<'step> Scope<'step> {
@@ -130,8 +135,76 @@ impl<'step> Scope<'step> {
         }
         match dead_lean {
             Some(name) => DispatchOutcome::UnboundName(name),
-            None => DispatchOutcome::Unmatched,
+            None => DispatchOutcome::Unmatched {
+                quote_hint: quote_would_help(
+                    self,
+                    key,
+                    chain,
+                    expr,
+                    bare_outcomes,
+                    registries,
+                    scratch,
+                ),
+            },
         }
+    }
+}
+
+/// Whether a forgotten `#(…)` explains this dispatch miss: some overload in the bucket types a slot
+/// `:KExpression`, and the expression carries an evaluated value there that is not code. The
+/// argument ran, its side effects happened, and only then did nothing match — a failure mode
+/// pointed enough to name its fix.
+///
+/// No provenance is tracked on the evaluated part: the trigger cannot tell a bare group from a bare
+/// name that was bound to one, and the hint reads correctly for both. Walked only on the miss path,
+/// so a successful dispatch pays nothing for it.
+fn quote_would_help<'step>(
+    scope: &Scope<'step>,
+    key: &[KeyElement],
+    chain: Option<&LexicalFrame>,
+    expr: &WorkingExpression<'_>,
+    bare_outcomes: &[Option<Resolution>],
+    registries: &RunRegistries,
+    scratch: BumpAllocator<'step>,
+) -> bool {
+    scope.ancestors().any(|scope| {
+        let lookup =
+            scope
+                .bindings()
+                .lookup_function_stored(key, scope.binding_cutoff(chain), scratch);
+        lookup.overloads.iter().any(|sealed| {
+            sealed
+                .open_at()
+                .value()
+                .signature
+                .elements()
+                .iter()
+                .zip(expr.parts)
+                .enumerate()
+                .any(|(i, (el, part))| {
+                    matches!(el, SignatureElement::Argument(arg) if matches!(arg.ktype, KType::KEXPRESSION))
+                        && holds_evaluated_non_code(&part.value, i, bare_outcomes, registries)
+                })
+        })
+    })
+}
+
+/// Whether this slot holds a landed value that is not a `KExpression` — the staged group's result,
+/// or the binding a bare name resolved to.
+fn holds_evaluated_non_code(
+    part: &WorkingPart<'_>,
+    index: usize,
+    bare_outcomes: &[Option<Resolution>],
+    registries: &RunRegistries,
+) -> bool {
+    if let WorkingPart::Spliced { cell } = part {
+        return !KType::KEXPRESSION.accepts_cell(cell, registries);
+    }
+    match bare_outcomes.get(index).and_then(|o| o.as_ref()) {
+        Some(Resolution::Resolved(delivered)) => {
+            !KType::KEXPRESSION.accepts_carried(delivered.open_at().value(), registries)
+        }
+        _ => false,
     }
 }
 

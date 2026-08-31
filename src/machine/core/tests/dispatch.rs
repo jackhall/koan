@@ -210,7 +210,7 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
             &registries,
             scope.brand().allocator()
         ),
-        DispatchOutcome::Unmatched
+        DispatchOutcome::Unmatched { .. }
     ));
 }
 
@@ -274,7 +274,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
                 &registries,
                 scope.brand().allocator()
             ),
-            DispatchOutcome::Unmatched
+            DispatchOutcome::Unmatched { .. }
         ),
         "different-bucket call must not park on a lead-keyword sibling",
     );

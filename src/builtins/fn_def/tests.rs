@@ -9,6 +9,7 @@
 //! - [`return_type`] — parsing the `-> Type` slot and runtime return-type checks.
 //! - [`param_type`] — typed-parameter dispatch, overload routing, shape errors.
 //! - [`container_types`] — `List<T>`, `Dict<K,V>`, `Function<…>`, specificity.
+//! - [`explicit_laziness`] — a user `:KExpression` parameter is an ordinary eager value slot.
 //! - [`functor`] — FN as a functor over module-typed parameters.
 //! - [`tail_region_turnover`] — library-owned tail-call region-turnover acceptance criteria.
 
@@ -19,6 +20,7 @@ mod body_block;
 mod body_routing;
 mod combined;
 mod container_types;
+mod explicit_laziness;
 mod functor;
 mod param_type;
 mod record_types;

@@ -74,10 +74,10 @@ fn resolve_and_invoke<'step>(
                 candidates: n,
             })));
         }
-        DispatchOutcome::Unmatched => {
+        DispatchOutcome::Unmatched { quote_hint } => {
             return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(&ctx.registries().labels),
-                reason: "no matching function".to_string(),
+                reason: unmatched_reason(quote_hint),
             })));
         }
         DispatchOutcome::UnboundName(name) => {
@@ -94,6 +94,18 @@ fn resolve_and_invoke<'step>(
     let expr =
         splice_wrap_slots(ctx, &expr, &bare_outcomes, &resolved.wrap_indices).unwrap_or(expr);
     super::exec::invoke_continue(ctx, resolved.function, expr)
+}
+
+/// Why nothing matched. A slot typed `:KExpression` in the bucket that took an evaluated value
+/// instead gets the pointed hint: the argument ran before dispatch, so quoting it is the fix.
+fn unmatched_reason(quote_hint: bool) -> String {
+    if quote_hint {
+        "no matching function: an argument evaluated before dispatch; write #(…) to pass the code \
+         itself"
+            .to_string()
+    } else {
+        "no matching function".to_string()
+    }
 }
 
 /// Park on the claims dispatch resolution leaned on — a still-finalizing bare-name producer from
