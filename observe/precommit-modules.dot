@@ -530,6 +530,7 @@ digraph {
     "koan::machine::core::ref_carriers" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::ref_carriers" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::core::scope" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::ref_carriers" [label="uses", style="dashed"];

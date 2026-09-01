@@ -33,7 +33,7 @@
 
 use allocator_api2::alloc::Global;
 
-use super::Scope;
+use super::{Scope, ScopeKind};
 use crate::machine::DeliveredCarried;
 use crate::machine::core::bindings::BindingIndex;
 use crate::machine::core::carrier_witness::{DeliveredFunction, GroupSeal, OverloadSeal};
@@ -79,6 +79,20 @@ fn scope_address(scope: &Scope<'_>) -> usize {
     scope as *const Scope<'_> as usize
 }
 
+/// The address of the group record `scope`'s kind carries, in the form the record memo keys on —
+/// the same address a registry entry's sealed record opens to, since a `GROUP` body's kind field
+/// and its powerset entries hold one record.
+fn source_group_address(scope: &Scope<'_>) -> usize {
+    let ScopeKind::Module {
+        group: Some(record),
+        ..
+    } = &scope.kind
+    else {
+        unreachable!("only a group body's copy re-births a record");
+    };
+    std::ptr::from_ref(*record) as usize
+}
+
 /// Consolidate `value` into `brand`'s region — the `Consolidate` verb's act, entered from the
 /// relocation fold that owns `brand`.
 ///
@@ -87,9 +101,10 @@ fn scope_address(scope: &Scope<'_>) -> usize {
 /// the engine re-checks readiness itself rather than trusting the chooser's earlier verdict, which
 /// is pricing and not authority.
 ///
-/// Only a `KFunction` consolidates. A `Module`'s child scope is `MODULE`-kinded, carrying an
-/// announced window and a group record the readiness gate does not model, so a module declines by
-/// the same gate every other unmodelled environment does rather than by a special case here.
+/// Only a `KFunction` consolidates: a module value's own environment is its child scope, and
+/// rebuilding the value around a copy of that scope is a surface this engine does not open. A
+/// closure that merely *captured* a module body is a different matter and does consolidate — the
+/// readiness gate models a windowless `MODULE` kind, group record and all.
 pub(crate) fn consolidate_object<'b>(
     value: &KObject<'b>,
     door: FoldingBrand<'b>,
@@ -160,9 +175,20 @@ fn copy_chain<'b>(
         outer = match memo.get(scope_address(link)) {
             Some(hit) => hit,
             None => {
-                let copied = Scope::alloc_copied_child(outer, brand);
+                // The kind is fixed at allocation, so a `GROUP` body's record is reborn here,
+                // before the scope that stamps it exists. The same envelope then seeds the fill's
+                // record memo, which is what lands the copied kind field and every copied powerset
+                // entry on one record — the sharing `alloc_group_child` establishes at the source.
+                let (kind, born) = link.copied_kind(brand);
+                let copied = Scope::alloc_copied_child(outer, brand, kind);
+                let seed = born.map(|cell| {
+                    (
+                        source_group_address(link),
+                        GroupSeal::of_delivered(copied, &cell),
+                    )
+                });
                 memo.insert(scope_address(link), copied);
-                fill_scope(link, copied, memo)?;
+                fill_scope(link, copied, seed, memo)?;
                 copied.close();
                 copied
             }
@@ -194,9 +220,16 @@ fn copy_chain<'b>(
 /// births a fresh record at the destination, one per distinct source record however many powerset
 /// entries seal it. That is what lets a `CLOSE` block consolidate at all, since the capture plan
 /// flattens every per-call operator visible on the enclosing chain into the block scope.
+///
+/// A record has a second home: a `GROUP` body's own [`ScopeKind::Module`] field, read by
+/// [`nearest_group_context`](Scope::nearest_group_context). That one is reborn in
+/// [`copied_kind`](Scope::copied_kind) — the kind is fixed before this fill runs — and arrives here
+/// as `seeded`, the record memo's first entry, so the field and the registry entries name one
+/// reborn record exactly as the source's do.
 fn fill_scope<'b>(
     source: &'b Scope<'b>,
     copied: &'b Scope<'b>,
+    seeded: Option<(usize, GroupSeal<'b>)>,
     memo: &CopiedScopes<'b>,
 ) -> Option<()> {
     let visible = source.bindings().visible_for_capture(None, Global);
@@ -232,6 +265,8 @@ fn fill_scope<'b>(
     // Re-birth per record, share per entry. A `GROUP`'s powerset keys — and a `CLOSE` flatten of
     // them — all seal one record, so the fill memoizes the rebuild on the source record's address
     // and every subset entry lands on one reborn record, exactly as the source's entries share one.
+    // `seeded` pre-loads that memo with the record a copied `GROUP` body already stamped into its
+    // scope kind, so the field and the entries name one record rather than two equal ones.
     // What a record gives up to be reborn is its member symbols and its mode, both lifetime-free
     // plain data, so the read happens under the source envelope's own open and nothing routes
     // through a nested transfer the way a captured callable must.
@@ -239,7 +274,7 @@ fn fill_scope<'b>(
     // `OperatorGroup::alloc` re-sorts and re-dedups what it is handed, so the reborn record renders
     // a byte-identical `declaration_key`: the upsert's structural arm survives the copy verbatim,
     // and only its address arm — a fresh record, by construction — differs.
-    let mut reborn: Vec<(usize, GroupSeal<'b>)> = Vec::new();
+    let mut reborn: Vec<(usize, GroupSeal<'b>)> = seeded.into_iter().collect();
     for (probe, cell) in visible.operators.iter() {
         let (address, members, mode) = cell.open(|group| {
             (

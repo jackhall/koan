@@ -138,6 +138,44 @@ product-derived like every other relocation's — a rebuilt callable's one regio
 borrow is its captured scope, so a copy releases the producer and a declined
 rebuild that rode verbatim keeps it, out of one predicate.
 
+The **operator registry** is rebuilt rather than relocated. A group record is
+resident in the declaring scope's region, and so are the entry's `address`
+identity arm and its bumped `declaration` text — copying the map wholesale
+would leave the rebuilt scope pointing into the source. But a record's whole
+content is its member symbols and its chaining mode, both lifetime-free plain
+data, so the fill reads them under the source envelope's own open and births a
+fresh record at the destination ([`Scope::birth_operator_group`](../src/machine/core/scope/reach.rs)),
+with no nested transfer of the kind a captured callable needs. The rebuild is
+memoized on the source record's address for the length of one scope's fill, so
+a `GROUP`'s `2ⁿ−1` powerset entries land on **one** reborn record exactly as
+the source's entries share one. `OperatorGroup::alloc` re-sorts and re-dedups
+what it is handed, so the reborn record renders a byte-identical
+`declaration_key`: the registry upsert's structural arm survives the copy
+verbatim — an equal redeclaration is still a silent no-op and a disagreeing
+chaining mode is still a conflict — and only its address arm, fresh by
+construction, differs. The rebuild is priced like every other channel: each
+entry charges its flat size plus its declaration text into the scope's
+`copy_cost` memo, and the record's own bytes are charged once per record, so
+the chooser pays for what it now copies. This is what lets a `CLOSE` block
+consolidate at all, since the capture plan flattens every per-call operator
+visible on the enclosing chain into the block scope.
+
+A record has a **second home**, and one birth fills both. A `GROUP` body's scope
+*kind* names the record its member `OP` declarations belong to
+([`ScopeKind::Module`](../src/machine/core/scope.rs)), read back through
+`nearest_group_context`; the body's powerset registry entries seal that same
+record. The kind is fixed at allocation, so the copy re-births the record
+*before* the copied scope exists — the brand-rooted
+[`Scope::birth_operator_group_at`](../src/machine/core/scope/reach.rs), which the
+scope-rooted door delegates to — stamps it into the copied kind, and seeds the
+fill's per-record memo with it, so the copied kind field and every copied entry
+name one reborn record exactly as `alloc_group_child` makes the source's share
+one. Carrying the kind across is not cosmetic: name resolution reads it.
+`nearest_opaque` stops at a `Module`, so a copied group body stamped `Anonymous`
+would let a name leak past a wall the source held, and `nearest_group_context`
+answers off the same field, so an `OP` inside the copied body resolves to the
+copy's own record rather than to nothing.
+
 ### Two surfaces, and the readiness gate
 
 The copy fires at exactly two surfaces: a top-level callable crossing the
@@ -156,11 +194,15 @@ counters.
 
 A scope is rebuildable only when it is **closed**, owns its bindings (a
 `USING … SCOPE` window is a façade with nothing of its own), carries **no
-standing claim**, holds **no operator-registry entry**, and is `Root`- or
-`Anonymous`-kinded. `Sig` scopes carry a live slot collector and `Module`
-scopes an announced window and group record, neither of which this engine
-rebuilds — so a module value declines by the same gate as every other
-unmodelled environment rather than by a special case.
+standing claim**, and is `Root`-, `Anonymous`- or `Module`-kinded — the last
+only when it announces nothing, its group record being the one part of that kind
+the copy re-births. What stays unmodelled is a `Sig` scope's live slot collector
+and a `Module` body's announced declaration window, so an environment carrying
+either declines by the same gate as every other unmodelled environment rather
+than by a special case. A **module value** declines for a different reason
+entirely: only a `KFunction` reaches the consolidate verb, so a module's own
+child scope is never offered to the gate
+([module-scope-consolidation.md](../roadmap/foundation/module-scope-consolidation.md)).
 
 Because the copy can fire at an arbitrary escape crossing, it may meet an
 environment still under construction: an unfinalized binding, or a captured
@@ -267,12 +309,19 @@ overloads.
 ## Open work
 
 - [Callable copy tuning](../roadmap/foundation/callable-copy-tuning.md) — the
-  levers the first seam leaves unpulled: foreign-crossing pricing (so a pin can
-  be re-consolidated at a later crossing), callable cells inside copied
-  containers, module values and `USING`-window scopes, and a measured
-  justification for α.
-- [Operator registrations in a copied environment](../roadmap/foundation/operator-registry-copy.md)
-  — rebuilding a scope's operator registry so a chain carrying one stops
-  pinning. `CLOSE` flattens every per-call operator declaration on the enclosing
-  chain into its block scope, so today the form exists to sever captures and
-  then declines the gate on what it installed.
+  pricing levers the first seam leaves unpulled: foreign-crossing pricing (so a
+  pin can be re-consolidated at a later crossing) and a measured justification
+  for α.
+- [Module scope consolidation](../roadmap/foundation/module-scope-consolidation.md)
+  — an escaping module value pins its body region whether or not anything
+  captured the body, and a `USING … SCOPE` window that aliases such a scope
+  reads as not-ready; one surface, since the window is the alias.
+- [Callable cells in copied containers](../roadmap/foundation/callable-cells-in-copied-containers.md)
+  — a record of closures crossing the seam severs nothing for its cells, and the
+  container's memoized copy cost counts no environment, so the consolidation is
+  never even offered.
+- [A flattened dispatch registration pins its defining frame](../roadmap/foundation/flattened-registration-pins-its-frame.md)
+  — a registration implicit close flattens into a block scope captures the
+  per-call frame that declared it, which is still open at the crossing, so its
+  nested rebuild declines and the block holds that frame. An `OP` inherits it,
+  being a dispatch registration as well as a registry entry.

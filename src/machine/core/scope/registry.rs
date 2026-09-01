@@ -241,9 +241,10 @@ impl<'a> Scope<'a> {
     ///
     /// Distinct from [`Self::bind_delivered_severed`], which is the opposite verb for the opposite
     /// purpose: an explicit data capture copies so the producer can die, a closed-over module pins
-    /// because the environment copy does not rebuild a `MODULE`-kinded scope
-    /// ([callable-copy-tuning.md](../../../../roadmap/foundation/callable-copy-tuning.md)); a
-    /// closed-over *callable* takes the severing door and consolidates.
+    /// because only a callable reaches the consolidate verb, so a module value's own environment is
+    /// never rebuilt
+    /// ([module-scope-consolidation.md](../../../../roadmap/foundation/module-scope-consolidation.md));
+    /// a closed-over *callable* takes the severing door and consolidates.
     pub(crate) fn adopt_binding_pinned(
         &'a self,
         name: ValueSymbol,

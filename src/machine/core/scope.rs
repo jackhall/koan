@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
 use std::rc::{Rc, Weak};
 
+use crate::machine::DeliveredOperatorGroup;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::{AnnouncedData, AnnouncedWindow};
 use crate::machine::model::{IdentityBuildHasher, KType, TypeSymbol, ValueSymbol};
@@ -457,11 +458,19 @@ impl<'a> Scope<'a> {
     /// `root` falls out of `outer` the way [`Self::run_child`]'s does: a parent carrying its own
     /// root handle passes it down, and a parent that *is* the root becomes the child's.
     ///
+    /// `kind` is the source link's, rebuilt at this region — [`Self::copied_kind`] derives it. It
+    /// is a parameter rather than a fixed `Anonymous` because the kind is what name resolution
+    /// reads: [`Self::nearest_opaque`] stops at a `Module`, so a copied module body stamped
+    /// `Anonymous` would let a name leak past a wall the source held, and
+    /// [`Self::nearest_group_context`] answers off the same field, so a copied `GROUP` body must
+    /// carry its own reborn record for an `OP` inside it to resolve the way the source did.
+    ///
     /// Born **open**, not closed: the engine fills the tables and closes the scope after, so the
     /// bind door's own open-scope assertion holds throughout the fill.
     pub(in crate::machine::core::scope) fn alloc_copied_child(
         outer: &'a Scope<'a>,
         brand: RegionBrand<'a>,
+        kind: ScopeKind<'a>,
     ) -> &'a Scope<'a> {
         brand.allocator().in_place(Scope {
             outer: Some(outer),
@@ -469,9 +478,48 @@ impl<'a> Scope<'a> {
             bindings: ScopeBindings::Owned(Bindings::new(brand)),
             brand,
             id: ScopeId::next(),
-            kind: ScopeKind::Anonymous,
+            kind,
             closed: Cell::new(false),
         })
+    }
+
+    /// The kind a copy of `self` takes, beside the freshly born group record it stamps in — `None`
+    /// for every kind carrying nothing to re-birth.
+    ///
+    /// A `GROUP` body is the one kind whose stamp is not plain data: its record is region-resident,
+    /// so the copy re-births one at `brand` from the member symbols and mode the source's renders —
+    /// the whole of that record's content, and lifetime-free. The envelope comes back beside the
+    /// kind so the caller can seal *the same* record into the registry entries
+    /// ([`fill_scope`](self::copy)), which is what keeps a copied powerset sharing one record the
+    /// way [`Self::alloc_group_child`] makes the source's share one.
+    ///
+    /// Only kinds [`Self::is_copy_ready`] admits reach here; the gate has already run.
+    pub(in crate::machine::core::scope) fn copied_kind(
+        &self,
+        brand: RegionBrand<'a>,
+    ) -> (ScopeKind<'a>, Option<DeliveredOperatorGroup>) {
+        match &self.kind {
+            ScopeKind::Module { group, window: _ } => {
+                let born = group.map(|record| {
+                    Scope::birth_operator_group_at(
+                        brand,
+                        &record.member_symbols().collect::<Vec<_>>(),
+                        record.mode(),
+                    )
+                });
+                let stamped = born
+                    .as_ref()
+                    .map(|cell| cell.adopt_into(brand.handle()) as &'a OperatorGroup<'a>);
+                (
+                    ScopeKind::Module {
+                        group: stamped,
+                        window: None,
+                    },
+                    born,
+                )
+            }
+            _ => (ScopeKind::Anonymous, None),
+        }
     }
 
     /// Allocate a transparent `USING … SCOPE` child whose bindings are a read-only window onto
@@ -593,9 +641,11 @@ impl<'a> Scope<'a> {
     /// - **No standing claim** ([`Bindings::has_no_claims`]): an in-flight binder is a binding that
     ///   does not exist yet, which is exactly the unfinalized binding the roadmap downgrades on.
     /// - **A kind the engine models**: `Anonymous` — the block and per-call frame scopes a closure
-    ///   chain is made of — and `Root`, which is eternal and referenced verbatim rather than
-    ///   copied. `Sig` carries a live slot collector and `Module` an announced window and group
-    ///   record, neither of which the v1 engine rebuilds.
+    ///   chain is made of — `Root`, which is eternal and referenced verbatim rather than copied,
+    ///   and a `Module` announcing nothing, whose group record the copy re-births beside the
+    ///   registry entries that seal it ([`fill_scope`](self::copy)). `Sig` carries a live slot
+    ///   collector and an announced `Module` a declaration window, neither of which the engine
+    ///   rebuilds.
     ///
     /// Never a wait: an unready scope answers `false` and the caller pins. Nothing here can park,
     /// which is what makes the two-in-flight-environments deadlock unconstructible rather than
@@ -604,7 +654,10 @@ impl<'a> Scope<'a> {
         self.is_closed()
             && !self.borrows_its_bindings()
             && self.bindings().has_no_claims()
-            && matches!(self.kind, ScopeKind::Root | ScopeKind::Anonymous)
+            && matches!(
+                self.kind,
+                ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::Module { window: None, .. }
+            )
     }
 
     /// The **per-call** portion of this scope's chain: `self` and its `outer` ancestors up to but

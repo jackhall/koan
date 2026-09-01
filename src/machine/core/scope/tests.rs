@@ -9,6 +9,7 @@ use super::*;
 use crate::builtins::test_support::{TestRun, value_name};
 use crate::machine::core::arena::CallFrame;
 use crate::machine::core::bindings::{BindingIndex, WriteGate};
+use crate::machine::model::AnnouncedData;
 use crate::machine::model::{KObject, RegionEscape, copy_or_pin_callable};
 use crate::machine::model::{RunRegistries, object_copy_cost};
 use crate::machine::{ProducerId, program_storage, run_root_storage};
@@ -145,11 +146,12 @@ fn a_using_window_scope_is_not_copy_ready() {
     );
 }
 
-/// The v1 engine models the block and frame scopes a closure chain is made of. A `SIG` decl scope
-/// carries a live slot collector and a `MODULE` body an announced window and group record, neither
-/// of which it rebuilds — so both answer not-ready rather than being copied wrong.
+/// The engine models the block and frame scopes a closure chain is made of, and a `MODULE` body
+/// announcing nothing — whose group record, the one part of that kind that is not plain data, the
+/// copy re-births. What it does not model is a live `SIG` slot collector or a declaration window,
+/// so those answer not-ready rather than being copied wrong.
 #[test]
-fn a_sig_or_module_kinded_scope_is_not_copy_ready() {
+fn the_readiness_gate_admits_only_the_kinds_the_copy_rebuilds() {
     let program = program_storage();
     let root = run_root_storage();
     let test_run = TestRun::silent(&program, &root);
@@ -166,7 +168,22 @@ fn a_sig_or_module_kinded_scope_is_not_copy_ready() {
 
     let module = test_run.scope.alloc_child_under_module(None);
     module.close();
-    assert!(!module.is_copy_ready(), "a MODULE body is not ready");
+    assert!(
+        module.is_copy_ready(),
+        "a MODULE body announcing nothing is ready",
+    );
+
+    let mut announced = AnnouncedData::default();
+    announced.announce(crate::builtins::test_support::type_name(
+        "Shape",
+        &registries,
+    ));
+    let windowed = test_run.scope.alloc_child_under_module(Some(announced));
+    windowed.close();
+    assert!(
+        !windowed.is_copy_ready(),
+        "a MODULE body carrying a declaration window is not ready",
+    );
 }
 
 /// The per-call walk stops at the innermost eternal home: those scopes are referenced verbatim by a

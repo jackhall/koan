@@ -963,10 +963,10 @@ pub(crate) enum RegionEscape {
     /// seam ([`copy_or_pin_callable`]) and at an explicit `CLOSE OVER` callable capture; a callable
     /// **cell** inside a copied container keeps riding verbatim under `Copy`.
     ///
-    /// A `Module` reaching this verb declines: its child scope is `MODULE`-kinded, carrying an
-    /// announced window and a group record the readiness gate does not model, so it takes the
-    /// verbatim ride like any other unmodelled environment
-    /// ([callable-copy-tuning](../../../../roadmap/foundation/callable-copy-tuning.md)).
+    /// A `Module` reaching this verb declines before readiness is ever asked: a module's
+    /// environment is its own child scope rather than a captured chain, and rebuilding the value
+    /// around a copy of that scope is a surface the engine does not open, so it takes the verbatim
+    /// ride ([module-scope-consolidation](../../../../roadmap/foundation/module-scope-consolidation.md)).
     ///
     /// Everything the verb claims about release is derived from the product, exactly as `Copy`'s
     /// is: the rebuild is total or it does not happen. An environment the engine cannot rebuild —

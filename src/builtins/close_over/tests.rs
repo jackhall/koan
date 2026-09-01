@@ -487,17 +487,18 @@ fn an_escaped_body_applies_a_per_call_operator() {
     );
 }
 
-/// The census twin of the test above: the environment copy rebuilds the operator registry rather
-/// than the readiness gate declining on it, so the block scope holding a **flattened per-call
-/// operator** consolidates like any other and its own region stops surviving the escape.
+/// The census twin of the test above: a block scope holding a **flattened per-call operator**
+/// consolidates like any other, because the environment copy rebuilds its operator registry, so
+/// the block's own region does not survive the escape.
 ///
 /// Read against the operator-free baseline, because that isolates what the operator table costs.
 /// An `OP` declaration is also a keyworded-`FN` dispatch registration, and implicit close pins a
 /// flattened dispatch registration's defining frame on purpose (see this module's header) — the
 /// producer frame is still open at the crossing, so its rebuild declines and the callable rides
-/// verbatim. That retention is the registration's, not the operator table's: with the table now
-/// rebuilt, declaring the operator costs exactly what declaring the plain keyworded `FN` costs, at
-/// every producer depth. Under the old gate this ran one region higher at each of them.
+/// verbatim. That retention is the registration's, not the operator table's, and it is owned by
+/// [its own roadmap item](../../../roadmap/foundation/flattened-registration-pins-its-frame.md).
+/// With the table rebuilt, declaring the operator costs exactly what declaring the plain keyworded
+/// `FN` costs, at every producer depth — which is what this asserts.
 #[cfg(not(feature = "seam-force-pin"))]
 #[test]
 fn a_flattened_per_call_operator_retains_no_more_than_its_registration() {
@@ -521,6 +522,76 @@ fn a_flattened_per_call_operator_retains_no_more_than_its_registration() {
         );
         assert_eq!(
             operator.1, 0,
+            "and nothing at all outlives the run at producer depth {depth}",
+        );
+    }
+}
+
+/// A closure declared **inside a per-call `GROUP` body** escapes and still reduces through the
+/// group's operator. A group body is a `MODULE`-kinded scope carrying the record its `OP`
+/// declarations belong to, so the escaping closure's captured chain names a kind the readiness gate
+/// admits only because the copy re-births that record — the answer is `6` either way, since a
+/// declined chain rides verbatim and stays alive; what this pins down is that the *rebuilt* chain
+/// resolves the operator, which `a_copied_group_body_shares_one_record_between_its_kind_and_its_table`
+/// checks at the record level.
+#[test]
+fn an_escaped_closure_applies_an_operator_from_its_group_body() {
+    assert_eq!(
+        output(
+            "LET mk = (FN :{n :Number} -> Any = (\
+                 (GROUP ops FOLD LEFT = (\
+                     (OP #(⊕) OVER Number = (left + right))\
+                     (LET g = (FN :{} -> Number = (1 ⊕ 2 ⊕ 3)))))\
+                 (USING ops SCOPE (g))))\n\
+             LET esc = (mk {n = 1})\n\
+             PRINT (esc {})\n"
+        ),
+        "6\n"
+    );
+}
+
+/// The census twin, and a **ceiling rather than a discriminator**. A `GROUP` body is a whole extra
+/// scope on the escaping closure's captured chain, one whose kind carries a region-resident record;
+/// this reads it against the same group declared in the producer frame with the closure beside it
+/// rather than inside the body, so the group body scope is the only difference between the two
+/// programs.
+///
+/// Both sides sit on a floor neither can leave: the module *value* `ops` is bound pinned, and that
+/// pin chains one region per producer level
+/// ([module-scope-consolidation](../../../roadmap/foundation/module-scope-consolidation.md)), so
+/// each side holds depth + 2 regions where an operator-free chain answers `(1, 0)`. The floor is
+/// high enough to cover the body scope's own region, so equality here bounds what the body scope
+/// can cost — never more than the module value already pins — without witnessing the rebuild
+/// itself. That witness is
+/// `a_copied_group_body_shares_one_record_between_its_kind_and_its_table`, which consolidates a
+/// group body directly and reads the reborn record out of both of its homes. Once the floor lifts,
+/// this assertion tightens to the `(1, 0)` the operator-free chains answer.
+#[cfg(not(feature = "seam-force-pin"))]
+#[test]
+fn a_group_body_on_the_captured_chain_retains_nothing_extra() {
+    for depth in [0usize, 1, 3] {
+        let inside = held_and_released(&producer_chain(
+            depth,
+            "(GROUP ops FOLD LEFT = (\
+                 (OP #(⊕) OVER Number = (left + right))\
+                 (LET g = (FN :{} -> Number = (1 ⊕ 2 ⊕ 3)))))\
+             (USING ops SCOPE (g))",
+            "",
+        ));
+        let beside = held_and_released(&producer_chain(
+            depth,
+            "(GROUP ops FOLD LEFT = ((OP #(⊕) OVER Number = (left + right))))\
+             (LET g = (FN :{} -> Number = (6)))\
+             (g)",
+            "",
+        ));
+        assert_eq!(
+            inside, beside,
+            "at producer depth {depth} a closure declared inside the group body must retain \
+             exactly what one declared beside it retains",
+        );
+        assert_eq!(
+            inside.1, 0,
             "and nothing at all outlives the run at producer depth {depth}",
         );
     }

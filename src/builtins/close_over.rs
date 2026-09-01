@@ -33,7 +33,7 @@
 //!   so the severance is transitive ([lazy-closures.md § Lazy
 //!   close](../../design/lazy-closures.md)). A **module** capture still rides that copy as a
 //!   borrow leaf — i.e. pinned — the remaining deferred half
-//!   ([callable-copy-tuning.md](../../roadmap/foundation/callable-copy-tuning.md)).
+//!   ([module-scope-consolidation.md](../../roadmap/foundation/module-scope-consolidation.md)).
 //! - A **signature-shaped pattern** `(HELPER _)` names one full untyped bucket key and captures
 //!   every visible overload registered under it, pinned.
 //! - **Implicit close** copies every dispatch registration, operator-registry entry and module

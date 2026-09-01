@@ -15,7 +15,7 @@ use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::ref_carriers::BindingsReferenceFamily;
 use crate::machine::core::{
     FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt,
-    KoanStorageProfile, ModuleRefFamily, ScopeRefFamily, product_reaches_region,
+    KoanStorageProfile, ModuleRefFamily, RegionBrand, ScopeRefFamily, product_reaches_region,
 };
 use crate::machine::model::KeywordSymbol;
 use crate::machine::model::{
@@ -649,7 +649,28 @@ impl<'a> Scope<'a> {
         members: &[KeywordSymbol],
         mode: ReductionMode,
     ) -> DeliveredOperatorGroup {
-        KoanRegion::yoke_branded::<OperatorGroupFamily, _>(self.home(), |brand| {
+        Self::birth_operator_group_at(self.brand(), members, mode)
+    }
+
+    /// [`Self::birth_operator_group`] rooted on a bare [`RegionBrand`] rather than a scope. The
+    /// environment copy needs a record *before* the scope that will carry it exists: a copied
+    /// `GROUP` body stamps the reborn record into its own [`Module`](super::ScopeKind::Module) kind field,
+    /// fixed at allocation, so the birth cannot wait for a `&Scope` to root it on.
+    ///
+    /// The owner is the brand's own host region, exactly what [`Self::home`] resolves for a scope
+    /// living there, so a record born here and a scope allocated at the same brand are same-region
+    /// by construction — which is the premise [`Self::adopt_group_record`] states.
+    pub(crate) fn birth_operator_group_at(
+        brand: RegionBrand<'_>,
+        members: &[KeywordSymbol],
+        mode: ReductionMode,
+    ) -> DeliveredOperatorGroup {
+        let owner = brand
+            .handle()
+            .host()
+            .upgrade()
+            .expect("a live region brand implies a live region owner");
+        KoanRegion::yoke_branded::<OperatorGroupFamily, _>(owner, |brand| {
             OperatorGroup::alloc(brand, members, mode)
         })
     }

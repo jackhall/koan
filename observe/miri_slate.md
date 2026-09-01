@@ -192,8 +192,26 @@ bounds that pin the cart as the copies' home
 (`repeated_close_over_leaves_run_root_flat` and its siblings) are value asserts on the allocation
 substrate and run under plain `cargo test`; the read-after-free shape is what these two cover.
 
+A third shape rides the same region: a **flattened operator registration**. `CLOSE`'s capture plan
+copies every per-call operator visible on the enclosing chain into the block scope, and the
+environment copy rebuilds that registry rather than relocating it — the group record is
+region-resident, so `fill_scope` reads its member symbols and mode and births a fresh record at the
+destination ([src/machine/core/scope/copy.rs](../src/machine/core/scope/copy.rs)). The escaped
+closure then reduces an operator run through the reborn record after the frame that declared the
+original has died, which is where a record left borrowing the source region — or a registry entry
+still sealing the source's pointee — is a use-after-free rather than a wrong answer.
+
+A record has a **second home**, and the fourth shape exercises it: a `GROUP` body's own scope kind
+carries the record its `OP` declarations belong to, beside the registry entries that seal it. A
+closure declared inside that body puts the whole `MODULE`-kinded scope on its captured chain, so the
+copy stamps a reborn record into the copied kind and pre-seeds the fill's record memo with it. Two
+births instead of one would be a wrong answer; a stamp left naming the source's pointee is a
+use-after-free, read through `nearest_group_context` when the escaped closure reduces its run.
+
 - `a_severed_closure_still_answers_after_its_producers_die`
 - `a_captured_registration_runs_after_its_producers_die`
+- `an_escaped_body_applies_a_per_call_operator`
+- `an_escaped_closure_applies_an_operator_from_its_group_body`
 
 **Record substrate door — construction, O(1) ownership, fold-shared retype** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — `FoldingBrand::alloc_substrate_folded` (the sole `RecordSubstrate` mint, routed through by
@@ -660,6 +678,7 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-01: 1068s — 31 tests, 0 leaks, 0 UB
 - 2026-09-01: 918s — 29 tests, 0 leaks, 0 UB
 - 2026-08-31: 1098s — 27 tests, 0 leaks, 0 UB
 - 2026-08-30: 1265s — 27 tests, 0 leaks, 0 UB

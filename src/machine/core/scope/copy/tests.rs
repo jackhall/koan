@@ -233,11 +233,11 @@ fn register_powerset<'a>(
     (seal.address, probes)
 }
 
-/// **An operator registration no longer pins, and its table copies.** The readiness gate stopped
-/// naming operators, so a scope holding a `GROUP`'s powerset consolidates; the copied table carries
+/// **An operator registration does not pin, and its table copies.** The readiness gate does not
+/// name operators, so a scope holding a `GROUP`'s powerset consolidates; the copied table carries
 /// the same probe set, and all three subset entries seal **one** reborn record — the per-record
-/// memo doing its job, where a per-entry rebuild would have minted three where the source has one.
-/// The reborn address differs from the source's by construction: that is the copy's whole point.
+/// memo doing its job, where a per-entry rebuild would mint three where the source has one. The
+/// reborn address differs from the source's by construction: that is the copy's whole point.
 #[test]
 fn an_operator_registration_copies_over_one_reborn_record() {
     let program = program_storage();
@@ -272,6 +272,57 @@ fn an_operator_registration_copies_over_one_reborn_record() {
         assert_ne!(
             reborn, source_address,
             "and it is a fresh record, not the region-resident one the source sealed",
+        );
+    });
+}
+
+/// **A copied `GROUP` body keeps its kind, and one record fills both homes.** A group record lives
+/// in two places — the scope kind's own field, read by `nearest_group_context`, and the sealed
+/// carrier every powerset registry entry holds — and the source's two are one pointee. The copy has
+/// to reproduce that: the kind stamp is minted before the fill runs, so a second birth inside the
+/// fill would leave the copied body's `OP` context naming a different record than its own registry
+/// entries seal. Preserving the kind at all is what keeps `nearest_opaque` stopping where the
+/// source stopped.
+#[test]
+fn a_copied_group_body_shares_one_record_between_its_kind_and_its_table() {
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let registries = RunRegistries::new();
+    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+
+    frame.with_scope(|outer| {
+        let source = Scope::alloc_group_child(
+            outer,
+            &[probe_symbol("⊕"), probe_symbol("⊗")],
+            ReductionMode::FoldLeft,
+            None,
+            &registries,
+        )
+        .expect("a group body allocates");
+        let source_record = source
+            .nearest_group_context()
+            .map(|record| std::ptr::from_ref(record) as usize)
+            .expect("a group body carries its record");
+        let top = bind_self_capturing(source, "f", 0, &registries);
+        source.close();
+        outer.close();
+
+        let copied = consolidated(top, door_over(source)).captured_scope();
+        let stamped = copied
+            .nearest_group_context()
+            .map(|record| std::ptr::from_ref(record) as usize)
+            .expect("the copied body is still a group body, so an `OP` inside it resolves");
+        assert_ne!(
+            stamped, source_record,
+            "the stamped record is reborn, not the source's region-resident one",
+        );
+
+        let entries = copied.bindings().operator_entry_addresses();
+        assert_eq!(entries.len(), 3, "the copy holds the whole member powerset");
+        assert!(
+            entries.iter().all(|(_, address)| *address == stamped),
+            "every entry seals the very record the copied kind stamps, as the source's do",
         );
     });
 }
@@ -328,9 +379,9 @@ fn a_copied_table_preserves_the_upsert_decisions() {
 }
 
 /// **An operator table prices its own rebuild.** The chooser reads `binding_copy_cost` to decide
-/// whether a crossing is worth copying, so a table the engine now rebuilds has to enter that memo —
-/// otherwise the gate's removal buys a copy the chooser priced at zero. A powerset charges its
-/// record once and its entries once each, and the copied scope arrives at the same figure.
+/// whether a crossing is worth copying, so a table the engine rebuilds has to enter that memo — a
+/// table outside it would buy a copy the chooser priced at zero. A powerset charges its record once
+/// and its entries once each, and the copied scope arrives at the same figure.
 #[test]
 fn an_operator_table_prices_its_rebuild() {
     let program = program_storage();
