@@ -24,12 +24,13 @@ A binder position captures a bare name token raw and never resolves it — see
 rule and the surface consequences. Three part-kind-exact leaves express it, differing only in
 which token classes they admit:
 
-- `Identifier` — an `ExpressionPart::Identifier` part. `LET`'s value-class binder, `VAL`'s
-  and `FN`'s and `OP`'s `name`, `MODULE`/`GROUP`'s binding overloads.
+- `Identifier` — an `ExpressionPart::Identifier` part. `VAL`'s and `OP`'s `name`, and the
+  binding overloads of `MODULE`, `GROUP` and the combined `LET <name> = FN …` statement.
 - `NameToken` — an `Identifier` *or* a `Type` part. `LET`'s `name` and `ATTR`'s `field`, the
   two positions that take a name of either class through one overload.
 - `TypeNameToken` — a `Type` part only. `NEWTYPE`/`UNION`/`SIG`/`TYPE`'s `name`, and the
-  Type-named respelling overloads of `MODULE`/`GROUP`.
+  Type-named respelling overloads of `MODULE`, `GROUP` and the combined
+  `LET <name> = FN …` statement.
 
 All three deliver
 [`Held::Name(BinderSymbol)`](../../../src/machine/model/values/carried.rs), minted straight

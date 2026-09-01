@@ -47,7 +47,13 @@ admits accordingly. The forms:
   rather than a bind-time `TypeMismatch`. Name-owning slots — the binder positions
   (`Identifier` / `NameToken` / `TypeNameToken`) and the `OfKind(Proper)` type-reference
   slot — skip the cache and admit shape-only: the slot owns the token, so
-  admission can't depend on whether `x` happens to be bound or parked. A
+  admission can't depend on whether `x` happens to be bound or parked. The two
+  differ in *how much* shape they take: `OfKind(Proper)` also admits a `:(…)` or
+  `:{…}` part, which reaches the declarator raw and elaborates to a type-side
+  carrier, while the three binder slots are part-kind-exact and take a bare name
+  token only — so a type expression written in a binder position matches no
+  overload at all
+  ([tokens.md § A binder position is a name](../tokens.md#a-binder-position-is-a-name)). A
   `:KExpression` slot does consult the cache, because code is an ordinary
   value: a name bound to a quote carries a `KExpression` and admits.
 - **Literal** (`DESCRIBE [1 2 3]`) — the cache entry is `None` (literals

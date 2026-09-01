@@ -134,9 +134,9 @@ fn type_classified_binder_name_is_a_diagnostic() {
     );
 }
 
-/// The binder captures its token, so a name that happens to spell a builtin type takes the same
-/// diagnostic naming the same token. `List` used to reach a type-*reference* slot and lower, and
-/// the diagnostic reported the lowered node (`:(LIST OF Any)`, suggesting `:(_l_i_s_t _o_f _any)`).
+/// The binder captures its token and never lowers it, so a name that happens to spell a builtin
+/// type takes the same diagnostic naming the same token. Nothing on this path renders a type, so
+/// no spelling can report a lowered node in place of what the user wrote.
 #[test]
 fn a_builtin_spelled_binder_name_is_diagnosed_as_written() {
     let program = program_storage();

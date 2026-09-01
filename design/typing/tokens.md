@@ -61,7 +61,8 @@ shadowing a one-letter type-position identifier.
 ## A binder position is a name
 
 A **binder position** — the `name` of `LET` / `NEWTYPE` / `UNION` / `SIG` / `TYPE` /
-`MODULE` / `GROUP`, the `field` of `ATTR` — denotes a name, never a type reference, so it
+`MODULE` / `GROUP` and of the combined `LET <name> = FN …` statement, the `field` of `ATTR` —
+denotes a name, never a type reference, so it
 never resolves: not against the builtin type table, not against scope. Its class is the class
 the parser already assigned the token, taken from the part variant and never re-derived by a
 predicate over rendered text.
@@ -83,9 +84,18 @@ way, whether it is already bound. `LET Str = Number`, `LET List = Number` and
 `LET Dict = Number` all report the same `Rebind`, and no diagnostic quotes a lowered type in
 place of the token the user wrote.
 
-The classes stay disjoint where a builtin wants to tell them apart: `MODULE` and `GROUP` keep an
-`Identifier` overload that binds and a `TypeNameToken` twin that raises the snake_case respelling
-diagnostic, naming the token as written.
+The classes stay disjoint where a builtin wants to tell them apart: `MODULE`, `GROUP` and the
+combined `LET <name> = FN …` form each keep an `Identifier` overload that binds and a
+`TypeNameToken` twin that raises the snake_case respelling diagnostic, naming the token as
+written.
+
+Because the binder slots are part-kind-exact, a binder position admits a bare name token and
+**nothing else** — in particular no `:(…)` or `:{…}` part. A type expression written where a
+name belongs is therefore a dispatch non-match (`DispatchFailed`), not a bind-time shape error,
+and this holds uniformly across every declarator: `LET :(LIST OF Number) = 1`,
+`NEWTYPE :(…) = …`, `UNION :(…) = …`, `SIG :(…) = …`, `TYPE :(…)`, `MODULE :(…) = …`,
+`GROUP :(…) FOLD …` and `LET :(…) = FN …` alike. The refusal names no type because nothing on
+the path elaborated one.
 
 ## The module system adds no fourth class
 
@@ -106,9 +116,3 @@ A bare module name is therefore never a type: `:int_ord` fails at the `:` sigil,
 whose next token must be a Type token. The `TYPE OF` builtin is the door from a
 value to its type (see
 [modules.md § Modules in type position](modules.md#modules-in-type-position-type-of)).
-
-## Open work
-
-- [Name-token slots for binder positions](../../roadmap/type_language/name-token-slots.md) —
-  the combined `LET <Name> = FN …` statement's binder is the one position still typed as a type
-  reference, so its diagnostic quotes a lowered handle rather than the token as written.

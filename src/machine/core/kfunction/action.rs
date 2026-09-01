@@ -239,8 +239,9 @@ pub fn require_identifier_name<'a>(
 }
 
 /// Read the bare type-name captured by arg `slot` — the binder name of a builtin whose `name` is
-/// a `TypeNameToken` slot (NEWTYPE / UNION / SIG / TYPE, and MODULE / GROUP's Type-named
-/// respelling overloads) — or `MissingArg` for an absent slot. The Type-class twin
+/// a `TypeNameToken` slot (NEWTYPE / UNION / SIG / TYPE, and the Type-named respelling overloads
+/// of MODULE / GROUP / combined `LET <Name> = FN …`) — or `MissingArg` for an absent slot. The
+/// Type-class twin
 /// of [`require_identifier_name`]; both hand back the symbol their slot captured, which the parse
 /// minted when it classified the token.
 pub fn require_bare_type_name<'a>(

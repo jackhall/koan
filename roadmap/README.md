@@ -60,7 +60,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)
 - [Record-typed parameter list in the FN type constructor](type_language/fn-type-record-parameter-list.md)
 - [Module element-type join](type_language/module-element-type-join.md)
-- [Name-token slots for binder positions](type_language/name-token-slots.md)
 - [Field projection off a record-repr newtype type](type_language/record-type-field-projection.md)
 - [Union-typed carrier slots for builtin signatures](type_language/union-carrier-slots.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
