@@ -19,7 +19,6 @@
 
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
-use crate::machine::model::KKind;
 use crate::machine::model::KType;
 use crate::machine::model::TypeNode;
 use crate::machine::model::TypeSymbol;
@@ -71,7 +70,7 @@ pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machin
     if !ctx.scope.is_in_sig_body() {
         return Action::done(Err(not_in_sig_body()));
     }
-    let name = match require_bare_type_name(ctx.args, &SLOTS.name, "TYPE", ctx.registries) {
+    let name = match require_bare_type_name(ctx.args, &SLOTS.name) {
         Ok(name) => name,
         Err(e) => return Action::done(Err(e)),
     };
@@ -165,7 +164,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::ANY,
         vec![
             kw(registries, "TYPE"),
-            arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
+            arg(registries, &SLOTS.name, KType::TYPE_NAME_TOKEN),
         ],
     );
     crate::builtins::register_builtin(scope, bare_signature, body_bare, registries, gate);

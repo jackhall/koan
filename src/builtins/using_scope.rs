@@ -91,7 +91,7 @@ fn non_module_argument(ctx: &crate::machine::BodyCtx<'_, '_, '_>) -> KError {
         }
         Some(Held::Object(other)) => other.ktype().name(ctx.registries),
         // The `m` slot is `:Signature`, which admits no raw name part.
-        Some(Held::Identifier(_)) => unreachable!("USING's `m` slot never captures an identifier"),
+        Some(Held::Name(_)) => unreachable!("USING's `m` slot never captures a name"),
         None => return KError::new(KErrorKind::MissingArg("m".to_string())),
     };
     KError::new(KErrorKind::TypeMismatch {

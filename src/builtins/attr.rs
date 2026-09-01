@@ -12,10 +12,10 @@
 //! resolves the overloads: an `Identifier` lhs wins `body_identifier`, a module / type-token lhs
 //! wins its own slot, and only a bare runtime value falls through to [`body_value`].
 //!
-//! The `field` position splits the same way. A bare token is `Identifier`-classed and outranks
-//! `Str`, so the spelled forms above always win it; a field that arrives as a runtime string —
-//! computed or literal — falls to the dynamic pair, [`body_dynamic_field`] for a value lhs and
-//! [`body_dynamic_module_field`] for a module one.
+//! The `field` position does not split. One `NameToken` slot takes a bare field token of either
+//! class, and it outranks `Str`, so the spelled forms above always win it; a field that arrives as
+//! a runtime string — computed or literal — falls to the dynamic pair, [`body_dynamic_field`] for
+//! a value lhs and [`body_dynamic_module_field`] for a module one.
 
 use std::borrow::Cow;
 
@@ -54,12 +54,10 @@ enum FieldName<'a> {
     /// A name token the parse classified and interned. Its class *is* the channel it arrived on,
     /// which is the map a member probe keys.
     Token(BinderSymbol),
-    /// A name that classifies as neither channel: a runtime string that spells no token, or a type
-    /// rendered from a handle naming no bare token (a compound like `List<Number>`). It binds
+    /// A name that classifies as neither channel: a runtime string that spells no token. It binds
     /// nowhere, so it names no member and every consumer treats it as an immediate miss reporting
-    /// this text. The runtime-string producer borrows the string it read, so the read that
-    /// succeeds allocates nothing; the rendering producer is a miss by construction and owns the
-    /// text it reports.
+    /// this text. The producer borrows the string it read, so the read that succeeds allocates
+    /// nothing.
     Rendered(Cow<'a, str>),
 }
 
@@ -96,35 +94,14 @@ impl<'a> FieldName<'a> {
     }
 }
 
-/// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
-/// type-channel leaf token (resolved or rendered), else a `MissingArg`. Each channel hands over the
-/// class it arrived on, so no consumer re-derives the class by a predicate over text.
-fn read_field_name<'a>(
-    args: BoundArgs<'a, '_>,
-    registries: &RunRegistries,
-) -> Result<FieldName<'a>, KError> {
-    if let Some(v) = args.identifier(&SLOTS.field) {
-        // The parse classified this token value-side, so the channel tag is settled and nothing
-        // here reads a spelling.
-        return Ok(FieldName::Token(BinderSymbol::Value(v)));
+/// Read the `field` member name from `BodyCtx::args`. The slot is a `NameToken`, so a bare field
+/// token of either class arrives on one channel already carrying the class the parse assigned it —
+/// nothing here lowers a name or re-derives a class by a predicate over text.
+fn read_field_name<'a>(args: BoundArgs<'a, '_>) -> Result<FieldName<'a>, KError> {
+    match args.name(&SLOTS.field) {
+        Some(class) => Ok(FieldName::Token(class)),
+        None => Err(KError::new(KErrorKind::MissingArg("field".to_string()))),
     }
-    if let Some(te) = args.unresolved_type(&SLOTS.field) {
-        return Ok(FieldName::Token(BinderSymbol::Type(te)));
-    }
-    if let Some(kt) = args.ktype(&SLOTS.field) {
-        // The bind seam lowers a `Type`-token field only when the name is registry-known — that is,
-        // a primitive (`Ordered.Str`); every user type name stays unlowered and takes the arm
-        // above. The handle answers its own bare name as the symbol the registry already holds, so
-        // the class is recovered with no text rendered and no digest re-derived. It names no member
-        // either way, and the miss below is what reports the name. A handle answering no bare name
-        // is compound surface syntax (`List<Number>`), which classifies as nothing and rides as the
-        // rendering only that miss reads.
-        return Ok(match kt.name_symbol(registries) {
-            Some(name) => FieldName::Token(BinderSymbol::Type(name)),
-            None => FieldName::Rendered(Cow::Owned(kt.name(registries))),
-        });
-    }
-    Err(KError::new(KErrorKind::MissingArg("field".to_string())))
 }
 
 /// Read the `field` member name off a `:Str` slot — the dynamic read's counterpart to
@@ -167,7 +144,7 @@ pub fn body_identifier<'a>(
     let Some(s_name) = ctx.args.identifier(&SLOTS.s) else {
         return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string()))));
     };
-    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
+    let field_name = crate::try_action!(read_field_name(ctx.args));
     // `s` is a bound name: cross the binding's own carrier as the field read's lhs operand, so the
     // projected field folds every region the bound value reaches. The lift is the only read — the
     // field probe runs under the envelope's own pins rather than off a bare reference.
@@ -190,7 +167,7 @@ pub fn body_identifier<'a>(
 pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
     if let Some(te) = ctx.args.unresolved_type(&SLOTS.s) {
-        let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
+        let field_name = crate::try_action!(read_field_name(ctx.args));
         return match ctx.scope.resolve_type_identifier(te, None, ctx.registries) {
             TypeResolution::Done(kt) => route(access_type_member(
                 ctx.scope,
@@ -228,7 +205,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
             }));
         }
     };
-    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
+    let field_name = crate::try_action!(read_field_name(ctx.args));
     route(access_type_member(
         ctx.scope,
         s_kt,
@@ -245,7 +222,7 @@ pub fn body_value<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machi
         Some(obj) => obj,
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
-    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
+    let field_name = crate::try_action!(read_field_name(ctx.args));
     // The lhs `s` is a computed `Wrapped` value delivered to this call (e.g. `seg.finish.x`), so its
     // carrier names regions the read-site frame may not pin; cross the lhs carrier as the field
     // read's operand so the projected field outlives every region the lhs reaches. A carrier-less
@@ -295,8 +272,8 @@ pub fn body_dynamic_field<'a>(
             )))));
         }
         // The `s` slot is `:Any`, which admits no raw name part.
-        Some(Held::Identifier(_)) => {
-            unreachable!("ATTR's lhs slot never captures an identifier")
+        Some(Held::Name(_)) => {
+            unreachable!("ATTR's lhs slot never captures a name")
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
@@ -323,7 +300,7 @@ pub fn body_dynamic_field<'a>(
 /// Projects the field off a module lhs riding the value channel's Object arm.
 pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     let m = crate::try_action!(module_lhs(ctx.args, ctx.registries));
-    let field_name = crate::try_action!(read_field_name(ctx.args, ctx.registries));
+    let field_name = crate::try_action!(read_field_name(ctx.args));
     route(access_module_member(m, &field_name, ctx.registries))
 }
 
@@ -562,7 +539,7 @@ fn access_field<'a>(
         Held::UnresolvedType(_) => unreachable!("a record field is never an unlowered type name"),
         // A name carrier is minted only for an `:Identifier` slot at the bind seam; a member cell
         // comes from a container, which never holds one.
-        Held::Identifier(_) => unreachable!("a record field is never a captured identifier"),
+        Held::Name(_) => unreachable!("a record field is never a captured name"),
         Held::Object(value) => {
             // A shallow scalar embeds no borrow at all, so it rebuilds owned and seals empty rather
             // than naming the member's run.
@@ -691,7 +668,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             vec![
                 kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::IDENTIFIER),
-                arg(registries, &SLOTS.field, KType::IDENTIFIER),
+                arg(registries, &SLOTS.field, KType::NAME_TOKEN),
             ],
         )
     };
@@ -701,7 +678,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             vec![
                 kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::EMPTY_SIGNATURE),
-                arg(registries, &SLOTS.field, KType::IDENTIFIER),
+                arg(registries, &SLOTS.field, KType::NAME_TOKEN),
             ],
         )
     };
@@ -720,7 +697,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             vec![
                 kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::ANY),
-                arg(registries, &SLOTS.field, KType::IDENTIFIER),
+                arg(registries, &SLOTS.field, KType::NAME_TOKEN),
             ],
         )
     };
@@ -743,17 +720,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             vec![
                 kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::of_kind(KKind::ProperType)),
-                arg(registries, &SLOTS.field, KType::IDENTIFIER),
-            ],
-        )
-    };
-    let type_type_field_sig = || {
-        sig(
-            KType::ANY,
-            vec![
-                kw(registries, "ATTR"),
-                arg(registries, &SLOTS.s, KType::of_kind(KKind::ProperType)),
-                arg(registries, &SLOTS.field, KType::of_kind(KKind::ProperType)),
+                arg(registries, &SLOTS.field, KType::NAME_TOKEN),
             ],
         )
     };
@@ -766,17 +733,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
                 kw(registries, "ATTR"),
                 arg(registries, &SLOTS.s, KType::EMPTY_SIGNATURE),
                 arg(registries, &SLOTS.field, KType::STR),
-            ],
-        )
-    };
-    // Module lhs with a Type-classed field (e.g. the `Outer.Inner` step in `Outer.Inner.x`).
-    let module_type_field_sig = || {
-        sig(
-            KType::ANY,
-            vec![
-                kw(registries, "ATTR"),
-                arg(registries, &SLOTS.s, KType::EMPTY_SIGNATURE),
-                arg(registries, &SLOTS.field, KType::of_kind(KKind::ProperType)),
             ],
         )
     };
@@ -806,20 +762,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         registries,
         gate,
     );
-    register_builtin(
-        scope,
-        type_type_field_sig(),
-        body_type_lhs,
-        registries,
-        gate,
-    );
-    register_builtin(
-        scope,
-        module_type_field_sig(),
-        body_module,
-        registries,
-        gate,
-    );
 }
 
 #[cfg(test)]
@@ -831,9 +773,9 @@ mod tests {
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
 
-    /// A primitive type name in the field position is the one shape the bind seam lowers to a
-    /// resolved handle — every user type name stays unlowered. It names no member, so the read
-    /// reports the miss against the handle's rendering.
+    /// A field position captures its token, so a name that happens to spell a primitive is read
+    /// exactly like any other Type-classed field: it names no member of `Ordered`, and the miss
+    /// reports the token as written.
     #[test]
     fn attr_with_a_primitive_type_field_reports_the_miss() {
         let program = program_storage();

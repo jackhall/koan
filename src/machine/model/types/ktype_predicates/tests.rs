@@ -1378,3 +1378,54 @@ fn a_keyword_reports_no_slot_type() {
     );
     assert!(KType::slot_ktype(&keyword, &registries.types).is_none());
 }
+
+/// The two binder-position slots' part admission. `NameToken` takes a bare name token of either
+/// class and nothing else; `TypeNameToken` narrows that to the Type class. Neither takes a
+/// literal, a container literal, or a raw type expression — a binder position is a name, so the
+/// shapes that denote a *type* have no business there.
+#[test]
+fn name_token_slots_admit_only_bare_name_tokens() {
+    use crate::builtins::test_support::identifier_part;
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let value_part = identifier_part("x");
+    let type_part = ExpressionPart::Type(type_token("Point"));
+
+    assert!(KType::NAME_TOKEN.accepts_part(&value_part, types));
+    assert!(KType::NAME_TOKEN.accepts_part(&type_part, types));
+    assert!(!KType::TYPE_NAME_TOKEN.accepts_part(&value_part, types));
+    assert!(KType::TYPE_NAME_TOKEN.accepts_part(&type_part, types));
+
+    for other in [
+        ExpressionPart::Literal(KLiteral::Number(1.0)),
+        ExpressionPart::Literal(KLiteral::Null),
+        ExpressionPart::ListLiteral(&[]),
+        ExpressionPart::RecordLiteral(&[]),
+    ] {
+        assert!(!KType::NAME_TOKEN.accepts_part(&other, types));
+        assert!(!KType::TYPE_NAME_TOKEN.accepts_part(&other, types));
+    }
+}
+
+/// Specificity for the binder slots. A bare name token outranks the `:Str` sibling that reads the
+/// same position resolved (ATTR's dynamic read must not steal a spelled field), the two narrower
+/// name slots outrank `NameToken`, and any concrete type outranks all of them — the
+/// unconstrained-name rule.
+#[test]
+fn name_token_slots_order_against_str_and_concrete_slots() {
+    let registries = RunRegistries::new();
+    assert!(KType::NAME_TOKEN.is_more_specific_than(KType::STR, &registries));
+    assert!(!KType::STR.is_more_specific_than(KType::NAME_TOKEN, &registries));
+
+    assert!(KType::IDENTIFIER.is_more_specific_than(KType::NAME_TOKEN, &registries));
+    assert!(KType::TYPE_NAME_TOKEN.is_more_specific_than(KType::NAME_TOKEN, &registries));
+    assert!(!KType::NAME_TOKEN.is_more_specific_than(KType::IDENTIFIER, &registries));
+    assert!(!KType::NAME_TOKEN.is_more_specific_than(KType::TYPE_NAME_TOKEN, &registries));
+
+    for slot in [KType::NAME_TOKEN, KType::TYPE_NAME_TOKEN] {
+        assert!(KType::NUMBER.is_more_specific_than(slot, &registries));
+        assert!(!slot.is_more_specific_than(KType::NUMBER, &registries));
+        assert!(slot.is_more_specific_than(KType::ANY, &registries));
+        assert!(!KType::ANY.is_more_specific_than(slot, &registries));
+    }
+}

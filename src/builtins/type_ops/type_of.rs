@@ -27,8 +27,8 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
             )))));
         }
         // The `value` slot is `:Any`, which admits no raw name part.
-        Some(Held::Identifier(_)) => {
-            unreachable!("`TYPE OF`'s value slot never captures an identifier")
+        Some(Held::Name(_)) => {
+            unreachable!("`TYPE OF`'s value slot never captures a name")
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("value".into())))),
     };

@@ -258,9 +258,11 @@ impl<'a> ExpressionPart<'a> {
     /// unresolved name, so the token's symbol rides through verbatim and scope-aware
     /// elaboration defers to
     /// [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).
-    /// An `:Identifier` slot is that carrier's value-channel mirror: the token's symbol rides
-    /// through on [`Held::Identifier`], so a captured name is never rendered to a string to be
-    /// bound.
+    ///
+    /// The name-capture slots are a separate seam: `:Identifier` and the two binder-position
+    /// slots ride [`Held::Name`], carrying the class the parser assigned the part. They consult
+    /// [`KType::from_symbol`] for nothing, so a binder name is never lowered and never rendered to
+    /// a string to be bound.
     ///
     /// [`KFunction::bind_args`]: crate::machine::KFunction::bind_args
     pub fn resolve_for(
@@ -281,8 +283,14 @@ impl<'a> ExpressionPart<'a> {
         if let (ExpressionPart::RecordType(inner), KType::RECORD_TYPE) = (self, *slot) {
             return Held::Object(KObject::KExpression(inner.expression()));
         }
-        if let (ExpressionPart::Identifier(name), KType::IDENTIFIER) = (self, *slot) {
-            return Held::Identifier(*name);
+        if let (ExpressionPart::Identifier(name), KType::IDENTIFIER | KType::NAME_TOKEN) =
+            (self, *slot)
+        {
+            return Held::Name(BinderSymbol::Value(*name));
+        }
+        if let (ExpressionPart::Type(t), KType::NAME_TOKEN | KType::TYPE_NAME_TOKEN) = (self, *slot)
+        {
+            return Held::Name(BinderSymbol::Type(*t));
         }
         Held::Object(self.resolve(scope.brand()))
     }
@@ -298,11 +306,12 @@ impl<'a> ExpressionPart<'a> {
                 unreachable!("a keyword part is fixed syntax and never resolves to a value")
             }
             // A name part carries a symbol, not text, and never becomes a string on the way to a
-            // slot. `:Identifier` is part-kind-exact — it admits this part shape and no resolved
-            // cell (`accepts_part` / `accepts_carried`) — so an identifier reaches the bind seam
-            // only through the `Held::Identifier` arm of `resolve_for`; a `Type` part likewise
-            // reaches only a `PROPER_TYPE` / `ANY_TYPE` slot, taken at the top of the same
-            // function. Every other slot is served by an eagerly-resolved carrier, not a raw name.
+            // slot. The name-capture slots are part-kind-exact — they admit a part shape and no
+            // resolved cell (`accepts_part` / `accepts_carried`) — so a name reaches the bind seam
+            // only through the `Held::Name` arms of `resolve_for`; a `Type` part in a type
+            // *reference* slot likewise reaches only `PROPER_TYPE` / `ANY_TYPE`, taken at the top
+            // of the same function. Every other slot is served by an eagerly-resolved carrier, not
+            // a raw name.
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => unreachable!(
                 "a name part is captured as its symbol by resolve_for, never resolved to a string"
             ),

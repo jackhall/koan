@@ -260,7 +260,7 @@ impl KType {
             }),
             // An aggregate cell holds a value or a resolved type; neither of the bind seam's
             // name carriers ever becomes one, so no slot classifies them.
-            Held::UnresolvedType(_) | Held::Identifier(_) => false,
+            Held::UnresolvedType(_) | Held::Name(_) => false,
         }
     }
 

@@ -134,12 +134,22 @@ impl<'a, 'c> BoundArgs<'a, 'c> {
         self.held(name).and_then(Held::as_type)
     }
 
-    /// The argument's captured name — the value-channel read of an `:Identifier` slot. The bind
-    /// seam parks the token's symbol here rather than rendering it to a string, so a name-taking
-    /// builtin reads the symbol the parse minted.
+    /// The argument's captured name, value-class only — the read of an `:Identifier` slot. The
+    /// bind seam parks the token's symbol here rather than rendering it to a string, so a
+    /// name-taking builtin reads the symbol the parse minted.
     pub fn identifier(&self, name: &StaticName<ValueSymbol>) -> Option<ValueSymbol> {
         match self.held(name) {
-            Some(Held::Identifier(v)) => Some(*v),
+            Some(Held::Name(BinderSymbol::Value(v))) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// The argument's captured name with its class — the read of a `NameToken` slot. The bind
+    /// seam took the class from the part variant, so the body branches on the variant and never
+    /// classifies text.
+    pub fn name(&self, name: &StaticName<ValueSymbol>) -> Option<BinderSymbol> {
+        match self.held(name) {
+            Some(Held::Name(b)) => Some(*b),
             _ => None,
         }
     }
@@ -199,8 +209,8 @@ pub fn require_ktype<'a>(
             got: crate::machine::model::types::render_label(ti.symbol(), registries),
         })),
         // Every slot reaching here is a type slot, which admits no raw name part.
-        Some(Held::Identifier(_)) => {
-            unreachable!("a type slot never captures an identifier")
+        Some(Held::Name(_)) => {
+            unreachable!("a type slot never captures a name")
         }
         None => Err(KError::new(KErrorKind::MissingArg(name.text().to_string()))),
     }
@@ -219,7 +229,7 @@ pub fn require_identifier_name<'a>(
 ) -> Result<ValueSymbol, KError> {
     let spelling = slot.text();
     match args.held(slot) {
-        Some(Held::Identifier(v)) => Ok(*v),
+        Some(Held::Name(BinderSymbol::Value(v))) => Ok(*v),
         Some(other) => Err(KError::new(KErrorKind::ShapeError(format!(
             "{surface} {spelling} must be a bare identifier, got `{}`",
             other.ktype(&registries.types).name(registries),
@@ -228,32 +238,24 @@ pub fn require_identifier_name<'a>(
     }
 }
 
-/// Resolve the bare type-name in the `Type`-arm of arg `slot` — the binder name of a
-/// type-defining builtin (UNION / NEWTYPE / SIG / RECURSIVE) — or the canonical error:
-/// `MissingArg` for an absent slot, `ShapeError` for a structural type. `surface` is the keyword
-/// embedded in the diagnostic.
+/// Read the bare type-name captured by arg `slot` — the binder name of a type-defining builtin
+/// (UNION / NEWTYPE / SIG / RECURSIVE) — or `MissingArg` for an absent slot. The Type-class twin
+/// of [`require_identifier_name`]; both hand back the symbol their slot captured, which the parse
+/// minted when it classified the token.
 pub fn require_bare_type_name<'a>(
     args: BoundArgs<'a, '_>,
     slot: &StaticName<ValueSymbol>,
-    surface: &str,
-    registries: &RunRegistries,
 ) -> Result<TypeSymbol, KError> {
     match args.held(slot) {
-        // A binder name is exactly the shape the bind seam leaves unlowered: a bare user type
-        // name with nothing bound to it yet, already classified and interned by the parser.
-        Some(Held::UnresolvedType(ti)) => Ok(*ti),
-        // A resolved handle answers its bare name as the symbol its node already carries (or a
-        // builtin leaf's fixed spelling); a type named by compound surface syntax has no bare
-        // name and errors.
-        Some(Held::Type(t)) => t.name_symbol(registries).ok_or_else(|| {
-            KError::new(KErrorKind::ShapeError(format!(
-                "{surface} {} must be a bare type name, got `{}`",
-                slot.text(),
-                t.display_name(registries),
-            )))
-        }),
-        // A type-name slot is `PROPER_TYPE` / `ANY_TYPE`, which admits no raw value-name part.
-        Some(Held::Identifier(_)) => unreachable!("a type-name slot never captures an identifier"),
+        // A binder slot captures its token classified, so a Type-class binder arrives on exactly
+        // this arm and no other — no binder position receives a resolved handle.
+        Some(Held::Name(BinderSymbol::Type(t))) => Ok(*t),
+        // A `TypeNameToken` slot admits no Identifier part, and no binder slot lowers or resolves.
+        Some(Held::Name(BinderSymbol::Value(_)))
+        | Some(Held::Type(_))
+        | Some(Held::UnresolvedType(_)) => {
+            unreachable!("a type-binder slot captures only a Type-class name token")
+        }
         Some(Held::Object(_)) | None => {
             Err(KError::new(KErrorKind::MissingArg(slot.text().to_string())))
         }

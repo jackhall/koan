@@ -29,12 +29,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     use super::await_body::await_body_in_scope;
     use crate::machine::{Action, require_bare_type_name, require_kexpression};
 
-    let name = crate::try_action!(require_bare_type_name(
-        ctx.args,
-        &SLOTS.name,
-        "SIG",
-        ctx.registries
-    ));
+    let name = crate::try_action!(require_bare_type_name(ctx.args, &SLOTS.name));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", &SLOTS.body));
 
     let decl_scope = ctx.scope.alloc_child_under_sig(name);
@@ -62,7 +57,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::of_kind(KKind::Signature),
         vec![
             kw(registries, "SIG"),
-            arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
+            arg(registries, &SLOTS.name, KType::TYPE_NAME_TOKEN),
             kw(registries, "="),
             arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ],

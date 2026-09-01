@@ -98,12 +98,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     use crate::machine::model::KObject;
     use crate::machine::{Action, require_bare_type_name};
 
-    let name = crate::try_action!(require_bare_type_name(
-        ctx.args,
-        &SLOTS.name,
-        "UNION",
-        ctx.registries
-    ));
+    let name = crate::try_action!(require_bare_type_name(ctx.args, &SLOTS.name));
     let schema_expr = match ctx.args.object(&SLOTS.schema) {
         Some(KObject::KExpression(e)) => e.node(),
         _ => {
@@ -314,7 +309,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         KType::of_kind(KKind::AnyType),
         vec![
             kw(registries, "UNION"),
-            arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
+            arg(registries, &SLOTS.name, KType::TYPE_NAME_TOKEN),
             kw(registries, "="),
             arg(registries, &SLOTS.schema, KType::KEXPRESSION),
         ],

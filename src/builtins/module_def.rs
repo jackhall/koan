@@ -12,9 +12,9 @@ use crate::machine::WriteGate;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
+use crate::machine::model::SigSchema;
 use crate::machine::model::ValueSymbol;
 use crate::machine::model::announce_type_members;
-use crate::machine::model::{KKind, SigSchema};
 use crate::machine::model::{Module, ModuleDraft};
 use crate::machine::{Action, BodyCtx};
 use crate::machine::{KError, KErrorKind};
@@ -156,12 +156,7 @@ pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     use crate::machine::require_bare_type_name;
     use crate::machine::{KError, KErrorKind};
 
-    let name = crate::try_action!(require_bare_type_name(
-        ctx.args,
-        &SLOTS.name,
-        "MODULE",
-        ctx.registries
-    ));
+    let name = crate::try_action!(require_bare_type_name(ctx.args, &SLOTS.name));
     let name = crate::machine::model::render_label(name.symbol(), ctx.registries);
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "module `{name}` is named with a Type token, but a module is a value — the Type-token \
@@ -185,7 +180,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     crate::builtins::register_builtin(scope, module_sig(KType::IDENTIFIER), body, registries, gate);
     crate::builtins::register_builtin(
         scope,
-        module_sig(KType::of_kind(KKind::ProperType)),
+        module_sig(KType::TYPE_NAME_TOKEN),
         body_type_named,
         registries,
         gate,

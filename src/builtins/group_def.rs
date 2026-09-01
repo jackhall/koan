@@ -40,7 +40,6 @@ use crate::machine::WriteGate;
 
 use crate::machine::body_statement_refs;
 use crate::machine::model::KExpression;
-use crate::machine::model::KKind;
 use crate::machine::model::KType;
 use crate::machine::model::labels::KeywordSymbol;
 use crate::machine::model::{FoldDirection, ReductionMode};
@@ -251,14 +250,14 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         );
         register_builtin(
             scope,
-            fold(KType::of_kind(KKind::ProperType), direction),
+            fold(KType::TYPE_NAME_TOKEN, direction),
             super::module_def::body_type_named,
             registries,
             gate,
         );
         register_builtin(
             scope,
-            pairwise(KType::of_kind(KKind::ProperType), direction),
+            pairwise(KType::TYPE_NAME_TOKEN, direction),
             super::module_def::body_type_named,
             registries,
             gate,

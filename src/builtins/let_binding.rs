@@ -1,7 +1,6 @@
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
-use crate::machine::model::KKind;
 use crate::machine::model::TypeNode;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
@@ -9,16 +8,16 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{BinderSymbol, TypeSymbol, ValueSymbol, display_label};
+use crate::machine::model::{BindKind, BinderSymbol, display_label};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { name, value } }
 
 /// `LET <name> = <value:Any>` — deep-clones the bound value into the region and inserts it
-/// under `name`. Two overloads share this body, differing only in the `name` slot's `KType`:
-/// `Identifier` and `ProperType`. Same partition logic across both: reads its args from the
-/// `BodyCtx::args` record, writes the binding directly on `ctx.scope` (interior-mutable), and
-/// returns the bound carrier as `Action::Done`.
+/// under `name`. The `name` slot is a `NameToken`, so the binder arrives as the classified
+/// symbol the parse minted, whichever class it is, and the two channels part on that class alone.
+/// Reads its args from the `BodyCtx::args` record, writes the binding directly on `ctx.scope`
+/// (interior-mutable), and returns the bound carrier as `Action::Done`.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
     use crate::machine::model::Held;
@@ -30,37 +29,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         None => return done_err(KError::new(KErrorKind::MissingArg("value".to_string()))),
     };
     let mut type_for_types_map: Option<KType> = None;
-    // Whether the binder name is Type-classified (`LET <Name> = …`) — the SIG-body VAL guard below
-    // keys on it, independent of which map the RHS lands in.
-    let mut type_classified_name = false;
-    // The Type-classified `name` slot arrives either lowered (a builtin leaf name) or as the
-    // unlowered surface name the bind seam leaves for the binder to own; both denote the binder.
-    let unlowered_name = ctx.args.unresolved_type(&SLOTS.name);
-    // The Type-classified binder as its own symbol wherever one exists: the unlowered surface
-    // name carries the one the parser minted, and a lowered handle answers the symbol its node
-    // carries. A type named by compound surface syntax has no bare name to bind under.
-    let type_name: Option<TypeSymbol> = match unlowered_name {
-        Some(te) => Some(te),
-        None => match ctx.args.ktype(&SLOTS.name) {
-            Some(name_kt) => match name_kt.name_symbol(ctx.registries) {
-                Some(binder) => Some(binder),
-                None => {
-                    return done_err(KError::new(KErrorKind::ShapeError(format!(
-                        "LET name must be a bare type name, got `{}`",
-                        name_kt.display_name(ctx.registries),
-                    ))));
-                }
-            },
-            None => None,
-        },
-    };
-    // The value-classified binder, carried straight off the `:Identifier` slot: the parse
-    // classified and interned the token, so the symbol below is the one it minted. `binder` is
-    // that symbol; each diagnostic that quotes the name renders it on its own arm, so a binding
-    // that succeeds reads no label text.
-    let mut value_binder: Option<ValueSymbol> = None;
-    let binder = match (ctx.args.identifier(&SLOTS.name), type_name) {
-        (Some(v), _) => {
+    // The binder, carried straight off the `NameToken` slot: the parse classified and interned the
+    // token, so the symbol here is the one it minted and its class is the one the parser assigned.
+    // Each diagnostic that quotes the name renders it on its own arm, so a binding that succeeds
+    // reads no label text.
+    let binder = match ctx.args.name(&SLOTS.name) {
+        None => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
+        Some(BinderSymbol::Value(v)) => {
             // A type-language carrier under a value-classified name is a cross-kind error. A module
             // is *not* one: it is a value, and a value-classified name is exactly where it belongs.
             let type_kind = match rhs {
@@ -74,8 +49,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 Held::Type(_) | Held::UnresolvedType(_) => Some("type"),
                 Held::Object(_) => None,
                 // The RHS slot is `:Any`, which admits no raw name part.
-                Held::Identifier(_) => {
-                    unreachable!("LET's bound-value slot never captures an identifier")
+                Held::Name(_) => {
+                    unreachable!("LET's bound-value slot never captures a name")
                 }
             };
             if let Some(kind) = type_kind {
@@ -88,11 +63,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                     suggestion = capitalize_identifier(&spelling),
                 ))));
             }
-            value_binder = Some(v);
             BinderSymbol::Value(v)
         }
-        (_, Some(resolved_name)) => {
-            type_classified_name = true;
+        Some(BinderSymbol::Type(type_name)) => {
             match rhs {
                 Held::Type(kt) => type_for_types_map = Some(*kt),
                 // The `Any` RHS slot is auto-wrapped by dispatch into a resolved carrier, so a
@@ -106,12 +79,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 // `LET view = (m :| S)` is the wrong spelling for a module binding, whatever the RHS
                 // produced it (an ascription view, a functor call) — respell it snake_case.
                 // The RHS slot is `:Any`, which admits no raw name part.
-                Held::Identifier(_) => {
-                    unreachable!("LET's bound-value slot never captures an identifier")
+                Held::Name(_) => {
+                    unreachable!("LET's bound-value slot never captures a name")
                 }
                 Held::Object(KObject::Module(_)) => {
                     let spelling =
-                        crate::machine::model::render_label(resolved_name.symbol(), ctx.registries);
+                        crate::machine::model::render_label(type_name.symbol(), ctx.registries);
                     return done_err(KError::new(KErrorKind::ShapeError(format!(
                         "LET binder `{spelling}` is Type-classified but the bound value is a \
                          module (a value); rebind under a value-classified identifier instead \
@@ -122,18 +95,17 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 Held::Object(o) => {
                     return done_err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: crate::machine::model::render_label(
-                            resolved_name.symbol(),
+                            type_name.symbol(),
                             ctx.registries,
                         ),
                         got: o.ktype().name(ctx.registries),
                     }));
                 }
             }
-            BinderSymbol::Type(resolved_name)
+            BinderSymbol::Type(type_name)
         }
-        (None, None) => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
-    if !type_classified_name && ctx.scope.is_in_sig_body() {
+    if binder.bind_kind() == BindKind::Value && ctx.scope.is_in_sig_body() {
         let name = display_label(binder.symbol(), ctx.registries);
         return done_err(KError::new(KErrorKind::ShapeError(format!(
             "inside a SIG body, value slots must use VAL — write \
@@ -141,9 +113,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         ))));
     }
     if let Some(kt) = type_for_types_map {
-        // The text→symbol seam for the type channel: a name that will not classify as a Type token
-        // names the wrong side of the partition, which past this point the key types make
-        // unrepresentable. An unlowered binder crossed that seam in the parser and rides through.
+        // The type channel needs no seam of its own: the parser classified the token Type-side
+        // when it minted the symbol, and past that point the key types make a crossing
+        // unrepresentable.
         let BinderSymbol::Type(name) = binder else {
             unreachable!("the type-channel route is reached only under a Type-classified binder")
         };
@@ -162,9 +134,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             },
         )
     } else {
-        // The value channel needs no seam of its own: only the `:Identifier` arm reaches here, and
-        // its symbol was classified value-side at the parse.
-        let binder = value_binder.expect("a value-route LET binds the name slot's own symbol");
+        // The value channel needs no seam of its own: only a value-classified binder reaches here,
+        // and its symbol was classified value-side at the parse.
+        let BinderSymbol::Value(binder) = binder else {
+            unreachable!("the value-channel route is reached only under a value-classified binder")
+        };
         let value = rhs
             .as_object()
             .expect("value-route LET RHS is the Object arm");
@@ -250,30 +224,18 @@ fn capitalize_identifier(name: &str) -> String {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
-    let identifier_sig = || {
+    let name_sig = || {
         sig(
             KType::ANY,
             vec![
                 kw(registries, "LET"),
-                arg(registries, &SLOTS.name, KType::IDENTIFIER),
+                arg(registries, &SLOTS.name, KType::NAME_TOKEN),
                 kw(registries, "="),
                 arg(registries, &SLOTS.value, KType::ANY),
             ],
         )
     };
-    let type_sig = || {
-        sig(
-            KType::ANY,
-            vec![
-                kw(registries, "LET"),
-                arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
-                kw(registries, "="),
-                arg(registries, &SLOTS.value, KType::ANY),
-            ],
-        )
-    };
-    crate::builtins::register_builtin(scope, identifier_sig(), body, registries, gate);
-    crate::builtins::register_builtin(scope, type_sig(), body, registries, gate);
+    crate::builtins::register_builtin(scope, name_sig(), body, registries, gate);
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@
 //!
 //! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
 
-use crate::machine::model::labels::{TypeSymbol, ValueSymbol};
+use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
 use crate::machine::model::types::{KKind, KType, TypeRegistry, display_label};
 use crate::witnessed::reattachable;
 
@@ -114,9 +114,9 @@ impl<'a> Carried<'a> {
 
 /// Owned by-value cell — the owned dual of the borrowed [`Carried`], holding each arm inline (no `Rc`).
 /// The cell type of a `List` / `Dict` / `Record` substrate, and the value half of a builtin's bound
-/// argument slot (`BoundArg`). The `Identifier` arm is the one arm with no [`Carried`] peer: a
-/// captured name is a bound argument only, never a produced result, so it reaches a bound slot and
-/// no substrate.
+/// argument slot (`BoundArg`). The `Name` arm is the one arm with no [`Carried`] peer: a captured
+/// name is a bound argument only, never a produced result, so it reaches a bound slot and no
+/// substrate.
 ///
 /// `Copy` for the same reason [`KObject`] is: every arm is a scalar handle or a region borrow, so a
 /// cell owns no allocation and runs no `Drop` at region death. The bound is what lets a `Held` cell
@@ -128,13 +128,13 @@ pub enum Held<'a> {
     /// The owned dual of [`Carried::UnresolvedType`] — the bind seam's carrier for a bare type
     /// name that is not a builtin leaf. Consumers resolve it against their scope chain.
     UnresolvedType(TypeSymbol),
-    /// The value-channel mirror of [`Held::UnresolvedType`] — the bind seam's carrier for the
-    /// token an `:Identifier` slot captures. The slot is part-kind-exact, so the only thing that
-    /// reaches it is the symbol the parse minted; a builtin reads it back through
-    /// [`BoundArgs::identifier`](crate::machine::core::BoundArgs::identifier) and nothing else.
-    /// There is no [`Carried`] peer: a captured name is never a produced result, only a bound
-    /// argument.
-    Identifier(ValueSymbol),
+    /// The bind seam's carrier for a captured name token: the classified symbol the parse minted,
+    /// with the class taken from the part variant (`Identifier` part → `Value`, `Type` part →
+    /// `Type`). Minted only for the raw name-capture slots (`:Identifier`, `NameToken`,
+    /// `TypeNameToken`); a binder position never resolves, so no consumer re-derives the class
+    /// from a rendering. There is no [`Carried`] peer: a captured name is never a produced
+    /// result, only a bound argument.
+    Name(BinderSymbol),
 }
 
 impl<'a> Held<'a> {
@@ -152,7 +152,7 @@ impl<'a> Held<'a> {
     pub fn as_object(&self) -> Option<&KObject<'a>> {
         match self {
             Held::Object(o) => Some(o),
-            Held::Type(_) | Held::UnresolvedType(_) | Held::Identifier(_) => None,
+            Held::Type(_) | Held::UnresolvedType(_) | Held::Name(_) => None,
         }
     }
 
@@ -160,7 +160,7 @@ impl<'a> Held<'a> {
     pub fn as_type(&self) -> Option<KType> {
         match self {
             Held::Type(t) => Some(*t),
-            Held::Object(_) | Held::UnresolvedType(_) | Held::Identifier(_) => None,
+            Held::Object(_) | Held::UnresolvedType(_) | Held::Name(_) => None,
         }
     }
 
@@ -177,9 +177,9 @@ impl<'a> Held<'a> {
                 "expected an Object cell, got an unresolved type name: 0x{:032x}",
                 ti.symbol().0
             ),
-            Held::Identifier(v) => panic!(
-                "expected an Object cell, got a captured identifier: 0x{:032x}",
-                v.symbol().0
+            Held::Name(b) => panic!(
+                "expected an Object cell, got a captured name: 0x{:032x}",
+                b.symbol().0
             ),
         }
     }
@@ -190,7 +190,7 @@ impl<'a> Held<'a> {
             Held::Object(o) => Held::Object(o.deep_clone()),
             Held::Type(t) => Held::Type(*t),
             Held::UnresolvedType(ti) => Held::UnresolvedType(*ti),
-            Held::Identifier(v) => Held::Identifier(*v),
+            Held::Name(b) => Held::Name(*b),
         }
     }
 
@@ -201,7 +201,8 @@ impl<'a> Held<'a> {
             Held::Object(o) => o.ktype(),
             Held::Type(t) => KType::of_kind(t.kind_of(types)),
             Held::UnresolvedType(_) => KType::of_kind(KKind::ProperType),
-            Held::Identifier(_) => KType::IDENTIFIER,
+            Held::Name(BinderSymbol::Value(_)) => KType::IDENTIFIER,
+            Held::Name(BinderSymbol::Type(_)) => KType::NAME_TOKEN,
         }
     }
 
@@ -216,7 +217,7 @@ impl<'a> Held<'a> {
             Held::Object(o) => o.write_summary(f, registries),
             Held::Type(t) => t.write_name(f, registries),
             Held::UnresolvedType(ti) => write!(f, "{}", display_label(ti.symbol(), registries)),
-            Held::Identifier(v) => write!(f, "{}", display_label(v.symbol(), registries)),
+            Held::Name(b) => write!(f, "{}", display_label(b.symbol(), registries)),
         }
     }
 

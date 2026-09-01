@@ -216,10 +216,11 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     );
 }
 
-/// Parameterized binder names hit the structural shape check, which fires
-/// before the type-class allowlist — regression guard for ordering.
+/// A binder position captures a name token, so a `:(…)` type expression there matches no LET
+/// overload at all. The refusal is a dispatch non-match, not a bind-time check over a lowered
+/// handle — the binder never resolves, so there is no rendering to report.
 #[test]
-fn let_parameterized_type_lhs_still_shape_errors() {
+fn let_parameterized_type_lhs_matches_no_overload() {
     use crate::machine::KErrorKind;
     use crate::machine::program_storage;
     use crate::machine::run_root_storage;
@@ -254,11 +255,17 @@ fn let_parameterized_type_lhs_still_shape_errors() {
         .runtime
         .read_edge_result_with(edges[0], |v| format!("{:?}", v.ktype(&types)));
     match res {
-        Err(e) => assert!(
-            matches!(&e.kind, KErrorKind::ShapeError(_)),
-            "expected ShapeError, got {e}",
-        ),
-        Ok(ktype) => panic!("expected shape error, got value {ktype}"),
+        Err(e) => {
+            assert!(
+                matches!(&e.kind, KErrorKind::DispatchFailed { .. }),
+                "expected DispatchFailed, got {e}",
+            );
+            assert!(
+                !e.to_string().contains("LIST OF"),
+                "the binder never lowers, so no diagnostic renders one: {e}",
+            );
+        }
+        Ok(ktype) => panic!("expected a dispatch failure, got value {ktype}"),
     }
 }
 
@@ -499,4 +506,77 @@ fn let_value_class_with_module_rhs_binds_value_side() {
         lookup_type(scope, "view").is_none(),
         "the name is committed to `data` xor `types` — nothing lands in `types`",
     );
+}
+
+/// The binder never resolves, so a name that happens to spell a builtin type differs from a fresh
+/// one in exactly one way: it is already bound. `Str` (a leaf), `List` and `Dict` (names that
+/// used to lower to parameterized nodes and so answered no bare name at all) all report the same
+/// `Rebind`, and no diagnostic renders the lowered type.
+#[test]
+fn let_builtin_type_names_are_uniformly_already_bound() {
+    use crate::builtins::test_support::TestRun;
+    use crate::machine::KErrorKind;
+    use crate::machine::program_storage;
+    use crate::machine::run_root_storage;
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+
+    test_run.run("LET Foo = Number");
+    assert!(
+        lookup_type(scope, "Foo").is_some(),
+        "a fresh Type-classed binder binds",
+    );
+
+    for name in ["Str", "List", "Dict"] {
+        let source = format!("LET {name} = Number");
+        let err = test_run.run_one_err(test_run.parse_one(&source));
+        assert!(
+            matches!(&err.kind, KErrorKind::Rebind { name: bound } if bound == name),
+            "expected `LET {name} = Number` to report Rebind, got {err}",
+        );
+        let rendered = err.to_string();
+        assert!(
+            !rendered.contains("LIST OF") && !rendered.contains("MAP "),
+            "no spelling reports a rendered lowered type: {rendered}",
+        );
+    }
+}
+
+/// The same uniformity across the sibling declarators: their `name` slots are `TypeNameToken`, so
+/// a builtin-spelled name is the ordinary already-bound question there too. `MODULE` keeps its
+/// respelling diagnostic and names the token as written.
+#[test]
+fn sibling_declarators_report_the_same_uniform_refusal() {
+    use crate::builtins::test_support::TestRun;
+    use crate::machine::KErrorKind;
+    use crate::machine::program_storage;
+    use crate::machine::run_root_storage;
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+
+    let err = test_run.run_one_err(test_run.parse_one("NEWTYPE List = Number"));
+    assert!(
+        matches!(&err.kind, KErrorKind::Rebind { name } if name == "List"),
+        "expected NEWTYPE Rebind, got {err}",
+    );
+
+    let err = test_run.run_one_err(test_run.parse_one("UNION Dict = (Some :Number None :Null)"));
+    assert!(
+        matches!(&err.kind, KErrorKind::Rebind { name } if name == "Dict"),
+        "expected UNION Rebind, got {err}",
+    );
+
+    let err = test_run.run_one_err(test_run.parse_one("MODULE List = ((LET x = 1))"));
+    match &err.kind {
+        KErrorKind::ShapeError(message) => {
+            assert!(
+                message.contains("List") && !message.contains("LIST OF"),
+                "the respelling diagnostic names the token as written: {message}",
+            );
+        }
+        _ => panic!("expected the MODULE respelling ShapeError, got {err}"),
+    }
 }

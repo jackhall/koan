@@ -125,7 +125,7 @@ fn collect_substrate_addresses<C>(
         out.insert(*cell as *const Held<'_> as usize);
         match cell {
             Held::Object(object) => collect_object_addresses(object, out),
-            Held::Type(_) | Held::UnresolvedType(_) | Held::Identifier(_) => {}
+            Held::Type(_) | Held::UnresolvedType(_) | Held::Name(_) => {}
         }
     }
 }

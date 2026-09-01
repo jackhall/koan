@@ -23,12 +23,13 @@ So an `:Identifier` slot refuses `Ordered.Carrier` and an `OfKind(ProperType)` s
 `p.x`. Two consequences follow, and both are load-bearing today.
 
 *Every name-taking builtin declares its binder position twice.* `ATTR`
-([attr.rs](../../src/builtins/attr.rs)) registers six overloads where four would do:
+([attr.rs](../../src/builtins/attr.rs)) registers eight overloads where six would do:
 `type_type_field_sig` and `module_type_field_sig` exist only to give a Type-classed field token
 a slot, and route to the same bodies as their `:Identifier` siblings. `LET`
 ([let_binding.rs](../../src/builtins/let_binding.rs)) registers `identifier_sig` and `type_sig`,
 identical but for `name: KType::IDENTIFIER` against `name: KType::of_kind(KKind::ProperType)`,
-sharing one `body`.
+sharing one `body`. `MODULE` and `GROUP` each pair their `:Identifier` overloads with
+Type-named `ProperType` twins whose only job is a respelling diagnostic.
 
 *The only slot that admits a Type-classed name is also the lowering trigger.*
 `ExpressionPart::resolve_for` ([ast.rs](../../src/machine/model/ast.rs)) keys its guard on the
@@ -75,11 +76,12 @@ the diagnostic reports a rendering of the lowered type rather than the token the
 
 The root cause is that a name has no way to cross the bind seam with its class *whichever class
 it is*. A slot is a `KType`, and whatever it admits reaches a body as a `Held`
-([carried.rs](../../src/machine/model/values/carried.rs)), which has three arms — `Object`,
-`Type`, `UnresolvedType`. None carries a [`BinderSymbol`](../../src/machine/model/labels.rs):
-`UnresolvedType` carries a `TypeSymbol`, so a Type token that misses the builtin table does cross
-classified, but an `Identifier` name still arrives on the `Object` arm as text a body must
-re-classify, and a builtin-table hit arrives as a resolved handle that has thrown the name away.
+([carried.rs](../../src/machine/model/values/carried.rs)). The value class already crosses
+classified — an `:Identifier` capture rides `Held::Identifier(ValueSymbol)` — and a Type token
+that misses the builtin table crosses on `UnresolvedType(TypeSymbol)`. But no arm carries a
+[`BinderSymbol`](../../src/machine/model/labels.rs): a Type-classed binder rides the arm whose
+contract is "resolve me against scope", and a builtin-table hit arrives as a resolved handle
+that has thrown the name away.
 
 **Ruling (pinned).** A binder position denotes a **name**, never a type reference, so it must
 never resolve — not against the builtin table, not against scope. The class of that name is the
@@ -91,29 +93,41 @@ between spellings that have nothing to do with binding.
 
 **Acceptance criteria.**
 
-- A name-token slot type admits `ExpressionPart::Identifier` and `ExpressionPart::Type` in
-  `accepts_part` and no other part shape. It is not an `OfKind(_)`, so `resolve_for`'s
-  `PROPER_TYPE | ANY_TYPE` guard does not fire for it and `KType::from_symbol` is never consulted
-  for a binder position.
-- The bind seam delivers a name-token slot's argument **classified**: a `Held` arm carrying a
-  `BinderSymbol` beside the token's source text, with the class taken from the part variant.
-  No consumer runs a class predicate over a rendering to recover it.
-- `ATTR`'s `field` slot and `LET`'s `name` slot both use it. `type_type_field_sig` and
-  `module_type_field_sig` are deleted — `attr.rs` registers four overloads, `let_binding.rs`
-  one — and no surviving overload pair becomes ambiguous. The new slot joins
-  `is_unconstrained_name` ([ktype_predicates.rs](../../src/machine/model/types/ktype_predicates.rs))
-  and carries its entry in the specificity ordering, so a concrete slot still out-specifies it.
-- `read_field_name` ([attr.rs](../../src/builtins/attr.rs)) has two channels, not three: the
-  `args.ktype("field")` arm, its `kt.name(registries)` render and the `BinderSymbol::of` over
-  that rendering are gone. This closes the residual clause of the ATTR criterion that the
-  symbol-keyed nominal-member work shipped on two of its three channels.
-- `LET`'s body reads its binder name from the classified carrier. The `args.ktype("name")` arm,
-  the `TypeNode::List | Dict | KFunction | Sibling` guard and its `"LET name must be a bare type
-  name"` error are deleted, because no binder position can receive a resolved handle any more.
-- The four `LET` spellings above differ only in whether the name is already bound. No spelling
-  reports a rendered lowered type in a diagnostic. Regression tests pin all four.
-- Adding a leaf node for the slot takes a fresh digest tag
-  ([type_digest.rs](../../src/machine/model/types/type_digest.rs)) and moves **no** existing
+- Two name-token slot leaves exist: one admitting `ExpressionPart::Identifier` and
+  `ExpressionPart::Type` in `accepts_part` and no other part shape (`NameToken`), and one
+  admitting only `ExpressionPart::Type` (`TypeNameToken`). Neither is an `OfKind(_)`, so
+  `resolve_for`'s `PROPER_TYPE | ANY_TYPE` guard does not fire for them and `KType::from_symbol`
+  is never consulted for a binder position.
+- The bind seam delivers every name-capture slot's argument **classified**: one
+  `Held::Name(BinderSymbol)` arm replaces `Held::Identifier(ValueSymbol)`, minted for
+  `:Identifier` and both name-token slots, with the class taken from the part variant. A binder
+  never rides `Held::UnresolvedType` (the type-*reference* carrier) again, and no consumer runs
+  a class predicate over a rendering to recover a class.
+- `ATTR`'s `field` slot and `LET`'s `name` slot use `NameToken`. `type_type_field_sig` and
+  `module_type_field_sig` are deleted — `attr.rs` registers six overloads (the two dynamic
+  `:Str` reads stay), `let_binding.rs` one — and no surviving overload pair becomes ambiguous.
+  Both new slots join `is_unconstrained_name`
+  ([ktype_predicates.rs](../../src/machine/model/types/ktype_predicates.rs)) and carry entries
+  in the specificity ordering, so a concrete slot still out-specifies them and a bare field
+  token still outranks a `:Str` sibling.
+- The Type-class binder positions use `TypeNameToken`: `NEWTYPE`/`UNION`/`SIG`/`TYPE`'s `name`
+  slots, and the Type-named respelling overloads of `MODULE`/`GROUP`. `require_bare_type_name`
+  ([action.rs](../../src/machine/core/kfunction/action.rs)) reads only the `Held::Name` arm; its
+  `Held::Type` arm and the `"must be a bare type name"` rendering are deleted.
+- `read_field_name` ([attr.rs](../../src/builtins/attr.rs)) reads one classified channel: the
+  `args.ktype("field")` arm, its `kt.name(registries)` render and the classification over that
+  rendering are gone (`FieldName::Rendered` survives only for the dynamic `:Str` read). This
+  closes the residual clause of the ATTR criterion that the symbol-keyed nominal-member work
+  shipped on two of its three channels.
+- `LET`'s body reads its binder from the classified carrier. The `args.ktype("name")` arm, the
+  bare-name guard and its `"LET name must be a bare type name"` error are deleted, because no
+  binder position can receive a resolved handle any more.
+- The four `LET` spellings above differ only in whether the name is already bound, and the same
+  uniformity holds for the sibling declarators (`NEWTYPE List = …` is a `Rebind`, `MODULE List
+  = …` takes the respelling diagnostic naming `List`). No spelling reports a rendered lowered
+  type in a diagnostic. Regression tests pin the four `LET` spellings and at least one sibling.
+- The two leaf nodes take fresh digest tags
+  ([type_digest.rs](../../src/machine/model/types/type_digest.rs)) and move **no** existing
   golden pin ([type_digest/tests/golden.rs](../../src/machine/model/types/type_digest/tests/golden.rs)).
 - The recorded allocation baselines ([audit/README.md](../../audit/README.md)) do not regress.
   The render this removes is off the hot path, so the expected movement is none.
@@ -124,17 +138,15 @@ between spellings that have nothing to do with binding.
   with no sigil a user can write. No user-authored signature needs it yet, and a sigil is a
   language commitment that cannot be quietly withdrawn. Revisit if user-defined forms ever need
   a binder position.
-- *Carrier shape — a fourth `Held` arm, not a reused `KString`.* Reusing
-  `Held::Object(KObject::KString)` would land the name as bare text and put every body back to
-  `BinderSymbol::of` over it. That is better than classifying a *rendering*, but it still
-  re-derives what the parser already knew, and it cannot represent the class for a body that
-  needs to branch on it before looking at the text.
-- *Interning stays the body's call.* A binder position is a declaration site for `LET`, which
-  must intern so the name renders later, and a reference site for `ATTR`, which must not — the
-  reference/declaration split in
-  [design/label-interning.md](../../design/label-interning.md). So the carrier holds the
-  classification and the source text, and each body chooses `declared` or `of`; the seam itself
-  never interns.
+- *Carrier shape — widen `Held::Identifier` to `Held::Name(BinderSymbol)`, not a second arm and
+  not a reused `KString`.* One arm is the whole name-capture vocabulary; text would put bodies
+  back to classifying spellings, and a parallel arm would leave two carriers for one concept.
+  The parser interns every source name token it classifies, so the symbol alone renders back
+  through the label table and the carrier holds nothing else.
+- *Derived text still interns at its consumer.* The reference/declaration split in
+  [design/label-interning.md](../../design/label-interning.md) survives at the one door that
+  classifies non-source text: `ATTR`'s dynamic `:Str` read (`classify_derived_field`). The bind
+  seam itself never interns — it forwards the symbol the parse minted.
 - *`FN` parameter names are adjacent but out of scope.* The unplanned entry on parameter token
   class ([type_language/README.md](README.md)) is about checking a parameter's class against its
   slot at definition time. It shares this item's premise — the parser's class is authoritative —

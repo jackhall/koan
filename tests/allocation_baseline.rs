@@ -117,9 +117,17 @@ fn the_empty_program_stays_within_its_startup_bound() {
 /// The bound sits over the recorded bracketed reading by less than the 100 a single new
 /// per-step allocation would add. Tight on purpose: a looser bound cannot see one
 /// allocation, and rebaselining is meant to be a deliberate edit.
+///
+/// `seam-force-pin` gets a bound of its own at the same tightness. Forcing the pin verb takes
+/// every record escape the cost-driven chooser declines to pin, which costs ~2.6k allocations
+/// across this body — folding that headroom into the one bound would leave the production path
+/// blind to 25 added per-step allocations, so the two builds are held separately instead.
 #[test]
 fn the_wide_shape_stays_within_its_per_step_bound() {
+    #[cfg(not(feature = "seam-force-pin"))]
     const BOUND: u64 = 22_690;
+    #[cfg(feature = "seam-force-pin")]
+    const BOUND: u64 = 25_290;
     let delta = allocations_for(
         include_str!("../audit/shapes/wide_n100.koan"),
         "audit/shapes/wide_n100.koan",
@@ -142,10 +150,14 @@ fn the_wide_shape_stays_within_its_per_step_bound() {
 /// signal — a cost that only depth can see.
 ///
 /// The bound sits over the recorded bracketed reading by less than the 100 a single new
-/// per-frame allocation would add.
+/// per-frame allocation would add, and `seam-force-pin` takes its own at the same tightness for
+/// the reason the wide shape's doc gives.
 #[test]
 fn the_deep_shape_stays_within_its_per_frame_bound() {
+    #[cfg(not(feature = "seam-force-pin"))]
     const BOUND: u64 = 23_300;
+    #[cfg(feature = "seam-force-pin")]
+    const BOUND: u64 = 25_900;
     let delta = allocations_for(
         include_str!("../audit/shapes/deep_n100.koan"),
         "audit/shapes/deep_n100.koan",

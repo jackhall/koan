@@ -140,12 +140,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     use crate::builtins::resolve_or_await::{classify_name_lookup, resolve_or_await};
     use crate::machine::{Action, require_bare_type_name};
 
-    let name = crate::try_action!(require_bare_type_name(
-        ctx.args,
-        &SLOTS.name,
-        "NEWTYPE",
-        ctx.registries
-    ));
+    let name = crate::try_action!(require_bare_type_name(ctx.args, &SLOTS.name));
     let chain = ctx.chain.clone();
     let site = ctx.declaration_site();
     if let Some(te) = ctx.args.unresolved_type(&SLOTS.repr) {
@@ -216,12 +211,7 @@ pub fn body_record_repr<'a>(
     use super::nominal_schema::nominal_schema_action;
     use crate::machine::{Action, require_bare_type_name};
 
-    let name = crate::try_action!(require_bare_type_name(
-        ctx.args,
-        &SLOTS.name,
-        "NEWTYPE",
-        ctx.registries
-    ));
+    let name = crate::try_action!(require_bare_type_name(ctx.args, &SLOTS.name));
     let fields = match ctx.args.object(&SLOTS.repr) {
         Some(KObject::KExpression(e)) => e.node(),
         _ => {
@@ -317,7 +307,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw(registries, "NEWTYPE"),
-                arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
+                arg(registries, &SLOTS.name, KType::TYPE_NAME_TOKEN),
                 kw(registries, "="),
                 arg(registries, &SLOTS.repr, KType::of_kind(KKind::ProperType)),
             ],
@@ -328,7 +318,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw(registries, "NEWTYPE"),
-                arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
+                arg(registries, &SLOTS.name, KType::TYPE_NAME_TOKEN),
                 kw(registries, "="),
                 arg(registries, &SLOTS.repr, KType::SIGILED_TYPE_EXPR),
             ],
@@ -339,7 +329,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw(registries, "NEWTYPE"),
-                arg(registries, &SLOTS.name, KType::of_kind(KKind::ProperType)),
+                arg(registries, &SLOTS.name, KType::TYPE_NAME_TOKEN),
                 kw(registries, "="),
                 arg(registries, &SLOTS.repr, KType::RECORD_TYPE),
             ],
