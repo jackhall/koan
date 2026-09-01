@@ -152,14 +152,9 @@ pub fn body_let_combined<'a>(
 pub fn body_let_combined_type_named<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
 ) -> crate::machine::Action<'a> {
-    use crate::machine::Action;
-    let name = match ctx.args.unresolved_type(&SLOTS.name) {
-        Some(te) => crate::machine::model::render_label(te.symbol(), ctx.registries),
-        None => match ctx.args.ktype(&SLOTS.name) {
-            Some(kt) => kt.name(ctx.registries),
-            None => return Action::done(Err(KError::new(KErrorKind::MissingArg("name".into())))),
-        },
-    };
+    use crate::machine::{Action, require_bare_type_name};
+    let name = crate::try_action!(require_bare_type_name(ctx.args, &SLOTS.name));
+    let name = crate::machine::model::render_label(name.symbol(), ctx.registries);
     Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
         "LET binder `{name}` is Type-classified but the bound value is a function (a value); \
          rebind under a value-classified identifier instead (snake_case, e.g. `{suggestion}`)",
@@ -443,7 +438,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     register_builtin(
         scope,
         combined_sig(
-            KType::of_kind(KKind::ProperType),
+            KType::TYPE_NAME_TOKEN,
             KType::KEXPRESSION,
             KType::of_kind(KKind::ProperType),
         ),

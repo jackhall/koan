@@ -1,20 +1,52 @@
 # Slot kinds and function signatures
 
-Type-position slot kinds, the `UnresolvedType` surface-survives-bind
-carrier, and function signature types. Part of the [`KType` reference](README.md).
+Type-position slot kinds, the binder-position slot kinds, the `UnresolvedType`
+surface-survives-bind carrier, and function signature types. Part of the
+[`KType` reference](README.md).
 
 ## Type-position slot kinds
 
 `OfKind(Proper)` is the meta-type for argument slots that capture a parsed type-name
-token (`ExpressionPart::Type(_)`). The slot resolves to a `KType` handle flowing raw in the value
-channel's `Type` arm, carrying the elaborated type — name, nested
+token (`ExpressionPart::Type(_)`) as a type *reference*. The slot resolves to a `KType` handle
+flowing raw in the value channel's `Type` arm, carrying the elaborated type — name, nested
 parameters, and (for recursive types) the member handle of a sealed nominal —
 so parameterized types like `:(LIST OF Number)` and recursive types like `Tree`
 survive the parser → dispatch boundary as a single canonical value. Used by
-FN's return-type slot, by NEWTYPE and UNION's name slots, and by `type_call`'s
-verb slot. Slots that want only a bare name (NEWTYPE/UNION) check the elaborated
-shape on the inner type; the validation lives at the consuming builtin rather
-than at the slot kind.
+FN's return-type slot, by NEWTYPE's `repr` slot, and by `type_call`'s verb slot.
+A slot that wants a bare *name* rather than a reference is a binder position and takes one of
+the slot kinds below instead, so no consuming builtin re-checks an elaborated shape to recover
+a name.
+
+## Binder-position slot kinds
+
+A binder position captures a bare name token raw and never resolves it — see
+[tokens.md § A binder position is a name](../tokens.md#a-binder-position-is-a-name) for the
+rule and the surface consequences. Three part-kind-exact leaves express it, differing only in
+which token classes they admit:
+
+- `Identifier` — an `ExpressionPart::Identifier` part. `LET`'s value-class binder, `VAL`'s
+  and `FN`'s and `OP`'s `name`, `MODULE`/`GROUP`'s binding overloads.
+- `NameToken` — an `Identifier` *or* a `Type` part. `LET`'s `name` and `ATTR`'s `field`, the
+  two positions that take a name of either class through one overload.
+- `TypeNameToken` — a `Type` part only. `NEWTYPE`/`UNION`/`SIG`/`TYPE`'s `name`, and the
+  Type-named respelling overloads of `MODULE`/`GROUP`.
+
+All three deliver
+[`Held::Name(BinderSymbol)`](../../../src/machine/model/values/carried.rs), minted straight
+from the part variant by
+[`ExpressionPart::resolve_for`](../../../src/machine/model/ast.rs), so the class a body reads
+is the class the parse assigned. None admits a resolved cell
+([`accepts_carried`](../../../src/machine/model/types/ktype_predicates.rs) refuses every
+`Carried` arm for them), none is registered in
+[the declared builtin names](../../../src/machine/model/types/builtin_names.rs), so no user
+can spell one, and admission is shape-only in dispatch — the slot owns its token, so it cannot
+depend on whether the name happens to be bound.
+
+For specificity, all three join the unconstrained-name family: a concrete slot out-specifies
+them, they out-specify `Any`, `NameToken` out-specifies `Str` (the token-over-resolved-string
+rule `Identifier` already carried), and `Identifier` and `TypeNameToken` each out-specify
+`NameToken`, since each admits one of its two part shapes. See
+[dispatch.md § Slot specificity](dispatch.md).
 
 ### `UnresolvedType` — surface form survives bind
 

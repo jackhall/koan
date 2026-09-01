@@ -44,8 +44,9 @@ admits accordingly. The forms:
   [`KType::accepts_carried`](../../../src/machine/model/types/ktype_predicates.rs)
   against the carried value (an object or a `Type` arm — no clone). A bare name whose value has the
   wrong carrier type strict-rejects the overload; the call surfaces as `DispatchFailed`
-  rather than a bind-time `TypeMismatch`. Binder (`Identifier` / `OfKind(Proper)`)
-  slots skip the cache and admit shape-only — the slot owns the name, so
+  rather than a bind-time `TypeMismatch`. Name-owning slots — the binder positions
+  (`Identifier` / `NameToken` / `TypeNameToken`) and the `OfKind(Proper)` type-reference
+  slot — skip the cache and admit shape-only: the slot owns the token, so
   admission can't depend on whether `x` happens to be bound or parked. A
   `:KExpression` slot does consult the cache, because code is an ordinary
   value: a name bound to a quote carries a `KExpression` and admits.
@@ -79,31 +80,40 @@ the precise error matching what the single-overload path reports for an
 unresolved bare name, not a generic dispatch miss.
 
 Specificity ranks `is_more_specific_than` so that concrete carrier types
-beat the unconstrained-name slot types (`Identifier` / `OfKind(Proper)`). A
+beat the unconstrained-name slot types (`Identifier` / `NameToken` /
+`TypeNameToken` / `OfKind(Proper)`). A
 call like `ATTR p z` where `p` resolves to a record value admits both a
 concrete-typed `ATTR` overload and an `ATTR <s:Identifier>` fallback;
 the concrete overload wins by specificity without tying.
 
-`Str` is the one exception to that rule: **`Identifier` out-specifies `Str`**,
-and `Str` does not out-specify `Identifier`. The two slots read the same bare
-token at different depths — an `Identifier` slot claims the token *itself*, a
+`Str` is the one exception to that rule: **a bare-token slot out-specifies `Str`**
+(`Identifier` does, and so does `NameToken`), and `Str` does not out-specify either.
+The two kinds of slot read the same bare
+token at different depths — a token slot claims the token *itself*, a
 `Str` slot only the value the token resolves to — so when one bucket offers both
-readings, the token reading wins. A field token stays bare wherever an
-`Identifier` slot admits it, and a local string binding that happens to share the
-spelling cannot steal it. The pair has no other consumer: `Identifier` is not
+readings, the token reading wins. A field token stays bare wherever a name slot
+admits it, and a local string binding that happens to share the
+spelling cannot steal it. The pair has no other consumer: neither name slot is
 user-spellable, and no other builtin bucket puts the two slot types in one
 position, so the ranking alone decides and dispatch admission needs no carve-out.
 
+Among the name slots themselves, strictly narrower part admission is strictly more
+specific: `Identifier` and `TypeNameToken` each admit one of `NameToken`'s two part
+shapes, so each out-specifies it. `OfKind(Proper)` and the binder slots stay
+unordered against each other — no bucket puts a type-reference slot and a binder
+slot in the same position.
+
 `ATTR`'s `field` position is where that matters. The spelled forms — the `.`
 sugar (`s.x`) and the written-out `ATTR s x` alike — bind the field bare through
-an `Identifier` slot. A field that arrives as a runtime string instead falls to a
+one `NameToken` slot, whichever class the token lexes as — `s.x` and `Ordered.Carrier`
+take the same overload. A field that arrives as a runtime string instead falls to a
 **pair** of dynamic overloads, split by the lhs exactly as the bare-token
 overloads are: `ATTR <s :Any> <field :Str>` reads a member off a runtime value,
 and `ATTR <s :EmptySignature> <field :Str>` answers out of a module's own
 bindings, `EmptySignature` (which every module's self-sig satisfies)
 out-specifying `Any`. So `s."x"` and `ATTR s (name_var)` reach the same member
 `s.x` does — the dynamic read classifies and interns the text at the read, which
-is the value channel's one derived-symbol door
+is the tree's one derived-symbol door
 ([label-interning.md](../../label-interning.md)) — while `ATTR p x` with `x`
 bound to a string still reads the member named `x`.
 

@@ -134,6 +134,29 @@ fn type_classified_binder_name_is_a_diagnostic() {
     );
 }
 
+/// The binder captures its token, so a name that happens to spell a builtin type takes the same
+/// diagnostic naming the same token. `List` used to reach a type-*reference* slot and lower, and
+/// the diagnostic reported the lowered node (`:(LIST OF Any)`, suggesting `:(_l_i_s_t _o_f _any)`).
+#[test]
+fn a_builtin_spelled_binder_name_is_diagnosed_as_written() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    for name in ["Str", "List", "Dict"] {
+        let source = format!("LET {name} = FN (MAKE n :Number) -> Number = (n)");
+        let err = test_run.run_one_err(test_run.parse_one(&source));
+        let message = format!("{err}");
+        assert!(
+            message.contains(&format!("`{name}`")),
+            "expected the diagnostic to name `{name}` as written, got {message}",
+        );
+        assert!(
+            !message.contains("LIST OF") && !message.contains("MAP "),
+            "the binder never lowers, so no diagnostic renders one: {message}",
+        );
+    }
+}
+
 /// The return slot names a type; an identifier there is the same mistake the bare form diagnoses,
 /// and the combined twin reports it identically.
 #[test]

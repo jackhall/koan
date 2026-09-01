@@ -281,6 +281,14 @@ that the absolute figure never rises. The movement above — a registered overlo
 force a rebaseline without any such allocation existing. When a bound moves, the question the
 failure message asks is which of the two it was. Only the first is a regression.
 
+A bound is the **cost-driven** build's figure — the one `tools/alloc_audit.py` scrapes and holds
+to the tightness rule above. The `seam-force-pin` verification build takes every record escape the
+cost chooser declines to pin, which costs the two recursion shapes a few thousand allocations that
+say nothing about a marginal path. That is carried by a `FORCED_PIN_ALLOWANCE` constant added at
+those two assertions under `cfg!(feature = "seam-force-pin")`, never folded into `BOUND` — folding
+it in would blind the production guard to every allocation the allowance covers. `seam-force-copy`
+needs no allowance: it lands within a dozen allocations of the chooser.
+
 `allocations_for` runs each shape once *outside* its bracket. The bounds are tight enough that one
 lazy static added later would break them by test order alone — whichever test reached it first would
 carry its whole initialisation cost. Warming with the shape's own source rather than a stand-in is

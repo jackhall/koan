@@ -56,9 +56,10 @@ impl KType {
     /// Strict specificity ordering. Concrete types outrank `Any` and the unconstrained-name slot
     /// types (`Identifier`, `ProperType`, `NameToken`, `TypeNameToken`), so an overload like
     /// `ATTR <s:NewType>` beats its `ATTR <s:Identifier>` sibling when both admit. `Str` is the
-    /// one exception to that rule: the bare-token slots out-specify it, because the two slots read
-    /// the same bare token at different depths (see `more_specific_walk`). A nominal-family kind
-    /// out-specifies
+    /// one exception to that rule: a bare-token slot out-specifies it, because the token slot and
+    /// the `Str` slot read the same bare token at different depths (see `more_specific_walk`).
+    /// Among the name slots themselves, `Identifier` and `TypeNameToken` each out-specify
+    /// `NameToken`, admitting one of its two part shapes. A nominal-family kind out-specifies
     /// `OfKind(ProperType)` (`OfKind(NewType) ≺ OfKind(ProperType)`), and a sealed member
     /// out-specifies the `OfKind(kind)` of its own family. Parameterized containers are
     /// covariant in their inner slots. Returns `false` for equal types.

@@ -309,19 +309,19 @@ carrier and a fully-resolved type report
 whether the surface form already lowered to a concrete `KType` handle at bind time
 or is still in parser-form is an internal detail.
 
-Downstream consumers branch on the two arms, handling the `UnresolvedType` carrier where
-a bare user name can still be pending:
+The carrier is a type *reference* awaiting resolution, so it reaches only reference slots — a
+binder position never rides it (see
+[tokens.md § A binder position is a name](tokens.md#a-binder-position-is-a-name)). Downstream
+consumers branch on the two arms, handling the `UnresolvedType` carrier where a bare user name
+can still be pending:
 
-- the shared
-  [`require_bare_type_name`](../../src/machine/core/kfunction/action.rs)
-  helper (used by the nominal binders that read their name from a `KObject::Record`
-  type cell), which yields the `TypeSymbol` of either an unresolved name or a resolved type —
-  a resolved leaf reaches its name only as rendered text, so that arm is the one seam where a
-  type name is declared from a string rather than carried from the token;
-- [ATTR's `body_type_lhs` and `read_field_name`](../../src/builtins/attr.rs);
-- [`let_binding`'s name slot](../../src/builtins/let_binding.rs), which
-  runs a primitive/container blocklist over the `Type` arm and
-  routes to `register_type` for type-valued RHSes.
+- [ATTR's `body_type_lhs`](../../src/builtins/attr.rs), whose `s` operand is a type reference —
+  its `field` operand is a binder position and arrives classified instead;
+- [NEWTYPE's `repr` slot](../../src/builtins/newtype_def.rs), the
+  [FN return-type slot](../../src/builtins/fn_def/return_type.rs),
+  [VAL's `ty`](../../src/builtins/val_decl.rs) and
+  [MATCH's union operand](../../src/builtins/match_case.rs), which hand the pending name to the
+  park-capable resolver or quote it verbatim in a diagnostic.
 
 The single-part bare-`Type` lookup that those consumers' siblings need is
 folded into the dispatcher's `BareTypeLeaf` fast lane
@@ -397,8 +397,9 @@ probed here
 Cycle detection is likewise deferred — the cache carries no consumer id — so
 neither state is a `Resolution` variant admission must screen.
 
-**Binder declaration slots bypass the cache.** A slot typed `KType::Identifier`
-or `KType::OfKind(KKind::ProperType)` owns the name (`x` in `LET x = …`, `Ty` in
+**Binder declaration slots bypass the cache.** A slot typed `KType::Identifier`,
+`KType::NAME_TOKEN`, `KType::TYPE_NAME_TOKEN` or `KType::OfKind(KKind::ProperType)`
+owns the name (`x` in `LET x = …`, `Ty` in
 `NEWTYPE Ty = …`), so admission must be shape-only regardless of whether
 the name happens to be bound elsewhere. A `SigiledTypeExpr` or `RecordType`
 part that the form's lazy-slot stamp keeps raw admits shape-only in such a

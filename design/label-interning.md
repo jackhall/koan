@@ -377,9 +377,10 @@ touches text ([operators.md](operators.md)).
 The **type** vocabulary converts there too, on the same reasoning. Where the parser classifies a
 token as Type-class it mints the token's `TypeSymbol` through `declared` and the part carries the
 symbol alone — `ExpressionPart::Type(TypeSymbol)`, no surface text beside it. Every later reader
-carries that symbol through: the bind seam's `UnresolvedType` carrier, the type-side lookup ladder
-(`Scope::resolve_type_with_chain`), `elaborate_type_identifier`, a variant-tag match, and each
-type-declaring builtin's binder name. Because the symbol is lifetime-free and `Copy`, a type name
+carries that symbol through: the bind seam's `UnresolvedType` carrier for a type *reference*, the
+`Held::Name` carrier for a type-declaring builtin's binder name, the type-side lookup ladder
+(`Scope::resolve_type_with_chain`), `elaborate_type_identifier`, and a variant-tag match.
+Because the symbol is lifetime-free and `Copy`, a type name
 crossing a region boundary is copied rather than re-bumped, and a name that must be *printed*
 resolves back through the interner.
 
@@ -387,12 +388,18 @@ The **value** vocabulary converts at the parse boundary too, and for the same re
 name classes are mirror images. Where the parser classifies a token as neither keyword-class nor
 Type-class it mints the token's `ValueSymbol` through `declared`, and the part carries the symbol
 alone (`ExpressionPart::Identifier(ValueSymbol)`, `FieldSlot::Name(ValueSymbol)`). Every later
-reader carries it: the bind seam's `Held::Identifier` carrier — the value-channel mirror of
-`Held::UnresolvedType`, read back through `BoundArgs::identifier` and nothing else — the
+reader carries it: the bind seam's `Held::Name` carrier, read back through
+`BoundArgs::identifier` (value class only) or `BoundArgs::name` (either class), the
 value-lookup ladder (`Scope::resolve_value_delivered`, which takes a `ValueSymbol` rather than a
 spelling), each binder builtin's own name read, and the statement's `StoredBinderKey`, which
 mints nothing. Because no lookup re-derives a digest, a name spelled once and read
 many times is hashed once, at the parse.
+
+`Held::Name` is where the two vocabularies meet: it carries a
+[`BinderSymbol`](../src/machine/model/labels.rs), the class taken from the part variant the
+parser assigned, so one carrier serves every name-capture slot and no consumer re-derives a
+class from a rendering. See
+[tokens.md § A binder position is a name](typing/tokens.md#a-binder-position-is-a-name).
 
 The consequence for the surface is that neither name class admits a bare probe. A binder builtin
 that needs the spelling back — for a diagnostic that quotes the name — renders it out of the run's
@@ -404,16 +411,13 @@ A runtime string probing a record computes `Symbol::of(text)` and searches the
 record or substrate directly. A miss is a lookup miss; the interner is never
 consulted and never written.
 
-The **derived-symbol door** is the exception, and there is exactly one on each
-side of the name partition. On the value side it is
-[`classify_derived_field`](../src/builtins/attr.rs), which the one member name that
-reaches `ATTR` as text rather than as a parse-minted token funnels through: the
-runtime string the dynamic `ATTR <s> <field :Str>` overloads read. A `Type`-channel
-field arrives as a handle, not as text, and recovers its class straight off the
-handle through [`KType::name_symbol`](../src/machine/model/types/ktype.rs) — the
-symbol the registry already holds — so it renders nothing and interns nothing; a
-handle answering no bare name is compound surface syntax, which names no member and
-rides as a rendering. It classifies through `BinderSymbol::declared`, so a spelling read
+The **derived-symbol door** is the exception, and there is exactly one in the whole
+tree: [`classify_derived_field`](../src/builtins/attr.rs), which the one member name
+that reaches `ATTR` as text rather than as a parse-minted token funnels through — the
+runtime string the dynamic `ATTR <s> <field :Str>` overloads read. A bare field token
+of *either* class never reaches it: the `field` slot is a `NameToken`, so the token
+arrives already carrying the class the parse assigned it, and nothing on that path
+renders or classifies text. It classifies through `BinderSymbol::declared`, so a spelling read
 off text keys the same symbol a bare token of that spelling would have minted, and
 `s."x"` and `s.x` reach one member. Classifying through `declared` means it also
 **interns**: a computed member name is recorded, so interner growth is bounded by
