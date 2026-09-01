@@ -540,7 +540,10 @@ fn slot_admits_strict<'e>(
                 }
                 return arg.matches(part_value, types);
             }
-            if matches!(arg.ktype, KType::IDENTIFIER) {
+            if matches!(
+                arg.ktype,
+                KType::IDENTIFIER | KType::NAME_TOKEN | KType::TYPE_NAME_TOKEN
+            ) {
                 return arg.matches(part_value, types);
             }
             // The two lazy raw-capture slots are part-kind-exact and mutually exclusive: admitting

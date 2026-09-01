@@ -30,6 +30,13 @@ pub enum TypeNode {
     Bool,
     Null,
     Identifier,
+    /// Binder-position slot: captures a bare name token of either class raw
+    /// (`ExpressionPart::Identifier` or `::Type`), delivered as `Held::Name`. Never resolves.
+    NameToken,
+    /// Binder-position slot for a Type-class name only: captures a bare `ExpressionPart::Type`
+    /// raw, delivered as `Held::Name(BinderSymbol::Type(_))`. Never resolves — unlike
+    /// `OfKind(ProperType)`, which is a type *reference* slot and lowers builtin names.
+    TypeNameToken,
     /// Lazy slot: accepts an unevaluated `ExpressionPart::Expression`, so the builtin chooses
     /// when (or whether) to run it.
     KExpression,

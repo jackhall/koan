@@ -742,6 +742,8 @@ fn slot_more_specific_or_equal(
     if target == KType::ANY
         || target == KType::IDENTIFIER
         || target == KType::of_kind(KKind::ProperType)
+        || target == KType::NAME_TOKEN
+        || target == KType::TYPE_NAME_TOKEN
     {
         return true;
     }

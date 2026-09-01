@@ -21,6 +21,12 @@ fn constants_match_freshly_interned_nodes() {
         ("Bool", KType::BOOL, TypeNode::Bool),
         ("Null", KType::NULL, TypeNode::Null),
         ("Identifier", KType::IDENTIFIER, TypeNode::Identifier),
+        ("NameToken", KType::NAME_TOKEN, TypeNode::NameToken),
+        (
+            "TypeNameToken",
+            KType::TYPE_NAME_TOKEN,
+            TypeNode::TypeNameToken,
+        ),
         ("KExpression", KType::KEXPRESSION, TypeNode::KExpression),
         (
             "SigiledTypeExpr",

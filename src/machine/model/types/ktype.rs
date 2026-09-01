@@ -42,6 +42,9 @@ static STR_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Str")
 static BOOL_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Bool");
 static NULL_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Null");
 static IDENTIFIER_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Identifier");
+static NAME_TOKEN_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "NameToken");
+static TYPE_NAME_TOKEN_NAME: StaticName<TypeSymbol> =
+    crate::static_name!(TypeSymbol, "TypeNameToken");
 static KEXPRESSION_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "KExpression");
 static SIGILED_TYPE_EXPR_NAME: StaticName<TypeSymbol> =
     crate::static_name!(TypeSymbol, "SigiledTypeExpr");
@@ -53,7 +56,7 @@ static MODULE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Mo
 impl KType {
     // --- Fixed handles ---
     //
-    // The nine leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>` and the empty
+    // The eleven leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>` and the empty
     // signature name content every registry pre-seeds (`TypeRegistry::new`), so their digests are
     // known at compile time and lowering a builtin type name needs no registry in hand. The
     // literals below are the digest recipe's output; `constants_match_freshly_interned_nodes`
@@ -65,6 +68,10 @@ impl KType {
     pub const BOOL: KType = KType(TypeDigest(0x01210944_fd6fb8f8_0c9ba36e_1de8e0e1));
     pub const NULL: KType = KType(TypeDigest(0xbc9d88bb_75d5fb35_a4fd343e_749a380c));
     pub const IDENTIFIER: KType = KType(TypeDigest(0x41b73c3e_2391bbb4_6b850e4f_e740cb84));
+    /// A binder position taking a bare name of either class — never resolved, never lowered.
+    pub const NAME_TOKEN: KType = KType(TypeDigest(0x7dec3e82_f44adbda_2f8cc4c2_47b790eb));
+    /// A binder position taking a bare Type-class name — never resolved, never lowered.
+    pub const TYPE_NAME_TOKEN: KType = KType(TypeDigest(0xb9978361_a0bb1460_82127faa_0711eeca));
     pub const KEXPRESSION: KType = KType(TypeDigest(0x63c296ef_dbe5d41c_9969ddda_6b0b311c));
     pub const SIGILED_TYPE_EXPR: KType = KType(TypeDigest(0xf6d652dc_848e0f69_4a152496_ddd88b44));
     pub const RECORD_TYPE: KType = KType(TypeDigest(0x387dfced_dc0a5d96_da3b29a5_dde0f32e));
@@ -124,6 +131,8 @@ impl KType {
             TypeNode::Bool => f.write_str(BOOL_NAME.text()),
             TypeNode::Null => f.write_str(NULL_NAME.text()),
             TypeNode::Identifier => f.write_str(IDENTIFIER_NAME.text()),
+            TypeNode::NameToken => f.write_str(NAME_TOKEN_NAME.text()),
+            TypeNode::TypeNameToken => f.write_str(TYPE_NAME_TOKEN_NAME.text()),
             TypeNode::KExpression => f.write_str(KEXPRESSION_NAME.text()),
             TypeNode::SigiledTypeExpr => f.write_str(SIGILED_TYPE_EXPR_NAME.text()),
             TypeNode::RecordType => f.write_str(RECORD_TYPE_NAME.text()),
@@ -268,6 +277,8 @@ impl KType {
             TypeNode::Bool => fixed(&BOOL_NAME),
             TypeNode::Null => fixed(&NULL_NAME),
             TypeNode::Identifier => fixed(&IDENTIFIER_NAME),
+            TypeNode::NameToken => fixed(&NAME_TOKEN_NAME),
+            TypeNode::TypeNameToken => fixed(&TYPE_NAME_TOKEN_NAME),
             TypeNode::KExpression => fixed(&KEXPRESSION_NAME),
             TypeNode::SigiledTypeExpr => fixed(&SIGILED_TYPE_EXPR_NAME),
             TypeNode::RecordType => fixed(&RECORD_TYPE_NAME),

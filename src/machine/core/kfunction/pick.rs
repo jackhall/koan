@@ -43,7 +43,10 @@ impl<'a> KFunction<'a> {
                 continue;
             }
             // A literal-name slot owns its token; every other slot's bare name resolves.
-            if !matches!(arg.ktype, KType::IDENTIFIER | KType::PROPER_TYPE) {
+            if !matches!(
+                arg.ktype,
+                KType::IDENTIFIER | KType::PROPER_TYPE | KType::NAME_TOKEN | KType::TYPE_NAME_TOKEN
+            ) {
                 wrap_indices.push(i);
             }
         }

@@ -131,6 +131,8 @@ impl TypeRegistry {
             TypeNode::Bool,
             TypeNode::Null,
             TypeNode::Identifier,
+            TypeNode::NameToken,
+            TypeNode::TypeNameToken,
             TypeNode::KExpression,
             TypeNode::SigiledTypeExpr,
             TypeNode::RecordType,

@@ -43,18 +43,22 @@ fn constructor_apply_admits(
         })
 }
 
-/// The two slot types that constrain nothing beyond "a name": a concrete type out-specifies
-/// either of them.
+/// The slot types that constrain nothing beyond "a name": a concrete type out-specifies any of
+/// them.
 fn is_unconstrained_name(kt: KType) -> bool {
-    kt == KType::IDENTIFIER || kt == KType::of_kind(KKind::ProperType)
+    kt == KType::IDENTIFIER
+        || kt == KType::of_kind(KKind::ProperType)
+        || kt == KType::NAME_TOKEN
+        || kt == KType::TYPE_NAME_TOKEN
 }
 
 impl KType {
     /// Strict specificity ordering. Concrete types outrank `Any` and the unconstrained-name slot
-    /// types (`Identifier`, `ProperType`), so an overload like `ATTR <s:NewType>` beats its
-    /// `ATTR <s:Identifier>` sibling when both admit. `Str` is the one exception to that rule:
-    /// `Identifier` out-specifies it, because the two slots read the same bare token at different
-    /// depths (see `more_specific_walk`). A nominal-family kind out-specifies
+    /// types (`Identifier`, `ProperType`, `NameToken`, `TypeNameToken`), so an overload like
+    /// `ATTR <s:NewType>` beats its `ATTR <s:Identifier>` sibling when both admit. `Str` is the
+    /// one exception to that rule: the bare-token slots out-specify it, because the two slots read
+    /// the same bare token at different depths (see `more_specific_walk`). A nominal-family kind
+    /// out-specifies
     /// `OfKind(ProperType)` (`OfKind(NewType) ≺ OfKind(ProperType)`), and a sealed member
     /// out-specifies the `OfKind(kind)` of its own family. Parameterized containers are
     /// covariant in their inner slots. Returns `false` for equal types.
@@ -87,6 +91,23 @@ impl KType {
         }
         if self == KType::STR && other == KType::IDENTIFIER {
             return false;
+        }
+        // A name-token slot claims a bare field/binder token the way `Identifier` does, so the
+        // same token-over-resolved-string rule applies (ATTR keeps `field :Str` siblings in the
+        // bucket).
+        if self == KType::NAME_TOKEN && other == KType::STR {
+            return true;
+        }
+        if self == KType::STR && other == KType::NAME_TOKEN {
+            return false;
+        }
+        // Among the name slots themselves, strictly-narrower part admission is strictly more
+        // specific: `Identifier` and `TypeNameToken` each admit one of `NameToken`'s two part
+        // shapes.
+        if (self == KType::IDENTIFIER || self == KType::TYPE_NAME_TOKEN)
+            && other == KType::NAME_TOKEN
+        {
+            return true;
         }
         if is_unconstrained_name(other) && !(is_unconstrained_name(self) || self == KType::ANY) {
             return true;
@@ -415,7 +436,11 @@ impl KType {
             TypeNode::KExpression => matches!(c, Carried::Object(KObject::KExpression(_))),
             // The remaining part-shape-only slots are builtin raw-capture slots and nothing else,
             // so they admit a parser part shape and never a resolved value.
-            TypeNode::Identifier | TypeNode::SigiledTypeExpr | TypeNode::RecordType => false,
+            TypeNode::Identifier
+            | TypeNode::SigiledTypeExpr
+            | TypeNode::RecordType
+            | TypeNode::NameToken
+            | TypeNode::TypeNameToken => false,
             // Type-accepting slot, type-channel-only, by shallow kind via `kind_of` subsumption:
             // a first-class type value is admitted iff the slot kind subsumes the value's
             // `kind_of`, so `Any` takes every type value (signatures included), `ProperType`
@@ -590,6 +615,13 @@ impl KType {
             // above by `accepts_carried`.
             TypeNode::KFunction { .. } => false,
             TypeNode::Identifier => matches!(part, ExpressionPart::Identifier(_)),
+            // The binder-position slots: a bare name token of the class(es) they admit, captured
+            // raw. Neither is an `OfKind`, so no name reaching one is ever lowered or resolved.
+            TypeNode::NameToken => matches!(
+                part,
+                ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
+            ),
+            TypeNode::TypeNameToken => matches!(part, ExpressionPart::Type(_)),
             // A `:KExpression` slot captures a parenthesized expression raw, and a `#(...)` quote —
             // whose body is already data — with it.
             TypeNode::KExpression => matches!(
