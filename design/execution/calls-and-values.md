@@ -11,7 +11,7 @@ of the [execution model](README.md).
 runtime value type — the `Object` arm of the scheduler's value currency
 [`Carried`](../../src/machine/model/values/carried.rs); a type rides the
 `Type` arm as a raw `&KType`, with no `KObject` box. Pure-data variants
-(`Number`, `KString`, `Bool`, `List`, `Dict`, `KExpression`, `Tagged`,
+(`Number`, `KString`, `Bool`, `List`, `Dict`, `KExpression`,
 `Record`, `Null`) carry no references into
 [`machine::core`](../../src/machine/core.rs). The runtime-reference
 variants do — `KFunction`, `Module`, and `Wrapped`
@@ -44,7 +44,7 @@ read the concrete runtime shape directly:
 
 Indirecting these through a trait, an opaque handle, a generic
 parameter, or a model/runtime split each fail the same way: the
-recursive composite variants (`Tagged.value: Rc<KObject>`,
+recursive composite variants (`Wrapped.inner: &'a PayloadSubstrate<'a>`,
 `List(&'a ListSubstrate<'a>)`, `KObject::KExpression(ProgramExpression<'a>)`)
 re-form the union at every nesting level, and the hot consumers
 need the concrete region/scope/path identity that the abstraction

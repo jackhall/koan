@@ -6,46 +6,39 @@ use crate::machine::model::{Argument, SignatureElement};
 use crate::machine::model::{BinderSymbol, RunRegistries, Symbol};
 use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{SignaturePosition, SignatureScan};
 use crate::source::Spanned;
 use crate::witnessed::{BumpAllocator, BumpVec};
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface
 /// `Unbound` against a parameter name.
+///
+/// Only an annotated position names a parameter; the stride itself is
+/// [`SignatureScan`]'s, shared with [`parse_fn_param_list`].
 pub(crate) fn collect_param_names_from_signature<'s>(
     signature: &KExpression<'_>,
     scratch: BumpAllocator<'s>,
 ) -> BumpVec<'s, Symbol> {
-    let parts = &signature.parts;
+    let parts = signature.parts;
     // Read by the return-type classifier and dropped inside this step, so the scratch hosts it.
     // A name takes a part and its type slot takes another, so the parts count is the upper bound.
     let mut names: BumpVec<'s, Symbol> = BumpVec::with_capacity_in(parts.len(), scratch);
-    let mut i = 0;
-    while i < parts.len() {
+    for position in SignatureScan::new(parts) {
         // The scan compares against reference leaves, which probe by bare symbol bits, so a
         // parameter's name rides as the symbol its own token minted.
-        let param_name: Option<Symbol> = match parts[i].value {
-            ExpressionPart::Identifier(v) => Some(v.symbol()),
-            ExpressionPart::Type(t) => Some(t.symbol()),
-            _ => None,
-        };
-        if let Some(name) = param_name {
-            let next = parts.get(i + 1).map(|p| p.value);
-            let next_is_type_slot = matches!(
-                next,
-                Some(ExpressionPart::Type(_))
-                    | Some(ExpressionPart::Expression(_))
-                    | Some(ExpressionPart::SigiledTypeExpr(_))
-                    | Some(ExpressionPart::RecordType(_))
-            );
-            if next_is_type_slot {
-                names.push(name);
-                i += 2;
-                continue;
-            }
+        if let SignaturePosition::Annotated { name, .. } = position {
+            names.push(name.symbol());
         }
-        i += 1;
     }
     names
+}
+
+/// The diagnostic a binder position with no `:<Type>` annotation reports.
+fn missing_annotation(symbol: BinderSymbol, registries: &RunRegistries) -> String {
+    let name = crate::machine::model::render_label(symbol.symbol(), registries);
+    format!(
+        "FN signature parameter `{name}` requires a `:<Type>` annotation (e.g. `{name} :Number`)",
+    )
 }
 
 pub(crate) enum ParamListOutcome<'a> {
@@ -98,32 +91,21 @@ pub(crate) fn parse_fn_param_list<'a>(
     let mut sub_dispatches: BumpVec<'a, (usize, KExpression<'a>)> =
         BumpVec::with_capacity_in(parts.len(), scratch);
     let mut first_err: Option<String> = None;
-    let mut i = 0;
-    while i < parts.len() {
-        // A bare-leaf `Type` part (e.g. `er` in `FN (LIFT er: Ordered) -> ...`) in
-        // parameter-name position denotes a binder, not a type reference.
-        // Each part's class *is* the binder's class: the lexer tags an `Identifier` only for a
-        // token that classifies as neither keyword nor Type, and a `Type` part only for one that
-        // classifies as a Type token — so each part hands over its own already-minted symbol.
-        let param_name: Option<BinderSymbol> = match parts[i].value {
-            ExpressionPart::Identifier(v) => Some(BinderSymbol::Value(v)),
-            ExpressionPart::Type(t) => Some(BinderSymbol::Type(t)),
-            _ => None,
-        };
-        match (param_name, parts[i].value) {
-            (_, ExpressionPart::Keyword(kw)) => {
-                elements.push(SignatureElement::Keyword(kw));
-                i += 1;
+    for position in SignatureScan::new(parts) {
+        match position {
+            SignaturePosition::Keyword(keyword) => {
+                elements.push(SignatureElement::Keyword(keyword));
             }
-            (Some(symbol), _) => {
-                let slot_idx = i + 1;
-                let ty = parts.get(slot_idx).map(|p| p.value);
+            SignaturePosition::Annotated {
+                name: symbol,
+                annotation,
+            } => {
                 let feed = resolved.and_then(|r| {
                     r.iter()
-                        .find_map(|(idx, ktype)| (*idx == slot_idx).then_some(*ktype))
+                        .find_map(|(idx, ktype)| (*idx == annotation).then_some(*ktype))
                 });
-                match (ty, feed) {
-                    (Some(ExpressionPart::Type(t)), _) => {
+                match (parts[annotation].value, feed) {
+                    (ExpressionPart::Type(t), _) => {
                         match elaborate_type_identifier(elaborator, t, registries) {
                             TypeResolution::Done(kt) => {
                                 elements.push(SignatureElement::Argument(Argument {
@@ -146,14 +128,11 @@ pub(crate) fn parse_fn_param_list<'a>(
                             }
                             TypeResolution::Unbound(_) => {}
                         }
-                        i += 2;
                     }
                     (
-                        Some(
-                            ExpressionPart::Expression(_)
-                            | ExpressionPart::SigiledTypeExpr(_)
-                            | ExpressionPart::RecordType(_),
-                        ),
+                        ExpressionPart::Expression(_)
+                        | ExpressionPart::SigiledTypeExpr(_)
+                        | ExpressionPart::RecordType(_),
                         Some(ktype),
                     ) => {
                         // The dep-finish re-walk: this slot's sub-Dispatch already resolved, and the
@@ -164,13 +143,11 @@ pub(crate) fn parse_fn_param_list<'a>(
                             name: symbol,
                             ktype,
                         }));
-                        i += 2;
                     }
-                    (Some(ExpressionPart::Expression(inner)), None) => {
-                        sub_dispatches.push((slot_idx, *inner));
-                        i += 2;
+                    (ExpressionPart::Expression(inner), None) => {
+                        sub_dispatches.push((annotation, *inner));
                     }
-                    (Some(ExpressionPart::SigiledTypeExpr(inner)), None) => {
+                    (ExpressionPart::SigiledTypeExpr(inner), None) => {
                         // Wrap and sub-Dispatch so the dispatcher routes the inner expression
                         // through its standard classifier.
                         let brand = elaborator.scope.brand();
@@ -178,38 +155,31 @@ pub(crate) fn parse_fn_param_list<'a>(
                             brand,
                             &[Spanned::bare(ExpressionPart::SigiledTypeExpr(inner))],
                         );
-                        sub_dispatches.push((slot_idx, wrapped));
-                        i += 2;
+                        sub_dispatches.push((annotation, wrapped));
                     }
-                    (Some(ExpressionPart::RecordType(inner)), None) => {
+                    (ExpressionPart::RecordType(inner), None) => {
                         // A `:{…}` record param type sub-Dispatches to a record `KType` carrier.
                         let brand = elaborator.scope.brand();
                         let wrapped = KExpression::new(
                             brand,
                             &[Spanned::bare(ExpressionPart::RecordType(inner))],
                         );
-                        sub_dispatches.push((slot_idx, wrapped));
-                        i += 2;
+                        sub_dispatches.push((annotation, wrapped));
                     }
+                    // `SignatureScan` only pairs a name with one of the four shapes above, so this
+                    // arm is the exhaustiveness tail rather than a reachable input.
                     _ => {
-                        let name = crate::machine::model::render_label(symbol.symbol(), registries);
-                        return ParamListOutcome::Err(format!(
-                            "FN signature parameter `{name}` requires a `:<Type>` annotation \
-                             (e.g. `{name} :Number`)",
-                        ));
+                        return ParamListOutcome::Err(missing_annotation(symbol, registries));
                     }
                 }
             }
-            (None, ExpressionPart::Type(t)) => {
-                return ParamListOutcome::Err(format!(
-                    "FN signature has a stray type `{}` outside a `<name> :<Type>` pair",
-                    crate::machine::model::render_label(t.symbol(), registries),
-                ));
+            SignaturePosition::Bare(symbol) => {
+                return ParamListOutcome::Err(missing_annotation(symbol, registries));
             }
-            (None, other) => {
+            SignaturePosition::Foreign(at) => {
                 return ParamListOutcome::Err(format!(
                     "FN signature part `{}` is not a Keyword, Identifier, or `<name> :<Type>` pair",
-                    other.summary(&registries.labels),
+                    parts[at].value.summary(&registries.labels),
                 ));
             }
         }

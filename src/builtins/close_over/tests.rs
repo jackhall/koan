@@ -9,6 +9,8 @@
 //! is a dispatch registration, which implicit close pins on purpose; an anonymous one is a plain
 //! value binding, so a chain of them isolates the lexical-frame retention the form exists to cut.
 
+mod inferred;
+
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
 use crate::machine::core::KoanRegionExt;
@@ -707,15 +709,15 @@ fn recursion_carried_close_over_stays_flat_in_depth() {
             "UNION Nat = (Zero :Null Succ :Nat)\n\
              FN (COUNTDOWN n :Nat) -> Str = (\
                  (CLOSE OVER () ((LET b = (1)) (b)))\
-                 (MATCH (n) -> :Str WITH (\
+                 (MATCH (n) OVER Nat -> :Str WITH (\
                      Zero -> (\"done\")\
                      Succ -> (COUNTDOWN it)\
                  ))\
              )\n\
-             LET n0 = (Nat (Zero null))\n",
+             LET n0 = (Nat.Zero null)\n",
         );
         for level in 1..=depth {
-            source.push_str(&format!("LET n{level} = (Nat (Succ n{}))\n", level - 1));
+            source.push_str(&format!("LET n{level} = (Nat.Succ n{})\n", level - 1));
         }
         test_run.run(&source);
         let call = format!("COUNTDOWN n{depth}");

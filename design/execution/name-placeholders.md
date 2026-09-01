@@ -287,8 +287,8 @@ assuming. **A claim-owning slot never tail-replaces**, so the scope its claims
 were installed into is the scope it retires against:
 [`block_tail`](../../src/machine/core/kfunction/block_tail.rs) and its
 fresh-cart sibling `fresh_cart_tail` are the only `Action::Tail` constructors,
-and their callers are `MATCH` / `TRY` arms, `EVAL`, `USING` and `CLOSE OVER`,
-none of which is a binder form in
+and their callers are `MATCH` / `TRY` arms, `EVAL`, `USING` and both `CLOSE`
+forms, none of which is a binder form in
 [`BINDER_SPECS`](../../src/machine/model/binder.rs) — an FN body's tail belongs
 to the call's slot, not the declaration's. And **a scope is fanned out into
 exactly once**, which is what lets `by_statement` be a fixed run sized at the

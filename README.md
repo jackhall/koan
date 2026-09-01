@@ -167,11 +167,12 @@ src/
 │   ├── fn_def/return_type.rs    return-type slot elaboration
 │   ├── fn_def/param_refs.rs     parameter-reference resolution
 │   ├── fn_def/finalize.rs       seal the function once its slots resolve
-│   ├── match_case.rs         MATCH — branch by the scrutinee's runtime type
+│   ├── match_case.rs         MATCH — branch by union member (OVER) or by the scrutinee's runtime type
 │   ├── try_with.rs           TRY (<expr>) WITH (<branches>) — catch runtime errors
 │   ├── catch.rs              CATCH — error-handling primitive
-│   ├── branch_walk.rs        MATCH's by-type arm walker + TRY's by-tag walker + shared arm-tail machinery
-│   ├── result.rs             Result tagged-union builtin
+│   ├── branch_walk.rs        the shared member-arm parser + MATCH's by-member and by-type walkers + TRY's member walker + shared arm-tail machinery
+│   ├── result.rs             Result — the prelude two-member union (Ok / Error)
+│   ├── error_union.rs        KError — the prelude union of every catchable error kind
 │   ├── parameterized_types.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN)
 │   ├── type_ops.rs           WITH — infix signature specialization; TYPE OF — value → type
 │   ├── type_ops/with.rs               WITH — abstract-slot pinning + manifest fixity
@@ -181,7 +182,7 @@ src/
 │   ├── record_projection.rs  FROM — `(x y) FROM r` re-tags a record value's carried type to the named fields
 │   ├── nominal_schema.rs     shared Action-harness field-list elaboration for UNION / NEWTYPE record repr
 │   ├── newtype_def.rs        NEWTYPE — scalar repr, the `:{…}` record repr, and the `(Param… AS Name)` constructor-family mint
-│   ├── module_def.rs         MODULE — including the body's type-declaration announcement, which co-declares a mutually-recursive nominal group
+│   ├── module_def.rs         MODULE — the body's child scope and the declaration window it announces into, which co-declares a mutually-recursive nominal group (the announcement scan itself is model/binder.rs)
 │   ├── op_def.rs             OP / UNARY OP — declare a chainable operator over an operand type
 │   ├── group_def.rs          GROUP — a module bundling mutually chainable operators under one reduction mode
 │   ├── sig_def.rs            SIG

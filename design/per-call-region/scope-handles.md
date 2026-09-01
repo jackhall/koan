@@ -113,7 +113,7 @@ mechanics:
   `region()` is the receiving region allocates into the escape region
   instead, with the per-call region's storage left untouched.
 - `try_inside_tco_position_preserves_frame_chain` runs a user-fn that
-  recurses through a `Tagged` parameter via MATCH inside TRY,
+  recurses through a union-variant parameter via MATCH inside TRY,
   exercising the `FrameStorage.outer` chain that keeps the call-site
   region alive across TCO replace.
 - `call_arena_try_reset_for_tail_round_trip` and

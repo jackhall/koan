@@ -2,7 +2,6 @@ use super::*;
 use crate::builtins::test_support::type_name;
 use crate::builtins::test_support::type_token;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::TypeMemberMap;
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::values::KKey;
 use std::collections::HashMap;
@@ -161,57 +160,84 @@ fn list_with_type_carrier_is_authoritative_for_ktype() {
     assert_eq!(stamped.ktype(), list_any);
 }
 
-/// A `TypeConstructor` (`Result`) value carries its identity handle directly: an erased carrier
-/// holds the bare member reference, a stamped carrier the applied `ConstructorApply`.
+/// A variant value carries its identity handle directly: an erased carrier holds the bare member
+/// reference, a stamped carrier the applied `ConstructorApply` over it.
 #[test]
-fn type_constructor_ktype_erased_vs_applied() {
+fn variant_ktype_erased_vs_applied() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
-    let ctor = RecursiveGroupWindow::seal_singleton(
+    let window = RecursiveGroupWindow::for_binder(
         type_token("Result"),
-        RelativeSchema::TypeConstructor {
-            schema: TypeMemberMap::default(),
-            param_names: vec![
-                type_name("Ok", &registries),
-                type_name("Error", &registries),
-            ],
-        },
-        None,
-        types,
+        vec![type_token("Ok"), type_token("Error")],
     );
-    let erased = KObject::tagged(door, type_token("Ok"), &KObject::Number(1.0), ctor);
+    window.fill_member(0, RelativeSchema::NewType(KType::ANY), types);
+    let sealed = window
+        .fill_member(1, RelativeSchema::NewType(KType::ANY), types)
+        .expect("a two-member window seals on its second fill");
+    let ok = sealed.members[0];
+
+    let erased = KObject::wrapped_hold(door, &KObject::Number(1.0), ok);
     let erased_handle = erased.ktype();
     match types.node(erased_handle) {
-        TypeNode::SetMember { name, .. } => assert_eq!(name, type_token("Result")),
+        TypeNode::SetMember { name, .. } => assert_eq!(name, type_token("Ok")),
         _ => panic!("expected SetMember, got {erased_handle:?}"),
     }
-    let arguments = Record::from_pairs([
-        (
-            crate::builtins::test_support::binder_token("Ok"),
-            KType::NUMBER,
-        ),
-        (
-            crate::builtins::test_support::binder_token("Error"),
-            KType::STR,
-        ),
-    ]);
-    let applied = KObject::tagged(
+    let arguments = Record::from_pairs([(
+        crate::builtins::test_support::binder_token("Ok"),
+        KType::NUMBER,
+    )]);
+    let applied = KObject::wrapped_hold(
         door,
-        type_token("Ok"),
         &KObject::Number(1.0),
-        types.constructor_apply(ctor, arguments.clone()),
+        types.constructor_apply(ok, arguments.clone()),
     );
-    let applied_handle = applied.ktype();
-    match types.node(applied_handle) {
+    match types.node(applied.ktype()) {
         TypeNode::ConstructorApply {
             arguments: applied_args,
             ..
-        } => {
-            assert_eq!(applied_args, arguments);
-        }
-        _ => panic!("expected ConstructorApply, got {applied_handle:?}"),
+        } => assert_eq!(applied_args, arguments),
+        _ => panic!("expected ConstructorApply identity"),
     }
+}
+
+/// A union slot stamps a variant value to the application over the member it inhabits — the
+/// boundary shape `:(Result {Ok = Number, Error = Str})` drives. A member the slot left bare, and
+/// a value of a member the slot never declares, pass through unchanged.
+#[test]
+fn stamp_type_adopts_the_inhabited_members_application() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    container_door!(_storage, door);
+    let window = RecursiveGroupWindow::for_binder(
+        type_token("Result"),
+        vec![type_token("Ok"), type_token("Error")],
+    );
+    window.fill_member(0, RelativeSchema::NewType(KType::ANY), types);
+    let sealed = window
+        .fill_member(1, RelativeSchema::NewType(KType::ANY), types)
+        .expect("a two-member window seals on its second fill");
+    let (ok, error) = (sealed.members[0], sealed.members[1]);
+    let ok_applied = types.constructor_apply(
+        ok,
+        Record::from_pairs([(
+            crate::builtins::test_support::binder_token("Ok"),
+            KType::NUMBER,
+        )]),
+    );
+    // `Error` rides bare, so a value of it keeps its own member handle.
+    let declared = types.union_of(&[ok_applied, error]);
+
+    let stamped =
+        KObject::wrapped_hold(door, &KObject::Number(1.0), ok).stamp_type(declared, types);
+    assert_eq!(stamped.ktype(), ok_applied);
+    let bare =
+        KObject::wrapped_hold(door, &KObject::Number(1.0), error).stamp_type(declared, types);
+    assert_eq!(bare.ktype(), error);
+    let foreign = newtype_singleton("Distance", KType::NUMBER, &registries);
+    let untouched =
+        KObject::wrapped_hold(door, &KObject::Number(1.0), foreign).stamp_type(declared, types);
+    assert_eq!(untouched.ktype(), foreign);
 }
 
 #[test]

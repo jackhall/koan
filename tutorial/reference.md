@@ -20,28 +20,31 @@ the link in each section to the relevant chapter.
 | `<keyword> <args>`                         | Call a function by writing its shape (e.g. `ECHO 21`). |
 | `<fn> {name = value, ...}`                 | Call a captured function by named arguments. |
 | `CLOSE OVER (<captures>) (<block>)`        | Run a block over a region of its own, copying the named values in; only the block's last expression escapes, and it holds copies rather than the enclosing call. |
+| `CLOSE (<block>)`                          | The same, with the capture list inferred from the names the block uses; `$(...)` and `USING … SCOPE` inside the block are refused. |
 
 ## Data types — see [5](05-tagged-unions.md), [7](07-records.md), [8](08-newtypes.md)
 
 | Form                                       | Meaning                                  |
 |--------------------------------------------|------------------------------------------|
 | `UNION <Name> = (<Tag> :<Type> ...)`       | Declare a tagged union (sum type).       |
-| `(<Union> (<Tag> <value>))`                | Construct a tagged value.                |
-| `:(<Union> <Tag>)`                         | A slot type admitting one variant.       |
+| `<Union>.<Tag>`                            | Name one variant as a type value.        |
+| `<Union>.<Tag> <value>`                    | Construct a tagged value.                |
+| `:(<Union>.<Tag>)`                         | A slot type admitting one variant.       |
 | `NEWTYPE <Name> = <Type>`                  | Declare a nominal type over a representation. |
 | `NEWTYPE <Name> = :{<field> :<Type>, ...}` | Declare a record type (named fields).    |
 | `(<Type> {field = value, ...})`            | Construct a record value.                |
-| `<record>.<field>`                         | Read a field off a `NEWTYPE` record.     |
+| `<record>.<field>`                         | Read a field off any record value.       |
 | `(<fields>) FROM <record>`                 | Project a record's type to the named fields. |
 
 ## Control and errors — see [6](06-pattern-matching.md), [9](09-errors.md)
 
 | Form                                              | Meaning                           |
 |---------------------------------------------------|-----------------------------------|
-| `MATCH (<value>) -> :<Type> WITH (<Tag> -> (<body>) ...)` | Branch on a union tag or boolean; `it` is the payload. |
-| `TRY (<expr>) -> :<Type> WITH (<Tag> -> (<body>) ... )`   | Catch errors; arms are `Ok`, error-kind tags, and `_`. |
+| `MATCH (<value>) OVER <Union> -> :<Type> WITH (<Tag> -> (<body>) ...)` | Branch on a union's variants; every variant needs an arm unless a `_` arm defaults the rest, and `it` is the payload. |
+| `MATCH (<value>) -> :<Type> WITH (<Type> -> (<body>) ...)` | Branch on the value's runtime type or on `true` / `false`; `it` is the value unchanged. |
+| `TRY (<expr>) -> :<Type> WITH (<Tag> -> (<body>) ... )`   | Catch errors; arms are `Ok`, error-kind names, and `_`. Uncaught kinds re-raise. |
 | `CATCH (<expr>)`                                   | Run an expression, returning a `Result` value. |
-| `Result`, `Ok`, `Error`                           | Built-in result union and its variants. |
+| `Result.Ok <value>`, `Result.Error <value>`       | Built-in result union's variants, reached by projection. |
 
 ## Quoting — see [10](10-quoting.md)
 

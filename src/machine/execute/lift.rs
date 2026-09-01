@@ -64,9 +64,6 @@ fn seam_verb(delivered: &DeliveredCarried) -> RegionEscape {
             KObject::Record(substrate, _) => copy_or_pin(substrate, host),
             KObject::List(substrate, _) => copy_or_pin(substrate, host),
             KObject::Dict(substrate, _) => copy_or_pin(substrate, host),
-            KObject::Tagged {
-                value: substrate, ..
-            } => copy_or_pin(substrate, host),
             KObject::Wrapped {
                 inner: substrate, ..
             } => copy_or_pin(substrate, host),

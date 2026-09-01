@@ -76,6 +76,7 @@ enum OpKind {
 // operators the same way.
 
 use crate::machine::BoundArgs;
+use crate::machine::model::MACHINE_BINDERS;
 use crate::machine::model::ReturnType;
 pub(super) use crate::machine::model::symbol_from_parts;
 use crate::machine::model::symbol_from_quote_body;
@@ -83,11 +84,12 @@ use crate::machine::model::untyped_key_of;
 use crate::machine::model::{StaticName, ValueSymbol};
 use crate::machine::{GroupSeal, OverloadSeal};
 
-// This builtin's slot spellings, minted once and read back by symbol. A pairwise group's
-// combiner is itself an `OP`, so it binds the same `left` / `right` pair — but positionally, by
-// the infix shape the reducer synthesizes, not by name. `operands` is the unary form's single
-// parameter: the whole run as one list.
-crate::slots! { SLOTS { body, left, name, operand, operands, return_type, right, symbol } }
+// This builtin's slot spellings, minted once and read back by symbol. The names an `OP` body
+// binds its operands under are not among them: they are machine-fixed binders, declared once in
+// the model layer as `MACHINE_BINDERS` and read back from there. A pairwise group's combiner is
+// itself an `OP`, so it binds the same pair — but positionally, by the infix shape the reducer
+// synthesizes, not by name.
+crate::slots! { SLOTS { body, name, operand, return_type, symbol } }
 
 /// Body-side symbol read: a quoted slot's raw `KObject::KExpression` is the quote body. Shared with
 /// `GROUP`, whose pairwise `combiner` slot names an operator the same way (`super::group_def`).
@@ -413,9 +415,9 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
         let (cell, registrations) = match kind {
             OpKind::Binary => {
                 let elements = [
-                    arg(registries, &SLOTS.left, operand),
+                    arg(registries, &MACHINE_BINDERS.operand_left, operand),
                     SignatureElement::Keyword(sym),
-                    arg(registries, &SLOTS.right, operand),
+                    arg(registries, &MACHINE_BINDERS.operand_right, operand),
                 ];
                 let result_type = result.unwrap_or(operand);
                 let (cell, overload) = register_body(
@@ -444,16 +446,16 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                 })?;
                 let list_elements = [
                     SignatureElement::Keyword(sym),
-                    arg(registries, &SLOTS.operands, types.list(operand)),
+                    arg(registries, &MACHINE_BINDERS.operands, types.list(operand)),
                 ];
                 // The binary bridge: `a ~ b` names one keyword, so it dispatches as a plain
                 // keyworded call, not an operator chain — without a two-operand body it would
                 // simply miss. Its body is the AST `sym [left right]`, the shape a reduced run
                 // takes, so both surfaces land on the one list body the user wrote.
                 let bridge_elements = [
-                    arg(registries, &SLOTS.left, operand),
+                    arg(registries, &MACHINE_BINDERS.operand_left, operand),
                     SignatureElement::Keyword(sym),
-                    arg(registries, &SLOTS.right, operand),
+                    arg(registries, &MACHINE_BINDERS.operand_right, operand),
                 ];
                 // `check_group_context` rejects `UNARY OP` inside a `GROUP` before the plan is
                 // built, so `in_group` cannot hold here; the door asserts that rather than take
@@ -639,11 +641,10 @@ fn bridge_body<'a>(
         brand,
         &[
             Spanned::bare(ExpressionPart::Keyword(sym)),
-            Spanned::bare(ExpressionPart::ListLiteral(
-                brand
-                    .allocator()
-                    .slice(&[operand(&SLOTS.left), operand(&SLOTS.right)]),
-            )),
+            Spanned::bare(ExpressionPart::ListLiteral(brand.allocator().slice(&[
+                operand(&MACHINE_BINDERS.operand_left),
+                operand(&MACHINE_BINDERS.operand_right),
+            ]))),
         ],
     )
 }

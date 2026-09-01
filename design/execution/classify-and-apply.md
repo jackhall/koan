@@ -214,7 +214,7 @@ The rails the dispatch driver feeds:
   `TypeCall`, `FunctionValueCall`, `HeadDeferred`, `TypeHeadDeferred` —
   converge on [`apply_callable`](../../src/machine/execute/decide/apply_callable.rs).
   A `ResolvedCallable` has exactly two execution arms: `Constructor(&KType)`
-  builds from a struct / tagged / newtype / `TypeConstructor` schema, and
+  builds from a struct / newtype / `TypeConstructor` schema, and
   `Function(&KFunction)` calls a `KFunction` by name. A functor — a
   module-returning function — is a `KFunction` like any other, so it takes the
   `Function` arm with no arm, flag, or classification of its own. The

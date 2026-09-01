@@ -127,32 +127,91 @@ unconstructible.
 
 ## Inferred capture
 
-`CLOSE (block)` infers the capture list: the block's free identifiers on both
+`CLOSE (block)` infers the capture list: a structural walk over the block's raw
+AST ([close_inference.rs](../src/machine/model/close_inference.rs)), run at the
+form's step on the step scratch, yields the block's free identifiers on both
 channels — value names and type names — callables and modules being implicit
-already. Freeness is position-aware, mirroring the strict `idx < cutoff`
-visibility rule: a use lexically before a `LET` of the same name is free. A
-free identifier that resolves in the per-call portion of the enclosing chain
-is captured exactly as if written in a `CLOSE OVER` list (an in-flight claim
-parks the build); one that resolves only in the eternal tier is read through
-the block's outer link rather than copied; one that resolves nowhere is an
-unbound-name error at the form.
+already. The two `CLOSE` overloads share one resolve-park-seed spine
+([close_over.rs](../src/builtins/close_over.rs)) and differ only in where the
+list comes from. `CLOSE OVER ()` is an empty capture, a distinct bucket key from
+inference.
 
-Two forms surface names dynamically, so their presence in the inference
-domain is a structured error — the free identifiers cannot be identified and
+### Which inferred names are captured
+
+A free identifier that resolves in the per-call portion of the enclosing chain
+is captured exactly as if written in a `CLOSE OVER` list (an in-flight claim
+parks the build); one that resolves only in the eternal tier is read through the
+block's outer link rather than copied, because a copy of it buys nothing. The
+tier is read off the resolution that found the binding — `HitTier`
+([resolve.rs](../src/machine/core/scope/resolve.rs)), split at the same
+per-call/eternal predicate implicit close walks with — and the untiered
+resolvers are *defined as* the tiered ones with the tier dropped, so `CLOSE` and
+`CLOSE OVER (<the same names>)` can never pick different bindings for a name.
+
+A name on **either channel** that resolves nowhere is an unbound-name error at
+the form, matching explicit `CLOSE OVER`. The type channel holds that rule
+because no type position spells a bare token that is not a chain-resolvable
+name: a union's variant tag is reached only by member projection (`Maybe.Some`),
+whose lhs is the resolvable name, and the arm heads of a `MATCH … OVER U`
+resolve against `U`'s member schema with `U` itself the captured name
+([user-types.md § Unions dissolve into per-variant
+newtypes](typing/user-types.md#unions-dissolve-into-per-variant-newtypes)).
+
+### Freeness is position-aware
+
+An identifier is bound by a local binder only where the interpreter's own strict
+`idx < cutoff` rule would bind it: a use lexically before a `LET` of the same
+name is free, and a binder never binds its own right-hand side. A nested
+statement block, a function body, an operator body and a match arm each restart
+the count in a scope of their own, seeded with the names the surface *binds*
+rather than spells — the signature's parameters, and the machine-fixed `left` /
+`right` / `operands` / `it` (`MACHINE_BINDERS`,
+[binder.rs](../src/machine/model/binder.rs)). A name in a label position — an
+attribute's field in `m.x`, a projection's field list, a record literal's keys,
+the name half of a `<name> :<Type>` pair — is not a use at all.
+
+The type channel has two order-independent windows the position rule does not
+describe, and the walk mirrors both:
+
+- **Self-recursion.** A nominal declaration binds the names it declares inside
+  its own representation — `NEWTYPE Tree = :{left :Tree}`, and a `UNION`'s
+  variant tags.
+- **Module-body announcement.** A `MODULE` / `GROUP` body pre-announces its
+  top-level nominal declarations body-wide
+  ([`announce_type_members`](../src/machine/model/binder.rs)), so a mutually
+  recursive pair declared inside the block is free in neither source order.
+
+### Dynamic names, and the domain's frontiers
+
+Two forms surface names dynamically, so their presence in the inference domain
+is a structured error — the free identifiers cannot be identified and
 `CLOSE OVER` remains the form that admits them:
 
-- `$(...)`: EVAL resolves names against the scope at the evaluation site.
-- `USING … SCOPE (…)`: the window surfaces its module's members at run time,
-  so a syntactic walk cannot tell a member reference from a name the
-  enclosing chain must supply.
+- `$(...)`, and its spelled-out `EVAL` head: EVAL resolves names against the
+  scope at the evaluation site.
+- `USING … SCOPE (…)`: the window surfaces its module's members at run time, so
+  a syntactic walk cannot tell a member reference from a name the enclosing
+  chain must supply.
 
-The inference domain is the walked region of the block: `#(...)` quote bodies
-are excluded as data, and the blocks of nested `CLOSE OVER` / `CLOSE` forms
-are excluded as severed — a nested `CLOSE` polices its own block when it
-evaluates. Outside those excluded regions the walk is exact: only the fixed
-builtin forms have lazy slots, so every remaining group in the domain
-evaluates in the block's chain and structural freeness coincides with
-resolution. `CLOSE OVER ()` is an empty capture, distinct from inference.
+The inference domain is the walked region of the block, and its frontiers are:
+
+- A `#(...)` quote in an eager position is data — nothing inside it resolves. A
+  quote *filling a builtin's lazy code slot* is that builtin's body spelled with
+  a quote, so it is walked as the body: `CLOSE #(x + 1)` infers `x`.
+- A nested `CLOSE OVER` contributes the identifiers in its **capture list**,
+  which resolve against this chain at the inner form's build, and nothing from
+  its body — that block is severed.
+- A nested `CLOSE` contributes the free set of its own block, but not its
+  conflicts: it polices its own block when it evaluates.
+
+Outside those excluded regions the walk is exact: only the fixed builtin forms
+have lazy slots, so every remaining group in the domain evaluates in the block's
+chain and structural freeness coincides with resolution. Those forms are
+recognized by full untyped bucket key, sound for the same reason
+[`BINDER_SPECS`](../src/machine/model/binder.rs) and
+[`LAZY_SLOT_SPECS`](../src/machine/model/lazy_slots.rs) are: builtin buckets are
+unshadowable, so a matching node can only ever resolve to that builtin's
+overloads.
 
 ## Open work
 
@@ -160,5 +219,3 @@ resolution. `CLOSE OVER ()` is an empty capture, distinct from inference.
   callable copy and its pin-not-park downgrade rule; the liveness matrix
   ([liveness-matrix.md](../workgraph/design/liveness-matrix.md)) consumes it
   as its proactive consolidation lever.
-- [Inferred CLOSE](../roadmap/foundation/inferred-close.md) — capture-list
-  inference.

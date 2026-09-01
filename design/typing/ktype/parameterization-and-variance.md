@@ -163,28 +163,49 @@ unaffected — it carries information and is legal where `:(LIST OF Any)` is dec
 
 ### Runtime type-parameter carriers
 
-`List`, `Dict`, and `Tagged` carry their runtime type arguments on the variant so
+`List`, `Dict`, and `Wrapped` carry their runtime type arguments on the variant so
 dispatch and slot admission see the full instantiation, not just the outer shape:
 
 - `KObject::List(items, list_type)` / `KObject::Dict(substrate, dict_type)` memoize the
   full interned container type handle at construction (`KObject::list` / `KObject::dict`),
   so `ktype()` is a handle copy.
-- `KObject::Tagged { identity, .. }` carries the value's own type handle. When the
-  applied type arguments of a parameterized union are erased (the default from
-  `tagged_union::construct` / `CATCH`), `identity` is the bare `SetMember` handle; an
-  ascription stamp populates it with a `ConstructorApply` over that member, folding the
-  applied arguments into the one handle `ktype()` copies.
+- `KObject::Wrapped { type_id, .. }` carries the value's own type handle. When the applied
+  type arguments are erased (the default from a projection construction and from `CATCH`),
+  `type_id` is the bare `SetMember` handle; an ascription stamp populates it with a
+  `ConstructorApply` over that member, folding the applied arguments into the one handle
+  `ktype()` copies.
 
-A `ConstructorApply` slot (`:(Result {Ok = Number, Error = MyError})`) admits a
-`Tagged` value via the `matches_value` arm in
-[ktype_predicates.rs](../../../src/machine/model/types/ktype_predicates.rs): the
-declaring schema must be the same constructor, and then either a stamped
-`ConstructorApply` identity's arguments are checked per parameter name against the
-declared args, or — for an
-erased carrier — the *inhabited* tag's payload is checked against the same-named
-argument. `Result`'s tag names and its parameter names coincide by construction
-(`Ok`, `Error`), so the field→parameter linkage is a direct `args.get(tag)` lookup
-with no separate ordering table.
+#### Applying a union head
+
+A union head takes named type arguments — `:(Result {Ok = Number, Error = MyError})`, and
+the same spelling over any user `UNION`. Each argument name must name a **member**, and the
+application lands **per member**
+([union.rs](../../../src/builtins/union.rs)): the result is the union of the members, each
+named one replaced by the `ConstructorApply` over it carrying that one argument under the
+member's own name, each unnamed one riding bare. Partial application is therefore legal on
+a union head — a member no argument names simply stays unconstrained.
+
+Per-member is the form both consumers can act on directly, because a value inhabits exactly
+one member:
+
+- **Admission.** The union slot admits a value any member admits, and the applied member
+  hits the `ConstructorApply` arm of
+  [ktype_predicates.rs](../../../src/machine/model/types/ktype_predicates.rs): the
+  constructor must be the same, and then either a stamped `ConstructorApply` identity's
+  arguments are checked per name against the declared args, or — for an erased carrier —
+  the payload is checked against the argument the member's *own* name keys. A member's name
+  and the argument's name agree by construction, so the linkage is a direct
+  `arguments.get(member_name)` lookup with no separate ordering table, and a missing
+  same-named argument admits.
+- **Stamping.** `KObject::stamp_type` against a union node is the one declared shape that
+  re-tags a carrier to something other than the declared handle itself: the `Wrapped` adopts
+  the application over the member *it* inhabits, both sides peeled past any
+  `ConstructorApply`. A member the slot left bare, and a value whose member the slot never
+  declares, pass through unchanged.
+
+The applied node is anonymous, so it renders structurally as the disjunction of its applied
+members, like any other union node the surface did not name — the applied spelling does not
+round-trip back through a bound name.
 
 **Ascription is authoritative at annotated boundaries.** A parameterized-carrier
 value crossing an annotated boundary is checked via `matches_value`. Where the

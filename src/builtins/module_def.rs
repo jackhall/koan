@@ -9,21 +9,19 @@
 use crate::machine::BindingIndex;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
-use crate::machine::body_statement_refs;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
-use crate::machine::model::{AnnouncedData, ValueSymbol, pair_list_names};
+use crate::machine::model::ValueSymbol;
+use crate::machine::model::announce_type_members;
 use crate::machine::model::{KKind, SigSchema};
 use crate::machine::model::{Module, ModuleDraft};
-use crate::machine::model::{TypeDeclarationSurface, announced_type_declaration};
 use crate::machine::{Action, BodyCtx};
 use crate::machine::{KError, KErrorKind};
 use crate::machine::{NameLookup, Scope};
 
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::display_label;
 use crate::machine::model::render_label;
 
 // This builtin's slot spellings, minted once and read back by symbol.
@@ -48,71 +46,6 @@ pub fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     let announced = crate::try_action!(announce_type_members(&body_expr, name, ctx.registries));
     let child_scope = ctx.scope.alloc_child_under_module(announced);
     await_module_body(child_scope, name, body_expr, ctx.bind_index())
-}
-
-/// Pre-scan `body`'s **top-level** statements for the type declarations the body announces, so
-/// every one of their names is visible to every statement regardless of order — which is what lets
-/// a plain module host a mutually-recursive group.
-///
-/// A `NEWTYPE` announces one standalone member. A `UNION` announces one member per statically
-/// scannable variant tag, each **owned** by the union's binder: a variant is never
-/// bare-name-resolvable and never lands in `bindings.types`, so it is reached only through the
-/// binder or the qualified sigil. A `UNION` whose schema does not scan announces nothing at all —
-/// its own dispatch surfaces the real diagnostic.
-///
-/// Nested and computed declarations are untouched by construction: the scan sees only the statement
-/// split [`body_statement_refs`] draws, the same boundary `GROUP` reads its members off.
-pub(super) fn announce_type_members(
-    body: &KExpression<'_>,
-    module: ValueSymbol,
-    registries: &RunRegistries,
-) -> Result<Option<AnnouncedData>, KError> {
-    let mut announced = AnnouncedData::default();
-    for statement in body_statement_refs(body) {
-        let Some(surface) = announced_type_declaration(statement) else {
-            continue;
-        };
-        let Some(name) = statement.binder_name_from_type_part() else {
-            continue;
-        };
-        // The parser classified and interned the binder token, so the window, the members it
-        // seals and every diagnostic naming one already share one currency.
-        let binder = name;
-        if announced.declares(binder) || announced.binds(binder) {
-            return Err(KError::new(KErrorKind::ShapeError(format!(
-                "module `{}` declares type `{}` twice",
-                display_label(module.symbol(), registries),
-                display_label(binder.symbol(), registries),
-            ))));
-        }
-        match surface {
-            TypeDeclarationSurface::NewType => {
-                announced.announce(binder);
-            }
-            TypeDeclarationSurface::Union => {
-                // The variant tags are the union's announced members. A schema this scan cannot
-                // read is left entirely unannounced rather than half-announced.
-                let Some(schema) = union_schema(statement) else {
-                    continue;
-                };
-                match pair_list_names(&schema, "UNION schema", registries) {
-                    Ok(tags) => {
-                        announced.announce_binder(binder, tags);
-                    }
-                    Err(_) => continue,
-                }
-            }
-        }
-    }
-    Ok((!announced.is_empty()).then_some(announced))
-}
-
-/// The schema expression of a `UNION <name> = (<schema>)` statement — its final slot.
-fn union_schema<'a>(statement: &KExpression<'a>) -> Option<KExpression<'a>> {
-    match statement.parts.last()?.value {
-        crate::machine::model::ExpressionPart::Expression(schema) => Some(*schema),
-        _ => None,
-    }
 }
 
 /// Dispatch a module body block against an already-minted `child_scope` and bind the resulting

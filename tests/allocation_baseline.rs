@@ -82,16 +82,16 @@ fn allocations_for(source: &str, path: &str) -> u64 {
 
 /// The empty program: interpreter startup and builtin seeding, which every other shape
 /// here carries. It is the `fixed` term in `observe/alloc.txt`, and it is inert to
-/// what a program *names* — an empty program names nothing. What moves it is the *count*
-/// of registered overloads, so registering a builtin moves this bound and every absolute
-/// figure in the record with it.
+/// what a program *names* — an empty program names nothing. What moves it is the *count* of
+/// what the prelude registers — overloads and type members alike — so registering a builtin or
+/// seeding a prelude union moves this bound and every absolute figure in the record with it.
 ///
 /// Its headroom rule is unlike the marginal shapes': nothing repeats here, so one added
 /// allocation adds exactly one. The bound is set a little over the reading, tight enough
 /// that a seeding change of any real size fails it rather than being absorbed.
 #[test]
 fn the_empty_program_stays_within_its_startup_bound() {
-    const BOUND: u64 = 960;
+    const BOUND: u64 = 1_092;
     let delta = allocations_for(
         include_str!("../audit/shapes/empty.koan"),
         "audit/shapes/empty.koan",
@@ -119,7 +119,7 @@ fn the_empty_program_stays_within_its_startup_bound() {
 /// allocation, and rebaselining is meant to be a deliberate edit.
 #[test]
 fn the_wide_shape_stays_within_its_per_step_bound() {
-    const BOUND: u64 = 22_220;
+    const BOUND: u64 = 22_690;
     let delta = allocations_for(
         include_str!("../audit/shapes/wide_n100.koan"),
         "audit/shapes/wide_n100.koan",
@@ -145,7 +145,7 @@ fn the_wide_shape_stays_within_its_per_step_bound() {
 /// per-frame allocation would add.
 #[test]
 fn the_deep_shape_stays_within_its_per_frame_bound() {
-    const BOUND: u64 = 23_000;
+    const BOUND: u64 = 23_300;
     let delta = allocations_for(
         include_str!("../audit/shapes/deep_n100.koan"),
         "audit/shapes/deep_n100.koan",

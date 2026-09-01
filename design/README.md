@@ -92,8 +92,9 @@ Root concerns:
   as first-class `KObject` values, signature-driven evaluation,
   tail-call optimization, and the FN-as-extension-mechanism property.
 - [lazy-closures.md](lazy-closures.md) — severing a captured environment
-  from its birth regions: the `CLOSE OVER` surface, the transitive copy
-  through callable leaves, and the pin-not-park downgrade rule.
+  from its birth regions: the `CLOSE OVER` surface and the inferred
+  `CLOSE` short form, the transitive copy through callable leaves, and
+  the pin-not-park downgrade rule.
 - [error-handling.md](error-handling.md) — `KError` as a value
   propagating through the scheduler's dependency edges, frame
   attribution, the `TRY … WITH` arm shape, the per-arm `it` binding,

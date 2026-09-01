@@ -5,7 +5,7 @@
 mod arena;
 pub(crate) mod bindings;
 mod carrier_witness;
-mod kerror;
+pub(crate) mod kerror;
 pub(crate) mod kfunction;
 mod lexical_frame;
 /// The reach-tightness report — the over-pinning audit at the fold chokepoint, compiled only under
@@ -40,7 +40,7 @@ pub use carrier_witness::{
 };
 pub(crate) use carrier_witness::{GroupSeal, OverloadSeal, product_reaches_region, read_resting};
 pub use kerror::{KError, KErrorKind, TraceFrame};
-pub(crate) use kerror::{kerror_ktype, location_from_expr, resolve_location};
+pub(crate) use kerror::{location_from_expr, resolve_location};
 pub(crate) use kfunction::action::{
     Action, ActionKind, AwaitContinue, BlockEntry, BlockRequest, BodyCtx, BodyPlacement, BoundArgs,
     CatchFn, DepPlacement, DepRequest, DepTerminal, FinishCtx, FramePlacement, SubDispatch,
@@ -56,6 +56,7 @@ pub(crate) use kfunction::{ActionFn, Body, KFunction, WrapIndices};
 pub use lexical_frame::{LexicalFrame, assemble_body_chain};
 pub use ref_carriers::{ModuleRefFamily, ScopeRefFamily};
 pub(crate) use scope::AdoptSeam;
+pub(crate) use scope::HitTier;
 pub use scope::Scope;
 pub use scope_id::ScopeId;
 pub use statement_id::StatementId;

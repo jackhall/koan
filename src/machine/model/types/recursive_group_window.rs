@@ -239,7 +239,7 @@ impl RecursiveGroupWindow {
     }
 
     /// Index of the standalone member named `name`. Owned members — a `UNION`'s variants — never
-    /// answer here: they are reached through their binder or the qualified sigil.
+    /// answer here: they are reached through their binder or by member projection off it.
     pub fn member_index(&self, name: TypeSymbol) -> Option<usize> {
         self.members
             .borrow()
@@ -317,7 +317,7 @@ impl RecursiveGroupWindow {
 
     /// The names a reference may reach bare: the standalone members and the declaring binders.
     /// An owned member — a `UNION`'s variant — is absent, because it is reached only through its
-    /// binder or the qualified sigil.
+    /// binder or by member projection off it.
     pub fn bare_reachable_names(&self) -> Vec<TypeSymbol> {
         self.members
             .borrow()

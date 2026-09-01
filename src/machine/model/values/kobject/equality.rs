@@ -47,8 +47,8 @@ fn types_related(a: KType, b: KType, registries: &RunRegistries) -> bool {
 impl<'a> KObject<'a> {
     /// Structural equality against `other`, the engine behind `==` / `!=`.
     ///
-    /// Numbers follow IEEE (`NaN != NaN`, `-0.0 == 0.0`); nominal carriers (`Tagged`, `Wrapped`)
-    /// compare identity first, so a `Wrapped` value is never equal to its bare representation.
+    /// Numbers follow IEEE (`NaN != NaN`, `-0.0 == 0.0`); the nominal carrier (`Wrapped`)
+    /// compares identity first, so a `Wrapped` value is never equal to its bare representation.
     /// Containers gate on [`types_related`] before descending. Any comparison in which either side —
     /// at any depth — is a `KFunction` or `Module` is [`Err`], not `false`: these values are
     /// generative, and the builtin turns the error into a diagnostic. A shape short-circuit that
@@ -114,27 +114,6 @@ impl<'a> KObject<'a> {
                     }
                 }
                 Ok(true)
-            }
-
-            (
-                KObject::Tagged {
-                    value: value_a,
-                    identity: identity_a,
-                    ..
-                },
-                KObject::Tagged {
-                    value: value_b,
-                    identity: identity_b,
-                    ..
-                },
-            ) => {
-                // The whole nominal question — same member, same type arguments, erased-vs-stamped
-                // — is one handle compare: the identity handle folds the member reference and the
-                // runtime type arguments into a single interned type.
-                if identity_a != identity_b {
-                    return Ok(false);
-                }
-                value_a.payload().value_equal(value_b.payload(), registries)
             }
 
             (

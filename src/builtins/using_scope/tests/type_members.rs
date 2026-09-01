@@ -20,7 +20,7 @@ fn plain_module_type_member_types_a_dispatch_slot() {
     test_run.run("MODULE some_module = ((UNION Color = (Red :Null Blue :Null)))");
     let result = test_run.run_one(test_run.parse_one(
         "USING some_module SCOPE ((FN (SHOW c :Color) -> Str = (\"a color\")) \
-         (SHOW (Color (Blue null))))",
+         (SHOW (Color.Blue null)))",
     ));
     assert!(matches!(result, KObject::KString(s) if *s == "a color"));
 }
@@ -35,12 +35,17 @@ fn plain_module_type_member_types_a_return_slot() {
     test_run.run("MODULE some_module = ((UNION Color = (Red :Null Blue :Null)))");
     let result = test_run.run_one(test_run.parse_one(
         "USING some_module SCOPE ((FN (PAINT c :Color) -> Color = (c)) \
-         (PAINT (Color (Blue null))))",
+         (PAINT (Color.Blue null)))",
     ));
+    // A variant value is a `Wrapped` whose identity is the member's own handle, so the member name
+    // it renders under is the check that the module's `Color` typed the return.
+    let variant = result
+        .ktype()
+        .display_name(test_run.registries())
+        .to_string();
     assert!(
-        matches!(result, KObject::Tagged { tag, .. } if *tag == crate::builtins::test_support::type_token("Blue")),
-        "the module's `Color` must type both the slot and the return, got {:?}",
-        result.ktype(),
+        matches!(result, KObject::Wrapped { .. }) && variant == "Blue",
+        "the module's `Color` must type both the slot and the return, got `{variant}`",
     );
 }
 
@@ -171,7 +176,7 @@ fn block_type_alias_types_a_later_statement_of_the_same_block() {
          USING some_module SCOPE (\n  \
          LET Alias = Color\n  \
          FN (SHOW c :Alias) -> Str = (\"a color\")\n  \
-         (SHOW (Alias (Blue null)))\n\
+         (SHOW (Alias.Blue null))\n\
          )",
     );
     let mut edges = Vec::new();

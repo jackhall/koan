@@ -6,7 +6,7 @@ use crate::machine::core::{
     FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
 };
 use crate::machine::model::ast::{KExpression, ProgramExpression};
-use crate::machine::model::labels::{BinderSymbol, Symbol, TypeSymbol};
+use crate::machine::model::labels::{BinderSymbol, Symbol};
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::types::display_label;
 use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
@@ -109,23 +109,6 @@ pub enum KObject<'a> {
     /// the claim that marker carries, so the arm takes its proof as an operand.
     KExpression(ProgramExpression<'a>),
     KFunction(&'a KFunction<'a>),
-    /// Tagged-union value. The `value` field is a region borrow of the payload's
-    /// [`PayloadSubstrate`] — the single payload cell in sectioned storage plus its stored reach and
-    /// copy cost. `identity` is the value's own type handle: the
-    /// union member's `SetMember` handle when the carrier's type arguments are erased, or the
-    /// `ConstructorApply` over that member when an ascription stamped a parameterized union's
-    /// arguments in. One handle carries what the member reference and the runtime type
-    /// arguments used to carry separately, so `ktype()` is a copy and identity comparison is
-    /// one `u128`. The tag is the variant's classified name symbol — a fixed-width `Copy` key, so a
-    /// construction stores no discriminant bytes and a tag comparison is a symbol compare. Construct
-    /// via [`KObject::tagged`] — never the struct literal directly outside this
-    /// module, and never `Rc::new`: the substrate is born only through
-    /// [`FoldingBrand::alloc_substrate_folded`].
-    Tagged {
-        tag: TypeSymbol,
-        value: &'a PayloadSubstrate<'a>,
-        identity: KType,
-    },
     /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is a region
     /// borrow of the record's [`RecordSubstrate`] — the field cells in sectioned storage plus the
     /// sorted name slice that indexes them, the stored reach union and the copy cost
@@ -138,16 +121,19 @@ pub enum KObject<'a> {
     /// nominal `Struct`: a record carries no `(name, scope_id)` identity, only its structure.
     /// Each field value is a [`Held`] (an object or a first-class type).
     Record(&'a RecordSubstrate<'a>, KType),
-    /// NEWTYPE identity-wrapper carrier (and the ATTR abstract-type re-tag carrier): tags a
-    /// representation value with a type identity. (A user-`UNION` variant value is a
-    /// [`Self::Tagged`], not a `Wrapped` — ruling 13.) The `inner` field is a region borrow of the
+    /// The single nominal wrap carrier: tags a representation value with a type identity. A
+    /// NEWTYPE construction, an ATTR abstract-type re-tag, a union variant (a user `UNION`'s and
+    /// the prelude `Result`'s alike), and a lowered `KError` all ride this one arm — identity
+    /// discriminates, so no tag symbol rides the value. The `inner` field is a region borrow of the
     /// payload's [`PayloadSubstrate`] — the single payload cell plus its stored reach and copy cost.
     /// A re-tag collapses one wrapper layer ([`KObject::wrapped_peel`]); a genuine construction
     /// preserves the payload verbatim ([`KObject::wrapped_hold`]), so a newtype nesting another
     /// keeps every layer. `type_id` is the declaration-stable identity handle — for a standalone
-    /// newtype the sealed member's `SetMember` handle, for an identity-wrapper (`NEWTYPE (T AS W)`)
-    /// construction a `ConstructorApply` over it, and for an opaque-ascription abstract-type re-tag
-    /// the per-call `AbstractType` identity. Construct via [`KObject::wrapped_peel`] /
+    /// newtype the sealed member's `SetMember` handle, for a union variant the member's own
+    /// handle (or the `ConstructorApply` over it, once an ascription stamps the union's type
+    /// arguments in), for an identity-wrapper (`NEWTYPE (T AS W)`) construction a
+    /// `ConstructorApply` over it, and for an opaque-ascription abstract-type re-tag the per-call
+    /// `AbstractType` identity. Construct via [`KObject::wrapped_peel`] /
     /// [`KObject::wrapped_hold`] — never the struct literal directly outside this module, and never
     /// `Rc::new`: the substrate is born only through [`FoldingBrand::alloc_substrate_folded`].
     ///
@@ -359,28 +345,6 @@ impl<'a> KObject<'a> {
         KObject::Record(alloc_record(door, fields.iter().copied()), record_type)
     }
 
-    /// Fresh `Tagged` carrier over one payload value. Sections the payload cell through `door`, then
-    /// names the carrier `tag` / `identity`. `value` is deep-cloned into the substrate (a pointer
-    /// copy for a substrate-carrier payload, whose own stored reach then becomes the payload run's);
-    /// the caller keeps its borrow.
-    ///
-    /// The discriminant is the variant's name symbol, which points into no region: it rides the
-    /// carrier as fixed-width `Copy` data, so a construction bumps the payload cell and nothing
-    /// else, and the tag can never reach a region the carrier's own run does not name.
-    pub fn tagged(
-        door: SubstrateDoor<'a, '_>,
-        tag: TypeSymbol,
-        value: &KObject<'a>,
-        identity: KType,
-    ) -> KObject<'a> {
-        let substrate = alloc_payload(door, value.deep_clone());
-        KObject::Tagged {
-            tag,
-            value: substrate,
-            identity,
-        }
-    }
-
     /// Fresh `Wrapped` carrier for a **construction**, preserving the payload verbatim — including a
     /// nested `Wrapped`, so a newtype over another keeps every layer. Sections the payload cell
     /// through `door`. See [`Self::wrapped_peel`] for the re-tag verb.
@@ -422,9 +386,12 @@ impl<'a> KObject<'a> {
     ///
     /// Only parameterized carriers re-tag, and each re-tags to `declared` itself —
     /// the declared type IS the carrier's new identity handle. Every other shape passes through
-    /// (its `ktype()` is already its nominal identity). For a `Tagged` stamped against a
-    /// `ConstructorApply`, the constructor identity must already match, so adopting `declared`
-    /// wholesale supplies exactly the declared arguments.
+    /// (its `ktype()` is already its nominal identity).
+    ///
+    /// A union slot is the one declared shape that re-tags to something *other* than itself: a
+    /// value inhabits exactly one member, so a `Wrapped` stamped against a union of per-member
+    /// applications adopts the application over its own member. A member the slot left bare, and a
+    /// value whose member the slot never declares, pass through.
     pub fn stamp_type(self, declared: KType, types: &TypeRegistry) -> KObject<'a> {
         match (self, types.node(declared)) {
             (KObject::List(substrate, _), TypeNode::List { .. }) => {
@@ -436,13 +403,25 @@ impl<'a> KObject<'a> {
             (KObject::Record(substrate, _), TypeNode::Record { .. }) => {
                 KObject::Record(substrate, declared)
             }
-            (KObject::Tagged { tag, value, .. }, TypeNode::ConstructorApply { .. }) => {
-                // Share the payload substrate borrow verbatim — immutable after construction, so the
-                // retype never touches the payload; only the identity handle changes.
-                KObject::Tagged {
-                    tag,
-                    value,
-                    identity: declared,
+            // Share the payload substrate borrow verbatim — immutable after construction, so a
+            // retype never touches the payload; only the identity handle changes.
+            (KObject::Wrapped { inner, type_id }, TypeNode::Union { members }) => {
+                // Peel each side to its bare constructor: the value may already be stamped, and a
+                // declared member may be an application, but the member a value inhabits is
+                // decided by the constructor both sides name.
+                let peel = |handle: KType| {
+                    types.with_node(handle, |node| match node {
+                        TypeNode::ConstructorApply { constructor, .. } => *constructor,
+                        _ => handle,
+                    })
+                };
+                let inhabited = peel(type_id);
+                match members.iter().copied().find(|m| peel(*m) == inhabited) {
+                    Some(member) => KObject::Wrapped {
+                        inner,
+                        type_id: member,
+                    },
+                    None => KObject::Wrapped { inner, type_id },
                 }
             }
             (other, _) => other,
@@ -483,7 +462,7 @@ impl<'a> KObject<'a> {
     /// A `KString` is **not** one: its bytes live in a region's bump, so a rebuild has to re-bump them
     /// at its destination and a string producer takes a fold door instead. Every other variant borrows
     /// (`KFunction`, `Module`) or holds cells that transitively might
-    /// (`List`/`Dict`/`Record`/`Tagged`/`Wrapped`/`KExpression`), so it keeps the fold too.
+    /// (`List`/`Dict`/`Record`/`Wrapped`/`KExpression`), so it keeps the fold too.
     pub fn as_scalar(&self) -> Option<Scalar> {
         match *self {
             KObject::Number(n) => Some(Scalar::Number(n)),
@@ -508,7 +487,6 @@ impl<'a> KObject<'a> {
             KObject::Dict(_, dict_type) => *dict_type,
             KObject::Record(_, record_type) => *record_type,
             KObject::KFunction(f) => f.value_ktype(),
-            KObject::Tagged { identity, .. } => *identity,
             KObject::Wrapped { type_id, .. } => *type_id,
             KObject::Module(m) => m.ktype(),
         }
@@ -534,15 +512,6 @@ impl<'a> KObject<'a> {
             KObject::KFunction(f) => KObject::KFunction(f),
             // A pointer copy: the payload substrate borrow copies (`Copy`), never rebuilding the
             // payload.
-            KObject::Tagged {
-                tag,
-                value,
-                identity,
-            } => KObject::Tagged {
-                tag: *tag,
-                value,
-                identity: *identity,
-            },
             // A pointer copy: the substrate borrow copies (`Copy`), never rebuilding the fields.
             KObject::Record(substrate, record_type) => KObject::Record(substrate, *record_type),
             KObject::Wrapped { inner, type_id } => KObject::Wrapped {
@@ -574,7 +543,7 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// Whether `self` is a substrate carrier — a `Record`, `List`, `Dict`, `Tagged`, or `Wrapped`,
+    /// Whether `self` is a substrate carrier — a `Record`, `List`, `Dict`, or `Wrapped`,
     /// each of which directly borrows a region-resident substrate. Purely structural: no residence
     /// is read here. A substrate is always a genuine region borrow into its own home (Ruling 5,
     /// design/value-substrates.md), which is what makes this the shape question the adoption rules
@@ -587,7 +556,6 @@ impl<'a> KObject<'a> {
             KObject::Record(..)
             | KObject::List(..)
             | KObject::Dict(..)
-            | KObject::Tagged { .. }
             | KObject::Wrapped { .. } => true,
             KObject::Number(_)
             | KObject::KString(_)
@@ -616,7 +584,6 @@ impl<'a> KObject<'a> {
             KObject::Record(..)
             | KObject::List(..)
             | KObject::Dict(..)
-            | KObject::Tagged { .. }
             | KObject::Wrapped { .. }
             | KObject::KString(_) => true,
             KObject::Number(_)
@@ -686,7 +653,6 @@ fn object_cell_reach<'a>(
         KObject::Record(substrate, _) => pinned_cell(substrate.reach(), door),
         KObject::List(substrate, _) => pinned_cell(substrate.reach(), door),
         KObject::Dict(substrate, _) => pinned_cell(substrate.reach(), door),
-        KObject::Tagged { value, .. } => pinned_cell(value.reach(), door),
         KObject::Wrapped { inner, .. } => pinned_cell(inner.reach(), door),
     }
 }
@@ -810,16 +776,15 @@ fn alloc_dict<'a>(
 }
 
 /// Section one owned payload `value` as a [`PayloadSubstrate`]'s single cell through `door` — the
-/// construction site every `Tagged` / `Wrapped` door verb ([`KObject::tagged`],
-/// [`KObject::wrapped_hold`], the non-`Wrapped` arm of [`KObject::wrapped_peel`], and the seam copy
-/// verb's tagged/wrapped arms) funnels through.
+/// construction site every `Wrapped` door verb ([`KObject::wrapped_hold`], the non-`Wrapped` arm
+/// of [`KObject::wrapped_peel`], and the seam copy verb's wrapped arm) funnels through.
 fn alloc_payload<'a>(door: SubstrateDoor<'a, '_>, value: KObject<'a>) -> &'a PayloadSubstrate<'a> {
     let (cells, reach) = section_cells(door, &[Held::Object(value)]);
     door.alloc_substrate_folded(ContainerSubstrate::new(PayloadLayout, cells, reach))
 }
 
 /// The seam copy verb's total rebuild: reconstruct `value`'s entire reachable structure at `dest`'s
-/// brand. A substrate carrier (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) rebuilds each
+/// brand. A substrate carrier (`Record` / `List` / `Dict` / `Wrapped`) rebuilds each
 /// cell recursively and sections a fresh substrate at `dest` through its door (so every run reads the
 /// rebuilt cell's own stored facts — a run that named the source region names it no longer once the
 /// cell rebuilt owned); a scalar rebuilds owned; a `KFunction` / `Module` borrow rides verbatim as a
@@ -868,15 +833,6 @@ pub(crate) fn copy_object_into<'b>(
                 .collect();
             KObject::dict_rehomed(dest, rebuilt, *dict_type)
         }
-        KObject::Tagged {
-            tag,
-            value,
-            identity,
-        } => KObject::Tagged {
-            tag: *tag,
-            value: alloc_payload(dest, copy_object_into(value.payload(), dest)),
-            identity: *identity,
-        },
         KObject::Wrapped { inner, type_id } => KObject::Wrapped {
             inner: alloc_payload(dest, copy_object_into(inner.payload(), dest)),
             type_id: *type_id,
@@ -888,7 +844,7 @@ pub(crate) fn copy_object_into<'b>(
 ///
 /// A **`Copy`** verb claims the source region's release, so a value that would otherwise leave
 /// region storage behind is totally rebuilt at the door ([`copy_object_into`]): a substrate carrier
-/// (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`), whose substrate must land in `dest`, and a
+/// (`Record` / `List` / `Dict` / `Wrapped`), whose substrate must land in `dest`, and a
 /// bare `KString`, whose bytes must be re-bumped there. [`KObject::needs_destination_door`] is that
 /// question, and it is the whole gate — a string left as a pointer copy would keep borrowing bump
 /// bytes the released region owns, which no audit can catch.
@@ -964,7 +920,6 @@ pub(crate) fn retains_home(value: &KObject<'_>, home: &KoanRegion) -> bool {
         KObject::Record(substrate, _) => substrate.reach().pins_region(home),
         KObject::List(substrate, _) => substrate.reach().pins_region(home),
         KObject::Dict(substrate, _) => substrate.reach().pins_region(home),
-        KObject::Tagged { value, .. } => value.reach().pins_region(home),
         KObject::Wrapped { inner, .. } => inner.reach().pins_region(home),
     }
 }
@@ -1071,11 +1026,6 @@ impl<'a> KObject<'a> {
             }
             KObject::KExpression(e) => e.write_summary(f, &registries.labels),
             KObject::KFunction(function) => function.value_ktype().write_name(f, registries),
-            KObject::Tagged { tag, value, .. } => {
-                write!(f, "{}(", display_label(tag.symbol(), registries))?;
-                value.payload().write_summary(f, registries)?;
-                f.write_str(")")
-            }
             KObject::Record(substrate, _) => {
                 // The substrate lays cells out in symbol order, which carries no meaning to a
                 // reader; rendering re-sorts by field text so a printed record reads in

@@ -446,8 +446,8 @@ impl<'a> Scope<'a> {
 
     /// Adopt a delivered value's **projection** into this scope for **binding** — the door whose
     /// product is the dormant [`SealedValue`] a binding entry stores. `project` selects what to bind
-    /// (identity for a whole-value bind, a `Tagged`/`Wrapped` payload for a MATCH/TRY `it`, the
-    /// Ok/Err payload for TRY), read under the envelope's own pin.
+    /// (identity for a whole-value bind, a `Wrapped` payload for a MATCH/TRY `it`), read under the
+    /// envelope's own pin.
     ///
     /// The seam is [`AdoptSeam::Binding`], the only one that admits the escape-seam cost chooser:
     /// the adopting scope's region union owns the minted reach for the region's life, so pinning a
@@ -868,7 +868,7 @@ enum AdoptDisposition {
 ///
 /// The shape rules behind that table:
 ///
-/// - A **substrate carrier** (`Record` / `List` / `Dict` / `Tagged` / `Wrapped`) is region-resident,
+/// - A **substrate carrier** (`Record` / `List` / `Dict` / `Wrapped`) is region-resident,
 ///   so a copying seam must rebuild it at the destination door rather than pointer-copy it: a
 ///   `deep_clone` would leave the substrate in the retiring producer, uncovered once the copy's
 ///   reach releases it. A bare **`KString`** joins it ([`KObject::needs_destination_door`]): a
@@ -878,7 +878,7 @@ enum AdoptDisposition {
 /// - Only a top-level **record**, and only at the bind seam, is cost-driven ([`copy_or_pin`]). Every
 ///   other substrate carrier copies unconditionally there: pinning a bound value retains its
 ///   producer region, which a tail loop's O(1) region turnover cannot afford (`it` in a
-///   `MATCH`-mediated tail hop binds a `Tagged` payload every iteration). Records reach the pin arm
+///   `MATCH`-mediated tail hop binds a `Wrapped` payload every iteration). Records reach the pin arm
 ///   only outside tail position.
 /// - A record's crossing is priced against the region the delivered value *lives in* — the host its
 ///   own reach description names, read off the carrier under the envelope's pins — not against the

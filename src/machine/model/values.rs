@@ -2,7 +2,7 @@
 //! the [`Module`] carrier, and the shared `<name>: <value>` parser [`NamedPairs`] used by
 //! struct construction and first-class calls.
 //!
-//! Construction dispatch for `Struct` and `Tagged` lives in
+//! Construction dispatch for `Struct` and `Wrapped` lives in
 //! [`crate::machine::execute::decide::constructors`].
 
 mod carried;

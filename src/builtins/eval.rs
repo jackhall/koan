@@ -160,11 +160,11 @@ mod tests {
         // through its `outer` pointer.
         let bytes = run_program(
             "UNION Bit = (One :Null Zero :Null)\n\
-             FN (HOP b :Any) -> Any = (MATCH (b) -> :Str WITH (\
-                 One -> $(#(HOP (Bit (Zero null))))\
+             FN (HOP b :Any) -> Any = (MATCH (b) OVER Bit -> :Str WITH (\
+                 One -> $(#(HOP (Bit.Zero null)))\
                  Zero -> (PRINT \"done\")\
              ))\n\
-             HOP (Bit (One null))",
+             HOP (Bit.One null)",
         );
         assert_eq!(bytes, b"done\n");
     }

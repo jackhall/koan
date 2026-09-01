@@ -15,7 +15,34 @@ use crate::machine::model::KObject;
 use crate::machine::model::{KType, KeywordSymbol, TypeSymbol, ValueSymbol};
 use crate::machine::{DeliveredCarried, DeliveredOperatorGroup};
 
+/// Which tier of the chain a resolution landed in — the one distinction inferred capture turns on.
+///
+/// A severed block runs over a region whose `outer` link reaches only the eternal chain, so the
+/// question an inferred capture asks of every free name is not *where* it resolves but *whether its
+/// home will still be there*. The two answers are exactly the two halves
+/// [`innermost_eternal_home`](Scope::innermost_eternal_home) splits the chain at.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HitTier {
+    /// A scope whose region a call frame owns. It dies while an escaped closure's value lives, so
+    /// the binding has to be copied in as a capture.
+    PerCall,
+    /// A scope homed at the eternal tier — builtins, the run root, top-level definitions. It stays
+    /// reachable through the severed block's own outer link, so capturing it buys nothing.
+    Eternal,
+}
+
 impl<'a> Scope<'a> {
+    /// Which half of the chain this scope sits in. The predicate is
+    /// [`parent_frame_pin`](Self::parent_frame_pin)'s eternal-tier policy — the same one
+    /// `close_over`'s implicit close walks the per-call portion with — so the tier a resolution
+    /// reports and the tier implicit close copies agree by construction.
+    pub(crate) fn tier(&self) -> HitTier {
+        match self.parent_frame_pin() {
+            Some(_) => HitTier::PerCall,
+            None => HitTier::Eternal,
+        }
+    }
+
     /// True iff `name` is a builtin type. The builtins live once in the immutable
     /// run-global root, so a user type declaration colliding with one is a `Rebind` at
     /// any depth — the consult hits the root directly rather than each layer of the
@@ -128,11 +155,23 @@ impl<'a> Scope<'a> {
         name: ValueSymbol,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<DeliveredCarried>> {
+        self.resolve_value_tiered(name, chain).map(|(_, hit)| hit)
+    }
+
+    /// [`Self::resolve_value_delivered`] with the tier of the scope the walk stopped at, for the
+    /// inferred-capture pass: a per-call hit becomes a capture, an eternal one is left to resolve
+    /// through the severed block's outer link. The untiered ladder is this one with the tier
+    /// dropped, so the two can never disagree about which binding won.
+    pub(crate) fn resolve_value_tiered(
+        &self,
+        name: ValueSymbol,
+        chain: Option<&LexicalFrame>,
+    ) -> Option<(HitTier, NameLookup<DeliveredCarried>)> {
         self.walk_chain(|scope| {
             scope
                 .bindings()
                 .lookup_value(name, scope.binding_cutoff(chain))
-                .map(|hit| hit.map(|sealed| scope.lift_resident(sealed)))
+                .map(|hit| (scope.tier(), hit.map(|sealed| scope.lift_resident(sealed))))
         })
     }
 
@@ -191,6 +230,18 @@ impl<'a> Scope<'a> {
         name: TypeSymbol,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<KType>> {
+        self.resolve_type_tiered(name, chain).map(|(_, hit)| hit)
+    }
+
+    /// [`Self::resolve_type_with_chain`] with the tier of the scope the walk stopped at — the type
+    /// channel's twin of [`Self::resolve_value_tiered`], and the ladder that one is defined over.
+    ///
+    /// A builtin type answers `Eternal` without a walk: the run-global root is where it lives.
+    pub(crate) fn resolve_type_tiered(
+        &self,
+        name: TypeSymbol,
+        chain: Option<&LexicalFrame>,
+    ) -> Option<(HitTier, NameLookup<KType>)> {
         // Builtin-first: a builtin type is unshadowable and authoritative, so the immutable
         // run-global root answers in one hop; a non-builtin name finds nothing there and falls
         // through to the innermost-wins walk. The gate is the `idx == 0`
@@ -198,12 +249,15 @@ impl<'a> Scope<'a> {
         // resolves by the chain walk below.
         let root = self.root_scope().bindings();
         if root.has_builtin_type(name) {
-            return root.lookup_type(name, None);
+            return root
+                .lookup_type(name, None)
+                .map(|hit| (HitTier::Eternal, hit));
         }
         self.walk_chain(|scope| {
             scope
                 .bindings()
                 .lookup_type(name, scope.binding_cutoff(chain))
+                .map(|hit| (scope.tier(), hit))
         })
     }
 

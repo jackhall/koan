@@ -5,8 +5,10 @@ use crate::machine::FinishCtx;
 use crate::machine::core::bindings::WriteOp;
 use crate::machine::model::FieldListContext;
 use crate::machine::model::KType;
+use crate::machine::model::TypeResolution;
 use crate::machine::model::{DeclWindow, RecursiveGroupWindow};
 use crate::machine::model::{FieldNameKind, pair_list_names, seal_writes};
+use crate::machine::model::{Symbol, TypeNode};
 use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
 use crate::machine::{StepCarried, seal_type_identity};
 
@@ -156,6 +158,155 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         error_frame,
         finalize_union,
     )
+}
+
+/// The `union` member a reference names, by the rule every variant-reference surface shares —
+/// ATTR projection (`Maybe.Some`) and a `MATCH … OVER` arm head. A union is a composite whose
+/// members are its only variant door: a member never binds in the enclosing scope, so the name is
+/// read against the member list, not walked up the chain.
+///
+/// Two member shapes answer, in order. A `SetMember` — what a user `UNION` mints per tag — matches
+/// when its declared name carries `name`'s bits; the reference arrives from a use site with no
+/// class attached, so the probe is by bare symbol bits (the recovery door). A **structural** member
+/// — what an inline `:(Number | Str)` holds — declares no name at all, so it answers only when
+/// `token` resolves in the reading scope to a type whose handle *is* that member. A union mixing
+/// the two answers a name from whichever shape holds it.
+///
+/// [`None`] is the miss the caller reports with [`union_member_names`]; it also covers `union`
+/// naming no union at all.
+pub(crate) fn union_member<'a>(
+    scope: &Scope<'a>,
+    union: KType,
+    name: Symbol,
+    token: Option<TypeSymbol>,
+    registries: &RunRegistries,
+) -> Option<KType> {
+    if let Some(member) = registries.types.union_member_named(union, name) {
+        return Some(member);
+    }
+    // The structural fallback resolves first and compares handles: identity is the digest, so a
+    // member is named by any spelling that resolves to it.
+    let token = token?;
+    let TypeResolution::Done(resolved) = scope.resolve_type_identifier(token, None, registries)
+    else {
+        return None;
+    };
+    match registries.types.node(union) {
+        TypeNode::Union { members } => members.into_iter().find(|m| *m == resolved),
+        _ => None,
+    }
+}
+
+/// Apply a union head to named type arguments — `:(Result {Ok = Number, Error = MyError})`, and
+/// the same spelling over any user union.
+///
+/// Each argument name must name a member of `union`. The result is the union of the members, with
+/// every **named** member replaced by the [`ConstructorApply`](TypeNode::ConstructorApply) over it
+/// carrying that one argument under the member's own name; a member no argument names — and a
+/// structural member, which declares no name at all — rides bare. A value admits the applied slot
+/// through its inhabited member alone, which is the per-member shape a `Wrapped` already carries
+/// for `NEWTYPE (T AS W)`.
+pub(crate) fn apply_union_type_args(
+    union: KType,
+    supplied: &[(Symbol, KType)],
+    registries: &RunRegistries,
+) -> Result<KType, KError> {
+    let types = &registries.types;
+    let TypeNode::Union { members } = types.node(union) else {
+        return Err(KError::new(KErrorKind::ShapeError(format!(
+            "`{}` is not a union, so it takes no named type arguments",
+            union.display_name(registries),
+        ))));
+    };
+    // A supplied name is a record-literal key carrying bare symbol bits; the member list it probes
+    // is keyed by the `TypeSymbol` each member's declaration minted, so a hit witnesses the class.
+    let mut unknown: Vec<String> = supplied
+        .iter()
+        .filter(|(name, _)| types.union_member_named(union, *name).is_none())
+        .map(|(name, _)| render_label(*name, registries))
+        .collect();
+    if !unknown.is_empty() {
+        unknown.sort_unstable();
+        return Err(KError::new(KErrorKind::ShapeError(format!(
+            "type argument{} {} name{} no member of `{}` (members: {})",
+            if unknown.len() == 1 { "" } else { "s" },
+            unknown
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            if unknown.len() == 1 { "s" } else { "" },
+            union.display_name(registries),
+            union_member_names(union, registries),
+        ))));
+    }
+    let applied: Vec<KType> = members
+        .iter()
+        .map(|member| {
+            let declared = types.with_node(*member, |node| match node {
+                TypeNode::SetMember { name, .. } => Some(*name),
+                _ => None,
+            });
+            let Some(declared) = declared else {
+                return *member;
+            };
+            match supplied.iter().find(|(name, _)| *name == declared.symbol()) {
+                Some((_, argument)) => types.constructor_apply(
+                    *member,
+                    crate::machine::model::Record::from_pairs([(
+                        BinderSymbol::Type(declared),
+                        *argument,
+                    )]),
+                ),
+                None => *member,
+            }
+        })
+        .collect();
+    Ok(types.union_of(&applied))
+}
+
+/// One union member's surface label: a `SetMember` by the name its declaration minted, a
+/// structural member by its type's own display name. A cold diagnostic path — every caller is
+/// already building a message — so it renders into an owned `String`.
+pub(crate) fn member_label(member: KType, registries: &RunRegistries) -> String {
+    registries.types.with_node(member, |node| match node {
+        TypeNode::SetMember { name, .. } => render_label(name.symbol(), registries),
+        _ => member.display_name(registries).to_string(),
+    })
+}
+
+/// Every member of `union` in declaration order, comma-joined for a miss diagnostic. Empty when
+/// `union` names no union at all — the same miss [`union_member`] reports.
+pub(crate) fn union_member_names(union: KType, registries: &RunRegistries) -> String {
+    let TypeNode::Union { members } = registries.types.node(union) else {
+        return String::new();
+    };
+    member_labels(&members, registries)
+}
+
+/// [`union_member_names`] over an explicit member slate — what a walk reads when its member set is
+/// assembled rather than read off one union node (`TRY`'s `Ok` plus the error kinds).
+pub(crate) fn member_labels(members: &[KType], registries: &RunRegistries) -> String {
+    members
+        .iter()
+        .map(|m| member_label(*m, registries))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The member of `members` declared under `name` — the same bare-symbol-bits probe
+/// [`TypeRegistry::union_member_named`](crate::machine::model::TypeRegistry::union_member_named)
+/// runs over a union node, against a slate assembled from more than one.
+pub(crate) fn member_named(
+    members: &[KType],
+    name: Symbol,
+    registries: &RunRegistries,
+) -> Option<KType> {
+    members.iter().copied().find(|member| {
+        registries.types.with_node(*member, |node| {
+            matches!(node, TypeNode::SetMember { name: declared, .. } if declared.symbol() == name)
+        })
+    })
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {

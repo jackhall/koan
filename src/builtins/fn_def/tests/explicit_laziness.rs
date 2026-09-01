@@ -92,8 +92,8 @@ fn a_bare_group_argument_evaluates_exactly_once_before_dispatch() {
 fn an_eval_spliced_quote_keeps_its_builtin_lazy_branches() {
     let bytes = run_program(
         "UNION Maybe = (Some :Number None :Null)\n\
-         LET m = (Maybe (Some 1))\n\
-         LET branch = #(MATCH (m) -> :Str WITH \
+         LET m = (Maybe.Some 1)\n\
+         LET branch = #(MATCH (m) OVER Maybe -> :Str WITH \
              (Some -> (PRINT \"yes\") None -> (PRINT \"NO_SHOULD_NOT_APPEAR\")))\n\
          $(branch)",
     );
@@ -109,9 +109,9 @@ fn an_eval_spliced_quote_keeps_its_builtin_lazy_branches() {
 fn a_name_bound_to_a_quote_fills_a_builtin_lazy_slot() {
     let bytes = run_program(
         "UNION Maybe = (Some :Number None :Null)\n\
-         LET m = (Maybe (Some 1))\n\
+         LET m = (Maybe.Some 1)\n\
          LET branches = #(Some -> (PRINT \"yes\") None -> (PRINT \"NO_SHOULD_NOT_APPEAR\"))\n\
-         MATCH (m) -> :Str WITH branches",
+         MATCH (m) OVER Maybe -> :Str WITH branches",
     );
     assert_eq!(bytes, b"yes\n");
 }

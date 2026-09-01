@@ -146,25 +146,20 @@ impl<'run> Host<'run> {
 }
 
 /// What a statement installs, read back off the working node the parsed statement crossed over as.
-/// The node's *own* plan key, never anything its slots contain — the namespace a block introduces is
-/// legible from its statement spines alone, which is what lets the block fan-out rule on duplicate
-/// declarations before any statement runs. A scheduler-synthesized node carries no plan and
-/// installs nothing: a binder is always a parsed statement.
+/// A scheduler-synthesized node carries no plan and installs nothing: a binder is always a parsed
+/// statement.
 ///
-/// Every key the plan names is a borrow into the declaring node's own region, so reading a block's
-/// whole namespace allocates nothing and the submission path stamps those runs into the claim
-/// store directly. The claim store re-homes a key into its own region only on the first claim of a
-/// shape.
+/// The rule itself is [`KExpression::statement_binder_plan`]; this peels the working shell — one
+/// AST node per part — down to the statement the model reads.
 pub(in crate::machine::execute) fn statement_binder_plan<'a>(
     expr: &WorkingExpression<'a>,
 ) -> Option<StoredBinderKey<'a>> {
-    // A redundant single-`Expression` paren wrapper (`((…))`) is the same statement, so it reads
-    // its child's plan straight through. A binder is always keyword-led, so this never co-occurs
-    // with the plan branch below.
+    // A redundant single-`Expression` paren wrapper (`((…))`) is the same statement. A binder is
+    // always keyword-led, so this never co-occurs with the plan branch below.
     if let [only] = expr.parts
         && let WorkingPart::Ast(ExpressionPart::Expression(child)) = only.value
     {
-        return child.binder_plan();
+        return child.statement_binder_plan();
     }
     expr.binder_plan()
 }

@@ -295,45 +295,15 @@ impl KType {
                 KKind::ProperType | KKind::AnyType => self == obj.ktype(),
                 _ => false,
             },
-            // A stamped `type_args` carrier (from ascription) takes precedence and is
-            // checked structurally per parameter name; an erased carrier falls back to
-            // checking the inhabited tag's payload against the same-named argument — a tag name
-            // and its carrier's parameter name agree by construction.
+            // A stamped carrier (from ascription) takes precedence and is checked structurally
+            // per parameter name; an erased carrier — one whose identity is still the bare member
+            // handle — falls back to checking its payload against the argument its own member name
+            // keys, which the applied member and the value's member agree on by construction.
             TypeNode::ConstructorApply {
                 constructor,
                 arguments,
             } => match obj {
-                KObject::Tagged { tag, value, .. } => {
-                    // The value's own identity is either the applied form (stamped `type_args`)
-                    // or the bare member handle (erased).
-                    let identity = obj.ktype();
-                    types.with_node(identity, |identity_node| match identity_node {
-                        TypeNode::ConstructorApply {
-                            constructor: value_constructor,
-                            arguments: value_arguments,
-                        } => constructor_apply_admits(
-                            *constructor,
-                            arguments,
-                            *value_constructor,
-                            value_arguments,
-                        ),
-                        _ => {
-                            if identity != *constructor {
-                                return false;
-                            }
-                            match arguments.get(tag.symbol()) {
-                                Some(argument) => {
-                                    argument.matches_value(value.payload(), registries)
-                                }
-                                None => true,
-                            }
-                        }
-                    })
-                }
-                // An identity-wrapper value (`NEWTYPE (Type AS Wrapper)`): its `type_id` is
-                // itself a `ConstructorApply`. Match by the same constructor + per-argument rule
-                // the stamped-`type_args` `Tagged` path uses.
-                KObject::Wrapped { type_id, .. } => {
+                KObject::Wrapped { type_id, inner } => {
                     types.with_node(*type_id, |value_node| match value_node {
                         TypeNode::ConstructorApply {
                             constructor: value_constructor,
@@ -344,7 +314,21 @@ impl KType {
                             *value_constructor,
                             value_arguments,
                         ),
-                        _ => false,
+                        _ => {
+                            if *type_id != *constructor {
+                                return false;
+                            }
+                            let member_name = types.with_node(*constructor, |node| match node {
+                                TypeNode::SetMember { name, .. } => Some(*name),
+                                _ => None,
+                            });
+                            match member_name.and_then(|name| arguments.get(name.symbol())) {
+                                Some(argument) => {
+                                    argument.matches_value(inner.payload(), registries)
+                                }
+                                None => true,
+                            }
+                        }
                     })
                 }
                 _ => false,

@@ -187,7 +187,7 @@ fn union_install_lets_sibling_resolve() {
         &program,
         &region,
         "UNION Color = (Red :Null Green :Null)\n\
-         LET picked = (Color (Red null))",
+         LET picked = (Color.Red null)",
     );
     assert!(
         test_run.scope.lookup("picked").is_some(),

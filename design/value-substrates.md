@@ -66,18 +66,18 @@ Every composite [`KObject`](../src/machine/model/values/kobject.rs) payload is a
   door that also mints the memoized field-*type* record takes classified
   `&[(BinderSymbol, Held<'a>)]` pairs and drops to `key.symbol()` for the cells, while
   `record_rehomed`, which relocates cells already laid out, stays bare-`Symbol` throughout.
-- `Tagged { value: &'a PayloadSubstrate<'a>, .. }` — the single-cell payload
-  substrate in the arena.
-- `Wrapped { inner: &'a PayloadSubstrate<'a>, .. }` — the same one-cell payload
-  substrate; the peel (re-tag collapses one layer) and hold (construction
-  preserves layers) constructors are door verbs, not a payload wrapper type.
+- `Wrapped { inner: &'a PayloadSubstrate<'a>, .. }` — the single-cell payload
+  substrate in the arena, borrowed by the one nominal wrap carrier (newtypes,
+  union variants, `Result`, lowered errors); the peel (re-tag collapses one
+  layer) and hold (construction preserves layers) constructors are door verbs,
+  not a payload wrapper type.
 - `KFunction(&'a KFunction<'a>)` and `Module(&'a Module<'a>)` — bare borrows
   into their defining regions.
 - Scalars (`Number`, `Bool`, `Null`) are owned leaves. `KString` rides a
   bump-hosted `&'a str` ([§ String residence](#string-residence)), as does a
-  `KKey::String` dict key. A `Tagged` discriminant is not a string at all: it is the
-  variant's classified name symbol, fixed-width `Copy` data pointing into no region
-  ([label-interning.md](label-interning.md)).
+  `KKey::String` dict key. A wrap carrier's discriminant is not a string at all: it is
+  the interned [`KType`](typing/ktype/README.md) identity handle, fixed-width `Copy` data
+  pointing into no region ([label-interning.md](label-interning.md)).
   [`KExpression`](../src/machine/model/ast.rs) is a `Copy` handle whose parts run
   is a bumped slice of `Copy` parts
   ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)).
@@ -111,7 +111,7 @@ above are aliases of that one wrapper, differing only in `C`, and every `C` is
   ([§ Untyped arenas](#untyped-arenas-the-drop-free-end-state)). Iteration order
   stays arbitrary.
 - **`ListLayout` / `PayloadLayout`** — markers, for the two shapes whose index is
-  implicit: a list's position *is* its cell index, and a `Tagged` / `Wrapped` payload has
+  implicit: a list's position *is* its cell index, and a `Wrapped` payload has
   exactly one cell.
 
 Each later conversion instantiates the same wrapper over its own index rather than
@@ -272,9 +272,9 @@ that named no region while still pointing into a retiring one would dangle with
 no fold able to rescue it, and nothing downstream able to catch it. So every
 substrate door re-homes a top-node string cell and every string dict key before
 the verdict is read, and the copy verb re-bumps at the destination —
-which is what keeps the relocation's release-exact answer exact. A tagged value's
-discriminant needs none of this: a symbol names no region, so a `Tagged` carrier's
-only region-resident part is its payload substrate. Pinning paths
+which is what keeps the relocation's release-exact answer exact. A wrap carrier's
+discriminant needs none of this: an interned type handle names no region, so a
+`Wrapped` carrier's only region-resident part is its payload substrate. Pinning paths
 (a retaining adoption, a projection's `deep_clone`) share the pointer, covered
 by the reach that already names the producer region.
 

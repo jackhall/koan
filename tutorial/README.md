@@ -42,7 +42,7 @@ Read them in order the first time through — each builds on the last.
    scope, the three token classes, and how matching by shape works.
 4. [Functions](04-functions.md) — defining and calling, return types,
    overloading, anonymous functions, named arguments, closures, and severing a
-   closure's captures with `CLOSE OVER`.
+   closure's captures with `CLOSE OVER` or the inferred `CLOSE`.
 5. [Tagged unions](05-tagged-unions.md) — sum types: values that are one of
    several tagged alternatives.
 6. [Pattern matching](06-pattern-matching.md) — `MATCH`, unwrapping a union, and

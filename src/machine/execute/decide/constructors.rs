@@ -1,6 +1,6 @@
-//! NewType + tagged-union construction dispatch. Args resolve through one sub-Dispatch per value
-//! cell; once every cell is bound, [`finish_witnessed`] type-checks them and emits the
-//! `KObject::Wrapped` / `KObject::Tagged` directly — no bucket lookup, no re-dispatch.
+//! NewType construction dispatch. Args resolve through one sub-Dispatch per value cell; once
+//! every cell is bound, [`finish_witnessed`] type-checks them and emits the `KObject::Wrapped`
+//! directly — no bucket lookup, no re-dispatch.
 
 use std::rc::Rc;
 
@@ -13,7 +13,7 @@ use crate::machine::core::{
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
-use crate::machine::model::{KType, NodeSchema, TypeMemberMap, TypeNode, render_label};
+use crate::machine::model::{KType, NodeSchema, TypeNode};
 use crate::machine::{
     CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, RegionTypeFamily,
 };
@@ -26,8 +26,8 @@ use super::super::StepCarried;
 use super::super::outcome::DepTerminal;
 use super::ctx::DecideCtx;
 use super::{Await, DepRequest, Outcome};
+use crate::machine::model::BinderSymbol;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{BinderSymbol, TypeSymbol};
 use crate::scheduler::Deps;
 
 /// Which construction shape the resolved value subs feed. The carried `KType` is the sealed
@@ -45,14 +45,6 @@ pub(in crate::machine::execute) enum CtorKind<'step> {
     RecordNewType {
         identity: KType,
         field_names: &'step [BinderSymbol],
-    },
-    /// Tagged-union construction against a sealed `member`. `expected` is the tag's declared
-    /// payload type, resolved from the variant schema at the construction site — so an unknown tag
-    /// errors before the value expression evaluates, and the schema never crosses the park.
-    Tagged {
-        expected: KType,
-        member: KType,
-        tag: TypeSymbol,
     },
     /// Identity-wrapper construction over a `NEWTYPE (Type AS Wrapper)`-declared constructor
     /// family (empty-schema `TypeConstructor` member). The value's own full type becomes the sole
@@ -76,38 +68,6 @@ reattachable!(RecordFieldsFamily => (RegionHandle<'r, KoanStorageProfile>, &'r [
 /// Layout-invariant in `'r`: [`KObject`] is one type up to its lifetime.
 struct KObjectFamily;
 reattachable!(KObjectFamily => KObject<'r>);
-
-/// Validate a tagged-union call site's args shape: exactly two parts, the first a `Type`-token tag
-/// (tags are capitalized variant types). The value part rides through unchanged — the tag/value
-/// type checks and the witnessed build wait for its resolved value in [`finish_witnessed`].
-///
-/// The tag classifies **and interns** here: a construction site is a syntactic site, so interner
-/// growth stays source-bounded, and a tag that names no variant is rendered back through the
-/// interner at the miss. Its source text rides back beside the symbol so an error site names what
-/// the expression spelled without a lookup.
-pub(in crate::machine::execute) fn prepare_args<'step>(
-    args_parts: &[Spanned<ExpressionPart<'step>>],
-    registries: &RunRegistries,
-) -> Result<(TypeSymbol, ExpressionPart<'step>), KError> {
-    let [tag_part, value_part] = args_parts else {
-        return Err(KError::new(KErrorKind::ArityMismatch {
-            expected: 2,
-            got: args_parts.len(),
-        }));
-    };
-    let shape_error = || {
-        KError::new(KErrorKind::ShapeError(format!(
-            "tagged-union construction = first arg must be a capitalized variant tag, got {}",
-            tag_part.value.summary(&registries.labels)
-        )))
-    };
-    let ExpressionPart::Type(t) = tag_part.value else {
-        return Err(shape_error());
-    };
-    // The parser classified and interned the tag token, so it is already the currency the member
-    // schema keys by.
-    Ok((t, value_part.value))
-}
 
 #[cfg(test)]
 mod tests;
@@ -321,73 +281,6 @@ pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
     )
 }
 
-/// Direct-construct a tagged-union value from the variant schema of its sealed member. Shared by
-/// named UNIONs (`Tagged` kind) and the builtin `Result` constructor (`TypeConstructor` kind) —
-/// both name a sealed member by its handle.
-pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
-    brand: RegionBrand<'step>,
-    member: KType,
-    schema: &TypeMemberMap,
-    args_parts: &[Spanned<ExpressionPart<'step>>],
-    registries: &RunRegistries,
-    scratch: BumpAllocator<'step>,
-) -> Outcome<'step> {
-    let (tag, value_part) = match prepare_args(args_parts, registries) {
-        Ok(v) => v,
-        Err(e) => return Outcome::Done(Err(e)),
-    };
-    let expected = match expected_payload(schema, tag, registries) {
-        Ok(t) => t,
-        Err(e) => return Outcome::Done(Err(e)),
-    };
-    construct_tagged(brand, member, expected, tag, value_part, scratch)
-}
-
-/// The tag's declared payload type, or the unknown-tag error naming every variant the schema
-/// declares. Both sides are classified symbols, so the lookup is a bits compare; the probed tag
-/// interned at the construction site and the known keys at their declarations, so the miss renders
-/// every name it prints.
-pub(in crate::machine::execute) fn expected_payload(
-    schema: &TypeMemberMap,
-    tag: TypeSymbol,
-    registries: &RunRegistries,
-) -> Result<KType, KError> {
-    schema.get(&tag).copied().ok_or_else(|| {
-        let known: Vec<String> = schema
-            .keys()
-            .map(|key| render_label(key.symbol(), registries))
-            .collect();
-        KError::new(KErrorKind::ShapeError(format!(
-            "tag `{}` not in union (known: {})",
-            render_label(tag.symbol(), registries),
-            known.join(", ")
-        )))
-    })
-}
-
-/// Construct a tagged value from an already-split `(tag, value)` pair whose payload type the caller
-/// resolved. The finish type-checks the value against `expected` and builds `KObject::Tagged { tag,
-/// value, identity: member }`.
-pub(in crate::machine::execute) fn construct_tagged<'step>(
-    brand: RegionBrand<'step>,
-    member: KType,
-    expected: KType,
-    tag: TypeSymbol,
-    value_part: ExpressionPart<'step>,
-    scratch: BumpAllocator<'step>,
-) -> Outcome<'step> {
-    launch(
-        brand,
-        &[ValueCell::Part(value_part)],
-        CtorKind::Tagged {
-            expected,
-            member,
-            tag,
-        },
-        scratch,
-    )
-}
-
 /// Decide a constructor park. A freshly-minted sub is never terminal in the same step (submission
 /// is enqueue-then-drain), so there is no inline-ready case — the slot always parks as an
 /// [`Outcome::Park`]. Dep errors propagate frameless.
@@ -567,51 +460,6 @@ fn finish_witnessed<'step>(
             // borrows into the very region it was built in, and the relocated envelope's pins
             // named it.
             Ok(product)
-        }
-        CtorKind::Tagged {
-            expected,
-            member,
-            tag,
-        } => {
-            debug_assert_eq!(terminals.len(), 1);
-            // The schema check reads the payload at the term's resident brand — a pin-free read;
-            // only the verdict (and, on mismatch, an owned rendered name) escapes the guard's
-            // borrow.
-            {
-                let opened = terminals[0].cell.open_at();
-                if !expected.matches_value(opened.value().object(), view.registries()) {
-                    return Err(KError::new(KErrorKind::TypeMismatch {
-                        arg: "value".to_string(),
-                        expected: expected.name(view.registries()).to_string(),
-                        got: opened
-                            .value()
-                            .object()
-                            .ktype()
-                            .name(view.registries())
-                            .to_string(),
-                    }));
-                }
-            }
-            let home = build_type_operand(view.dest_frame(), member);
-            // The tag keeps the value verbatim — see the `NewType` arm's holder.
-            let delivered = view.current_scope().lift_spliced(&terminals[0].cell);
-            let holder = delivered.coverage().clone();
-            Ok(
-                delivered.transfer_into::<RegionTypeFamily, CarriedFamily, _>(
-                    home,
-                    // The tag holds the value's borrow verbatim, so nothing is released.
-                    |_product, _region| true,
-                    move |value, (_region, identity_ty), placement| {
-                        let region = FoldingBrand::in_fold_closure(placement);
-                        Carried::Object(region.alloc_object_folded(KObject::tagged(
-                            region.with_holder(&holder),
-                            tag,
-                            value.object(),
-                            identity_ty,
-                        )))
-                    },
-                ),
-            )
         }
         CtorKind::ApplyConstructor { constructor } => {
             debug_assert_eq!(terminals.len(), 1);

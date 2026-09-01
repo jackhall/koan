@@ -44,15 +44,15 @@ Per variant:
 - **Records** gate on record subtyping (either direction), then compare
   order-blind: the same field-name set, each field's value equal. Field
   declaration order does not matter.
-- **Tagged** values compare nominal identity first by their `identity` handle (the
-  member's `(SCC digest, index)`, or a `ConstructorApply` over it when stamped — a
-  bare member and a stamped one are a comparability gate: an erased identity is
-  comparable, two stamped ones must name the same type parameters and be related per
-  name); then the payloads walk.
-- **Wrapped** (newtype) values compare their nominal `type_id` via digest-based
-  `KType` equality, then the inner payloads. A `Wrapped` value is never equal to
-  its bare representation, and two distinct newtypes over the same representation
-  are unequal — nominal identity, not shape, decides.
+- **Wrapped** values — the one nominal wrap carrier, shared by newtypes, union
+  variants, `Result` and lowered errors — compare their nominal `type_id` via
+  digest-based `KType` equality, then the inner payloads. The whole nominal question
+  is that one handle compare: `type_id` is the member's `(SCC digest, index)`, or the
+  `ConstructorApply` over it once an ascription stamped the type arguments in, so an
+  erased carrier and a stamped one are already distinguished without a second field.
+  A `Wrapped` value is never equal to its bare representation, and two distinct
+  newtypes (or two variants) over the same representation are unequal — nominal
+  identity, not shape, decides.
 - **Expressions** compare by [structural syntax equality](#expression-equality).
 - Every remaining cross-variant pair is unequal.
 
@@ -61,7 +61,7 @@ object/type cell is unequal.
 
 ## The comparability gate
 
-Containers (`List`/`Dict`/`Record`/`Tagged`) compare their contents only when
+Containers (`List`/`Dict`/`Record`/`Wrapped`) compare their contents only when
 their memoized or ascribed type parameters are **related** — one `satisfied_by`
 the other, in either direction. Unrelated parameters short-circuit the container
 to unequal without descending. This buys two properties: ascription-invariance
@@ -113,7 +113,7 @@ equality wherever both apply.
 
 ## Nominal identity, cross-lifetime
 
-Nominal identity (newtypes, tagged sets, module interfaces) compares through
+Nominal identity (newtypes, union variants, module interfaces) compares through
 digest-based `KType` equality. `KType` carries no lifetime parameter at all — every
 variant owns its content — so the comparison is lifetime-agnostic by construction,
 whatever regions the two values holding those types live in. The predicate suite takes heterogeneous slot and value

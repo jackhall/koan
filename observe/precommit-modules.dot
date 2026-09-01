@@ -9,6 +9,7 @@ digraph {
     "koan::builtins::catch" [label="koan::builtins::catch"];
     "koan::builtins::close_over" [label="koan::builtins::close_over"];
     "koan::builtins::equality" [label="koan::builtins::equality"];
+    "koan::builtins::error_union" [label="koan::builtins::error_union"];
     "koan::builtins::eval" [label="koan::builtins::eval"];
     "koan::builtins::fn_def" [label="koan::builtins::fn_def"];
     "koan::builtins::fn_def::finalize" [label="koan::builtins::fn_def::finalize"];
@@ -98,6 +99,8 @@ digraph {
     "koan::machine::model::ast::shape" [label="koan::machine::model::ast::shape"];
     "koan::machine::model::ast::working" [label="koan::machine::model::ast::working"];
     "koan::machine::model::binder" [label="koan::machine::model::binder"];
+    "koan::machine::model::binder::signature" [label="koan::machine::model::binder::signature"];
+    "koan::machine::model::close_inference" [label="koan::machine::model::close_inference"];
     "koan::machine::model::key_spec" [label="koan::machine::model::key_spec"];
     "koan::machine::model::labels" [label="koan::machine::model::labels"];
     "koan::machine::model::labels::sealed" [label="koan::machine::model::labels::sealed"];
@@ -156,6 +159,7 @@ digraph {
     "koan::builtins" -> "koan::builtins::catch" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::close_over" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::equality" [label="owns", style="solid"];
+    "koan::builtins" -> "koan::builtins::error_union" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::eval" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::fn_def" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::group_def" [label="owns", style="solid"];
@@ -240,6 +244,7 @@ digraph {
     "koan::machine::execute::decide" -> "koan::machine::execute::decide::submit" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::ast" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::binder" [label="owns", style="solid"];
+    "koan::machine::model" -> "koan::machine::model::close_inference" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::key_spec" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::labels" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::lazy_slots" [label="owns", style="solid"];
@@ -250,6 +255,7 @@ digraph {
     "koan::machine::model::ast" -> "koan::machine::model::ast::program" [label="owns", style="solid"];
     "koan::machine::model::ast" -> "koan::machine::model::ast::shape" [label="owns", style="solid"];
     "koan::machine::model::ast" -> "koan::machine::model::ast::working" [label="owns", style="solid"];
+    "koan::machine::model::binder" -> "koan::machine::model::binder::signature" [label="owns", style="solid"];
     "koan::machine::model::labels" -> "koan::machine::model::labels::sealed" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::builtin_names" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::declaration_window" [label="owns", style="solid"];
@@ -299,9 +305,9 @@ digraph {
     "koan::builtins::await_body" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::await_body" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan" [label="uses", style="dashed"];
+    "koan::builtins::branch_walk" -> "koan::builtins::union" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::branch_walk" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -314,6 +320,9 @@ digraph {
     "koan::builtins::equality" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::equality" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::equality" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::error_union" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::error_union" -> "koan::machine::core::kerror" [label="uses", style="dashed"];
+    "koan::builtins::error_union" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -479,6 +488,7 @@ digraph {
     "koan::machine::core::kerror" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::kerror" -> "koan::machine::model::close_inference" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan" [label="uses", style="dashed"];
@@ -762,7 +772,20 @@ digraph {
     "koan::machine::model::binder" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::model::key_spec" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::binder" -> "koan::machine::model::registries" [label="uses", style="dashed"];
+    "koan::machine::model::binder" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::binder" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::binder::signature" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::binder::signature" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::binder::signature" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::machine::model::binder" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::machine::model::key_spec" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::machine::model::lazy_slots" [label="uses", style="dashed"];
+    "koan::machine::model::close_inference" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::key_spec" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::key_spec" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::key_spec" -> "koan::machine::model::labels" [label="uses", style="dashed"];

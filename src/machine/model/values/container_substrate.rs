@@ -7,7 +7,7 @@
 //! [`ListSubstrate`] (`C = ListLayout`) is the element substrate behind a list value;
 //! [`DictSubstrate`] (`C = &BumpBackedMap<KKey, usize>`) is the entry substrate behind a dict
 //! value; [`PayloadSubstrate`] (`C = PayloadLayout`) is the single-cell payload substrate behind a
-//! `Tagged` or `Wrapped` value.
+//! `Wrapped` value.
 //!
 //! The two borrow memos are **reads on the stored union**, not bits: contains-borrows is "the union
 //! is non-empty", borrows-home is the description's own home-relative query. The cost memo is a
@@ -164,7 +164,7 @@ impl<'a, C> ContainerSubstrate<'a, C> {
     /// Exact cost in bytes of totally rebuilding this container's reachable structure at a
     /// destination brand — the sectioned storage's own [`Sectioned::weight`], folded from the
     /// per-cell prices the door handed in ([`held_copy_cost`]) beside the reach verdicts. Every
-    /// cell family prices — a nested `Record`, `List`, `Dict`, `Tagged`, or `Wrapped` contributes
+    /// cell family prices — a nested `Record`, `List`, `Dict`, or `Wrapped` contributes
     /// its own memoized cost, and the borrow leaves contribute nothing — so this is always a real
     /// number and the copy/pin decision is never taken blind. The sums saturate rather than wrap,
     /// and a saturated cost simply reads as "far too large to copy".
@@ -254,10 +254,9 @@ impl<'a> DictSubstrate<'a> {
     }
 }
 
-/// The single-cell payload substrate an identity-carrying composite borrows — a `Tagged` value's
-/// `value` and a `Wrapped` value's `inner` both ride one of these: exactly one cell (a tagged/wrapped
-/// value is always an object, never a first-class type) plus its run and the memos. One substrate
-/// family shared by both carriers, born through the fold door.
+/// The single-cell payload substrate an identity-carrying composite borrows — a `Wrapped` value's
+/// `inner` rides one of these: exactly one cell (a wrapped value's payload is always an object,
+/// never a first-class type) plus its run and the memos. Born through the fold door.
 pub(crate) type PayloadSubstrate<'a> = ContainerSubstrate<'a, PayloadLayout>;
 
 impl<'a> PayloadSubstrate<'a> {
@@ -290,9 +289,8 @@ pub(crate) fn held_copy_cost(h: &Held<'_>) -> u64 {
 /// The object-level copy-cost rule (the [`Held::Object`] arm of [`held_copy_cost`]): the bytes of
 /// totally rebuilding this object at a destination brand. A scalar costs one flat [`Held`]; a
 /// `KString` adds its byte length; a `KFunction`, `Module` or `KExpression` is a borrow leaf that
-/// rides the transfer and rebuilds nothing (**0**); a nested `Record`, `List`, `Dict`, `Tagged`, or
-/// `Wrapped` contributes its own memoized cost (a `Tagged`'s tag bytes stay out — short, the same
-/// negligible approximation a `KString` cell already takes for its own discriminant).
+/// rides the transfer and rebuilds nothing (**0**); a nested `Record`, `List`, `Dict`, or
+/// `Wrapped` contributes its own memoized cost.
 ///
 /// An expression is a borrow leaf for the same reason it needs no reach description: the value holds
 /// the node by value, and the node's parts run, keyword text and structural cache live in the
@@ -306,7 +304,6 @@ fn object_copy_cost(o: &KObject<'_>) -> u64 {
         KObject::Record(substrate, _) => substrate.copy_cost(),
         KObject::List(substrate, _) => substrate.copy_cost(),
         KObject::Dict(substrate, _) => substrate.copy_cost(),
-        KObject::Tagged { value, .. } => value.copy_cost(),
         KObject::Wrapped { inner, .. } => inner.copy_cost(),
     }
 }

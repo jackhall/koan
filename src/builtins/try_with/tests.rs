@@ -1,5 +1,9 @@
 //! TRY-WITH branch dispatch over success and per-`KErrorKind` arms, plus re-raise on
 //! no-match and wildcard `_` coverage of dispatcher-internal kinds.
+//!
+//! An error arm binds `it` to the kind's payload **record** (ruling F3), and a field read
+//! projects straight off that bare record, so an arm reads `it.name` / `it.message` / `it.frames`
+//! the same way it reads a field off any record value.
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
@@ -71,8 +75,8 @@ fn shape_error_arm_catches_shape_error() {
     // Inexhaustive MATCH is a deterministic ShapeError trigger.
     let bytes = run_program(
         "UNION Maybe = (Some :Number None :Null)\n\
-         LET m = (Maybe (Some 1))\n\
-         TRY (MATCH (m) -> :Number WITH (None -> (0))) -> :Str WITH (\
+         LET m = (Maybe.Some 1)\n\
+         TRY (MATCH (m) OVER Maybe -> :Number WITH (None -> (0))) -> :Str WITH (\
             ShapeError -> (PRINT it.message)\
          )",
     );
@@ -133,6 +137,48 @@ fn wildcard_arm_catches_when_no_specific_match() {
          )",
     );
     assert_eq!(bytes, b"caught wildcard\n");
+}
+
+/// A dispatcher-internal kind is an ordinary member of the `KError` union, so an arm names it the
+/// way it names a public one — no tag side-channel, and no `_` required to reach it.
+#[test]
+fn an_internal_kind_arm_catches_by_name() {
+    let bytes = run_program(
+        "TRY (LET Ty = 1) -> :Str WITH (\
+            Ok -> (PRINT \"ok\")\
+            TypeClassBindingExpectsType -> (PRINT \"kind\")\
+         )",
+    );
+    assert_eq!(bytes, b"kind\n");
+}
+
+/// `_` reaches the dispatcher-internal kinds too — as members no named arm claims, which is the
+/// same rule that defaults a public kind.
+#[test]
+fn the_wildcard_catches_an_internal_kind() {
+    let bytes = run_program(
+        "TRY (LET Ty = 1) -> :Str WITH (\
+            UnboundName -> (PRINT \"never\")\
+            _ -> (PRINT \"caught\")\
+         )",
+    );
+    assert_eq!(bytes, b"caught\n");
+}
+
+/// Every head names a member of the slate or is `_`, so a boolean literal — legal in the
+/// `OVER`-less `MATCH`, which reads heads as type tests — is an arm-set error here.
+#[test]
+fn a_boolean_head_is_an_arm_set_error() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let err = test_run
+        .run_one_err(test_run.parse_one("TRY (foo) -> :Str WITH (true -> (PRINT \"never\"))"));
+    assert!(
+        matches!(&err.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("`TRY` arm head must name a member")),
+        "expected the arm-head error, got {err}",
+    );
 }
 
 /// TRY body runs in a fresh `child_under` scope, so `LET x = 2` shadows rather
@@ -222,15 +268,15 @@ fn it_resolves_via_scope_for_eval_of_top_level_quoted_reference() {
 
 #[test]
 fn try_inside_tco_position_preserves_frame_chain() {
-    // A user-fn recursing through a `Tagged` parameter via MATCH inside TRY:
+    // A user-fn recursing through a variant parameter via MATCH inside TRY:
     // the catch path must keep the call-site frame Rc chained on the new frame.
     let bytes = run_program(
         "UNION Bit = (One :Null Zero :Null)\n\
-         FN (HOP b :Any) -> Any = (TRY (MATCH (b) -> :Str WITH (\
-            One -> (HOP (Bit (Zero null)))\
+         FN (HOP b :Any) -> Any = (TRY (MATCH (b) OVER Bit -> :Str WITH (\
+            One -> (HOP (Bit.Zero null))\
             Zero -> (PRINT \"done\")\
          )) -> :Str WITH (Ok -> it))\n\
-         HOP (Bit (One null))",
+         HOP (Bit.One null)",
     );
     assert_eq!(bytes, b"done\n");
 }

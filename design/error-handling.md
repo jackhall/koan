@@ -141,7 +141,7 @@ recover from them — a REPL, a sandbox, a defensive wrapper — intercept
 the propagation and dispatch on the `KErrorKind`; `CATCH expr` lifts a
 single fault into a `Result` at `Error = KError` so the caller can bind it via
 `LET`, MATCH on `Ok` / `Error`, and (inside the `Error` arm) dispatch
-on the per-kind tag carried in the payload (see [`CATCH`](#catch)).
+on the per-kind member identity the payload carries (see [`CATCH`](#catch)).
 The shared `Result` shape means a function that wraps a `CATCH` and a
 function with a typed user-error return present the same destructuring
 surface to callers.
@@ -156,50 +156,48 @@ errors carry the type discipline. `KErrorKind` itself is a closed set.
 
 ## `Result`
 
-`Result` is a builtin parameterized type — a two-variant tagged union over two
-type parameters named for their variants, `Ok` and `Error`. It is the shared
-return-type shape for
+`Result` is a builtin two-member union whose members, `Ok` and `Error`, name the
+type arguments an application supplies. It is the shared return-type shape for
 [`CATCH`](#catch) (`:(Result {Ok = <Ty>, Error = KError})`) and for user functions
-with typed error
-returns (`:(Result {Ok = <Ty>, Error = MyErr})`). It is *not* a functor — a module-returning
-function — whereas `Result` is a type constructor producing a tagged-union
-value.
+with typed error returns (`:(Result {Ok = <Ty>, Error = MyErr})`). It is *not* a
+functor — a module-returning function — whereas `Result` is a union head whose
+projections produce wrapped member values.
 
 It is registered once in the root scope by
 [`result::register`](../src/builtins/result.rs), **type-only** the way a `UNION`
-declaration is: `bindings.types["Result"]` holds a `TypeConstructor` identity
-whose payload carries both the parameter names `Ok` / `Error` and the variant
-`schema` `{Ok, Error}` (both `Any`). Each parameter is named for the tag whose
-payload it types, so the two agree by construction. `Result (Ok v)` /
-`Result (Error e)`
-construct by reading that schema off a fresh `types["Result"]` lookup — the
-same identity-borne path `UNION`-declared constructors use, with no value-side
-carrier. Type-position application binds both parameters by name —
-`:(Result {Ok = Number, Error = MyError})`
-([functors.md § Higher-kinded type slots](typing/functors.md#higher-kinded-type-slots)).
+declaration is: a sealed two-member group — `Ok` and `Error`, each over `Any` —
+with `bindings.types["Result"]` bound to the members' union, and each parameter
+named for the member whose payload it types, so the two agree by construction.
+`Result.Ok v` / `Result.Error e` construct by member projection — the same door a
+`UNION`-declared variant uses, with no value-side carrier. Applying the union head
+itself (`Result (Ok 1)`) constructs nothing: it raises the member-projection guidance
+every union head gives. Type-position application binds the arguments by member name —
+`:(Result {Ok = Number, Error = MyError})` — and lowers per member, the rule general to
+any union head (see
+[ktype/parameterization-and-variance.md § Applying a union head](typing/ktype/parameterization-and-variance.md#applying-a-union-head)).
 The arity-1 `AS` form does not apply to `Result`; it errors directing to the
 record form.
 
-The identity is minted once at prelude registration and bound in the root
-scope's `types`, so every `Result` value shares one nominal identity and
-MATCHes uniformly. Because the name is
+The members are minted once at prelude registration and their union bound in the
+root scope's `types`, so every `Result` value carries one of the two member
+identities and MATCHes uniformly. Because the name is
 registered at prelude, a user `UNION Result = (...)` is rejected with `Rebind`:
 the binder-placeholder install refuses a name already bound to a non-function
 value.
 
 A `Result` value's type arguments are erased at construction — both `CATCH`
-and a `Result (Ok v)` / `Result (Error e)` constructor leave the carrier's
-`identity` a bare `SetMember` handle. A `:(Result {Ok = …, Error = …})` slot is nonetheless
-runtime-checkable: the
-`matches_value(ConstructorApply, Tagged)` arm (see
-[ktype/parameterization-and-variance.md § Runtime type-parameter carriers](typing/ktype/parameterization-and-variance.md#runtime-type-parameter-carriers))
-confirms the constructor identity and then checks the *inhabited* tag's payload
-against the same-named type argument — a direct lookup, since tag name and
-parameter name coincide. So a caught
+and a `Result.Ok v` / `Result.Error e` construction leave the carrier's
+`type_id` a bare `SetMember` handle. A `:(Result {Ok = …, Error = …})` slot is nonetheless
+runtime-checkable: the slot is the union of per-member applications, and the
+constructor-application `matches_value` arm (see
+[ktype/parameterization-and-variance.md § Applying a union head](typing/ktype/parameterization-and-variance.md#applying-a-union-head))
+confirms the member identity and then checks the *inhabited* member's payload
+against the same-named type argument — a direct lookup, since member name and
+argument name coincide. So a caught
 `Result` at `Error = KError` is rejected where `Error = MyErr` is declared, because
 the `Error` payload (a `KError`) does not satisfy `MyErr`. Ascription at an
-annotated boundary stamps the carrier's `identity` to a `ConstructorApply` over the
-declared instantiation;
+annotated boundary stamps the carrier's `type_id` to the `ConstructorApply` over the
+member it inhabits;
 the remaining per-call parameter-slot binding for generic value-slot functions is
 tracked under
 [modular implicits](../roadmap/predicate_typing/modular-implicits.md).
@@ -226,14 +224,20 @@ TRY (<expr>) -> :<Type> WITH (
 ```
 
 Like `MATCH`, `TRY` declares a result type with `-> :<Type>` between the
-expression and `WITH`; every arm body must produce that type. Arm heads are
-capitalized variant tags (`Type` tokens) — `Ok` and the
-capitalized `KErrorKind` names. Both slots are lazy `KExpression`s. `<expr>`
+expression and `WITH`; every arm body must produce that type. Arm heads name
+members of a fixed slate — `Result`'s `Ok` plus every member of the prelude
+[`KError`](#the-kerror-union) union — or are `_`, the default arm. A head that is
+neither (a boolean literal, an undeclared name) is an arm-set error at the form,
+checked before the outcome is known. Both slots are lazy `KExpression`s. `<expr>`
 is evaluated in a catching sub-context: on success the `Ok` arm runs with `it`
-bound to the bare success value; on failure the arm matching the `KErrorKind`
-runs with `it` bound to a per-variant payload struct. No matching arm and no
-`_` → re-raise the original `KError`. Success with no `Ok` arm and no `_` →
+bound to the bare success value; on failure the arm naming the lowered error's own
+kind member runs with `it` bound to that kind's payload record. No matching arm and
+no `_` → re-raise the original `KError`. Success with no `Ok` arm and no `_` →
 synthetic `ShapeError("TRY missing Ok arm")`.
+
+A `TRY` arm set carries **no coverage requirement**: an unhandled kind re-raises
+rather than failing the form, which is what makes leaving kinds out the ordinary
+spelling and `_` optional.
 
 The TRY body and each WITH arm are independent lexical blocks: any
 `LET` introduced inside the body or an arm binds into that arm's own
@@ -243,24 +247,51 @@ This is the structural reason a `LET x` inside a TRY body is not a
 `Rebind` of an enclosing `x`, and equally the reason a fresh `LET y`
 inside the body is not visible to code following the `TRY`.
 
-The branch walker is shared with `MATCH`
-([`branch_walk::find_branch_body`](../src/builtins/branch_walk.rs));
-TRY opts into `_` wildcard support, MATCH does not. The catching wiring is the
+The branch walker is `MATCH`'s member walk over a fixed member set — an implicit
+`OVER` covering `Ok` plus the error members
+([branch_walk.rs](../src/builtins/branch_walk.rs)). `TRY` and `MATCH … OVER` share
+one arm parser and one `_` default-arm rule; they differ only in coverage (above)
+and in how the winner is chosen — `TRY` keys on the member the outcome already
+carries, `MATCH … OVER` runs the specificity tournament. The catching wiring is the
 action-harness catch (`Action::Catch`, lowered to a `Continuation::Catch`; see
 [execution/README.md](execution/README.md)): it waits on a watched slot and hands
 its `Result<&KObject, KError>` to a host closure that decides whether to recover
 or re-raise. Unlike a dep-finish, an errored dep does not short-circuit — TRY's
 finish always runs (the `catching` adapter).
 
+### The `KError` union
+
+Every catchable kind is a member of `KError`, a prelude union registered beside
+`Result` ([error_union.rs](../src/builtins/error_union.rs)) with one `NewType`
+member per `KErrorKind` surface name. Registration and lowering read the member
+names off one table in [kerror.rs](../src/machine/core/kerror.rs), so a kind's
+member and the name its lowering looks up cannot drift apart.
+
+A lowered error is therefore an ordinary union value: one `KObject::Wrapped`
+carrying its kind's member handle over the kind's field record. One identity spells
+the kind, so a caught error renders its name exactly once —
+`PRINT (CATCH (mystery))` reads
+`Error(UnboundName({frames = [], name = mystery}))`. Because `KError` is a real
+registered type, `MATCH e OVER KError WITH (…)` eliminates a caught error through
+the same member walk any union takes, and `CATCH`'s declared
+`:(Result {Ok = Any, Error = KError})` return names a type that resolves rather than
+a documentary one.
+
+An error arm — in `TRY` or in `MATCH … OVER KError` — binds `it` to the kind's
+payload **record** (ruling F3, the same narrowing a union variant's arm takes).
+That record is an ordinary anonymous record value, so an arm reads a single field
+straight off it: `UnboundName -> (PRINT it.name)`, `ShapeError -> (PRINT
+it.message)`, and `it.frames` on any kind, through the same bare-record projection
+[`wrapped_field_cell`](../src/builtins/attr.rs) serves every record with. The
+per-kind field names are the table below.
+
 ### Exposed variants
 
-User-meaningful subset. Each error arm's `it` is a Struct under one
-shared `KError` tagged-union identity ([`KError::to_tagged`](../src/machine/core/kerror.rs))
-with heterogeneous payload shape per arm; `Ok` binds `it` to the bare
-success value (no wrapper). Tags are the capitalized `KErrorKind` names — a
-`Type` token, since Type tokens cannot contain underscores:
+User-meaningful subset, with the payload record each kind's arm binds; `Ok` binds
+`it` to the bare success value (no wrapper). Member names are the capitalized
+`KErrorKind` names — a `Type` token, since Type tokens cannot contain underscores:
 
-| Tag | `it` shape |
+| Member | `it` shape |
 |---|---|
 | `Ok` | the success value (bare, not a struct) |
 | `TypeMismatch` | `{arg :Str, expected :Str, got :Str, frames :List<Str>}` |
@@ -275,9 +306,10 @@ success value (no wrapper). Tags are the capitalized `KErrorKind` names — a
 `frames` is a `List<Str>`, each entry rendered `"in <expression> (<function>)"`.
 
 The five dispatcher-internal kinds (`Rebind`, `DuplicateDeclaration`,
-`DuplicateOverload`, `TypeClassBindingExpectsType`, `SchedulerDeadlock`)
-are only catchable via `_`; `it` is then bound to a minimal
-`{kind :Str, message :Str, frames :List<Str>}` struct.
+`DuplicateOverload`, `TypeClassBindingExpectsType`, `SchedulerDeadlock`) are
+ordinary members like any other: an arm names one directly, and `_` reaches them as
+members no named arm claims rather than through a side channel. Their payload is a
+flattened `{kind :Str, message :Str, frames :List<Str>}` record.
 
 ## `CATCH`
 
@@ -290,18 +322,20 @@ spell out catch arms at the catch site, `CATCH` hands back a `Result` at
 the caller binds with `LET`, passes as an argument, or returns:
 
 - `Ok(v)` on success, where `v` is the bare success value;
-- `Error(e)` on failure, where `e` is
-  [`KError::to_tagged`](../src/machine/core/kerror.rs)'s value — still carrying
-  the per-`KErrorKind` tag and payload struct, so per-kind dispatch is reached by
-  MATCH-ing `e` after destructuring the `Result`.
+- `Error(e)` on failure, where `e` is the lowered error value
+  ([kerror.rs](../src/machine/core/kerror.rs)) — a `KError` member value carrying
+  its kind's identity over the kind's payload record, so per-kind dispatch is
+  reached by `MATCH e OVER KError` after destructuring the `Result`.
 
 The [`CATCH`](../src/builtins/catch.rs) builtin reuses the same scheduler
 mechanism as `TRY-WITH` (`Action::Catch` / the `catching` adapter): it schedules `<expr>` as a
 catching sub-dispatch and registers a finish closure that wraps the outcome in
-a `Result` value. The prelude `Result` identity is read from `bindings.types`
-(via `scope.resolve_type("Result")`) at body time, so a `CATCH`-produced
-`Result` and a `Result (...)`-constructed one share nominal identity regardless
-of where the `CATCH` runs. `LET` and other eager slots still short-circuit on errors, so the
+a `Result` value under the projected `Ok` / `Error` member. The prelude `Result`
+union is read from `bindings.types` (via `scope.resolve_type("Result")`) at body
+time and its members projected there, so a `CATCH`-produced value and a
+`Result.Ok` / `Result.Error`-constructed one share nominal identity regardless of
+where the `CATCH` runs. The wrap **holds** rather than peels, so an error's kind
+layer nests inside the `Error` layer and each name renders once. `LET` and other eager slots still short-circuit on errors, so the
 lift stays opt-in.
 
 ## Open work

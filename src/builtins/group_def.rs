@@ -88,7 +88,7 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
     // buffer there. The success path — every `GROUP` that declares — renders nothing.
     let members = crate::try_action!(scan_members(&body_expr, name, ctx.scratch, ctx.registries));
     // A group *is* a module, so its body announces its top-level type declarations the same way.
-    let announced = crate::try_action!(super::module_def::announce_type_members(
+    let announced = crate::try_action!(crate::machine::model::announce_type_members(
         &body_expr,
         name,
         ctx.registries

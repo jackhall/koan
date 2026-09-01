@@ -8,7 +8,6 @@
 //! thread-local so tests run independently under `cargo test`'s default thread
 //! pool.
 
-use crate::builtins::test_support::type_token;
 use crate::builtins::test_support::{TestRun, operator_run, parse_one, probe_symbol, type_name};
 use crate::machine::ProducerId;
 use crate::machine::core::{Action, BodyCtx};
@@ -372,46 +371,40 @@ fn fast_lane_on_non_function_returns_error() {
     );
 }
 
-/// Tagged-union construction through the type name. The TypeCall fast lane
-/// resolves `Maybe` to its interned union identity and constructs the named
-/// member as a `Tagged` via `constructors::construct_tagged`.
+/// Union-variant construction through the projected member. The projection resolves `Maybe.Some`
+/// to the member's own sealed handle and the TypeCall fast lane constructs it as every newtype
+/// constructs — `constructors::dispatch_construct_newtype`.
 ///
-/// Counter contract: every step in the chain (TypeCall head resolution +
-/// construct-from-identity + LiteralPassThrough on the value-cell) is fast-lane;
-/// nothing enters `resolve_dispatch`.
+/// Counter contract: the construction itself is fast-lane (construct-from-identity +
+/// LiteralPassThrough on the value-cell); only the ATTR projection ahead of it dispatches.
 #[test]
-fn fast_lane_on_tagged_union_constructs() {
+fn fast_lane_on_variant_construction() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("UNION Maybe = (Some :Number None :Null)");
+    test_run.run("UNION Maybe = (Some :Number None :Null)\nLET Just = Maybe.Some");
     reset_resolve_dispatch_entry_count();
-    let result = test_run.run_one(test_run.parse_one("Maybe (Some 42)"));
+    let result = test_run.run_one(test_run.parse_one("Just 42"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
-        "tagged-union construction is fully fast-lane: no `resolve_dispatch` \
+        "variant construction is fully fast-lane: no `resolve_dispatch` \
          entries. Counter was {}",
         resolve_dispatch_entry_count(),
     );
-    // A user-union variant value is a `Tagged` — the same shape builtin `Result` produces —
-    // carrying its variant tag and the member's own `SetMember` handle as `identity`.
+    // A user-union variant value is a `Wrapped` whose `type_id` is the member's own `SetMember`
+    // handle — the shape every newtype produces, since a member *is* a newtype.
     match result {
-        KObject::Tagged {
-            tag,
-            value,
-            identity,
-        } => {
-            assert_eq!(*tag, type_token("Some"));
-            assert!(matches!(value.payload(), KObject::Number(n) if *n == 42.0));
-            match test_run.types().node(*identity) {
+        KObject::Wrapped { inner, type_id } => {
+            assert!(matches!(inner.payload(), KObject::Number(n) if *n == 42.0));
+            match test_run.types().node(*type_id) {
                 TypeNode::SetMember { name, .. } => {
                     assert_eq!(name, type_name("Some", test_run.registries()));
                 }
-                _ => panic!("expected a member SetMember identity, got {identity:?}"),
+                _ => panic!("expected a member SetMember identity, got {type_id:?}"),
             }
         }
-        other => panic!("expected Tagged, got {:?}", other.ktype()),
+        other => panic!("expected Wrapped, got {:?}", other.ktype()),
     }
 }
 
@@ -675,20 +668,21 @@ fn classifier_struct_construct_routes_to_type_call() {
     );
 }
 
-/// `(Maybe (Some 42))` — leaf-Type head, single nested-`Expression` body
-/// holding `(Some 42)`. Must route to `TypeCall`.
+/// `Wrap (Inner 42)` — leaf-Type head, single nested-`Expression` body. Must route to `TypeCall`:
+/// classification reads the parts alone, so the head naming a newtype or a union is not its
+/// business — a union head is admitted here and refused where it is applied.
 #[test]
-fn classifier_tagged_construct_routes_to_type_call() {
+fn classifier_nested_body_construct_routes_to_type_call() {
     use crate::machine::execute::decide::{DispatchShape, classify_dispatch_shape};
     let program = program_storage();
     let expr = parse_one(
         &program,
         &crate::machine::model::LabelInterner::new(),
-        "Maybe (Some 42)",
+        "Wrap (Inner 42)",
     );
     assert!(
         matches!(classify_dispatch_shape(expr.parts), DispatchShape::TypeCall),
-        "expected TypeCall for `Maybe (Some 42)`",
+        "expected TypeCall for `Wrap (Inner 42)`",
     );
 }
 
@@ -1184,26 +1178,24 @@ fn type_head_deferred_constructs_from_sigil_type() {
     );
 }
 
-/// `TypeHeadDeferred` → union constructor. A `:(Maybe)` head resolves to a
-/// `UNION` identity — a `TypeNode::Union`, not a `SetMember`. The head-deferred
-/// lane admits it as a constructor and `apply_callable`'s constructor arm routes
-/// it to union construction, so `(Some 42)` builds the tagged variant. This is
-/// the sanctioned admission the head-classification unification opens: the lane
-/// no longer pre-gates on `SetMember`.
+/// `TypeHeadDeferred` → union head. A `:(Maybe)` head resolves to a `UNION` identity — a
+/// `TypeNode::Union`, not a `SetMember` — and the head-deferred lane admits it as a constructor
+/// without pre-gating on `SetMember`. Applying it is what refuses: a union has no direct
+/// application, and the error names the projection that reaches a variant.
 #[test]
-fn type_head_deferred_constructs_union_variant() {
+fn type_head_deferred_refuses_to_apply_a_union() {
+    use crate::machine::KErrorKind;
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run("UNION Maybe = (Some :Number None :Null)");
-    let result = test_run.run_one(test_run.parse_one(":(Maybe) (Some 42)"));
-    match result {
-        KObject::Tagged { tag, value, .. } => {
-            assert_eq!(*tag, type_token("Some"));
-            assert!(matches!(value.payload(), KObject::Number(n) if *n == 42.0));
-        }
-        other => panic!("expected Tagged, got {:?}", other.ktype()),
-    }
+    let err = test_run.run_one_err(test_run.parse_one(":(Maybe) (Some 42)"));
+    assert!(
+        matches!(&err.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("a union has no direct application")
+                && msg.contains("member projection")),
+        "expected the no-direct-application error naming the projection surface, got {err}",
+    );
 }
 
 /// `NonCallableHead`. A literal / list head in a multi-part expression is not

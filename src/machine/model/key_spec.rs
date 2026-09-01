@@ -45,6 +45,10 @@ pub(crate) struct SurfaceKeywords {
     pub(crate) scope: StaticName<KeywordSymbol>,
     pub(crate) close: StaticName<KeywordSymbol>,
     pub(crate) from: StaticName<KeywordSymbol>,
+    /// The head of the parse of `$(…)`; also its spelled-out surface.
+    pub(crate) eval: StaticName<KeywordSymbol>,
+    /// The head of the parse of `<record>.<field>`.
+    pub(crate) attr: StaticName<KeywordSymbol>,
     /// The pattern-guard sigil `:|`.
     pub(crate) guard: StaticName<KeywordSymbol>,
     /// The otherwise-guard sigil `:!`.
@@ -78,6 +82,8 @@ pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
     scope: crate::static_name!(KeywordSymbol, "SCOPE"),
     close: crate::static_name!(KeywordSymbol, "CLOSE"),
     from: crate::static_name!(KeywordSymbol, "FROM"),
+    eval: crate::static_name!(KeywordSymbol, "EVAL"),
+    attr: crate::static_name!(KeywordSymbol, "ATTR"),
     guard: crate::static_name!(KeywordSymbol, ":|"),
     otherwise: crate::static_name!(KeywordSymbol, ":!"),
 };

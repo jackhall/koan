@@ -130,15 +130,15 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
         &program,
         &test_run.registries().labels,
         "UNION Tick = (More :Null Done :Null)\n\
-         FN (PING n :Number c :Any) -> Number = (MATCH (c) -> :Number WITH (\
-            More -> (PONG (n) (Tick (Done null)))\
+         FN (PING n :Number c :Any) -> Number = (MATCH (c) OVER Tick -> :Number WITH (\
+            More -> (PONG (n) (Tick.Done null))\
             Done -> (n)\
          ))\n\
-         FN (PONG n :Number c :Any) -> Number = (MATCH (c) -> :Number WITH (\
-            More -> (PING (n) (Tick (Done null)))\
+         FN (PONG n :Number c :Any) -> Number = (MATCH (c) OVER Tick -> :Number WITH (\
+            More -> (PING (n) (Tick.Done null))\
             Done -> (n)\
          ))\n\
-         LET out = (PING 42 (Tick (More null)))",
+         LET out = (PING 42 (Tick.More null))",
     );
     for (i, e) in exprs.into_iter().enumerate() {
         test_run.runtime.dispatch_in_scope(e, scope, i + 1);

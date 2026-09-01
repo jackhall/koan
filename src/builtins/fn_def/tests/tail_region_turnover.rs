@@ -36,14 +36,14 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
     const DEPTH: usize = 20;
     let mut source = String::from(
         "UNION Nat = (Zero :Null Succ :Nat)\n\
-         FN (COUNTDOWN n :Nat) -> Str = (MATCH (n) -> :Str WITH (\
+         FN (COUNTDOWN n :Nat) -> Str = (MATCH (n) OVER Nat -> :Str WITH (\
              Zero -> (\"done\")\
              Succ -> (COUNTDOWN it)\
          ))\n\
-         LET n0 = (Nat (Zero null))\n",
+         LET n0 = (Nat.Zero null)\n",
     );
     for i in 1..=DEPTH {
-        source.push_str(&format!("LET n{i} = (Nat (Succ n{}))\n", i - 1));
+        source.push_str(&format!("LET n{i} = (Nat.Succ n{})\n", i - 1));
     }
     test_run.run(&source);
     // Measure the countdown's own slot footprint: release the setup phase's slots so the store's
@@ -117,14 +117,14 @@ fn tail_recursive_record_thread_stays_o1_in_regions() {
     const DEPTH: usize = 20;
     let mut source = String::from(
         "UNION Nat = (Zero :Null Succ :Nat)\n\
-         FN (THREAD n :Nat rec :{acc :Number}) -> Str = (MATCH (n) -> :Str WITH (\
+         FN (THREAD n :Nat rec :{acc :Number}) -> Str = (MATCH (n) OVER Nat -> :Str WITH (\
              Zero -> (\"done\")\
              Succ -> (THREAD it {acc = 0})\
          ))\n\
-         LET n0 = (Nat (Zero null))\n",
+         LET n0 = (Nat.Zero null)\n",
     );
     for i in 1..=DEPTH {
-        source.push_str(&format!("LET n{i} = (Nat (Succ n{}))\n", i - 1));
+        source.push_str(&format!("LET n{i} = (Nat.Succ n{})\n", i - 1));
     }
     test_run.run(&source);
     test_run.reset_slots();

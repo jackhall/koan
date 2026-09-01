@@ -257,13 +257,11 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
             // context, so co-declared references are pre-resolved to sibling carriers first
             // (see `rewrite_threaded_self_refs`).
             FieldSlot::AstSigil(boxed) => {
-                // `:(Tree Leaf)` while `Tree` is a binder of the active window: a sibling-variant
+                // `:(Tree.Leaf)` while `Tree` is a binder of the active window: a sibling-variant
                 // reference. It cannot sub-dispatch (parking would deadlock on this very seal's
                 // producer), so it lowers straight to the variant's handle against the window —
                 // relative while the window is open, absolute once it has sealed.
-                if let [first, second] = boxed.parts
-                    && let (ExpressionPart::Type(head), ExpressionPart::Type(tag)) =
-                        (&first.value, &second.value)
+                if let Some((head, tag)) = window_member_projection(boxed)
                     && let Some(view) = elaborator.window().filter(|v| v.binds(*head))
                 {
                     let index = view.variant_index(*head, tag.symbol()).ok_or_else(|| {
@@ -349,6 +347,41 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                 FieldListOutcome::Done(fields)
             }
         }
+    }
+}
+
+/// The `(head, tag)` pair a sigil body spells as a member projection — `:(Tree.Leaf)` — or [`None`]
+/// for any other body. The `.` operator lowers to the `ATTR` compound and, because both operands
+/// are `Type`-classed, wraps it in a `SigiledTypeExpr`; a sigil around that single atom is the one
+/// shape the window path recognizes, so the projection surface reads identically pre-seal and post.
+fn window_member_projection<'a, 'p>(
+    boxed: &'p KExpression<'a>,
+) -> Option<(&'p TypeSymbol, &'p TypeSymbol)> {
+    let attr = match boxed.parts {
+        [
+            Spanned {
+                value: ExpressionPart::SigiledTypeExpr(inner),
+                ..
+            },
+        ] => inner,
+        _ => return None,
+    };
+    match attr.parts {
+        [
+            Spanned {
+                value: ExpressionPart::Keyword(kw),
+                ..
+            },
+            Spanned {
+                value: ExpressionPart::Type(head),
+                ..
+            },
+            Spanned {
+                value: ExpressionPart::Type(tag),
+                ..
+            },
+        ] if *kw == crate::machine::model::key_spec::KEYWORDS.attr.symbol() => Some((head, tag)),
+        _ => None,
     }
 }
 

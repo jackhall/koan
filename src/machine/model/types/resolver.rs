@@ -198,7 +198,7 @@ pub fn elaborate_type_identifier(
         // A bare leaf naming a standalone member of the window is a co-declared sibling (or a
         // self-reference). A `UNION`'s variants are *not* standalone types: a bare `Node :Leaf` is
         // an unknown-type error, and a sibling variant is reached only through its binder
-        // (`:Tree`) or the qualified sigil `:(Tree Leaf)` (handled in `typed_field_list`).
+        // (`:Tree`) or the member projection `:(Tree.Leaf)` (handled in `typed_field_list`).
         if let Some(index) = view.member_index(classified) {
             return match (view.sealed_member(index), el.mode) {
                 (Some(kt), _) => TypeResolution::Done(kt),

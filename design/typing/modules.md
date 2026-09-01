@@ -224,7 +224,7 @@ newtype-with-private-fields pattern that a trait system would need.
 
 Before it runs any body statement, `MODULE` pre-scans the body's **top-level**
 statements for type declarations and announces every name it finds
-([`announce_type_members`](../../src/builtins/module_def.rs)). The announcement rides
+([`announce_type_members`](../../src/machine/model/binder.rs)). The announcement rides
 the body's child scope as its ambient declaration window
 ([`ScopeKind::Module`](../../src/machine/core/scope.rs)'s `window`), so an announced
 name is visible to every statement of the body regardless of order — which is what
@@ -246,7 +246,7 @@ A statement announces iff its own parse-time binder key is the `NEWTYPE <Name> =
 head keyword is excluded. A `UNION` announces one member per variant tag, owned by its
 binder: an owned member never reaches `bindings.types` and is therefore absent from
 `Module::type_members`, since a variant is constructed through its binder
-(`Tree (Node …)`) or named through the qualified sigil (`:(Tree Node)`), never as a
+(`Tree.Node …`) or named through member projection (`:(Tree.Node)`), never as a
 module member of its own. The whole group's `types` writes land when the last
 announced member fills; a member the body never fills is a typed `ShapeError` at the
 module's finish, not a hang. The type-side mechanics — window representations, the
