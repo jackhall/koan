@@ -20,11 +20,9 @@ exact lever the liveness matrix wants
   scope copy to two closures over one copied scope.
 - A copy that reaches an unfinalized binding or a not-yet-closed scope does
   not wait: that copy downgrades to `Pin` (always sound — retaining more
-  never dangles), and consolidation retries at a later priced crossing —
-  frame death at the latest, by which point the scope has closed. No park
-  edge is added to the finalize walk, so the wait-cycle deadlock two
-  mutually-referencing in-flight environments would create is
-  unconstructible, not merely handled.
+  never dangles). No park edge is added to the finalize walk, so the
+  wait-cycle deadlock two mutually-referencing in-flight environments would
+  create is unconstructible, not merely handled.
 - A `CLOSE OVER` callable capture severs transitively: its data is copied,
   its own callable references recurse.
 - The copy-or-recurse decision remains seam-priced; no definition-site cost
@@ -44,12 +42,33 @@ exact lever the liveness matrix wants
   escape seam's `copy_or_pin`-style decision), never unconditionally at
   definition sites: definition stays O(1); escape is the priced seam.
 - *Unready environments — decided.* Pin, never park (the third acceptance
-  criterion); no wait edges enter the finalize walk.
+  criterion); no wait edges enter the finalize walk. When a downgraded pin is
+  re-consolidated is [callable-copy-tuning.md](callable-copy-tuning.md)'s and
+  [region evacuation](../untyped_arena/region-evacuation.md)'s concern.
+- *Copy surfaces — decided.* The copy recurses at a top-level callable
+  crossing the priced escape seam and at an explicit `CLOSE OVER` callable
+  capture; a callable cell inside a copied container rides verbatim
+  ([callable-copy-tuning.md](callable-copy-tuning.md) owns that lever).
+- *Pricing fact — decided.* A per-scope monotone binding-copy-cost memo,
+  bumped as each write op applies from the bound value's memoized copy
+  weight; the seam sums the per-call chain's memos against the chain regions'
+  allocated totals under the existing α.
+- *Foreign crossings — deferred.* The chooser pins when the innermost
+  captured region is not the crossing's host, mirroring the substrate rule;
+  pricing foreign chains moves to
+  [callable-copy-tuning.md](callable-copy-tuning.md).
+- *`USING` windows — decided.* A captured chain holding a `Borrowed`-bindings
+  scope is not ready: the copy downgrades to `Pin`.
 
 ## Dependencies
 
-**Requires:**
-
-
-**Unblocks:** none directly; the liveness-matrix consolidation gate consumes
+The liveness-matrix consolidation gate
+([liveness-matrix.md](../../workgraph/design/liveness-matrix.md)) consumes
 this when that design is planned.
+
+**Requires:** none.
+
+**Unblocks:**
+
+- [callable-copy-tuning.md](callable-copy-tuning.md) — pricing and
+  copy-recursion levers tuned once this seam ships.

@@ -264,11 +264,31 @@ fn a_self_recursive_nominal_declares_its_own_name() {
     assert!(inferred.values.is_empty());
 }
 
-/// A standalone `UNION`'s variant tags are declared names too.
+/// A `UNION`'s variant tags sit in the label half of its schema, so they contribute no name of
+/// their own — only the payload half is read as uses.
 #[test]
-fn a_unions_variant_tags_are_declared_names() {
+fn a_unions_variant_tags_are_labels() {
     let inferred = infer("((UNION Shape = (Circle :Number, Square :Number)) (1))");
     assert_eq!(inferred.types, ["Number"]);
+}
+
+/// A tag is never bare-name-resolvable, so it shadows nothing: a payload spelled like a sibling
+/// tag is a genuine free use of an outer type, and a capture that missed it would leave the block
+/// unbound inside `CLOSE`.
+#[test]
+fn a_payload_spelled_like_a_sibling_tag_is_a_free_type_use() {
+    let inferred = infer("((UNION Shape = (Circle :Number, Square :Circle)) (1))");
+    assert_eq!(inferred.types, ["Number", "Circle"]);
+}
+
+/// The same rule through a module body's pre-announcement: an announced `UNION`'s owned tags are
+/// not body-wide names, so a sibling declaration using one names an outer type.
+#[test]
+fn an_announced_unions_tags_are_not_body_wide_names() {
+    let inferred = infer(
+        "((MODULE m = ((UNION Shape = (Circle :Number)) (NEWTYPE Ring = :{c :Circle}))) (m))",
+    );
+    assert_eq!(inferred.types, ["Number", "Circle"]);
 }
 
 /// A module body pre-announces its type declarations, so a mutually recursive pair infers neither

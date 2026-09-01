@@ -599,3 +599,22 @@ fn a_member_projection_infers_its_union_only() {
         "Some(5)\n"
     );
 }
+
+/// A `UNION` payload spelled like a **sibling variant tag** names an outer type — a tag is a member
+/// label, reached only through its binder, so it binds nothing inside the declaration. The outer
+/// per-call `Leaf` is therefore captured, and the block answers; a walk that read the tags as
+/// declared names would miss the capture and leave `Leaf` unbound inside `CLOSE`.
+#[test]
+fn a_union_payload_spelled_like_a_sibling_tag_captures_the_outer_type() {
+    assert_eq!(
+        output(
+            "LET mk = (FN :{n :Number} -> Any = (\
+                 (NEWTYPE Leaf = :Number)\
+                 (CLOSE (\
+                     (UNION Tree = (Leaf :Number Node :Leaf))\
+                     (Tree.Node (Leaf n))))))\n\
+             PRINT (mk {n = 7})\n"
+        ),
+        "Node(7)\n"
+    );
+}

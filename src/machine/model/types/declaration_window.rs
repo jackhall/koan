@@ -137,6 +137,20 @@ impl AnnouncedData {
     pub fn binds(&self, name: TypeSymbol) -> bool {
         self.binders.iter().any(|(binder, _)| *binder == name)
     }
+
+    /// The names a bare reference into this body may reach: the standalone members and the
+    /// declaring binders. An owned member — a `UNION`'s variant tag — is absent, because it is
+    /// reached only through its binder or by member projection off it. The pre-scan twin of
+    /// `RecursiveGroupWindow::bare_reachable_names`, which answers the same question off the live
+    /// window; sharing the filter is what keeps a pre-scan consumer and the interpreter's window
+    /// from drifting apart.
+    pub fn bare_resolvable_names(&self) -> impl Iterator<Item = TypeSymbol> + '_ {
+        self.members
+            .iter()
+            .filter(|(_, owner)| owner.is_none())
+            .map(|(member, _)| *member)
+            .chain(self.binders.iter().map(|(binder, _)| *binder))
+    }
 }
 
 /// The ambient declaration window a module body's announced types elaborate against. Drop-free:

@@ -35,7 +35,7 @@ use crate::machine::model::labels::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::machine::model::lazy_slots::LazyKinds;
 use crate::machine::model::{
     ExpressionPart, KExpression, MACHINE_BINDERS, RunRegistries, SignaturePosition, SignatureScan,
-    announce_type_members, pair_list_names,
+    announce_type_members,
 };
 use crate::source::{FileId, Span};
 use crate::witnessed::{BumpAllocator, BumpVec};
@@ -802,7 +802,9 @@ impl<'s> Walk<'s, '_> {
 
     /// The type names a `MODULE` / `GROUP` body announces, which are visible throughout it whatever
     /// order its statements sit in. Read through [`announce_type_members`], the same scan the
-    /// declaration's own dispatch pre-scans its window with.
+    /// declaration's own dispatch pre-scans its window with, and filtered through the pre-scan's
+    /// own `AnnouncedData::bare_resolvable_names` so the walk reaches exactly what the
+    /// interpreter's window answers bare — a `UNION`'s owned variant tags are not among them.
     ///
     /// A body that announces nothing, one whose scan the declaration will reject, and a
     /// declaration named with a Type token — a hard error either way — all announce nothing here.
@@ -824,17 +826,14 @@ impl<'s> Walk<'s, '_> {
         else {
             return names;
         };
-        for (member, _) in &announced.members {
-            names.push(BinderSymbol::Type(*member));
-        }
-        for (binder, _) in &announced.binders {
-            names.push(BinderSymbol::Type(*binder));
-        }
+        names.extend(announced.bare_resolvable_names().map(BinderSymbol::Type));
         names
     }
 
-    /// A nominal declaration's own names are visible inside its representation — `NEWTYPE Tree =
-    /// :{left :Tree}` and a `UNION`'s variant tags both refer to what the statement is declaring.
+    /// A nominal declaration's own **binder** is visible inside its representation — `NEWTYPE Tree =
+    /// :{left :Tree}` names what the statement is declaring. A `UNION`'s variant tags are not
+    /// among the names it declares: a tag is a member label, reached only through its binder or by
+    /// member projection off it, so it neither shadows an outer type nor stands as one.
     fn walk_nominal_declaration(
         &mut self,
         expr: &KExpression<'_>,
@@ -847,17 +846,33 @@ impl<'s> Walk<'s, '_> {
         if let Some(name) = expr.binder_name_from_type_part() {
             declared.push(BinderSymbol::Type(name));
         }
-        if surface == TypeDeclarationSurface::Union
-            && let Some(schema) = union_schema(expr)
-            && let Ok(tags) = pair_list_names(&schema, "UNION schema", self.registries)
-        {
-            for tag in tags {
-                declared.push(BinderSymbol::Type(tag));
-            }
-        }
         self.push_scope(&declared);
-        self.walk_part(expr, representation);
+        match surface {
+            TypeDeclarationSurface::Union => self.walk_union_schema(expr),
+            TypeDeclarationSurface::NewType => self.walk_part(expr, representation),
+        }
         self.pop_scope();
+    }
+
+    /// A `UNION`'s schema, read at the `<Tag> <payload>` stride
+    /// [`pair_list_names`](crate::machine::model::pair_list_names) announces its members with: the
+    /// tag half is labels, contributing no name, and the payload half is walked as uses. That
+    /// position-awareness is the whole of it — a payload spelled like a sibling tag names an outer
+    /// type, which is exactly what a capture must not miss.
+    ///
+    /// A schema this stride cannot read is walked generically, the conservative reading: its own
+    /// dispatch surfaces the real diagnostic.
+    fn walk_union_schema(&mut self, expr: &KExpression<'_>) {
+        let representation = expr.parts.len() - 1;
+        let Some(schema) = union_schema(expr) else {
+            return self.walk_part(expr, representation);
+        };
+        if !schema.parts.len().is_multiple_of(2) {
+            return self.walk_part(expr, representation);
+        }
+        for payload in (1..schema.parts.len()).step_by(2) {
+            self.walk_part(&schema, payload);
+        }
     }
 
     /// A `<head> -> <body>` arm run: heads name types, each body runs in a scope holding the arm
