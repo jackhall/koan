@@ -592,8 +592,6 @@ impl<'a> Scope<'a> {
     ///   own to rebuild.
     /// - **No standing claim** ([`Bindings::has_no_claims`]): an in-flight binder is a binding that
     ///   does not exist yet, which is exactly the unfinalized binding the roadmap downgrades on.
-    /// - **No operator registry entry** ([`Bindings::has_operators`]): the group record an entry
-    ///   resolves to is region-resident and the engine does not rebuild it.
     /// - **A kind the engine models**: `Anonymous` — the block and per-call frame scopes a closure
     ///   chain is made of — and `Root`, which is eternal and referenced verbatim rather than
     ///   copied. `Sig` carries a live slot collector and `Module` an announced window and group
@@ -606,7 +604,6 @@ impl<'a> Scope<'a> {
         self.is_closed()
             && !self.borrows_its_bindings()
             && self.bindings().has_no_claims()
-            && !self.bindings().has_operators()
             && matches!(self.kind, ScopeKind::Root | ScopeKind::Anonymous)
     }
 

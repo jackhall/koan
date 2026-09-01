@@ -487,6 +487,45 @@ fn an_escaped_body_applies_a_per_call_operator() {
     );
 }
 
+/// The census twin of the test above: the environment copy rebuilds the operator registry rather
+/// than the readiness gate declining on it, so the block scope holding a **flattened per-call
+/// operator** consolidates like any other and its own region stops surviving the escape.
+///
+/// Read against the operator-free baseline, because that isolates what the operator table costs.
+/// An `OP` declaration is also a keyworded-`FN` dispatch registration, and implicit close pins a
+/// flattened dispatch registration's defining frame on purpose (see this module's header) — the
+/// producer frame is still open at the crossing, so its rebuild declines and the callable rides
+/// verbatim. That retention is the registration's, not the operator table's: with the table now
+/// rebuilt, declaring the operator costs exactly what declaring the plain keyworded `FN` costs, at
+/// every producer depth. Under the old gate this ran one region higher at each of them.
+#[cfg(not(feature = "seam-force-pin"))]
+#[test]
+fn a_flattened_per_call_operator_retains_no_more_than_its_registration() {
+    for depth in [0usize, 1, 3] {
+        let operator = held_and_released(&producer_chain(
+            depth,
+            "(OP #(⊕) OVER Number = (left + right))\
+             (CLOSE OVER () ((LET g = (FN :{} -> Number = (1 ⊕ 2 ⊕ 3))) (g)))",
+            "",
+        ));
+        let plain = held_and_released(&producer_chain(
+            depth,
+            "(FN (left :Number PLUS right :Number) -> Number = (left + right))\
+             (CLOSE OVER () ((LET g = (FN :{} -> Number = (1 PLUS 2))) (g)))",
+            "",
+        ));
+        assert_eq!(
+            operator, plain,
+            "at producer depth {depth} a flattened operator must retain exactly what its own \
+             keyworded registration retains — the rebuilt table adds nothing",
+        );
+        assert_eq!(
+            operator.1, 0,
+            "and nothing at all outlives the run at producer depth {depth}",
+        );
+    }
+}
+
 /// Two scopes on the walked chain may declare one operator probe differently — a bare `OP` and a
 /// `GROUP` whose member set is wider — and the inner one shadows the outer whole, since operator
 /// resolution stops at the first scope holding the probe. Implicit close keeps that innermost

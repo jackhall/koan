@@ -456,6 +456,27 @@ fn bump_bucket(brand: RegionBrand<'_>) -> Bucket<'_> {
     ManuallyDrop::new(allocator_api2::vec::Vec::new_in(brand.allocator()))
 }
 
+/// What installing `seal`'s entry costs a rebuild of this table: the flat [`OperatorEntry`] plus
+/// the declaration text the insert bumps, and — only when no standing entry already seals the same
+/// record — the record's own bytes.
+///
+/// The address scan is what keeps a `GROUP`'s powerset honest: its `2^n - 1` keys all seal one
+/// record, so the first key pays for the record and the rest pay only their own entry, which is
+/// exactly what the copy rebuilds. The scan is bounded by that same powerset, so it is bounded by
+/// the group's own (necessarily tiny) member count.
+fn operator_entry_weight(tables: &Tables<'_>, seal: &GroupSeal<'_>) -> u64 {
+    let entry = (size_of::<OperatorEntry<'static>>() + seal.declaration.len()) as u64;
+    if tables
+        .operators
+        .values()
+        .any(|standing| standing.address == seal.address)
+    {
+        entry
+    } else {
+        entry.saturating_add(seal.record_bytes)
+    }
+}
+
 /// One scope's bindings: the four maps under a single [`RefCell`], and nothing else.
 ///
 /// One cell rather than one per map: with writes reachable only under a [`WriteGate`], a read can
@@ -727,10 +748,31 @@ impl<'a> Bindings<'a> {
                  chaining mode or member set; one scope declares one chaining mode per operator",
             ))));
         }
-        // The key is a `Copy` digest; only the declaration re-homes on the insert. A powerset
-        // install bumps the declaration once per subset entry; the byte cost is bounded by the
-        // group's own powerset, which is small, and cross-call sharing would cost an intern table
-        // to save it.
+        self.install_operator_entry(&mut tables, probe, seal, index);
+        Ok(())
+    }
+
+    /// The one `operators` insert, shared by the declaration door above and the environment copy's
+    /// [`Self::insert_copied_operator_group`], so the two cannot drift on what an entry stores or
+    /// what it charges the memo.
+    ///
+    /// The key is a `Copy` digest; only the declaration re-homes on the insert. A powerset install
+    /// bumps the declaration once per subset entry; the byte cost is bounded by the group's own
+    /// powerset, which is small, and cross-call sharing would cost an intern table to save it.
+    ///
+    /// The memo bump is the value channel's terms ([`Self::write_value`]): the weight is read off
+    /// plain data the seal already carries, at a site already mutating the table, so the definition
+    /// site pays nothing beyond an address scan bounded by the group's own powerset.
+    fn install_operator_entry(
+        &self,
+        tables: &mut Tables<'a>,
+        probe: KeywordSymbol,
+        seal: &GroupSeal<'a>,
+        index: BindingIndex,
+    ) {
+        let weight = operator_entry_weight(tables, seal);
+        self.copy_cost
+            .set(self.copy_cost.get().saturating_add(weight));
         tables.operators.insert(
             probe,
             OperatorEntry {
@@ -740,7 +782,6 @@ impl<'a> Bindings<'a> {
                 sealed: seal.sealed.duplicate(),
             },
         );
-        Ok(())
     }
 
     /// Snapshot every `(name, dormant carrier)` pair in `data`, ignoring visibility. Each
@@ -1201,12 +1242,17 @@ impl<'a> Bindings<'a> {
         Ok(())
     }
 
-    /// Whether this table holds an operator-registry entry — a `GROUP` declaration's powerset keys,
-    /// or the flattened copies a `CLOSE OVER` block installs. The environment copy does not model
-    /// them (the record they resolve to is region-resident and would have to be rebuilt with the
-    /// scope), so their presence is part of the readiness gate rather than a case inside the engine.
-    pub(crate) fn has_operators(&self) -> bool {
-        !self.tables.borrow().operators.is_empty()
+    /// Every operator entry's probe key beside the address of the record it seals — the identity
+    /// the environment-copy tests read to see that a powerset's entries share one reborn record,
+    /// without opening a carrier of their own.
+    #[cfg(test)]
+    pub(crate) fn operator_entry_addresses(&self) -> Vec<(KeywordSymbol, usize)> {
+        self.tables
+            .borrow()
+            .operators
+            .iter()
+            .map(|(probe, entry)| (*probe, entry.address))
+            .collect()
     }
 
     /// Every type binding in this table, as plain `Copy` data — the environment copy's `types`
@@ -1294,6 +1340,29 @@ impl<'a> Bindings<'a> {
             token: seal.token.store_in(self.brand),
             sealed: seal.sealed,
         });
+    }
+
+    /// The environment copy's `operators` write — [`Self::insert_copied_value`]'s registry-table
+    /// twin, registry-free for the same reason: the only thing [`Self::write_operator_group`] needs
+    /// registries for is rendering a chaining-mode conflict, and a copy fills an empty table with
+    /// one entry per source probe, so a collision is a construction bug rather than a program
+    /// error. It is asserted here rather than reported.
+    ///
+    /// The cost memo is bumped exactly as an ordinary registration bumps it, so a copied scope
+    /// prices its own re-consolidation on the same terms the source did — the address scan
+    /// amortizes a powerset's shared record to one record charge here too.
+    pub(crate) fn insert_copied_operator_group(
+        &self,
+        probe: KeywordSymbol,
+        index: BindingIndex,
+        seal: &GroupSeal<'a>,
+    ) {
+        let mut tables = self.tables.borrow_mut();
+        debug_assert!(
+            !tables.operators.contains_key(&probe),
+            "an environment copy fills an empty table, one entry per source probe",
+        );
+        self.install_operator_entry(&mut tables, probe, seal, index);
     }
 
     /// The `functions` write path: add `seal`'s callable to its dispatch bucket. The bucket key and

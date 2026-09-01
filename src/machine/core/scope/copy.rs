@@ -36,7 +36,7 @@ use allocator_api2::alloc::Global;
 use super::Scope;
 use crate::machine::DeliveredCarried;
 use crate::machine::core::bindings::BindingIndex;
-use crate::machine::core::carrier_witness::{DeliveredFunction, OverloadSeal};
+use crate::machine::core::carrier_witness::{DeliveredFunction, GroupSeal, OverloadSeal};
 use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::ref_carriers::RegionScopeFamily;
 use crate::machine::core::{FoldingBrand, KoanRegion, KoanStorageProfile, RegionBrand};
@@ -188,6 +188,12 @@ fn copy_chain<'b>(
 ///
 /// Dispatch registrations copy the same way, each overload's callable rebuilt and registered fresh,
 /// so a keyworded recursive `FN` reaches the copy rather than the source.
+///
+/// The operator registry is rebuilt rather than relocated: a group record is region-resident, so
+/// the fill reads its member symbols and mode — the whole of its content, and lifetime-free — and
+/// births a fresh record at the destination, one per distinct source record however many powerset
+/// entries seal it. That is what lets a `CLOSE` block consolidate at all, since the capture plan
+/// flattens every per-call operator visible on the enclosing chain into the block scope.
 fn fill_scope<'b>(
     source: &'b Scope<'b>,
     copied: &'b Scope<'b>,
@@ -223,10 +229,39 @@ fn fill_scope<'b>(
         );
     }
 
-    debug_assert!(
-        visible.operators.is_empty(),
-        "the readiness gate declines a scope holding an operator registry entry",
-    );
+    // Re-birth per record, share per entry. A `GROUP`'s powerset keys — and a `CLOSE` flatten of
+    // them — all seal one record, so the fill memoizes the rebuild on the source record's address
+    // and every subset entry lands on one reborn record, exactly as the source's entries share one.
+    // What a record gives up to be reborn is its member symbols and its mode, both lifetime-free
+    // plain data, so the read happens under the source envelope's own open and nothing routes
+    // through a nested transfer the way a captured callable must.
+    //
+    // `OperatorGroup::alloc` re-sorts and re-dedups what it is handed, so the reborn record renders
+    // a byte-identical `declaration_key`: the upsert's structural arm survives the copy verbatim,
+    // and only its address arm — a fresh record, by construction — differs.
+    let mut reborn: Vec<(usize, GroupSeal<'b>)> = Vec::new();
+    for (probe, cell) in visible.operators.iter() {
+        let (address, members, mode) = cell.open(|group| {
+            (
+                std::ptr::from_ref(group) as usize,
+                group.member_symbols().collect::<Vec<_>>(),
+                group.mode(),
+            )
+        });
+        let seal = match reborn.iter().find(|(key, _)| *key == address) {
+            Some((_, seal)) => seal.clone(),
+            None => {
+                let born = copied.birth_operator_group(&members, mode);
+                let seal = GroupSeal::of_delivered(copied, &born);
+                reborn.push((address, seal.clone()));
+                seal
+            }
+        };
+        copied
+            .bindings()
+            .insert_copied_operator_group(*probe, BindingIndex::value(0), &seal);
+    }
+
     debug_assert!(
         visible.claims.is_empty(),
         "the readiness gate declines a scope with a standing claim",

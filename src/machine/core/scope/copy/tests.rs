@@ -13,11 +13,14 @@ use std::rc::Rc;
 
 use super::*;
 use crate::builtins::test_support::{TestRun, value_name};
+use crate::builtins::test_support::{operator_run, probe_symbol};
 use crate::machine::core::arena::CallFrame;
+use crate::machine::core::bindings::OperatorEntry;
 use crate::machine::core::bindings::{BindingIndex, WriteGate};
+use crate::machine::core::carrier_witness::GroupSeal;
 use crate::machine::core::kfunction::Body;
 use crate::machine::core::tests::{body_no_op, unit_signature};
-use crate::machine::model::RunRegistries;
+use crate::machine::model::{KeywordSymbol, OperatorGroup, ReductionMode, RunRegistries};
 use crate::machine::{program_storage, run_root_storage};
 use crate::witnessed::FoldedPlacement;
 
@@ -197,4 +200,190 @@ fn an_open_source_chain_declines() {
             "an unclosed captured chain declines rather than copying a table that can still grow",
         );
     });
+}
+
+/// Register a two-member `FoldLeft` group in `scope` under all three of its powerset probes — the
+/// shape a `GROUP` declaration installs, and the shape a `CLOSE OVER` flatten copies out of an
+/// enclosing chain. Hands back the source record's address and the probe keys.
+fn register_powerset<'a>(
+    scope: &'a Scope<'a>,
+    registries: &RunRegistries,
+) -> (usize, Vec<KeywordSymbol>) {
+    let record = scope.birth_operator_group(
+        &[probe_symbol("⊕"), probe_symbol("⊗")],
+        ReductionMode::FoldLeft,
+    );
+    let seal = GroupSeal::of_delivered(scope, &record);
+    let probes = vec![
+        operator_run(&["⊕"], registries),
+        operator_run(&["⊗"], registries),
+        operator_run(&["⊕", "⊗"], registries),
+    ];
+    for probe in &probes {
+        scope
+            .register_operator_group_direct(
+                *probe,
+                seal.clone(),
+                BindingIndex::value(0),
+                registries,
+                &mut WriteGate::for_test(),
+            )
+            .expect("a fresh powerset key registers");
+    }
+    (seal.address, probes)
+}
+
+/// **An operator registration no longer pins, and its table copies.** The readiness gate stopped
+/// naming operators, so a scope holding a `GROUP`'s powerset consolidates; the copied table carries
+/// the same probe set, and all three subset entries seal **one** reborn record — the per-record
+/// memo doing its job, where a per-entry rebuild would have minted three where the source has one.
+/// The reborn address differs from the source's by construction: that is the copy's whole point.
+#[test]
+fn an_operator_registration_copies_over_one_reborn_record() {
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let registries = RunRegistries::new();
+    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+
+    frame.with_scope(|source| {
+        let (source_address, probes) = register_powerset(source, &registries);
+        let top = bind_self_capturing(source, "f", 0, &registries);
+        source.close();
+
+        let copied_scope = consolidated(top, door_over(source)).captured_scope();
+        let copied = copied_scope.bindings().operator_entry_addresses();
+        assert_eq!(
+            copied.len(),
+            probes.len(),
+            "the copy holds one entry per source probe",
+        );
+        for probe in &probes {
+            assert!(
+                copied.iter().any(|(key, _)| key == probe),
+                "every source probe key is registered in the copy",
+            );
+        }
+        let reborn = copied[0].1;
+        assert!(
+            copied.iter().all(|(_, address)| *address == reborn),
+            "every powerset entry seals one reborn record, as the source's entries share one",
+        );
+        assert_ne!(
+            reborn, source_address,
+            "and it is a fresh record, not the region-resident one the source sealed",
+        );
+    });
+}
+
+/// **The copy preserves the upsert's decisions.** A registration that was a silent no-op against
+/// the source table is one against the copy, and a chaining-mode conflict is still a conflict.
+/// The address arm cannot carry that: a reborn record has a fresh address by construction. What
+/// carries it is the structural arm — `OperatorGroup::alloc` re-sorts and re-dedups, so the reborn
+/// record renders a byte-identical `declaration_key`, which the copied entry stores verbatim.
+#[test]
+fn a_copied_table_preserves_the_upsert_decisions() {
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let registries = RunRegistries::new();
+    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+
+    frame.with_scope(|source| {
+        let (_, probes) = register_powerset(source, &registries);
+        let top = bind_self_capturing(source, "f", 0, &registries);
+        source.close();
+
+        let copied_scope = consolidated(top, door_over(source)).captured_scope();
+        let members = [probe_symbol("⊕"), probe_symbol("⊗")];
+
+        let twin = copied_scope.birth_operator_group(&members, ReductionMode::FoldLeft);
+        assert!(
+            copied_scope
+                .register_operator_group_direct(
+                    probes[0],
+                    GroupSeal::of_delivered(copied_scope, &twin),
+                    BindingIndex::value(0),
+                    &registries,
+                    &mut WriteGate::for_test(),
+                )
+                .is_ok(),
+            "an equal declaration against the copy is the silent no-op it was against the source",
+        );
+
+        let clashing = copied_scope.birth_operator_group(&members, ReductionMode::FoldRight);
+        assert!(
+            copied_scope
+                .register_operator_group_direct(
+                    probes[1],
+                    GroupSeal::of_delivered(copied_scope, &clashing),
+                    BindingIndex::value(0),
+                    &registries,
+                    &mut WriteGate::for_test(),
+                )
+                .is_err(),
+            "and a disagreeing chaining mode is still the conflict it was against the source",
+        );
+    });
+}
+
+/// **An operator table prices its own rebuild.** The chooser reads `binding_copy_cost` to decide
+/// whether a crossing is worth copying, so a table the engine now rebuilds has to enter that memo —
+/// otherwise the gate's removal buys a copy the chooser priced at zero. A powerset charges its
+/// record once and its entries once each, and the copied scope arrives at the same figure.
+#[test]
+fn an_operator_table_prices_its_rebuild() {
+    let program = program_storage();
+    let root = run_root_storage();
+    let test_run = TestRun::silent(&program, &root);
+    let registries = RunRegistries::new();
+    let frame: Rc<CallFrame> = CallFrame::new(test_run.scope);
+
+    frame.with_scope(|source| {
+        let before = source.bindings().binding_copy_cost();
+        let (_, probes) = register_powerset(source, &registries);
+        let charged = source.bindings().binding_copy_cost() - before;
+
+        let record_bytes =
+            (size_of::<OperatorGroup<'static>>() + 2 * size_of::<KeywordSymbol>()) as u64;
+        let declaration = OperatorGroup::alloc(
+            source.brand(),
+            &[probe_symbol("⊕"), probe_symbol("⊗")],
+            ReductionMode::FoldLeft,
+        )
+        .declaration_key();
+        let entries =
+            probes.len() as u64 * (size_of::<OperatorEntry<'static>>() + declaration.len()) as u64;
+        assert_eq!(
+            charged,
+            record_bytes + entries,
+            "the powerset charges its one record once and each subset entry its own bytes",
+        );
+
+        let top = bind_self_capturing(source, "f", 0, &registries);
+        source.close();
+        let with_operators = copied_cost(consolidated(top, door_over(source)));
+        assert_eq!(
+            with_operators - copied_cost_without_operators(test_run.scope, &registries),
+            charged,
+            "and the copy prices its own re-consolidation on the same terms",
+        );
+    });
+}
+
+/// The `binding_copy_cost` a copied callable's captured scope carries.
+fn copied_cost(copy: &KFunction<'_>) -> u64 {
+    copy.captured_scope().bindings().binding_copy_cost()
+}
+
+/// The same consolidation with **no** operator registration — the baseline the operator-table
+/// charge is read against, so the measurement isolates the table from whatever the rebuilt callable
+/// binding itself contributes.
+fn copied_cost_without_operators<'a>(outer: &'a Scope<'a>, registries: &RunRegistries) -> u64 {
+    let frame: Rc<CallFrame> = CallFrame::new(outer);
+    frame.with_scope(|source| {
+        let top = bind_self_capturing(source, "f", 0, registries);
+        source.close();
+        copied_cost(consolidated(top, door_over(source)))
+    })
 }

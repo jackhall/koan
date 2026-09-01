@@ -4,7 +4,8 @@
 //! [workgraph/design/reach.md § The carrier states](../../../workgraph/design/reach.md#the-carrier-states).
 
 use crate::machine::model::{
-    Carried, CarriedFamily, DispatchToken, KObject, OperatorGroupFamily, UntypedKey, retains_home,
+    Carried, CarriedFamily, DispatchToken, KObject, KeywordSymbol, OperatorGroup,
+    OperatorGroupFamily, UntypedKey, retains_home,
 };
 
 use super::arena::{FrameStorage, KoanRegion};
@@ -164,6 +165,11 @@ pub(crate) struct GroupSeal<'a> {
     /// `OperatorGroup::declaration_key()` — the stored form of the upsert's **structural** arm, for
     /// the two-`OP`-statements case where one declaration allocates two records.
     pub declaration: String,
+    /// What re-birthing the record itself costs a copy — the `OperatorGroup` struct beside its
+    /// member slice. Read here, where the record is open, so the cost memo prices an operator
+    /// install without reopening a carrier. A powerset install shares one record across every
+    /// subset entry, so the registry writes charge this once per record rather than once per key.
+    pub record_bytes: u64,
 }
 
 impl<'a> GroupSeal<'a> {
@@ -179,12 +185,20 @@ impl<'a> GroupSeal<'a> {
     /// free under the library's self rule. The address and the declaration key are both read inside
     /// the envelope's own open and travel as region-free data.
     pub(crate) fn of_delivered(scope: &'a Scope<'a>, cell: &DeliveredOperatorGroup) -> Self {
-        let (address, declaration) =
-            cell.open(|group| (std::ptr::from_ref(group) as usize, group.declaration_key()));
+        let (address, declaration, record_bytes) = cell.open(|group| {
+            (
+                std::ptr::from_ref(group) as usize,
+                group.declaration_key(),
+                (size_of::<OperatorGroup<'static>>()
+                    + group.member_symbols().count() * size_of::<KeywordSymbol>())
+                    as u64,
+            )
+        });
         GroupSeal {
             sealed: cell.rest_in(scope.brand().handle()),
             address,
             declaration,
+            record_bytes,
         }
     }
 }
