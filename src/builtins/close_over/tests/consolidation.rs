@@ -35,6 +35,10 @@ fn a_self_referential_dispatch_bucket_copies_to_one_copied_scope() {
         "9\n",
         "the copied bucket dispatches after the producer frame has died",
     );
+    // The census reads the *mechanism*: `seam-force-pin` overrides the chooser and pins every
+    // callable escape, so only a build that lets the chooser decide can assert the count. The
+    // output assertion above is language-visible and is never gated.
+    #[cfg(not(feature = "seam-force-pin"))]
     assert_eq!(
         held_and_released(source),
         (1, 0),
@@ -54,6 +58,10 @@ fn sibling_closures_share_one_copied_scope() {
          (FN :{} -> Number = ((a {}) + (b {})))))\n\
          LET esc = (mk {n = 10})\n";
     assert_eq!(output(&format!("{source}PRINT (esc {{}})\n")), "23\n");
+    // The census reads the *mechanism*: `seam-force-pin` overrides the chooser and pins every
+    // callable escape, so only a build that lets the chooser decide can assert the count. The
+    // output assertion above is language-visible and is never gated.
+    #[cfg(not(feature = "seam-force-pin"))]
     assert_eq!(
         held_and_released(source),
         (1, 0),
@@ -76,6 +84,10 @@ fn a_close_over_callable_capture_severs_transitively() {
          CLOSE OVER (h) ((LET g = (FN :{} -> Number = (h {}))) (g))))\n\
          LET esc = (mk {h = helper})\n";
     assert_eq!(output(&format!("{source}PRINT (esc {{}})\n")), "15\n");
+    // The census reads the *mechanism*: `seam-force-pin` overrides the chooser and pins every
+    // callable escape, so only a build that lets the chooser decide can assert the count. The
+    // output assertion above is language-visible and is never gated.
+    #[cfg(not(feature = "seam-force-pin"))]
     assert_eq!(
         held_and_released(source),
         (1, 0),

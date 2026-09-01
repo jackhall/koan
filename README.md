@@ -243,7 +243,8 @@ src/
     │   ├── scope/
     │   │   ├── resolve.rs     name-resolution ladders — value / type / operator-group lookup, walk_chain / resolve_builtin_first, visibility cutoff, builtin-shadow consults
     │   │   ├── registry.rs    write doors — the seal_* construction halves of the value binds, the submission-channel placeholder installs, the owns-its-bindings write-target guard, and the *_direct writes for unpublished scopes
-    │   │   └── reach.rs       reach / carrier derivation — resident value / type carriers, envelope sealing, copy-free / copying adoption, and the module store folds
+    │   │   ├── reach.rs       reach / carrier derivation — resident value / type carriers, envelope sealing, copy-free / copying adoption, and the module store folds
+    │   │   └── copy.rs        the environment copy behind the Consolidate verb — rebuilds a callable's per-call captured chain at the destination region, memoized per source scope so cycles terminate and siblings share
     │   ├── ref_carriers.rs  ScopeRefFamily / ModuleRefFamily — the Reattachable families a region-stored &Scope / &Module carrier erases through
     │   ├── source.rs      source-span and provenance carrier for errors
     │   ├── scope_id.rs    ScopeId — counter-minted nominal scope identity for per-declaration types

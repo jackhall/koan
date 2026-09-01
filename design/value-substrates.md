@@ -323,10 +323,26 @@ chooses per value:
 
 - **Copy** — rebuild the value's entire reachable structure at the destination
   brand, releasing the producer pin. Cells that are region-borrow leaves
-  (closures, modules) ride as borrows in either verb; their own reaches ride
+  (closures, modules) ride as borrows under this verb; their own reaches ride
   the witness unchanged. A copy is total or not at all — a partial spine copy
   would pay the copy *and* keep the pin.
+- **Consolidate** — the callable verb: a *top-level* closure crossing the seam
+  has the per-call portion of its captured scope chain rebuilt at the
+  destination too, so the product reaches no source region and the producer
+  frames are free to die
+  ([lazy-closures.md § Lazy close](lazy-closures.md#lazy-close-the-copy-verb-through-callables)).
+  Chosen by `copy_or_pin_callable`, the substrate chooser's twin over the one
+  thing a substrate has no analogue of — an environment — priced in the same
+  currency under the same α, with the same foreign-crossing pin. Its numerator
+  is a per-scope monotone `copy_cost` memo bumped at bind time rather than a
+  substrate's construction-time weight, so a closure's definition site pays
+  nothing for it. An environment the engine cannot rebuild is not waited on: it
+  declines, the value rides verbatim, and that is the pin.
 - **Pin** — the default above: borrow rides, region transfers by hold.
+
+`Copy` and `Consolidate` are the two **rebuilding** verbs (`RegionEscape::rebuilds`):
+both claim the producer's release, and both have that claim answered off the
+product rather than restated per verb.
 
 The core decision is a **scale-free ratio** over two numbers that already exist
 at the seam:
@@ -361,6 +377,16 @@ resident in a region the producer host does not own — always pins: pricing a
 copy-out at an intermediate host is region evacuation's job, not the
 per-crossing seam's.
 
+A callable's borrows-home answer is exact rather than conservative: the birth
+door derives a `KFunction`'s residence from the scope it captures, so the two
+cannot come apart and `retains_home` compares the product's captured scope
+region against the home by identity. That is also what lets a consolidated
+closure release its producer — the rebuilt product captures the copy, so the
+source region answers `false`. A `Module` stays conservatively `true`: a
+transparent-ascription view re-tags a foreign module into the viewing scope's
+own region, so residence is not recoverable from the value, and retaining more
+can never dangle.
+
 The ratio is gated by the exact **borrows-home** query. Set, the value **pins
 outright** — a leaf provably borrows the home region, so a copy would pay the
 rebuild *and* keep the pin; the ratio is never consulted. Clear, the copy
@@ -390,8 +416,8 @@ binding's life.
 The policy is **semantically invisible**: koan values are immutable and
 identity-free, so nothing in the language can distinguish a copied result from a
 pinned one. Two mutually-exclusive build features (`seam-force-copy`,
-`seam-force-pin`) force every record escape seam to a single verb, turning the
-whole output-asserting suite into an **equivalence battery** — identical
+`seam-force-pin`) force every record and callable escape seam to a single verb,
+turning the whole output-asserting suite into an **equivalence battery** — identical
 hardcoded expectations passing under both prove the choice changes only which
 memory mechanism runs, never observable behavior. This is also the seam where
 **region evacuation** becomes a local decision: at frame death with escapees,

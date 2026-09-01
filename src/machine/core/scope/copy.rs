@@ -174,7 +174,9 @@ fn copy_chain<'b>(
 /// Fill `copied` from `source`'s visible bindings. `source` is closed and claim-free (the readiness
 /// gate), so no visibility cutoff applies: a scope no live call-site chain names reads as complete,
 /// every entry visible to every body that captured it, and copying the table wholesale under a
-/// fresh id reproduces exactly what the source answered.
+/// fresh id reproduces exactly what the source answered. Every copied entry therefore lands at
+/// index 0: a [`BindingIndex`] is read only by the `idx < cutoff` visibility rule, and the copy's
+/// fresh id is named by no chain, so the source's lexical positions carry no information here.
 ///
 /// A binding whose value **is** a callable is rebuilt against the copied scope it captured
 /// ([`rebuild_callable`]); that is what makes the recursive-closure and sibling-sharing cases hold.
@@ -381,3 +383,6 @@ fn destination_operand<'b>(
 fn rebuilt_still_borrows(product: &&KFunction<'_>, region: &KoanRegion) -> bool {
     std::ptr::eq(product.captured_scope().region(), region)
 }
+
+#[cfg(test)]
+mod tests;

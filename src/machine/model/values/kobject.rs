@@ -957,12 +957,16 @@ pub(crate) enum RegionEscape {
     /// [`product_reaches_region`]: crate::machine::core::product_reaches_region
     Copy,
     /// Total rebuild of a **callable's captured environment** at the destination region: the
-    /// per-call portion of the scope chain a `KFunction` / `Module` captured is rebuilt there —
-    /// data bindings relocated under [`Copy`](Self::Copy), nested callables recursed, eternal-homed
-    /// scopes referenced verbatim — so the product reaches no source region. Chosen only by
-    /// [`copy_or_pin_callable`], and only for a top-level callable at a priced escape seam or an
-    /// explicit `CLOSE OVER` callable capture; a callable **cell** inside a copied container keeps
-    /// riding verbatim under `Copy`.
+    /// per-call portion of the scope chain a `KFunction` captured is rebuilt there — data bindings
+    /// relocated under [`Copy`](Self::Copy), nested callables recursed, eternal-homed scopes
+    /// referenced verbatim — so the product reaches no source region. Chosen at a priced escape
+    /// seam ([`copy_or_pin_callable`]) and at an explicit `CLOSE OVER` callable capture; a callable
+    /// **cell** inside a copied container keeps riding verbatim under `Copy`.
+    ///
+    /// A `Module` reaching this verb declines: its child scope is `MODULE`-kinded, carrying an
+    /// announced window and a group record the readiness gate does not model, so it takes the
+    /// verbatim ride like any other unmodelled environment
+    /// ([callable-copy-tuning](../../../../roadmap/foundation/callable-copy-tuning.md)).
     ///
     /// Everything the verb claims about release is derived from the product, exactly as `Copy`'s
     /// is: the rebuild is total or it does not happen. An environment the engine cannot rebuild —
@@ -989,8 +993,8 @@ impl RegionEscape {
 /// observable in language semantics; provisional pending measurement.
 const ALPHA_DIVISOR: u64 = 4;
 
-/// The escape-seam **callable** decision: how a top-level `KFunction` / `Module` whose captured
-/// chain starts at `captured` crosses out of producer `host`. The substrate chooser's twin
+/// The escape-seam **callable** decision: how a top-level `KFunction` whose captured chain starts
+/// at `captured` crosses out of producer `host`. The substrate chooser's twin
 /// ([`copy_or_pin`]) over the one thing a substrate has no analogue of — an environment — and it
 /// prices in the same currency under the same α.
 ///

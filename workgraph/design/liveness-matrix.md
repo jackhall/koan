@@ -199,14 +199,13 @@ interface either way.
 Everything. No part of this design is implemented, and the roadmap sequence
 that ships it — pool-owned frames and handle-based anchors, the pin matrix,
 the lexical structure, reach-mask carriers, the admission interface, the
-retention pressure valve, the recycling gate — is not yet planned. Two
-koan-side primitives the design leans on are tracked:
+retention pressure valve, the recycling gate — is not yet planned. The
+koan-side primitive this design's consolidation gate fires — the transitive
+callable copy, at the priced escape seam and at an explicit capture-severing
+`CLOSE OVER` — is shipped
+([lazy-closures.md § Lazy close](../../design/lazy-closures.md)); one further
+primitive it leans on is tracked:
 
-- [Lazy close](../../roadmap/foundation/lazy-close.md) — the transitive
-  callable copy this design's consolidation gate actually fires. Its explicit
-  counterpart, the capture-severing `CLOSE OVER` copy that creates
-  consolidation chances ahead of frame death, is shipped
-  ([lazy-closures.md](../../design/lazy-closures.md)).
 - [Yielding iterators](../../roadmap/foundation/yielding-iterators.md) —
   node-backed producers that yield many values before dying, the surface
   family the admission iterator belongs to.

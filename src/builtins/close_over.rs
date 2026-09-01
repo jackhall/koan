@@ -28,9 +28,12 @@
 //!   ([`Scope::bind_delivered_severed`]), which forces the `Copy` verb: data is rebuilt
 //!   transitively at the block's own door and strings are re-bumped, so the copy's release-exact
 //!   reach names nothing in the producer's region and that region is free to die. A `KType` is a
-//!   lifetime-free handle and copies by value. A capture that resolves to a *callable or module*
-//!   rides that same copy as a borrow leaf — i.e. pinned — which is the deferred half of the design
-//!   ([lazy close](../../roadmap/foundation/lazy-close.md) owns the transitive callable copy).
+//!   lifetime-free handle and copies by value. A capture that resolves to a **callable** takes the
+//!   `Consolidate` verb instead: its own captured environment is rebuilt at the block's region too,
+//!   so the severance is transitive ([lazy-closures.md § Lazy
+//!   close](../../design/lazy-closures.md)). A **module** capture still rides that copy as a
+//!   borrow leaf — i.e. pinned — the remaining deferred half
+//!   ([callable-copy-tuning.md](../../roadmap/foundation/callable-copy-tuning.md)).
 //! - A **signature-shaped pattern** `(HELPER _)` names one full untyped bucket key and captures
 //!   every visible overload registered under it, pinned.
 //! - **Implicit close** copies every dispatch registration, operator-registry entry and module

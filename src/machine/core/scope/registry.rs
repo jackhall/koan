@@ -241,8 +241,9 @@ impl<'a> Scope<'a> {
     ///
     /// Distinct from [`Self::bind_delivered_severed`], which is the opposite verb for the opposite
     /// purpose: an explicit data capture copies so the producer can die, a closed-over module pins
-    /// because copying through a module is [lazy close](../../../../roadmap/foundation/lazy-close.md)'s
-    /// job, not this form's.
+    /// because the environment copy does not rebuild a `MODULE`-kinded scope
+    /// ([callable-copy-tuning.md](../../../../roadmap/foundation/callable-copy-tuning.md)); a
+    /// closed-over *callable* takes the severing door and consolidates.
     pub(crate) fn adopt_binding_pinned(
         &'a self,
         name: ValueSymbol,

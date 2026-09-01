@@ -107,23 +107,69 @@ invariants of the form rather than incidental choices:
 
 ## Lazy close: the copy verb through callables
 
-Deep-copying a function or module deep-copies the data it closes over: the
-captured scope chain is rebuilt at the destination — data bindings relocated
-under `Copy`, nested callables recursed, eternal-homed scopes referenced
-verbatim — memoized per source scope and callable, so a recursive FN's
-scope→function→scope cycle terminates and sibling closures sharing a
-defining scope share the copy. The trigger is seam pricing, the same
-copy-vs-pin shape as [value-substrates.md](value-substrates.md): copy when
-the rebuild is small against what the pin would retain.
+Deep-copying a function deep-copies the data it closes over. The per-call
+portion of the captured scope chain is rebuilt at the destination — data
+bindings relocated under `Copy`, nested callables recursed, eternal-homed
+scopes referenced verbatim, each copied link taking a **fresh `ScopeId`** —
+memoized per source scope, so a recursive FN's scope→function→scope cycle
+terminates and sibling closures sharing a defining scope share the copy. The
+engine is [scope/copy.rs](../src/machine/core/scope/copy.rs); the verb naming
+it is `RegionEscape::Consolidate`, the third verb beside `Copy` and `Pin`
+([kobject.rs](../src/machine/model/values/kobject.rs)).
+
+The fresh id is free of consequence because a visibility cutoff is
+reader-relative: `LexicalFrame::index_for` gates a scope's bindings only while
+a live call-site chain names that `scope_id`, and a copy's id is named by no
+chain, so every entry in a copied scope reads as visible to every body that
+captured it — exactly what the closed source scope already answered. Copied
+entries therefore carry no lexical position of their own.
+
+The copy runs **inside the relocation fold**, at the fold's own brand: a
+delivered value re-anchors only at the borrow that opens it, never at a region
+lifetime, so a bound callable is not read out and rebuilt but *relocated*,
+through a nested `transfer_into` whose destination operand pairs the
+destination region's handle with the copied scope the rebuilt callable attaches
+under (`RegionScopeFamily`,
+[ref_carriers.rs](../src/machine/core/ref_carriers.rs)). Source callable and
+copied scope meet at that nested fold's brand. The consequence for the memo is
+that it can only carry source *addresses* across brands, which is what it is
+keyed by; the consequence for the retention claim is that it stays
+product-derived like every other relocation's — a rebuilt callable's one region
+borrow is its captured scope, so a copy releases the producer and a declined
+rebuild that rode verbatim keeps it, out of one predicate.
+
+### Two surfaces, and the readiness gate
+
+The copy fires at exactly two surfaces: a top-level callable crossing the
+**priced escape seam** (`copy_or_pin_callable`, which prices the chain's summed
+binding-copy memos against what the pin would retain, under the same α as the
+substrate chooser and with the same foreign-crossing pin), and an explicit
+**`CLOSE OVER` callable capture**, which consolidates unconditionally — the
+form exists to cut exactly that retention. A callable *cell* inside a copied
+container rides verbatim under `Copy`.
+
+The pricing fact is a per-scope monotone `copy_cost` memo on `Bindings`, bumped
+as each value bind applies from the bound value's already-memoized copy weight.
+A closure's definition site therefore pays nothing: the bump happens where a
+bind was already happening, and the seam's read is O(chain depth) over stored
+counters.
+
+A scope is rebuildable only when it is **closed**, owns its bindings (a
+`USING … SCOPE` window is a façade with nothing of its own), carries **no
+standing claim**, holds **no operator-registry entry**, and is `Root`- or
+`Anonymous`-kinded. `Sig` scopes carry a live slot collector and `Module`
+scopes an announced window and group record, neither of which this engine
+rebuilds — so a module value declines by the same gate as every other
+unmodelled environment rather than by a special case.
 
 Because the copy can fire at an arbitrary escape crossing, it may meet an
 environment still under construction: an unfinalized binding, or a captured
 scope whose defining block has not closed. The copy then pins rather than
-parks — `Pin` is always sound, and severance retries at a later priced
-crossing, frame death at the latest, by which point the scope has closed.
-No wait edge is ever added to the finalize walk, so the deadlock two
-mutually-referencing in-flight environments would otherwise create is
-unconstructible.
+parks — `Pin` is always sound, since retaining more never dangles. No wait edge
+is ever added to the finalize walk, so the deadlock two mutually-referencing
+in-flight environments would otherwise create is unconstructible. The engine
+re-checks readiness itself before it allocates anything: the chooser's earlier
+verdict is pricing, not authority.
 
 ## Inferred capture
 
@@ -173,9 +219,14 @@ the name half of a `<name> :<Type>` pair — is not a use at all.
 The type channel has two order-independent windows the position rule does not
 describe, and the walk mirrors both:
 
-- **Self-recursion.** A nominal declaration binds the names it declares inside
-  its own representation — `NEWTYPE Tree = :{left :Tree}`, and a `UNION`'s
-  variant tags.
+- **Self-recursion.** A nominal declaration binds its declared **binder** inside
+  its own representation — `NEWTYPE Tree = :{left :Tree}`. A `UNION`'s variant
+  tags are not among them: a tag is a member label, reached only through its
+  binder or by projection off it ([user-types.md § Unions dissolve into
+  per-variant newtypes](typing/user-types.md#unions-dissolve-into-per-variant-newtypes)),
+  so the walk reads a union schema at its `<Tag> <payload>` stride — labels on
+  the tag half, uses on the payload half — and a payload spelled like a sibling
+  tag names an outer type.
 - **Module-body announcement.** A `MODULE` / `GROUP` body pre-announces its
   top-level nominal declarations body-wide
   ([`announce_type_members`](../src/machine/model/binder.rs)), so a mutually
@@ -215,7 +266,8 @@ overloads.
 
 ## Open work
 
-- [Lazy close](../roadmap/foundation/lazy-close.md) — the transitive
-  callable copy and its pin-not-park downgrade rule; the liveness matrix
-  ([liveness-matrix.md](../workgraph/design/liveness-matrix.md)) consumes it
-  as its proactive consolidation lever.
+- [Callable copy tuning](../roadmap/foundation/callable-copy-tuning.md) — the
+  levers the first seam leaves unpulled: foreign-crossing pricing (so a pin can
+  be re-consolidated at a later crossing), callable cells inside copied
+  containers, module values and `USING`-window scopes, and a measured
+  justification for α.

@@ -1,12 +1,13 @@
 # Callable copy tuning
 
 The pricing and recursion levers the first callable-copy seam
-([lazy-close.md](lazy-close.md)) deliberately leaves unpulled.
+([lazy-closures.md § Lazy close](../../design/lazy-closures.md)) deliberately
+leaves unpulled.
 
 **Problem.** The callable copy consolidates an escaping closure at exactly two
-surfaces: a top-level `KFunction` / `Module` crossing the escape seam out of
-its own captured region, and an explicit `CLOSE OVER` capture. Everything else
-still pins:
+surfaces: a top-level `KFunction` crossing the escape seam out of its own
+captured region, and an explicit `CLOSE OVER` capture. Everything else still
+pins:
 
 - A **foreign crossing** pins unconditionally, mirroring the substrate rule in
   [`copy_or_pin`](../../src/machine/model/values/kobject.rs). A callable that
@@ -21,6 +22,13 @@ still pins:
 - A captured chain holding a **`USING … SCOPE` window** (`Borrowed` bindings)
   reads as not-ready and pins, though the module scope it aliases may be
   closed and cheap.
+- A **module value** never consolidates. Its child scope is `MODULE`-kinded and
+  the readiness gate declines that kind, so an escaping module pins its
+  producer chain however small and closed the body is.
+- A scope holding an **operator-registry entry** declines for the same reason:
+  a `GROUP` declaration's powerset keys, or the flattened copies a `CLOSE OVER`
+  block installs, resolve to a region-resident record the engine does not
+  rebuild.
 
 **Acceptance criteria.**
 
@@ -32,6 +40,9 @@ still pins:
   environments.
 - The chooser's tuning constants are justified by a measured workload
   (smallest `n` that shows the trend), recorded where the constant is defined.
+- An escaping module value whose body scope is closed and claim-free
+  consolidates on the same terms a closure does, and a scope holding operator
+  registrations is rebuildable rather than declined.
 
 **Directions.**
 
@@ -46,6 +57,10 @@ still pins:
 - *`Borrowed` window scopes — open.* Copy the façade through the module
   scope's memo entry (a window and its module value share one copy), or keep
   the not-ready pin.
+- *Module and operator-bearing scopes — open.* Teach the engine to rebuild an
+  `AnnouncedWindow` and an `OperatorGroup` record so a `MODULE`-kinded scope
+  passes the readiness gate, or keep the gate and consolidate a module value by
+  rebuilding only what its members reach.
 
 ## Dependencies
 
@@ -54,7 +69,5 @@ reach; this item covers the per-crossing decisions.
 
 **Requires:**
 
-- [lazy-close.md](lazy-close.md) — the seam, chooser, and rebuild engine these
-  levers tune.
 
 **Unblocks:** none.
