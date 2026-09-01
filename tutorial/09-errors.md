@@ -57,8 +57,20 @@ TRY (mystery) -> :Str WITH
 {frames = [], name = mystery}
 ```
 
-Reading a single field off that record — `it.name` — is not available yet;
-field reads work on records reached through a declared type, not on a bare one.
+It is an ordinary record, so you can read a single field off it:
+
+```koan
+TRY (mystery) -> :Str WITH
+  Ok -> (PRINT "ok"),
+  UnboundName -> (PRINT it.name)
+```
+
+```text
+mystery
+```
+
+Every kind's record carries `frames`, the call stack the error passed through;
+[the error kinds you can catch](#the-error-kinds-you-can-catch) lists the rest per kind.
 
 A named branch always wins over `_`, regardless of order, so you can handle
 specific kinds and let the default mop up the rest:

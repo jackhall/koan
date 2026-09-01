@@ -1,9 +1,9 @@
 //! TRY-WITH branch dispatch over success and per-`KErrorKind` arms, plus re-raise on
 //! no-match and wildcard `_` coverage of dispatcher-internal kinds.
 //!
-//! An error arm binds `it` to the kind's payload **record** (ruling F3). A bare record carries no
-//! field read yet, so the arms that project a field off `it` are ignored pending
-//! [anonymous-record-field-read](../../../roadmap/type_language/anonymous-record-field-read.md).
+//! An error arm binds `it` to the kind's payload **record** (ruling F3), and a field read
+//! projects straight off that bare record, so an arm reads `it.name` / `it.message` / `it.frames`
+//! the same way it reads a field off any record value.
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
@@ -46,7 +46,6 @@ fn arm_violating_declared_return_type_errors() {
 }
 
 #[test]
-#[ignore = "an error arm's `it` is the payload record; field reads on one return with anonymous-record-field-read"]
 fn unbound_name_arm_catches_unbound_name() {
     let bytes = run_program(
         "TRY (foo) -> :Str WITH (\
@@ -72,7 +71,6 @@ fn dispatch_failed_arm_catches_keyworded_dispatch_failure() {
 }
 
 #[test]
-#[ignore = "an error arm's `it` is the payload record; field reads on one return with anonymous-record-field-read"]
 fn shape_error_arm_catches_shape_error() {
     // Inexhaustive MATCH is a deterministic ShapeError trigger.
     let bytes = run_program(
@@ -90,7 +88,6 @@ fn shape_error_arm_catches_shape_error() {
 }
 
 #[test]
-#[ignore = "an error arm's `it` is the payload record; field reads on one return with anonymous-record-field-read"]
 fn type_mismatch_arm_catches_record_newtype_value_mismatch() {
     // A record-repr newtype type-checks its value against the whole record repr, so the
     // mismatch names the record type rather than a single field type.
@@ -224,7 +221,6 @@ fn specific_arm_wins_over_wildcard() {
 }
 
 #[test]
-#[ignore = "an error arm's `it` is the payload record; field reads on one return with anonymous-record-field-read"]
 fn frames_non_empty_after_recursive_call() {
     // PRINT renders a List as `[item, …]`, so a non-empty frames list starts
     // with `[in ` and an empty list is `[]`.

@@ -29,7 +29,6 @@ fn success_wraps_value_in_ok() {
 /// A caught error is a `KError` member value, so the `Error` arm's `it` eliminates through the
 /// `MATCH … OVER KError` member walk — and `_` defaults the kinds the arm set leaves out.
 #[test]
-#[ignore = "an error arm's `it` is the payload record; field reads on one return with anonymous-record-field-read"]
 fn failure_wraps_lowered_error_in_error() {
     let bytes = run_program(
         "MATCH (CATCH (foo)) OVER Result -> :Str WITH (\

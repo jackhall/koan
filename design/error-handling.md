@@ -279,9 +279,11 @@ a documentary one.
 
 An error arm — in `TRY` or in `MATCH … OVER KError` — binds `it` to the kind's
 payload **record** (ruling F3, the same narrowing a union variant's arm takes).
-Reading a field off that record needs the bare-record field read tracked under
-[anonymous record field read](../roadmap/type_language/anonymous-record-field-read.md);
-until it lands, `it` is bindable and printable but `it.name` does not resolve.
+That record is an ordinary anonymous record value, so an arm reads a single field
+straight off it: `UnboundName -> (PRINT it.name)`, `ShapeError -> (PRINT
+it.message)`, and `it.frames` on any kind, through the same bare-record projection
+[`wrapped_field_cell`](../src/builtins/attr.rs) serves every record with. The
+per-kind field names are the table below.
 
 ### Exposed variants
 
@@ -346,6 +348,3 @@ lift stays opt-in.
 - **Continue-on-error** — top-level continuation past a single failed
   expression, useful for the CLI's batch mode, tracked under
   [continue-on-error for the REPL and batch mode](../roadmap/editor_tooling/continue-on-error.md).
-- **Field reads on an error arm's `it`** — an error arm binds the kind's payload
-  record, and a bare record carries no field read yet, tracked under
-  [anonymous record field read](../roadmap/type_language/anonymous-record-field-read.md).

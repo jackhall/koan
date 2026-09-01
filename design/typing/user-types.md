@@ -495,13 +495,26 @@ rules apply to both. See
 ATTR over a `KObject::Wrapped` falls through to `inner` via
 [`access_field`'s `Wrapped` arm](../../src/builtins/attr.rs). A runtime `Wrapped` lhs is
 matched by a *type*, never by a kind: it lands in the least-specific `s: Any` ATTR
-overload, and `access_field` validates the `Wrapped` shape in the body (a non-`Wrapped`
-value errors "a value with fields"), descending one level per access.
+overload, and `access_field` validates the shape in the body, descending one level per
+access.
 Specificity (`Any` ≺ `OfKind` ≺ `Identifier`) keeps this unambiguous with the
 sibling overloads: an `Identifier` lhs wins `body_identifier`, a module / type-token lhs
 wins its `OfKind` overload, and only a bare runtime value falls through here. Missing-field
 diagnostics name the inner record (`b: Boxed = Point; b.z` reports the field miss on
-`Point`) — the fall-through is transparent at the diagnostic level too. The nominal-family
+`Point`) — the fall-through is transparent at the diagnostic level too.
+
+The nominal layer is what the fall-through *adds*, not what makes a record readable: a
+bare `KObject::Record` — an anonymous record value with no `NEWTYPE` anywhere — projects
+a field off the same `RecordSubstrate` one layer shallower, so `person.name`, `ATTR person
+"name"` and `ATTR person (which)` all reach the same cell. Which fields that read admits is
+decided by the value's **carried record type**, the same currency dispatch reads by, not by
+the substrate's physical layout: a `FROM` projection shares the substrate whole and narrows
+only the carried type, so a projected-away field is unreadable through the view
+([type-language-via-dispatch.md § `FROM`](type-language-via-dispatch.md)). A miss on a bare
+record renders the structural type it carries (`` `:{x :Number y :Number}` has no field `z` ``),
+the same `ShapeError` shape a newtype's miss reports under its nominal name. A value with no
+fields at all — a NEWTYPE over `Number`, a bare scalar — falls to the catch-all, which names
+the field and the operand's rendered type rather than the builtin's `s` slot. The nominal-family
 keyword `Newtype` is *not* registered in
 [`KType::from_symbol`](../../src/machine/model/types/ktype_resolution.rs)'s table; the `OfKind(Newtype)`
 slot is type-channel-only and never matches a runtime value.

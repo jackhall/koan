@@ -1,16 +1,16 @@
-//! `ATTR <s> <field:Identifier>` — newtype (record-repr or scalar), module, or signature
+//! `ATTR <s> <field:Identifier>` — record (anonymous or newtype-wrapped), module, or signature
 //! field access. Surface syntax is the `.` infix operator. Overloads share the bucket
 //! `[Keyword, Slot, Slot]` and pick by lhs shape: [`body_identifier`] for `p.x` where
-//! the lhs is still an `Identifier`, [`body_newtype`] for a `Wrapped` lhs (a record-repr
-//! newtype's `.x` reads through to the wrapped record), [`body_module`] for chained module
-//! access.
+//! the lhs is still an `Identifier`, [`body_value`] for a runtime-value lhs (an anonymous record's
+//! `.x` reads off it directly; a record-repr newtype's reads through the wrap), [`body_module`]
+//! for chained module access.
 //!
 //! The lhs is matched by *type*, never by a kind: a module value picks `body_module` through the
 //! empty-signature slot every module's self-sig satisfies, a type-token lhs picks `body_type_lhs`
 //! through its `OfKind` kind, and any other value-channel lhs is caught by the least-specific
 //! `s: Any` slot and validated in [`access_field`]. Specificity (`Any` < `OfKind` < `Identifier`)
 //! resolves the overloads: an `Identifier` lhs wins `body_identifier`, a module / type-token lhs
-//! wins its own slot, and only a bare runtime value falls through to [`body_newtype`].
+//! wins its own slot, and only a bare runtime value falls through to [`body_value`].
 //!
 //! The `field` position splits the same way. A bare token is `Identifier`-classed and outranks
 //! `Str`, so the spelled forms above always win it; a field that arrives as a runtime string —
@@ -238,8 +238,8 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
     ))
 }
 
-/// Reads the `Wrapped` runtime lhs and projects the field through [`access_field`].
-pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
+/// Reads the runtime-value lhs and projects the field through [`access_field`].
+pub fn body_value<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
     let target = match ctx.args.object(&SLOTS.s) {
         Some(obj) => obj,
@@ -276,7 +276,7 @@ pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mac
 /// computed or literal string reaches here.
 ///
 /// The name is classified and interned at the read ([`classify_derived_field`]), so `s."x"` probes
-/// the same symbol `s.x` does. The lhs is read the way [`body_newtype`] reads its own `s :Any`
+/// the same symbol `s.x` does. The lhs is read the way [`body_value`] reads its own `s :Any`
 /// slot; a type-channel lhs names no runtime member and errors. A module lhs picks
 /// [`body_dynamic_module_field`] through the more specific empty-signature slot, the same split the
 /// bare-token overloads make.
@@ -300,7 +300,7 @@ pub fn body_dynamic_field<'a>(
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
-    // Same operand contract as `body_newtype`: a delivered lhs crosses as the read's operand so the
+    // Same operand contract as `body_value`: a delivered lhs crosses as the read's operand so the
     // projected member outlives every region the lhs reaches, and a carrier-less region-pure lhs is
     // placed through the shape-split pure door instead.
     match ctx.args.carrier(&SLOTS.s) {
@@ -367,7 +367,7 @@ fn module_lhs<'a>(
 /// a variant (`Maybe.Some` names it, `Maybe.Some 42` constructs through it); an abstract identity
 /// carries no receiver and errors. A module rides the value channel, so a module lhs lands in
 /// [`body_module`] instead. A nominal record handle carries no members here and falls through to
-/// the same TypeMismatch a static struct field access produces.
+/// the memberless-type error.
 fn access_type_member<'a>(
     scope: &Scope<'a>,
     kt: KType,
@@ -448,11 +448,11 @@ fn access_type_member<'a>(
         Projection::Abstract(name) => Err(abstract_type_has_no_members(
             &crate::machine::model::render_label(name.symbol(), registries),
         )),
-        Projection::NoMembers => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "s".to_string(),
-            expected: "a type with members".to_string(),
-            got: kt.name(registries),
-        })),
+        Projection::NoMembers => Err(KError::new(KErrorKind::ShapeError(format!(
+            "type `{}` has no member `{}`",
+            kt.name(registries),
+            field.text(registries)
+        )))),
     }
 }
 
@@ -466,16 +466,18 @@ fn abstract_type_has_no_members(name: &str) -> KError {
     )))
 }
 
-/// Walk nested `Wrapped` layers to the record member named `field` and **part it from its
+/// Walk any `Wrapped` layers to the record member named `field` and **part it from its
 /// container**: the cell arrives bundled with exactly its own run's stored reach, read off the run,
 /// never derived by a subset walk over the container. Lifetime-generic in the container's own region,
 /// so the parted cell is confined there until a relocation seam lifts it out.
 ///
-/// A record-repr newtype (an ex-struct) wraps a `KObject::Record`; the member reads straight off
-/// it, naming the nominal type in the miss diagnostic so `b.z` on a `Point` still reports `Point`.
-/// `Wrapped.inner` is invariantly not a `Wrapped` (the construction-time collapse rule peels any
-/// `Wrapped` before re-wrapping), so a scalar inner (a NEWTYPE-over-`Number`, which has no fields)
-/// falls to the `other` arm.
+/// Two shapes carry fields and both project off the same `RecordSubstrate`. An anonymous record
+/// value is read directly, and its miss renders the structural type it carries
+/// (`` `:{x :Number}` has no field `z` ``). A record-repr newtype (an ex-struct) wraps a
+/// `KObject::Record`; the member reads through the wrap, naming the nominal type in the miss so
+/// `b.z` on a `Point` reports `Point`. `Wrapped.inner` is invariantly not a `Wrapped` (the
+/// construction-time collapse rule peels any `Wrapped` before re-wrapping), so a scalar inner
+/// (a NEWTYPE-over-`Number`, which has no fields) falls to the `other` arm.
 fn wrapped_field_cell<'w>(
     target: &'w KObject<'w>,
     field: &FieldName<'_>,
@@ -495,15 +497,42 @@ fn wrapped_field_cell<'w>(
             },
             payload => wrapped_field_cell(payload, field, registries),
         },
-        other => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "s".to_string(),
-            expected: "a value with fields".to_string(),
-            got: other.ktype().name(registries),
-        })),
+        // An anonymous record value reads the same way, one layer shallower: the member parts off
+        // the substrate directly and the miss renders the value's structural type, since there is
+        // no nominal layer to name.
+        //
+        // The *carried type* decides which fields the read admits, the same currency dispatch
+        // reads by. `FROM` narrows that type while sharing the substrate whole, so a
+        // projected-away field is unreadable through the view even though its cell is still
+        // physically present. The substrate then supplies the cell for a field the type admits —
+        // the two agree on every field the type names.
+        KObject::Record(substrate, record_type) => {
+            let admitted = registries.types.with_node(*record_type, |node| match node {
+                TypeNode::Record { fields } => fields.get(field.symbol()).is_some(),
+                // A record value's handle is interned over its own fields at construction and
+                // re-stamped only to another record type, so no other node carries one.
+                _ => false,
+            });
+            match substrate.field_index(field.symbol()).filter(|_| admitted) {
+                Some(at) => Ok(substrate
+                    .project(at)
+                    .expect("the index came from this substrate's own layout")),
+                None => Err(KError::new(KErrorKind::ShapeError(format!(
+                    "`{}` has no field `{}`",
+                    record_type.name(registries),
+                    field.text(registries)
+                )))),
+            }
+        }
+        other => Err(KError::new(KErrorKind::ShapeError(format!(
+            "cannot read field `{}` off a `{}` value — it has no fields",
+            field.text(registries),
+            other.ktype().name(registries)
+        )))),
     }
 }
 
-/// Project `field` off the `Wrapped` runtime lhs whose carrier is the declared operand `lhs`.
+/// Project `field` off the runtime-value lhs whose carrier is the declared operand `lhs`.
 ///
 /// The member is **parted** from its container ([`wrapped_field_cell`]) under the envelope's own
 /// pins, so it arrives paired with exactly its own run's stored reach rather than the whole
@@ -676,15 +705,16 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
-    // NEWTYPE fall-through, including ex-structs. A computed `Wrapped` lhs (e.g.
-    // `seg.finish.x`) arrives in the Object channel; the `s: Any` slot matches the *value* by
-    // a type (never by a kind — `OfKind` is type-channel-only), and `access_field`'s `Wrapped`
-    // arm validates the shape, reading a record repr's field directly and recursing one level
-    // for any other inner (a non-`Wrapped` value errors "a value with fields"). This stays
-    // unambiguous with the sibling overloads: `Any` is the least specific, so an `Identifier`
-    // lhs picks `body_identifier`, a module / type-token lhs picks `body_module` /
-    // `body_type_lhs`, and only a bare runtime value falls through to here.
-    let newtype_sig = || {
+    // Runtime-value fall-through: a bare record and a NEWTYPE wrap (ex-structs included). A
+    // computed lhs (e.g. `seg.finish.x`) arrives in the Object channel; the `s: Any` slot matches
+    // the *value* by a type (never by a kind — `OfKind` is type-channel-only), and `access_field`
+    // validates the shape, reading a bare record's field off its substrate, a wrapped record
+    // repr's through one layer, and recursing for any other inner — a value with no fields errors
+    // naming the field and the operand's type. This stays unambiguous with the sibling overloads:
+    // `Any` is the least specific, so an `Identifier` lhs picks `body_identifier`, a module /
+    // type-token lhs picks `body_module` / `body_type_lhs`, and only a bare runtime value falls
+    // through to here.
+    let value_sig = || {
         sig(
             KType::ANY,
             vec![
@@ -754,7 +784,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     use crate::builtins::register_builtin;
     register_builtin(scope, identifier_sig(), body_identifier, registries, gate);
     register_builtin(scope, module_field_sig(), body_module, registries, gate);
-    register_builtin(scope, newtype_sig(), body_newtype, registries, gate);
+    register_builtin(scope, value_sig(), body_value, registries, gate);
     register_builtin(
         scope,
         dynamic_field_sig(),
@@ -992,14 +1022,11 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("LET n = 5");
         let err = test_run.run_one_err(test_run.parse_one("n.x"));
-        match &err.kind {
-            KErrorKind::TypeMismatch { arg, expected, got } => {
-                assert_eq!(arg, "s");
-                assert_eq!(expected, "a value with fields");
-                assert_eq!(got, "Number");
-            }
-            _ => panic!("expected TypeMismatch on non-struct lhs, got {err}"),
-        }
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("`x`") && msg.contains("`Number`") && !msg.contains("'s'")),
+            "expected a ShapeError naming the field and the operand type, got {err}",
+        );
     }
 
     #[test]
@@ -1067,14 +1094,11 @@ mod tests {
              LET d = (Distance (3.0))",
         );
         let err = test_run.run_one_err(test_run.parse_one("d.x"));
-        match &err.kind {
-            KErrorKind::TypeMismatch { arg, expected, got } => {
-                assert_eq!(arg, "s");
-                assert_eq!(expected, "a value with fields");
-                assert_eq!(got, "Number");
-            }
-            _ => panic!("expected TypeMismatch on NEWTYPE-over-Number field access, got {err}"),
-        }
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("`x`") && msg.contains("`Number`") && !msg.contains("'s'")),
+            "expected a ShapeError naming the field and the operand type, got {err}",
+        );
     }
 
     /// An opaque (`:|`) view re-tags a VAL-slot read with the per-call abstract identity:
@@ -1155,6 +1179,112 @@ mod tests {
             "expected ShapeError naming Boxed and z on Wrapped fall-through, got {err}",
         );
     }
+    /// An anonymous record value is projectable on its own: `person.name` reads the field with no
+    /// `NEWTYPE` declaration anywhere in the program.
+    #[test]
+    fn attr_reads_field_off_anonymous_record() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("LET person = {name = \"Ada\", age = 36}");
+        assert!(
+            matches!(test_run.run_one(test_run.parse_one("person.name")), KObject::KString(s) if *s == "Ada"),
+        );
+        assert!(
+            matches!(test_run.run_one(test_run.parse_one("person.age")), KObject::Number(n) if *n == 36.0),
+        );
+    }
+
+    /// The dynamic spelling tracks the dotted one: `ATTR person "name"` reads the same field off
+    /// the same anonymous record.
+    #[test]
+    fn attr_dynamic_string_reads_anonymous_record() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("LET person = {name = \"Ada\", age = 36}");
+        assert!(
+            matches!(test_run.run_one(test_run.parse_one("ATTR person \"name\"")), KObject::KString(s) if *s == "Ada"),
+        );
+    }
+
+    /// A field name computed at runtime reads the same cell: the name is classified and interned at
+    /// the read, so a bound string reaches the same symbol the token spelling does.
+    #[test]
+    fn attr_computed_field_reads_anonymous_record() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("LET person = {name = \"Ada\", age = 36}\nLET which = \"name\"");
+        assert!(
+            matches!(test_run.run_one(test_run.parse_one("ATTR person (which)")), KObject::KString(s) if *s == "Ada"),
+        );
+    }
+
+    /// A miss on an anonymous record names the field, the same `ShapeError` shape a `NEWTYPE`
+    /// record's miss reports — the receiver renders as the structural type it carries, since there
+    /// is no nominal layer to name.
+    #[test]
+    fn attr_missing_field_on_anonymous_record_names_field() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("LET person = {name = \"Ada\", age = 36}");
+        let err = test_run.run_one_err(test_run.parse_one("person.email"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("`email`") && msg.contains("name") && !msg.contains("'s'")),
+            "expected ShapeError naming email and the record type, got {err}",
+        );
+    }
+
+    /// The read composes with the schema-typed parameter path: a body whose parameter is typed
+    /// `:{name :Str}` reads the field off a wider anonymous record passed to it.
+    #[test]
+    fn attr_reads_field_through_schema_typed_param() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("FN (GREET r :{name :Str}) -> Str = (r.name)");
+        assert!(
+            matches!(test_run.run_one(test_run.parse_one("GREET {name = \"Ada\", age = 36}")), KObject::KString(s) if *s == "Ada"),
+        );
+    }
+
+    /// A projection binds an anonymous record and reads back through the same arm.
+    #[test]
+    fn attr_reads_field_off_projection() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("LET both = {x = 1, y = 2, z = 3}\nLET view = ((x y) FROM both)");
+        assert!(
+            matches!(test_run.run_one(test_run.parse_one("view.x")), KObject::Number(n) if *n == 1.0),
+        );
+        // The projection narrows the carried type, which is the surface the read admits: `z` is
+        // still physically in the shared substrate and still unreadable through the view.
+        let err = test_run.run_one_err(test_run.parse_one("view.z"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`z`")),
+            "expected ShapeError naming z on a projected-away field, got {err}",
+        );
+    }
+
+    /// A type-channel lhs carrying no members at all reports the miss by naming the type and the
+    /// member, claiming no argument slot — `Number.foo` is a program a writer can reach.
+    #[test]
+    fn attr_on_a_memberless_type_names_the_type_and_member() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let err = test_run.run_one_err(test_run.parse_one("Number.foo"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("Number") && msg.contains("`foo`") && !msg.contains("'s'")),
+            "expected ShapeError naming Number and foo, got {err}",
+        );
+    }
+
     /// `Maybe.Some` — ATTR with a union-typed lhs — projects the variant's member handle as a type
     /// value. Member projection is the one door to a variant, so it is the surface both a
     /// reference and a construction go through.

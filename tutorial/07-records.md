@@ -179,9 +179,32 @@ PRINT person
 {age = 36, name = ada}
 ```
 
-One limit to know: `.` reads fields only off a `NEWTYPE` record value. A bare
-`{...}` record is for structural matching and projection, not field access — to
-read its fields, accept it through a `NEWTYPE` record type.
+`.` reads a field off any record value, anonymous ones included — no `NEWTYPE`
+declaration required:
+
+```koan
+LET person = {name = "ada", age = 36}
+PRINT person.name
+PRINT person.age
+```
+
+```text
+ada
+36
+```
+
+Naming a field the record doesn't carry is an error that names the field and the
+record's type:
+
+```koan
+LET person = {name = "ada", age = 36}
+PRINT person.email
+```
+
+```text
+error: shape error: `:{name :Str age :Number}` has no field `email`
+  in PRINT <staged> (<bind>) at <input>:2:1
+```
 
 Width subtyping has a cost in dispatch: a wide record can satisfy two different
 field-subset schemas at once, with neither more specific, so a call is
@@ -214,7 +237,23 @@ got xy
 ```
 
 The projection narrows the *type*, not the stored value — the other fields are
-still physically there, just invisible to dispatch through the projected view.
+still physically there, just invisible through the projected view. The narrowed
+type is the whole surface of the view, so a dropped field is out of reach of a
+field read as well as of dispatch:
+
+```koan
+LET both = {x = 1, y = "a", z = "b"}
+LET view = ((x y) FROM both)
+PRINT view.y
+PRINT view.z
+```
+
+```text
+a
+error: shape error: `:{x :Number y :Str}` has no field `z`
+  in PRINT <staged> (<bind>) at <input>:4:1
+```
+
 When you bind a projection, wrap the whole right-hand side: `LET v = ((x y) FROM
 both)`.
 

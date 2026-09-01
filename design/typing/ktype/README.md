@@ -81,8 +81,8 @@ concrete `KObject` has a `TypeNode` variant:
   carrying the nominal family (`OfKind(Newtype)` / `OfKind(TypeConstructor)`).
   Because `OfKind` is type-channel-only, such a slot
   admits the *type value* of that family, not a runtime instance — a builtin that
-  dispatches on a runtime representation (ATTR's newtype field access) takes the
-  least-specific `Any` slot and validates the `KObject::Wrapped` shape in its body
+  dispatches on a runtime representation (ATTR's record field access) takes the
+  least-specific `Any` slot and validates the value's shape in its body
   (`access_field`), never matching the value by a kind. The nominal-family surface
   keywords (`Newtype` / `TypeConstructor`) are pinned for diagnostic
   rendering only — none is registered as a writable surface name (no entry in

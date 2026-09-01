@@ -33,7 +33,7 @@ the link in each section to the relevant chapter.
 | `NEWTYPE <Name> = <Type>`                  | Declare a nominal type over a representation. |
 | `NEWTYPE <Name> = :{<field> :<Type>, ...}` | Declare a record type (named fields).    |
 | `(<Type> {field = value, ...})`            | Construct a record value.                |
-| `<record>.<field>`                         | Read a field off a `NEWTYPE` record.     |
+| `<record>.<field>`                         | Read a field off any record value.       |
 | `(<fields>) FROM <record>`                 | Project a record's type to the named fields. |
 
 ## Control and errors — see [6](06-pattern-matching.md), [9](09-errors.md)

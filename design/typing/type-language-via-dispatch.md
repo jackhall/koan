@@ -201,6 +201,13 @@ The field list arrives unevaluated through a `KExpression` slot (bare names only
 it re-tags a carrier to break an incomparable-arm dispatch tie without name-resolving
 the fields.
 
+The narrowed carried type is the whole surface of the projection: a dropped field is still
+physically present in the shared substrate, and invisible to everything that reads the
+carried type — dispatch *and* field access alike. `((x y) FROM both).z` is a `ShapeError`
+naming the narrowed structural type, because the field read consults the carried
+`TypeNode::Record` before it indexes the substrate
+([user-types.md § the `Wrapped` fall-through](user-types.md)).
+
 ## Classifier
 
 `classify_dispatch_shape`
