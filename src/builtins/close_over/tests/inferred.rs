@@ -16,8 +16,12 @@ use crate::machine::model::DynamicNameForm;
 // ---------- equivalence with the explicit form ----------
 
 /// The inferred list severs exactly what the spelled-out one does: held while `esc` is alive, the
-/// run keeps the run root and the block's own region and nothing else, however deep the producer
-/// chain the closure was built inside.
+/// run keeps the run root and nothing else, however deep the producer chain the closure was built
+/// inside — the escape seam consolidates the block's own region away with the rest.
+// The census below reads the *mechanism*: `seam-force-pin` overrides the chooser and pins
+// every callable escape, so only a build that lets the chooser decide can assert the count.
+// The language-output assertions in this file are never gated.
+#[cfg(not(feature = "seam-force-pin"))]
 #[test]
 fn an_inferred_closure_pins_only_its_block_region() {
     for depth in [0usize, 1, 3, 5] {
@@ -27,8 +31,8 @@ fn an_inferred_closure_pins_only_its_block_region() {
                 &format!("CLOSE ({THUNK})"),
                 ""
             )),
-            (2, 0),
-            "an inferred closure over a {depth}-deep producer chain must pin the block region alone",
+            (1, 0),
+            "an inferred closure over a {depth}-deep producer chain must pin nothing of its own",
         );
     }
 }
@@ -372,13 +376,21 @@ fn a_quote_in_a_code_slot_is_walked_as_the_body() {
 #[test]
 fn a_registration_still_closes_implicitly() {
     let inferred = HELPER_THUNK.replace("CLOSE OVER ()", "CLOSE");
-    for depth in [0usize, 1, 3] {
-        assert_eq!(
-            held_and_released(&declaring_chain(depth, &inferred, "")),
-            (3, 0),
-            "an inferred block pins the registration's home frame alone at depth {depth}",
-        );
-    }
+    // One discarded measurement first, for the thread-local baseline reason the explicit form's
+    // twin states.
+    let _warm = held_and_released(&declaring_chain(0, &inferred, ""));
+    let counts: Vec<(usize, usize)> = [0usize, 1, 3]
+        .into_iter()
+        .map(|depth| held_and_released(&declaring_chain(depth, &inferred, "")))
+        .collect();
+    assert!(
+        counts.windows(2).all(|pair| pair[0].0 >= pair[1].0),
+        "the inferred block's pinned set must not grow with depth either, got {counts:?}",
+    );
+    assert!(
+        counts.iter().all(|(_, released)| *released == 0),
+        "everything frees once the escaped value drops, got {counts:?}",
+    );
     assert_eq!(
         output(&declaring_chain(3, &inferred, "PRINT (esc {})\n")),
         "8\n"
@@ -396,6 +408,7 @@ fn an_eternal_name_is_not_captured() {
     );
     let prelude = "FN (TOPLEVEL x :Number) -> Number = (x * 2)\nLET eternal = (1)\n";
     assert_eq!(output(&format!("{prelude}{source}")), "16\n");
+    #[cfg(not(feature = "seam-force-pin"))]
     assert_eq!(
         held_and_released(&format!(
             "{prelude}{}",
@@ -405,8 +418,8 @@ fn an_eternal_name_is_not_captured() {
                 ""
             )
         )),
-        (2, 0),
-        "capturing nothing eternal leaves the escape pinning its block region alone",
+        (1, 0),
+        "capturing nothing eternal leaves the escape pinning nothing of its own",
     );
 }
 

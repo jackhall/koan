@@ -61,6 +61,7 @@ digraph {
     "koan::machine::core::lexical_frame" [label="koan::machine::core::lexical_frame"];
     "koan::machine::core::ref_carriers" [label="koan::machine::core::ref_carriers"];
     "koan::machine::core::scope" [label="koan::machine::core::scope"];
+    "koan::machine::core::scope::copy" [label="koan::machine::core::scope::copy"];
     "koan::machine::core::scope::reach" [label="koan::machine::core::scope::reach"];
     "koan::machine::core::scope::registry" [label="koan::machine::core::scope::registry"];
     "koan::machine::core::scope::resolve" [label="koan::machine::core::scope::resolve"];
@@ -213,6 +214,7 @@ digraph {
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::body" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::exec" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::pick" [label="owns", style="solid"];
+    "koan::machine::core::scope" -> "koan::machine::core::scope::copy" [label="owns", style="solid"];
     "koan::machine::core::scope" -> "koan::machine::core::scope::reach" [label="owns", style="solid"];
     "koan::machine::core::scope" -> "koan::machine::core::scope::registry" [label="owns", style="solid"];
     "koan::machine::core::scope" -> "koan::machine::core::scope::resolve" [label="owns", style="solid"];
@@ -533,6 +535,15 @@ digraph {
     "koan::machine::core::scope" -> "koan::machine::core::ref_carriers" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::scope_id" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::scope::copy" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::core::scope::copy" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::core::scope::copy" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::core::scope::copy" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
+    "koan::machine::core::scope::copy" -> "koan::machine::core::carrier_witness" [label="uses", style="dashed"];
+    "koan::machine::core::scope::copy" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
+    "koan::machine::core::scope::copy" -> "koan::machine::core::ref_carriers" [label="uses", style="dashed"];
+    "koan::machine::core::scope::copy" -> "koan::machine::core::scope" [label="uses", style="dashed"];
+    "koan::machine::core::scope::copy" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::scope::reach" -> "koan::machine::core" [label="uses", style="dashed"];

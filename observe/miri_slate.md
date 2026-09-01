@@ -231,6 +231,27 @@ same fold answers the opposite way for its string cells.
 - `captured_per_call_value_survives_let_bind_and_call`
 - `closure_argument_stays_live_through_user_fn_call`
 
+The **consolidating** shape inverts the same field read. Where the tests above keep the defining
+region alive so the stored `&'a Scope<'a>` stays honest, a callable crossing a priced escape seam has
+its captured chain *rebuilt* at the destination
+([scope/copy.rs](../src/machine/core/scope/copy.rs)): the field the closure reads back names a scope
+in a region the source never touched, and the source region is then released rather than pinned. A
+residence error here is not a lost pin but a copy that kept pointing at what it claimed to have left,
+which is a use-after-free the moment the producer frames retire — and one no reach fold can rescue,
+because the product's own claim says the region is free to die.
+
+Both tests build the environment inside per-call frames, let every one of them retire, and then read
+a captured value back through the copy. The first rebuilds a two-deep callable chain (a copied
+closure whose own captured scope binds another closure), which is where the nested rebuild's
+destination operand — a region handle paired with the copied scope the callable attaches under —
+either lands the callable in the destination region or does not. The second rebuilds a dispatch
+bucket whose overloads capture the very scope holding them, the `scope → function → scope` cycle the
+memo closes: a copy that re-entered it would not terminate, and one that rebuilt the overloads
+against the source scope would dispatch into freed memory.
+
+- `a_close_over_callable_capture_severs_transitively`
+- `a_self_referential_dispatch_bucket_copies_to_one_copied_scope`
+
 **Region-hosted string re-home at the substrate door** ([src/machine/model/values/kobject.rs](../src/machine/model/values/kobject.rs))
 — a `KObject::KString` carries a `&'a str` bumped into the region the value lives in, and a string
 cell's reach verdict is `Owned`: it names no region at all. That verdict is honest only because the
@@ -639,9 +660,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-01: 918s — 29 tests, 0 leaks, 0 UB
 - 2026-08-31: 1098s — 27 tests, 0 leaks, 0 UB
 - 2026-08-30: 1265s — 27 tests, 0 leaks, 0 UB
 - 2026-08-28: 787s — 27 tests, 0 leaks, 0 UB
 - 2026-08-28: 1302s — 27 tests, 0 leaks, 0 UB
-- 2026-08-28: 1256s — 27 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

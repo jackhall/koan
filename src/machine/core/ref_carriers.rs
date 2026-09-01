@@ -36,8 +36,24 @@ pub struct ModuleRefFamily;
 /// cannot — an ambient borrow has no outlives relation to a `for<'b>` brand.
 pub struct BindingsReferenceFamily;
 
+/// `Reattachable` family for a **destination scope** — a region handle paired with a scope
+/// resident in that same region. The environment copy's relocation operand: a nested relocation
+/// rebuilding a captured callable needs both the region to build into and the copied scope the
+/// rebuilt callable attaches under, and a fold takes exactly one destination operand.
+///
+/// Pairing them is also what discharges the destination's
+/// `HasRegionHandle` obligation — the library's handle-headed blanket covers any
+/// `(RegionHandle<'r, _>, T)`, so the family needs no `unsafe impl` of its own. Layout-invariant
+/// like [`ScopeRefFamily`]: a `Copy` handle beside a thin pointer, representation independent of
+/// `'r`.
+pub struct RegionScopeFamily;
+
 reattachable!(
     ScopeRefFamily => &'r Scope<'r>,
+    RegionScopeFamily => (
+        crate::witnessed::RegionHandle<'r, super::arena::KoanStorageProfile>,
+        &'r Scope<'r>,
+    ),
     ModuleRefFamily => &'r Module<'r>,
     BindingsReferenceFamily => &'r Bindings<'r>,
 );

@@ -58,5 +58,6 @@ pub use ref_carriers::{ModuleRefFamily, ScopeRefFamily};
 pub(crate) use scope::AdoptSeam;
 pub(crate) use scope::HitTier;
 pub use scope::Scope;
+pub(crate) use scope::consolidate_object;
 pub use scope_id::ScopeId;
 pub use statement_id::StatementId;

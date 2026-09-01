@@ -174,9 +174,15 @@ fn the_deep_shape_stays_within_its_per_frame_bound() {
 /// The recorded figure is the `declare_name` term in `observe/alloc.txt`. The bound is
 /// on the difference, and sits over it by less than the 450 that one allocation added per
 /// declared name would cost across the 90-name gap in five forms.
+///
+/// The bound has to clear the **forced** builds too, and `seam-force-copy` consolidates every
+/// callable escape — including the crossings the cost-driven chooser declines — which costs a
+/// handful of transient buffers per copied environment (2611 against the cost-driven build's
+/// 2605). It is headroom for a verification build, not for the production path: that stayed at
+/// parity when the consolidation landed, and a per-name regression there is still 450 away.
 #[test]
 fn the_declare_shape_stays_within_its_per_name_bound() {
-    const BOUND: u64 = 2_610;
+    const BOUND: u64 = 2_616;
     let marginal = allocations_for(
         include_str!("../audit/shapes/declare_n100.koan"),
         "audit/shapes/declare_n100.koan",

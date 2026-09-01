@@ -8,7 +8,8 @@
 use crate::machine::core::{FoldingBrand, SubstrateDoor};
 use crate::machine::core::{KoanRegion, KoanStorageProfile, product_reaches_region};
 use crate::machine::model::{
-    Carried, CarriedFamily, Held, KObject, RegionEscape, copy_or_pin, relocate_object_into,
+    Carried, CarriedFamily, Held, KObject, RegionEscape, copy_or_pin, copy_or_pin_callable,
+    relocate_object_into,
 };
 use crate::machine::{CarrierWitness, DeliveredCarried, FrameStorage};
 use crate::witnessed::{Delivered, RegionHandleFamily, reattachable};
@@ -52,7 +53,8 @@ pub(in crate::machine::execute) fn copy_held_from_carried<'b>(
 }
 
 /// The [`RegionEscape`] for relocating `delivered` across a value-level escape seam: a top-level
-/// substrate carrier routes the cost chooser ([`copy_or_pin`]), everything else copies its top node
+/// substrate carrier routes the cost chooser ([`copy_or_pin`]), a top-level callable the
+/// environment chooser ([`copy_or_pin_callable`]), and everything else copies its top node
 /// unconditionally. The verb names only the act; what the relocation still reaches is
 /// [`seam_still_borrows`]'s question, answered off the rebuilt product.
 fn seam_verb(delivered: &DeliveredCarried) -> RegionEscape {
@@ -67,6 +69,10 @@ fn seam_verb(delivered: &DeliveredCarried) -> RegionEscape {
             KObject::Wrapped {
                 inner: substrate, ..
             } => copy_or_pin(substrate, host),
+            // A top-level callable prices its captured environment instead of a substrate: the
+            // chain the closure holds is what a pin would retain, and consolidating it is what
+            // frees the producer.
+            KObject::KFunction(function) => copy_or_pin_callable(function.captured_scope(), host),
             _ => RegionEscape::Copy,
         }),
         _ => RegionEscape::Copy,

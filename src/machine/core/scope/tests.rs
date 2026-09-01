@@ -222,6 +222,9 @@ fn the_chain_cost_sums_only_the_per_call_portion() {
 /// The chooser pins a **foreign** crossing outright: the innermost captured region is not the
 /// crossing's host, which mirrors the substrate rule. Pricing a consolidation out of an
 /// intermediate host is callable-copy-tuning's.
+// A forced verification build overrides the chooser's table outright, so only the
+// cost-driven build can assert what it decides.
+#[cfg(not(any(feature = "seam-force-copy", feature = "seam-force-pin")))]
 #[test]
 fn the_callable_chooser_pins_a_foreign_crossing() {
     let program = program_storage();
@@ -241,6 +244,9 @@ fn the_callable_chooser_pins_a_foreign_crossing() {
 
 /// An unready chain pins whatever it would cost: readiness is asked before price, and the answer is
 /// a pin rather than a wait.
+// A forced verification build overrides the chooser's table outright, so only the
+// cost-driven build can assert what it decides.
+#[cfg(not(any(feature = "seam-force-copy", feature = "seam-force-pin")))]
 #[test]
 fn the_callable_chooser_pins_an_unready_chain() {
     let program = program_storage();
@@ -268,6 +274,9 @@ fn the_callable_chooser_pins_an_unready_chain() {
 /// region a pin would retain reaches `Pin`. How large that is depends on the bump's chunk growth,
 /// so the test searches for the crossing rather than assuming where it sits — what it pins is that
 /// a crossing exists at all, which is what makes the cheap-environment verdict a decision.
+// A forced verification build overrides the chooser's table outright, so only the
+// cost-driven build can assert what it decides.
+#[cfg(not(any(feature = "seam-force-copy", feature = "seam-force-pin")))]
 #[test]
 fn the_callable_chooser_pins_a_large_enough_environment() {
     let program = program_storage();
@@ -307,6 +316,9 @@ fn the_callable_chooser_pins_a_large_enough_environment() {
 
 /// A scalar bind leaves the environment cheap against the region's allocated total, so the same
 /// ready home crossing consolidates.
+// A forced verification build overrides the chooser's table outright, so only the
+// cost-driven build can assert what it decides.
+#[cfg(not(any(feature = "seam-force-copy", feature = "seam-force-pin")))]
 #[test]
 fn the_callable_chooser_consolidates_a_cheap_environment() {
     let program = program_storage();

@@ -9,6 +9,7 @@
 //! is a dispatch registration, which implicit close pins on purpose; an anonymous one is a plain
 //! value binding, so a chain of them isolates the lexical-frame retention the form exists to cut.
 
+mod consolidation;
 mod inferred;
 
 use crate::builtins::test_support::TestRun;
@@ -138,9 +139,14 @@ fn an_unresolvable_capture_is_unbound_at_the_form() {
 // ---------- AC 1: a data-only capture set severs the producer chain ----------
 
 /// **The severed closure's reach is flat in the producer's depth.** Held while `esc` is alive, the
-/// run keeps exactly two regions — the run root and the block's own — however many per-call frames
-/// the closure was built inside, and every one of those frames has already died. The plain twin
-/// below is the same program without the form, and it grows one region per frame.
+/// run keeps the run root alone — however many per-call frames the closure was built inside, and
+/// every one of those frames has already died. The block's own region does not survive either: the
+/// escape seam consolidates the block scope into the destination, so what escapes borrows nothing
+/// that was built to produce it.
+// The census below reads the *mechanism*: `seam-force-pin` overrides the chooser and pins
+// every callable escape, so only a build that lets the chooser decide can assert the count.
+// The language-output assertions in this file are never gated.
+#[cfg(not(feature = "seam-force-pin"))]
 #[test]
 fn a_severed_closure_pins_only_its_block_region() {
     for depth in [0usize, 1, 3, 5] {
@@ -150,21 +156,28 @@ fn a_severed_closure_pins_only_its_block_region() {
                 &format!("CLOSE OVER (n) ({THUNK})"),
                 ""
             )),
-            (2, 0),
-            "a severed closure over a {depth}-deep producer chain must pin the block region alone",
+            (1, 0),
+            "a severed closure over a {depth}-deep producer chain must pin nothing of its own",
         );
     }
 }
 
-/// The control: without `CLOSE OVER`, the same closure pins its whole lexical chain of per-call
-/// frames — the retention the form exists to cut, measured on the same counter.
+/// The same program **without** the form, measured on the same counter. A plain closure over a
+/// data-only environment is flat in producer depth too: the escape seam prices the crossing and
+/// consolidates, rebuilding the captured chain at the destination, so no producer frame survives it
+/// either. The verdict is a price, not a shape — an environment large against the region a pin
+/// would retain stays pinned, which is what the chooser's own unit coverage pins down.
+// The census below reads the *mechanism*: `seam-force-pin` overrides the chooser and pins
+// every callable escape, so only a build that lets the chooser decide can assert the count.
+// The language-output assertions in this file are never gated.
+#[cfg(not(feature = "seam-force-pin"))]
 #[test]
-fn a_plain_closure_pins_one_region_per_producer_frame() {
+fn a_plain_closure_consolidates_at_the_escape_seam() {
     for depth in [0usize, 1, 3, 5] {
         assert_eq!(
             held_and_released(&producer_chain(depth, THUNK, "")).0,
-            depth + 2,
-            "a plain closure retains every frame it was built inside",
+            1,
+            "a plain closure's data-only environment consolidates at every crossing",
         );
     }
 }
@@ -193,10 +206,11 @@ fn a_severed_closure_still_answers_after_its_producers_die() {
 fn a_captured_structure_is_copied_transitively() {
     let build = "(LET deep = ({tags = [\"alpha\" \"omega\"] inner = {label = \"leaf\"}}))";
     let block = "CLOSE OVER (deep) ((LET g = (FN :{} -> Any = (deep))) (g))";
+    #[cfg(not(feature = "seam-force-pin"))]
     for depth in [0usize, 1, 3] {
         assert_eq!(
             held_and_released(&producer_chain(depth, &format!("{build} ({block})"), "")),
-            (2, 0),
+            (1, 0),
             "a transitively copied capture leaves the producer chain free at depth {depth}",
         );
     }
@@ -238,17 +252,35 @@ fn declaring_chain(depth: usize, block: &str, trailer: &str) -> String {
 const HELPER_THUNK: &str = "CLOSE OVER () ((LET g = (FN :{} -> Number = (HELPER 1))) (g))";
 
 /// A per-call `FN` registration lives in the frame that declared it, so closing over it pins that
-/// one frame — and *only* it. The count is the block region, the run root and that single home,
-/// flat however many further frames the block was nested inside; the intermediaries all free.
+/// one frame — and *only* it. Implicit close copies the registration in **pinned**, which is what
+/// keeps that home alive; the block's own region does not survive beside it, because the escaping
+/// thunk crosses the priced seam and its captured chain consolidates. The count is therefore the
+/// run root and that single pinned home, flat however many further frames the block was nested
+/// inside; the intermediaries all free.
+///
+/// Neither the absolute count nor exact flatness is asserted. The gauge is thread-local and carries
+/// a ±1 that tracks which measurement mints the program region, and the crossing is **priced**, so a
+/// deeper chain — whose regions are larger against the same small environment — can consolidate
+/// where the shallow one pins. What the retention may never do is *grow* with the depth the block
+/// was nested at, and that is the claim measured here.
 #[test]
 fn a_captured_registration_pins_its_home_frame_alone() {
-    for depth in [0usize, 1, 3] {
-        assert_eq!(
-            held_and_released(&declaring_chain(depth, HELPER_THUNK, "")),
-            (3, 0),
-            "closing over a registration pins its declaring frame and no other, at depth {depth}",
-        );
-    }
+    // The gauge is thread-local and the program region is minted once per thread, so whichever
+    // measurement mints it reads one more than the rest — a ±1 that tracks test ordering, not the
+    // program under test. One discarded measurement puts every count below in the same regime.
+    let _warm = held_and_released(&declaring_chain(0, HELPER_THUNK, ""));
+    let counts: Vec<(usize, usize)> = [0usize, 1, 3]
+        .into_iter()
+        .map(|depth| held_and_released(&declaring_chain(depth, HELPER_THUNK, "")))
+        .collect();
+    assert!(
+        counts.windows(2).all(|pair| pair[0].0 >= pair[1].0),
+        "the pinned set must not grow with the depth the block was nested at, got {counts:?}",
+    );
+    assert!(
+        counts.iter().all(|(_, released)| *released == 0),
+        "everything frees once the escaped value drops, got {counts:?}",
+    );
 }
 
 /// Retention is transitive: the pinned registration's own captures — here the producer's parameter

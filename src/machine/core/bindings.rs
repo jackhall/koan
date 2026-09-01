@@ -516,7 +516,6 @@ impl<'a> Bindings<'a> {
     /// Whether no binder is still in flight into this table — no claim stands on either channel.
     /// The unfinalized-binding half of the copy engine's readiness gate
     /// ([`Scope::is_copy_ready`](crate::machine::core::Scope)).
-    #[allow(dead_code)]
     pub(crate) fn has_no_claims(&self) -> bool {
         self.tables.borrow().claims.is_empty()
     }
@@ -524,10 +523,6 @@ impl<'a> Bindings<'a> {
     /// What totally rebuilding every value bound here would cost — the monotone memo
     /// [`Self::copy_cost`] accumulated at bind time, read in O(1) with no walk over the table and
     /// no `tables` borrow.
-    ///
-    /// `#[allow(dead_code)]`: the escape seam's callable arm is what consumes this, and it is not
-    /// wired yet — the plain `--lib` build (no `cfg(test)`) sees no consumer until it is.
-    #[allow(dead_code)]
     pub(crate) fn binding_copy_cost(&self) -> u64 {
         self.copy_cost.get()
     }
@@ -1204,6 +1199,101 @@ impl<'a> Bindings<'a> {
         tables.data.insert(name, DataEntry { index, sealed });
         tables.claims.retire_name(name.symbol(), index);
         Ok(())
+    }
+
+    /// Whether this table holds an operator-registry entry — a `GROUP` declaration's powerset keys,
+    /// or the flattened copies a `CLOSE OVER` block installs. The environment copy does not model
+    /// them (the record they resolve to is region-resident and would have to be rebuilt with the
+    /// scope), so their presence is part of the readiness gate rather than a case inside the engine.
+    pub(crate) fn has_operators(&self) -> bool {
+        !self.tables.borrow().operators.is_empty()
+    }
+
+    /// Every type binding in this table, as plain `Copy` data — the environment copy's `types`
+    /// read, and the one table [`Self::visible_for_capture`] deliberately leaves out (a `CLOSE OVER`
+    /// block reaches a nominal only through an explicit capture, where a copied *environment* must
+    /// carry whatever the source scope bound).
+    ///
+    /// The whole entry copies by value: a [`KType`] is a lifetime-free handle into the run's
+    /// registry and a [`DeclarationSite`] is plain data, so the fresh [`ScopeId`] a copied scope
+    /// takes changes no identity here — a nominal's identity is registry state, not scope state.
+    ///
+    /// [`ScopeId`]: crate::machine::core::scope_id::ScopeId
+    pub(crate) fn copied_types(&self) -> Vec<(TypeSymbol, KType, DeclarationSite)> {
+        self.tables
+            .borrow()
+            .types
+            .iter()
+            .map(|(name, (kt, site))| (*name, *kt, *site))
+            .collect()
+    }
+
+    /// The environment copy's `types` write — [`Self::insert_copied_value`]'s type-channel twin,
+    /// registry-free for the same reason: the copy fills an empty table, one entry per source name.
+    pub(crate) fn insert_copied_type(&self, name: TypeSymbol, kt: KType, site: DeclarationSite) {
+        let mut tables = self.tables.borrow_mut();
+        debug_assert!(
+            !tables.types.contains_key(&name),
+            "an environment copy fills an empty table, one entry per source name",
+        );
+        tables.types.insert(name, (kt, site));
+    }
+
+    /// The environment copy's `data` write: install a rebuilt binding into a freshly built copied
+    /// scope. Deliberately **registry-free**, which is what lets it run from inside a relocation
+    /// fold: the only thing `write_value` needs registries for is rendering a `Rebind`, and a copy
+    /// fills an empty table with one entry per source name, so a collision is a construction bug
+    /// rather than a program error. It is asserted here rather than reported.
+    ///
+    /// The cost memo is bumped exactly as an ordinary bind bumps it, so a copied scope prices its
+    /// own re-consolidation on the same terms the source did.
+    pub(crate) fn insert_copied_value(
+        &self,
+        name: ValueSymbol,
+        index: BindingIndex,
+        sealed: SealedValue<'a>,
+    ) {
+        let mut tables = self.tables.borrow_mut();
+        debug_assert!(
+            !tables.data.contains_key(&name),
+            "an environment copy fills an empty table, one entry per source name",
+        );
+        let weight = sealed
+            .open_at()
+            .value()
+            .as_object()
+            .map_or(0, object_copy_cost);
+        self.copy_cost
+            .set(self.copy_cost.get().saturating_add(weight));
+        tables.data.insert(name, DataEntry { index, sealed });
+    }
+
+    /// The environment copy's `functions` write — [`Self::insert_copied_value`]'s dispatch-bucket
+    /// twin, registry-free for the same reason: the copy fills an empty table, so the duplicate
+    /// token `write_overload` would render a `DuplicateOverload` for cannot arise. Each overload's
+    /// key and token are re-derived from the rebuilt callable's own signature at seal time, so the
+    /// copy lands in the same bucket the source sat in with nothing threaded alongside it.
+    pub(crate) fn insert_copied_overload(&self, index: BindingIndex, seal: OverloadSeal<'a>) {
+        let mut tables = self.tables.borrow_mut();
+        if !tables.functions.contains_key(seal.key.as_slice()) {
+            let key = self.brand.allocator().slice(&seal.key);
+            tables.functions.insert(key, bump_bucket(self.brand));
+        }
+        let bucket = tables
+            .functions
+            .get_mut(seal.key.as_slice())
+            .expect("the bucket was just seeded if it was missing");
+        debug_assert!(
+            !bucket
+                .iter()
+                .any(|existing| seal.token.elements() == existing.token),
+            "an environment copy fills an empty bucket, one entry per source overload",
+        );
+        bucket.push(FunctionBucketEntry {
+            index,
+            token: seal.token.store_in(self.brand),
+            sealed: seal.sealed,
+        });
     }
 
     /// The `functions` write path: add `seal`'s callable to its dispatch bucket. The bucket key and

@@ -148,7 +148,6 @@ impl<'a> ClaimStore<'a> {
     /// is not bound yet: the readiness gate a copy of the scope's environment runs
     /// ([`Scope::is_copy_ready`](crate::machine::core::Scope)) reads this, and a claim there is
     /// exactly the unfinalized binding that downgrades the copy to a pin.
-    #[allow(dead_code)]
     pub(super) fn is_empty(&self) -> bool {
         self.by_name.is_empty() && self.by_bucket.values().all(|claims| claims.is_empty())
     }

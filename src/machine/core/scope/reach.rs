@@ -403,7 +403,8 @@ impl<'a> Scope<'a> {
             // The whole envelope is adopted in place through the library's fused mint-and-retain
             // door: nothing is copied, so there is nothing to relocate.
             AdoptDisposition::Pin => cell.adopt_into(self.brand().handle()),
-            AdoptDisposition::Relocate => self.adopt_copied(cell),
+            AdoptDisposition::Relocate => self.adopt_copied(cell, RegionEscape::Copy),
+            AdoptDisposition::Consolidate => self.adopt_copied(cell, RegionEscape::Consolidate),
         }
     }
 
@@ -414,8 +415,10 @@ impl<'a> Scope<'a> {
     /// producer's region is not part of the copy's residence — the copy carries its own release-exact
     /// reach — so the source envelope's hold is **released** when the caller drops it. Released, not
     /// discarded: the copy retains everything it still reaches.
-    fn adopt_copied(&self, cell: &DeliveredCarried) -> Carried<'a> {
-        self.relocate_delivered(cell, |carried| Ok(carried.object()), RegionEscape::Copy)
+    /// `verb` is the rebuilding verb the chooser named — `Copy` for a value, `Consolidate` for a
+    /// callable whose captured environment is rebuilt with it.
+    fn adopt_copied(&self, cell: &DeliveredCarried, verb: RegionEscape) -> Carried<'a> {
+        self.relocate_delivered(cell, |carried| Ok(carried.object()), verb)
             .expect("a whole-value adoption's copy is infallible")
             .adopt_into(self.brand().handle())
     }
@@ -429,7 +432,7 @@ impl<'a> Scope<'a> {
     #[cfg(test)]
     pub(crate) fn adopt_copied_for_test(&self, cell: &DeliveredCarried) -> Carried<'a> {
         self.adopt_type_channel(cell)
-            .unwrap_or_else(|| self.adopt_copied(cell))
+            .unwrap_or_else(|| self.adopt_copied(cell, RegionEscape::Copy))
     }
 
     /// The type channel's adoption, `None` for an object envelope: both type-channel arms are
@@ -516,6 +519,7 @@ impl<'a> Scope<'a> {
 
         let verb = match disposition {
             AdoptDisposition::Relocate => RegionEscape::Copy,
+            AdoptDisposition::Consolidate => RegionEscape::Consolidate,
             AdoptDisposition::Pin => RegionEscape::Pin,
         };
         Ok(self
@@ -849,6 +853,13 @@ enum AdoptDisposition {
     /// derives and retains the copy's release-exact reach. The source envelope's hold is released
     /// when the caller drops it.
     Relocate,
+    /// The value is a **callable**, and the captured environment behind it is rebuilt at the
+    /// adopting scope's region ([`RegionEscape::Consolidate`]) rather than its reference riding
+    /// verbatim — so an explicit `CLOSE OVER` callable capture severs transitively: its data is
+    /// copied and its own callable references recurse. The composition derives the copy's
+    /// release-exact reach from the product exactly as [`Self::Relocate`]'s does, and an
+    /// environment the engine declines falls back to that verbatim ride under the pin.
+    Consolidate,
 }
 
 /// The single home of the adoption rules. `projected` is what the caller will actually move —
@@ -887,6 +898,12 @@ fn adopt_disposition(
 ) -> AdoptDisposition {
     match seam {
         AdoptSeam::Retaining => AdoptDisposition::Pin,
+        // A callable capture is the one severing case a plain relocation cannot finish: the leaf
+        // would ride verbatim and keep its whole captured chain alive, which is exactly the
+        // retention the form exists to cut. Its environment is rebuilt instead.
+        AdoptSeam::Severing(_) if matches!(projected, KObject::KFunction(_)) => {
+            AdoptDisposition::Consolidate
+        }
         AdoptSeam::Severing(_) => AdoptDisposition::Relocate,
         AdoptSeam::Binding(_) if !projected.needs_destination_door() => AdoptDisposition::Relocate,
         AdoptSeam::Binding(_) => cell

@@ -139,35 +139,28 @@ impl<'a> KFunction<'a> {
         Self::birth(captured, signature, body, value_ktype)
     }
 
-    /// **Rebuild `source` at `captured`** — the environment copy's door
-    /// ([`Scope`](crate::machine::core::Scope)'s `copy` engine), where `captured` is the copied
-    /// chain's innermost scope and `source` the callable being consolidated.
+    /// **Assemble a copy of `source` captured at `captured`, at a relocation fold's own brand** —
+    /// the environment copy's in-fold door. Where [`Self::alloc_captured_copy`] performs its own
+    /// witnessed birth, this hands the struct back for the enclosing fold to store through
+    /// [`FoldingBrand::alloc_function_folded`], whose rank-2 brand is the same residence proof: the
+    /// callable is typed at the brand lifetime, so `captured` is the fold's own destination operand
+    /// and an ambient-lifetime capture is a compile error at this signature.
     ///
-    /// The same witnessed birth [`Self::alloc_captured`] performs, differing only in where the two
-    /// derived facts come from. The signature is **re-minted** at `captured`'s brand rather than
-    /// carried over: its elements run and parameter schema live wherever the signature does, so a
-    /// carried-over signature would leave the rebuilt callable borrowing the source region — the
-    /// one thing the consolidation exists to stop. `value_ktype` is a lifetime-free interned handle
-    /// naming the same `(params) -> ret` type, so it copies rather than being re-derived, which is
-    /// what keeps this door registry-free and callable from inside a relocation fold.
-    ///
-    /// The return contract rides over verbatim: a `Resolved` is a lifetime-free handle, and a
-    /// `Deferred`'s preserved surface holds either owned text or a `KExpression` whose parts run
-    /// lives in eternal-tier program storage, which no relocation releases.
-    ///
-    /// `#[allow(dead_code)]`: the escape seam's callable arm is what consumes this, and it is not
-    /// wired yet — the plain `--lib` build (no `cfg(test)`) sees no consumer until it is.
-    #[allow(dead_code)]
-    pub(crate) fn alloc_captured_copy(
-        captured: &'a Scope<'a>,
-        source: &KFunction<'a>,
-    ) -> DeliveredFunction {
-        let signature = ExpressionSignature::mint(
-            captured.brand(),
-            source.signature.return_type(),
-            source.signature.elements(),
-        );
-        Self::birth(captured, signature, source.body, source.value_ktype)
+    /// The signature is re-minted at `captured`'s brand for [`Self::alloc_captured_copy`]'s reason —
+    /// a carried-over signature would leave the copy borrowing the source region — and
+    /// `value_ktype` is copied, being a lifetime-free handle on the same `(params) -> ret` type.
+    /// Assembling the struct stays here, where the private fields live; the fold stores.
+    pub(crate) fn copy_at_fold(captured: &'a Scope<'a>, source: &KFunction<'a>) -> KFunction<'a> {
+        KFunction {
+            signature: ExpressionSignature::mint(
+                captured.brand(),
+                source.signature.return_type(),
+                source.signature.elements(),
+            ),
+            body: source.body,
+            captured,
+            value_ktype: source.value_ktype,
+        }
     }
 
     /// The witnessed birth both callable doors share: the three ingredients ride in as one resident

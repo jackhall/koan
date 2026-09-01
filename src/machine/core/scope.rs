@@ -13,12 +13,14 @@ use super::ref_carriers::{BindingsReferenceFamily, ScopeRefFamily};
 use super::scope_id::ScopeId;
 use crate::witnessed::BumpBackedMap;
 
+mod copy;
 mod reach;
 mod registry;
 mod resolve;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use copy::consolidate_object;
 pub(crate) use reach::AdoptSeam;
 pub(crate) use resolve::HitTier;
 
@@ -457,7 +459,6 @@ impl<'a> Scope<'a> {
     ///
     /// Born **open**, not closed: the engine fills the tables and closes the scope after, so the
     /// bind door's own open-scope assertion holds throughout the fill.
-    #[allow(dead_code)]
     pub(in crate::machine::core::scope) fn alloc_copied_child(
         outer: &'a Scope<'a>,
         brand: RegionBrand<'a>,
@@ -576,7 +577,6 @@ impl<'a> Scope<'a> {
     /// destination for (rebuilding the window would have to rebuild what it looks through, and the
     /// window's own scope binds nothing of its own). Not-ready is the answer here, so a captured
     /// chain holding one downgrades to a pin.
-    #[allow(dead_code)]
     fn borrows_its_bindings(&self) -> bool {
         self.bindings.is_borrowed()
     }
@@ -592,6 +592,8 @@ impl<'a> Scope<'a> {
     ///   own to rebuild.
     /// - **No standing claim** ([`Bindings::has_no_claims`]): an in-flight binder is a binding that
     ///   does not exist yet, which is exactly the unfinalized binding the roadmap downgrades on.
+    /// - **No operator registry entry** ([`Bindings::has_operators`]): the group record an entry
+    ///   resolves to is region-resident and the engine does not rebuild it.
     /// - **A kind the engine models**: `Anonymous` — the block and per-call frame scopes a closure
     ///   chain is made of — and `Root`, which is eternal and referenced verbatim rather than
     ///   copied. `Sig` carries a live slot collector and `Module` an announced window and group
@@ -600,14 +602,11 @@ impl<'a> Scope<'a> {
     /// Never a wait: an unready scope answers `false` and the caller pins. Nothing here can park,
     /// which is what makes the two-in-flight-environments deadlock unconstructible rather than
     /// merely handled.
-    ///
-    /// `#[allow(dead_code)]`: the escape seam's callable arm is what consumes this, and it is not
-    /// wired yet — the plain `--lib` build (no `cfg(test)`) sees no consumer until it is.
-    #[allow(dead_code)]
     pub(crate) fn is_copy_ready(&self) -> bool {
         self.is_closed()
             && !self.borrows_its_bindings()
             && self.bindings().has_no_claims()
+            && !self.bindings().has_operators()
             && matches!(self.kind, ScopeKind::Root | ScopeKind::Anonymous)
     }
 
@@ -615,7 +614,6 @@ impl<'a> Scope<'a> {
     /// excluding [`Self::innermost_eternal_home`]. Exactly the scopes an environment copy has to
     /// rebuild — an eternal-homed scope outlives everything that could retain it, so the copy
     /// references it verbatim and the walk stops there. Empty when `self` is itself eternal-homed.
-    #[allow(dead_code)]
     pub(crate) fn per_call_chain(&'a self) -> impl Iterator<Item = &'a Scope<'a>> {
         let eternal: *const Scope<'a> = self.innermost_eternal_home();
         std::iter::successors(Some(self), |scope| scope.outer())
@@ -626,7 +624,6 @@ impl<'a> Scope<'a> {
     /// chain-level gate the callable escape seam asks before pricing anything: one unready link
     /// pins the whole crossing, because a rebuilt chain missing a link would have to point back
     /// into the source.
-    #[allow(dead_code)]
     pub(crate) fn chain_is_copy_ready(&'a self) -> bool {
         self.per_call_chain().all(Scope::is_copy_ready)
     }
@@ -634,7 +631,6 @@ impl<'a> Scope<'a> {
     /// What rebuilding this chain's per-call portion would cost: the sum of each scope's monotone
     /// [`binding_copy_cost`](Bindings::binding_copy_cost) memo. O(chain depth), every term a
     /// stored read.
-    #[allow(dead_code)]
     pub(crate) fn chain_copy_cost(&'a self) -> u64 {
         self.per_call_chain()
             .map(|scope| scope.bindings().binding_copy_cost())

@@ -4,6 +4,7 @@ use std::rc::Weak;
 use crate::machine::core::KFunction;
 use crate::machine::core::{
     FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, Scope, SubstrateDoor,
+    consolidate_object,
 };
 use crate::machine::model::ast::{KExpression, ProgramExpression};
 use crate::machine::model::labels::{BinderSymbol, Symbol};
@@ -33,7 +34,7 @@ mod tests;
 /// verification-build cfg features, making the output-asserting suite an equivalence battery.
 ///
 /// `#[allow(dead_code)]`: the forced variants are constructed only under their cfg features, so the
-/// default build sees them unused; `SEAM_POLICY` itself has no consumer until the chooser lands.
+/// default build sees them unused.
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SeamPolicy {
@@ -867,6 +868,13 @@ pub(crate) fn relocate_object_into<'b>(
         // rebuilt at the door, so nothing it points at stays in a region the copy's own retention
         // claim then releases. That predicate is the whole gate: keying on the substrate variants
         // alone would leave a string pointer-copied under a release claim.
+        // Consolidate: the callable verb. The captured environment is rebuilt at the destination
+        // ([`consolidate_object`]) so the product borrows the copy and nothing of the source; an
+        // environment the engine declines falls through to the verbatim ride below, which is the
+        // pin the chooser's readiness answer already priced.
+        RegionEscape::Consolidate => {
+            consolidate_object(value, *dest).unwrap_or_else(|| value.deep_clone())
+        }
         RegionEscape::Copy if value.needs_destination_door() => copy_object_into(value, dest),
         // Everything else is a pointer copy: a scalar, a `KFunction` / `Module` leaf riding its
         // borrow verbatim, or — under Pin — a substrate carrier whose region-resident borrow rides,
@@ -916,7 +924,16 @@ pub(crate) fn retains_home(value: &KObject<'_>, home: &KoanRegion) -> bool {
         | KObject::Bool(_)
         | KObject::Null
         | KObject::KExpression(_) => false,
-        KObject::KFunction(_) | KObject::Module(_) => true,
+        // A callable's residence *is* its captured scope's region — the birth door derives the
+        // destination from the scope, so the two cannot come apart — which makes the identity
+        // compare exact rather than conservative. It is also what lets a consolidated callable
+        // release the producer: the rebuilt product captures the copy, so the source region it
+        // came from answers `false` here.
+        KObject::KFunction(function) => std::ptr::eq(function.captured_scope().region(), home),
+        // A module stays conservative: a transparent-ascription view re-tags a foreign module into
+        // the viewing scope's own region, so residence is not recoverable from the value and
+        // retaining more can never dangle. The consolidation lever is the callable case.
+        KObject::Module(_) => true,
         KObject::Record(substrate, _) => substrate.reach().pins_region(home),
         KObject::List(substrate, _) => substrate.reach().pins_region(home),
         KObject::Dict(substrate, _) => substrate.reach().pins_region(home),
@@ -951,10 +968,6 @@ pub(crate) enum RegionEscape {
     /// is: the rebuild is total or it does not happen. An environment the engine cannot rebuild —
     /// an unclosed scope, a standing claim, a `USING` window — is not waited on; the engine
     /// declines and the relocation falls back to the verbatim ride the pin covers.
-    ///
-    /// `#[allow(dead_code)]`: nothing selects the verb until the seam's callable arm routes
-    /// [`copy_or_pin_callable`], so the plain `--lib` build sees no construction of it.
-    #[allow(dead_code)]
     Consolidate,
 }
 
@@ -996,10 +1009,6 @@ const ALPHA_DIVISOR: u64 = 4;
 /// Every term is a stored read — the per-scope memos are bumped at bind time and the allocated
 /// totals are the arena's own — so a definition site pays nothing for this and the seam pays
 /// O(chain depth).
-///
-/// `#[allow(dead_code)]`: the escape seam's callable arm is what consumes this, and it is not
-/// wired yet — the plain `--lib` build (no `cfg(test)`) sees no consumer until it is.
-#[allow(dead_code)]
 pub(crate) fn copy_or_pin_callable<'a>(captured: &'a Scope<'a>, host: &KoanRegion) -> RegionEscape {
     match SEAM_POLICY {
         SeamPolicy::ForcePin => return RegionEscape::Pin,
@@ -1024,7 +1033,6 @@ pub(crate) fn copy_or_pin_callable<'a>(captured: &'a Scope<'a>, host: &KoanRegio
 /// the chain's per-call scopes sit in. Same-region children share one term — a scope chain is a
 /// handful of links deep, so the dedupe is a linear scan over what is already in cache rather than
 /// a set.
-#[allow(dead_code)]
 fn chain_retained_total<'a>(captured: &'a Scope<'a>) -> u64 {
     let mut seen: SmallVec<[*const KoanRegion; 4]> = SmallVec::new();
     let mut total = 0u64;
