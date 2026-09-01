@@ -80,6 +80,18 @@ fn allocations_for(source: &str, path: &str) -> u64 {
     delta
 }
 
+/// What the `seam-force-pin` verification build is allowed over the two recursion-driven shapes'
+/// bounds. Forcing that verb takes every record escape the cost-driven chooser declines to pin,
+/// and pinning them all costs ~2.6k allocations across either body. It is added at the assertion
+/// rather than folded into a bound so `BOUND` stays the production figure — the one
+/// `tools/alloc_audit.py` scrapes and holds to its own tightness rule. `seam-force-copy` needs
+/// nothing: it lands within a dozen allocations of the chooser.
+const FORCED_PIN_ALLOWANCE: u64 = if cfg!(feature = "seam-force-pin") {
+    2_600
+} else {
+    0
+};
+
 /// The empty program: interpreter startup and builtin seeding, which every other shape
 /// here carries. It is the `fixed` term in `observe/alloc.txt`, and it is inert to
 /// what a program *names* — an empty program names nothing. What moves it is the *count* of
@@ -118,22 +130,17 @@ fn the_empty_program_stays_within_its_startup_bound() {
 /// per-step allocation would add. Tight on purpose: a looser bound cannot see one
 /// allocation, and rebaselining is meant to be a deliberate edit.
 ///
-/// `seam-force-pin` gets a bound of its own at the same tightness. Forcing the pin verb takes
-/// every record escape the cost-driven chooser declines to pin, which costs ~2.6k allocations
-/// across this body — folding that headroom into the one bound would leave the production path
-/// blind to 25 added per-step allocations, so the two builds are held separately instead.
+/// The bound is the cost-driven build's; the forced-pin build clears it by
+/// [`FORCED_PIN_ALLOWANCE`] on top.
 #[test]
 fn the_wide_shape_stays_within_its_per_step_bound() {
-    #[cfg(not(feature = "seam-force-pin"))]
-    const BOUND: u64 = 22_690;
-    #[cfg(feature = "seam-force-pin")]
-    const BOUND: u64 = 25_290;
+    const BOUND: u64 = 22_670;
     let delta = allocations_for(
         include_str!("../audit/shapes/wide_n100.koan"),
         "audit/shapes/wide_n100.koan",
     );
     assert!(
-        delta <= BOUND,
+        delta <= BOUND + FORCED_PIN_ALLOWANCE,
         "the 100-step wide shape allocated {delta} times, over its {BOUND} bound — an \
          allocation was added to a per-step path; re-measure with `tools/alloc_audit.py`, \
          attribute it with the `dhat` feature, and rebaseline deliberately if intended"
@@ -150,20 +157,17 @@ fn the_wide_shape_stays_within_its_per_step_bound() {
 /// signal — a cost that only depth can see.
 ///
 /// The bound sits over the recorded bracketed reading by less than the 100 a single new
-/// per-frame allocation would add, and `seam-force-pin` takes its own at the same tightness for
-/// the reason the wide shape's doc gives.
+/// per-frame allocation would add, over [`FORCED_PIN_ALLOWANCE`] for the reason the wide shape's
+/// doc gives.
 #[test]
 fn the_deep_shape_stays_within_its_per_frame_bound() {
-    #[cfg(not(feature = "seam-force-pin"))]
-    const BOUND: u64 = 23_300;
-    #[cfg(feature = "seam-force-pin")]
-    const BOUND: u64 = 25_900;
+    const BOUND: u64 = 23_280;
     let delta = allocations_for(
         include_str!("../audit/shapes/deep_n100.koan"),
         "audit/shapes/deep_n100.koan",
     );
     assert!(
-        delta <= BOUND,
+        delta <= BOUND + FORCED_PIN_ALLOWANCE,
         "the depth-100 shape allocated {delta} times, over its {BOUND} bound — an \
          allocation was added to a path that runs per live frame; re-measure with \
          `tools/alloc_audit.py` and rebaseline deliberately if the cost is intended"
