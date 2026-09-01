@@ -74,6 +74,11 @@ Root concerns:
   region mint, the space/efficiency accounting, and the three-lemma
   soundness argument. The reasoning layer over the
   [witness-hosting.md](witness-hosting.md) carrier and retention model.
+- [destination-homed-construction.md](destination-homed-construction.md) —
+  the born-at-destination memory primitive: a marked node constructs its
+  result in a foreign destination region, the result-position propagation
+  rule, its place as the crossing rule's zero-copy tier, and the TCO
+  constraints on step-time foreign allocation.
 - [expressions-and-parsing.md](expressions-and-parsing.md) — the
   parse pipeline (quotes → whitespace → expression tree → tokens →
   operators), the `KExpression` shape it produces, the
