@@ -186,11 +186,15 @@ layer — the same peel-or-hold rule every newtype construction runs (see
 ([match_case.rs](../../src/builtins/match_case.rs) via
 [branch_walk.rs](../../src/builtins/branch_walk.rs)). `MATCH <expr> OVER <U> WITH
 (…)` is *member elimination*: `U` resolves to a union type, every arm head names a
-member of `U` (an unknown head errors listing the members), and the arm set names
-every member exactly once — a missing member and a repeated one are each an error at
-the form, checked before any value is read, so no arm order and no runtime value can
-leave the match without a body. A scrutinee inhabiting no member of `U` is its own
-error naming both. The winning arm binds
+member of `U` — or is `_`, the **default arm** — and no member and no `_` is named
+twice. An unknown head errors listing the members. Coverage is required *unless* a `_`
+arm stands in: without one, a missing member is an error at the form; with one, the
+arm set may leave members uncovered and `_` runs for a value of any member no named
+arm claims. A named arm always wins over `_`, whatever the source order. All of this
+is checked before any value is read, so no arm order and no runtime value can leave
+the match without a body. `_` defaults the union's uncovered *members* only — a
+scrutinee inhabiting no member of `U` is still its own error naming both, `_` present
+or not. The winning arm — named or `_` — binds
 `it` to the matched member's payload — the value under the member's wrap — with a
 non-wrapping member binding the value itself. `OVER` takes any union-noded operand:
 a `UNION` binder, a `LET`-bound alias of an anonymous union, or an inline
@@ -210,9 +214,21 @@ bind site. See
 [unions and match-by-type](type-language-via-dispatch.md#anonymous-union-sigil).
 
 `TRY` selects arms through the same member walk with a fixed member set — `Ok` plus
-the error members, an implicit `OVER`
-([try_with.rs](../../src/builtins/try_with.rs)) — see
+the members of the prelude `KError` union, an implicit `OVER`
+([try_with.rs](../../src/builtins/try_with.rs)). The two forms share one arm parser
+and the `_` default-arm rule; `TRY` drops the coverage requirement, because an
+unhandled kind re-raises rather than failing the form — see
 [error-handling.md](../error-handling.md).
+
+**A union head takes named type arguments** — `:(Maybe {Some = Number})`,
+`:(Result {Ok = Number, Error = Str})`. Each argument name must name a member, and
+the application lands per member ([union.rs](../../src/builtins/union.rs)): the
+result is the union of the members with every named one replaced by the
+`ConstructorApply` over it, so a member no argument names simply rides bare and
+partial application is legal. A record body on a union head is therefore always
+*type application*, never construction — a variant is reached by projection alone.
+The admission and stamping rules for the applied form are in
+[ktype/parameterization-and-variance.md § Applying a union head](ktype/parameterization-and-variance.md#applying-a-union-head).
 
 ## Type-only nominal install
 
@@ -553,8 +569,3 @@ value's lifetime — so a FN parameter typed `:(Number AS Wrapper)` and a
 value-position match apply the identical admission. Two `Wrapper (v)` values compare `==`
 through the ordinary `Wrapped` structural-equality path.
 
-## Open work
-
-- [Retire the Tagged carrier](../../roadmap/type_language/retire-tagged-carrier.md)
-  — variant values on `Wrapped`, `Result` as a sealed two-member union, and the
-  unified member walk `TRY` shares.

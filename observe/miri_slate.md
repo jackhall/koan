@@ -46,7 +46,7 @@ group just to silence the stale-anchor check.
   file carries no `unsafe` of its own — koan-side `src/` carries none at all — and the backing
   `unsafe` is `BumpAllocator`'s in `witnessed.rs`, reached through `BumpVec`.
 - `src/machine/core/arena.rs` — arena.rs split into `arena/{frame,step_allocator}` child
-  modules. Its groups (CallFrame lifetime erasure, the record substrate door, MATCH-Tagged /
+  modules. Its groups (CallFrame lifetime erasure, the record substrate door, MATCH-variant /
   TRY-WITH TCO, per-call frame
   re-anchor, NodeStore reinstall) pin safe-code frame / carrier / region drop-order and reattach
   disciplines whose backing `unsafe` is the branded re-anchor in `witnessed.rs`. Every koan family is
@@ -288,7 +288,7 @@ that quietly reintroduced an owning slot — a `Vec` spine, a `String` name, an 
 and reads correctly, and the buffer simply never frees, because freeing a chunk does not visit what
 the chunk holds. `Copy` is the static proxy that forbids it at every bump primitive; this test is
 the dynamic check that the proxy is load-bearing in composition. It fills one frame region with all
-five substrate shapes (list, dict, record, `Tagged`, `Wrapped`), each carrying a bumped string leaf
+four substrate shapes (list, dict, record, `Wrapped`), each carrying a bumped string leaf
 so the region holds re-homed bytes and index metadata as well as cells, a run of `KFunction`s
 whose signatures put a bumped element run and synthesized keyword / parameter-name bytes in the same
 region, and a run of `Module`s, whose paths, member-map keys and member-table bucket arrays land there
@@ -400,7 +400,7 @@ cart's scope, and seed the `it` bind into that overlay: the matched value, deep-
 lifetime, is relocated into the enclosing cart's own region through the substrate (rebuilt at the
 destination brand, which is where the caller lifetime is dropped) and bound; the `FrameStorage`
 ancestor chain keeps the call-site region alive across TCO replace when a user-fn recurses through a
-`Tagged` parameter. The test drives both doors in one program — a MATCH on a `Tagged` scrutinee
+union-variant parameter. The test drives both doors in one program — a MATCH on a variant scrutinee
 nested inside a TRY whose `Ok -> it` catch path tail-calls back through the enclosing user-fn — so
 the overlay's residence in the cart the replace retires, the `it`-bind seed relocation, and the
 framed TCO replace are all exercised together.
@@ -528,8 +528,8 @@ the Replace arm stores the slot's scope as a payload-less `NodeScope::Yoked` mar
 from the frame cart (no fabricated `&'a` persists), so the `Rc<CallFrame>` witness in `Node.frame`
 remains the sole liveness root for the re-installed slot's scope.
 Exercised by the dispatch-time parking shapes that reinstall through this entry
-point (and transitively by user-fn TCO; that path is covered by the MATCH-on-
-`Tagged` recursion test above). One batch-submitted program drives both: `LET y = z`
+point (and transitively by user-fn TCO; that path is covered by the
+MATCH-on-a-variant recursion test above). One batch-submitted program drives both: `LET y = z`
 forward-splices a bare name whose producer has not run yet, and `LET out = (DOUBLE y)` parks a FN
 call on that same binding and replays it on the wake — the parked slot's scope must stay valid across
 both the wake and the re-dispatch.
@@ -639,9 +639,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-08-31: 1098s — 27 tests, 0 leaks, 0 UB
 - 2026-08-30: 1265s — 27 tests, 0 leaks, 0 UB
 - 2026-08-28: 787s — 27 tests, 0 leaks, 0 UB
 - 2026-08-28: 1302s — 27 tests, 0 leaks, 0 UB
 - 2026-08-28: 1256s — 27 tests, 0 leaks, 0 UB
-- 2026-08-26: 701s — 25 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

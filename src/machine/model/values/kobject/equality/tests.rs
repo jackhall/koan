@@ -262,7 +262,7 @@ fn record_field_value_differs() {
     assert_eq!(a.value_equal(&b, &registries), Ok(false));
 }
 
-// --- tagged -----------------------------------------------------------------------
+// --- variants --------------------------------------------------------------------
 
 /// Two singleton newtype members declared together, so distinct handles exist for the
 /// identity check. Returns the `None`-over-`Null` and `Some`-over-`Number` member handles.
@@ -278,24 +278,11 @@ fn two_member(types: &TypeRegistry) -> Vec<KType> {
         .members
 }
 
-#[test]
-fn tagged_same_nominal_compares_payload() {
-    let registries = RunRegistries::new();
-    let types = &registries.types;
-    container_door!(_storage, door);
-    let identity = newtype_singleton("Distance", KType::NUMBER, types);
-    let a = KObject::tagged(door, type_token("Distance"), &num(3.0), identity);
-    let b = KObject::tagged(door, type_token("Distance"), &num(3.0), identity);
-    let c = KObject::tagged(door, type_token("Distance"), &num(4.0), identity);
-    assert_eq!(a.value_equal(&b, &registries), Ok(true));
-    assert_eq!(a.value_equal(&c, &registries), Ok(false));
-}
-
 /// Identity-based equality reads an erased carrier (the bare member handle) and a stamped one
 /// (a `ConstructorApply` over that member) as distinct types, so they compare unequal even with
 /// equal payloads — the erased-vs-stamped distinction lives in the one identity handle.
 #[test]
-fn tagged_erased_and_stamped_are_distinct_identities() {
+fn erased_and_stamped_are_distinct_identities() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
@@ -308,10 +295,9 @@ fn tagged_erased_and_stamped_are_distinct_identities() {
         None,
         types,
     );
-    let erased = KObject::tagged(door, type_token("Box"), &num(1.0), ctor);
-    let stamped = KObject::tagged(
+    let erased = KObject::wrapped_hold(door, &num(1.0), ctor);
+    let stamped = KObject::wrapped_hold(
         door,
-        type_token("Box"),
         &num(1.0),
         types.constructor_apply(
             ctor,
@@ -324,14 +310,16 @@ fn tagged_erased_and_stamped_are_distinct_identities() {
     assert_eq!(erased.value_equal(&stamped, &registries), Ok(false));
 }
 
+/// Two variants of one group are distinct members, so their values are unequal whatever the
+/// payloads: identity is compared before the payload ever is.
 #[test]
-fn tagged_distinct_index_is_unequal() {
+fn distinct_variant_members_are_unequal() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
     let members = two_member(types);
-    let none = KObject::tagged(door, type_token("None"), &KObject::Null, members[0]);
-    let some = KObject::tagged(door, type_token("Some"), &num(1.0), members[1]);
+    let none = KObject::wrapped_hold(door, &KObject::Null, members[0]);
+    let some = KObject::wrapped_hold(door, &num(1.0), members[1]);
     assert_eq!(none.value_equal(&some, &registries), Ok(false));
 }
 

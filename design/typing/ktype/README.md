@@ -61,8 +61,8 @@ concrete `KObject` has a `TypeNode` variant:
   See [user-types.md](../user-types.md) for the full model.
   - `SetMember { scc_digest, index, scc_size, name, kind, schema }` — one sealed
     member. Its handle is the `Copy` `(scc_digest, index)` folded into one digest —
-    the nominal identity `KObject::ktype()` reports for `Wrapped` and `Tagged`
-    carriers and held by `bindings.types`. Identity is the SCC digest plus the
+    the nominal identity `KObject::ktype()` reports for `Wrapped` carriers and
+    held by `bindings.types`. Identity is the SCC digest plus the
     member index, never the (possibly cyclic) schema; `scc_size`, `name`, `kind`,
     and `schema` are digest-excluded because they are exactly the inputs the digest
     was computed over. Structurally identical declarations therefore unify — the

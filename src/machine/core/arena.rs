@@ -453,7 +453,7 @@ reattachable! {
 /// value lands — allocated through the handle — tagged by the identity, both re-anchored to the
 /// build brand under the same witness. The identity is a bare interned handle pointing into no
 /// region, so the whole operand is born co-located in the dest region by a single yoke. Used by the
-/// newtype / tagged-union constructors and the `CATCH` `Result` build. Layout-invariant: a thin
+/// newtype and union-variant constructors and the `CATCH` `Result` build. Layout-invariant: a thin
 /// pointer and a `Copy` `KType` handle, representation independent of `'r`.
 pub struct RegionTypeFamily;
 reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, KType));

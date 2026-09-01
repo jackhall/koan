@@ -20,6 +20,13 @@ writer wrote, and it renders the operand as its *type*, which is a schema that
 manifestly has fields. A reader is told the value lacks what the message itself
 prints.
 
+The gap reaches the error surface too. A `TRY` error arm and a `MATCH … OVER
+KError` arm bind `it` to the caught kind's payload record (ruling F3), which is a
+bare record, so `it.name` / `it.message` / `it.frames` do not resolve —
+[design/error-handling.md](../../design/error-handling.md) and
+[tutorial/09-errors.md](../../tutorial/09-errors.md) both have to say so, and five
+behavioural tests are `#[ignore]`d on it.
+
 **Acceptance criteria.**
 
 - `person.name` reads the field off a value bound from a record literal, with no
@@ -34,6 +41,16 @@ prints.
   `view.x` yields the field.
 - No field-read diagnostic names a builtin slot (`s`) where the receiver is what
   the writer wrote.
+- A `TRY` error arm and a `MATCH … OVER KError` arm read their kind's fields off
+  `it` — the arm binds the payload record (ruling F3), so `it.name`, `it.message`
+  and `it.frames` resolve through the same bare-record read. The behavioural tests
+  ignored on that binding are re-enabled: `unbound_name_arm_catches_unbound_name`,
+  `shape_error_arm_catches_shape_error`,
+  `type_mismatch_arm_catches_record_newtype_value_mismatch` and
+  `frames_non_empty_after_recursive_call` in
+  [`try_with/tests.rs`](../../src/builtins/try_with/tests.rs), and
+  `failure_wraps_lowered_error_in_error` in
+  [`catch/tests.rs`](../../src/builtins/catch/tests.rs).
 
 **Directions.**
 

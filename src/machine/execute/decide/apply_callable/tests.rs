@@ -1,9 +1,11 @@
 //! The named type-application surface: `:(Ctor {Param = Type, …})`.
 //!
-//! A record-literal body on a type-constructor head — a `NEWTYPE`-declared family, the builtin
-//! `Result`, or a SIG's abstract constructor slot — binds the family's declared parameters by
-//! name and yields a `TypeNode::ConstructorApply`. `AS` is its arity-1 sugar. These run the real
-//! dispatcher, so they cover the sub-dispatch parking path and the key-check diagnostics.
+//! A record-literal body on a type-constructor head — a `NEWTYPE`-declared family or a SIG's
+//! abstract constructor slot — binds the family's declared parameters by name and yields a
+//! `TypeNode::ConstructorApply`. `AS` is its arity-1 sugar. On a **union** head the same body is a
+//! per-member application: each name keys a member, and the result is the union of the members
+//! with every named one applied. These run the real dispatcher, so they cover the sub-dispatch
+//! parking path and the key-check diagnostics.
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
@@ -25,26 +27,79 @@ fn applied_args(
     }
 }
 
-/// `:(Result {Ok = Number, Error = Str})` applies the builtin two-parameter family, and the args
-/// record carries `Ok` before `Error` — `Result`'s declared order.
+/// `:(Result {Ok = Number, Error = Str})` applies the builtin union head per member: the result is
+/// the union of `Ok` and `Error`, each carrying its own same-named argument.
 #[test]
-fn result_applies_named_type_arguments() {
+fn result_applies_named_type_arguments_per_member() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let applied = test_run.run_one_type(test_run.parse_one(":(Result {Ok = Number, Error = Str})"));
+    let registries = test_run.registries();
+    let TypeNode::Union { members } = registries.types.node(applied) else {
+        panic!(
+            "expected a union of per-member applications, got {}",
+            applied.name(registries)
+        )
+    };
+    assert_eq!(members.len(), 2);
+    for (member, (name, arg)) in members
+        .iter()
+        .zip([("Ok", KType::NUMBER), ("Error", KType::STR)])
+    {
+        assert_eq!(
+            applied_args(*member, registries),
+            vec![(crate::builtins::test_support::binder_token(name), arg)],
+            "each member carries only its own same-named argument",
+        );
+    }
+}
+
+/// A member the application leaves unnamed rides bare — the union's own member handle, unapplied.
+#[test]
+fn union_application_leaves_unnamed_members_bare() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let applied = test_run.run_one_type(test_run.parse_one(":(Result {Ok = Number})"));
+    let registries = test_run.registries();
+    let TypeNode::Union { members } = registries.types.node(applied) else {
+        panic!("expected a union, got {}", applied.name(registries))
+    };
     assert_eq!(
-        applied_args(applied, test_run.registries()),
-        vec![
-            (
-                crate::builtins::test_support::binder_token("Ok"),
-                KType::NUMBER
-            ),
-            (
-                crate::builtins::test_support::binder_token("Error"),
-                KType::STR
-            ),
-        ],
+        applied_args(members[0], registries),
+        vec![(
+            crate::builtins::test_support::binder_token("Ok"),
+            KType::NUMBER
+        )],
+    );
+    assert!(
+        matches!(
+            registries.types.node(members[1]),
+            TypeNode::SetMember { .. }
+        ),
+        "the unnamed `Error` member stays a bare member handle",
+    );
+}
+
+/// The lowering rule is general to any union head, so a user `UNION` gains the same application.
+#[test]
+fn user_union_applies_named_type_arguments() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("UNION Maybe = (Some :Any None :Null)");
+    let applied = test_run.run_one_type(test_run.parse_one(":(Maybe {Some = Number})"));
+    let registries = test_run.registries();
+    let TypeNode::Union { members } = registries.types.node(applied) else {
+        panic!("expected a union, got {}", applied.name(registries))
+    };
+    assert_eq!(
+        applied_args(members[0], registries),
+        vec![(
+            crate::builtins::test_support::binder_token("Some"),
+            KType::NUMBER
+        )],
     );
 }
 
@@ -123,10 +178,8 @@ fn constructor_apply_name_round_trips() {
     test_run.run("NEWTYPE (Elem AS Wrap)");
     for source in [
         ":(Wrap {Elem = Number})",
-        ":(Result {Ok = Number, Error = Str})",
         ":(Wrap {Elem = (LIST OF Number)})",
         ":(Wrap {Elem = :(LIST OF Number)})",
-        ":(Result {Ok = (LIST OF Number), Error = Str})",
     ] {
         let applied = test_run.run_one_type(test_run.parse_one(source));
         let rendered = applied.name(test_run.registries());
@@ -139,21 +192,24 @@ fn constructor_apply_name_round_trips() {
     }
 }
 
-/// An application that omits a declared parameter names the one it is missing.
+/// An application that omits a declared parameter names the one it is missing. A constructor
+/// family binds every parameter or none — unlike a union head, where an unnamed member simply
+/// rides bare.
 #[test]
 fn missing_type_parameter_is_named() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let error = test_run.run_one_err(test_run.parse_one(":(Result {Ok = Number})"));
+    test_run.run("NEWTYPE (One Two AS Pair)");
+    let error = test_run.run_one_err(test_run.parse_one(":(Pair {One = Number})"));
     match &error.kind {
         KErrorKind::ShapeError(message) => {
             assert!(
-                message.contains("missing `Error`"),
+                message.contains("missing `Two`"),
                 "the error must name the missing parameter, got: {message}",
             );
             assert!(
-                message.contains("`Ok`"),
+                message.contains("`One`"),
                 "the error must list the declared parameters, got: {message}",
             );
         }
@@ -203,22 +259,22 @@ fn abstract_slot_applies_named_type_argument() {
     );
 }
 
-/// An arity-2 abstract slot is satisfied end to end by a module binding the builtin `Result`,
-/// whose parameters are named `Ok` and `Error`.
+/// An arity-2 abstract slot is satisfied end to end by a module binding a two-parameter family.
 #[test]
-fn arity_two_abstract_slot_satisfied_by_result() {
+fn arity_two_abstract_slot_satisfied_by_family() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
+    test_run.run("NEWTYPE (One Two AS Pair)");
     test_run.run(
-        "SIG Bifunctor = ((TYPE (Ok Error AS Result2)))\n\
-         MODULE result_bifunctor = ((LET Result2 = Result))",
+        "SIG Bifunctor = ((TYPE (One Two AS Pair2)))\n\
+         MODULE pair_bifunctor = ((LET Pair2 = Pair))",
     );
-    test_run.run("LET view = (result_bifunctor :| Bifunctor)");
+    test_run.run("LET view = (pair_bifunctor :| Bifunctor)");
     assert!(
         crate::builtins::test_support::binds_module(scope, "view"),
-        "`LET Result2 = Result` must satisfy `TYPE (Ok Error AS Result2)`",
+        "`LET Pair2 = Pair` must satisfy `TYPE (One Two AS Pair2)`",
     );
 }
 
@@ -258,15 +314,15 @@ fn multi_parameter_family_rejects_value_construction() {
     );
 }
 
-/// An `Result (Ok v)` carrier erases its type arguments, so admission against a named application
-/// reads the tag's parameter out of the args record directly.
+/// A `Result.Ok v` carrier erases its type arguments, so admission against a named application
+/// reads the inhabited member's same-named argument out of that member's application directly.
 #[test]
 fn erased_result_carrier_admits_named_application() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("LET wrapped = (Result (Ok 3.0))");
+    test_run.run("LET wrapped = (Result.Ok 3.0)");
     let admitting =
         test_run.run_one_type(test_run.parse_one(":(Result {Ok = Number, Error = Any})"));
     let refusing = test_run.run_one_type(test_run.parse_one(":(Result {Ok = Str, Error = Any})"));

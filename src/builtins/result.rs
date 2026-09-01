@@ -1,61 +1,51 @@
-//! `Result` — a builtin two-variant tagged union, registered once at prelude build like
-//! `List`/`Dict`, not via `UNION`/`NEWTYPE`.
+//! `Result` — a builtin two-variant union, registered once at prelude build like `List`/`Dict`,
+//! not via `UNION`.
 //!
-//! Type-only: `bindings.types["Result"]` holds the interned member handle of a one-member
-//! [`KKind::TypeConstructor`] group whose member carries the variant schema
-//! (`{Ok: Any, Error: Any}`) and the matching `param_names` `["Ok", "Error"]` — each tag's
-//! payload type is the arg bound to the same-named parameter.
-//! `:(Result {Ok = Number, Error = MyError})` drives the resolver's `ConstructorApply` arm;
-//! `(Result (Ok v))` constructs by reading the schema off the member node. No value-side
-//! carrier.
+//! Type-only: `bindings.types["Result"]` holds the anonymous union of two sealed `NewType`
+//! members, `Ok` and `Error`, each over `Any` and owned by the `Result` binder — the shape a user
+//! `UNION Result = (Ok :Any, Error :Any)` would seal. Construction is projection-only
+//! (`Result.Ok 1`, `Result.Error e`), and applying the union head directly raises the
+//! member-projection guidance error every union head gives.
 //!
-//! Type parameters are erased at runtime (as for `List`/`Dict`): the member handle is the
-//! constructor's identity and never descends its arguments, so every `:(Result …)` resolves
-//! to the one identity.
+//! `:(Result {Ok = Number, Error = MyError})` is *type application* over the union head: it
+//! lowers to the union of `ConstructorApply` nodes over each named member, so a slot so typed
+//! runtime-checks the inhabited member's payload against its same-named argument.
 
 use crate::machine::WriteGate;
 
 use crate::machine::Scope;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{
-    KType, RecursiveGroupWindow, RelativeSchema, StaticName, TypeMemberMap, TypeSymbol,
-};
+use crate::machine::model::{KType, RecursiveGroupWindow, RelativeSchema, StaticName, TypeSymbol};
 
-/// The family's own name and its two variant tags — the three labels of the `Result` shape, each
+/// The family's own name and its two variant names — the three labels of the `Result` shape, each
 /// fixed in Rust source, so each is minted once for the process and recorded into a run's interner
-/// at registration. [`catch`](super::catch) reads the tags back through these same statics, so the
-/// tag a `Result` is built under and the tag registration declared cannot drift apart.
+/// at registration. [`catch`](super::catch) and [`try_with`](super::try_with) read the variants
+/// back through these same statics, so the member a `Result` is built under and the member
+/// registration declared cannot drift apart.
 pub(crate) static RESULT: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Result");
 pub(crate) static OK: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Ok");
 pub(crate) static ERROR: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Error");
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     let types = &registries.types;
+    let result = registries.labels.record(&RESULT);
     let ok = registries.labels.record(&OK);
     let error = registries.labels.record(&ERROR);
-    let mut schema = TypeMemberMap::default();
-    schema.insert(ok, KType::ANY);
-    schema.insert(error, KType::ANY);
-    // A one-member window sealed in miniature: the sole `TypeConstructor` member's component is a
-    // singleton, so its interned handle is `Result`'s identity.
-    let identity = RecursiveGroupWindow::seal_singleton(
-        registries.labels.record(&RESULT),
-        RelativeSchema::TypeConstructor {
-            schema,
-            param_names: vec![ok, error],
-        },
-        None,
-        types,
-    );
-    // Type-only: the variant schema rides the sealed member, so construction reads it via a
-    // fresh `types["Result"]` lookup — no value-side carrier. Prelude build runs once; a
-    // collision would be a programming error.
-    scope.register_builtin_type(
-        registries.labels.record(&RESULT),
-        identity,
-        registries,
-        gate,
-    );
+    // The one-binder window a standalone `UNION` runs: `Result` owns both members, so neither
+    // variant name binds on its own and the binder denotes their union. Each member's payload is
+    // `Any` — a `Result`'s variant types are supplied by application, never by the declaration.
+    let window = RecursiveGroupWindow::for_binder(result, vec![ok, error]);
+    window.fill_member(0, RelativeSchema::NewType(KType::ANY), types);
+    let sealed = window
+        .fill_member(1, RelativeSchema::NewType(KType::ANY), types)
+        .expect("a two-member window seals on its second fill");
+    let union = sealed
+        .binder_type(result)
+        .expect("the `Result` binder owns both sealed members");
+    // Type-only: the members carry the variant identities, so construction reaches them by
+    // projection off a fresh `types["Result"]` lookup — no value-side carrier. Prelude build runs
+    // once; a collision would be a programming error.
+    scope.register_builtin_type(result, union, registries, gate);
 }
 
 #[cfg(test)]

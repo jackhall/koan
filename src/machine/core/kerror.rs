@@ -2,10 +2,7 @@ use std::fmt;
 
 use crate::machine::model::WorkingExpression;
 use crate::machine::model::{Carried, CarriedFamily, KObject};
-use crate::machine::model::{
-    KKind, KType, RecursiveGroupWindow, RelativeSchema, StaticName, TypeMemberMap, TypeRegistry,
-    TypeSymbol,
-};
+use crate::machine::model::{StaticName, TypeSymbol};
 use crate::source::{self, FileId, SourceLoc, SourceRef, Span};
 use crate::witnessed::RegionHandleFamily;
 
@@ -201,27 +198,29 @@ impl KError {
         self.clone()
     }
 
-    /// Lower this error into a `KObject::Tagged` for `TRY-WITH` to dispatch
-    /// on. The `tag` is the capitalized `KErrorKind` variant name (e.g. `"TypeMismatch"`),
-    /// a valid type-token tag a TRY arm catches by name; the payload is a record-repr
-    /// `KObject::Wrapped` mirroring the variant's fields plus `frames :List<Str>`, so TRY's
-    /// `it.field` ATTR reads through the `Wrapped` arm. The payload's `type_id` and the
-    /// wrapping `Tagged`'s `identity` are synthetic singleton members (named after the variant /
-    /// `"KError"`) because TRY's branch walker reads `tag` and `value` directly without going
-    /// through dispatch — these carriers never need real nominal identity. They intern like any
-    /// other member, so two errors of one variant carry one handle.
+    /// Lower this error into the `KError` union member for its kind — one
+    /// [`KObject::Wrapped`] whose `type_id` is `member` and whose payload is a record-repr
+    /// `Wrapped` mirroring the variant's fields plus `frames :List<Str>`, so an arm's `it.field`
+    /// ATTR reads through the payload's own `Wrapped` arm. One identity spells the kind, so a
+    /// rendered error names it once.
+    ///
+    /// The member is the registered `KError` union's member of that kind's name — the same member
+    /// a `TRY` or `MATCH … OVER KError` arm names, so selection is an identity compare with
+    /// nothing to re-derive. `KError` is a registered prelude union and only `TRY` / `CATCH`
+    /// finishes reach this door, so a missing registration is a programming error.
     ///
     /// `door` is the substrate door the payload's `Record` substrate is born through — a caller with
-    /// no fold in hand mints a zero-dep one (see [`Self::to_tagged_delivered`]). Every cell here is
+    /// no fold in hand mints a zero-dep one (see [`Self::to_wrapped_delivered`]). Every cell here is
     /// freshly built owned data, so the door needs no holder.
-    pub fn to_tagged<'a>(
+    pub fn to_wrapped<'a>(
         &self,
         door: SubstrateDoor<'a, '_>,
+        scope: &Scope<'_>,
         registries: &RunRegistries,
     ) -> KObject<'a> {
         let types = &registries.types;
         let brand = **door;
-        let (name, fields) = self.kind.to_struct_fields(brand);
+        let (kind_name, fields) = self.kind.to_struct_fields(brand);
         let frames_list = KObject::list(
             door,
             self.frames
@@ -248,27 +247,18 @@ impl KError {
             .map(|(name, value)| (BinderSymbol::Value(registries.labels.record(name)), value))
             .collect();
         let record = KObject::record(door, &classified, types);
-        // The variant name and `KError` are Type tokens of the error shape; both reach the run's
-        // interner here so a rendered member name resolves.
-        let variant = error_label(&name, registries);
-        let payload = KObject::wrapped_peel(
-            door,
-            &record,
-            synthetic_singleton(variant, KKind::NewType, types),
-        );
-        KObject::tagged(
-            door,
-            variant,
-            &payload,
-            synthetic_singleton(
-                registries.labels.record(&KERROR),
-                KKind::TypeConstructor,
-                types,
-            ),
-        )
+        let union = scope
+            .resolve_type(KERROR.symbol())
+            .expect("KError is registered in the prelude before any error can lower");
+        let member = types
+            .union_member_named(union, kind_name.symbol().symbol())
+            .expect("every KErrorKind name is a member of the registered KError union");
+        // `wrapped_hold`, not `wrapped_peel`: the record is the member's payload verbatim, and a
+        // peel would collapse the one layer the kind's identity rides on.
+        KObject::wrapped_hold(door, &record, member)
     }
 
-    /// [`Self::to_tagged`] built directly resident in `scope`'s own region and sealed as a
+    /// [`Self::to_wrapped`] built directly resident in `scope`'s own region and sealed as a
     /// delivered carrier — the shape a caller with no fold already in hand needs: the payload's
     /// `Record` substrate can only be born through a fold door, so this drives a zero-dep one over
     /// `scope`'s frame. The seed operand is a bare handle into that same region,
@@ -276,7 +266,7 @@ impl KError {
     /// value where it already belongs and mints its description there: the region is the value's
     /// host *and* one of its members, since the freshly born substrate borrows into it. A consumer
     /// adopting this envelope under a copying seam therefore correctly retains `scope`'s frame.
-    pub fn to_tagged_delivered<'a>(
+    pub fn to_wrapped_delivered<'a>(
         &self,
         scope: &'a Scope<'a>,
         registries: &RunRegistries,
@@ -291,51 +281,89 @@ impl KError {
             |_handle, _dest, placement| {
                 let owned_cells = crate::machine::core::FrameCoverage::empty();
                 let brand = FoldingBrand::in_fold_closure(placement);
-                Carried::Object(brand.alloc_object_folded(
-                    self.to_tagged(brand.with_holder(&owned_cells), registries),
-                ))
+                Carried::Object(brand.alloc_object_folded(self.to_wrapped(
+                    brand.with_holder(&owned_cells),
+                    scope,
+                    registries,
+                )))
             },
         )
     }
 }
 
-/// The name every `to_tagged` value reports its family under — the one label of the error shape
-/// that is fixed in Rust source rather than read off a variant, so it is minted once for the
-/// process and recorded into each run's interner.
-static KERROR: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "KError");
-
-/// A `KErrorKind` variant name as the Type token it is, interned so a rendered member name resolves
-/// back. The name is chosen by the variant in hand, so it is classified here rather than declared.
-fn error_label(text: &str, registries: &RunRegistries) -> TypeSymbol {
-    TypeSymbol::declared(text, &registries.labels).expect("a KError variant name is a Type token")
+/// The union name every lowered error reports its family under, and one name per `KErrorKind`
+/// variant. Each is a Type token fixed in Rust source, so each is minted once for the process and
+/// recorded into a run's interner when
+/// [`error_union::register`](crate::builtins::error_union::register) mints the members.
+///
+/// The same table drives both ends: [`KErrorKind::to_struct_fields`] reads a lowered error's member name
+/// off it, and the registration iterates [`ErrorKinds::all`] — so a variant's member and the name
+/// its lowering looks up cannot drift apart.
+pub(crate) struct ErrorKinds {
+    pub ambiguous_dispatch: StaticName<TypeSymbol>,
+    pub arity_mismatch: StaticName<TypeSymbol>,
+    pub dispatch_failed: StaticName<TypeSymbol>,
+    pub duplicate_declaration: StaticName<TypeSymbol>,
+    pub duplicate_overload: StaticName<TypeSymbol>,
+    pub dynamic_names_under_inferred_close: StaticName<TypeSymbol>,
+    pub missing_arg: StaticName<TypeSymbol>,
+    pub nested_binder: StaticName<TypeSymbol>,
+    pub parse_error: StaticName<TypeSymbol>,
+    pub rebind: StaticName<TypeSymbol>,
+    pub scheduler_deadlock: StaticName<TypeSymbol>,
+    pub shape_error: StaticName<TypeSymbol>,
+    pub type_class_binding_expects_type: StaticName<TypeSymbol>,
+    pub type_mismatch: StaticName<TypeSymbol>,
+    pub unbound_name: StaticName<TypeSymbol>,
+    pub user: StaticName<TypeSymbol>,
 }
 
-/// A synthetic singleton member for an unregistered carrier (the `KError` to-tagged payload's
-/// `type_id` and the wrapping `Tagged`'s `identity`). Its one member carries an empty schema —
-/// these carriers are read directly by the TRY branch walker, never dispatched on, so the schema
-/// is never consulted.
-fn synthetic_singleton(name: TypeSymbol, kind: KKind, types: &TypeRegistry) -> KType {
-    let schema = match kind {
-        KKind::NewType => RelativeSchema::NewType(KType::ANY),
-        _ => RelativeSchema::TypeConstructor {
-            schema: TypeMemberMap::default(),
-            param_names: Vec::new(),
-        },
-    };
-    RecursiveGroupWindow::seal_singleton(name, schema, None, types)
-}
+pub(crate) static KERROR: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "KError");
 
-/// The `KError` carrier type — the `TypeConstructor`-kind member a `to_tagged` value reports its
-/// family from. Used as the `Error` arm of `CATCH`'s declared
-/// `:(Result {Ok = Any, Error = KError})` return (a documentary contract — `KError` is not a
-/// registered prelude type, and the synthetic member is identity-throwaway, but `CATCH`'s return
-/// is never validated against the runtime value).
-pub(crate) fn kerror_ktype(registries: &RunRegistries) -> KType {
-    synthetic_singleton(
-        registries.labels.record(&KERROR),
-        KKind::TypeConstructor,
-        &registries.types,
-    )
+pub(crate) static KIND: ErrorKinds = ErrorKinds {
+    ambiguous_dispatch: crate::static_name!(TypeSymbol, "AmbiguousDispatch"),
+    arity_mismatch: crate::static_name!(TypeSymbol, "ArityMismatch"),
+    dispatch_failed: crate::static_name!(TypeSymbol, "DispatchFailed"),
+    duplicate_declaration: crate::static_name!(TypeSymbol, "DuplicateDeclaration"),
+    duplicate_overload: crate::static_name!(TypeSymbol, "DuplicateOverload"),
+    dynamic_names_under_inferred_close: crate::static_name!(
+        TypeSymbol,
+        "DynamicNamesUnderInferredClose"
+    ),
+    missing_arg: crate::static_name!(TypeSymbol, "MissingArg"),
+    nested_binder: crate::static_name!(TypeSymbol, "NestedBinder"),
+    parse_error: crate::static_name!(TypeSymbol, "ParseError"),
+    rebind: crate::static_name!(TypeSymbol, "Rebind"),
+    scheduler_deadlock: crate::static_name!(TypeSymbol, "SchedulerDeadlock"),
+    shape_error: crate::static_name!(TypeSymbol, "ShapeError"),
+    type_class_binding_expects_type: crate::static_name!(TypeSymbol, "TypeClassBindingExpectsType"),
+    type_mismatch: crate::static_name!(TypeSymbol, "TypeMismatch"),
+    unbound_name: crate::static_name!(TypeSymbol, "UnboundName"),
+    user: crate::static_name!(TypeSymbol, "User"),
+};
+
+impl ErrorKinds {
+    /// Every kind name, in the order the `KError` union declares its members.
+    pub(crate) fn all(&'static self) -> [&'static StaticName<TypeSymbol>; 16] {
+        [
+            &self.ambiguous_dispatch,
+            &self.arity_mismatch,
+            &self.dispatch_failed,
+            &self.duplicate_declaration,
+            &self.duplicate_overload,
+            &self.dynamic_names_under_inferred_close,
+            &self.missing_arg,
+            &self.nested_binder,
+            &self.parse_error,
+            &self.rebind,
+            &self.scheduler_deadlock,
+            &self.shape_error,
+            &self.type_class_binding_expects_type,
+            &self.type_mismatch,
+            &self.unbound_name,
+            &self.user,
+        ]
+    }
 }
 
 /// The error record's field names, each fixed in Rust source rather than written by a program. A
@@ -381,18 +409,21 @@ static FIELD: ErrorFields = ErrorFields {
 };
 
 impl KErrorKind {
-    /// `(name, fields)` for `KError::to_tagged`. `name` is the capitalized variant tag —
-    /// a TRY arm catches it by name (`TypeMismatch -> …`) — and also the payload newtype's
-    /// identity. Field order mirrors the variant's declaration order; `frames` is appended
-    /// by the caller. Dispatcher-internal kinds flatten to `{ kind, message }` since
-    /// they're only catchable via `_`.
+    /// `(name, fields)` for [`KError::to_wrapped`]. `name` is the [`KIND`] entry for this
+    /// variant — the `KError` union member the lowered value carries, which a TRY or
+    /// `MATCH … OVER KError` arm catches by name (`TypeMismatch -> …`). Field order mirrors the
+    /// variant's declaration order; `frames` is appended by the caller. Dispatcher-internal kinds
+    /// flatten to `{ kind, message }`.
     fn to_struct_fields<'a>(
         &self,
         brand: RegionBrand<'a>,
-    ) -> (String, Vec<(&'static StaticName<ValueSymbol>, KObject<'a>)>) {
+    ) -> (
+        &'static StaticName<TypeSymbol>,
+        Vec<(&'static StaticName<ValueSymbol>, KObject<'a>)>,
+    ) {
         match self {
             KErrorKind::TypeMismatch { arg, expected, got } => (
-                "TypeMismatch".to_string(),
+                &KIND.type_mismatch,
                 vec![
                     (&FIELD.arg, KObject::KString(brand.allocator().text(arg))),
                     (
@@ -403,15 +434,15 @@ impl KErrorKind {
                 ],
             ),
             KErrorKind::MissingArg(name) => (
-                "MissingArg".to_string(),
+                &KIND.missing_arg,
                 vec![(&FIELD.name, KObject::KString(brand.allocator().text(name)))],
             ),
             KErrorKind::UnboundName(name) => (
-                "UnboundName".to_string(),
+                &KIND.unbound_name,
                 vec![(&FIELD.name, KObject::KString(brand.allocator().text(name)))],
             ),
             KErrorKind::ArityMismatch { expected, got } => (
-                "ArityMismatch".to_string(),
+                &KIND.arity_mismatch,
                 vec![
                     (&FIELD.expected, KObject::Number(*expected as f64)),
                     (&FIELD.got, KObject::Number(*got as f64)),
@@ -420,14 +451,14 @@ impl KErrorKind {
             KErrorKind::AmbiguousDispatch {
                 expr, candidates, ..
             } => (
-                "AmbiguousDispatch".to_string(),
+                &KIND.ambiguous_dispatch,
                 vec![
                     (&FIELD.expr, KObject::KString(brand.allocator().text(expr))),
                     (&FIELD.candidates, KObject::Number(*candidates as f64)),
                 ],
             ),
             KErrorKind::DispatchFailed { expr, reason, .. } => (
-                "DispatchFailed".to_string(),
+                &KIND.dispatch_failed,
                 vec![
                     (&FIELD.expr, KObject::KString(brand.allocator().text(expr))),
                     (
@@ -437,18 +468,18 @@ impl KErrorKind {
                 ],
             ),
             KErrorKind::NestedBinder { expr, .. } => (
-                "NestedBinder".to_string(),
+                &KIND.nested_binder,
                 vec![(&FIELD.expr, KObject::KString(brand.allocator().text(expr)))],
             ),
             KErrorKind::DynamicNamesUnderInferredClose { form, .. } => (
-                "DynamicNamesUnderInferredClose".to_string(),
+                &KIND.dynamic_names_under_inferred_close,
                 vec![(
                     &FIELD.form,
                     KObject::KString(brand.allocator().text(form.surface())),
                 )],
             ),
             KErrorKind::ShapeError(msg) => (
-                "ShapeError".to_string(),
+                &KIND.shape_error,
                 vec![(
                     &FIELD.message,
                     KObject::KString(brand.allocator().text(msg)),
@@ -496,10 +527,10 @@ impl KErrorKind {
                     &FIELD.col_utf16,
                     KObject::Number(col_utf16.unwrap_or(0) as f64),
                 ));
-                ("ParseError".to_string(), fields)
+                (&KIND.parse_error, fields)
             }
             KErrorKind::User(msg) => (
-                "User".to_string(),
+                &KIND.user,
                 vec![(
                     &FIELD.message,
                     KObject::KString(brand.allocator().text(msg)),
@@ -511,17 +542,22 @@ impl KErrorKind {
             | KErrorKind::TypeClassBindingExpectsType { .. }
             | KErrorKind::SchedulerDeadlock { .. } => {
                 let name = match self {
-                    KErrorKind::Rebind { .. } => "Rebind",
-                    KErrorKind::DuplicateDeclaration { .. } => "DuplicateDeclaration",
-                    KErrorKind::DuplicateOverload { .. } => "DuplicateOverload",
-                    KErrorKind::TypeClassBindingExpectsType { .. } => "TypeClassBindingExpectsType",
-                    KErrorKind::SchedulerDeadlock { .. } => "SchedulerDeadlock",
+                    KErrorKind::Rebind { .. } => &KIND.rebind,
+                    KErrorKind::DuplicateDeclaration { .. } => &KIND.duplicate_declaration,
+                    KErrorKind::DuplicateOverload { .. } => &KIND.duplicate_overload,
+                    KErrorKind::TypeClassBindingExpectsType { .. } => {
+                        &KIND.type_class_binding_expects_type
+                    }
+                    KErrorKind::SchedulerDeadlock { .. } => &KIND.scheduler_deadlock,
                     _ => unreachable!(),
                 };
                 (
-                    name.to_string(),
+                    name,
                     vec![
-                        (&FIELD.kind, KObject::KString(brand.allocator().text(name))),
+                        (
+                            &FIELD.kind,
+                            KObject::KString(brand.allocator().text(name.text())),
+                        ),
                         (
                             &FIELD.message,
                             KObject::KString(brand.allocator().text(&format!("{self}"))),

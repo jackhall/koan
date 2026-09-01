@@ -89,7 +89,7 @@ aggregates are built this way — a single-part literal and a static aggregate c
 in one `transfer_all_into`
 ([decide/literal.rs](../src/machine/execute/decide/literal.rs) /
 [single_poll.rs](../src/machine/execute/decide/single_poll.rs)). The
-carrier-self-building constructions follow: the newtype / tagged-union
+carrier-self-building constructions follow: the newtype
 [`constructors`](../src/machine/execute/decide/constructors.rs) take the same
 run door for a record newtype's fields and the pairwise `transfer_into` for the
 single-value arms,
@@ -162,7 +162,7 @@ value all the way to
 the drain's finalize, whose delivery walk adopts it into each edge's
 destination region. An error
 carries no value and finalizes bare. The type / region construction operands are computed carriers
-too — the newtype / tagged-union / `CATCH` build folds a delivered type-identity
+too — the newtype / union-variant / `CATCH` build folds a delivered type-identity
 carrier in as the destination operand under the binding's stored reach
 ([`build_type_operand`](../src/machine/execute/decide/constructors.rs)). A
 declared return is checked and re-stamped in place in the producer's own region; no

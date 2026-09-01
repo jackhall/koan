@@ -14,6 +14,7 @@ mod branch_walk;
 mod catch;
 mod close_over;
 mod equality;
+mod error_union;
 mod eval;
 mod fn_def;
 mod group_def;
@@ -157,6 +158,7 @@ pub(crate) fn seed_builtins<'a>(
     fn_def::register(scope, registries, gate);
     union::register(scope, registries, gate);
     result::register(scope, registries, gate);
+    error_union::register(scope, registries, gate);
     newtype_def::register(scope, registries, gate);
     match_case::register(scope, registries, gate);
     try_with::register(scope, registries, gate);

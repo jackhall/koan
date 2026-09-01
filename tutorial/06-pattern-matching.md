@@ -72,13 +72,29 @@ MATCH (m) OVER Maybe -> :Str WITH (Some -> (PRINT "got"))
 ```
 
 ```text
-error: shape error: inexhaustive match over `Maybe`: no arm for None
+error: shape error: inexhaustive match over `Maybe`: no arm for None (add a `_` arm to default them)
 ```
 
-Cover every variant the union declares. An `OVER`-less match is checked against
-the value instead: it errors when no branch's type admits what it was handed.
-(For catching *errors* with a wildcard, see [`TRY`](09-errors.md), which is a
-different construct.)
+Cover every variant the union declares — or add a `_` branch, which stands in
+for all the ones you left out:
+
+```koan
+UNION Color = (Red :Null Green :Null Blue :Null)
+LET c = (Color.Blue null)
+MATCH (c) OVER Color -> :Str WITH (Red -> (PRINT "red") _ -> (PRINT "some other colour"))
+```
+
+```text
+some other colour
+```
+
+A named branch always wins over `_`, whatever order you write them in, and `_`
+binds `it` to the payload exactly as a named branch does. You may write at most
+one `_`. What `_` does *not* do is widen the match: it defaults the union's
+members, so a value that belongs to no member of the union is still an error.
+
+An `OVER`-less match is checked against the value instead: it errors when no
+branch's type admits what it was handed.
 
 ## Writing branches across lines
 

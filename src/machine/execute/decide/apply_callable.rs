@@ -35,7 +35,7 @@ mod tests;
 enum CallBody<'step> {
     /// A `{x = 1}` record literal — named arguments.
     Named(&'step [(BinderSymbol, ExpressionPart<'step>)]),
-    /// A `(Error "x")` paren group — positional construction (tagged unions, newtypes).
+    /// A `(Error "x")` paren group — positional construction (newtypes, union variants).
     Positional(&'step [Spanned<ExpressionPart<'step>>]),
 }
 
@@ -123,32 +123,53 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
 /// application*, yielding a `ConstructorApply` type value. Otherwise a newtype bypasses the
 /// `{name = value}` / `(value)` body split — it takes the trailing parts directly as its
 /// value expression, so `(Point {x = 1, y = 2})` builds a record and `(Point r)` /
-/// `(Distance 3.0)` wrap a value. The tagged and identity-wrapper arms take a positional
-/// `(value)` body; a named one there is a loud `DispatchFailed`.
+/// `(Distance 3.0)` wrap a value. The identity-wrapper arm takes a positional `(value)` body; a
+/// named one there is a loud `DispatchFailed`.
 fn apply_constructor<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     identity: KType,
     expr: &WorkingExpression<'step>,
 ) -> Outcome<'step> {
     let brand = ctx.current_scope().brand();
-    // A user `UNION` binds an anonymous union of per-variant newtype members, and a member is
-    // reached only by projection (`Maybe.Some`) — so the union name itself is uncallable.
-    if ctx.types().is_union(identity) {
-        return apply_union_construct(ctx, identity, expr);
-    }
-    // Named type application precedes every construction arm: on a type-constructor head the
-    // record body is a type-argument list, not a value, and the two surfaces are disjoint.
-    if let Some(param_names) = constructor_param_names(identity, ctx.types())
-        && let Some(
+    // A record body is a named type-argument list on any head that takes one, and the type and
+    // value surfaces are disjoint — so the shape is read once, before either construction arm.
+    let record_body = match expr.parts.get(1..) {
+        Some(
             [
                 Spanned {
                     value: WorkingPart::Ast(ExpressionPart::RecordLiteral(fields)),
                     ..
                 },
             ],
-        ) = expr.parts.get(1..)
+        ) => Some(*fields),
+        _ => None,
+    };
+    // A user `UNION` binds an anonymous union of per-variant newtype members, and a member is
+    // reached only by projection (`Maybe.Some`) — so the union name constructs nothing. Applied to
+    // named type arguments it is a *type* head: each name is a member, and the application lands
+    // per member ([`union::apply_union_type_args`]).
+    if ctx.types().is_union(identity) {
+        return match record_body {
+            Some(fields) => {
+                apply_named_type_args(ctx, ApplyHead::Union { union: identity }, fields)
+            }
+            None => apply_union_construct(ctx, identity, expr),
+        };
+    }
+    // Named type application precedes every construction arm: on a type-constructor head the
+    // record body is a type-argument list, not a value.
+    if let Some(param_names) = constructor_param_names(identity, ctx.types())
+        && let Some(fields) = record_body
     {
-        return apply_named_type_args(ctx, identity, param_names, fields);
+        let param_names: &'step [TypeSymbol] = brand.allocator().slice(&param_names);
+        return apply_named_type_args(
+            ctx,
+            ApplyHead::Constructor {
+                identity,
+                param_names,
+            },
+            fields,
+        );
     }
     // A SIG's abstract constructor slot names a kind; it has no representation to build values
     // over. Its first-order sibling carries no parameters and falls to the generic mismatch.
@@ -194,24 +215,6 @@ fn apply_constructor<'step>(
                 ctx.scratch(),
             ),
         },
-        // A non-empty schema is `Result`'s variant schema — the sealed tagged-union path. An
-        // empty schema is a declared constructor family (`NEWTYPE (Elem AS Wrapper)`); it
-        // constructs an identity-wrapper `Wrapped` value.
-        NodeSchema::TypeConstructor {
-            schema: variant_schema,
-            ..
-        } if !variant_schema.is_empty() => match extract_call_body(expr, ctx.registries()) {
-            Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
-                brand,
-                identity,
-                &variant_schema,
-                parts,
-                ctx.registries(),
-                ctx.scratch(),
-            ),
-            Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY, ctx.registries()),
-            Err(e) => Outcome::Done(Err(e)),
-        },
         // An identity wrapper wraps one value and infers one type argument from it, so value
         // construction is an arity-1 surface; a wider family applies by name only.
         NodeSchema::TypeConstructor { param_names, .. } if param_names.len() > 1 => {
@@ -232,40 +235,71 @@ fn apply_constructor<'step>(
     }
 }
 
-/// One supplied type argument on its way to [`build_apply_args`]: the name's bare symbol bits as
+/// One supplied type argument on its way to [`build_applied_type`]: the name's bare symbol bits as
 /// the record-literal key carries them, and the resolved argument. A miss renders the name from
 /// the interner at the error site.
 type SuppliedTypeArgument = (Symbol, KType);
 
-/// Apply a type constructor to a record of named type arguments — `:(Result {Ok = Number, Error =
+/// What a named type-argument record applies to. Every field is `Copy` — the parameter-name slice
+/// is host-region data — so the head rides the bumped tier into the await's finish.
+#[derive(Clone, Copy)]
+enum ApplyHead<'step> {
+    /// A type-constructor member: the argument names key its declared parameters, and the whole
+    /// record applies to the one identity.
+    Constructor {
+        identity: KType,
+        param_names: &'step [TypeSymbol],
+    },
+    /// A union head: the argument names key its *members*, and each named member takes its own
+    /// same-named argument, so the application lands per member.
+    Union { union: KType },
+}
+
+/// The type a resolved argument record builds over its head.
+fn build_applied_type(
+    head: ApplyHead<'_>,
+    supplied: Vec<SuppliedTypeArgument>,
+    registries: &RunRegistries,
+) -> Result<KType, KError> {
+    match head {
+        ApplyHead::Constructor {
+            identity,
+            param_names,
+        } => {
+            let args = build_apply_args(identity, param_names, supplied, registries)?;
+            Ok(registries.types.constructor_apply(identity, args))
+        }
+        ApplyHead::Union { union } => {
+            crate::builtins::union::apply_union_type_args(union, &supplied, registries)
+        }
+    }
+}
+
+/// Apply a type head to a record of named type arguments — `:(Result {Ok = Number, Error =
 /// MyError})`. Each field value rides its own sub-Dispatch, so a compound argument like
 /// `{Elem = (LIST OF Number)}` elaborates through the ordinary type-expression lanes and the slot
 /// parks until it lands.
 fn apply_named_type_args<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
-    identity: KType,
-    param_names: Vec<TypeSymbol>,
+    head: ApplyHead<'step>,
     fields: &[(BinderSymbol, ExpressionPart<'step>)],
 ) -> Outcome<'step> {
     // An empty argument record supplies no dep to park on, so it decides here — against the same
     // key check the non-empty path runs.
     if fields.is_empty() {
         return Outcome::Done(
-            build_apply_args(identity, &param_names, Vec::new(), ctx.registries()).map(|args| {
-                ctx.step_ctx()
-                    .type_carried(ctx.types().constructor_apply(identity, args))
-            }),
+            build_applied_type(head, Vec::new(), ctx.registries())
+                .map(|kt| ctx.step_ctx().type_carried(kt)),
         );
     }
     let brand = ctx.current_scope().brand();
     // Argument names are record-literal keys, minted at parse and matched by symbol bits from
     // here on. A reference is not a declaration, so this is a bare probe through the recovery
-    // door; a name matching no declared parameter renders its own text in the miss.
-    // Both name runs cross the park inside the finish, so they land in the host frame region.
+    // door; a name matching no declared parameter or member renders its own text in the miss.
+    // The name run crosses the park inside the finish, so it lands in the host frame region.
     let names: &'step [Symbol] = brand
         .allocator()
         .slice_from_iter(fields.iter().map(|(name, _)| name.symbol()));
-    let param_names: &'step [TypeSymbol] = brand.allocator().slice(&param_names);
     let value_parts: Vec<ExpressionPart<'step>> = fields.iter().map(|(_, part)| *part).collect();
     let deps: Vec<DepRequest<'step>> = value_parts
         .into_iter()
@@ -293,10 +327,8 @@ fn apply_named_type_args<'step>(
             })
             .collect();
         Outcome::Done(supplied.and_then(|supplied| {
-            let args = build_apply_args(identity, param_names, supplied, view.registries())?;
-            Ok(view
-                .step_ctx()
-                .type_carried(view.types().constructor_apply(identity, args)))
+            let kt = build_applied_type(head, supplied, view.registries())?;
+            Ok(view.step_ctx().type_carried(kt))
         }))
     };
     Await::on(Deps::from_requests_in(deps, ctx.scratch()))

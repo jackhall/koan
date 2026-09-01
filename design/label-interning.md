@@ -271,8 +271,10 @@ error record's labels are `StaticName<ValueSymbol>`s held in one `ErrorFields` s
 `KErrorKind` match that builds each shape ([kerror.rs](../src/machine/core/kerror.rs)). A handler
 reads `message` or `expr` off a caught error by name, so the label is an ordinary record key — but
 the spelling is the machine's, not a program's, so it classifies at its first read like any other
-Rust-source name and `record` hands `to_tagged` the symbol per error with no text classified and no
-`String` built.
+Rust-source name and `record` hands the lowering the symbol per error with no text classified and
+no `String` built. The kind's *own* name is fixed the same way: `KIND` holds one
+`StaticName<TypeSymbol>` per `KErrorKind` surface name in that file, read by both the lowering and
+the prelude registration that mints the `KError` union's members, so the two ends cannot drift.
 
 A name the machine *binds into a program's scope* is fixed in source the same way. `it` — the
 scrutinee binder every `MATCH` and `TRY` arm opens — is a `StaticName<ValueSymbol>` in the
@@ -326,9 +328,10 @@ presentation a recursive group's members are indexed in, so a member handle's in
 digest feed agree by construction.
 
 The currency reaches the value side at the one place a value carries a declared name: a
-`KObject::Tagged`'s `tag` is the variant's `TypeSymbol`, so constructing a tagged value
-bumps no discriminant bytes into its region and a `MATCH` arm head selects by symbol
-compare ([value-substrates.md](value-substrates.md)).
+`KObject::Wrapped`'s `type_id` is the interned handle of the member whose name the declaration
+minted, so constructing a variant bumps no discriminant bytes into its region and a `MATCH` arm
+head selects by comparing that handle against the member its own head named
+([value-substrates.md](value-substrates.md)).
 
 The `data`/`types` partition is therefore a property of the **key types** — a
 `ValueSymbol` and a `TypeSymbol` can never wrap the same text, so a name reaching both

@@ -1,10 +1,10 @@
-//! Integration coverage for the cost-driven-copy bind seam's **pin** path over the two
-//! identity-carrying composites, `Tagged` and `Wrapped` (`Scope::copy_delivered_substrate`). A
-//! tagged / wrapped value whose payload holds a closure captured in its producer frame borrows its
-//! home region, so the cost chooser pins it into the binding rather than rebuilding it: the bound
-//! value shares the producer-resident payload substrate, kept live by the binding's stored reach.
-//! Reading the value back after the producer frame retires proves the pin is sound — the
-//! tagged/wrapped analog of `dict_bind_pin.rs`, and a tagged/wrapped-escape case in the
+//! Integration coverage for the cost-driven-copy bind seam's **pin** path over the nominal wrap
+//! carrier `KObject::Wrapped` (`Scope::copy_delivered_substrate`), in both its shapes: a union
+//! variant and a `NEWTYPE` instance. A wrapped value whose payload holds a closure captured in its
+//! producer frame borrows its home region, so the cost chooser pins it into the binding rather than
+//! rebuilding it: the bound value shares the producer-resident payload substrate, kept live by the
+//! binding's stored reach. Reading the value back after the producer frame retires proves the pin
+//! is sound — the wrap-carrier analog of `dict_bind_pin.rs`, and a wrap-escape case in the
 //! seam-equivalence battery (identical output under `seam-force-copy` / `seam-force-pin`).
 
 use std::cell::RefCell;
@@ -31,8 +31,8 @@ fn run_capturing(source: &str) -> Result<String, koan::machine::KError> {
 }
 
 /// `MAKE` returns a `Some` variant carrying a closure over `n`. The closure captures `n` from
-/// `MAKE`'s frame, so the tagged value borrows its home region — the cost chooser selects `Pin` at
-/// the `LET r` bind seam (exact via the borrows-home bit). The tagged value rides `MAKE`'s producer
+/// `MAKE`'s frame, so the variant value borrows its home region — the cost chooser selects `Pin` at
+/// the `LET r` bind seam (exact via the borrows-home bit). The variant rides `MAKE`'s producer
 /// region by hold; `PRINT r` reads it back after `MAKE` returned, exercising the pinned payload
 /// substrate through the binding's `Kept`-minted stored reach.
 #[test]
@@ -46,11 +46,11 @@ fn bound_tagged_holding_a_home_closure_pins_and_reads_back() {
     .expect("the program evaluates without error");
     assert_eq!(
         out, "Some(:(FN () -> Number))\n",
-        "the pinned tagged value reads back with its captured closure intact"
+        "the pinned variant value reads back with its captured closure intact"
     );
 }
 
-/// A plain-data tagged value (owned scalar payload, no home borrow) that escapes via return and bind
+/// A plain-data variant value (owned scalar payload, no home borrow) that escapes via return and bind
 /// takes the **copy** verb rather than the pin — the total rebuild homes the payload substrate at the
 /// binding and frees the producer. The read-back output is identical to the pin case's shape, so the
 /// two verbs are semantically invisible (the equivalence battery asserts this hardcoded output under
@@ -66,7 +66,7 @@ fn bound_plain_data_tagged_copies_and_reads_back() {
     .expect("the program evaluates without error");
     assert_eq!(
         out, "Some(5)\n",
-        "the copied tagged value reads back with its scalar payload intact"
+        "the copied variant value reads back with its scalar payload intact"
     );
 }
 

@@ -116,7 +116,8 @@ admits any value one of its members admits, and a union used as an FN or arm ret
 type validates but never re-tags, so the value keeps its own runtime type for
 downstream type-dispatch (ruling F4,
 [finalize.rs](../../src/machine/execute/finalize.rs)). `MATCH` eliminates a union
-either by member coverage (`MATCH … OVER U`, exhaustive over `U`'s members) or by
+either by member coverage (`MATCH … OVER U`, exhaustive over `U`'s members unless a
+`_` default arm stands in for the rest) or by
 type test in the `OVER`-less form: each arm head resolves to a `KType`, the
 admitting arms compete in the same most-specific-wins tournament
 ([`ExpressionSignature::most_specific`](../../src/machine/model/types/signature.rs)) that

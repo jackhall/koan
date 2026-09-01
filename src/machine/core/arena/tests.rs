@@ -1068,7 +1068,7 @@ fn a_bound_bare_string_rebumps_at_its_destination() {
 }
 
 /// Region death for the `Drop`-free families is deallocation only. A frame region is filled with
-/// every substrate shape — list, dict, record, and both payload carriers (`Tagged` and `Wrapped`) —
+/// every substrate shape — list, dict, record, and the payload carrier (`Wrapped`) —
 /// each carrying a string leaf so the bump holds re-homed bytes as well as cells and index metadata,
 /// and with a run of **callables**, whose signatures put a bumped element run and re-homed keyword /
 /// parameter-name bytes in the same region, with **modules**, whose paths, member-map keys and
@@ -1129,18 +1129,13 @@ fn region_death_frees_every_drop_free_family() {
         }),
         scope.fold_resident_object(|brand| {
             let door = brand.with_holder(&owned_cells);
-            let inner = KObject::KString(door.allocator().text("tagged"));
-            KObject::tagged(door, type_token("Tag"), &inner, KType::NULL)
-        }),
-        scope.fold_resident_object(|brand| {
-            let door = brand.with_holder(&owned_cells);
             let inner = KObject::KString(door.allocator().text("wrapped"));
             KObject::wrapped_hold(door, &inner, KType::NULL)
         }),
     ];
     assert_eq!(
         shapes.len(),
-        5,
+        4,
         "every drop-free shape is live in the region"
     );
     assert!(

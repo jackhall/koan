@@ -110,9 +110,6 @@ fn collect_object_addresses(object: &KObject<'_>, out: &mut AddressSet) {
         KObject::List(substrate, _) => collect_substrate_addresses(*substrate, out),
         KObject::Dict(substrate, _) => collect_substrate_addresses(*substrate, out),
         KObject::Record(substrate, _) => collect_substrate_addresses(*substrate, out),
-        // The tag is a fixed-width symbol, not a region borrow, so a tagged value's only
-        // region-resident part is its payload substrate.
-        KObject::Tagged { value, .. } => collect_substrate_addresses(*value, out),
         KObject::Wrapped { inner, .. } => collect_substrate_addresses(*inner, out),
     }
 }

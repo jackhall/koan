@@ -608,150 +608,173 @@ fn is_more_specific_for_pinned_signature_bound() {
     assert!(!other_sig.is_more_specific_than(pinned_number, &registries));
 }
 
-/// A shared `Result` `TypeConstructor` member handle. Identity is content, so a `ConstructorApply`
-/// slot and a `Tagged` carrier match only when they name the *same* member — every test below
-/// threads this one member through both the slot ctor and the value.
-fn result_member(registries: &RunRegistries) -> KType {
+/// The `Result` union's two sealed newtype members, as the prelude registers them. Identity is
+/// content, so a `ConstructorApply` slot and a variant carrier match only when they name the
+/// *same* member — every test below threads these two handles through both the slot and the value.
+fn result_members(registries: &RunRegistries) -> (KType, KType) {
     let types = &registries.types;
-    RecursiveGroupWindow::seal_singleton(
+    let window = RecursiveGroupWindow::for_binder(
         type_token("Result"),
-        RelativeSchema::TypeConstructor {
-            schema: TypeMemberMap::default(),
-            param_names: vec![type_name("Ok", registries), type_name("Error", registries)],
-        },
-        None,
-        types,
-    )
+        vec![type_token("Ok"), type_token("Error")],
+    );
+    window.fill_member(0, RelativeSchema::NewType(KType::ANY), types);
+    let sealed = window
+        .fill_member(1, RelativeSchema::NewType(KType::ANY), types)
+        .expect("a two-member window seals on its second fill");
+    (sealed.members[0], sealed.members[1])
 }
 
-/// The args record for a `Result` application, keyed by the carrier's parameter names.
-fn result_args(ok: KType, error: KType) -> Record<KType> {
-    Record::from_pairs([
-        (crate::builtins::test_support::binder_token("Ok"), ok),
-        (crate::builtins::test_support::binder_token("Error"), error),
+/// The type `:(Result {Ok = …, Error = …})` lowers to: the union of one `ConstructorApply` per
+/// member, each carrying its own same-named argument.
+fn result_slot(members: (KType, KType), ok: KType, error: KType, types: &TypeRegistry) -> KType {
+    types.union_of(&[
+        types.constructor_apply(
+            members.0,
+            Record::from_pairs([(crate::builtins::test_support::binder_token("Ok"), ok)]),
+        ),
+        types.constructor_apply(
+            members.1,
+            Record::from_pairs([(crate::builtins::test_support::binder_token("Error"), error)]),
+        ),
     ])
 }
 
-/// Build a `Result`-carrier `Tagged` value occupying `tag` with `payload`, identified by the
-/// erased `Result` member handle (no stamped type arguments). The inner `payload` is itself a
-/// `Tagged` carrier identified by the error type's nominal member handle.
+/// A `Result` variant value: `payload` wrapped under `member`, with no stamped type arguments —
+/// the erased carrier a bare `Result.Ok 1` builds.
 fn result_value<'a>(
     door: SubstrateDoor<'a, '_>,
     member: KType,
-    tag: &str,
     payload: &KObject<'a>,
 ) -> KObject<'a> {
-    KObject::tagged(door, type_token(tag), payload, member)
+    KObject::wrapped_hold(door, payload, member)
 }
 
-/// A bare error carrier (`Tagged` identified by `member`) standing in for a caught error value.
-/// The tag is never read on this path — every predicate here matches on `member` — so it is any
-/// well-formed variant name.
+/// A bare error carrier standing in for a caught error value: a `Wrapped` identified by `member`,
+/// the shape `KError` lowering builds.
 fn error_carrier<'a>(door: SubstrateDoor<'a, '_>, member: KType) -> KObject<'a> {
-    KObject::tagged(door, type_token("Opaque"), &KObject::Number(0.0), member)
+    KObject::wrapped_hold(door, &KObject::Number(0.0), member)
 }
 
-/// A singleton `TypeConstructor`-kind member named `name`, for an error-type identity.
+/// A singleton newtype member named `name`, for an error-type identity.
 fn error_type_member(name: &str, types: &TypeRegistry) -> KType {
     RecursiveGroupWindow::seal_singleton(
         type_token(name),
-        RelativeSchema::TypeConstructor {
-            schema: TypeMemberMap::default(),
-            param_names: Vec::new(),
-        },
+        RelativeSchema::NewType(KType::ANY),
         None,
         types,
     )
 }
 
-/// `:(Result {Ok = …, Error = …})` slot admission: a `ConstructorApply` slot whose ctor
-/// identity matches the `Result` carrier admits an `Error(...)` value iff the inhabited
-/// `Error` payload satisfies the slot's same-named arg. A caught `Error(KError)` is rejected
-/// where that arg is `MyError` and accepted where it is `KError` / `Any`. Identity is
-/// content, so the slot's arg and the value's payload carrier share one member per error type.
+/// `:(Result {Ok = …, Error = …})` slot admission: the union-of-applies admits an `Error` value
+/// iff the inhabited `Error` member's payload satisfies that member's same-named argument. A
+/// caught `Error(KError)` is rejected where that argument is `MyError` and accepted where it is
+/// `KError` / `Any`. Identity is content, so the slot's argument and the value's payload carrier
+/// share one member per error type.
 #[test]
 fn constructor_apply_result_checks_inhabited_error_param() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
 
-    let r_member = result_member(&registries);
+    let members = result_members(&registries);
     let kerror_ty = error_type_member("KError", types);
     let my_error_ty = error_type_member("MyError", types);
 
-    let slot_my_error = types.constructor_apply(r_member, result_args(KType::ANY, my_error_ty));
-    let caught = result_value(door, r_member, "Error", &error_carrier(door, kerror_ty));
+    let slot_my_error = result_slot(members, KType::ANY, my_error_ty, types);
+    let caught = result_value(door, members.1, &error_carrier(door, kerror_ty));
     assert!(!slot_my_error.matches_value(&caught, &registries));
 
-    let slot_kerror = types.constructor_apply(r_member, result_args(KType::ANY, kerror_ty));
+    let slot_kerror = result_slot(members, KType::ANY, kerror_ty, types);
     assert!(slot_kerror.matches_value(&caught, &registries));
 
-    let my_error = result_value(door, r_member, "Error", &error_carrier(door, my_error_ty));
+    let my_error = result_value(door, members.1, &error_carrier(door, my_error_ty));
     assert!(slot_my_error.matches_value(&my_error, &registries));
 }
 
-/// The `Ok` tag names the `Ok` parameter, so a slot checks the `Ok` payload against its
-/// `Ok` arg regardless of the `Error` arg: an `Ok(42)` value admits any `Error` arg (the
-/// uninhabited tag's parameter is unconstrained at the value).
+/// A value inhabits exactly one member, so the slot checks the `Ok` payload against the `Ok`
+/// argument regardless of the `Error` one: an `Ok(42)` value admits any `Error` argument, because
+/// the uninhabited member's application is never reached.
 #[test]
 fn constructor_apply_result_ok_admits_any_error_param() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
-    let r_member = result_member(&registries);
+    let members = result_members(&registries);
     let my_error_ty = error_type_member("MyError", types);
-    let ok_value = result_value(door, r_member, "Ok", &KObject::Number(42.0));
-    let slot = types.constructor_apply(r_member, result_args(KType::NUMBER, my_error_ty));
+    let ok_value = result_value(door, members.0, &KObject::Number(42.0));
+    let slot = result_slot(members, KType::NUMBER, my_error_ty, types);
     assert!(slot.matches_value(&ok_value, &registries));
-    let slot_str = types.constructor_apply(r_member, result_args(KType::STR, KType::ANY));
+    let slot_str = result_slot(members, KType::STR, KType::ANY, types);
     assert!(!slot_str.matches_value(&ok_value, &registries));
 }
 
-/// Covariance for `ConstructorApply` carriers: a value stamped
-/// `{Ok = Number, Error = MyError}` is admitted by the coarser `{Ok = Any, Error = Any}`
-/// slot, and the refined slot is strictly more specific, so dispatch tie-breaks toward the
-/// refined overload.
+/// Covariance for `ConstructorApply` carriers: a value stamped `apply(Ok, {Ok = Number})` is
+/// admitted by the coarser `apply(Ok, {Ok = Any})` slot, and the refined slot is strictly more
+/// specific, so dispatch tie-breaks toward the refined overload.
 #[test]
 fn constructor_apply_covariant_admission_and_specificity() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
-    let r_member = result_member(&registries);
-    let my_error = error_type_member("MyError", types);
-    let stamped = KObject::tagged(
-        door,
-        type_token("Ok"),
-        &KObject::Number(1.0),
-        types.constructor_apply(r_member, result_args(KType::NUMBER, my_error)),
-    );
-    let coarse = types.constructor_apply(r_member, result_args(KType::ANY, KType::ANY));
-    let refined = types.constructor_apply(r_member, result_args(KType::NUMBER, my_error));
+    let members = result_members(&registries);
+    let ok_arg = |arg| {
+        types.constructor_apply(
+            members.0,
+            Record::from_pairs([(crate::builtins::test_support::binder_token("Ok"), arg)]),
+        )
+    };
+    let stamped = KObject::wrapped_hold(door, &KObject::Number(1.0), ok_arg(KType::NUMBER));
+    let coarse = ok_arg(KType::ANY);
+    let refined = ok_arg(KType::NUMBER);
     assert!(coarse.matches_value(&stamped, &registries));
     assert!(refined.matches_value(&stamped, &registries));
     assert!(refined.is_more_specific_than(coarse, &registries));
     assert!(!coarse.is_more_specific_than(refined, &registries));
 }
 
-/// A stamped `ConstructorApply` identity (from ascription) is checked structurally against
-/// the slot args, taking precedence over the inhabited-tag path.
+/// A stamped `ConstructorApply` identity (from ascription) is checked structurally against the
+/// slot arguments, taking precedence over the erased inhabited-member path.
 #[test]
 fn constructor_apply_stamped_type_args_checked_structurally() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
-    let r_member = result_member(&registries);
-    let stamped = KObject::tagged(
-        door,
-        type_token("Ok"),
-        &KObject::Number(1.0),
-        types.constructor_apply(r_member, result_args(KType::NUMBER, KType::STR)),
-    );
-    let slot_ok = types.constructor_apply(r_member, result_args(KType::NUMBER, KType::STR));
-    assert!(slot_ok.matches_value(&stamped, &registries));
-    let slot_any = types.constructor_apply(r_member, result_args(KType::ANY, KType::ANY));
-    assert!(slot_any.matches_value(&stamped, &registries));
-    let slot_bad = types.constructor_apply(r_member, result_args(KType::BOOL, KType::STR));
-    assert!(!slot_bad.matches_value(&stamped, &registries));
+    let members = result_members(&registries);
+    let ok_arg = |arg| {
+        types.constructor_apply(
+            members.0,
+            Record::from_pairs([(crate::builtins::test_support::binder_token("Ok"), arg)]),
+        )
+    };
+    let stamped = KObject::wrapped_hold(door, &KObject::Number(1.0), ok_arg(KType::NUMBER));
+    assert!(ok_arg(KType::NUMBER).matches_value(&stamped, &registries));
+    assert!(ok_arg(KType::ANY).matches_value(&stamped, &registries));
+    assert!(!ok_arg(KType::BOOL).matches_value(&stamped, &registries));
+}
+
+/// A union slot walks its members, so the whole `:(Result {…})` lowering admits a value through
+/// whichever member it inhabits — the same verdict each per-member application gives alone.
+#[test]
+fn union_of_applies_admits_through_the_inhabited_member() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    container_door!(_storage, door);
+    let members = result_members(&registries);
+    let slot = result_slot(members, KType::NUMBER, KType::STR, types);
+    assert!(slot.matches_value(
+        &result_value(door, members.0, &KObject::Number(1.0)),
+        &registries
+    ));
+    assert!(!slot.matches_value(
+        &result_value(door, members.0, &KObject::Bool(true)),
+        &registries
+    ));
+    let text = KObject::KString(door.allocator().text("x"));
+    assert!(slot.matches_value(&result_value(door, members.1, &text), &registries));
+    assert!(!slot.matches_value(
+        &result_value(door, members.1, &KObject::Number(1.0)),
+        &registries
+    ));
 }
 
 use crate::machine::model::RunRegistries;

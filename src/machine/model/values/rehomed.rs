@@ -28,9 +28,7 @@ impl<'a> Rehomed<'a> {
     ///
     /// Top-node only, and that is the whole rule: a **nested substrate** cell's own strings are
     /// already home-resident in that substrate's region, which its stored reach union names, so the
-    /// pinned-cell verdict covers them and re-walking would be a deep copy this door does not do. A
-    /// `Tagged`'s tag rides its own substrate's region for the same reason (`KObject::tagged`
-    /// re-bumped it there).
+    /// pinned-cell verdict covers them and re-walking would be a deep copy this door does not do.
     ///
     /// The cost is one memcpy per string per container construction — the bytes land where the
     /// container's own region can release them, so nothing walks them again to free them.

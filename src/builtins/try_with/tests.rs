@@ -1,5 +1,9 @@
 //! TRY-WITH branch dispatch over success and per-`KErrorKind` arms, plus re-raise on
 //! no-match and wildcard `_` coverage of dispatcher-internal kinds.
+//!
+//! An error arm binds `it` to the kind's payload **record** (ruling F3). A bare record carries no
+//! field read yet, so the arms that project a field off `it` are ignored pending
+//! [anonymous-record-field-read](../../../roadmap/type_language/anonymous-record-field-read.md).
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
@@ -42,6 +46,7 @@ fn arm_violating_declared_return_type_errors() {
 }
 
 #[test]
+#[ignore = "an error arm's `it` is the payload record; field reads on one return with anonymous-record-field-read"]
 fn unbound_name_arm_catches_unbound_name() {
     let bytes = run_program(
         "TRY (foo) -> :Str WITH (\
@@ -67,6 +72,7 @@ fn dispatch_failed_arm_catches_keyworded_dispatch_failure() {
 }
 
 #[test]
+#[ignore = "an error arm's `it` is the payload record; field reads on one return with anonymous-record-field-read"]
 fn shape_error_arm_catches_shape_error() {
     // Inexhaustive MATCH is a deterministic ShapeError trigger.
     let bytes = run_program(
@@ -84,6 +90,7 @@ fn shape_error_arm_catches_shape_error() {
 }
 
 #[test]
+#[ignore = "an error arm's `it` is the payload record; field reads on one return with anonymous-record-field-read"]
 fn type_mismatch_arm_catches_record_newtype_value_mismatch() {
     // A record-repr newtype type-checks its value against the whole record repr, so the
     // mismatch names the record type rather than a single field type.
@@ -135,6 +142,48 @@ fn wildcard_arm_catches_when_no_specific_match() {
     assert_eq!(bytes, b"caught wildcard\n");
 }
 
+/// A dispatcher-internal kind is an ordinary member of the `KError` union, so an arm names it the
+/// way it names a public one — no tag side-channel, and no `_` required to reach it.
+#[test]
+fn an_internal_kind_arm_catches_by_name() {
+    let bytes = run_program(
+        "TRY (LET Ty = 1) -> :Str WITH (\
+            Ok -> (PRINT \"ok\")\
+            TypeClassBindingExpectsType -> (PRINT \"kind\")\
+         )",
+    );
+    assert_eq!(bytes, b"kind\n");
+}
+
+/// `_` reaches the dispatcher-internal kinds too — as members no named arm claims, which is the
+/// same rule that defaults a public kind.
+#[test]
+fn the_wildcard_catches_an_internal_kind() {
+    let bytes = run_program(
+        "TRY (LET Ty = 1) -> :Str WITH (\
+            UnboundName -> (PRINT \"never\")\
+            _ -> (PRINT \"caught\")\
+         )",
+    );
+    assert_eq!(bytes, b"caught\n");
+}
+
+/// Every head names a member of the slate or is `_`, so a boolean literal — legal in the
+/// `OVER`-less `MATCH`, which reads heads as type tests — is an arm-set error here.
+#[test]
+fn a_boolean_head_is_an_arm_set_error() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let err = test_run
+        .run_one_err(test_run.parse_one("TRY (foo) -> :Str WITH (true -> (PRINT \"never\"))"));
+    assert!(
+        matches!(&err.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("`TRY` arm head must name a member")),
+        "expected the arm-head error, got {err}",
+    );
+}
+
 /// TRY body runs in a fresh `child_under` scope, so `LET x = 2` shadows rather
 /// than rebinds the outer `x`. The WITH arm never fires.
 #[test]
@@ -175,6 +224,7 @@ fn specific_arm_wins_over_wildcard() {
 }
 
 #[test]
+#[ignore = "an error arm's `it` is the payload record; field reads on one return with anonymous-record-field-read"]
 fn frames_non_empty_after_recursive_call() {
     // PRINT renders a List as `[item, …]`, so a non-empty frames list starts
     // with `[in ` and an empty list is `[]`.

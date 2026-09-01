@@ -9,6 +9,7 @@ digraph {
     "koan::builtins::catch" [label="koan::builtins::catch"];
     "koan::builtins::close_over" [label="koan::builtins::close_over"];
     "koan::builtins::equality" [label="koan::builtins::equality"];
+    "koan::builtins::error_union" [label="koan::builtins::error_union"];
     "koan::builtins::eval" [label="koan::builtins::eval"];
     "koan::builtins::fn_def" [label="koan::builtins::fn_def"];
     "koan::builtins::fn_def::finalize" [label="koan::builtins::fn_def::finalize"];
@@ -158,6 +159,7 @@ digraph {
     "koan::builtins" -> "koan::builtins::catch" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::close_over" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::equality" [label="owns", style="solid"];
+    "koan::builtins" -> "koan::builtins::error_union" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::eval" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::fn_def" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::group_def" [label="owns", style="solid"];
@@ -306,7 +308,6 @@ digraph {
     "koan::builtins::branch_walk" -> "koan::builtins::union" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::branch_walk" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -319,6 +320,9 @@ digraph {
     "koan::builtins::equality" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::equality" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::equality" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::error_union" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::error_union" -> "koan::machine::core::kerror" [label="uses", style="dashed"];
+    "koan::builtins::error_union" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine::model" [label="uses", style="dashed"];

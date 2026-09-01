@@ -579,6 +579,95 @@ mod tests {
         );
     }
 
+    /// A `_` arm is the default: it stands in for every member no named arm claims, so an arm set
+    /// carrying one may leave members uncovered and still be a complete match.
+    #[test]
+    fn match_over_wildcard_defaults_the_uncovered_members() {
+        let bytes = run_program(
+            "UNION Maybe = (Some :Number None :Null)\n\
+             LET m = (Maybe.None null)\n\
+             MATCH (m) OVER Maybe -> :Str WITH (Some -> (PRINT \"s\") _ -> (PRINT \"default\"))",
+        );
+        assert_eq!(bytes, b"default\n");
+    }
+
+    /// `_` binds `it` the way a named arm does — to the payload, when the value wraps a member of
+    /// the walked union.
+    #[test]
+    fn match_over_wildcard_binds_the_payload() {
+        let bytes = run_program(
+            "UNION Maybe = (Some :Number None :Null)\n\
+             LET m = (Maybe.Some 7)\n\
+             MATCH (m) OVER Maybe -> :Str WITH (None -> (PRINT \"n\") _ -> (PRINT it))",
+        );
+        assert_eq!(bytes, b"7\n");
+    }
+
+    /// A named arm wins over `_` whatever the source order — the default arm is the fallback, not
+    /// a competitor in the tournament.
+    #[test]
+    fn match_over_a_named_arm_wins_over_the_wildcard() {
+        let bytes = run_program(
+            "UNION Maybe = (Some :Number None :Null)\n\
+             LET m = (Maybe.Some 1)\n\
+             MATCH (m) OVER Maybe -> :Str WITH (_ -> (PRINT \"default\") Some -> (PRINT \"named\"))",
+        );
+        assert_eq!(bytes, b"named\n");
+    }
+
+    /// Without a `_` arm the coverage rule is unchanged: an uncovered member is an error at the
+    /// form, and the diagnostic points at the arm that would fix it.
+    #[test]
+    fn match_over_without_a_wildcard_still_errors_on_an_uncovered_member() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe.Some 1)");
+        let err = test_run.run_one_err(
+            test_run.parse_one("MATCH (m) OVER Maybe -> :Str WITH (Some -> (PRINT \"s\"))"),
+        );
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("no arm for None") && msg.contains("`_` arm")),
+            "expected the inexhaustive error suggesting a `_` arm, got {err}",
+        );
+    }
+
+    /// `_` covers the members no named arm claims — never a value outside the union, which is the
+    /// value's miss and stays an error with a default arm present.
+    #[test]
+    fn match_over_wildcard_does_not_cover_a_value_outside_the_union() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("UNION Maybe = (Some :Number None :Null)");
+        let err = test_run.run_one_err(
+            test_run.parse_one("MATCH (\"x\") OVER Maybe -> :Str WITH (_ -> (PRINT \"default\"))"),
+        );
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg == "value of type `Str` inhabits no member of `Maybe`"),
+            "expected the inhabits-no-member error, got {err}",
+        );
+    }
+
+    /// One `_` arm at most: a second is an arm-set error, the same shape naming a member twice is.
+    #[test]
+    fn match_over_rejects_a_second_wildcard_arm() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe.Some 1)");
+        let err = test_run.run_one_err(test_run.parse_one(
+            "MATCH (m) OVER Maybe -> :Str WITH (_ -> (PRINT \"a\") _ -> (PRINT \"b\"))",
+        ));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg == "`MATCH … OVER` has more than one `_` arm"),
+            "expected the duplicate-wildcard error, got {err}",
+        );
+    }
+
     /// A record-repr variant binds its record payload to `it`, the same narrowing a scalar payload
     /// takes — the binding reads the wrap, not the payload's shape.
     #[test]
