@@ -271,3 +271,8 @@ overloads.
   be re-consolidated at a later crossing), callable cells inside copied
   containers, module values and `USING`-window scopes, and a measured
   justification for α.
+- [Operator registrations in a copied environment](../roadmap/foundation/operator-registry-copy.md)
+  — rebuilding a scope's operator registry so a chain carrying one stops
+  pinning. `CLOSE` flattens every per-call operator declaration on the enclosing
+  chain into its block scope, so today the form exists to sever captures and
+  then declines the gate on what it installed.

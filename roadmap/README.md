@@ -44,6 +44,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Callable copy tuning](foundation/callable-copy-tuning.md)
 - [Constructing circular values](foundation/circular-value-construction.md)
+- [Operator registrations in a copied environment](foundation/operator-registry-copy.md)
 - [Yielding iterators](foundation/yielding-iterators.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [EVAL splices in place](metaprogramming/eval-splices-in-place.md)

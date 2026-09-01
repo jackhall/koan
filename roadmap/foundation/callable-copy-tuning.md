@@ -25,10 +25,6 @@ pins:
 - A **module value** never consolidates. Its child scope is `MODULE`-kinded and
   the readiness gate declines that kind, so an escaping module pins its
   producer chain however small and closed the body is.
-- A scope holding an **operator-registry entry** declines for the same reason:
-  a `GROUP` declaration's powerset keys, or the flattened copies a `CLOSE OVER`
-  block installs, resolve to a region-resident record the engine does not
-  rebuild.
 
 **Acceptance criteria.**
 
@@ -41,8 +37,7 @@ pins:
 - The chooser's tuning constants are justified by a measured workload
   (smallest `n` that shows the trend), recorded where the constant is defined.
 - An escaping module value whose body scope is closed and claim-free
-  consolidates on the same terms a closure does, and a scope holding operator
-  registrations is rebuildable rather than declined.
+  consolidates on the same terms a closure does.
 
 **Directions.**
 
@@ -57,15 +52,19 @@ pins:
 - *`Borrowed` window scopes — open.* Copy the façade through the module
   scope's memo entry (a window and its module value share one copy), or keep
   the not-ready pin.
-- *Module and operator-bearing scopes — open.* Teach the engine to rebuild an
-  `AnnouncedWindow` and an `OperatorGroup` record so a `MODULE`-kinded scope
-  passes the readiness gate, or keep the gate and consolidate a module value by
-  rebuilding only what its members reach.
+- *Module scopes — open.* Teach the engine to rebuild an `AnnouncedWindow` so a
+  `MODULE`-kinded scope passes the readiness gate, or keep the gate and
+  consolidate a module value by rebuilding only what its members reach. A module
+  scope also carries a group record, which
+  [Operator registrations in a copied environment](operator-registry-copy.md)
+  owns.
 
 ## Dependencies
 
 Region evacuation owns the frame-death backstop for pins these levers never
-reach; this item covers the per-crossing decisions.
+reach; this item covers the per-crossing decisions. The operator-registry
+decline is carved out into
+[Operator registrations in a copied environment](operator-registry-copy.md).
 
 **Requires:**
 
