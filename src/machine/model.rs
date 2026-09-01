@@ -57,7 +57,8 @@ pub(crate) use types::{
 };
 /// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
 pub(crate) use types::{TypeDigest, sig_subtype, substitute_sig_members};
+#[allow(unused_imports)]
 pub(crate) use values::{
     CarriedFamily, Module, ModuleDraft, NamedPairs, RegionEscape, copy_or_pin,
-    relocate_object_into, retains_home,
+    copy_or_pin_callable, object_copy_cost, relocate_object_into, retains_home,
 };

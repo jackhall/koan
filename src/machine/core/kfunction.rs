@@ -134,9 +134,52 @@ impl<'a> KFunction<'a> {
         body: Body<'a>,
         registries: &RunRegistries,
     ) -> DeliveredFunction {
-        let brand = captured.brand();
-        let signature = ExpressionSignature::mint(brand, return_type, elements);
+        let signature = ExpressionSignature::mint(captured.brand(), return_type, elements);
         let value_ktype = function_value_ktype(&signature, registries);
+        Self::birth(captured, signature, body, value_ktype)
+    }
+
+    /// **Rebuild `source` at `captured`** — the environment copy's door
+    /// ([`Scope`](crate::machine::core::Scope)'s `copy` engine), where `captured` is the copied
+    /// chain's innermost scope and `source` the callable being consolidated.
+    ///
+    /// The same witnessed birth [`Self::alloc_captured`] performs, differing only in where the two
+    /// derived facts come from. The signature is **re-minted** at `captured`'s brand rather than
+    /// carried over: its elements run and parameter schema live wherever the signature does, so a
+    /// carried-over signature would leave the rebuilt callable borrowing the source region — the
+    /// one thing the consolidation exists to stop. `value_ktype` is a lifetime-free interned handle
+    /// naming the same `(params) -> ret` type, so it copies rather than being re-derived, which is
+    /// what keeps this door registry-free and callable from inside a relocation fold.
+    ///
+    /// The return contract rides over verbatim: a `Resolved` is a lifetime-free handle, and a
+    /// `Deferred`'s preserved surface holds either owned text or a `KExpression` whose parts run
+    /// lives in eternal-tier program storage, which no relocation releases.
+    ///
+    /// `#[allow(dead_code)]`: the escape seam's callable arm is what consumes this, and it is not
+    /// wired yet — the plain `--lib` build (no `cfg(test)`) sees no consumer until it is.
+    #[allow(dead_code)]
+    pub(crate) fn alloc_captured_copy(
+        captured: &'a Scope<'a>,
+        source: &KFunction<'a>,
+    ) -> DeliveredFunction {
+        let signature = ExpressionSignature::mint(
+            captured.brand(),
+            source.signature.return_type(),
+            source.signature.elements(),
+        );
+        Self::birth(captured, signature, source.body, source.value_ktype)
+    }
+
+    /// The witnessed birth both callable doors share: the three ingredients ride in as one resident
+    /// seed and the callable is assembled inside a merge whose destination is the captured scope's
+    /// own region handle. `signature` must already be minted at `captured`'s brand — that is what
+    /// makes it a region-resident operand alongside the scope.
+    fn birth(
+        captured: &'a Scope<'a>,
+        signature: ExpressionSignature<'a>,
+        body: Body<'a>,
+        value_ktype: KType,
+    ) -> DeliveredFunction {
         let seed = FunctionBirth {
             captured,
             signature,

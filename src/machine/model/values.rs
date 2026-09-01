@@ -16,10 +16,12 @@ mod rehomed;
 pub use carried::{Carried, CarriedFamily, Held};
 pub use container_substrate::{ContainerSubstrate, PartedCell};
 pub(crate) use container_substrate::{
-    DictSubstrate, ListSubstrate, PayloadSubstrate, RecordSubstrate,
+    DictSubstrate, ListSubstrate, PayloadSubstrate, RecordSubstrate, object_copy_cost,
 };
 pub use kkey::KKey;
 pub use kobject::{KObject, Scalar, ValueEqualityError};
-pub(crate) use kobject::{RegionEscape, copy_or_pin, relocate_object_into, retains_home};
+pub(crate) use kobject::{
+    RegionEscape, copy_or_pin, copy_or_pin_callable, relocate_object_into, retains_home,
+};
 pub use module::{Module, ModuleDraft};
 pub use named_pairs::NamedPairs;

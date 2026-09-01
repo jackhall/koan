@@ -296,7 +296,7 @@ pub(crate) fn held_copy_cost(h: &Held<'_>) -> u64 {
 /// the node by value, and the node's parts run, keyword text and structural cache live in the
 /// eternal-tier program storage that parsed them. Copying the cell copies pointers into storage no
 /// relocation releases, so the rebuild is the flat `Held` the enclosing substrate already counts.
-fn object_copy_cost(o: &KObject<'_>) -> u64 {
+pub(crate) fn object_copy_cost(o: &KObject<'_>) -> u64 {
     match o {
         KObject::Number(_) | KObject::Bool(_) | KObject::Null => held_flat_size(),
         KObject::KString(s) => held_flat_size().saturating_add(s.len() as u64),

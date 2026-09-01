@@ -58,7 +58,7 @@ use allocator_api2::alloc::{Allocator, Global};
 use allocator_api2::vec::Vec as AllocVec;
 #[cfg(test)]
 use std::cell::Ref;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::hash::BuildHasher;
 use std::mem::ManuallyDrop;
 
@@ -74,6 +74,7 @@ use crate::machine::core::carrier_witness::{
 #[cfg(test)]
 use crate::machine::model::BindKind;
 use crate::machine::model::CarriedFamily;
+use crate::machine::model::object_copy_cost;
 use crate::machine::model::{
     BinderSymbol, IdentityBuildHasher, KeywordSymbol, RunRegistries, TypeSymbol, ValueSymbol,
     render_label,
@@ -473,6 +474,19 @@ pub struct Bindings<'a> {
     /// the `Scope` holding it — the assert below is the proof, and it is what a scope skipping its
     /// own destructor rests on.
     tables: RefCell<ManuallyDrop<Tables<'a>>>,
+    /// **Monotone** sum of what totally rebuilding this scope's bound values would cost, in the
+    /// same [`object_copy_cost`] currency a substrate prices its cells with — bumped by
+    /// [`Self::write_value`] as each value bind applies, from the weight the bound value already
+    /// memoized. The pricing fact the callable escape seam sums a captured chain over
+    /// ([`copy_or_pin_callable`](crate::machine::model::copy_or_pin_callable)): a closure's
+    /// definition site pays nothing for it, because the bump happens where a bind was already
+    /// happening.
+    ///
+    /// Monotone because a binding is bind-once and an entry never dies before its scope, so the sum
+    /// only ever grows and no write has to subtract. A `Cell` for the same reason
+    /// [`Scope::closed`](crate::machine::core::Scope) is one: it is a plain `Copy` counter beside
+    /// the tables, not table state, and reading it takes no `tables` borrow.
+    copy_cost: Cell<u64>,
 }
 
 /// A scope's binding state carries **no drop glue at all** — not an entry walk, not a vacuous free
@@ -495,7 +509,27 @@ impl<'a> Bindings<'a> {
                 operators: bump_table(brand),
                 claims: ClaimStore::new(brand),
             })),
+            copy_cost: Cell::new(0),
         }
+    }
+
+    /// Whether no binder is still in flight into this table — no claim stands on either channel.
+    /// The unfinalized-binding half of the copy engine's readiness gate
+    /// ([`Scope::is_copy_ready`](crate::machine::core::Scope)).
+    #[allow(dead_code)]
+    pub(crate) fn has_no_claims(&self) -> bool {
+        self.tables.borrow().claims.is_empty()
+    }
+
+    /// What totally rebuilding every value bound here would cost — the monotone memo
+    /// [`Self::copy_cost`] accumulated at bind time, read in O(1) with no walk over the table and
+    /// no `tables` borrow.
+    ///
+    /// `#[allow(dead_code)]`: the escape seam's callable arm is what consumes this, and it is not
+    /// wired yet — the plain `--lib` build (no `cfg(test)`) sees no consumer until it is.
+    #[allow(dead_code)]
+    pub(crate) fn binding_copy_cost(&self) -> u64 {
+        self.copy_cost.get()
     }
 
     /// Per-scope value-side lookup. One probe of `data[name]`, and on a miss one probe of the claim
@@ -1157,6 +1191,16 @@ impl<'a> Bindings<'a> {
                 name: render_label(name.symbol(), registries),
             }));
         }
+        // The weight is read off the seal before it is stored, where the value is open: a bind is
+        // already doing this work's worth of table mutation, so the memo costs the definition site
+        // nothing beyond one `object_copy_cost` read of a value the seal hands back.
+        let weight = sealed
+            .open_at()
+            .value()
+            .as_object()
+            .map_or(0, object_copy_cost);
+        self.copy_cost
+            .set(self.copy_cost.get().saturating_add(weight));
         tables.data.insert(name, DataEntry { index, sealed });
         tables.claims.retire_name(name.symbol(), index);
         Ok(())

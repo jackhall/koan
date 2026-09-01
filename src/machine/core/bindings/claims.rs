@@ -143,6 +143,16 @@ impl<'a> ClaimStore<'a> {
         record
     }
 
+    /// Whether any claim stands in this store — no binder is still in flight into the scope it
+    /// sits in. Both channels answer, because either one standing means a name the scope will bind
+    /// is not bound yet: the readiness gate a copy of the scope's environment runs
+    /// ([`Scope::is_copy_ready`](crate::machine::core::Scope)) reads this, and a claim there is
+    /// exactly the unfinalized binding that downgrades the copy to a pin.
+    #[allow(dead_code)]
+    pub(super) fn is_empty(&self) -> bool {
+        self.by_name.is_empty() && self.by_bucket.values().all(|claims| claims.is_empty())
+    }
+
     /// The claim standing on `name`, whatever channel it resolves in. Visibility is the caller's:
     /// the resolution walk filters, and the finalize gate's dependency tracking does not.
     pub(super) fn name_claim(&self, name: Symbol) -> Option<Claim> {

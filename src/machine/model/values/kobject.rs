@@ -3,7 +3,7 @@ use std::rc::Weak;
 
 use crate::machine::core::KFunction;
 use crate::machine::core::{
-    FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, SubstrateDoor,
+    FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt, Scope, SubstrateDoor,
 };
 use crate::machine::model::ast::{KExpression, ProgramExpression};
 use crate::machine::model::labels::{BinderSymbol, Symbol};
@@ -939,12 +939,106 @@ pub(crate) enum RegionEscape {
     ///
     /// [`product_reaches_region`]: crate::machine::core::product_reaches_region
     Copy,
+    /// Total rebuild of a **callable's captured environment** at the destination region: the
+    /// per-call portion of the scope chain a `KFunction` / `Module` captured is rebuilt there —
+    /// data bindings relocated under [`Copy`](Self::Copy), nested callables recursed, eternal-homed
+    /// scopes referenced verbatim — so the product reaches no source region. Chosen only by
+    /// [`copy_or_pin_callable`], and only for a top-level callable at a priced escape seam or an
+    /// explicit `CLOSE OVER` callable capture; a callable **cell** inside a copied container keeps
+    /// riding verbatim under `Copy`.
+    ///
+    /// Everything the verb claims about release is derived from the product, exactly as `Copy`'s
+    /// is: the rebuild is total or it does not happen. An environment the engine cannot rebuild —
+    /// an unclosed scope, a standing claim, a `USING` window — is not waited on; the engine
+    /// declines and the relocation falls back to the verbatim ride the pin covers.
+    ///
+    /// `#[allow(dead_code)]`: nothing selects the verb until the seam's callable arm routes
+    /// [`copy_or_pin_callable`], so the plain `--lib` build sees no construction of it.
+    #[allow(dead_code)]
+    Consolidate,
+}
+
+impl RegionEscape {
+    /// Whether the verb **rebuilds** at the destination, and so claims the source region's release:
+    /// [`Copy`](Self::Copy) and [`Consolidate`](Self::Consolidate) do, a [`Pin`](Self::Pin) does
+    /// not. The one place the two rebuilding verbs read as one, so a relocation's retention claim
+    /// is derived from the product it built under either — never re-stated per verb.
+    pub(crate) fn rebuilds(self) -> bool {
+        match self {
+            RegionEscape::Copy | RegionEscape::Consolidate => true,
+            RegionEscape::Pin => false,
+        }
+    }
 }
 
 /// A seam tuning constant: copy a priceable home-crossing record only when its exact rebuild cost
 /// is under 1/`ALPHA_DIVISOR` of what the pin would retain (the host's allocated total). Not
 /// observable in language semantics; provisional pending measurement.
 const ALPHA_DIVISOR: u64 = 4;
+
+/// The escape-seam **callable** decision: how a top-level `KFunction` / `Module` whose captured
+/// chain starts at `captured` crosses out of producer `host`. The substrate chooser's twin
+/// ([`copy_or_pin`]) over the one thing a substrate has no analogue of — an environment — and it
+/// prices in the same currency under the same α.
+///
+/// - A **forced** verification build overrides the table exactly as [`copy_or_pin`] does. A forced
+///   `Consolidate` stays sound because readiness is the engine's own gate, re-checked before it
+///   allocates anything: an environment it cannot rebuild rides verbatim under the pin instead.
+/// - A **foreign crossing** — the innermost captured region is not the crossing's host — pins,
+///   mirroring the substrate rule. Pricing a consolidation out of an intermediate host is
+///   [callable-copy-tuning](../../../../roadmap/foundation/callable-copy-tuning.md)'s.
+/// - An **unready** chain pins ([`Scope::chain_is_copy_ready`]). Never a wait: no edge of any kind
+///   enters the finalize walk from here, so two mutually-referencing in-flight environments cannot
+///   deadlock on each other — the cycle is unconstructible, not handled.
+/// - A **ready home crossing** is priced: the chain's summed binding-copy memos against what the
+///   pin would retain, which is the allocated total of every distinct region the chain sits in.
+///
+/// Every term is a stored read — the per-scope memos are bumped at bind time and the allocated
+/// totals are the arena's own — so a definition site pays nothing for this and the seam pays
+/// O(chain depth).
+///
+/// `#[allow(dead_code)]`: the escape seam's callable arm is what consumes this, and it is not
+/// wired yet — the plain `--lib` build (no `cfg(test)`) sees no consumer until it is.
+#[allow(dead_code)]
+pub(crate) fn copy_or_pin_callable<'a>(captured: &'a Scope<'a>, host: &KoanRegion) -> RegionEscape {
+    match SEAM_POLICY {
+        SeamPolicy::ForcePin => return RegionEscape::Pin,
+        SeamPolicy::ForceCopy => return RegionEscape::Consolidate,
+        SeamPolicy::CostDriven => {}
+    }
+
+    if !std::ptr::eq(captured.region(), host) {
+        return RegionEscape::Pin;
+    }
+    if !captured.chain_is_copy_ready() {
+        return RegionEscape::Pin;
+    }
+    if captured.chain_copy_cost() < chain_retained_total(captured) / ALPHA_DIVISOR {
+        RegionEscape::Consolidate
+    } else {
+        RegionEscape::Pin
+    }
+}
+
+/// What pinning `captured`'s chain would retain: the allocated total of every **distinct** region
+/// the chain's per-call scopes sit in. Same-region children share one term — a scope chain is a
+/// handful of links deep, so the dedupe is a linear scan over what is already in cache rather than
+/// a set.
+#[allow(dead_code)]
+fn chain_retained_total<'a>(captured: &'a Scope<'a>) -> u64 {
+    let mut seen: SmallVec<[*const KoanRegion; 4]> = SmallVec::new();
+    let mut total = 0u64;
+    for scope in captured.per_call_chain() {
+        let region = scope.region();
+        let address: *const KoanRegion = region;
+        if seen.contains(&address) {
+            continue;
+        }
+        seen.push(address);
+        total = total.saturating_add(region.allocated_total());
+    }
+    total
+}
 
 /// The escape-seam copy-vs-pin decision for a top-level container value (whose cell substrate is
 /// `substrate`) crossing out of producer `host`. O(1), every read a stored fact: the home-crossing

@@ -16,6 +16,8 @@ use crate::witnessed::BumpBackedMap;
 mod reach;
 mod registry;
 mod resolve;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use reach::AdoptSeam;
 pub(crate) use resolve::HitTier;
@@ -437,6 +439,40 @@ impl<'a> Scope<'a> {
         )
     }
 
+    /// Allocate one scope of a **copied environment** into `brand`'s region: a fresh id, empty
+    /// owned bindings, and `outer` — the previously copied link, or (for the outermost link) the
+    /// source chain's [`innermost_eternal_home`](Self::innermost_eternal_home) referenced verbatim.
+    /// The copy engine's construction door ([`copy`](self::copy)).
+    ///
+    /// Built directly at `'a` like every same-region child, and for the same reason: `outer` and
+    /// `brand` arrive already coupled at one lifetime — the engine runs at a relocation fold's own
+    /// brand, where the source chain is the fold's operand view and `brand` is the destination — so
+    /// there is nothing foreign to re-anchor. What makes the *outermost* link sound is the eternal
+    /// tier, exactly as it is for a `CLOSE OVER` block scope: an eternal region outlives everything
+    /// that could retain it, so an unpinned `&Scope` outer cannot dangle. The engine asserts that
+    /// premise where it relies on it.
+    ///
+    /// `root` falls out of `outer` the way [`Self::run_child`]'s does: a parent carrying its own
+    /// root handle passes it down, and a parent that *is* the root becomes the child's.
+    ///
+    /// Born **open**, not closed: the engine fills the tables and closes the scope after, so the
+    /// bind door's own open-scope assertion holds throughout the fill.
+    #[allow(dead_code)]
+    pub(in crate::machine::core::scope) fn alloc_copied_child(
+        outer: &'a Scope<'a>,
+        brand: RegionBrand<'a>,
+    ) -> &'a Scope<'a> {
+        brand.allocator().in_place(Scope {
+            outer: Some(outer),
+            root: outer.root.or(Some(outer)),
+            bindings: ScopeBindings::Owned(Bindings::new(brand)),
+            brand,
+            id: ScopeId::next(),
+            kind: ScopeKind::Anonymous,
+            closed: Cell::new(false),
+        })
+    }
+
     /// Allocate a transparent `USING … SCOPE` child whose bindings are a read-only window onto
     /// `module_bindings`. The table lives in the **opened module's own region**, so this is one of
     /// the two scope stores with a genuinely foreign operand: it takes the bump's crossing door,
@@ -533,6 +569,76 @@ impl<'a> Scope<'a> {
                 .outer()
                 .expect("a per-call-homed scope has a lexical parent; every chain ends eternal");
         }
+    }
+
+    /// Whether this scope's binding storage is a `USING … SCOPE` window rather than its own —
+    /// a read-only façade onto another scope's tables, which the environment copy has no
+    /// destination for (rebuilding the window would have to rebuild what it looks through, and the
+    /// window's own scope binds nothing of its own). Not-ready is the answer here, so a captured
+    /// chain holding one downgrades to a pin.
+    #[allow(dead_code)]
+    fn borrows_its_bindings(&self) -> bool {
+        self.bindings.is_borrowed()
+    }
+
+    /// Whether the environment copy can rebuild **this one scope** at a destination region — the
+    /// readiness gate, read as stored facts with no walk over what the scope binds:
+    ///
+    /// - **Closed** ([`Self::is_closed`]): its defining block has finished, so no further bind is
+    ///   legal and the copy cannot miss one. It also settles visibility: a closed scope is named by
+    ///   no live call-site chain, so every entry in it reads as visible to every body that captured
+    ///   it, and copying the table wholesale under a fresh id reproduces what the source answered.
+    /// - **Owned bindings** ([`Self::borrows_its_bindings`]): a `USING` window has nothing of its
+    ///   own to rebuild.
+    /// - **No standing claim** ([`Bindings::has_no_claims`]): an in-flight binder is a binding that
+    ///   does not exist yet, which is exactly the unfinalized binding the roadmap downgrades on.
+    /// - **A kind the engine models**: `Anonymous` — the block and per-call frame scopes a closure
+    ///   chain is made of — and `Root`, which is eternal and referenced verbatim rather than
+    ///   copied. `Sig` carries a live slot collector and `Module` an announced window and group
+    ///   record, neither of which the v1 engine rebuilds.
+    ///
+    /// Never a wait: an unready scope answers `false` and the caller pins. Nothing here can park,
+    /// which is what makes the two-in-flight-environments deadlock unconstructible rather than
+    /// merely handled.
+    ///
+    /// `#[allow(dead_code)]`: the escape seam's callable arm is what consumes this, and it is not
+    /// wired yet — the plain `--lib` build (no `cfg(test)`) sees no consumer until it is.
+    #[allow(dead_code)]
+    pub(crate) fn is_copy_ready(&self) -> bool {
+        self.is_closed()
+            && !self.borrows_its_bindings()
+            && self.bindings().has_no_claims()
+            && matches!(self.kind, ScopeKind::Root | ScopeKind::Anonymous)
+    }
+
+    /// The **per-call** portion of this scope's chain: `self` and its `outer` ancestors up to but
+    /// excluding [`Self::innermost_eternal_home`]. Exactly the scopes an environment copy has to
+    /// rebuild — an eternal-homed scope outlives everything that could retain it, so the copy
+    /// references it verbatim and the walk stops there. Empty when `self` is itself eternal-homed.
+    #[allow(dead_code)]
+    pub(crate) fn per_call_chain(&'a self) -> impl Iterator<Item = &'a Scope<'a>> {
+        let eternal: *const Scope<'a> = self.innermost_eternal_home();
+        std::iter::successors(Some(self), |scope| scope.outer())
+            .take_while(move |scope| !std::ptr::eq(*scope as *const Scope<'a>, eternal))
+    }
+
+    /// Whether every per-call scope in this chain is [`copy-ready`](Self::is_copy_ready). The
+    /// chain-level gate the callable escape seam asks before pricing anything: one unready link
+    /// pins the whole crossing, because a rebuilt chain missing a link would have to point back
+    /// into the source.
+    #[allow(dead_code)]
+    pub(crate) fn chain_is_copy_ready(&'a self) -> bool {
+        self.per_call_chain().all(Scope::is_copy_ready)
+    }
+
+    /// What rebuilding this chain's per-call portion would cost: the sum of each scope's monotone
+    /// [`binding_copy_cost`](Bindings::binding_copy_cost) memo. O(chain depth), every term a
+    /// stored read.
+    #[allow(dead_code)]
+    pub(crate) fn chain_copy_cost(&'a self) -> u64 {
+        self.per_call_chain()
+            .map(|scope| scope.bindings().binding_copy_cost())
+            .fold(0, u64::saturating_add)
     }
 
     /// True iff the nearest opaque enclosing scope is a SIG decl_scope.

@@ -82,9 +82,8 @@ fn seam_still_borrows<'e>(
     delivered: &'e DeliveredCarried,
     verb: RegionEscape,
 ) -> impl for<'b> FnMut(&Carried<'b>, &KoanRegion) -> bool + 'e {
-    move |product, region| match verb {
-        RegionEscape::Pin => true,
-        RegionEscape::Copy => product_reaches_region(delivered, product.as_object(), region),
+    move |product, region| {
+        !verb.rebuilds() || product_reaches_region(delivered, product.as_object(), region)
     }
 }
 

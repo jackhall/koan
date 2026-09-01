@@ -567,11 +567,8 @@ impl<'a> Scope<'a> {
         let copied = cell
             .transfer_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
                 dest,
-                |product, region| match verb {
-                    RegionEscape::Pin => true,
-                    RegionEscape::Copy => {
-                        product_reaches_region(cell, product.as_object(), region)
-                    }
+                |product, region| {
+                    !verb.rebuilds() || product_reaches_region(cell, product.as_object(), region)
                 },
                 |value, _handle, placement| {
                     let door = FoldingBrand::in_fold_closure(placement).with_holder(&holder);
@@ -896,7 +893,7 @@ fn adopt_disposition(
             .open_at()
             .with_home_region(|host_region| match projected {
                 KObject::Record(substrate, _) => match copy_or_pin(substrate, host_region) {
-                    RegionEscape::Copy => AdoptDisposition::Relocate,
+                    RegionEscape::Copy | RegionEscape::Consolidate => AdoptDisposition::Relocate,
                     RegionEscape::Pin => AdoptDisposition::Pin,
                 },
                 _ => AdoptDisposition::Relocate,
