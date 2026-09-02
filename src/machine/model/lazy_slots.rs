@@ -20,7 +20,9 @@
 //! `NEWTYPE <name> = <repr>` captures a `:(…)` or `:{…}` at index 3 raw while a bare `(…)` there
 //! evaluates. The [`LAZY_SLOT_SPECS`] entries are pinned to the live builtin signatures by the
 //! spec⟺registration consistency test: index `i` of bucket `k` carries kind `K` iff some builtin
-//! overload registered under `k` types slot `i` with `K`'s slot type.
+//! overload registered under `k` types slot `i` with `K`'s slot type, or with a union carrying it
+//! as a member — one union-typed slot admits every carrier spelling it lists, and each contributes
+//! its own kind here.
 
 use crate::machine::model::ast::Part;
 use crate::machine::model::key_spec::{KEYWORDS, KeyElementSpec, key_matches_parts};

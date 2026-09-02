@@ -407,6 +407,22 @@ slot — it reaches the declarator un-dispatched, which elaborates it to a
 type-side carrier. The same shape-only rule covers a raw `KExpression` part in
 a builtin lazy slot: the slot owns its body, not a name lookup.
 
+**A union carrier slot routes by its claiming member.** When a slot lists several carrier
+spellings (`union_of(TypeNameToken, SigiledTypeExpr, RecordType, Identifier)` — see
+[ktype/slots-and-signatures.md § Union carrier slots](ktype/slots-and-signatures.md#union-carrier-slots)),
+the member that claims the part's shape decides the routing, and every shape-only rule above
+distributes: an exact carrier member routes its shape to raw capture, and an
+`OfKind(ProperType)` member brings the shape-only admission of its own bare slot — so a fresh
+`Type` token, a `:(…)` and a `:{…}` all admit at a union naming it without consulting the
+cache, exactly as they do at `:OfKind(ProperType)` itself, while the token is still *lowered*
+rather than captured raw. Either way the slot bypasses the cache and the verdict comes from
+`accepts_part` distributed over the members. Registration guarantees at most one member claims
+any shape, so the routing does not depend on how the union was written. The two
+mutually-exclusive raw-capture guards distribute the same way: a union capturing one of `:(…)`
+/ `:{…}` raw must not speculatively admit the other, or a sibling overload's raw capture ties
+away and the eager fallback wins. A part no member claims falls through to the ordinary rungs
+of the table above.
+
 Elaboration carries no cache tier. Bind-time builtin lowering
 ([`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) →
 [`KType::from_symbol`](../../src/machine/model/types/ktype_resolution.rs))

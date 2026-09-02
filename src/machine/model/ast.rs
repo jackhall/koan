@@ -264,31 +264,39 @@ impl<'a> ExpressionPart<'a> {
     /// [`KType::from_symbol`] for nothing, so a binder name is never lowered and never rendered to
     /// a string to be bound.
     ///
+    /// A union carrier slot reduces to the one member that claims this part's shape
+    /// ([`KType::capture_member_for`]) before the arms below run, so a union spelling of a carrier
+    /// slot captures exactly as the bare member would. A part no member claims keeps the union
+    /// handle and falls through to [`resolve`](Self::resolve), as an unclaimed part does at a bare
+    /// slot.
+    ///
     /// [`KFunction::bind_args`]: crate::machine::KFunction::bind_args
     pub fn resolve_for(
         &self,
         slot: &crate::machine::model::KType,
         scope: &'a crate::machine::core::Scope<'a>,
+        types: &crate::machine::model::TypeRegistry,
     ) -> Held<'a> {
         use crate::machine::model::types::KType;
-        if let (ExpressionPart::Type(t), KType::PROPER_TYPE | KType::ANY_TYPE) = (self, *slot) {
+        let slot = slot.capture_member_for(self, types).unwrap_or(*slot);
+        if let (ExpressionPart::Type(t), KType::PROPER_TYPE | KType::ANY_TYPE) = (self, slot) {
             return match KType::from_symbol(*t) {
                 Some(kt) => Held::Type(kt),
                 None => Held::UnresolvedType(*t),
             };
         }
-        if let (ExpressionPart::SigiledTypeExpr(inner), KType::SIGILED_TYPE_EXPR) = (self, *slot) {
+        if let (ExpressionPart::SigiledTypeExpr(inner), KType::SIGILED_TYPE_EXPR) = (self, slot) {
             return Held::Object(KObject::KExpression(inner.expression()));
         }
-        if let (ExpressionPart::RecordType(inner), KType::RECORD_TYPE) = (self, *slot) {
+        if let (ExpressionPart::RecordType(inner), KType::RECORD_TYPE) = (self, slot) {
             return Held::Object(KObject::KExpression(inner.expression()));
         }
         if let (ExpressionPart::Identifier(name), KType::IDENTIFIER | KType::NAME_TOKEN) =
-            (self, *slot)
+            (self, slot)
         {
             return Held::Name(BinderSymbol::Value(*name));
         }
-        if let (ExpressionPart::Type(t), KType::NAME_TOKEN | KType::TYPE_NAME_TOKEN) = (self, *slot)
+        if let (ExpressionPart::Type(t), KType::NAME_TOKEN | KType::TYPE_NAME_TOKEN) = (self, slot)
         {
             return Held::Name(BinderSymbol::Type(*t));
         }

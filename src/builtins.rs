@@ -1,7 +1,7 @@
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{
     Argument, BinderSymbol, KType, ReturnType, SignatureDraft, SignatureElement, StaticName,
-    ValueSymbol,
+    ValueSymbol, carrier_union_error,
 };
 use crate::machine::{BindingIndex, Scope, WriteGate};
 use crate::machine::{Body, KFunction};
@@ -56,11 +56,20 @@ pub(crate) fn kw(registries: &RunRegistries, s: &str) -> SignatureElement {
 /// text back through the same interner. Slots are value-class by declaration —
 /// [`StaticName<ValueSymbol>`] is what the static carries — so the class is settled where the
 /// spelling is written rather than probed here.
+///
+/// Every builtin slot passes through this door, so it is where a union carrier slot's
+/// well-formedness is pinned ([`carrier_union_error`]): a union whose members disagree on which
+/// raw part shape each claims would make admission and capture depend on member order, and
+/// `Union` identity is order-blind. Only a builtin author can construct one, so the failure is a
+/// seed-time panic rather than a user-facing diagnostic.
 pub(crate) fn arg(
     registries: &RunRegistries,
     name: &StaticName<ValueSymbol>,
     ktype: KType,
 ) -> SignatureElement {
+    if let Some(error) = carrier_union_error(ktype, registries) {
+        panic!("builtin slot `{}`: {error}", name.text());
+    }
     SignatureElement::Argument(Argument {
         name: BinderSymbol::Value(registries.labels.record(name)),
         ktype,

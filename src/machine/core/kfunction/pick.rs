@@ -4,7 +4,7 @@
 //! The "bare-name" predicate ([`is_bare_name`]) is the load-bearing shape concept the auto-wrap
 //! rail turns on.
 
-use crate::machine::model::{Argument, KType, SignatureElement};
+use crate::machine::model::{Argument, SignatureElement, TypeRegistry};
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 
 use super::KFunction;
@@ -13,8 +13,9 @@ use crate::witnessed::{BumpAllocator, BumpVec};
 
 /// The auto-wrap classification produced by [`KFunction::classify_for_pick`]: the bare-Identifier /
 /// bare-Type parts in non-literal-name slots, to resolve as sub-Dispatches. A literal-name slot
-/// (`KType::Identifier` / `KType::OfKind(KKind::ProperType)`) is excluded: it owns its token — a
-/// declaration's name, or name-data the body reads — so the token rides to the bind unresolved.
+/// (`KType::Identifier` / `KType::OfKind(KKind::ProperType)`, or a union with such a member) is
+/// excluded: it owns its token — a declaration's name, or name-data the body reads — so the token
+/// rides to the bind unresolved.
 ///
 /// Bump-hosted in the scratch arena the classifier was handed, so a classification costs no heap
 /// allocation.
@@ -25,6 +26,7 @@ impl<'a> KFunction<'a> {
     pub fn classify_for_pick<'e, 's>(
         &self,
         expr: &WorkingExpression<'e>,
+        types: &TypeRegistry,
         scratch: BumpAllocator<'s>,
     ) -> WrapIndices<'s> {
         let mut wrap_indices: WrapIndices<'s> =
@@ -43,10 +45,7 @@ impl<'a> KFunction<'a> {
                 continue;
             }
             // A literal-name slot owns its token; every other slot's bare name resolves.
-            if !matches!(
-                arg.ktype,
-                KType::IDENTIFIER | KType::PROPER_TYPE | KType::NAME_TOKEN | KType::TYPE_NAME_TOKEN
-            ) {
+            if !arg.ktype.owns_bare_name(types) {
                 wrap_indices.push(i);
             }
         }

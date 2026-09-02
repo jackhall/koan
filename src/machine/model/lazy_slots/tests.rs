@@ -7,17 +7,36 @@ use super::{LAZY_SLOT_SPECS, LazyKinds, LazySlotSpec};
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::{program_storage, run_root_storage};
 use crate::machine::model::key_spec::{key_matches_untyped, render_key};
-use crate::machine::model::{KType, SignatureElement, UntypedKey};
+use crate::machine::model::{KType, SignatureElement, TypeNode, TypeRegistry, UntypedKey};
 use crate::parse::parse;
 
-/// The kind a raw-capture slot type stands for; `None` for a slot type that captures nothing raw.
-fn kind_of(ktype: KType) -> Option<LazyKinds> {
+/// The kind an exact raw-capture slot type stands for; `None` for a slot type that captures
+/// nothing raw. A name-token carrier answers `None`: a bare token is not an eager shape, so it
+/// never stages and needs no stamp to stay raw.
+fn exact_kind_of(ktype: KType) -> Option<LazyKinds> {
     match ktype {
         KType::KEXPRESSION => Some(LazyKinds::CODE),
         KType::SIGILED_TYPE_EXPR => Some(LazyKinds::TYPE_EXPR),
         KType::RECORD_TYPE => Some(LazyKinds::RECORD_TYPE),
         _ => None,
     }
+}
+
+/// The kinds a slot type stands for, distributed over union members: a union carrier slot admits
+/// every carrier spelling it lists, so its bucket's stamp must carry each member's kind. This is
+/// what forces a union-slot builtin's bucket to declare a correct [`LAZY_SLOT_SPECS`] entry.
+fn kind_of(ktype: KType, types: &TypeRegistry) -> Option<LazyKinds> {
+    if let Some(kind) = exact_kind_of(ktype) {
+        return Some(kind);
+    }
+    let kinds = types.with_node(ktype, |node| match node {
+        TypeNode::Union { members } => members
+            .iter()
+            .filter_map(|member| exact_kind_of(*member))
+            .fold(LazyKinds::EMPTY, LazyKinds::with),
+        _ => LazyKinds::EMPTY,
+    });
+    (!kinds.is_empty()).then_some(kinds)
 }
 
 /// The lazy slots every seeded builtin bucket actually declares: per bucket key, the union over the
@@ -27,6 +46,7 @@ fn live_lazy_slots() -> Vec<(UntypedKey, BTreeMap<usize, LazyKinds>)> {
     let program = program_storage();
     let storage = run_root_storage();
     let run = TestRun::silent(&program, &storage);
+    let types = run.registry_handle();
     let mut live = Vec::new();
     for scope in run.scope.ancestors() {
         for (key, bucket) in scope.bindings().functions().iter() {
@@ -35,7 +55,7 @@ fn live_lazy_slots() -> Vec<(UntypedKey, BTreeMap<usize, LazyKinds>)> {
                 let opened = entry.sealed.open_at();
                 for (i, element) in opened.value().signature.elements().iter().enumerate() {
                     if let SignatureElement::Argument(argument) = element
-                        && let Some(kind) = kind_of(argument.ktype)
+                        && let Some(kind) = kind_of(argument.ktype, &types)
                     {
                         let slot = slots.entry(i).or_default();
                         *slot = slot.with(kind);
@@ -126,6 +146,49 @@ fn spec_slot_indices_name_slot_positions() {
             );
         }
     }
+}
+
+/// The derivation distributes over union carrier slots: a union-typed slot contributes every
+/// member's kind, so a bucket that spells its raw capture as a union is held to a table entry
+/// covering all of them. Name-token members contribute nothing — a bare token is not an eager
+/// shape and never stages.
+#[test]
+fn the_kind_derivation_distributes_over_union_members() {
+    let registries = crate::machine::model::RunRegistries::new();
+    let types = &registries.types;
+
+    let both = types.union_of(&[
+        KType::TYPE_NAME_TOKEN,
+        KType::SIGILED_TYPE_EXPR,
+        KType::RECORD_TYPE,
+        KType::IDENTIFIER,
+    ]);
+    assert_eq!(
+        kind_of(both, types),
+        Some(LazyKinds::TYPE_EXPR.with(LazyKinds::RECORD_TYPE)),
+    );
+    assert_eq!(
+        kind_of(
+            types.union_of(&[KType::TYPE_NAME_TOKEN, KType::SIGILED_TYPE_EXPR]),
+            types
+        ),
+        Some(LazyKinds::TYPE_EXPR),
+    );
+    // A union of name tokens alone stages nothing, so its bucket needs no table entry at all.
+    assert_eq!(
+        kind_of(
+            types.union_of(&[KType::TYPE_NAME_TOKEN, KType::IDENTIFIER]),
+            types
+        ),
+        None,
+    );
+    assert_eq!(
+        kind_of(types.union_of(&[KType::NUMBER, KType::STR]), types),
+        None
+    );
+    // The bare constants keep their own kinds.
+    assert_eq!(kind_of(KType::KEXPRESSION, types), Some(LazyKinds::CODE));
+    assert_eq!(kind_of(KType::NUMBER, types), None);
 }
 
 // ---------- the seal-time stamp ----------

@@ -80,11 +80,12 @@ fn build<'a>(brand: ProgramBrand<'a>, items: Vec<ExpressionPart<'a>>) -> KExpres
 fn resolve_for_lowers_builtin_leaf_to_type_arm() {
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
+    let registries = RunRegistries::new();
     let part = ExpressionPart::Type(type_token("Number"));
     let slot = KType::of_kind(KKind::ProperType);
     // Consume the scope-tied `Held` inside `matches!` so no borrow outlives `storage`.
     assert!(matches!(
-        part.resolve_for(&slot, scope),
+        part.resolve_for(&slot, scope, &registries.types),
         Held::Type(t) if t == KType::NUMBER
     ));
 }
@@ -99,7 +100,7 @@ fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
     let registries = RunRegistries::new();
     let part = ExpressionPart::Type(type_name("MyType", &registries));
     let slot = KType::of_kind(KKind::ProperType);
-    match part.resolve_for(&slot, scope) {
+    match part.resolve_for(&slot, scope, &registries.types) {
         Held::UnresolvedType(te) => {
             assert_eq!(registries.labels.render(te.symbol()), "MyType")
         }
@@ -120,7 +121,7 @@ fn unresolved_carrier_classifies_as_a_proper_type() {
     let types = &registries.types;
     let part = ExpressionPart::Type(type_token("MyType"));
     let slot = KType::of_kind(KKind::ProperType);
-    let held = part.resolve_for(&slot, scope);
+    let held = part.resolve_for(&slot, scope, types);
     assert_eq!(held.ktype(types), KType::of_kind(KKind::ProperType));
     assert!(held.as_type().is_none(), "it carries no type handle");
     assert!(held.as_object().is_none(), "and it is not a value");
@@ -643,4 +644,65 @@ fn debug_for_expression_part_and_kexpression() {
     }
     let e = build(brand, parts);
     assert!(format!("{:?}", e).starts_with("KExpression"));
+}
+
+/// A union carrier slot captures each part shape through the member that claims it: the raw
+/// type-expression members ride `Held::Object(KExpression)`, and the two name members ride
+/// `Held::Name` carrying the class the parser assigned the token.
+#[test]
+fn resolve_for_captures_through_a_union_carrier_member() {
+    let storage = crate::machine::core::run_root_storage();
+    let scope = crate::builtins::test_support::run_root_bare(&storage);
+    let program = program_storage();
+    let brand = program.brand();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let slot = types.union_of(&[
+        KType::TYPE_NAME_TOKEN,
+        KType::SIGILED_TYPE_EXPR,
+        KType::RECORD_TYPE,
+        KType::IDENTIFIER,
+    ]);
+
+    let inner = brand.nested_node_from_iter(parts_of(vec![ty("Number")]));
+    for raw in [
+        ExpressionPart::SigiledTypeExpr(inner),
+        ExpressionPart::RecordType(inner),
+    ] {
+        assert!(matches!(
+            raw.resolve_for(&slot, scope, types),
+            Held::Object(crate::machine::model::KObject::KExpression(_)),
+        ));
+    }
+
+    let type_part = ExpressionPart::Type(type_name("Meters", &registries));
+    assert!(matches!(
+        type_part.resolve_for(&slot, scope, types),
+        Held::Name(crate::machine::model::BinderSymbol::Type(_)),
+    ));
+    let value_part = ident("width", &registries.labels);
+    assert!(matches!(
+        value_part.resolve_for(&slot, scope, types),
+        Held::Name(crate::machine::model::BinderSymbol::Value(_)),
+    ));
+}
+
+/// An `of_kind(…)` member is an ordinary eager member, so a bare `Type` token reaching it is
+/// lowered exactly as it is at the bare kind slot — never captured raw as a name.
+#[test]
+fn resolve_for_lowers_a_type_token_through_a_kind_member() {
+    let storage = crate::machine::core::run_root_storage();
+    let scope = crate::builtins::test_support::run_root_bare(&storage);
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let slot = types.union_of(&[KType::of_kind(KKind::ProperType), KType::NUMBER]);
+
+    assert!(matches!(
+        ExpressionPart::Type(type_token("Number")).resolve_for(&slot, scope, types),
+        Held::Type(t) if t == KType::NUMBER
+    ));
+    assert!(matches!(
+        ExpressionPart::Type(type_name("MyType", &registries)).resolve_for(&slot, scope, types),
+        Held::UnresolvedType(_)
+    ));
 }

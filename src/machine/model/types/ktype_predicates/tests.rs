@@ -1429,3 +1429,241 @@ fn name_token_slots_order_against_str_and_concrete_slots() {
         assert!(!KType::ANY.is_more_specific_than(slot, &registries));
     }
 }
+
+// ---------- union carrier slots ----------
+
+/// The workhorse union: every carrier spelling of a type slot plus the value-name token — the
+/// exact union the downstream type-slot untangle registers.
+fn carrier_union(types: &TypeRegistry) -> KType {
+    types.union_of(&[
+        KType::TYPE_NAME_TOKEN,
+        KType::SIGILED_TYPE_EXPR,
+        KType::RECORD_TYPE,
+        KType::IDENTIFIER,
+    ])
+}
+
+/// Each carrier constant claims exactly the raw part shapes it captures, and the workhorse
+/// union's members are pairwise disjoint — the property registration enforces, and the reason a
+/// part maps to one member regardless of member order.
+#[test]
+fn capture_footprints_pin_each_carrier_to_its_own_shapes() {
+    let shapes = |kt| capture_footprint(kt);
+    let of = CaptureShapes::of;
+
+    assert_eq!(shapes(KType::IDENTIFIER), of(CaptureShape::Identifier));
+    assert_eq!(shapes(KType::TYPE_NAME_TOKEN), of(CaptureShape::TypeToken));
+    assert_eq!(shapes(KType::SIGILED_TYPE_EXPR), of(CaptureShape::TypeExpr));
+    assert_eq!(shapes(KType::RECORD_TYPE), of(CaptureShape::RecordType));
+    assert_eq!(shapes(KType::KEXPRESSION), of(CaptureShape::Code));
+    assert_eq!(
+        shapes(KType::NAME_TOKEN),
+        of(CaptureShape::Identifier).with(of(CaptureShape::TypeToken)),
+    );
+    // A kind slot claims the token it lowers and the two type-expression shapes it shape-admits.
+    for kind in [KType::PROPER_TYPE, KType::ANY_TYPE] {
+        assert_eq!(
+            shapes(kind),
+            of(CaptureShape::TypeToken)
+                .with(of(CaptureShape::TypeExpr))
+                .with(of(CaptureShape::RecordType)),
+        );
+    }
+    // A value type claims nothing, so it never collides with a carrier member.
+    for value in [KType::NUMBER, KType::STR, KType::ANY] {
+        assert!(shapes(value).is_empty());
+    }
+
+    let workhorse = [
+        KType::TYPE_NAME_TOKEN,
+        KType::SIGILED_TYPE_EXPR,
+        KType::RECORD_TYPE,
+        KType::IDENTIFIER,
+    ];
+    for (i, a) in workhorse.iter().enumerate() {
+        for b in &workhorse[i + 1..] {
+            assert!(!shapes(*a).intersects(shapes(*b)));
+        }
+    }
+    // The collisions registration rejects.
+    assert!(shapes(KType::NAME_TOKEN).intersects(shapes(KType::TYPE_NAME_TOKEN)));
+    assert!(shapes(KType::NAME_TOKEN).intersects(shapes(KType::IDENTIFIER)));
+    assert!(shapes(KType::PROPER_TYPE).intersects(shapes(KType::SIGILED_TYPE_EXPR)));
+    assert!(shapes(KType::PROPER_TYPE).intersects(shapes(KType::TYPE_NAME_TOKEN)));
+}
+
+/// `is_exact_carrier` names the five raw-capture constants and nothing else — `KExpression` is a
+/// carrier but never a union member, and a kind slot is an ordinary eager member.
+#[test]
+fn exact_carrier_membership_is_the_five_raw_capture_constants() {
+    for carrier in [
+        KType::IDENTIFIER,
+        KType::NAME_TOKEN,
+        KType::TYPE_NAME_TOKEN,
+        KType::SIGILED_TYPE_EXPR,
+        KType::RECORD_TYPE,
+    ] {
+        assert!(is_exact_carrier(carrier));
+    }
+    for other in [
+        KType::KEXPRESSION,
+        KType::PROPER_TYPE,
+        KType::ANY_TYPE,
+        KType::NUMBER,
+        KType::ANY,
+    ] {
+        assert!(!is_exact_carrier(other));
+    }
+}
+
+/// The routing lookup: each raw part shape picks out the one member that claims it, and a part
+/// no member claims answers `None` so the slot falls through to eager handling.
+#[test]
+fn raw_capture_member_picks_the_claiming_member() {
+    let program = crate::machine::core::program_storage();
+    let brand = program.brand();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let slot = carrier_union(types);
+
+    let cases = [
+        (
+            ExpressionPart::Type(type_token("Meters")),
+            KType::TYPE_NAME_TOKEN,
+        ),
+        (
+            ExpressionPart::SigiledTypeExpr(brand.nested_node_from_iter(std::iter::empty())),
+            KType::SIGILED_TYPE_EXPR,
+        ),
+        (
+            ExpressionPart::RecordType(brand.nested_node_from_iter(std::iter::empty())),
+            KType::RECORD_TYPE,
+        ),
+        (
+            ExpressionPart::Identifier(value_name("width", &registries)),
+            KType::IDENTIFIER,
+        ),
+    ];
+    for (part, expected) in cases {
+        assert_eq!(slot.raw_capture_member(&part, types), Some(expected));
+        // A bare carrier is not a union, so it routes by its own exact-constant arm, not here.
+        assert_eq!(expected.raw_capture_member(&part, types), None);
+    }
+    // A literal is no carrier's shape.
+    assert_eq!(
+        slot.raw_capture_member(&ExpressionPart::Literal(KLiteral::Number(1.0)), types),
+        None,
+    );
+}
+
+/// Raw capture rides exact carrier members only: an `of_kind(…)` member is an ordinary eager
+/// member, so a union carrying one routes a bare `Type` token nowhere raw.
+#[test]
+fn a_kind_member_carries_no_raw_capture() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let slot = types.union_of(&[KType::PROPER_TYPE, KType::NUMBER]);
+    let part = ExpressionPart::Type(type_token("Meters"));
+    assert_eq!(slot.raw_capture_member(&part, types), None);
+    // Bind-time reduction still finds it: the member lowers the token rather than capturing it.
+    assert_eq!(
+        slot.capture_member_for(&part, types),
+        Some(KType::PROPER_TYPE),
+    );
+}
+
+/// `capture_member_for` widens to a kind member for a bare `Type` token and for nothing else —
+/// the two type-expression shapes a kind member shape-admits arrive already sub-dispatched.
+#[test]
+fn capture_member_for_widens_only_for_a_type_token() {
+    let program = crate::machine::core::program_storage();
+    let brand = program.brand();
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let slot = types.union_of(&[KType::ANY_TYPE, KType::NUMBER]);
+
+    assert_eq!(
+        slot.capture_member_for(&ExpressionPart::Type(type_token("Meters")), types),
+        Some(KType::ANY_TYPE),
+    );
+    let sigil = ExpressionPart::SigiledTypeExpr(brand.nested_node_from_iter(std::iter::empty()));
+    assert_eq!(slot.capture_member_for(&sigil, types), None);
+}
+
+/// Membership distribution: the primitive every structural exact-constant dispatch rule reads
+/// through, true for the bare constant and for a union carrying it.
+#[test]
+fn union_has_member_covers_the_bare_and_union_spellings() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let slot = carrier_union(types);
+
+    assert!(slot.union_has_member(KType::SIGILED_TYPE_EXPR, types));
+    assert!(slot.union_has_member(KType::RECORD_TYPE, types));
+    assert!(!slot.union_has_member(KType::KEXPRESSION, types));
+    assert!(KType::SIGILED_TYPE_EXPR.union_has_member(KType::SIGILED_TYPE_EXPR, types));
+    assert!(!KType::SIGILED_TYPE_EXPR.union_has_member(KType::RECORD_TYPE, types));
+}
+
+/// The auto-wrap exclusion is blanket by slot type and distributes: a union owns a bare name as
+/// soon as any member does, and a pure value union owns none.
+#[test]
+fn owns_bare_name_distributes_over_union_members() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+
+    assert!(carrier_union(types).owns_bare_name(types));
+    assert!(
+        types
+            .union_of(&[KType::PROPER_TYPE, KType::NUMBER])
+            .owns_bare_name(types)
+    );
+    assert!(KType::NAME_TOKEN.owns_bare_name(types));
+    assert!(!KType::KEXPRESSION.owns_bare_name(types));
+    assert!(
+        !types
+            .union_of(&[KType::NUMBER, KType::STR])
+            .owns_bare_name(types)
+    );
+    // A union of pure carriers with no name member owns nothing bare.
+    assert!(
+        !types
+            .union_of(&[KType::SIGILED_TYPE_EXPR, KType::RECORD_TYPE])
+            .owns_bare_name(types)
+    );
+}
+
+/// Registration's two rules on a union carrier slot, and the unions they leave alone.
+#[test]
+fn carrier_union_validation_rejects_code_and_overlapping_members() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let accepts = |kt| carrier_union_error(kt, &registries).is_none();
+
+    assert!(accepts(carrier_union(types)));
+    assert!(accepts(
+        types.union_of(&[KType::TYPE_NAME_TOKEN, KType::NUMBER])
+    ));
+    // Not a carrier union at all: a user-spellable value union is an ordinary eager slot.
+    assert!(accepts(types.union_of(&[KType::NUMBER, KType::STR])));
+    assert!(accepts(
+        types.union_of(&[KType::KEXPRESSION, KType::NUMBER])
+    ));
+    // And a bare carrier is not a union.
+    assert!(accepts(KType::SIGILED_TYPE_EXPR));
+
+    for rejected in [
+        types.union_of(&[KType::KEXPRESSION, KType::SIGILED_TYPE_EXPR]),
+        types.union_of(&[KType::TYPE_NAME_TOKEN, KType::NAME_TOKEN]),
+        types.union_of(&[KType::IDENTIFIER, KType::NAME_TOKEN]),
+        types.union_of(&[KType::PROPER_TYPE, KType::SIGILED_TYPE_EXPR]),
+        types.union_of(&[KType::PROPER_TYPE, KType::TYPE_NAME_TOKEN]),
+        types.union_of(&[KType::ANY_TYPE, KType::RECORD_TYPE]),
+    ] {
+        assert!(
+            carrier_union_error(rejected, &registries).is_some(),
+            "{} should be rejected at registration",
+            rejected.name(&registries),
+        );
+    }
+}

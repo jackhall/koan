@@ -74,6 +74,75 @@ does it elaborate to the underlying type. Pinned by
 `fn_return_type_surface_name_preserved_in_error` in
 [`src/builtins/fn_def/tests/return_type.rs`](../../../src/builtins/fn_def/tests/return_type.rs).
 
+## Union carrier slots
+
+One slot can list several carrier spellings at once. A slot typed
+`union_of(TypeNameToken, SigiledTypeExpr, RecordType, Identifier)` admits a bare `Type`
+token, a `:(…)`, a `:{…}` and a bare value name through a single overload, each captured by
+the semantics of the member that claims it — so a form spells the carrier dimension once
+instead of enumerating an overload per carrier combination. Only builtin registration can
+build one: none of the exact carrier constants is spellable from source
+([the declared builtin names](../../../src/machine/model/types/builtin_names.rs) lists none
+of them), so no user signature can carry raw-capture semantics.
+
+**Capture footprint.** A slot type claims the raw part shapes for which it imposes its own
+capture or shape-only admission rather than letting the part sub-dispatch
+([`capture_footprint`](../../../src/machine/model/types/ktype_predicates.rs)):
+
+| Slot type                              | Claimed shapes                        |
+|----------------------------------------|---------------------------------------|
+| `Identifier`                           | bare value token                      |
+| `NameToken`                            | bare value token, bare `Type` token   |
+| `TypeNameToken`                        | bare `Type` token                     |
+| `SigiledTypeExpr`                      | `:(…)`                                |
+| `RecordType`                           | `:{…}`                                |
+| `KExpression`                          | `(…)` / `#(…)`                        |
+| `OfKind(ProperType)` / `OfKind(AnyType)` | bare `Type` token, `:(…)`, `:{…}`   |
+| everything else                        | none                                  |
+
+The first five are the **exact carrier members** — the slot types whose whole content is a raw
+part shape. A union with at least one of them is a *carrier union*; a union of ordinary value
+types (`:(Number | Str)`, which a user can spell) is an eager slot and is unconstrained here.
+
+**Well-formedness is a registration-time rule.** `Union` identity is order-blind — the digest
+sorts member handles — so admission and capture must pick the same member however the union
+was written. Two rules fall out, checked by
+[`carrier_union_error`](../../../src/machine/model/types/ktype_predicates.rs) at the
+registration door ([`arg`](../../../src/builtins.rs)), which panics at seed time because only
+a builtin author can reach the failure:
+
+- **No `KExpression` member.** A `(…)` group is *the* eager sub-expression shape, so a
+  CODE-capturing member would leave the seal-time raw-kind derivation and the group's staging
+  ambiguous.
+- **Pairwise footprint-disjoint members**, so at most one member ever claims a part shape.
+  `NameToken` therefore shares no union with `Identifier` or `TypeNameToken`, and
+  `OfKind(ProperType)` shares one only with `Identifier`.
+
+**Where the union is read.** Four sites distribute over members rather than over-fitting the
+bare constants. Each distributes exactly the set of constants it already treats specially, so
+a member behaves inside a union precisely as it does as a bare slot type:
+
+- Strict admission ([`slot_admits_strict`](../../../src/machine/execute/decide/resolve_dispatch.rs))
+  routes a part to shape-only admission when an exact carrier member claims its shape, gives an
+  `OfKind(ProperType)` member the same shape-only admission it has bare, and distributes the
+  mutually-exclusive `:(…)` / `:{…}` speculative-eager guards over members.
+- The auto-wrap exclusion ([`classify_for_pick`](../../../src/machine/core/kfunction/pick.rs))
+  asks `owns_bare_name`: a union owns a bare name as soon as any member does.
+- Bind-time capture ([`ExpressionPart::resolve_for`](../../../src/machine/model/ast.rs))
+  reduces the union to the one member claiming the part's shape before its capture arms run,
+  so a union spelling captures exactly as the bare member would.
+- The seal-time raw-kind stamp: a bucket whose slot is a union is held to a
+  [`LAZY_SLOT_SPECS`](../../../src/machine/model/lazy_slots.rs) entry covering *every* member's
+  kind, since any of them can arrive at that index.
+
+**Raw capture and shape-only admission are separate properties**, and only the exact carrier
+members hold both. An `OfKind(ProperType)` member brings its shape-only admission — a fresh
+`Type` token, a `:(…)`, a `:{…}` all admit without consulting the bare-name cache, so the token
+reaches the member that lowers it instead of dying on its unbound name — and it brings its
+lowering to `Held::Type` / `Held::UnresolvedType`. It brings no raw capture:
+`raw_capture_member` answers `None` for it, so it stays an ordinary eager member and the
+capture semantics of a union carrier slot remain the exact carrier members' alone.
+
 ## Function signatures
 
 `FN` syntax requires both per-parameter types and a return type:

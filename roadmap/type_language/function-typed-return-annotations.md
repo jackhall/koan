@@ -60,9 +60,9 @@ and fails with `unbound name 'left'`.
   rejected: it flips the slot's eager/lazy classification and grows the overload
   matrix per carrier combination.)
 - *How the overload-matrix holes are closed — decided.* Collapse the carrier
-  dimension with union-typed slots, shipped by the prerequisite
-  [Union-typed carrier slots for builtin signatures](union-carrier-slots.md)
-  item. On top of that machinery, this item rewrites
+  dimension with the shipped
+  [union carrier slots](../../design/typing/ktype/slots-and-signatures.md#union-carrier-slots).
+  On top of that machinery, this item rewrites
   [`fn_def.rs`](../../src/builtins/fn_def.rs) to two overloads — the
   binder-shaped keyworded form and the non-binder record form, each with a
   return slot of `union_of(TYPE_NAME_TOKEN, SIGILED_TYPE_EXPR,
@@ -82,10 +82,7 @@ and fails with `unbound name 'left'`.
 
 ## Dependencies
 
-**Requires:**
-
-- [Union-typed carrier slots for builtin signatures](union-carrier-slots.md)
-  — the overload-matrix collapse registers union-typed return and operand
-  slots.
+**Requires:** none — the union carrier slots its overload-matrix collapse rests
+on are shipped.
 
 **Unblocks:** none.

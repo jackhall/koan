@@ -25,6 +25,9 @@ use crate::witnessed::{BumpAllocator, BumpVec};
 use super::resolve::Resolution;
 use crate::machine::model::RunRegistries;
 
+#[cfg(test)]
+mod tests;
+
 // Test-only entry counter: fast-lane dispatch shapes must route around the
 // candidate machinery, so the counter must not advance for them.
 #[cfg(test)]
@@ -300,7 +303,9 @@ fn decide_scope<'step, 'e>(
     match bucket.pick_strict(expr, bare_outcomes, registries, scratch) {
         PickPass::Picked(index) => {
             let function = scope.open_function(&lookup.overloads[index]);
-            let wrap_indices = function.value().classify_for_pick(expr, scratch);
+            let wrap_indices = function
+                .value()
+                .classify_for_pick(expr, &registries.types, scratch);
             ScopeDecision::Terminal(DispatchOutcome::Resolved(Resolved {
                 function,
                 wrap_indices,
@@ -526,12 +531,22 @@ fn slot_admits_strict<'e>(
         },
         (SignatureElement::Argument(arg), Some(part_value)) => {
             let part_value = &part_value;
+            // A union carrier slot routes by its matching exact carrier member: the part is
+            // captured raw at bind, so admission is shape-only here exactly as it is for the
+            // bare carrier constants below. The verdict still comes from `matches`, which
+            // distributes over the union — the member lookup decides only the routing.
+            if arg.ktype.raw_capture_member(part_value, types).is_some() {
+                return arg.matches(part_value, types);
+            }
             // A declaration slot owns the name, so admission is shape-only. `ProperType` admits a
             // `:(…)` / `:{…}` part on shape alone — whether that part reaches the declarator raw or
             // as a resolved type-side carrier is the node's lazy-slot stamp's call, not this
             // predicate's. `Identifier` stays part-kind-exact, so a `:{…}` return type is never
-            // mistaken for a value-named one.
-            if matches!(arg.ktype, KType::PROPER_TYPE) {
+            // mistaken for a value-named one. A `ProperType` *member* brings the same shape-only
+            // admission into a union, so a fresh `Type` token reaches the member that lowers it
+            // rather than dying on its unbound name — the member stays eager either way, since
+            // what it does with the token is lower it, not capture it raw.
+            if arg.ktype.union_has_member(KType::PROPER_TYPE, types) {
                 if matches!(
                     part_value,
                     ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)
@@ -549,15 +564,19 @@ fn slot_admits_strict<'e>(
             // The two lazy raw-capture slots are part-kind-exact and mutually exclusive: admitting
             // a `:{…}` to a `:SigiledTypeExpr` slot (or a `:(…)` to a `:RecordType` one) would tie
             // the two overloads incomparably, and the eager fallback would win — dropping the lazy
-            // raw capture. Anywhere else, such a part sub-dispatches to a type-side carrier.
+            // raw capture. Anywhere else, such a part sub-dispatches to a type-side carrier. The
+            // exclusion distributes over union members: a union capturing one type-expression
+            // kind raw must not speculatively eat the other, or a sibling overload's raw capture
+            // ties away just the same.
+            let excludes = |needle| arg.ktype.union_has_member(needle, types);
             match part_value {
                 ExpressionPart::SigiledTypeExpr(_)
-                    if !matches!(arg.ktype, KType::KEXPRESSION | KType::RECORD_TYPE) =>
+                    if !(excludes(KType::KEXPRESSION) || excludes(KType::RECORD_TYPE)) =>
                 {
                     return true;
                 }
                 ExpressionPart::RecordType(_)
-                    if !matches!(arg.ktype, KType::KEXPRESSION | KType::SIGILED_TYPE_EXPR) =>
+                    if !(excludes(KType::KEXPRESSION) || excludes(KType::SIGILED_TYPE_EXPR)) =>
                 {
                     return true;
                 }

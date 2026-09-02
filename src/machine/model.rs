@@ -30,6 +30,10 @@ pub use types::{
     ReturnType, SealedAnnounced, SealedGroup, SignatureDraft, SignatureElement, TypeNode,
     UntypedKey, WindowView, is_keyword_token,
 };
+pub use types::{
+    CaptureShape, CaptureShapes, capture_footprint, capture_shape_of, carrier_union_error,
+    is_exact_carrier,
+};
 pub use types::{display_label, render_label};
 pub(crate) use types::{render_untyped_key, summarize_dispatch, untyped_key_of};
 pub use values::{

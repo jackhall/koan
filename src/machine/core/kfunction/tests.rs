@@ -87,7 +87,11 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         ],
     );
     let f = find_match(scope, &expr, types).expect("OP <Number> should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), brand.allocator());
+    let pick = f.classify_for_pick(
+        &WorkingExpression::from_ast(brand, expr),
+        types,
+        brand.allocator(),
+    );
     assert_eq!(&*pick, &[1]);
 }
 
@@ -138,7 +142,11 @@ fn classify_excludes_literal_name_slots_from_wrap() {
     );
     let f = find_match(scope, &expr, types)
         .expect("test overload should match an Identifier-leading expression");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), brand.allocator());
+    let pick = f.classify_for_pick(
+        &WorkingExpression::from_ast(brand, expr),
+        types,
+        brand.allocator(),
+    );
     assert!(pick.is_empty());
 }
 
@@ -162,7 +170,11 @@ fn classify_excludes_binder_name_slot_from_wrap() {
         ],
     );
     let f = find_match(scope, &expr, &types).expect("LET should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), brand.allocator());
+    let pick = f.classify_for_pick(
+        &WorkingExpression::from_ast(brand, expr),
+        &types,
+        brand.allocator(),
+    );
     assert!(
         pick.is_empty(),
         "LET's Identifier name slot is a declaration, not a reference; \
@@ -208,7 +220,11 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
         ],
     );
     let f = find_match(scope, &expr, types).expect("OP <ProperType> should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), brand.allocator());
+    let pick = f.classify_for_pick(
+        &WorkingExpression::from_ast(brand, expr),
+        types,
+        brand.allocator(),
+    );
     assert!(pick.is_empty());
 }
 
@@ -280,6 +296,61 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
         ],
     );
     let f = find_match(scope, &expr, types).expect("OP <Any> should match");
-    let pick = f.classify_for_pick(&WorkingExpression::from_ast(brand, expr), brand.allocator());
+    let pick = f.classify_for_pick(
+        &WorkingExpression::from_ast(brand, expr),
+        types,
+        brand.allocator(),
+    );
     assert_eq!(&*pick, &[1]);
+}
+
+/// The auto-wrap exclusion distributes over union members: a union carrier slot with a
+/// `TypeNameToken` member owns the bare `Type` token it captures, so the token rides to the bind
+/// unresolved rather than becoming a sub-Dispatch. A pure value union owns nothing bare and wraps.
+#[test]
+fn classify_excludes_a_bare_token_at_a_union_carrier_slot() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let region = run_root_storage();
+    let scope = run_root_bare(&region);
+    let carrier = types.union_of(&[KType::TYPE_NAME_TOKEN, KType::SIGILED_TYPE_EXPR]);
+    let value_union = types.union_of(&[KType::NUMBER, KType::STR]);
+    for (keyword, ktype) in [("OWNS", carrier), ("WRAPS", value_union)] {
+        register_builtin(
+            scope,
+            SignatureDraft {
+                return_type: ReturnType::Resolved(KType::ANY),
+                elements: vec![
+                    SignatureElement::Keyword(probe_symbol(keyword)),
+                    SignatureElement::Argument(Argument {
+                        name: crate::machine::model::BinderSymbol::classify("v")
+                            .expect("a test fixture parameter is a value token"),
+                        ktype,
+                    }),
+                ],
+            },
+            body_any,
+            &registries,
+            &mut crate::machine::WriteGate::for_test(),
+        );
+    }
+    let brand = region.brand();
+    let classify = |keyword: &str| {
+        let expr = KExpression::new(
+            brand,
+            &[
+                Spanned::bare(kw_part(keyword)),
+                Spanned::bare(ExpressionPart::Type(type_token("IntOrd"))),
+            ],
+        );
+        let f = find_match(scope, &expr, types).expect("the fixture overload should match");
+        let pick = f.classify_for_pick(
+            &WorkingExpression::from_ast(brand, expr),
+            types,
+            brand.allocator(),
+        );
+        pick.to_vec()
+    };
+    assert!(classify("OWNS").is_empty());
+    assert_eq!(classify("WRAPS"), vec![1]);
 }

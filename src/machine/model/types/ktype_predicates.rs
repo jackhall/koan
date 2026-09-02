@@ -43,6 +43,153 @@ fn constructor_apply_admits(
         })
 }
 
+/// One raw part shape a carrier slot type can claim — the alphabet the capture footprints below
+/// are sets over. A part shape absent here (a literal, a container literal, a keyword) is never
+/// claimed by any slot type, so it plays no part in carrier-union disjointness.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CaptureShape {
+    /// A bare value-token part.
+    Identifier,
+    /// A bare `Type`-token part.
+    TypeToken,
+    /// A sigiled type expression, `:(…)`.
+    TypeExpr,
+    /// A record type, `:{…}`.
+    RecordType,
+    /// A `(…)` group or a `#(…)` quote — the eager sub-expression shape.
+    Code,
+}
+
+/// A set of [`CaptureShape`]s, modeled on
+/// [`LazyKinds`](crate::machine::model::lazy_slots::LazyKinds).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CaptureShapes(u8);
+
+impl CaptureShapes {
+    pub const EMPTY: CaptureShapes = CaptureShapes(0);
+
+    const fn of(shape: CaptureShape) -> CaptureShapes {
+        CaptureShapes(1 << shape as u8)
+    }
+
+    pub const fn with(self, other: CaptureShapes) -> CaptureShapes {
+        CaptureShapes(self.0 | other.0)
+    }
+
+    pub const fn contains(self, other: CaptureShapes) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    pub const fn intersects(self, other: CaptureShapes) -> bool {
+        self.0 & other.0 != 0
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// The raw shape `part` presents to a carrier slot, or `None` for a part shape no slot type
+/// captures raw. The inverse of the [`capture_footprint`] table: a slot type claims `part` iff its
+/// footprint contains this shape.
+pub fn capture_shape_of(part: &ExpressionPart<'_>) -> Option<CaptureShape> {
+    Some(match part {
+        ExpressionPart::Identifier(_) => CaptureShape::Identifier,
+        ExpressionPart::Type(_) => CaptureShape::TypeToken,
+        ExpressionPart::SigiledTypeExpr(_) => CaptureShape::TypeExpr,
+        ExpressionPart::RecordType(_) => CaptureShape::RecordType,
+        ExpressionPart::Expression(_) | ExpressionPart::QuotedExpression(_) => CaptureShape::Code,
+        _ => return None,
+    })
+}
+
+/// The **exact carrier members** — the slot types whose whole content is a raw part shape, so a
+/// part reaching one is captured verbatim instead of sub-dispatched. These are the members that
+/// make a union a *carrier* union: only they carry raw-capture semantics into one, and none of
+/// them is nameable from source, so a union carrier slot can only come from builtin registration.
+pub fn is_exact_carrier(kt: KType) -> bool {
+    matches!(
+        kt,
+        KType::IDENTIFIER
+            | KType::NAME_TOKEN
+            | KType::TYPE_NAME_TOKEN
+            | KType::SIGILED_TYPE_EXPR
+            | KType::RECORD_TYPE
+    )
+}
+
+/// The raw part shapes `kt` claims: the shapes for which it imposes its own capture or shape-only
+/// admission semantics rather than letting the part sub-dispatch. `ProperType` / `AnyType` claim
+/// the `Type` token they lower plus the `:(…)` / `:{…}` shapes they shape-admit
+/// (`slot_admits_strict`), which is why a kind member cannot share a union with a carrier member
+/// over the same shape. Every other slot type — a value type, a container, a nominal — claims
+/// nothing.
+pub fn capture_footprint(kt: KType) -> CaptureShapes {
+    use CaptureShape::{Code, Identifier, RecordType, TypeExpr, TypeToken};
+    match kt {
+        KType::IDENTIFIER => CaptureShapes::of(Identifier),
+        KType::NAME_TOKEN => CaptureShapes::of(Identifier).with(CaptureShapes::of(TypeToken)),
+        KType::TYPE_NAME_TOKEN => CaptureShapes::of(TypeToken),
+        KType::SIGILED_TYPE_EXPR => CaptureShapes::of(TypeExpr),
+        KType::RECORD_TYPE => CaptureShapes::of(RecordType),
+        KType::KEXPRESSION => CaptureShapes::of(Code),
+        KType::PROPER_TYPE | KType::ANY_TYPE => CaptureShapes::of(TypeToken)
+            .with(CaptureShapes::of(TypeExpr))
+            .with(CaptureShapes::of(RecordType)),
+        _ => CaptureShapes::EMPTY,
+    }
+}
+
+/// Why `kt` is an ill-formed builtin slot type, or `None` when it is well-formed. Only a **union
+/// carrier slot** — a `Union` with at least one [`is_exact_carrier`] member — is
+/// constrained; a pure value union like `:(KExpression | Number)` is an ordinary eager slot a user
+/// can spell, and is left alone.
+///
+/// Two rules, both forced by `Union` identity being order-blind: admission and capture must pick
+/// the same member for a given part however the union was written.
+///
+/// 1. No `KExpression` member. A `(…)` group is *the* eager sub-expression shape, so a
+///    CODE-capturing union member would make the seal-time raw-kind derivation
+///    ([`LAZY_SLOT_SPECS`](crate::machine::model::lazy_slots::LAZY_SLOT_SPECS)) and the group's
+///    staging ambiguous.
+/// 2. Pairwise capture-footprint disjointness across *all* members, so at most one member ever
+///    claims a part shape.
+///
+/// Only builtin registration can construct a union carrier slot, so a violation is a developer
+/// error the seed asserts on rather than a user-facing diagnostic.
+pub fn carrier_union_error(kt: KType, registries: &RunRegistries) -> Option<String> {
+    let members: Vec<KType> = registries.types.with_node(kt, |node| match node {
+        TypeNode::Union { members } => members.clone(),
+        _ => Vec::new(),
+    });
+    if !members.iter().copied().any(is_exact_carrier) {
+        return None;
+    }
+    let name = |m: KType| m.name(registries);
+    if members.contains(&KType::KEXPRESSION) {
+        return Some(format!(
+            "union carrier slot {} may not have a `{}` member: a `(…)` group is the eager \
+             sub-expression shape",
+            name(kt),
+            name(KType::KEXPRESSION),
+        ));
+    }
+    for (i, a) in members.iter().enumerate() {
+        for b in &members[i + 1..] {
+            if capture_footprint(*a).intersects(capture_footprint(*b)) {
+                return Some(format!(
+                    "union carrier slot {} has overlapping members `{}` and `{}`: both claim the \
+                     same raw part shape, so capture would depend on member order",
+                    name(kt),
+                    name(*a),
+                    name(*b),
+                ));
+            }
+        }
+    }
+    None
+}
+
 /// The slot types that constrain nothing beyond "a name": a concrete type out-specifies any of
 /// them.
 fn is_unconstrained_name(kt: KType) -> bool {
@@ -53,6 +200,85 @@ fn is_unconstrained_name(kt: KType) -> bool {
 }
 
 impl KType {
+    /// True iff `self` is `needle`, or a `Union` with `needle` among its members. The
+    /// distribution primitive for the structural exact-constant checks dispatch runs on a slot
+    /// type: a rule written against a carrier constant reads through here to cover the union
+    /// spelling of the same slot.
+    pub fn union_has_member(self, needle: KType, types: &TypeRegistry) -> bool {
+        self == needle
+            || types.with_node(self, |node| match node {
+                TypeNode::Union { members } => members.contains(&needle),
+                _ => false,
+            })
+    }
+
+    /// The [`is_exact_carrier`] member of this union that claims `part`'s raw shape,
+    /// or `None` — for a non-union, for a union with no such member, and for a part shape no
+    /// carrier claims. `Some` is what routes a part to raw capture instead of eager
+    /// sub-dispatch, so an `of_kind(…)` member never answers here: it is an ordinary eager
+    /// member. [`carrier_union_error`] forbids two members claiming one shape, so the
+    /// answer is unique regardless of member order.
+    pub fn raw_capture_member(
+        self,
+        part: &ExpressionPart<'_>,
+        types: &TypeRegistry,
+    ) -> Option<KType> {
+        self.member_claiming(part, types, true)
+    }
+
+    /// The bind-time reduction of a union slot to the member whose capture semantics apply to
+    /// `part`: [`raw_capture_member`](Self::raw_capture_member) widened to admit a
+    /// `ProperType` / `AnyType` member for a bare `Type` token, which such a member lowers to
+    /// [`Held::Type`] / [`Held::UnresolvedType`] rather than capturing raw.
+    pub fn capture_member_for(
+        self,
+        part: &ExpressionPart<'_>,
+        types: &TypeRegistry,
+    ) -> Option<KType> {
+        self.member_claiming(part, types, false)
+    }
+
+    fn member_claiming(
+        self,
+        part: &ExpressionPart<'_>,
+        types: &TypeRegistry,
+        exact_only: bool,
+    ) -> Option<KType> {
+        let shape = capture_shape_of(part)?;
+        let eligible = |m: KType| {
+            is_exact_carrier(m)
+                || (!exact_only
+                    && shape == CaptureShape::TypeToken
+                    && matches!(m, KType::PROPER_TYPE | KType::ANY_TYPE))
+        };
+        let wanted = CaptureShapes::of(shape);
+        types.with_node(self, |node| match node {
+            TypeNode::Union { members } => members
+                .iter()
+                .copied()
+                .find(|m| eligible(*m) && capture_footprint(*m).contains(wanted)),
+            _ => None,
+        })
+    }
+
+    /// Whether a slot of this type *owns* a bare name part rather than letting it resolve — the
+    /// auto-wrap exclusion ([`KFunction::classify_for_pick`](crate::machine::KFunction)). Blanket
+    /// by slot type, not by part shape: an `:Identifier` slot owns even a bare `Type` token it
+    /// cannot admit, and a union owns one as soon as any member does.
+    pub fn owns_bare_name(self, types: &TypeRegistry) -> bool {
+        fn is_owner(kt: KType) -> bool {
+            matches!(
+                kt,
+                KType::IDENTIFIER | KType::PROPER_TYPE | KType::NAME_TOKEN | KType::TYPE_NAME_TOKEN
+            )
+        }
+        is_owner(self)
+            || types.with_node(self, |node| match node {
+                TypeNode::Union { members } => members.iter().copied().any(is_owner),
+                _ => false,
+            })
+    }
+
     /// Strict specificity ordering. Concrete types outrank `Any` and the unconstrained-name slot
     /// types (`Identifier`, `ProperType`, `NameToken`, `TypeNameToken`), so an overload like
     /// `ATTR <s:NewType>` beats its `ATTR <s:Identifier>` sibling when both admit. `Str` is the

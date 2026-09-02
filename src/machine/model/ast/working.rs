@@ -219,6 +219,7 @@ impl<'a> WorkingPart<'a> {
         &self,
         slot: &crate::machine::model::KType,
         scope: &'a crate::machine::core::Scope<'a>,
+        types: &crate::machine::model::TypeRegistry,
     ) -> Held<'a> {
         match self {
             WorkingPart::Spliced { cell } => {
@@ -231,7 +232,7 @@ impl<'a> WorkingPart<'a> {
                     Carried::Object(obj) => Held::Object(obj.deep_clone()),
                 }
             }
-            WorkingPart::Ast(part) => part.resolve_for(slot, scope),
+            WorkingPart::Ast(part) => part.resolve_for(slot, scope, types),
             _ => Held::Object(self.resolve(scope.brand())),
         }
     }

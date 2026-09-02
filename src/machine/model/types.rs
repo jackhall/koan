@@ -26,6 +26,10 @@ pub use declaration_window::{
 pub use kkind::KKind;
 pub use ktraits::Parseable;
 pub use ktype::{KType, display_label, render_label};
+pub use ktype_predicates::{
+    CaptureShape, CaptureShapes, capture_footprint, capture_shape_of, carrier_union_error,
+    is_exact_carrier,
+};
 pub use node::{NodeSchema, TypeNode};
 pub use record::Record;
 pub use recursive_group_window::{

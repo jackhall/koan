@@ -73,7 +73,9 @@ record schema :{…}` while a `:{…}` literal works.
 **Directions.**
 
 - *Carrier mechanism — decided.* Union admission plus an internal thunk seam.
-  [Union-typed carrier slots](union-carrier-slots.md) carries admission: each
+  The shipped
+  [union carrier slots](../../design/typing/ktype/slots-and-signatures.md#union-carrier-slots)
+  carry admission: each
   deferral slot is one overload with a `union_of(TYPE_NAME_TOKEN,
   SIGILED_TYPE_EXPR, RECORD_TYPE, IDENTIFIER)` slot — every member
   part-kind-exact and captured raw by its own explicit semantics, no sentinel.
@@ -109,9 +111,7 @@ This item interacts with
 [Uniform forward type references](uniform-forward-type-references.md) (a
 shared single diagnostic raiser is an option, not an edge).
 
-**Requires:**
-
-- [Union-typed carrier slots](union-carrier-slots.md) — the deferral slots
-  spell raw capture as unions of exact carrier members.
+**Requires:** none — the union carrier slots its deferral slots spell raw
+capture with are shipped.
 
 **Unblocks:** none.

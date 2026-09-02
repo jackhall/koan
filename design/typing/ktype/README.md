@@ -100,6 +100,10 @@ concrete `KObject` has a `TypeNode` variant:
   union-typed slot dispatches by the value's own runtime type. `kind_of` reports
   `Proper`. A user `UNION` binds the anonymous union of its per-variant `NewType`
   member handles. See [user-types.md § Unions dissolve into per-variant newtypes](../user-types.md#unions-dissolve-into-per-variant-newtypes).
+  A builtin slot may also union the raw *carrier* leaves, collapsing an overload-per-carrier
+  matrix into one signature — see
+  [slots-and-signatures.md § Union carrier slots](slots-and-signatures.md#union-carrier-slots)
+  for the registration rule that keeps such a union's admission and capture order-blind.
 - Module / signature carriers (the [module system](../modules.md) rests on
   these): **there is no module variant.** A module is a value — it rides the value
   channel's Object arm as `KObject::Module`, and its `ktype()` is its principal
