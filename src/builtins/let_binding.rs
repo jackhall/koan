@@ -55,12 +55,15 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             };
             if let Some(kind) = type_kind {
                 let spelling = ctx.registries.labels.render(v.symbol());
+                let example = match capitalize_identifier(&spelling) {
+                    Some(suggestion) => format!(", e.g. `{suggestion}`"),
+                    None => String::new(),
+                };
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "LET binder `{spelling}` is value-classified but the bound value is a \
                      {kind} (a type-language carrier); rebind under a Type-classified \
                      identifier instead (uppercase-leading plus at least one lowercase \
-                     letter, e.g. `{suggestion}`)",
-                    suggestion = capitalize_identifier(&spelling),
+                     letter{example})",
                 ))));
             }
             BinderSymbol::Value(v)
@@ -206,21 +209,24 @@ pub(crate) fn snake_case_identifier(name: &str) -> String {
     out
 }
 
-/// Suggest a Type-classified rewrite of a value-classified binder name for the
-/// partition-guard diagnostic. Falls back to a synthetic `M` prefix if the name
-/// starts with a non-alphabetic character where simple capitalization wouldn't
-/// yield a Type-shape token (see design/typing/tokens.md).
-fn capitalize_identifier(name: &str) -> String {
+/// A Type-classified rewrite of a value-classified binder name for the partition-guard
+/// diagnostic, or [`None`] when capitalizing the name does not reach a Type token.
+///
+/// Checked against [`is_type_name`], the one classifier the parser tags a `Type` part by, so the
+/// suggestion is always a spelling the writer can actually type: `t` capitalizes to `T`, which is
+/// one uppercase letter with no lowercase and so classifies as neither keyword nor type name (see
+/// [design/typing/tokens.md](../../design/typing/tokens.md)). A name that has no such rewrite is
+/// reported with the rule alone.
+fn capitalize_identifier(name: &str) -> Option<String> {
     let mut chars = name.chars();
-    match chars.next() {
-        Some(first) if first.is_ascii_alphabetic() => {
-            let mut out = String::with_capacity(name.len());
-            out.push(first.to_ascii_uppercase());
-            out.extend(chars);
-            out
-        }
-        _ => format!("M{name}"),
+    let first = chars.next()?;
+    if !first.is_ascii_alphabetic() {
+        return None;
     }
+    let mut out = String::with_capacity(name.len());
+    out.push(first.to_ascii_uppercase());
+    out.extend(chars);
+    crate::machine::model::labels::is_type_name(&out).then_some(out)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {

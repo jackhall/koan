@@ -580,3 +580,31 @@ fn sibling_declarators_report_the_same_uniform_refusal() {
         _ => panic!("expected the MODULE respelling ShapeError, got {err}"),
     }
 }
+
+/// The partition guard's respelling suggestion has to be a token the writer can actually type.
+/// `point` capitalizes to a Type name and is offered; `t` capitalizes to `T`, which is one
+/// uppercase letter with no lowercase and so classifies as neither keyword nor type name — the
+/// diagnostic states the rule and offers nothing rather than naming a parse error.
+#[test]
+fn the_type_class_respelling_is_offered_only_when_it_classifies() {
+    use crate::builtins::test_support::TestRun;
+    use crate::machine::KErrorKind;
+    use crate::machine::program_storage;
+    use crate::machine::run_root_storage;
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+
+    let named = test_run.run_one_err(test_run.parse_one("LET point = Number"));
+    assert!(
+        matches!(&named.kind, KErrorKind::ShapeError(msg) if msg.contains("e.g. `Point`")),
+        "expected the capitalized respelling, got {named}",
+    );
+
+    let unspellable = test_run.run_one_err(test_run.parse_one("LET t = Number"));
+    assert!(
+        matches!(&unspellable.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("at least one lowercase letter") && !msg.contains("e.g.")),
+        "expected the rule with no suggestion, got {unspellable}",
+    );
+}
