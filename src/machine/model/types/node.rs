@@ -79,9 +79,10 @@ pub enum TypeNode {
         key: KType,
         value: KType,
     },
-    /// Structural record type (`:{x :Number, y :Str}`) — an identifier-keyed field schema with
-    /// width/depth subtyping, order-blind by `(name, type)` for identity and declaration-ordered
-    /// for rendering.
+    /// Structural record type (`:{x :Number, y :Str}`) — a `BinderSymbol`-keyed field schema
+    /// (a field name may be an identifier or a capitalized `Type` token) with width/depth
+    /// subtyping, order-blind by `(name, type)` for identity and declaration-ordered for
+    /// rendering.
     Record {
         fields: Record<KType>,
     },

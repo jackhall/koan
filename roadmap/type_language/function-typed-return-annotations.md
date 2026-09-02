@@ -4,7 +4,7 @@ Make the bare `-> (LIST OF Str)` / `-> (FN …)` return annotation behave like i
 sigiled twin, which fails at definition today.
 
 **Problem.** The two ways to annotate a constructed return type diverge. The
-**sigiled** form `-> :(FN (x :Number) -> Number)` elaborates and runs — a closure
+**sigiled** form `-> :(FN :{x :Number} -> Number)` elaborates and runs — a closure
 factory can declare and return a typed function (see the closure example in
 [tutorial/04-functions.md](../../tutorial/04-functions.md)). The **bare** form,
 parenthesized without the `:` sigil, fails at definition time: `FN`'s keyworded
@@ -19,7 +19,7 @@ parameter list — meaningful only as a binder pattern — is then evaluated as 
 call, and the definition dies with
 `dispatch failed for SINGLETON s Str: no matching function`.
 
-The gap is constructor-independent: `-> (FN (y :Number) -> Number)`,
+The gap is constructor-independent: `-> (FN :{y :Number} -> Number)`,
 `-> (LIST OF Str)`, and `-> (MAP Str -> Number)` all fail identically, while each
 sigiled counterpart runs. The bare form parallels how every other return type is
 written (`-> Number`, not `-> :Number`), so it is the natural thing to reach for
@@ -84,8 +84,6 @@ and fails with `unbound name 'left'`.
 
 **Requires:**
 
-- [Record-typed parameter list in the FN type constructor](fn-type-record-parameter-list.md)
-  — the acceptance criteria write function types in the record form.
 - [Union-typed carrier slots for builtin signatures](union-carrier-slots.md)
   — the overload-matrix collapse registers union-typed return and operand
   slots.

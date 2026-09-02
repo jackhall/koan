@@ -13,7 +13,7 @@ keyworded overloads that produce a `&KType` in the value channel's `Type` arm.
 ```
 :(LIST OF Number)
 :(MAP Str -> Number)
-:(FN (x :Number, y :Str) -> Bool)
+:(FN :{x :Number, y :Str} -> Bool)
 :{x :Number, y :Str}
 ```
 
@@ -62,16 +62,16 @@ changes.
 
 ## Function-type sigil
 
-`:(FN (x :Number, y :Str) -> Bool)` declares parameter names at the
+`:(FN :{x :Number, y :Str} -> Bool)` declares parameter names at the
 sigil surface, symmetric with the FN declaration form and the
 value-side rule that function-value calls are named (no positional
 `f 1 2` shape). The names round-trip into identity:
 `KType::KFunction { params, ret }` carries `params` as a
 [parameter `Record<KType>`](ktype/records-and-limits.md#record-fields-and-ktype-hashing),
-so `:(FN (a :Number) -> Bool)` and `:(FN (b :Number) -> Bool)` are
+so `:(FN :{a :Number} -> Bool)` and `:(FN :{b :Number} -> Bool)` are
 distinct types, and the function/return surface re-parses from
-`KType::name()` back to the same `KType` — `:(FN () -> Any)`,
-`:(FN (xs :(LIST OF Number)) -> Bool)` included. Slot identity is the
+`KType::name()` back to the same `KType` — `:(FN :{} -> Any)`,
+`:(FN :{xs :(LIST OF Number)} -> Bool)` included. Slot identity is the
 record substrate's order-blind equality (same parameters by name and
 type regardless of declaration order). Admission (`function_compat`) is
 sound function subtyping — contravariant params with width-drop,
@@ -79,22 +79,31 @@ covariant return (see [ktype/parameterization-and-variance.md § Variance](ktype
 value requiring a param the slot doesn't promise is a non-match, while
 extra slot params arrive unbound under call-by-name.
 
-The parameter list parses through the shared field-list parser NEWTYPE /
-UNION use (`parse_typed_field_list_via_elaborator`), so nested
-parameterized param types sub-Dispatch — `:(FN (xs :(LIST OF Number))
--> Bool)` elaborates its element type rather than failing on the bare
-identifier.
+**The parameter list is a record type, not a syntax of its own.** `FN`'s
+parameter-list slot is typed `OfKind(AnyType)` and takes an already-resolved
+`KType`: the `:{…}` operand elaborates through the record-type sigil's own path
+before `FN` dispatches, so a nested parameterized param type sub-Dispatches
+(`:(FN :{xs :(LIST OF Number)} -> Bool)` elaborates its element type) and any
+record-valued type expression names a parameter list — a `LET`-bound alias
+included, `LET Params = :{x :Number}` then `:(FN Params -> Bool)`. The widest
+carrier is deliberate: an `OfKind(ProperType)` slot withholds the bare-name
+auto-wrap ([`classify_for_pick`](../../src/machine/core/kfunction/pick.rs)) that
+lets a bare alias token reach the body at all. The kind lattice carries no
+structural kinds, so record-ness is a *body* check
+([parameterized_types.rs](../../src/builtins/parameterized_types.rs)): every
+non-record the slot admits — a nominal `SetMember`, a bare `Number`, a signature
+kind — is rejected there with a pointed `ShapeError` naming the offending type.
 
 `:(FN …)` is the only function-type surface, and it covers a functor — a
 module-returning function — with no separate spelling:
-`:(FN (Ty :Signature) -> Module)`. Capitalized `Type`-token parameter names
+`:(FN :{Ty :Signature} -> Module)`. Capitalized `Type`-token parameter names
 (`Ty` for a `:Type` or `:Signature` slot) are admitted by the field-list parser's
-`FieldNameKind::IdentifierOrType` policy, so they round-trip into the parameter
-`Record<KType>` alongside snake_case ones. A `UNION` schema's variant tags go one
-step further — they *must* be capitalized
+`FieldNameKind::IdentifierOrType` policy — the policy every record-type field list
+uses — so they round-trip into the parameter `Record<KType>` alongside snake_case
+ones and key the record as `BinderSymbol::Type`. A `UNION` schema's variant tags go
+one step further — they *must* be capitalized
 `Type` tokens (`FieldNameKind::Type`), since a variant is itself a nominal type
-(see [user-types.md § Unions dissolve into per-variant newtypes](user-types.md#unions-dissolve-into-per-variant-newtypes));
-record fields stay `Identifier`-only.
+(see [user-types.md § Unions dissolve into per-variant newtypes](user-types.md#unions-dissolve-into-per-variant-newtypes)).
 
 ## Anonymous-union sigil
 
@@ -158,7 +167,7 @@ stays an unknown-type error. See
 
 ## Record-type sigil
 
-`:{x :Number, y :Str}` is the structural record type — an identifier-keyed field
+`:{x :Number, y :Str}` is the structural record type — a `BinderSymbol`-keyed field
 schema lowering to a [`TypeNode::Record`](ktype/records-and-limits.md#record-fields-and-ktype-hashing) node,
 distinct from any nominal struct. The `:` type-sigil anchors to `{` (not only `(`),
 and the parser emits a first-class `ExpressionPart::RecordType(<field list>)` part
@@ -168,9 +177,11 @@ dispatcher to route), `:{...}` is matched *structurally*: the `DispatchShape::Re
 handler folds the field list straight to a `Record` node via the shared field-list parser
 (`elaborate_record_value` in
 [decide/field_list.rs](../../src/machine/execute/decide/field_list.rs),
-`FieldNameKind::Identifier`, like NEWTYPE), with no internal type-constructor builtin
-behind it. The field list parses through the same `parse_typed_field_list_via_elaborator`
-path NEWTYPE / FN use, so nested parameterized field types sub-Dispatch
+`FieldNameKind::IdentifierOrType`, like NEWTYPE — so a field name may be a lowercase
+identifier or a capitalized `Type` token, `:{Ty :Signature}`), with no internal
+type-constructor builtin behind it. The field list parses through the same
+`parse_typed_field_list_via_elaborator`
+path NEWTYPE / UNION use, so nested parameterized field types sub-Dispatch
 (`:{xs :(LIST OF Number)}`), while a nested record type `:{inner :{…}}` elaborates
 *inline* through the same walker — sharing the elaborator so the outer binder name
 threads into the inner record (`NEWTYPE Outer = :{inner :{owner :Outer}}` seals the
@@ -232,7 +243,7 @@ same classifier — there is no separate type-context table — so the
 inner expression's parts decide its shape:
 
 - `Keyworded` for the keyworded surface (`:(LIST OF Number)`,
-  `:(MAP Str -> Number)`, `:(FN (x :Number) -> Bool)`) served by the
+  `:(MAP Str -> Number)`, `:(FN :{x :Number} -> Bool)`) served by the
   registered `LIST OF` / `MAP _ -> _` / `FN` overloads in
   [`builtins/parameterized_types.rs`](../../src/builtins/parameterized_types.rs).
   A head with no registered overload — `:(FUNCTOR …)`, say — is an ordinary

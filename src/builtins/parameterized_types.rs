@@ -107,10 +107,9 @@ mod action_bodies {
     }
 
     /// The parameter list is a record type that resolved before `FN` dispatched — the `:{…}`
-    /// operand sub-dispatches through the `ProperType` slot, exactly as the anonymous definition
-    /// form's record schema does, so a nested sigil param type or a reaching field resolves inside
-    /// the record's own elaboration and nothing defers here. The kind lattice has no structural
-    /// kinds, so record-ness is this body's check.
+    /// operand sub-dispatches through the parameter-list slot, so a nested sigil param type or a
+    /// reaching field resolves inside the record's own elaboration and nothing defers here. The
+    /// kind lattice has no structural kinds, so record-ness is this body's check.
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         let params_kt = crate::try_action!(require_ktype(ctx.args, &SLOTS.sig, ctx.registries));
         let ret = crate::try_action!(require_ktype(ctx.args, &SLOTS.ret, ctx.registries));
@@ -186,8 +185,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             vec![
                 kw(registries, "FN"),
                 // The parameter list is a record type, so it sub-dispatches to a resolved `KType`
-                // before this body fires. `OfKind(ProperType)` also admits `NewType` /
-                // `TypeConstructor` handles — the body's record check is what rejects those.
+                // before this body fires. `OfKind(AnyType)` is the widest carrier — it matches
+                // every sibling slot here and, unlike `OfKind(ProperType)`, does not withhold the
+                // bare-name auto-wrap a `LET`-bound alias operand needs
+                // ([`classify_for_pick`](../machine/core/kfunction/pick.rs)). Everything it admits
+                // beyond a record — a nominal handle, a signature kind — the body's record check
+                // rejects with a pointed error.
                 arg(registries, &SLOTS.sig, KType::of_kind(KKind::AnyType)),
                 kw(registries, "->"),
                 // `OfKind(AnyType)` admits every type value — a `-> Ordered` signature return
@@ -462,12 +465,11 @@ mod tests {
         );
     }
 
-    /// A deferred FN (the `:(LIST OF Number)` param forces deferral) whose return type names a
-    /// `NEWTYPE` alias — a `SetMember` that is not region-free, so it cannot be rebuilt from a
-    /// `'static` value — composes its function type by cloning the return type out of its own carrier
-    /// view (the `Some(Carried::Type(_))` compose arm). Were the return type to arrive without a
-    /// carrier, `build_carrier`'s guard would error instead of producing a function type, so a
-    /// successful compose proves the carrier-view path ran.
+    /// An FN whose parameter list defers (the `:(LIST OF Number)` field parks inside the record's
+    /// own elaboration) and whose return type names a `NEWTYPE` alias — a `SetMember` that is not
+    /// region-free, so it cannot be rebuilt from a `'static` value. Both operands reach the body
+    /// through the carrier view, so a successful compose proves the reaching return type survived
+    /// the park the parameter list forced.
     #[test]
     fn fn_deferred_with_reaching_ret_composes_from_carrier_view() {
         let program = program_storage();

@@ -16,11 +16,13 @@ the `NEWTYPE` elaborator wraps the parser's declaration-ordered `(name, KType)` 
 
 The same `Record<KType>` substrate backs `KFunction` parameter
 identity: the variant stores its parameters as `params: Record<KType>`
-(`(name → type)`), built by `finalize_carrier` in
-[`parameterized_types.rs`](../../../src/builtins/parameterized_types.rs) from the
-shared field-list parser NEWTYPE / UNION use. A function-typed slot is thus
-identified by its parameter names and types order-blind — `:(FN (x :Number,
-y :Str) -> Bool)` equals `:(FN (y :Str, x :Number) -> Bool)`. Function
+(`(name → type)`). An `:(FN :{…} -> …)` type takes that record whole — its
+parameter list *is* a record type, elaborated before `FN` dispatches, and
+[`parameterized_types.rs`](../../../src/builtins/parameterized_types.rs)'s body
+unwraps the resolved `TypeNode::Record` and interns the function type. A
+function-typed slot is thus
+identified by its parameter names and types order-blind — `:(FN :{x :Number,
+y :Str} -> Bool)` equals `:(FN :{y :Str, x :Number} -> Bool)`. Function
 admission compares the two records under width-drop subtyping (see
 [Variance](parameterization-and-variance.md#variance)): a value that requires a parameter the slot doesn't
 declare is a non-match, while extra *slot* parameters the value doesn't declare

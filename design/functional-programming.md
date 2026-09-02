@@ -151,5 +151,5 @@ language the analog of the higher-order story this doc covers — a module
 parameterized by another module, applied generatively to produce fresh
 abstract types. See [typing/](typing/README.md) for the full
 plan; container type parameterization (`:(LIST OF Number)`,
-`:(FN (args) -> R)`, etc.) is shipped today and is documented in
+`:(FN :{args…} -> R)`, etc.) is shipped today and is documented in
 [typing/ktype/README.md](typing/ktype/README.md).

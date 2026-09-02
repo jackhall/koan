@@ -1,6 +1,7 @@
 //! Shared deferral for typed field lists whose elaboration parked on a forward type or
-//! scheduled sub-Dispatches for sigil field types — FN parameter lists, the
-//! NEWTYPE record repr, the UNION schema, and the standalone record-type sigil.
+//! scheduled sub-Dispatches for sigil field types — the NEWTYPE record repr, the UNION schema,
+//! and the standalone record-type sigil (which is also how an `:(FN :{…} -> …)` parameter list
+//! and an anonymous FN's record schema elaborate).
 //!
 //! [`FieldListDeferral`] bundles the forward-ref producers, the sigil sub-Dispatches, and the
 //! elaborator state a re-walk needs. Its finish methods declare a dep-finish that waits on
@@ -9,10 +10,10 @@
 //! that walker's `results` channel in DFS order. Two composition surfaces consume the resulting
 //! `(name, KType)` pairs:
 //!
-//! - [`FieldListDeferral::outcome`] (the record-type sigil) and [`FieldListDeferral::action_composed`]
-//!   (the FN carrier) compose through a caller-supplied closure, which assembles one owned `KType`
-//!   and allocates it into the consumer's own region — folded in generically, so `outcome`'s finish
-//!   crosses the park as one `Copy` closure on the bumped tier;
+//! - [`FieldListDeferral::outcome`] (the record-type sigil) composes through a caller-supplied
+//!   closure, which assembles one owned `KType` and allocates it into the consumer's own region —
+//!   folded in generically, so the finish crosses the park as one `Copy` closure on the bumped
+//!   tier;
 //! - [`FieldListDeferral::action`] (the UNION schema and the NEWTYPE record repr) hands the pairs to a
 //!   caller-supplied [`FieldListFinalizeAction`], which seals them through the declaration window into
 //!   interned member handles and crosses the nominal identity through

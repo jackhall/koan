@@ -29,7 +29,7 @@ A **signature** (declared with `SIG`) is a module type — an interface
 specifying what a structure must contain:
 
 ```
-SIG Ordered = ((TYPE Carrier) (VAL compare :(FN (x :Carrier, y :Carrier) -> Number)))
+SIG Ordered = ((TYPE Carrier) (VAL compare :(FN :{x :Carrier, y :Carrier} -> Number)))
 ```
 
 A module is a value, so a module name is an **Identifier** token: snake_case,

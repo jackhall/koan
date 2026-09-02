@@ -6,7 +6,7 @@ specificity, and the runtime carriers for type parameters. Part of the
 
 ## Container type parameterization
 
-`:(LIST OF T)`, `:(MAP K -> V)`, and `:(FN (args) -> ret)` carry their inner
+`:(LIST OF T)`, `:(MAP K -> V)`, and `:(FN :{args…} -> ret)` carry their inner
 types on the variant directly. `KType` is not `Copy`; structural payloads are
 `Box`ed where the variant would otherwise be self-referential.
 
@@ -54,18 +54,18 @@ Three sites consume parameterized types, and each has its own behavior:
 | Site | What it does | Variance |
 | --- | --- | --- |
 | `matches_value` | Walks a runtime value against a declared type at an ascription boundary (FN return, FN argument, `LET`). | **Covariant** for `List` / `Dict`: `:(LIST OF Any)` accepts any list because `Any.matches_value(_)` is always true; `:(MAP Str -> Any)` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
-| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier`, `NameToken`, `TypeNameToken` and `OfKind(Proper)`, so a concrete-typed `ATTR` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant** for `List` / `Dict` (element, key, value): `:(LIST OF Number)` ≺ `:(LIST OF Any)`, `:(MAP Str -> Number)` ≺ `:(MAP Str -> Any)`. **Contravariant params (with width-subset) + covariant return** for `Function`, matching `function_compat`: `:(FN (x :Any) -> Str)` ≺ `:(FN (x :Number) -> Str)` (more-general param wins), `:(FN (x) -> Number)` ≺ `:(FN (x) -> Any)` (narrower return wins), and a nullary `:(FN () -> R)` ≺ a unary `:(FN (x) -> R)` (narrower width wins). |
-| `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Function subtyping** — contravariant params (width + depth) + covariant return. A value `(x :Any) -> Str` fills a slot typed `:(FN (x :Number) -> Str)`; a value `(x :Number) -> Number` fills `:(FN (x :Number) -> Any)`; a unary value fills a binary slot (the extra slot param arrives unbound under call-by-name). A value requiring a param the slot doesn't promise is a non-match. |
+| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier`, `NameToken`, `TypeNameToken` and `OfKind(Proper)`, so a concrete-typed `ATTR` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant** for `List` / `Dict` (element, key, value): `:(LIST OF Number)` ≺ `:(LIST OF Any)`, `:(MAP Str -> Number)` ≺ `:(MAP Str -> Any)`. **Contravariant params (with width-subset) + covariant return** for `Function`, matching `function_compat`: `:(FN :{x :Any} -> Str)` ≺ `:(FN :{x :Number} -> Str)` (more-general param wins), `:(FN :{x} -> Number)` ≺ `:(FN :{x} -> Any)` (narrower return wins), and a nullary `:(FN :{} -> R)` ≺ a unary `:(FN :{x} -> R)` (narrower width wins). |
+| `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Function subtyping** — contravariant params (width + depth) + covariant return. A value `(x :Any) -> Str` fills a slot typed `:(FN :{x :Number} -> Str)`; a value `(x :Number) -> Number` fills `:(FN :{x :Number} -> Any)`; a unary value fills a binary slot (the extra slot param arrives unbound under call-by-name). A value requiring a param the slot doesn't promise is a non-match. |
 
 Admission (`function_compat`) and specificity (`is_more_specific_than`) share
 **one** relation for function slots — contravariant params with width-subset,
 covariant return — so most-specific-wins is consistent: the same value can now
 fill several function slots at once (e.g. an `(x :Any) -> R` value fills both
-`:(FN (x :Number) -> R)` and `:(FN (x :Any) -> R)`), and the ranking orders
+`:(FN :{x :Number} -> R)` and `:(FN :{x :Any} -> R)`), and the ranking orders
 those slots the same way admission does. Where one admitting slot is strictly
 more specific than the others it wins outright; where two admitting slots are
 genuinely incomparable — an `(x :Any) -> R` value against both
-`:(FN (x :Number) -> R)` and `:(FN (x :Str) -> R)`, neither more specific —
+`:(FN :{x :Number} -> R)` and `:(FN :{x :Str} -> R)`, neither more specific —
 dispatch ties and surfaces `AmbiguousDispatch`. The `List` / `Dict` covariance
 is observable the same way: `(xs :(LIST OF Number))` strictly outranks
 `(xs :(LIST OF Any))` for a number-list call.
@@ -121,7 +121,7 @@ BAD   # → TypeMismatch: expected :(LIST OF Number), got :(LIST OF Any)
 ```
 
 ```
-FN (USE f :(FN (x :Number) -> Str)) -> Str = ("got fn")
+FN (USE f :(FN :{x :Number} -> Str)) -> Str = ("got fn")
 
 USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (function_compat: equal by name+type)
 USE (FN (SHOW x :Any)    -> Str = ("hi"))   # → "got fn"   (contravariant param: a value
@@ -129,7 +129,7 @@ USE (FN (SHOW x :Any)    -> Str = ("hi"))   # → "got fn"   (contravariant para
 ```
 
 ```
-FN (USE f :(FN (x :Number, y :Str) -> Str)) -> Str = ("got fn")
+FN (USE f :(FN :{x :Number, y :Str} -> Str)) -> Str = ("got fn")
 
 USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (width drop: a unary value fills a
                                             #   binary slot; the extra slot param `y` arrives
@@ -254,7 +254,7 @@ elaboration sits in the pipeline.)
 
 `KFunction` is not a surface-declarable type name — there's no "any function"
 KType, since a function with no signature has nothing to dispatch on. Use
-`:(FN (args) -> R)` for typed shapes or `Any` for unconstrained values.
+`:(FN :{args…} -> R)` for typed shapes or `Any` for unconstrained values.
 FN's own registered return type is `KType::Any` for the same reason: the
 constructed function's projected `ktype()` carries its real shape at runtime.
 

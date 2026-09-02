@@ -82,7 +82,7 @@ lifetime-free, which is what lets the sealed
 A rendered call frame names the call two ways: `function` carries the call site's own
 source text — `BOOM 1` for a keyword call, `f {x = 7}` for a bound-value one — and
 `expression` carries the callable's by-name identity, its `value_ktype` rendered through
-`KType::name` as `:(FN (x :Number) -> Str)`, with the frame's location resolved from the
+`KType::name` as `:(FN :{x :Number} -> Str)`, with the frame's location resolved from the
 same span. A contract sealed from an expression with no source extent falls back to the
 by-name render alone. The by-name identity is the right render for a function *value*,
 which the anonymous `FN` form makes reachable only through the name a `LET` binds — that

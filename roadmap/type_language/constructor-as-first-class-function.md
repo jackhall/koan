@@ -14,7 +14,7 @@ the function it applies.
 
 **Acceptance criteria.**
 
-- A type reference reaches a `KObject::KFunction` typed `:(FN (fields…) -> <Type>)` whose body
+- A type reference reaches a `KObject::KFunction` typed `:(FN :{fields…} -> <Type>)` whose body
   constructs the type — its parameter record is the repr's field record for a record-repr
   newtype, or a single positional slot for a scalar newtype.
 - That constructor function binds wherever a function value does — a higher-order argument, an

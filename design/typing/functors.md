@@ -80,7 +80,7 @@ with width-drop, covariant return (see
 
 A module-returning function is therefore admissible wherever a same-shape `:(FN …)` slot
 matches, and joins with plain functions: there is no type-level partition between "returns a
-module" and "returns anything else". The only function-type surface is `:(FN (params) -> R)`.
+module" and "returns anything else". The only function-type surface is `:(FN :{params…} -> R)`.
 
 ## Generativity
 
@@ -240,10 +240,10 @@ where implicit search dispatches on parameter types.
 
 Multi-argument functors are ordinary multi-parameter FNs. Currying is
 just nested FNs whose outer return type is the inner function's type,
-written with the `:(FN (params) -> R)` sigil:
+written with the `:(FN :{params…} -> R)` sigil:
 
 ```
-LET make_map = FN (MAKEMAP er :Ordered) -> :(FN (vo :Monoid) -> :(Map WITH {Key = er.Carrier})) = (
+LET make_map = FN (MAKEMAP er :Ordered) -> :(FN :{vo :Monoid} -> :(Map WITH {Key = er.Carrier})) = (
   FN (MAKEVALS vo :Monoid) -> :(Map WITH {Key = er.Carrier}) = (
     MODULE result = ( ... )
   )
@@ -262,8 +262,8 @@ a type parameter — so parametric abstractions like the `Monad` signature in
 ```
 SIG Monad = (
   (TYPE (Type AS Wrap))
-  (VAL pure :(FN (x :Number) -> :(Number AS Wrap)))
-  (VAL bind :(FN (m :(Number AS Wrap), f :(FN (x :Number) -> :(Number AS Wrap))) -> :(Number AS Wrap)))
+  (VAL pure :(FN :{x :Number} -> :(Number AS Wrap)))
+  (VAL bind :(FN :{m :(Number AS Wrap), f :(FN :{x :Number} -> :(Number AS Wrap))} -> :(Number AS Wrap)))
 )
 ```
 
@@ -356,7 +356,7 @@ against a root-scope-bound constructor is the path the test suite pins.
 ## Type expressions and constraints
 
 The `:(...)` type-expression sigil parameterizes `:(LIST OF T)`, `:(MAP K -> V)`,
-and `:(FN (args) -> R)`
+and `:(FN :{args…} -> R)`
 ([ktype/parameterization-and-variance.md § Container type parameterization](ktype/parameterization-and-variance.md#container-type-parameterization))
 for positional structural types. Sharing constraints,
 modular-implicit signature constraints, and witness-typed

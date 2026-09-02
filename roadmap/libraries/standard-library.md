@@ -73,7 +73,7 @@ for value slots. An `ORDERED` signature reads
 ```
 SIG Ordered = (
   (TYPE Carrier)
-  (VAL compare :(FN (Carrier, Carrier) -> Number))
+  (VAL compare :(FN :{x :Carrier, y :Carrier} -> Number))
 )
 ```
 
@@ -84,7 +84,7 @@ SIG Set = (
   (TYPE Carrier)
   (TYPE Elt)
   (VAL empty :Carrier)
-  (VAL insert :(FN (Carrier, Elt) -> Carrier))
+  (VAL insert :(FN :{s :Carrier, e :Elt} -> Carrier))
 )
 ```
 

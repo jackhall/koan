@@ -77,7 +77,7 @@ the link in each section to the relevant chapter.
 | `Any`                         | Accepts any value (opts a slot out of checking).   |
 | `:(LIST OF <Type>)`           | List type.                                         |
 | `:(MAP <Key> -> <Value>)`     | Map / dictionary type.                             |
-| `:(FN (<params>) -> <Result>)`| Function type.                                     |
+| `:(FN :{<params>} -> <Result>)`| Function type — the parameter list is a record type (`:{}` when nullary). |
 | `TYPE (Type AS Wrap)`         | A higher-kinded type member, inside a `SIG`.       |
 | `NEWTYPE (Key Val AS Pair)`   | A type constructor with one or more parameters.    |
 | `:(Pair {Key = Number, Val = Str})` | Apply a type constructor, binding each parameter by name. |

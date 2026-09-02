@@ -58,8 +58,8 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)
-- [Record-typed parameter list in the FN type constructor](type_language/fn-type-record-parameter-list.md)
 - [Module element-type join](type_language/module-element-type-join.md)
+- [Uniform forward type references in sigiled type expressions](type_language/uniform-forward-type-references.md)
 - [Union-typed carrier slots for builtin signatures](type_language/union-carrier-slots.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
 

@@ -140,7 +140,7 @@ The type names you can write in source are:
 | `Null`                        | the null value                      | `null`                         |
 | `:(LIST OF <element>)`        | ordered list                        | `[1, 2, 3]`                    |
 | `:(MAP <key> -> <value>)`     | map / dictionary                    | `{"a": 1}`                     |
-| `:(FN (<params>) -> <result>)`| function value                      | see [Functions](04-functions.md) |
+| `:(FN :{<params>} -> <result>)`| function value                     | see [Functions](04-functions.md) |
 | `Any`                         | wildcard — accepts any value        | used only in annotations       |
 
 You'll also occasionally see `Type`, `Module`, `Signature`, and `KExpression`
@@ -165,8 +165,12 @@ For a parameterized type, the sigil opens a parenthesized group:
 ```koan
 xs :(LIST OF Number)
 ys :(MAP Str -> Number)
-f  :(FN (n :Number) -> Str)
+f  :(FN :{n :Number} -> Str)
 ```
+
+A function type's parameter list is a [record type](07-records.md) — the same
+`:{name :Type}` form you write anywhere else — so a no-argument function type is
+`:(FN :{} -> Str)`.
 
 The spacing matters: write `x :Number` (space before the colon, glued after) or
 `x:Number`, but **not** `x: Number` with a space after the colon — that is a

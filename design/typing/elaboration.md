@@ -442,3 +442,10 @@ forward reference). A type-denoting FN parameter binds its already-resolved type
 argument directly via `register_type` in
 [`run_user_fn`](../../src/machine/core/kfunction/exec.rs), so the per-call
 type-side bind needs no scope re-resolution and cannot park.
+
+## Open work
+
+- [Uniform forward type references in sigiled type expressions](../../roadmap/type_language/uniform-forward-type-references.md)
+  — the strict-source-order rule above is enforced by every type-expression
+  surface, but each renders the refusal differently and none of them says the
+  name is declared too late.

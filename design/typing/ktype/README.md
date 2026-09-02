@@ -20,8 +20,9 @@ concrete `KObject` has a `TypeNode` variant:
   function's source return is
   per-call-elaborated, its `ret` handle names a `DeferredReturn(DeferredReturnSurface)`
   node — see [Record fields and `KType` hashing](records-and-limits.md#record-fields-and-ktype-hashing).
-- Structural record: `Record { fields: Record<KType> }` — an identifier-keyed field schema
-  (`:{x :Number, y :Str}`), distinct from a nominal `NewType`-kind `SetMember`
+- Structural record: `Record { fields: Record<KType> }` — a `BinderSymbol`-keyed field schema
+  (`:{x :Number, y :Str}`; a field name may also be a capitalized `Type` token, `:{Ty :Signature}`),
+  distinct from a nominal `NewType`-kind `SetMember`
   (a structural record is anonymous; a record-repr newtype is nominal). A record *value* (`KObject::Record`,
   surface `{x = 1, y = "a"}`) memoizes its per-field type record as its carried type.
   Width/depth subtyping orders record *values* in the dispatch lattice — see
