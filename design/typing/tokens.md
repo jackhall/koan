@@ -58,6 +58,32 @@ falling through to identifier — the rule keeps the type-position slot
 syntactically discriminable and prevents a future binding from silently
 shadowing a one-letter type-position identifier.
 
+## A value token names a type only under the sigil
+
+The partition reaches *reads*, not just bindings: **a value token never names a type in an
+unsigiled expression, and `:(…)` is the one door that admits it.** Without that rule a bare,
+value-context expression whose tail is a value token could evaluate to a type, which is exactly
+the crossing the classified symbol newtypes exist to make unrepresentable.
+
+The surface where the two could meet is ATTR's type-lhs member projection
+([attr.rs](../../src/builtins/attr.rs)`::access_type_member`). A **Type**-class field is a type
+name already and projects either way — `Maybe.Some`, `Ordered.Carrier` and `:(Maybe.Some)` all
+name the member. A **value**-class field is the split:
+
+- `:(Ordered.compare)` names the `VAL` slot's declared type; bare `Ordered.compare` names no
+  member at all.
+- `:(Point.x)` names the field type of a record-repr newtype
+  ([user-types.md § `NEWTYPE` and the `Wrapped` carrier](user-types.md#newtype-and-the-wrapped-carrier));
+  bare `Point.x` names no member.
+
+The bare spelling is an ordinary value-context read landing on the ordinary no-member error, with
+no new refusal class. Where the schema *does* carry the field, the miss appends the sigiled
+spelling as a hint; where it does not, the message is the unhinted one every other miss reports.
+
+The value channel is untouched by the rule. An lhs that bottoms out at an `Identifier` is a
+runtime value wherever it is written, so a module member read (`int_ord.compare`) or a record
+field read (`p.x`) answers the same bare and inside a sigil — it neither requires nor rejects one.
+
 ## A binder position is a name
 
 A **binder position** — the `name` of `LET` / `NEWTYPE` / `UNION` / `SIG` / `TYPE` /

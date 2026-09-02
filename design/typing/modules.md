@@ -289,8 +289,12 @@ that collides with a builtin: `int_ord.Type` reads module-own too, and since `Ty
 is an unshadowable builtin meta-type no module can declare that member, so it is a
 missing member, never the builtin. Signature member access
 (`access_type_member` over `KType::Signature`) answers from the signature type's own owned
-schema — a manifest or abstract type member first, then a declared `VAL` slot's type — with no
-decl-scope lookup, so a signature projects exactly the interface its content names.
+schema — a manifest or abstract type member first, then, **under the type sigil only**, a
+declared `VAL` slot's type — with no decl-scope lookup, so a signature projects exactly the
+interface its content names. `Ordered.Carrier` names the abstract member bare, while the
+value-slot read needs `:(Ordered.compare)`: `compare` is a value token, and a value token names
+a type only where the surface says so (see
+[tokens.md § A value token names a type only under the sigil](tokens.md#a-value-token-names-a-type-only-under-the-sigil)).
 
 `MODULE` binds **value-side**: it takes an `Identifier` name part, installs a
 `BindKind::Value` placeholder, and finalize allocates the Object-arm module value and

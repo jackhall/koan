@@ -85,6 +85,44 @@ error: shape error: `Boxed` has no field `z`
 Wrapping a newtype in another newtype collapses to a single layer — however many
 times you wrap a value, the representation sits exactly one wrapper deep.
 
+## Naming a field's type
+
+`b.x` reads a field off a *value*. You can also ask a record-repr newtype for the
+*type* it declared a field with, by writing the projection under the type sigil
+`:(…)`. That is useful when you want a slot to track a declaration instead of
+restating it:
+
+```koan
+NEWTYPE Point = :{x :Number, y :Str}
+FN (LABEL v :(Point.y)) -> Str = (v)
+PRINT (LABEL "north")
+```
+
+```text
+north
+```
+
+`:(Point.y)` is the field's declared `Str`, so the slot admits exactly what a slot
+spelled `:Str` admits. Change the declaration and the slot follows. The read chains
+where a field is itself record-shaped — `:(Outer.inner.x)` — and works through an
+alias of the type name.
+
+The sigil is not optional here. `x` and `y` are lowercase names, and a lowercase
+name never means a type in an ordinary expression, so the bare spelling is a
+missing member:
+
+```koan
+NEWTYPE Point = :{x :Number, y :Str}
+Point.y
+```
+
+```text
+error: shape error: type `Point` has no member `y` — write `:(Point.y)` to name the field's declared type
+```
+
+Uppercase members need no sigil, because an uppercase name already means a type:
+`Maybe.Some` names a union variant bare, and `:(Maybe.Some)` names the same thing.
+
 ## Mutually recursive types
 
 A type may refer to itself directly — a union whose variant payload is the union

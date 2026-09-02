@@ -144,7 +144,10 @@ union-typed sibling that admits the same value.
 **The variant-reference surface is member projection through the owning union** —
 `Maybe.Some` in expression position, `:(Maybe.Some)` under the type sigil — the same
 ATTR type-member projection a signature member uses
-([attr.rs](../../src/builtins/attr.rs)). A tag is a schema member of its union the
+([attr.rs](../../src/builtins/attr.rs)). The two spellings are the same *shape*, not just the
+same meaning: a tag is Type-class, so the parser already wraps the projection in a
+`SigiledTypeExpr`, and an explicit sigil collapses onto that node instead of layering a second
+one. A tag is a schema member of its union the
 way a field is a schema member of its record, never a bare scope name: `:Some`
 resolves nowhere, so two binders may own the same tag. The projection yields the
 member handle as a type value, and ordinary application of it constructs —
@@ -423,6 +426,23 @@ and writes only `bindings.types` — the same type-only shape NEWTYPE / UNION
 (`NEWTYPE Point = :{x :Number, y :Number}`) is a `NodeSchema::NewType` over a
 `Record` node — the product-side nominal form; `.x` reads the field through ATTR's
 `Wrapped` fall-through over the record repr.
+
+**A record repr also answers a field's *type*, under the type sigil.** `:(Point.x)` off the
+`Point` type — as opposed to off a `Point` value — projects the field's declared type as a type
+value, the product-side peer of a signature's `VAL`-slot read
+([attr.rs](../../src/builtins/attr.rs)`::access_type_member`, which carries the repr handle out
+of the lhs node's registry borrow and reads the `Record` node in a second one). The projected
+handle *is* the declared type, so a slot spelled `:(Point.x)` admits exactly what a slot spelled
+with that type admits, and the read chains where the field is itself record-shaped
+(`:(Point.inner.x)`). A `LET`-bound alias of the nominal resolves to the same handle and projects
+identically.
+
+The sigil is required because `x` is a value token
+([tokens.md § A value token names a type only under the sigil](tokens.md#a-value-token-names-a-type-only-under-the-sigil)):
+bare `Point.x` off the type names no member, and the miss appends the sigiled spelling as a hint
+when the schema does carry the field. Under the sigil an unknown field lists the record's fields
+the way a union member miss lists its variants, and a scalar repr (`NEWTYPE Meters = Number`) has
+no fields to name and takes the memberless-type error in either context.
 
 The [`NEWTYPE`](../../src/builtins/newtype_def.rs) declarator carries three overloads
 selected by the repr part-kind:

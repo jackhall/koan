@@ -501,8 +501,9 @@ fn lhs_spelling(spelling: Option<TypeSymbol>, kt: KType, registries: &RunRegistr
 }
 
 /// Append the sigiled spelling to a value-context miss the sigil *would* have answered — the one
-/// refinement the context split adds to the diagnostics. A miss the sigil would not rescue reports
-/// its message unchanged, so `Number.foo` and `Maybe.some` read exactly as they always have.
+/// refinement the context split adds to the diagnostics. A miss the sigil would not rescue carries
+/// no hint: `Number.foo` names a memberless type and `Maybe.some` names no variant, and neither
+/// has a spelling that would answer.
 fn sigil_hinted(
     error: KError,
     would_hit_under_sigil: bool,

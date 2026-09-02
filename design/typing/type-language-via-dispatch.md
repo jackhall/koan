@@ -36,6 +36,16 @@ in the classifier and elsewhere is exhaustive-match-checked by the
 compiler — a missed handler is a build error, not a silent fall-through
 to the value-side path.
 
+**One shape, whether the sigil was written or synthesized.** A sigil whose body is a lone
+sub-expression re-labels that node onto the wrapper instead of building a fresh layer
+([`BracketFrame::into_part`](../../src/parse/frame.rs)), so `:(Point.x)` lands on exactly the
+one-node shape `build_attr` already emits for a Type-class tail (`Maybe.Some`), and `:(…)` is
+idempotent. A lone non-expression part (`:(Number)`) and a multi-part body (`:(LIST OF Number)`)
+are untouched. This is normalization, not recognition — the parser still reads no meaning out of
+the payload's shape, and it is why the pre-seal window path
+([typed_field_list.rs](../../src/machine/model/types/typed_field_list.rs)) sees `Tree.Leaf` and
+`:(Tree.Leaf)` as the same body.
+
 ## Fully-uppercase head keywords
 
 `LIST`, `MAP`, `FN` keep parameterized-type construction in
@@ -131,7 +141,10 @@ through an exact pre-pass ranked above every typed arm — and the winner runs (
 A single `UNION` variant is named through its union by member projection —
 `Maybe.Some` in expression position, `:(Maybe.Some)` under the type sigil — the
 same ATTR type-member projection a signature member uses
-([attr.rs](../../src/builtins/attr.rs)). The projection yields the variant's member
+([attr.rs](../../src/builtins/attr.rs)). A variant tag is Type-class, so the two spellings are
+one shape as well as one meaning: `build_attr` wraps a Type-class tail in `SigiledTypeExpr`
+already, and the explicit sigil collapses onto that same node rather than adding a layer.
+The projection yields the variant's member
 handle, and applying the projected member constructs (`Maybe.Some 42`). An unknown
 member name at either surface is a schema error listing the union's members. There
 is no global `:Some` name; the variant is reachable only through its union, so two
@@ -246,6 +259,24 @@ inner expression's parts decide its shape:
   a compound argument (`{Elem = (LIST OF Number)}`) parks like any other type
   expression, and the supplied key set must equal the parameter set. See
   [functors.md § Higher-kinded type slots](functors.md#higher-kinded-type-slots).
+
+**The sigil leaves one fact behind: a stamp.** `sigiled_type_expr` re-dispatches its body
+carrying [`WorkingExpression::under_type_sigil`](../../src/machine/model/ast/working.rs), a
+non-structural bit a builtin body reads off its `BodyCtx`. This is the only thing the sigil
+contributes past the marker — a body that answers the same in either universe never reads it, and
+today the one reader is ATTR's type-lhs projection, which needs it to tell `:(Ordered.compare)`
+from `Ordered.compare` (see
+[tokens.md § A value token names a type only under the sigil](tokens.md#a-value-token-names-a-type-only-under-the-sigil)).
+The stamp is a fact about the node rather than about its slots, so it rides a resplice: a park
+anywhere under the sigil wakes still in the type universe.
+
+The stamp marks *one* node, so nesting is handled by re-labelling rather than by pushing the bit
+down a subtree. As the handler dispatches its body it re-labels each qualifying value-context part
+— an `ATTR` whose lhs is a `Type` leaf, an already-sigiled projection, or a nested qualifying
+`ATTR` — into the `SigiledTypeExpr` part `build_attr` emits for a Type-class tail, so the nested
+node re-enters this handler and stamps itself. `:(Point.inner.x)` and `:(m.Wrapper.inner.x)`
+resolve every level that way. An lhs bottoming out at an `Identifier` never qualifies, so a module
+or record *value* read inside a sigil stays on the value channel.
 
 A single-part `:(...)` sigil wrapping the whole construction is the
 `SigiledTypeExpr` lane that tail-replaces with a `Dispatch` of the inner
