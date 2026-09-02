@@ -190,6 +190,16 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
+                // A lone sub-expression is re-labelled rather than re-wrapped: `:(Point.x)` yields
+                // the same one-node `SigiledTypeExpr` `build_attr` emits for a Type-class tail
+                // (`Maybe.Some`), and `:(:(…))` is idempotent. Normalization only — the parser
+                // still reads no meaning out of the payload's shape.
+                if let [only] = parts.as_slice()
+                    && let ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) =
+                        only.value
+                {
+                    return Ok(Spanned::at(ExpressionPart::SigiledTypeExpr(node), span));
+                }
                 let expr = brand.build_expression_from_iter(parts, Some(span), file);
                 Ok(Spanned::at(
                     ExpressionPart::SigiledTypeExpr(brand.alloc_node(expr)),

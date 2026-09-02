@@ -352,21 +352,14 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
 
 /// The `(head, tag)` pair a sigil body spells as a member projection — `:(Tree.Leaf)` — or [`None`]
 /// for any other body. The `.` operator lowers to the `ATTR` compound and, because both operands
-/// are `Type`-classed, wraps it in a `SigiledTypeExpr`; a sigil around that single atom is the one
-/// shape the window path recognizes, so the projection surface reads identically pre-seal and post.
+/// are `Type`-classed, wraps it in a `SigiledTypeExpr`; an explicit sigil around that single atom
+/// collapses onto the same one node ([`BracketFrame::into_part`](crate::parse::frame)), so `Tree.Leaf`
+/// and `:(Tree.Leaf)` reach this read as the same body and the projection surface is identical
+/// pre-seal and post.
 fn window_member_projection<'a, 'p>(
     boxed: &'p KExpression<'a>,
 ) -> Option<(&'p TypeSymbol, &'p TypeSymbol)> {
-    let attr = match boxed.parts {
-        [
-            Spanned {
-                value: ExpressionPart::SigiledTypeExpr(inner),
-                ..
-            },
-        ] => inner,
-        _ => return None,
-    };
-    match attr.parts {
+    match boxed.parts {
         [
             Spanned {
                 value: ExpressionPart::Keyword(kw),

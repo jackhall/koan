@@ -4,6 +4,11 @@
 //! The parser does no shape-folding inside `:(...)`: every sigil emits
 //! `ExpressionPart::SigiledTypeExpr(inner)` whose inner mirrors the parens contents.
 //! Shape recognition is the dispatcher's job — these tests assert only parser output.
+//!
+//! One normalization, not a recognition: a sigil whose body is a lone sub-expression re-labels
+//! that node instead of wrapping it, so `:(...)` is idempotent and `:(Point.x)` lands on the very
+//! shape `build_attr` emits for a Type-class tail. The body is still copied through verbatim; only
+//! the redundant layer is dropped.
 
 use super::tree;
 
@@ -250,5 +255,56 @@ fn type_sigil_function_return_parenthesized() {
     assert_eq!(
         tree("LET f :(Function (Number) -> (List Str))").unwrap(),
         "[t(LET) t(f) :(T(Function) [T(Number)] t(->) [T(List) T(Str)])]",
+    );
+}
+
+// --- Sigil-shape normalization: a lone sub-expression is re-labelled, not re-wrapped ---
+
+#[test]
+fn sigil_over_a_value_context_attr_collapses_onto_the_attr_node() {
+    // `Point.x` has an Identifier tail, so `build_attr` leaves it a value-context
+    // `Expression`; the sigil re-labels that one node instead of adding a layer.
+    assert_eq!(tree("Point.x").unwrap(), "[[t(ATTR) T(Point) t(x)]]");
+    assert_eq!(tree(":(Point.x)").unwrap(), "[:(t(ATTR) T(Point) t(x))]");
+}
+
+#[test]
+fn sigil_over_a_type_context_attr_is_the_shape_build_attr_already_emits() {
+    assert_eq!(tree("Maybe.Some").unwrap(), "[:(t(ATTR) T(Maybe) T(Some))]");
+    assert_eq!(
+        tree(":(Maybe.Some)").unwrap(),
+        tree("Maybe.Some").unwrap(),
+        "the explicit sigil and `build_attr`'s Type-class-tail wrap are one shape",
+    );
+}
+
+#[test]
+fn the_sigil_is_idempotent() {
+    assert_eq!(
+        tree(":(:(:(Point.x)))").unwrap(),
+        tree(":(Point.x)").unwrap()
+    );
+    assert_eq!(
+        tree("LET x :(:((Number)))").unwrap(),
+        "[t(LET) t(x) :(T(Number))]"
+    );
+}
+
+#[test]
+fn a_lone_non_expression_part_is_still_wrapped() {
+    // `:(Number)` is a lone `Type` part, not a sub-expression — no collapse applies.
+    assert_eq!(tree(":(Number)").unwrap(), "[:(T(Number))]");
+    assert_eq!(tree(":()").unwrap(), "[:()]");
+}
+
+#[test]
+fn a_multi_part_sigil_body_is_untouched() {
+    assert_eq!(
+        tree(":(LIST OF Number)").unwrap(),
+        "[:(t(LIST) t(OF) T(Number))]"
+    );
+    assert_eq!(
+        tree(":(Maybe.Some 42)").unwrap(),
+        "[:(:(t(ATTR) T(Maybe) T(Some)) n(42))]"
     );
 }
