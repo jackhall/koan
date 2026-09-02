@@ -483,3 +483,41 @@ fn combined_unary_without_a_result_type_names_the_flat_spelling() {
         "expected the combined missing-result diagnostic, got {error}",
     );
 }
+
+/// The operand and result slots are one carrier union apiece, so the operand × result matrix is
+/// one registration per surface. Every member still reaches the body raw: a bare `Type` token that
+/// only a scope walk resolves (a `LET` alias), a `:(…)`, and a `:{…}` all declare.
+#[test]
+fn a_union_carrier_slot_admits_every_operand_and_result_spelling() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "LET MyNum = Number\n\
+         MODULE ops = (\
+           (UNARY OP #(!) OVER MyNum -> Number = (7))\
+           (UNARY OP #(~) OVER Number -> :{v :Number} = ({v = 1}))\
+           (UNARY OP #(^) OVER :(LIST OF Number) -> Number = (9))\
+           (LET aliased = (! [3 4]))\
+           (LET tagged = (~ [1 2])))",
+    );
+    assert!(
+        binds_module(scope, "ops"),
+        "all three declarations register"
+    );
+    assert!(
+        matches!(
+            test_run.run_one(test_run.parse_one("ops.aliased")),
+            KObject::Number(n) if *n == 7.0,
+        ),
+        "a `LET` alias operand resolves through the body's own scope walk",
+    );
+    assert!(
+        matches!(
+            test_run.run_one(test_run.parse_one("ops.tagged")),
+            KObject::Record(..)
+        ),
+        "a `:{{…}}` result type elaborates and the call lands a record",
+    );
+}

@@ -451,3 +451,90 @@ fn fn_return_type_parks_on_an_in_flight_binder_and_resolves_at_wake() {
         "the woken elaboration lands the same handle the NEWTYPE sealed",
     );
 }
+
+/// The return slot is one union carrier, so a bare `Type` token reaching it is a raw capture the
+/// body resolves — including a `LET` alias of a builtin leaf, which no builtin-table lowering would
+/// have found.
+#[test]
+fn fn_return_type_resolves_a_let_alias_of_a_builtin_leaf() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run
+        .run("LET MyNum = Number\nFN (DOUBLE x :Number) -> MyNum = (x * 2)\nLET out = (DOUBLE 3)");
+
+    let f = lookup_fn(scope, "DOUBLE");
+    let ReturnType::Resolved(kt) = f.signature.return_type() else {
+        panic!("an aliased return type resolves at definition time");
+    };
+    assert_eq!(kt, KType::NUMBER, "the alias lands the leaf it names");
+    assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 6.0));
+}
+
+/// A `:{…}` return rides the union's `RecordType` member — captured raw, re-wrapped as the
+/// single-part node that folds to its record type, and still enforced against the body's result.
+#[test]
+fn fn_record_return_type_is_captured_and_enforced() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run("FN (WRAPIT x :Number) -> :{v :Number} = ({v = x})\nLET out = (WRAPIT 3)");
+    assert!(
+        matches!(scope.lookup("out"), Some(KObject::Record(..))),
+        "the record return elaborates and the call lands a record",
+    );
+
+    let mut second = TestRun::silent(&program, &region);
+    let scope = second.scope;
+    second.run("FN (UNWRAPIT x :Number) -> :{v :Number} = (x)");
+    let id = second.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            second.parse_one("UNWRAPIT 3"),
+        ),
+        scope,
+    );
+    let edge = second.runtime.install_edge_for_test(id, scope);
+    second
+        .runtime
+        .execute()
+        .expect("execute does not surface per-slot errors");
+    assert!(
+        second.runtime.edge_result_error(edge).is_err(),
+        "a Number body must not satisfy a `:{{v :Number}}` return",
+    );
+}
+
+/// The union's `IDENTIFIER` member carries the diagnose-only arm that used to be its own overload:
+/// a lowercase return name is still met with the pointed `TYPE OF` suggestion, not a dispatch miss.
+#[test]
+fn fn_value_named_return_stays_pointed() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    let id = test_run.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            test_run.parse_one("FN (DOUBLE elem :Number) -> elem = (elem)"),
+        ),
+        scope,
+    );
+    let edge = test_run.runtime.install_edge_for_test(id, scope);
+    test_run
+        .runtime
+        .execute()
+        .expect("execute does not surface per-slot errors");
+    let err = match test_run.runtime.edge_result_error(edge) {
+        Err(e) => e,
+        Ok(()) => panic!("a value-named return should error"),
+    };
+    assert!(
+        matches!(&err.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("names a type, but `elem` is a value")
+                && msg.contains("-> :(TYPE OF elem)")),
+        "expected the pointed value-named-return error, got {err}",
+    );
+}

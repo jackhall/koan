@@ -114,3 +114,44 @@ fn anonymous_fn_non_record_signature_is_shape_error() {
         "a non-record `:T` signature should be a shape error, got {error:?}",
     );
 }
+
+/// The `signature` slot stays a pure kind expectation rather than a raw-capture union: an
+/// anonymous FN whose parameter record names a *later*-announced sibling still elaborates, because
+/// the eager consumer sub-dispatch parks until the module body's window seals. The same holds when
+/// the parameter is function-typed over the recursive pair.
+#[test]
+fn an_anonymous_signature_over_a_later_announced_sibling_elaborates() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "MODULE pair = (\n  NEWTYPE Aa = Number\n  \
+         LET plain = (FN :{b :Bb} -> Number = (1))\n  \
+         LET higher = (FN :{g :(FN :{a :Aa} -> Bb)} -> Number = (2))\n  \
+         NEWTYPE Bb = Number\n)",
+    );
+    assert!(
+        crate::builtins::test_support::binds_module(scope, "pair"),
+        "the announced pair seals with both anonymous FNs elaborated",
+    );
+}
+
+/// The keyworded return slot's raw capture carries the same guarantee from the other side: a
+/// return naming a later-announced sibling parks and resolves at seal.
+#[test]
+fn a_keyworded_return_naming_a_later_announced_sibling_elaborates() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "MODULE pair = (\n  NEWTYPE Aa = Number\n  \
+         FN (GETB a :Aa) -> Bb = (1)\n  \
+         NEWTYPE Bb = Number\n)",
+    );
+    assert!(
+        crate::builtins::test_support::binds_module(scope, "pair"),
+        "the announced pair seals with the forward-naming return resolved",
+    );
+}

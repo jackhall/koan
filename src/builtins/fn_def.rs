@@ -52,7 +52,11 @@ pub(crate) fn build_fn_like<'a>(
     }
     let signature_expr =
         crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.signature));
-    let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
+    let return_type_raw = crate::try_action!(extract_return_type_raw(
+        ctx.args,
+        ctx.scope.brand(),
+        ctx.registries
+    ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.body));
     let param_names = signature::collect_param_names_from_signature(&signature_expr, ctx.scratch);
     let mut elaborator = Elaborator::new(ctx.scope).with_chain(ctx.chain.clone());
@@ -162,26 +166,6 @@ pub fn body_let_combined_type_named<'a>(
     )))))
 }
 
-/// `-> <identifier>` — a return slot naming a value. Always errors: the slot names a type, and the
-/// value it most often names is a module-valued parameter, whose type is `:(TYPE OF er)`.
-pub fn body_value_named_return<'a>(
-    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
-) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, require_identifier_name};
-
-    let name = crate::try_action!(require_identifier_name(
-        ctx.args,
-        &SLOTS.return_type,
-        "FN",
-        ctx.registries
-    ));
-    let name = crate::machine::model::render_label(name.symbol(), ctx.registries);
-    Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-        "FN return-type slot names a type, but `{name}` is a value. For the type of a value — a \
-         module-valued parameter, say — write `-> :(TYPE OF {name})`"
-    )))))
-}
-
 /// Anonymous-FN body: `FN :{<record schema>} -> ReturnType = (<body>)`.
 ///
 /// The record-schema sigil `:{…}` resolves to a record-type `KType` before this
@@ -234,7 +218,11 @@ pub fn body_record_schema<'a>(
             schema_kt.display_name(ctx.registries),
         )))));
     };
-    let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
+    let return_type_raw = crate::try_action!(extract_return_type_raw(
+        ctx.args,
+        ctx.scope.brand(),
+        ctx.registries
+    ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "FN", &SLOTS.body));
     let return_type_state = crate::try_action!(classify_return_type(
         return_type_raw,
@@ -281,11 +269,13 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // once its signature is known. The constructed `KObject::KFunction` projects
     // its full signature through `ktype()` at the call site.
     //
-    // Two keyworded overloads cover the return-type carrier — `ProperType` for a bare
-    // `Type(_)` (`-> Number`) and `SigiledTypeExpr` for a `:(…)` / dotted form
-    // (`-> er.Carrier`, `-> :(Set WITH {…})`). A post-dep-finish `Spliced` cell carrying a type
-    // admits only against `ProperType`. A third overload (below) carries the
-    // anonymous `:{…}` record-schema signature.
+    // One keyworded overload covers the whole return-type carrier dimension: the slot is a union
+    // of the raw-capture members the return position admits — a bare `Type` token (`-> Number`,
+    // `-> MyAlias`), a `:(…)` / dotted form (`-> er.Carrier`, `-> :(Set WITH {…})`), a `:{…}`
+    // record (`-> :{v :Number}`), and a bare identifier, which exists only to diagnose. Every
+    // member captures raw, because a return type may name an FN parameter unbound in the defining
+    // scope and must survive verbatim to the dispatch boundary. A second overload (below) carries
+    // the anonymous `:{…}` record-schema signature.
     //
     // The keyworded overloads share a bucket key the spec table lists, so a named `FN` installs a
     // pending-overload *bucket* entry and a forward sibling reference parks on it. FN's spec-table
@@ -300,62 +290,33 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // the signature operand as a parenthesized expression, and a `:{…}` record part is not one, so
     // the extractor returns `None`. An anonymous `FN :{…}` therefore claims no bucket and stays
     // legal in a value position.
-    // `:ProperType`-return keyworded overload (`-> Number` / `-> er`).
-    let typeexpr_sig = || {
+    // The return-carrier union, shared by every FN surface below. Listing `IDENTIFIER` folds in the
+    // value-named diagnostic: without a member for it the shape would fall through every FN
+    // overload and report "no matching function", which says nothing about the actual mistake.
+    let return_union = registries.types.union_of(&[
+        KType::TYPE_NAME_TOKEN,
+        KType::SIGILED_TYPE_EXPR,
+        KType::RECORD_TYPE,
+        KType::IDENTIFIER,
+    ]);
+    let keyworded_sig = || {
         sig(
             KType::ANY,
             vec![
                 kw(registries, "FN"),
                 arg(registries, &SLOTS.signature, KType::KEXPRESSION),
                 kw(registries, "->"),
-                arg(
-                    registries,
-                    &SLOTS.return_type,
-                    KType::of_kind(KKind::ProperType),
-                ),
+                arg(registries, &SLOTS.return_type, return_union),
                 kw(registries, "="),
                 arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
         )
     };
-    // Lazy `:(...)` return carrier — a dotted/sigil return (`-> er.Carrier`, `-> :(LIST OF Elem)`) is a
-    // `SigiledTypeExpr`; the `:SigiledTypeExpr` slot captures it raw (more specific than
-    // `:ProperType`, so it wins) and `extract_return_type_raw` defers a param-referencing one
-    // per-call instead of eager-sub-dispatching it to an unbound parameter.
-    let sigil_sig = || {
-        sig(
-            KType::ANY,
-            vec![
-                kw(registries, "FN"),
-                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
-                kw(registries, "->"),
-                arg(registries, &SLOTS.return_type, KType::SIGILED_TYPE_EXPR),
-                kw(registries, "="),
-                arg(registries, &SLOTS.body, KType::KEXPRESSION),
-            ],
-        )
-    };
-    // Value-named return (`-> er`): a return slot names a *type*, and an Identifier names a value.
-    // The overload exists only to diagnose — without it the shape falls through every FN overload
-    // and reports "no matching function", which says nothing about the actual mistake. It is a
-    // common one: a module-valued parameter is a value token, so the type it denotes is spelled
-    // `:(TYPE OF er)`.
-    let value_named_return_sig = || {
-        sig(
-            KType::ANY,
-            vec![
-                kw(registries, "FN"),
-                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
-                kw(registries, "->"),
-                arg(registries, &SLOTS.return_type, KType::IDENTIFIER),
-                kw(registries, "="),
-                arg(registries, &SLOTS.body, KType::KEXPRESSION),
-            ],
-        )
-    };
-    // Anonymous overload: a `:{…}` record-schema operand is a `RecordType` part, which the two
-    // `KExpression`-signature overloads above reject and only this `ProperType`-signature overload
-    // admits (it sub-dispatches to a resolved record-type `KType`). Selection is unambiguous by operand
+    // Anonymous overload: a `:{…}` record-schema operand is a `RecordType` part, which the
+    // `KExpression`-signature overload above rejects and only this `ProperType`-signature overload
+    // admits. The signature slot stays a pure kind expectation — a `:{…}` sub-dispatches to a
+    // resolved record-type `KType`, and a bare `Type` token naming a record alias auto-wraps to
+    // one — so an alias and a literal reach the same body read. Selection is unambiguous by operand
     // part-kind, so it needs no bucket park-guard.
     let record_sig = || {
         sig(
@@ -368,11 +329,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
                     KType::of_kind(KKind::ProperType),
                 ),
                 kw(registries, "->"),
-                arg(
-                    registries,
-                    &SLOTS.return_type,
-                    KType::of_kind(KKind::ProperType),
-                ),
+                arg(registries, &SLOTS.return_type, return_union),
                 kw(registries, "="),
                 arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
@@ -381,8 +338,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // The combined statement form: `LET <name> = FN <signature> -> <Return> = (<body>)`. One
     // statement, one binder, both install channels — the value name and the signature's dispatch
     // bucket. Full-bucket-key matching keeps `[LET, Slot, =, FN, Slot, ->, Slot, =, Slot]` disjoint
-    // from plain `LET` and bare `FN`, so no overload of either is shadowed. The return-carrier and
-    // value-named-return splits mirror the bare form's, one twin each.
+    // from plain `LET` and bare `FN`, so no overload of either is shadowed. The return slot takes
+    // the same carrier union as the bare form, so both spellings admit the same return shapes.
     let combined_sig = |name: KType, signature: KType, return_type: KType| {
         sig(
             KType::ANY,
@@ -400,29 +357,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         )
     };
     use crate::builtins::register_builtin;
-    register_builtin(scope, typeexpr_sig(), body, registries, gate);
-    register_builtin(scope, sigil_sig(), body, registries, gate);
-    register_builtin(
-        scope,
-        value_named_return_sig(),
-        body_value_named_return,
-        registries,
-        gate,
-    );
+    register_builtin(scope, keyworded_sig(), body, registries, gate);
     register_builtin(scope, record_sig(), body_record_schema, registries, gate);
-    for return_type in [KType::of_kind(KKind::ProperType), KType::SIGILED_TYPE_EXPR] {
-        register_builtin(
-            scope,
-            combined_sig(KType::IDENTIFIER, KType::KEXPRESSION, return_type),
-            body_let_combined,
-            registries,
-            gate,
-        );
-    }
     register_builtin(
         scope,
-        combined_sig(KType::IDENTIFIER, KType::KEXPRESSION, KType::IDENTIFIER),
-        body_value_named_return,
+        combined_sig(KType::IDENTIFIER, KType::KEXPRESSION, return_union),
+        body_let_combined,
         registries,
         gate,
     );
@@ -437,11 +377,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // parenthesized value bind `LET f = (FN :{…} -> <Return> = (…))` stays the spelling.
     register_builtin(
         scope,
-        combined_sig(
-            KType::TYPE_NAME_TOKEN,
-            KType::KEXPRESSION,
-            KType::of_kind(KKind::ProperType),
-        ),
+        combined_sig(KType::TYPE_NAME_TOKEN, KType::KEXPRESSION, return_union),
         body_let_combined_type_named,
         registries,
         gate,

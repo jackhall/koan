@@ -5,12 +5,15 @@ use crate::builtins::resolve_or_await::{expect_type_terminal, resolve_at_wake, u
 use crate::machine::DepTerminal;
 use crate::machine::LexicalFrame;
 use crate::machine::ProducerId;
+use crate::machine::core::RegionBrand;
 use crate::machine::model::KExpression;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::labels::TypeSymbol;
+use crate::machine::model::{BinderSymbol, ExpressionPart};
 use crate::machine::model::{DeferredReturn, ReturnType};
 use crate::machine::model::{KObject, KType, Symbol};
 use crate::machine::{KError, KErrorKind, Scope};
+use crate::source::Spanned;
 use std::rc::Rc;
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
@@ -18,12 +21,16 @@ use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{StaticName, ValueSymbol};
 
-/// `ExprCarrier` is captured raw rather than sub-dispatched in the outer scope because a
-/// `:(…)` / dotted return's inner expression may reference a parameter unbound there.
-pub(crate) enum ReturnTypeRaw<'a> {
-    Resolved(KType),
-    TypeExprCarrier(TypeSymbol),
-    ExprCarrier(KExpression<'a>),
+/// The normalized read of a deferral slot: whatever carrier member of the slot's union claimed the
+/// part, reduced to the two shapes classification cares about. The slot captures raw rather than
+/// sub-dispatching in the outer scope because the return's content may reference a parameter
+/// unbound there.
+pub(crate) enum TypeSlotThunk<'a> {
+    /// A bare `Type` token, unresolved: the body forces it against its own scope and chain.
+    UnresolvedName(TypeSymbol),
+    /// A raw type expression to sub-dispatch: a `:(…)` capture's inner expression, or a `:{…}`
+    /// capture re-wrapped as the single-part node that folds to its record type.
+    RawTypeExpression(KExpression<'a>),
 }
 
 /// `Deferred` skips the outer-scope elaborator entirely: running it would surface
@@ -52,30 +59,62 @@ pub(crate) enum ReturnTypeCapture<'a> {
     ReturnTypeExpr,
 }
 
-/// Read the `return_type` slot from a `BodyCtx::args` record into a `ReturnTypeRaw`.
+/// Read the `return_type` slot from a `BodyCtx::args` record into a [`TypeSlotThunk`].
 pub(crate) fn extract_return_type_raw<'a>(
     args: BoundArgs<'a, '_>,
-) -> Result<ReturnTypeRaw<'a>, KError> {
-    extract_type_slot_raw(args, &super::SLOTS.return_type, "FN return-type slot")
+    brand: RegionBrand<'a>,
+    registries: &RunRegistries,
+) -> Result<TypeSlotThunk<'a>, KError> {
+    TypeSlotThunk::from_slot(
+        args,
+        brand,
+        &super::SLOTS.return_type,
+        "FN return-type slot",
+        registries,
+    )
 }
 
-/// Read any type-denoting slot from a `BodyCtx::args` record into a [`ReturnTypeRaw`]. The two
-/// carriers a type slot arrives on: a `ProperType` cell (`Number`, or an unlowered name a
-/// scope walk still has to resolve) and a raw `:(…)` sigil expression that sub-dispatches to its
-/// type. `slot` names the args field; `label` names the surface in the shape error. Shared by
-/// `FN`'s return slot and `OP`'s operand / return slots.
-pub(crate) fn extract_type_slot_raw<'a>(
-    args: BoundArgs<'a, '_>,
-    slot: &StaticName<ValueSymbol>,
-    label: &str,
-) -> Result<ReturnTypeRaw<'a>, KError> {
-    if let Some(te) = args.unresolved_type(slot) {
-        Ok(ReturnTypeRaw::TypeExprCarrier(te))
-    } else if let Some(kt) = args.ktype(slot) {
-        Ok(ReturnTypeRaw::Resolved(kt))
-    } else if let Some(KObject::KExpression(e)) = args.object(slot) {
-        Ok(ReturnTypeRaw::ExprCarrier(e.node()))
-    } else {
+impl<'a> TypeSlotThunk<'a> {
+    /// Normalize a deferral slot's raw capture. The slot is a carrier union, so exactly one member
+    /// claimed the part and the read is a match over the arms that union lists — never a probe for
+    /// a resolved cell, since every member is part-kind-exact and captures raw.
+    ///
+    /// `slot` names the args field; `label` names the surface in the shape errors. Shared by `FN`'s
+    /// return slot and `OP`'s operand / result slots — the value-name arm is reachable only from a
+    /// union that lists `IDENTIFIER`, which is `FN`'s alone.
+    pub(crate) fn from_slot(
+        args: BoundArgs<'a, '_>,
+        brand: RegionBrand<'a>,
+        slot: &StaticName<ValueSymbol>,
+        label: &str,
+        registries: &RunRegistries,
+    ) -> Result<TypeSlotThunk<'a>, KError> {
+        match args.name(slot) {
+            Some(BinderSymbol::Type(te)) => return Ok(TypeSlotThunk::UnresolvedName(te)),
+            // A return slot names a *type*, and an Identifier names a value. The mistake is a
+            // common one: a module-valued parameter is a value token, so the type it denotes is
+            // spelled `:(TYPE OF er)`.
+            Some(BinderSymbol::Value(name)) => {
+                let name = crate::machine::model::render_label(name.symbol(), registries);
+                return Err(KError::new(KErrorKind::ShapeError(format!(
+                    "{label} names a type, but `{name}` is a value. For the type of a value — a \
+                     module-valued parameter, say — write `-> :(TYPE OF {name})`"
+                ))));
+            }
+            None => {}
+        }
+        if let Some(KObject::KExpression(e)) = args.object(slot) {
+            // A sigil capture hands over its *inner* expression, which dispatches on its own.
+            return Ok(TypeSlotThunk::RawTypeExpression(e.node()));
+        }
+        if let Some(fields) = args.record_type(slot) {
+            // A record capture hands over the field list, which does not; re-wrap it as the
+            // single-part node whose `RecordType` dispatch shape folds to the record type.
+            return Ok(TypeSlotThunk::RawTypeExpression(KExpression::new(
+                brand,
+                &[Spanned::bare(ExpressionPart::RecordType(fields))],
+            )));
+        }
         Err(KError::new(KErrorKind::ShapeError(format!(
             "{label} must be a type expression (e.g. `Number`, `:(LIST OF Str)`)"
         ))))
@@ -87,7 +126,7 @@ pub(crate) fn extract_type_slot_raw<'a>(
 /// boundary. `label` names the slot in the unbound-name error; `param_names` is empty for a
 /// slot no parameter can reference (`OP`'s operand / return), which never classifies `Deferred`.
 pub(crate) fn classify_return_type<'a>(
-    raw: ReturnTypeRaw<'a>,
+    raw: TypeSlotThunk<'a>,
     param_names: &[Symbol],
     scope: &Scope<'a>,
     chain: Option<Rc<LexicalFrame>>,
@@ -95,8 +134,7 @@ pub(crate) fn classify_return_type<'a>(
     registries: &RunRegistries,
 ) -> Result<ReturnTypeState<'a>, KError> {
     match raw {
-        ReturnTypeRaw::Resolved(kt) => Ok(ReturnTypeState::Done(kt)),
-        ReturnTypeRaw::TypeExprCarrier(te) => {
+        TypeSlotThunk::UnresolvedName(te) => {
             if type_expr_references_any(te, param_names) {
                 return Ok(ReturnTypeState::Deferred(DeferredReturn::Type(te)));
             }
@@ -113,7 +151,7 @@ pub(crate) fn classify_return_type<'a>(
                 )),
             }
         }
-        ReturnTypeRaw::ExprCarrier(e) => {
+        TypeSlotThunk::RawTypeExpression(e) => {
             if kexpression_references_any(&e, param_names) {
                 Ok(ReturnTypeState::Deferred(DeferredReturn::Expression(e)))
             } else {

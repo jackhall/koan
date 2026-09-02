@@ -40,8 +40,8 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::KType;
 use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol};
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{KKind, SignatureDraft, SignatureElement};
 use crate::machine::model::{OperatorGroup, ReductionMode, binary_key, unary_key};
+use crate::machine::model::{SignatureDraft, SignatureElement};
 use crate::machine::{
     Action, AwaitContinue, BodyCtx, DepPlacement, DepTerminal, FinishCtx, SubDispatch,
     require_kexpression,
@@ -50,7 +50,7 @@ use crate::machine::{Body, CarrierWitness, KError, KErrorKind, Scope};
 use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
-use super::fn_def::return_type::{ReturnTypeState, classify_return_type, extract_type_slot_raw};
+use super::fn_def::return_type::{ReturnTypeState, TypeSlotThunk, classify_return_type};
 use super::resolve_or_await::{expect_type_terminal, resolve_at_wake};
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
@@ -226,10 +226,12 @@ fn build<'a>(
         &ctx.registries.labels
     ));
 
-    let operand_raw = crate::try_action!(extract_type_slot_raw(
+    let operand_raw = crate::try_action!(TypeSlotThunk::from_slot(
         ctx.args,
+        ctx.scope.brand(),
         &SLOTS.operand,
-        OPERAND_SLOT
+        OPERAND_SLOT,
+        ctx.registries,
     ));
     let operand_state = crate::try_action!(classify_return_type(
         operand_raw,
@@ -240,10 +242,12 @@ fn build<'a>(
         ctx.registries,
     ));
     let result_state = if has_result {
-        let raw = crate::try_action!(extract_type_slot_raw(
+        let raw = crate::try_action!(TypeSlotThunk::from_slot(
             ctx.args,
+            ctx.scope.brand(),
             &SLOTS.return_type,
-            RESULT_SLOT
+            RESULT_SLOT,
+            ctx.registries,
         ));
         Some(crate::try_action!(classify_return_type(
             raw,
@@ -722,13 +726,18 @@ fn body_unary_missing_result_combined<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'
     )))))
 }
 
-/// The two carriers a type slot arrives on. `OfKind(ProperType)` takes a bare type token (`OVER
-/// Number`); `SigiledTypeExpr` takes the sigiled form (`OVER :Number`, `OVER :(LIST OF Elt)`) raw,
-/// so the body sub-dispatches it rather than resolving a name that may not be one. Every
-/// operand × result combination of the two is registered, mirroring how `fn_def` splits its return
-/// slot.
-fn type_carriers() -> [KType; 2] {
-    [KType::of_kind(KKind::ProperType), KType::SIGILED_TYPE_EXPR]
+/// The carrier union an operand / result slot takes, spelling the whole dimension once so the
+/// operand × result matrix is one registration per surface rather than a cartesian product. Every
+/// member is captured raw: a bare `Type` token (`OVER Number`, `OVER Elt`), a sigiled form (`OVER
+/// :Number`, `OVER :(LIST OF Elt)`) and a record (`-> :{v :Number}`) all reach the body verbatim,
+/// so it resolves or sub-dispatches them against its own scope rather than a name the surrounding
+/// one may not bind. Mirrors how `fn_def` spells its return slot.
+fn type_carrier_union(registries: &RunRegistries) -> KType {
+    registries.types.union_of(&[
+        KType::TYPE_NAME_TOKEN,
+        KType::SIGILED_TYPE_EXPR,
+        KType::RECORD_TYPE,
+    ])
 }
 
 /// The combined statement form of a declaration surface: `LET <name> =` prefixed to its element
@@ -800,66 +809,63 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         ]
     };
 
-    for operand in type_carriers() {
-        register_builtin(
-            scope,
-            sig(KType::ANY, binary(operand)),
-            body_binary,
-            registries,
-            gate,
-        );
-        register_builtin(
-            scope,
-            combined(registries, binary(operand)),
-            body_binary_combined,
-            registries,
-            gate,
-        );
-        register_builtin(
-            scope,
-            sig(KType::ANY, unary_missing_result(operand)),
-            body_unary_missing_result,
-            registries,
-            gate,
-        );
-        register_builtin(
-            scope,
-            combined(registries, unary_missing_result(operand)),
-            body_unary_missing_result_combined,
-            registries,
-            gate,
-        );
-        for result in type_carriers() {
-            register_builtin(
-                scope,
-                sig(KType::ANY, binary_with_result(operand, result)),
-                body_binary,
-                registries,
-                gate,
-            );
-            register_builtin(
-                scope,
-                combined(registries, binary_with_result(operand, result)),
-                body_binary_combined,
-                registries,
-                gate,
-            );
-            register_builtin(
-                scope,
-                sig(KType::ANY, unary(operand, result)),
-                body_unary,
-                registries,
-                gate,
-            );
-            register_builtin(
-                scope,
-                combined(registries, unary(operand, result)),
-                body_unary_combined,
-                registries,
-                gate,
-            );
-        }
-    }
+    let carrier = type_carrier_union(registries);
+    register_builtin(
+        scope,
+        sig(KType::ANY, binary(carrier)),
+        body_binary,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        combined(registries, binary(carrier)),
+        body_binary_combined,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        sig(KType::ANY, unary_missing_result(carrier)),
+        body_unary_missing_result,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        combined(registries, unary_missing_result(carrier)),
+        body_unary_missing_result_combined,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        sig(KType::ANY, binary_with_result(carrier, carrier)),
+        body_binary,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        combined(registries, binary_with_result(carrier, carrier)),
+        body_binary_combined,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        sig(KType::ANY, unary(carrier, carrier)),
+        body_unary,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        combined(registries, unary(carrier, carrier)),
+        body_unary_combined,
+        registries,
+        gate,
+    );
 }
 
 #[cfg(test)]

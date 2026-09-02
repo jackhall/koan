@@ -248,7 +248,7 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
             Kw(&KEYWORDS.equals),
             Slot,
         ],
-        slots: &[(1, CODE), (3, TYPE_EXPR), (5, CODE)],
+        slots: &[(1, CODE), (3, TYPE_EXPR.with(RECORD_TYPE)), (5, CODE)],
     },
     // LET <name> = FN <signature> -> <return type> = <body>
     LazySlotSpec {
@@ -263,7 +263,7 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
             Kw(&KEYWORDS.equals),
             Slot,
         ],
-        slots: &[(4, CODE), (6, TYPE_EXPR), (8, CODE)],
+        slots: &[(4, CODE), (6, TYPE_EXPR.with(RECORD_TYPE)), (8, CODE)],
     },
     // OP <symbol> OVER <operand> = <body>
     LazySlotSpec {
@@ -275,7 +275,7 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
             Kw(&KEYWORDS.equals),
             Slot,
         ],
-        slots: &[(1, CODE), (3, TYPE_EXPR), (5, CODE)],
+        slots: &[(1, CODE), (3, TYPE_EXPR.with(RECORD_TYPE)), (5, CODE)],
     },
     // OP <symbol> OVER <operand> -> <result> = <body>
     LazySlotSpec {
@@ -289,7 +289,12 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
             Kw(&KEYWORDS.equals),
             Slot,
         ],
-        slots: &[(1, CODE), (3, TYPE_EXPR), (5, TYPE_EXPR), (7, CODE)],
+        slots: &[
+            (1, CODE),
+            (3, TYPE_EXPR.with(RECORD_TYPE)),
+            (5, TYPE_EXPR.with(RECORD_TYPE)),
+            (7, CODE),
+        ],
     },
     // UNARY OP <symbol> OVER <operand> = <body>
     LazySlotSpec {
@@ -302,7 +307,7 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
             Kw(&KEYWORDS.equals),
             Slot,
         ],
-        slots: &[(2, CODE), (4, TYPE_EXPR), (6, CODE)],
+        slots: &[(2, CODE), (4, TYPE_EXPR.with(RECORD_TYPE)), (6, CODE)],
     },
     // UNARY OP <symbol> OVER <operand> -> <result> = <body>
     LazySlotSpec {
@@ -317,7 +322,12 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
             Kw(&KEYWORDS.equals),
             Slot,
         ],
-        slots: &[(2, CODE), (4, TYPE_EXPR), (6, TYPE_EXPR), (8, CODE)],
+        slots: &[
+            (2, CODE),
+            (4, TYPE_EXPR.with(RECORD_TYPE)),
+            (6, TYPE_EXPR.with(RECORD_TYPE)),
+            (8, CODE),
+        ],
     },
     // LET <name> = OP <symbol> OVER <operand> = <body>
     LazySlotSpec {
@@ -332,7 +342,7 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
             Kw(&KEYWORDS.equals),
             Slot,
         ],
-        slots: &[(4, CODE), (6, TYPE_EXPR), (8, CODE)],
+        slots: &[(4, CODE), (6, TYPE_EXPR.with(RECORD_TYPE)), (8, CODE)],
     },
     // LET <name> = OP <symbol> OVER <operand> -> <result> = <body>
     LazySlotSpec {
@@ -349,7 +359,12 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
             Kw(&KEYWORDS.equals),
             Slot,
         ],
-        slots: &[(4, CODE), (6, TYPE_EXPR), (8, TYPE_EXPR), (10, CODE)],
+        slots: &[
+            (4, CODE),
+            (6, TYPE_EXPR.with(RECORD_TYPE)),
+            (8, TYPE_EXPR.with(RECORD_TYPE)),
+            (10, CODE),
+        ],
     },
     // LET <name> = UNARY OP <symbol> OVER <operand> = <body>
     LazySlotSpec {
@@ -365,7 +380,7 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
             Kw(&KEYWORDS.equals),
             Slot,
         ],
-        slots: &[(5, CODE), (7, TYPE_EXPR), (9, CODE)],
+        slots: &[(5, CODE), (7, TYPE_EXPR.with(RECORD_TYPE)), (9, CODE)],
     },
     // LET <name> = UNARY OP <symbol> OVER <operand> -> <result> = <body>
     LazySlotSpec {
@@ -383,7 +398,12 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
             Kw(&KEYWORDS.equals),
             Slot,
         ],
-        slots: &[(5, CODE), (7, TYPE_EXPR), (9, TYPE_EXPR), (11, CODE)],
+        slots: &[
+            (5, CODE),
+            (7, TYPE_EXPR.with(RECORD_TYPE)),
+            (9, TYPE_EXPR.with(RECORD_TYPE)),
+            (11, CODE),
+        ],
     },
 ];
 
