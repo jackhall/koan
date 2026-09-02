@@ -11,40 +11,19 @@
 
 use crate::machine::WriteGate;
 use crate::machine::model::KKind;
-use crate::machine::model::TypeRegistry;
-use crate::machine::model::{
-    Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts,
-    parse_typed_field_list_via_elaborator,
-};
-use crate::machine::model::{KType, Record};
+use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
-use crate::machine::FieldListDeferral;
-use crate::machine::model::BinderSymbol;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{StaticName, ValueSymbol};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { applied, ctor, elem, k, ret, sig, v } }
 
-/// Diagnostic nouns for the shared field-list parser when it walks an `:(FN …)` parameter list.
-const FN_PARAMS_CONTEXT: FieldListContext = FieldListContext::FN_TYPE_PARAMETERS;
-
-/// Field-name policy for an `:(FN …)` parameter list: capitalized `Type` param names like
-/// `Ty` are admitted alongside ordinary identifiers.
-const FN_PARAM_NAME_KIND: FieldNameKind = FieldNameKind::IdentifierOrType;
-
-/// Fold the elaborated `(name, type)` pairs into the parameter record and intern the function
-/// type. Shared by the synchronous and dep-finish paths.
-fn finalize_carrier(fields: Vec<(BinderSymbol, KType)>, ret: KType, types: &TypeRegistry) -> KType {
-    types.function_type(Record::from_pairs(fields), ret)
-}
-
 /// Reject a bare type constructor in a type-language argument position that demands kind `*`:
 /// a list's element, a dict's key and value, a function type's return. Each names the type of a
-/// value, so each must be a proper type. The parameter list of an `:(FN …)` is checked inside the
-/// shared field-list walker instead.
+/// value, so each must be a proper type. An `:(FN …)` parameter list is a record type, whose own
+/// elaboration checks its fields.
 fn require_proper_type(
     kt: KType,
     position: &str,
@@ -56,13 +35,14 @@ fn require_proper_type(
     }
 }
 
-/// `Action`-harness twins of the type-constructor bodies. LIST/MAP/AS compose from resolved type
-/// args directly (`Done`); FN routes the parameter list through [`build_carrier`], which either
-/// resolves synchronously or defers via a `FieldListDeferral` finished through `action_composed`.
+/// `Action`-harness twins of the type-constructor bodies. Each composes from resolved type args
+/// directly (`Done`) — including FN, whose parameter list arrives as an already-resolved record
+/// type.
 mod action_bodies {
     use super::SLOTS;
-    use super::{build_carrier, require_proper_type};
+    use super::require_proper_type;
     use crate::machine::model::BinderSymbol;
+    use crate::machine::model::TypeNode;
     use crate::machine::model::constructor_param_names;
     use crate::machine::{Action, BodyCtx, require_ktype};
 
@@ -126,66 +106,31 @@ mod action_bodies {
         Action::done(Ok(ctx.ctx.type_carried(apply)))
     }
 
+    /// The parameter list is a record type that resolved before `FN` dispatched — the `:{…}`
+    /// operand sub-dispatches through the `ProperType` slot, exactly as the anonymous definition
+    /// form's record schema does, so a nested sigil param type or a reaching field resolves inside
+    /// the record's own elaboration and nothing defers here. The kind lattice has no structural
+    /// kinds, so record-ness is this body's check.
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-        build_carrier(ctx, &SLOTS.sig, &SLOTS.ret)
-    }
-}
-
-/// The composer [`build_carrier`]'s deferred arm hands to the field-list deferral. The return type
-/// is owned data, so it rides the closure directly and pairs with the re-walked parameter list to
-/// finish the `KFunction`.
-fn ret_compose<'a>(
-    ret: KType,
-) -> impl for<'r> FnOnce(
-    Vec<(BinderSymbol, KType)>,
-    &'r RunRegistries,
-) -> Result<KType, crate::machine::KError>
-+ 'a {
-    move |fields, registries| Ok(finalize_carrier(fields, ret, &registries.types))
-}
-
-/// Walk the parameter list through the shared field-list parser (the same one UNION / NEWTYPE use),
-/// so nested parameterized param types like `xs :(LIST OF Number)` sub-Dispatch and capitalized
-/// param names like `Ty` are accepted. Resolves synchronously or defers via
-/// [`FieldListDeferral::action_composed`] (no self-reference binder, no pending guard).
-fn build_carrier<'a>(
-    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
-    sig_slot: &StaticName<ValueSymbol>,
-    ret_slot: &StaticName<ValueSymbol>,
-) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, require_kexpression, require_ktype};
-    let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
-    let ret = crate::try_action!(require_ktype(ctx.args, ret_slot, ctx.registries));
-    crate::try_action!(require_proper_type(
-        ret,
-        "the return type of an `:(FN …)` type",
-        ctx.registries
-    ));
-    let mut elaborator = Elaborator::new(ctx.scope);
-    match parse_typed_field_list_via_elaborator(
-        FieldParts::of(&sig_expr),
-        FN_PARAMS_CONTEXT,
-        FN_PARAM_NAME_KIND,
-        &mut elaborator,
-        None,
-        ctx.registries,
-    ) {
-        FieldListOutcome::Done(fields) => {
-            let carrier = finalize_carrier(fields, ret, ctx.types());
-            Action::done(Ok(ctx.ctx.type_carried(carrier)))
-        }
-        FieldListOutcome::Err(msg) => Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
-        FieldListOutcome::Pending {
-            awaited_producers,
-            sub_dispatches,
-        } => FieldListDeferral::new(
-            FieldParts::of(&sig_expr),
-            awaited_producers,
-            sub_dispatches,
-            FN_PARAMS_CONTEXT,
-            FN_PARAM_NAME_KIND,
-        )
-        .action_composed(ret_compose(ret)),
+        let params_kt = crate::try_action!(require_ktype(ctx.args, &SLOTS.sig, ctx.registries));
+        let ret = crate::try_action!(require_ktype(ctx.args, &SLOTS.ret, ctx.registries));
+        crate::try_action!(require_proper_type(
+            ret,
+            "the return type of an `:(FN …)` type",
+            ctx.registries
+        ));
+        let params = ctx.types().with_node(params_kt, |node| match node {
+            TypeNode::Record { fields } => Some(fields.clone()),
+            _ => None,
+        });
+        let Some(params) = params else {
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "the parameter list of an `:(FN …)` type must be a record type `:{{…}}`, got `{}`",
+                params_kt.display_name(ctx.registries),
+            )))));
+        };
+        let carrier = ctx.types().function_type(params, ret);
+        Action::done(Ok(ctx.ctx.type_carried(carrier)))
     }
 }
 
@@ -240,7 +185,10 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             KType::of_kind(KKind::AnyType),
             vec![
                 kw(registries, "FN"),
-                arg(registries, &SLOTS.sig, KType::KEXPRESSION),
+                // The parameter list is a record type, so it sub-dispatches to a resolved `KType`
+                // before this body fires. `OfKind(ProperType)` also admits `NewType` /
+                // `TypeConstructor` handles — the body's record check is what rejects those.
+                arg(registries, &SLOTS.sig, KType::of_kind(KKind::AnyType)),
                 kw(registries, "->"),
                 // `OfKind(AnyType)` admits every type value — a `-> Ordered` signature return
                 // and `-> Module` (which lowers to the empty signature) included.
@@ -342,7 +290,8 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let result = test_run.run_one_type(test_run.parse_one(":(FN (x :Number, y :Str) -> Bool)"));
+        let result =
+            test_run.run_one_type(test_run.parse_one(":(FN :{x :Number, y :Str} -> Bool)"));
         let types = test_run.types();
         assert_eq!(
             result,
@@ -367,7 +316,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let result = test_run.run_one_type(test_run.parse_one(":(FN () -> Number)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(FN :{} -> Number)"));
         let types = test_run.types();
         assert_eq!(result, types.function_type(Record::new(), KType::NUMBER));
     }
@@ -379,7 +328,7 @@ mod tests {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
-        let result = test_run.run_one_type(test_run.parse_one(":(FN (Ty :Signature) -> Module)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(FN :{Ty :Signature} -> Module)"));
         let types = test_run.types();
         assert_eq!(
             result,
@@ -393,6 +342,71 @@ mod tests {
         );
     }
 
+    /// The parameter-list slot takes any record-valued type expression, so a `LET`-bound alias
+    /// names the parameter list as directly as a literal `:{…}` does.
+    #[test]
+    fn fn_with_alias_parameter_list_lowers_to_kfunction() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("LET Params = :{x :Number}");
+        let result = test_run.run_one_type(test_run.parse_one(":(FN Params -> Bool)"));
+        let types = test_run.types();
+        assert_eq!(
+            result,
+            types.function_type(
+                Record::from_pairs(vec![(
+                    crate::builtins::test_support::binder_name("x", test_run.registries()),
+                    KType::NUMBER
+                )]),
+                KType::BOOL,
+            )
+        );
+    }
+
+    /// The kind lattice has no structural kinds, so a non-record operand passes the slot and the
+    /// body rejects it with a pointed shape error.
+    #[test]
+    fn fn_with_non_record_parameter_list_errors() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let err = test_run.run_one_err(test_run.parse_one(":(FN Number -> Str)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("must be a record type")),
+            "expected a pointed non-record ShapeError, got {err}",
+        );
+    }
+
+    /// A `NEWTYPE` over a record is a `SetMember`, not structurally a record, so it is not a
+    /// parameter list — the nominal identity is the point of declaring one.
+    #[test]
+    fn fn_with_nominal_parameter_list_errors() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("NEWTYPE Wrapped = :{a :Number}");
+        let err = test_run.run_one_err(test_run.parse_one(":(FN Wrapped -> Str)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("must be a record type")),
+            "expected a pointed non-record ShapeError, got {err}",
+        );
+    }
+
+    /// The parenthesized parameter list is gone: `(x :Number)` is a parenthesized group, not a
+    /// type expression, so no `FN` overload takes it.
+    #[test]
+    fn fn_with_parenthesized_parameter_list_no_longer_elaborates() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let err = test_run.run_one_err(test_run.parse_one(":(FN (x :Number) -> Bool)"));
+        assert!(
+            !matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("must be a record type")),
+            "the parenthesized form must not reach the FN body at all, got {err}",
+        );
+    }
+
     /// A nested parameterized param type (`:(LIST OF Number)`) sub-Dispatches through the
     /// shared field-list parser and lands in the parameter record.
     #[test]
@@ -401,7 +415,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         let result =
-            test_run.run_one_type(test_run.parse_one(":(FN (xs :(LIST OF Number)) -> Bool)"));
+            test_run.run_one_type(test_run.parse_one(":(FN :{xs :(LIST OF Number)} -> Bool)"));
         let types = test_run.types();
         assert_eq!(
             result,
@@ -461,7 +475,7 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
         let result =
-            test_run.run_one_type(test_run.parse_one(":(FN (xs :(LIST OF Number)) -> Wrapped)"));
+            test_run.run_one_type(test_run.parse_one(":(FN :{xs :(LIST OF Number)} -> Wrapped)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
@@ -683,7 +697,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(test_run.parse_one(":(FN (x :Wrapped) -> Bool)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(FN :{x :Wrapped} -> Bool)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {
@@ -709,7 +723,7 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
-        let result = test_run.run_one_type(test_run.parse_one(":(FN (x :Number) -> Wrapped)"));
+        let result = test_run.run_one_type(test_run.parse_one(":(FN :{x :Number} -> Wrapped)"));
         let types = test_run.types();
         match types.node(result) {
             TypeNode::KFunction { params, ret } => {

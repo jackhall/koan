@@ -248,7 +248,7 @@ fn abstract_slot_applies_named_type_argument() {
     test_run.run(
         "NEWTYPE (Elem AS Wrapper)\n\
          SIG Boxy = ((TYPE (Elem AS Wrap)) \
-         (VAL make :(FN (x :Number) -> :(Wrap {Elem = Number}))))\n\
+         (VAL make :(FN :{x :Number} -> :(Wrap {Elem = Number}))))\n\
          MODULE id_box = ((LET Wrap = Wrapper) \
          (LET make = FN (MAKEBOX x :Number) -> :(Wrapper {Elem = Number}) = (Wrapper (x))))",
     );

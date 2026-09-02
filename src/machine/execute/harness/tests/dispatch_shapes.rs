@@ -512,7 +512,7 @@ fn fast_lane_escaped_closure_with_param_returns_body_value() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (MAKE) -> :(FN (x :Number) -> Number) = (FN (ECHO x :Number) -> Number = (x))\n\
+        "FN (MAKE) -> :(FN :{x :Number} -> Number) = (FN (ECHO x :Number) -> Number = (x))\n\
          LET f = (MAKE)",
     );
     let result = test_run.run_one(test_run.parse_one("f {x = 42}"));
@@ -1069,7 +1069,7 @@ fn head_deferred_calls_returned_function() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (GET_F) -> :(FN (n :Number) -> Number) = \
+        "FN (GET_F) -> :(FN :{n :Number} -> Number) = \
          (FN (INNER n :Number) -> Number = (n))",
     );
     let out = test_run.run_one(test_run.parse_one("(GET_F) {n = 7}"));

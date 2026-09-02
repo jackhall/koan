@@ -342,25 +342,6 @@ impl<'a> FieldListDeferral<'a> {
         });
         Action::await_deps(deps, finish)
     }
-
-    /// Finish into the `Action` currency through a composer, adapting `compose` into a
-    /// [`FieldListFinalizeAction`] that carries the composed `KType` through the finish's allocator.
-    pub(crate) fn action_composed(
-        self,
-        compose: impl for<'r> FnOnce(
-            Vec<(BinderSymbol, KType)>,
-            &'r RunRegistries,
-        ) -> Result<KType, KError>
-        + 'a,
-    ) -> crate::machine::core::Action<'a> {
-        self.action(Box::new(move |fctx, _window, fields| {
-            // A composed structural type declares no binder, so it writes nothing.
-            Ok((
-                fctx.ctx.type_carried(compose(fields, fctx.registries)?),
-                Vec::new(),
-            ))
-        }))
-    }
 }
 
 /// Elaborate a standalone `:{…}` record type to a `Carried::Type` record handle. A record type at a

@@ -448,7 +448,7 @@ fn captured_per_call_value_survives_let_bind_and_call() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
+        "FN (MAKE_HOLDER base :Number) -> :(FN :{q :Number} -> Number) = \
          (FN (GET q :Number) -> Number = (base))\n\
          LET hold = (MAKE_HOLDER 99)",
     );
@@ -471,9 +471,9 @@ fn closure_argument_stays_live_through_user_fn_call() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
+        "FN (MAKE_HOLDER base :Number) -> :(FN :{q :Number} -> Number) = \
          (FN (GET q :Number) -> Number = (base))\n\
-         FN (CALL_IT f :(FN (q :Number) -> Number)) -> Number = (f {q = 0})\n\
+         FN (CALL_IT f :(FN :{q :Number} -> Number)) -> Number = (f {q = 0})\n\
          LET answer = (CALL_IT (MAKE_HOLDER 77))",
     );
     let result = test_run.run_one(test_run.parse_one("answer"));
@@ -503,7 +503,7 @@ fn let_bound_list_of_call_produced_strings_and_closures_survives_every_producer_
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(
-        "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
+        "FN (MAKE_HOLDER base :Number) -> :(FN :{q :Number} -> Number) = \
          (FN (GET q :Number) -> Number = (base))\n\
          FN (LABEL n :Number) -> Str = (PRINT n)\n\
          LET mixed = [(LABEL 1) (MAKE_HOLDER 1) (LABEL 2) (MAKE_HOLDER 2)]",

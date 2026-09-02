@@ -236,11 +236,6 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
         ],
         slots: &[(4, CODE), (7, CODE)],
     },
-    // FN <signature> -> <return type>: the type-language declaration form.
-    LazySlotSpec {
-        key: &[Kw(&KEYWORDS.fn_), Slot, Kw(&KEYWORDS.arrow), Slot],
-        slots: &[(1, CODE)],
-    },
     // FN <signature> -> <return type> = <body>
     LazySlotSpec {
         key: &[

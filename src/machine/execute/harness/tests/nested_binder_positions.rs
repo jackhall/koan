@@ -67,7 +67,7 @@ fn named_fn_in_user_call_argument_is_nested_binder() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
+    test_run.run("FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")");
     let err =
         test_run.run_one_err(test_run.parse_one("USE (FN (SHOW x :Number) -> Str = (\"hi\"))"));
     assert_nested_binder(err, "a user-call argument (named FN)");

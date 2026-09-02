@@ -171,7 +171,7 @@ fn fn_with_typed_dict_param_accepts_matching_dict() {
 #[test]
 fn fn_with_typed_function_param_accepts_matching_function() {
     let bytes = capture_program_output(
-        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")\n\
+        "FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")\n\
          LET g = FN (SHOW x :Number) -> Str = (\"hi\")\n\
          PRINT (USE g)",
     );
@@ -187,7 +187,7 @@ fn fn_with_typed_function_param_rejects_name_mismatch() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
+    test_run.run("FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")");
     test_run.run("LET g = FN (SHOW n :Number) -> Str = (\"hi\")");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
@@ -216,7 +216,7 @@ fn fn_with_typed_function_param_rejects_name_mismatch() {
 #[test]
 fn fn_with_typed_function_param_admits_contravariant_param() {
     let bytes = capture_program_output(
-        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")\n\
+        "FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")\n\
          LET g = FN (SHOW x :Any) -> Str = (\"hi\")\n\
          PRINT (USE g)",
     );
@@ -229,7 +229,7 @@ fn fn_with_typed_function_param_admits_contravariant_param() {
 #[test]
 fn fn_with_typed_function_param_admits_covariant_return() {
     let bytes = capture_program_output(
-        "FN (USE f :(FN (x :Number) -> Any)) -> Str = (\"got fn\")\n\
+        "FN (USE f :(FN :{x :Number} -> Any)) -> Str = (\"got fn\")\n\
          LET g = FN (SHOW x :Number) -> Number = (1)\n\
          PRINT (USE g)",
     );
@@ -241,7 +241,7 @@ fn fn_with_typed_function_param_admits_covariant_return() {
 #[test]
 fn fn_with_typed_function_param_admits_width_drop() {
     let bytes = capture_program_output(
-        "FN (USE f :(FN (x :Number, y :Str) -> Str)) -> Str = (\"got fn\")\n\
+        "FN (USE f :(FN :{x :Number, y :Str} -> Str)) -> Str = (\"got fn\")\n\
          LET g = FN (SHOW x :Number) -> Str = (\"hi\")\n\
          PRINT (USE g)",
     );
@@ -257,7 +257,7 @@ fn fn_with_typed_function_param_rejects_width_extra() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
+    test_run.run("FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")");
     test_run.run("LET g = FN (SHOW x :Number, y :Str) -> Str = (\"hi\")");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(
@@ -287,15 +287,15 @@ fn fn_with_typed_function_param_rejects_width_extra() {
 #[test]
 fn fn_typed_function_param_contravariant_tiebreak() {
     let any_value = capture_program_output(
-        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"narrow\")\n\
-         FN (USE f :(FN (x :Any) -> Str)) -> Str = (\"wide\")\n\
+        "FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"narrow\")\n\
+         FN (USE f :(FN :{x :Any} -> Str)) -> Str = (\"wide\")\n\
          LET g = FN (GET x :Any) -> Str = (\"v\")\n\
          PRINT (USE g)",
     );
     assert_eq!(any_value, b"wide\n");
     let number_value = capture_program_output(
-        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"narrow\")\n\
-         FN (USE f :(FN (x :Any) -> Str)) -> Str = (\"wide\")\n\
+        "FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"narrow\")\n\
+         FN (USE f :(FN :{x :Any} -> Str)) -> Str = (\"wide\")\n\
          LET g = FN (GET x :Number) -> Str = (\"v\")\n\
          PRINT (USE g)",
     );
@@ -311,8 +311,8 @@ fn fn_typed_function_param_incomparable_is_ambiguous() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"num\")");
-    test_run.run("FN (USE f :(FN (x :Str) -> Str)) -> Str = (\"str\")");
+    test_run.run("FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"num\")");
+    test_run.run("FN (USE f :(FN :{x :Str} -> Str)) -> Str = (\"str\")");
     test_run.run("LET g = FN (GET x :Any) -> Str = (\"v\")");
     let root = test_run.dispatch_in_scope(
         crate::machine::model::WorkingExpression::from_ast(

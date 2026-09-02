@@ -134,7 +134,7 @@ fn name_renders_function() {
         ]),
         KType::BOOL,
     );
-    assert_eq!(t.name(&registries), ":(FN (x :Number y :Str) -> Bool)");
+    assert_eq!(t.name(&registries), ":(FN :{x :Number y :Str} -> Bool)");
 }
 
 /// A nested sigiled parameter type already opens with `:`, so the renderer must not prefix a
@@ -153,7 +153,7 @@ fn name_renders_function_with_sigiled_param() {
     );
     assert_eq!(
         t.name(&registries),
-        ":(FN (xs :(LIST OF Number)) -> Number)"
+        ":(FN :{xs :(LIST OF Number)} -> Number)"
     );
 }
 
@@ -162,7 +162,7 @@ fn name_renders_function_nullary() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let t = types.function_type(Record::new(), KType::NULL);
-    assert_eq!(t.name(&registries), ":(FN () -> Null)");
+    assert_eq!(t.name(&registries), ":(FN :{} -> Null)");
 }
 
 #[test]

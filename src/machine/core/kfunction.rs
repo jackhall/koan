@@ -407,7 +407,7 @@ fn summarize_parts(parts: &[Spanned<WorkingPart<'_>>], registries: &RunRegistrie
 /// Intern the function type a `KFunction` value reports. The parameter record keys each
 /// `Argument` by its declared name — the names the signature already holds, never the dispatch
 /// keywords — so a function value projects the same `(name → type)` record a
-/// `:(FN (name :Type) -> _)` slot declares.
+/// `:(FN :{name :Type} -> _)` slot declares.
 ///
 /// A `Deferred(_)` source return projects into the confined `DeferredReturn` node, holding the
 /// hashable surface shadow of the deferred form, so equality and specificity read the deferred

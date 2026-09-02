@@ -158,9 +158,9 @@ impl KType {
                 f.write_str("}")
             }
             TypeNode::KFunction { params, ret } => {
-                f.write_str(":(FN (")?;
+                f.write_str(":(FN :{")?;
                 write_param_record(f, params, registries)?;
-                f.write_str(") -> ")?;
+                f.write_str("} -> ")?;
                 ret.write_name(f, registries)?;
                 f.write_str(")")
             }
@@ -324,8 +324,9 @@ impl KType {
     }
 }
 
-/// Write an FN parameter record as the comma-free `name :type` group the `:(FN (...) -> _)`
-/// surface re-parses. A leaf type surface gets a `:` prefix; one that already opens a sigil
+/// Write a record's fields as the comma-free `name :type` group the `:{…}` surface re-parses —
+/// a record type's own body, and the parameter list of an `:(FN :{…} -> _)`.
+/// A leaf type surface gets a `:` prefix; one that already opens a sigil
 /// (`:(LIST OF Number)`) is left as-is (no `::`), decided by
 /// [`KType::surface_opens_sigil`] rather than by looking at text already written.
 fn write_param_record(

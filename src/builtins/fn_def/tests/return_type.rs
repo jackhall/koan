@@ -154,7 +154,7 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     assert!(
         err.frames
             .iter()
-            .any(|f| f.expression.contains(":(FN () -> Number)")),
+            .any(|f| f.expression.contains(":(FN :{} -> Number)")),
         "the same frame carries the callable's by-name identity, got {:?}",
         err.frames.iter().map(|f| &f.expression).collect::<Vec<_>>(),
     );
@@ -309,7 +309,7 @@ fn keep_first_across_tail_chain_errors_against_outer_contract() {
     assert!(
         err.frames
             .iter()
-            .any(|f| f.expression.contains(":(FN () -> Number)")),
+            .any(|f| f.expression.contains(":(FN :{} -> Number)")),
         "the frame's by-name identity is OUTER's own signature, got {:?}",
         err.frames.iter().map(|f| &f.expression).collect::<Vec<_>>(),
     );
@@ -376,7 +376,7 @@ fn spliced_bare_name_tail_checks_declared_return() {
     assert!(
         err.frames
             .iter()
-            .any(|f| f.expression.contains(":(FN () -> Number)")),
+            .any(|f| f.expression.contains(":(FN :{} -> Number)")),
         "and carries WRAP's by-name identity beside it, got {:?}",
         err.frames.iter().map(|f| &f.expression).collect::<Vec<_>>(),
     );

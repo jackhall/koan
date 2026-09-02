@@ -27,7 +27,7 @@ const TYPE_PARAMETER_FUNCTOR: &str = "LET xs = [1]\n\
 /// the operation the signature names. `⊖` subtracts, so a fold-left `2 ⊕ 3 ⊖ 1` runs both members.
 const WITNESS_MODULE_FUNCTOR: &str = "SIG Additive = (\
        (TYPE Elt)\
-       (VAL combine :(FN (x :Elt, y :Elt) -> Elt)))\n\
+       (VAL combine :(FN :{x :Elt, y :Elt} -> Elt)))\n\
      MODULE sum_additive = (\
        (LET Elt = Number)\
        (LET combine = FN (COMBINE x :Number y :Number) -> Number = (x + y)))\n\

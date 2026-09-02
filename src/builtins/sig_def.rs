@@ -228,9 +228,9 @@ mod tests {
         let mut test_run = TestRun::silent(&program, &region);
         let scope = test_run.scope;
         test_run.run(
-            "SIG OrdA = ((TYPE Elem) (VAL compare :(FN (a :Elem b :Elem) -> Bool)))\n\
-             SIG OrdB = ((TYPE Elem) (VAL compare :(FN (a :Elem b :Elem) -> Bool)))\n\
-             SIG OrdManifest = ((TYPE Elem) (VAL compare :(FN (a :Number b :Number) -> Bool)))",
+            "SIG OrdA = ((TYPE Elem) (VAL compare :(FN :{a :Elem b :Elem} -> Bool)))\n\
+             SIG OrdB = ((TYPE Elem) (VAL compare :(FN :{a :Elem b :Elem} -> Bool)))\n\
+             SIG OrdManifest = ((TYPE Elem) (VAL compare :(FN :{a :Number b :Number} -> Bool)))",
         );
         let a = lookup_type(scope, "OrdA").expect("OrdA binds");
         let b = lookup_type(scope, "OrdB").expect("OrdB binds");

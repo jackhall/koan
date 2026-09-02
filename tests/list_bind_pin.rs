@@ -43,7 +43,7 @@ fn bound_bare_list_holding_a_home_closure_pins_and_reads_back() {
     ))
     .expect("the program evaluates without error");
     assert_eq!(
-        out, "[5, :(FN () -> Number)]\n",
+        out, "[5, :(FN :{} -> Number)]\n",
         "the pinned list reads back with its scalar element and captured closure intact"
     );
 }

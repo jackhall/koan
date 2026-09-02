@@ -127,7 +127,7 @@ fn sigil_map_lowers_to_dict_carrier() {
 
 // --- FN ---
 
-/// `:(FN (x :Number, y :Str) -> Bool)` lowers to a `KType::KFunction { params, ret }`
+/// `:(FN :{x :Number, y :Str} -> Bool)` lowers to a `KType::KFunction { params, ret }`
 /// whose `params` record keys each parameter type by its declared name.
 #[test]
 fn sigil_fn_lowers_to_kfunction_named() {
@@ -136,7 +136,7 @@ fn sigil_fn_lowers_to_kfunction_named() {
     let test_run = run(
         &program,
         &region,
-        "SIG Holder = ((VAL compare :(FN (x :Number, y :Str) -> Bool)))",
+        "SIG Holder = ((VAL compare :(FN :{x :Number, y :Str} -> Bool)))",
     );
     let cmp = lookup_sig_value_kt(test_run.scope, test_run.types(), "Holder", "compare");
     match test_run.types().node(cmp) {
@@ -150,7 +150,7 @@ fn sigil_fn_lowers_to_kfunction_named() {
     }
 }
 
-/// Nullary FN: `:(FN () -> Number)` lowers to a zero-arg function type.
+/// Nullary FN: `:(FN :{} -> Number)` lowers to a zero-arg function type.
 #[test]
 fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
     let program = program_storage();
@@ -158,7 +158,7 @@ fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
     let test_run = run(
         &program,
         &region,
-        "SIG Holder = ((VAL gen :(FN () -> Number)))",
+        "SIG Holder = ((VAL gen :(FN :{} -> Number)))",
     );
     let r#gen = lookup_sig_value_kt(test_run.scope, test_run.types(), "Holder", "gen");
     match test_run.types().node(r#gen) {
@@ -180,7 +180,7 @@ fn sigil_fn_type_param_and_module_return_lowers_to_kfunction() {
     let test_run = run(
         &program,
         &region,
-        "SIG Holder = ((VAL mk :(FN (Ty :Signature) -> Module)))",
+        "SIG Holder = ((VAL mk :(FN :{Ty :Signature} -> Module)))",
     );
     let mk = lookup_sig_value_kt(test_run.scope, test_run.types(), "Holder", "mk");
     match test_run.types().node(mk) {
@@ -288,55 +288,6 @@ fn union_field_accepts_keyworded_map_sigil() {
     }
 }
 
-// --- Forward type reference inside sigil body ---
-
-/// A sigiled FN type expression whose inner parameter type references a
-/// forward-declared sibling SIG defers through a dep-finish: at body-run time the
-/// SIG is still parked on its own elaboration, so `extract_param_types`
-/// returns `Park(producers)`; the body schedules a dep-finish over the producers
-/// and re-runs the walk at finish against the now-final SIG. Pins the
-/// [`defer`] path in `body_fn`.
-///
-/// Index gating means a SIG-internal VAL whose annotation references a
-/// later-sibling top-level SIG can't see the forward sibling at submission
-/// time, so the type-language sigil's resolver parks. Submission order:
-/// top-level SIG `Outer` (which contains the VAL), then top-level SIG
-/// `Ordered`. The VAL's sigiled FN type annotation parks on
-/// `Ordered`'s producer and resumes via dep-finish.
-#[test]
-fn sigil_fn_forward_reference_defers_via_combine() {
-    let program = program_storage();
-    let region = run_root_storage();
-    let test_run = run(
-        &program,
-        &region,
-        "SIG Outer = ((VAL mk :(FN (Ty :Ordered) -> Module)))\n\
-         SIG Ordered = (VAL compare :Number)",
-    );
-    let mk = lookup_sig_value_kt(test_run.scope, test_run.types(), "Outer", "mk");
-    match test_run.types().node(mk) {
-        TypeNode::KFunction { params, ret } => {
-            assert_eq!(params.len(), 1);
-            // Ordered resolves to its `Signature { .. }` identity post-dep-finish.
-            let ty = *params
-                .get(Symbol::of("Ty"))
-                .expect("param `Ty` must be present");
-            // A resolved signature now renders structurally, not by declared name: Ordered's
-            // interface (its sole member `compare :Number`) renders `SIG (compare: Number)`.
-            // Seeing that member content confirms the forward reference resolved to Ordered's
-            // Signature identity through the deferral path (rather than a bare kind placeholder).
-            assert!(
-                ty.name(test_run.registries()).contains("compare")
-                    || ty == KType::of_kind(KKind::Signature),
-                "param `Ty` should carry Ordered's resolved interface, got {ty:?} \
-                 (name: {:?})",
-                ty.name(test_run.registries()),
-            );
-            assert_eq!(ret, KType::EMPTY_SIGNATURE);
-        }
-        _ => panic!("mk must be KType::KFunction, got {mk:?}"),
-    }
-}
 // --- User-functor application ---
 
 /// A functor — a module-returning FN — binds a `KFunction` carrier under `MAKESET`, and the

@@ -126,7 +126,7 @@ fn val_function_typed_slot() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    test_run.run("SIG Ordered = ((VAL compare :(FN (x :Number, y :Number) -> Number)))");
+    test_run.run("SIG Ordered = ((VAL compare :(FN :{x :Number, y :Number} -> Number)))");
     let compare = sig_schema(scope, test_run.types(), "Ordered")
         .value_slots
         .get(&value_name("compare", test_run.registries()))

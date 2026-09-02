@@ -44,15 +44,10 @@ impl FieldListContext {
         member: "NEWTYPE repr field",
     };
 
-    /// The parameter list of an `:(FN …)` function type.
-    pub const FN_TYPE_PARAMETERS: Self = Self {
-        list: "FN parameters",
-        member: "FN parameter",
-    };
-
     /// A structural record type `:{x :Number}` — standalone, or nested inside another field list.
-    /// The anonymous-FN signature `FN :{x :Number} -> …` elaborates through this one: its `:{…}`
-    /// resolves as an ordinary record type before `FN` ever sees it.
+    /// Both FN surfaces elaborate through this one: the anonymous definition's signature
+    /// (`FN :{x :Number} -> … = …`) and the `:(FN :{x :Number} -> …)` type's parameter list each
+    /// resolve their `:{…}` as an ordinary record type before `FN` ever sees it.
     pub const RECORD_TYPE: Self = Self {
         list: "record fields",
         member: "record-type field",

@@ -62,13 +62,13 @@ fn anonymous_fn_multi_param_binds_by_name() {
 }
 
 /// An anonymous FN value fills a function-typed parameter slot
-/// (`:(FN (x :Number) -> Str)`) via the same `function_compat` check a keyworded
+/// (`:(FN :{x :Number} -> Str)`) via the same `function_compat` check a keyworded
 /// inline FN uses — its keyword-less signature projects the same
 /// `KType::KFunction`.
 #[test]
 fn anonymous_fn_fills_function_typed_slot() {
     let bytes = capture_program_output(
-        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")\n\
+        "FN (USE f :(FN :{x :Number} -> Str)) -> Str = (\"got fn\")\n\
          PRINT (USE (FN :{x :Number} -> Str = (\"hi\")))",
     );
     assert_eq!(bytes, b"got fn\n");

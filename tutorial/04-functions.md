@@ -80,7 +80,7 @@ WRONG 5
 
 ```text
 error: type mismatch for argument '<return>': expected Str, got Number
-  in :(FN (x :Number) -> Str) (WRONG 5) at <input>:2:1
+  in :(FN :{x :Number} -> Str) (WRONG 5) at <input>:2:1
 ```
 
 The indented `in …` line is the call trace that every error carries;
@@ -195,7 +195,7 @@ including a parameter of an enclosing function. The inner function carries those
 captures with it:
 
 ```koan
-FN (CONSTANTLY value :Str) -> :(FN () -> Str) =
+FN (CONSTANTLY value :Str) -> :(FN :{} -> Str) =
   FN :{} -> Str = (value)
 LET always_hi = (CONSTANTLY "hi")
 PRINT (always_hi {})
@@ -206,7 +206,7 @@ hi
 ```
 
 `CONSTANTLY` returns a fresh zero-argument function that closes over `value`. Its
-return type, `:(FN () -> Str)`, is the type of that function — a function that
+return type, `:(FN :{} -> Str)`, is the type of that function — a function that
 returns a function declares the function type it produces, and the returned
 function is checked against it.
 
@@ -220,7 +220,7 @@ the values you name into it, so what escapes carries copies rather than a
 handle on the call that built it:
 
 ```koan
-FN (GREETER text :Str) -> :(FN () -> Str) =
+FN (GREETER text :Str) -> :(FN :{} -> Str) =
   CLOSE OVER (text) (
     FN :{} -> Str = (text)
   )
@@ -253,7 +253,7 @@ with no list infers one: koan reads the block and captures exactly the names it
 uses from the enclosing call.
 
 ```koan
-FN (GREETER text :Str) -> :(FN () -> Str) =
+FN (GREETER text :Str) -> :(FN :{} -> Str) =
   CLOSE (
     FN :{} -> Str = (text)
   )

@@ -45,7 +45,7 @@ fn bound_tagged_holding_a_home_closure_pins_and_reads_back() {
     ))
     .expect("the program evaluates without error");
     assert_eq!(
-        out, "Some(:(FN () -> Number))\n",
+        out, "Some(:(FN :{} -> Number))\n",
         "the pinned variant value reads back with its captured closure intact"
     );
 }
@@ -83,7 +83,7 @@ fn bound_wrapped_holding_a_home_closure_pins_and_reads_back() {
     ))
     .expect("the program evaluates without error");
     assert_eq!(
-        out, "Holder(:(FN () -> Number))\n",
+        out, "Holder(:(FN :{} -> Number))\n",
         "the pinned wrapped value reads back with its captured closure intact"
     );
 }

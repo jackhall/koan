@@ -288,7 +288,7 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
 /// body constructs `Wrapper (x)`. Returned as a source string reused by the end-to-end tests.
 fn monad_program() -> &'static str {
     "NEWTYPE (Type AS Wrapper)\n\
-     SIG Monad = ((TYPE (Type AS Wrap)) (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))\n\
+     SIG Monad = ((TYPE (Type AS Wrap)) (VAL pure :(FN :{x :Number} -> :(Number AS Wrap))))\n\
      MODULE id_monad = ((LET Wrap = Wrapper) \
      (LET pure = FN (PURE x :Number) -> :(Number AS Wrapper) = (Wrapper (x))))"
 }

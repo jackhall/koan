@@ -372,7 +372,7 @@ fn monad_signature_smoke() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     let src = "SIG Monad = ((TYPE (Type AS Wrap)) \
-         (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
+         (VAL pure :(FN :{x :Number} -> :(Number AS Wrap))))";
     let exprs =
         parse(program.brand(), &test_run.registries().labels, src).expect("parse should succeed");
     {

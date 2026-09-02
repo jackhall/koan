@@ -432,7 +432,7 @@ fn value_slot_equal_passes_missing_fails() {
 fn value_slot_abstract_ref_substitutes_to_sub_manifest() {
     let registries = RunRegistries::new();
     let types = &registries.types;
-    // Super: abstract `Type`, slot `compare :(FN (x :Type, y :Type) -> Number)`.
+    // Super: abstract `Type`, slot `compare :(FN :{x :Type, y :Type} -> Number)`.
     let sup = schema(
         Some(SUP_ID),
         vec![("Type", sig_abstract(SUP_ID, "Type", &registries))],
@@ -450,7 +450,7 @@ fn value_slot_abstract_ref_substitutes_to_sub_manifest() {
         )],
         &registries,
     );
-    // Sub: manifest `Type = Number`, slot `compare :(FN (x :Number, y :Number) -> Number)`.
+    // Sub: manifest `Type = Number`, slot `compare :(FN :{x :Number, y :Number} -> Number)`.
     let sub = schema(
         None,
         vec![],
@@ -563,8 +563,8 @@ fn sig_to_sig_entailment_over_shared_abstract() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     test_run.run(
-        "SIG Alpha = ((TYPE Elem) (VAL compare :(FN (x :Elem) -> Number)))\n\
-         SIG Beta = ((TYPE Elem) (VAL compare :(FN (x :Elem) -> Number)))",
+        "SIG Alpha = ((TYPE Elem) (VAL compare :(FN :{x :Elem} -> Number)))\n\
+         SIG Beta = ((TYPE Elem) (VAL compare :(FN :{x :Elem} -> Number)))",
     );
     let a = match lookup_type(scope, "Alpha") {
         Some(kt) => match test_run.types().node(kt) {

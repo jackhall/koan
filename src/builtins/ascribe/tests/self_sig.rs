@@ -57,7 +57,7 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
         "MODULE int_ord = ((LET Elem = Number) (LET zero = 0) \
          (LET compare = (FN :{x :Number} -> Number = (x))))\n\
          SIG Ordered = ((TYPE Elem) (VAL zero :Elem) \
-         (VAL compare :(FN (x :Elem) -> Number)))\n\
+         (VAL compare :(FN :{x :Elem} -> Number)))\n\
          LET view = (int_ord :| Ordered)",
     );
     let view = module_named(scope, "view", test_run.registries());
@@ -111,7 +111,7 @@ fn transparent_view_self_sig_reads_source_concrete_types() {
         "MODULE int_ord = ((LET Elem = Number) (LET zero = 0) \
          (LET compare = (FN :{x :Number} -> Number = (x))))\n\
          SIG Ordered = ((TYPE Elem) (VAL zero :Elem) \
-         (VAL compare :(FN (x :Elem) -> Number)))\n\
+         (VAL compare :(FN :{x :Elem} -> Number)))\n\
          LET view = (int_ord :! Ordered)",
     );
     let view = module_named(scope, "view", test_run.registries());

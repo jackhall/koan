@@ -243,16 +243,18 @@ fn type_language_argument_positions_reject_bare_constructor() {
         "the value type of `MAP`",
     );
     assert_kind_error(
-        "LET Ft = :(FN (x :Number) -> Wrapper)",
+        "LET Ft = :(FN :{x :Number} -> Wrapper)",
         "Wrapper",
         &["Elem"],
         "the return type of an `:(FN …)` type",
     );
+    // An `:(FN …)` parameter list is a record type, so a parameter's kind error is the
+    // record-type field's — the record elaborates before `FN` dispatches.
     assert_kind_error(
-        "LET Ft = :(FN (x :Wrapper) -> Number)",
+        "LET Ft = :(FN :{x :Wrapper} -> Number)",
         "Wrapper",
         &["Elem"],
-        "the type of FN parameter `x`",
+        "the type of record-type field `x`",
     );
 }
 
@@ -281,7 +283,7 @@ fn first_order_abstract_member_fills_a_value_slot() {
     assert_accepted("", "SIG Ordered = ((TYPE Elem) (VAL zero :Elem))");
     assert_accepted(
         "",
-        "SIG Ordered = ((TYPE Elem) (VAL compare :(FN (a :Elem b :Elem) -> Bool)))",
+        "SIG Ordered = ((TYPE Elem) (VAL compare :(FN :{a :Elem b :Elem} -> Bool)))",
     );
 }
 
@@ -309,7 +311,7 @@ fn first_order_types_are_accepted_across_gated_surfaces() {
     for source in [
         "SIG Boxy = ((VAL boxed :Number))",
         "FN (ECHO xs :(LIST OF Number)) -> Number = (1.0)",
-        "FN (ECHO f :(FN (x :Number) -> Number)) -> Any = (1.0)",
+        "FN (ECHO f :(FN :{x :Number} -> Number)) -> Any = (1.0)",
         "FN (ECHO r :{a :Number}) -> Str = (\"ok\")",
         "OP #(+) OVER Number = (1.0)",
         "UNION Shape = (Circle :Number Square :Str)",
