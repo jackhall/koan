@@ -202,12 +202,11 @@ pub fn body_record_schema<'a>(
             param_names.extend(fields.keys().map(BinderSymbol::symbol));
             let mut elements: BumpVec<'a, SignatureElement> =
                 BumpVec::with_capacity_in(fields.len(), ctx.scope.brand().allocator());
-            elements.extend(fields.iter().map(|(name, ktype)| {
-                SignatureElement::Argument(Argument {
-                    name,
-                    ktype: *ktype,
-                })
-            }));
+            elements.extend(
+                fields
+                    .iter()
+                    .map(|(name, ktype)| SignatureElement::Argument(Argument::new(name, *ktype))),
+            );
             Some((param_names, elements))
         }
         _ => None,

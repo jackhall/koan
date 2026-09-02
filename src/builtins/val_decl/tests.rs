@@ -31,10 +31,11 @@ fn val_inside_sig_binds_typeexpr_carrier() {
     assert_eq!(zero, KType::NUMBER);
 }
 
-/// Pins the parking path: sibling statement order isn't guaranteed, so VAL parks
-/// on TYPE's placeholder and resumes via dep-finish, picking the SIG-local shadow over
-/// the meta-type builtin. The shadow binds an `AbstractType` sourced at the canonical binder (so
-/// the slot records that it *names* the abstract member `Carrier`).
+/// Pins the parking path: sibling statement order isn't guaranteed, so the `ty` slot's bare name
+/// parks on TYPE's placeholder at dispatch and resolves on the wake, picking the SIG-local shadow
+/// over the meta-type builtin — the scope walk reaches the shadow first. The shadow binds an
+/// `AbstractType` sourced at the canonical binder (so the slot records that it *names* the abstract
+/// member `Carrier`).
 #[test]
 fn val_resolves_sig_local_type_shadow() {
     let program = program_storage();
@@ -219,4 +220,19 @@ fn val_with_abstract_type_member_declaration() {
         TypeNode::AbstractType { source, name, .. } if source == ScopeId::SENTINEL && name == carrier
     ));
     assert_eq!(type_kt, zero, "both name the same abstract identity");
+}
+
+/// The `ty` slot is an ordinary kind expectation the dispatch lane resolves into, so an unknown
+/// name misses there — and the slot's registered role keeps the miss naming the form.
+#[test]
+fn unknown_slot_type_names_the_slot_role() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let err = test_run.run_one_err(test_run.parse_one("SIG Ordered = ((VAL zero :Nope))"));
+    assert!(
+        matches!(&err.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("VAL slot type `Nope` is not a known type")),
+        "expected the role-labeled unknown-type message, got {err}",
+    );
 }

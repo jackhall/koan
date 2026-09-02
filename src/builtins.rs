@@ -70,10 +70,29 @@ pub(crate) fn arg(
     if let Some(error) = carrier_union_error(ktype, registries) {
         panic!("builtin slot `{}`: {error}", name.text());
     }
-    SignatureElement::Argument(Argument {
-        name: BinderSymbol::Value(registries.labels.record(name)),
+    SignatureElement::Argument(Argument::new(
+        BinderSymbol::Value(registries.labels.record(name)),
         ktype,
-    })
+    ))
+}
+
+/// [`arg`] with the form-and-role label its unbound-name diagnostic renders — for a type-position
+/// slot whose name the dispatch lane resolves, where the bare unbound-name error would drop the
+/// noun the body used to supply (`MATCH return type \`Bogus\` is not a known type`).
+pub(crate) fn arg_labeled(
+    registries: &RunRegistries,
+    name: &StaticName<ValueSymbol>,
+    ktype: KType,
+    role: &'static str,
+) -> SignatureElement {
+    if let Some(error) = carrier_union_error(ktype, registries) {
+        panic!("builtin slot `{}`: {error}", name.text());
+    }
+    SignatureElement::Argument(Argument::labeled(
+        BinderSymbol::Value(registries.labels.record(name)),
+        ktype,
+        role,
+    ))
 }
 
 /// Assemble a [`SignatureDraft`] with `Resolved(return_type)`. Builtins needing

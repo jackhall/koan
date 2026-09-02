@@ -422,6 +422,7 @@ fn rewrite_threaded_self_refs<'a>(
                                 cell: scope.seal_resident::<crate::machine::model::CarriedFamily>(
                                     Carried::Type(handle),
                                 ),
+                                from_name: Some(BinderSymbol::Type(*t)),
                             },
                             None => WorkingPart::Ast(p.value),
                         }

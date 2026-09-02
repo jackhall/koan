@@ -197,22 +197,22 @@ fn lookup_function_filters_per_overload_visibility() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("BAR")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::NUMBER,
-            }),
+                KType::NUMBER,
+            )),
         ],
     };
     let sig_str = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("BAR")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::STR,
-            }),
+                KType::STR,
+            )),
         ],
     };
     let key = sig_num.untyped_key();

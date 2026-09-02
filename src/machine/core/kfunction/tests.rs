@@ -64,11 +64,11 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("OP")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::NUMBER,
-            }),
+                KType::NUMBER,
+            )),
         ],
     };
     register_builtin(
@@ -107,16 +107,16 @@ fn classify_excludes_literal_name_slots_from_wrap() {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("verb")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("verb")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::IDENTIFIER,
-            }),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("args")
+                KType::IDENTIFIER,
+            )),
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("args")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::KEXPRESSION,
-            }),
+                KType::KEXPRESSION,
+            )),
         ],
     };
     register_builtin(
@@ -183,12 +183,12 @@ fn classify_excludes_binder_name_slot_from_wrap() {
     );
 }
 
-/// A bare leaf Type-token in a `ProperType` slot is a literal-name slot the same way an
-/// Identifier in an Identifier slot is: excluded from `wrap_indices`, the token riding to the
-/// bind. Symmetry pinned by
+/// A `ProperType` slot is a kind expectation, not a literal-name slot: it asks for a type
+/// *value*, so a bare `Type` token at one is wrapped and resolved like any other bare name.
+/// Only the literal-name slot types withhold the wrap — see
 /// [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
-fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
+fn classify_wraps_a_type_token_in_a_propertype_slot() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let region = run_root_storage();
@@ -197,11 +197,11 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("OP")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::of_kind(KKind::ProperType),
-            }),
+                KType::of_kind(KKind::ProperType),
+            )),
         ],
     };
     register_builtin(
@@ -225,7 +225,7 @@ fn classify_excludes_type_token_in_propertype_slot_from_wrap() {
         types,
         brand.allocator(),
     );
-    assert!(pick.is_empty());
+    assert_eq!(&*pick, &[1], "the kind slot's bare Type token resolves");
 }
 
 /// Every `KFunction` value projects through `KObject::ktype()` as `KType::KFunction`,
@@ -241,11 +241,11 @@ fn function_value_ktype_projects_kfunction() {
         return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("CALL")),
-            SignatureElement::Argument(crate::machine::model::Argument {
-                name: crate::machine::model::BinderSymbol::classify("x")
+            SignatureElement::Argument(crate::machine::model::Argument::new(
+                crate::machine::model::BinderSymbol::classify("x")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::NUMBER,
-            }),
+                KType::NUMBER,
+            )),
         ],
     };
     let f = KFunction::alloc_captured_for_test(scope, sig, Body::Builtin(body_any), &registries);
@@ -273,11 +273,11 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("OP")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::ANY,
-            }),
+                KType::ANY,
+            )),
         ],
     };
     register_builtin(
@@ -322,11 +322,11 @@ fn classify_excludes_a_bare_token_at_a_union_carrier_slot() {
                 return_type: ReturnType::Resolved(KType::ANY),
                 elements: vec![
                     SignatureElement::Keyword(probe_symbol(keyword)),
-                    SignatureElement::Argument(Argument {
-                        name: crate::machine::model::BinderSymbol::classify("v")
+                    SignatureElement::Argument(Argument::new(
+                        crate::machine::model::BinderSymbol::classify("v")
                             .expect("a test fixture parameter is a value token"),
                         ktype,
-                    }),
+                    )),
                 ],
             },
             body_any,

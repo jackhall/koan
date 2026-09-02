@@ -333,6 +333,10 @@ impl<'a> KFunction<'a> {
                     .value
                     .resolve_for(&arg.ktype, scope, &registries.types),
                 carrier: carriers.get(at).and_then(Option::as_ref),
+                surface: match parts[at].value {
+                    WorkingPart::Spliced { from_name, .. } => from_name,
+                    _ => None,
+                },
             });
         }
         Ok(())

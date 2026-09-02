@@ -6,7 +6,7 @@ use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::branch_walk::{find_branch_body_by_member, find_branch_body_by_type};
-use super::{arg, kw, sig};
+use super::{arg, arg_labeled, kw, sig};
 use crate::machine::model::RunRegistries;
 
 // This builtin's slot spellings, minted once and read back by symbol.
@@ -107,7 +107,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 /// [`find_branch_body_by_member`] for the full rule, and [`body`] for everything the two forms
 /// share — the `-> :T` contract, the overlay scope, and the arm tail.
 pub fn body_over<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use super::branch_walk::{arm_tail, payload_envelope, resolve_arm_contract, resolve_type_slot};
+    use super::branch_walk::{arm_tail, payload_envelope, read_type_slot, resolve_arm_contract};
     use crate::machine::{Action, require_kexpression};
 
     let value = match ctx.args.object(&SLOTS.value) {
@@ -118,15 +118,10 @@ pub fn body_over<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machin
             ))));
         }
     };
-    // The spelling the operand slot carried, kept for the diagnostics: a user `UNION` binds an
-    // anonymous union, so the handle alone names nothing the source wrote.
-    let spelling = ctx.args.unresolved_type(&SLOTS.union);
-    let union = crate::try_action!(resolve_type_slot(
-        ctx,
-        &SLOTS.union,
-        "MATCH",
-        "OVER operand"
-    ));
+    let union = crate::try_action!(read_type_slot(ctx, &SLOTS.union, "OVER operand"));
+    // The name the operand was spelled with, when the lane resolved one into the slot: a `UNION`
+    // binding interns structurally, so the handle alone names nothing the source wrote.
+    let spelling = ctx.args.surface_name(&SLOTS.union);
     let contract = crate::try_action!(resolve_arm_contract(ctx, "MATCH"));
     let branches_expr = crate::try_action!(require_kexpression(ctx.args, "MATCH", &SLOTS.branches));
     let selected = match find_branch_body_by_member(
@@ -167,10 +162,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             kw(registries, "MATCH"),
             arg(registries, &SLOTS.value, KType::ANY),
             kw(registries, "->"),
-            arg(
+            arg_labeled(
                 registries,
                 &SLOTS.return_type,
                 KType::of_kind(KKind::ProperType),
+                "MATCH return type",
             ),
             kw(registries, "WITH"),
             arg(registries, &SLOTS.branches, KType::KEXPRESSION),
@@ -186,12 +182,18 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             kw(registries, "MATCH"),
             arg(registries, &SLOTS.value, KType::ANY),
             kw(registries, "OVER"),
-            arg(registries, &SLOTS.union, KType::of_kind(KKind::ProperType)),
+            arg_labeled(
+                registries,
+                &SLOTS.union,
+                KType::of_kind(KKind::ProperType),
+                "MATCH OVER operand",
+            ),
             kw(registries, "->"),
-            arg(
+            arg_labeled(
                 registries,
                 &SLOTS.return_type,
                 KType::of_kind(KKind::ProperType),
+                "MATCH return type",
             ),
             kw(registries, "WITH"),
             arg(registries, &SLOTS.branches, KType::KEXPRESSION),
@@ -424,9 +426,9 @@ mod tests {
         );
     }
 
-    /// The `-> :T` slot is a `ProperType` slot on a non-binder overload, so a bare user name
-    /// reaches the body as the bind seam's unlowered-name carrier and `resolve_arm_contract`
-    /// resolves it by scope walk. An unbound one keeps the not-a-known-type diagnostic.
+    /// The `-> :T` slot is a kind expectation, so a bare user name auto-wraps and the dispatch
+    /// lane resolves it by scope walk. An unbound one keeps the not-a-known-type diagnostic: the
+    /// slot registers its form-and-role label, which the lane's raise renders.
     #[test]
     fn match_unresolved_return_type_name_reports_not_a_known_type() {
         let program = program_storage();
@@ -441,8 +443,26 @@ mod tests {
         );
     }
 
-    /// The same slot with a *bound* user type name resolves through the carrier and runs, so the
-    /// carrier is a real resolution path, not just an error channel.
+    /// AC6 parity: the flip changes no scheduling. A *forward* reference — a type declared after
+    /// the MATCH — stays a position error, exactly as it was when the body owned the resolution.
+    #[test]
+    fn match_return_type_forward_reference_stays_a_position_error() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let err = test_run
+            .run_one_err(test_run.parse_one("MATCH (42) -> :Later WITH (Number -> (PRINT \"x\"))"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg == "MATCH return type `Later` is not a known type"),
+            "expected the position error for a not-yet-declared type, got {err}",
+        );
+        // Declaring it afterwards binds nothing retroactively — the statement above already failed.
+        test_run.run("NEWTYPE Later = Number");
+    }
+
+    /// The same slot with a *bound* user type name resolves and runs, so the lane's resolution is
+    /// a real path, not just an error channel.
     #[test]
     fn match_return_type_resolves_a_user_bound_name_through_the_carrier() {
         let program = program_storage();

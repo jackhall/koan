@@ -477,23 +477,23 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("x")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("x")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::ANY,
-            }),
+                KType::ANY,
+            )),
             SignatureElement::Keyword(probe_symbol("+")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("y")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("y")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::ANY,
-            }),
+                KType::ANY,
+            )),
             SignatureElement::Keyword(probe_symbol("+")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("z")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("z")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::ANY,
-            }),
+                KType::ANY,
+            )),
         ],
     };
     assert_eq!(e.untyped_key(), sig.untyped_key());

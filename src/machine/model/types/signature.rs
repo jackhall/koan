@@ -587,9 +587,34 @@ impl SignatureElement {
 pub struct Argument {
     pub name: BinderSymbol,
     pub ktype: KType,
+    /// What this slot *is* to its form, as the surface names it — `"MATCH return type"`,
+    /// `"NEWTYPE repr"`. Set at builtin registration ([`arg_labeled`](crate::builtins)) for the
+    /// slots whose unbound-name diagnostic must stay pointed once the lane, rather than the body,
+    /// resolves the name: the dispatch lane carries it to the raise, which renders ``{role}
+    /// `{Name}` is not a known type`` instead of the bare unbound-name error. A `&'static str`, so
+    /// an `Argument` stays `Copy` and the only formatting is on the error path.
+    pub role: Option<&'static str>,
 }
 
 impl Argument {
+    /// An unlabeled slot — the default. Its unbound-name miss renders the lane's bare error.
+    pub const fn new(name: BinderSymbol, ktype: KType) -> Argument {
+        Argument {
+            name,
+            ktype,
+            role: None,
+        }
+    }
+
+    /// [`new`](Self::new) with the form-and-role label the diagnostic renders.
+    pub const fn labeled(name: BinderSymbol, ktype: KType, role: &'static str) -> Argument {
+        Argument {
+            name,
+            ktype,
+            role: Some(role),
+        }
+    }
+
     pub fn matches<'e>(&self, part: &ExpressionPart<'e>, types: &TypeRegistry) -> bool {
         self.ktype.accepts_part(part, types)
     }

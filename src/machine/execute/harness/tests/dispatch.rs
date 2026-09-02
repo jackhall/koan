@@ -60,11 +60,11 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("MARK")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::NUMBER,
-            }),
+                KType::NUMBER,
+            )),
         ],
     };
     // User-position so the builtin root-first short-circuit doesn't claim it; the inner
@@ -83,11 +83,11 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("MARK")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::ANY,
-            }),
+                KType::ANY,
+            )),
         ],
     };
     register_builtin(
@@ -193,11 +193,11 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
             // The draft door is what normalizes; a Rust-spelled lowercase token keys the
             // uppercased bucket a call computes.
             SignatureElement::keyword("foo", &registries.labels),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::NUMBER,
-            }),
+                KType::NUMBER,
+            )),
         ],
     };
     register_builtin(

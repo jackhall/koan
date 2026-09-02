@@ -179,7 +179,7 @@ pub(super) fn literal_pass_through<'step>(
         // A spliced cell already *is* the producer's own carrier: lifting the resting cell back
         // into a delivery envelope threads the exact reach its producer named, rather than
         // re-deriving one around a read-back value.
-        WorkingPart::Spliced { cell } => Outcome::Done(Ok(StepCarried::born_delivered(
+        WorkingPart::Spliced { cell, .. } => Outcome::Done(Ok(StepCarried::born_delivered(
             ctx.current_scope().lift_spliced(&cell),
         ))),
         // A quote is its body as data. The AST it points at names no producer region, so the

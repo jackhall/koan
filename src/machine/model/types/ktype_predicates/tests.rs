@@ -275,6 +275,7 @@ fn spliced_cell_classifies_by_opening() {
     let scope = run_root_bare(&storage);
     let obj: &KObject = scope.brand().alloc_scalar(Scalar::Number(7.0));
     let cell_part = WorkingPart::Spliced {
+        from_name: None,
         cell: scope.seal_resident(Carried::Object(obj)),
     };
 
@@ -1606,7 +1607,8 @@ fn union_has_member_covers_the_bare_and_union_spellings() {
 }
 
 /// The auto-wrap exclusion is blanket by slot type and distributes: a union owns a bare name as
-/// soon as any member does, and a pure value union owns none.
+/// soon as any *literal-name* member does, and a union of a kind expectation with a value type
+/// owns none — a kind slot asks for a type value, so its bare name resolves.
 #[test]
 fn owns_bare_name_distributes_over_union_members() {
     let registries = RunRegistries::new();
@@ -1614,7 +1616,7 @@ fn owns_bare_name_distributes_over_union_members() {
 
     assert!(carrier_union(types).owns_bare_name(types));
     assert!(
-        types
+        !types
             .union_of(&[KType::PROPER_TYPE, KType::NUMBER])
             .owns_bare_name(types)
     );

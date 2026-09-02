@@ -8,73 +8,26 @@
 //! manifest members live in. VAL never binds a value: the slot is a specification (name →
 //! declared type) the module supplies a value for.
 //!
-//! Type resolution dispatches on the `ty` carrier shape: a [`Held::UnresolvedType`] name carrier
-//! or a builtin leaf re-dispatch against decl_scope so a SIG-local type member shadow wins over the
-//! builtin table; structural carriers (`KFunction`, `List`, ...) are taken directly.
-//!
-//! [`Held::UnresolvedType`]: crate::machine::model::Held::UnresolvedType
+//! The `ty` slot is an ordinary kind expectation, so the dispatch lane elaborates it against the
+//! SIG body's own scope before the body runs — which is what makes a SIG-local type member shadow
+//! win over the builtin table, since the lane's scope walk reaches the shadow first.
 
 use crate::machine::FinishCtx;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
-use crate::machine::model::labels::TypeSymbol;
-use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{KKind, KType, TypeNode};
+use crate::machine::model::{KKind, KType};
 use crate::machine::{KError, KErrorKind, Scope};
-use crate::source::Spanned;
 
-use super::{arg, kw, sig};
+use super::{arg, arg_labeled, kw, sig};
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { name, ty } }
 
-fn typeexpr_from_carrier(kt: KType, registries: &RunRegistries) -> CarrierForm {
-    let types = &registries.types;
-    // The builtin leaf type names re-resolve against decl_scope through the same name path so a
-    // SIG-local shadow wins over the builtin table. `:Module` lowers to the empty signature —
-    // its `name()` is "Module" — and joins that leaf path. A user-declared signature (a non-empty
-    // interface) stays `Direct`: re-resolution is by name, and an aliased user SIG reached
-    // through a `LET` could miss or hit a shadow.
-    let is_leaf_builtin = types.with_node(kt, |node| {
-        matches!(
-            node,
-            TypeNode::Number
-                | TypeNode::Str
-                | TypeNode::Bool
-                | TypeNode::Null
-                | TypeNode::Any
-                | TypeNode::Identifier
-                | TypeNode::KExpression
-                | TypeNode::OfKind(KKind::AnyType | KKind::Signature | KKind::ProperType)
-        )
-    });
-    if is_leaf_builtin || kt == KType::EMPTY_SIGNATURE {
-        CarrierForm::Leaf(
-            kt.name_symbol(registries)
-                .expect("a builtin leaf names itself by a bare Type token"),
-        )
-    } else {
-        CarrierForm::Direct(kt)
-    }
-}
-
-enum CarrierForm {
-    /// Builtin leaf synthesized from `kt.name()`; re-elaborated against decl_scope
-    /// so a SIG-local shadow wins over the builtin table.
-    Leaf(TypeSymbol),
-    Raw(TypeSymbol),
-    /// Structural carrier accepted as-is; inner names are not re-bound.
-    Direct(KType),
-}
-
-/// SIG-body-only value-slot declarator. Same SIG-body guard and carrier-shape split: reads its
-/// args from `BodyCtx::args`, registers the value slot's declared type directly on a scope, and
-/// returns `Action::Done` for a structural carrier or an `Action::AwaitDeps` (one `OwnScope` type
-/// sub-dispatch) for a leaf that re-resolves against decl_scope.
+/// SIG-body-only value-slot declarator: reads its args from `BodyCtx::args` and registers the value
+/// slot's declared type on the decl scope.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::builtins::resolve_or_await::dispatch_type_then;
     use crate::machine::Action;
 
     let done_err = |e: KError| Action::done(Err(e));
@@ -91,37 +44,17 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         return done_err(KError::new(KErrorKind::MissingArg("name".to_string())));
     };
 
-    let carrier = match ctx.args.unresolved_type(&SLOTS.ty) {
-        Some(te) => CarrierForm::Raw(te),
-        None => match ctx.args.ktype(&SLOTS.ty) {
-            Some(kt) => typeexpr_from_carrier(kt, ctx.registries),
-            None => {
-                return done_err(match ctx.args.object(&SLOTS.ty) {
-                    Some(other) => KError::new(KErrorKind::TypeMismatch {
-                        arg: "ty".to_string(),
-                        expected: "ProperType".to_string(),
-                        got: other.ktype().name(ctx.registries),
-                    }),
-                    None => KError::new(KErrorKind::MissingArg("ty".to_string())),
-                });
-            }
-        },
+    let Some(declared_kt) = ctx.args.ktype(&SLOTS.ty) else {
+        return done_err(match ctx.args.object(&SLOTS.ty) {
+            Some(other) => KError::new(KErrorKind::TypeMismatch {
+                arg: "ty".to_string(),
+                expected: "ProperType".to_string(),
+                got: other.ktype().name(ctx.registries),
+            }),
+            None => KError::new(KErrorKind::MissingArg("ty".to_string())),
+        });
     };
-
-    let te = match carrier {
-        CarrierForm::Direct(kt) => return finalize_val(&ctx.finish_ctx(), slot_name, kt),
-        // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
-        // `LET <name> = ...` shadow wins over the builtin table. A `Raw` carrier always holds a
-        // bare-leaf name (parameterized surface forms sub-Dispatch earlier).
-        CarrierForm::Leaf(te) => te,
-        CarrierForm::Raw(te) => te,
-    };
-
-    let brand = ctx.scope.brand();
-    let expr = KExpression::new(brand, &[Spanned::bare(ExpressionPart::Type(te))]);
-    dispatch_type_then(brand, expr, "VAL type slot", move |fctx, kt| {
-        finalize_val(fctx, slot_name, kt)
-    })
+    finalize_val(&ctx.finish_ctx(), slot_name, declared_kt)
 }
 
 /// Records the value slot's declared type into the SIG decl scope's slot collector and returns
@@ -132,7 +65,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
 /// constructor (`VAL boxed :Wrapper` where `Wrapper` has kind `* -> *`) is a kind error here,
 /// while a first-order abstract member (`TYPE Elem` → `VAL zero :Elem`) is proper and admits.
 ///
-/// `declared_kt` arrives from a bind-time `ty` argument or a leaf re-dispatch's dep terminal. The
+/// `declared_kt` arrives lane-resolved in the `ty` argument. The
 /// [`WriteOp::SigSlot`](crate::machine::core::bindings::WriteOp) the outcome carries installs it in
 /// the SIG decl scope's slot collector; [`Scope::resident`] seals the same handle into
 /// the terminal.
@@ -171,7 +104,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         vec![
             kw(registries, "VAL"),
             arg(registries, &SLOTS.name, KType::IDENTIFIER),
-            arg(registries, &SLOTS.ty, KType::of_kind(KKind::ProperType)),
+            arg_labeled(
+                registries,
+                &SLOTS.ty,
+                KType::of_kind(KKind::ProperType),
+                "VAL slot type",
+            ),
         ],
     );
     // VAL installs nothing: it records into the decl scope's slot collector, not into a binding map

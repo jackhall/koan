@@ -91,10 +91,10 @@ fn bind_identity_fn<'run>(
 ) {
     let sig = SignatureDraft {
         return_type: ReturnType::Resolved(KType::NUMBER),
-        elements: vec![SignatureElement::Argument(Argument {
-            name: crate::machine::model::BinderSymbol::Value(registries.labels.record(&N)),
-            ktype: KType::NUMBER,
-        })],
+        elements: vec![SignatureElement::Argument(Argument::new(
+            crate::machine::model::BinderSymbol::Value(registries.labels.record(&N)),
+            KType::NUMBER,
+        ))],
     };
     let f = KFunction::alloc_captured_for_test(
         scope,

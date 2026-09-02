@@ -37,17 +37,17 @@ fn two_slot_sig<'a>(a: KType, b: KType) -> SignatureDraft<'a> {
     SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("a")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("a")
                     .expect("a test fixture parameter is a value token"),
-                ktype: a,
-            }),
+                a,
+            )),
             SignatureElement::Keyword(probe_symbol("OP")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("b")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("b")
                     .expect("a test fixture parameter is a value token"),
-                ktype: b,
-            }),
+                b,
+            )),
         ],
     }
 }
@@ -294,11 +294,11 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("MARK")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::NUMBER,
-            }),
+                KType::NUMBER,
+            )),
         ],
     };
     // User-position so the builtin root-first short-circuit doesn't claim it; the inner
@@ -422,11 +422,11 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("PICK")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::NUMBER,
-            }),
+                KType::NUMBER,
+            )),
         ],
     };
     let pick_num_fn =
@@ -485,11 +485,11 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("PICK")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::STR,
-            }),
+                KType::STR,
+            )),
         ],
     };
     let sibling = KFunction::alloc_captured_draft(

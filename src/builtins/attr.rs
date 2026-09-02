@@ -30,7 +30,6 @@ use crate::machine::StepAllocator;
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::KKind;
-use crate::machine::model::TypeResolution;
 use crate::machine::model::{BinderSymbol, Carried, Module, NodeSchema, TypeSymbol};
 use crate::machine::model::{CarriedFamily, Held, KObject, KType, PartedCell, TypeNode};
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
@@ -168,39 +167,13 @@ pub fn body_identifier<'a>(
 /// `ATTR <s:ProperType> <field:_>` — entry for a type-channel lhs, e.g. a first-class signature
 /// value (see [token classes](../../design/typing/tokens.md) for why such an lhs token is
 /// Type-classed). The Type-Type overload shares this body so a chained access whose field is itself
-/// a Type token reaches the same projection. Projects a member off the Type-classed `s`, resolving
-/// an unlowered name carrier through the memoized bridge first. A module lhs rides the value channel
-/// and picks [`body_module`] instead, so `Foo.Carrier` projects off the module value.
+/// a Type token reaches the same projection. Projects a member off the Type-classed `s`, which
+/// arrives resolved: the slot is a kind expectation, so the dispatch lane elaborates a bare lhs
+/// token — sibling-under-seal fold included — before the body runs. A module lhs rides the value
+/// channel and picks [`body_module`] instead, so `Foo.Carrier` projects off the module value.
 pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
     let context = ProjectionContext::of(ctx.under_type_sigil);
-    if let Some(te) = ctx.args.unresolved_type(&SLOTS.s) {
-        let field_name = crate::try_action!(read_field_name(ctx.args));
-        return match ctx.scope.resolve_type_identifier(te, None, ctx.registries) {
-            TypeResolution::Done(kt) => route(access_type_member(
-                ctx.scope,
-                kt,
-                Some(te),
-                &field_name,
-                context,
-                ctx.registries,
-            )),
-            TypeResolution::Unbound(name) => {
-                Action::done(Err(KError::new(KErrorKind::UnboundName(
-                    crate::machine::model::render_label(name.symbol(), ctx.registries),
-                ))))
-            }
-            TypeResolution::Park(producers) => {
-                Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "ATTR lhs type `{}` resolved to a still-finalizing type \
-                     (parked on {} producer(s)); the type argument should already be sealed \
-                     at body entry",
-                    crate::machine::model::render_label(te.symbol(), ctx.registries),
-                    producers.len(),
-                )))))
-            }
-        };
-    }
     let s_kt = match ctx.args.ktype(&SLOTS.s) {
         Some(kt) => kt,
         None => {
@@ -218,7 +191,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
     route(access_type_member(
         ctx.scope,
         s_kt,
-        None,
+        ctx.args.surface_name(&SLOTS.s),
         &field_name,
         context,
         ctx.registries,
@@ -392,7 +365,7 @@ impl ProjectionContext {
 fn access_type_member<'a>(
     scope: &Scope<'a>,
     kt: KType,
-    spelling: Option<TypeSymbol>,
+    spelling: Option<BinderSymbol>,
     field: &FieldName<'_>,
     context: ProjectionContext,
     registries: &RunRegistries,
@@ -490,10 +463,10 @@ fn access_type_member<'a>(
     }
 }
 
-/// The lhs as a diagnostic names it: the name the read was spelled with when it had one, and the
-/// node's own rendering otherwise. A user `UNION` binds an *anonymous* union, so the node renders
-/// structurally and names nothing the source wrote.
-fn lhs_spelling(spelling: Option<TypeSymbol>, kt: KType, registries: &RunRegistries) -> String {
+/// The lhs as a diagnostic names it: the bare name the dispatch lane resolved into the slot when
+/// there was one, and the node's own rendering otherwise. A `SIG` or `UNION` binding interns
+/// structurally, so the handle alone names nothing the source wrote.
+fn lhs_spelling(spelling: Option<BinderSymbol>, kt: KType, registries: &RunRegistries) -> String {
     match spelling {
         Some(name) => crate::machine::model::render_label(name.symbol(), registries),
         None => kt.display_name(registries).to_string(),
@@ -507,7 +480,7 @@ fn lhs_spelling(spelling: Option<TypeSymbol>, kt: KType, registries: &RunRegistr
 fn sigil_hinted(
     error: KError,
     would_hit_under_sigil: bool,
-    spelling: Option<TypeSymbol>,
+    spelling: Option<BinderSymbol>,
     kt: KType,
     field: &FieldName<'_>,
     registries: &RunRegistries,
@@ -536,7 +509,7 @@ fn record_repr_member<'a>(
     scope: &Scope<'a>,
     kt: KType,
     repr: KType,
-    spelling: Option<TypeSymbol>,
+    spelling: Option<BinderSymbol>,
     field: &FieldName<'_>,
     context: ProjectionContext,
     registries: &RunRegistries,
@@ -874,12 +847,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
+    // The type-channel lhs. `AnyType`, not `ProperType`: the lhs arrives lane-resolved, and a
+    // first-class signature value — the surface this overload exists for — is `Signature`-kinded,
+    // which `ProperType` does not admit.
     let type_identifier_field_sig = || {
         sig(
             KType::ANY,
             vec![
                 kw(registries, "ATTR"),
-                arg(registries, &SLOTS.s, KType::of_kind(KKind::ProperType)),
+                arg(registries, &SLOTS.s, KType::of_kind(KKind::AnyType)),
                 arg(registries, &SLOTS.field, KType::NAME_TOKEN),
             ],
         )

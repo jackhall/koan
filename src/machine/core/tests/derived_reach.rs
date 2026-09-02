@@ -25,11 +25,11 @@ fn key(elements: Vec<SignatureElement>) -> UntypedKey {
 }
 
 fn slot(name: &str) -> SignatureElement {
-    SignatureElement::Argument(Argument {
-        name: crate::machine::model::BinderSymbol::classify(name)
+    SignatureElement::Argument(Argument::new(
+        crate::machine::model::BinderSymbol::classify(name)
             .expect("a test fixture parameter is a value token"),
-        ktype: KType::NUMBER,
-    })
+        KType::NUMBER,
+    ))
 }
 
 /// The **builtin seed** door ([`Scope::register_function_direct`]): the callable is born witnessed

@@ -108,10 +108,8 @@ pub(crate) fn parse_fn_param_list<'a>(
                     (ExpressionPart::Type(t), _) => {
                         match elaborate_type_identifier(elaborator, t, registries) {
                             TypeResolution::Done(kt) => {
-                                elements.push(SignatureElement::Argument(Argument {
-                                    name: symbol,
-                                    ktype: kt,
-                                }));
+                                elements
+                                    .push(SignatureElement::Argument(Argument::new(symbol, kt)));
                             }
                             TypeResolution::Park(producers) => {
                                 awaited.extend(producers);
@@ -139,10 +137,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                         // finish rejected a non-type terminal before feeding it here. The type is an
                         // interned handle, fed back positionally rather than spliced into the
                         // expression.
-                        elements.push(SignatureElement::Argument(Argument {
-                            name: symbol,
-                            ktype,
-                        }));
+                        elements.push(SignatureElement::Argument(Argument::new(symbol, ktype)));
                     }
                     (ExpressionPart::Expression(inner), None) => {
                         sub_dispatches.push((annotation, *inner));

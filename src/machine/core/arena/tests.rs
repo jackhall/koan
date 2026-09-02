@@ -1149,13 +1149,11 @@ fn region_death_frees_every_drop_free_family() {
                 return_type: ReturnType::Resolved(KType::NULL),
                 elements: vec![
                     SignatureElement::Keyword(probe_symbol(&format!("TAKE_{i}"))),
-                    SignatureElement::Argument(Argument {
-                        name: crate::machine::model::BinderSymbol::classify(&format!(
-                            "operand_{i}"
-                        ))
-                        .expect("a test fixture parameter is a value token"),
-                        ktype: KType::NUMBER,
-                    }),
+                    SignatureElement::Argument(Argument::new(
+                        crate::machine::model::BinderSymbol::classify(&format!("operand_{i}"))
+                            .expect("a test fixture parameter is a value token"),
+                        KType::NUMBER,
+                    )),
                 ],
             };
             KFunction::alloc_captured_for_test(

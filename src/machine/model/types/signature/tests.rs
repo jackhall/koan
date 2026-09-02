@@ -15,10 +15,10 @@ fn one_slot(brand: RegionBrand<'_>, kt: KType) -> ExpressionSignature<'_> {
     ExpressionSignature::mint(
         brand,
         ReturnType::Resolved(KType::ANY),
-        &[SignatureElement::Argument(Argument {
-            name: crate::machine::model::BinderSymbol::classify("v").expect("value token"),
-            ktype: kt,
-        })],
+        &[SignatureElement::Argument(Argument::new(
+            crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+            kt,
+        ))],
     )
 }
 
@@ -173,10 +173,10 @@ fn sig_with<'a>(
     ExpressionSignature::mint(
         brand,
         ret,
-        &[SignatureElement::Argument(Argument {
-            name: crate::machine::model::BinderSymbol::classify("v").expect("value token"),
-            ktype: slot,
-        })],
+        &[SignatureElement::Argument(Argument::new(
+            crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+            slot,
+        ))],
     )
 }
 
@@ -256,10 +256,10 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
     ) -> ExpressionSignature<'a> {
         let mut elements = vec![SignatureElement::Keyword(probe_symbol(keyword))];
         elements.extend(slots.iter().map(|kt| {
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v").expect("value token"),
-                ktype: *kt,
-            })
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+                *kt,
+            ))
         }));
         ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &elements)
     }
@@ -274,10 +274,10 @@ fn dispatch_token_equality_matches_indistinguishable_from() {
         ExpressionSignature::mint(
             brand,
             ReturnType::Resolved(KType::BOOL),
-            &[SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("other").expect("value token"),
-                ktype: KType::NUMBER,
-            })],
+            &[SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("other").expect("value token"),
+                KType::NUMBER,
+            ))],
         ),
         keyworded(brand, "TAKE", &[KType::NUMBER]),
         keyworded(brand, "TAKE", &[KType::ANY]),
@@ -338,10 +338,10 @@ fn a_bumped_dispatch_token_matches_what_its_owned_form_does() {
     ) -> ExpressionSignature<'a> {
         let mut elements = vec![SignatureElement::Keyword(probe_symbol(keyword))];
         elements.extend(slots.iter().map(|kt| {
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v").expect("value token"),
-                ktype: *kt,
-            })
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+                *kt,
+            ))
         }));
         ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &elements)
     }
@@ -382,10 +382,10 @@ fn a_dispatch_token_renders_its_keywords_and_slot_types() {
             .expect("a test fixture keyword is keyword-class");
         let mut elements = vec![SignatureElement::Keyword(symbol)];
         elements.extend(slots.iter().map(|kt| {
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v").expect("value token"),
-                ktype: *kt,
-            })
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v").expect("value token"),
+                *kt,
+            ))
         }));
         ExpressionSignature::mint(brand, ReturnType::Resolved(KType::ANY), &elements)
     }

@@ -72,6 +72,11 @@ pub fn scope_frame(scope: &Scope<'_>) -> Rc<FrameStorage> {
 pub struct BoundArg<'a, 'c> {
     pub value: Held<'a>,
     pub carrier: Option<&'c DeliveredCarried>,
+    /// The bare name this slot was spelled with, when the lane resolved one into it — read off the
+    /// part's [`WorkingPart::Spliced`](crate::machine::model::WorkingPart) carriage. A body quotes
+    /// it where the handle alone would not name what the source wrote: a `UNION` or `SIG` binding
+    /// interns structurally, so `Maybe` renders as `:(Some | None)` once resolved.
+    pub surface: Option<BinderSymbol>,
 }
 
 /// A call's arguments as a **schema-keyed view**: the signature's own parameter schema paired with
@@ -152,6 +157,13 @@ impl<'a, 'c> BoundArgs<'a, 'c> {
             Some(Held::Name(b)) => Some(*b),
             _ => None,
         }
+    }
+
+    /// The bare name the argument slot was spelled with, when the dispatch lane resolved one into
+    /// it — for a diagnostic that must quote the operand as the source wrote it rather than as its
+    /// resolved handle renders. `None` for every slot filled by a sub-dispatch or a raw capture.
+    pub fn surface_name(&self, name: &StaticName<ValueSymbol>) -> Option<BinderSymbol> {
+        self.slot(name).and_then(|slot| slot.surface)
     }
 
     /// The argument's raw `:{…}` capture — the read of a `RecordType` slot. Distinct from

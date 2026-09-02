@@ -13,9 +13,10 @@ use crate::witnessed::{BumpAllocator, BumpVec};
 
 /// The auto-wrap classification produced by [`KFunction::classify_for_pick`]: the bare-Identifier /
 /// bare-Type parts in non-literal-name slots, to resolve as sub-Dispatches. A literal-name slot
-/// (`KType::Identifier` / `KType::OfKind(KKind::ProperType)`, or a union with such a member) is
-/// excluded: it owns its token — a declaration's name, or name-data the body reads — so the token
-/// rides to the bind unresolved.
+/// (`KType::Identifier`, `KType::NameToken`, `KType::TypeNameToken`, or a union with such a
+/// member) is excluded: its whole content *is* the token — a declaration's name, or name-data the
+/// body reads — so the token rides to the bind unresolved. A kind expectation asks for a type
+/// value, not a name, so a bare name at one wraps and resolves like any other.
 ///
 /// Bump-hosted in the scratch arena the classifier was handed, so a classification costs no heap
 /// allocation.
@@ -61,7 +62,7 @@ pub fn slot_admits(arg: &Argument, part: &WorkingPart<'_>, registries: &RunRegis
     let types = &registries.types;
     match part {
         WorkingPart::Ast(ast) => arg.matches(ast, types),
-        WorkingPart::Spliced { cell } => arg.ktype.accepts_cell(cell, registries),
+        WorkingPart::Spliced { cell, .. } => arg.ktype.accepts_cell(cell, registries),
         WorkingPart::Expression(_) | WorkingPart::RecordType(_) | WorkingPart::StagedSlot => false,
     }
 }

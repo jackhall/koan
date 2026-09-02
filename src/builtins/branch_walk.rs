@@ -20,7 +20,7 @@
 //!
 //! [`resolve_arm_contract`] builds the `-> :T` return contract every arm enforces on its result.
 
-use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
+use crate::machine::model::{BinderSymbol, ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::{KeywordSymbol, Symbol, TypeSymbol, WILDCARD};
 use crate::machine::model::{TypeNode, TypeResolution, most_specific_ktype};
 
@@ -42,41 +42,25 @@ crate::slots! { SLOTS { return_type } }
 static ARROW: crate::machine::model::StaticName<KeywordSymbol> =
     crate::static_name!(KeywordSymbol, "->");
 
-/// Read the MATCH / TRY `-> :T` slot from `ctx.args` (resolving a forward-referenced bare name
-/// against the call-site scope/chain) into the [`ReturnContract::Arm`] both `MATCH` and `TRY`
-/// arms are checked against.
+/// Read the MATCH / TRY `-> :T` slot from `ctx.args` into the [`ReturnContract::Arm`] both `MATCH`
+/// and `TRY` arms are checked against.
 pub(crate) fn resolve_arm_contract<'a>(
     ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
     kind: &'static str,
 ) -> Result<ReturnContract<'a>, KError> {
-    let ret_kt = resolve_type_slot(ctx, &SLOTS.return_type, kind, "return type")?;
+    let ret_kt = read_type_slot(ctx, &SLOTS.return_type, "return type")?;
     Ok(ReturnContract::Arm { ret: ret_kt, kind })
 }
 
-/// Read a type-channel slot off `ctx.args` into a settled [`KType`], resolving a forward-referenced
-/// bare name against the call-site scope/chain. `kind` names the form and `role` the slot, so one
-/// door serves `MATCH`'s `-> :T` contract and its `OVER <U>` operand with the diagnostic each
-/// deserves.
-pub(crate) fn resolve_type_slot(
+/// Read a type-channel slot off `ctx.args` into a settled [`KType`]. The slot is an ordinary kind
+/// expectation, so the dispatch lane resolves a bare name into it before the body runs and an
+/// unknown one never reaches here — the lane raises against the slot's registered role instead
+/// ([`arg_labeled`](crate::builtins)). `role` names the slot in the missing-argument error.
+pub(crate) fn read_type_slot(
     ctx: &crate::machine::BodyCtx<'_, '_, '_>,
     slot: &crate::machine::model::StaticName<crate::machine::model::ValueSymbol>,
-    kind: &'static str,
     role: &'static str,
 ) -> Result<KType, KError> {
-    if let Some(te) = ctx.args.unresolved_type(slot) {
-        return match ctx
-            .scope
-            .resolve_type_identifier(te, ctx.chain.clone(), ctx.registries)
-        {
-            TypeResolution::Done(kt) => Ok(kt),
-            // The builtin fallback is already tried inside `resolve_type_identifier`; a
-            // non-`Done` arm here (parked or unbound) is not a synchronously-known type.
-            _ => Err(KError::new(KErrorKind::ShapeError(format!(
-                "{kind} {role} `{}` is not a known type",
-                crate::machine::model::render_label(te.symbol(), ctx.registries)
-            )))),
-        };
-    }
     ctx.args
         .ktype(slot)
         .ok_or_else(|| KError::new(KErrorKind::MissingArg(role.to_string())))
@@ -563,7 +547,7 @@ fn wraps_member(scrutinee: &KObject<'_>, members: &[KType], registries: &RunRegi
 pub(crate) fn find_branch_body_by_member<'a>(
     branches: &KExpression<'a>,
     union: KType,
-    spelling: Option<TypeSymbol>,
+    spelling: Option<BinderSymbol>,
     scrutinee: &KObject<'a>,
     scope: &Scope<'a>,
     registries: &RunRegistries,
@@ -571,8 +555,8 @@ pub(crate) fn find_branch_body_by_member<'a>(
 ) -> Result<SelectedArm<'a>, String> {
     use crate::builtins::union::{member_label, union_member};
 
-    // A user `UNION` binds an *anonymous* union, so the node renders structurally and names nothing
-    // the source wrote. Report the operand as it was spelled when the read had a name to go on.
+    // A `UNION` binding interns structurally, so the resolved handle names nothing the source
+    // wrote. Report the operand as it was spelled when the splice carried its name forward.
     let union_name = || match spelling {
         Some(name) => crate::machine::model::render_label(name.symbol(), registries),
         None => union.display_name(registries).to_string(),

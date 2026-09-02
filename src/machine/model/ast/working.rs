@@ -12,7 +12,7 @@
 //! reach the value channel at all — not by audit, but because no constructor takes one.
 
 use crate::machine::core::{RegionBrand, read_resting};
-use crate::machine::model::labels::{KeywordSymbol, LabelInterner};
+use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner};
 use crate::machine::model::{Carried, Held, KObject, RunRegistries};
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::machine::{AdoptSeam, SplicedCell};
@@ -54,7 +54,20 @@ pub enum WorkingPart<'a> {
     /// [`Scope::lift_spliced`](crate::machine::core::Scope::lift_spliced) re-owns its reach for a
     /// consuming adoption, and a verdict-only probe opens it at its own brand
     /// ([`KType::accepts_cell`](crate::machine::model::KType::accepts_cell)) with nothing minted.
-    Spliced { cell: SplicedCell<'a> },
+    ///
+    /// `from_name` is the bare name this slot held before the splice replaced it — `Some` for an
+    /// auto-wrapped operand and a threaded sibling reference, `None` for a sub-dispatch's result,
+    /// which was an expression and never a name. A body reads it back through
+    /// [`BoundArgs::surface_name`](crate::machine::BoundArgs::surface_name) to quote the operand as
+    /// the source spelled it: a [`BinderSymbol`] is a fixed-width content digest, so carrying it
+    /// costs the part no allocation and no borrow, and the diagnostic never re-derives a class
+    /// from text. Not every named type can be recovered from its handle — a `UNION` or `SIG`
+    /// binding interns structurally — which is why the spelling rides here rather than being
+    /// looked up after the fact.
+    Spliced {
+        cell: SplicedCell<'a>,
+        from_name: Option<BinderSymbol>,
+    },
     /// A positional argument slot whose eager value is being produced by a sibling dispatch,
     /// awaiting its resolved carrier. The keyworded part walk stages an eager part as an owned
     /// [`DepRequest`](crate::machine::core::DepRequest) and leaves this marker in its slot so the
@@ -83,7 +96,7 @@ impl<'a> Part<'a> for WorkingPart<'a> {
             // `:(…)` wrapper, since the wrapper's handler does no more than dispatch its body.
             WorkingPart::Expression(body) => FieldSlot::ThreadedSigil(body),
             WorkingPart::RecordType(body) => FieldSlot::ThreadedRecord(body),
-            WorkingPart::Spliced { cell } => FieldSlot::Resolved(*cell),
+            WorkingPart::Spliced { cell, .. } => FieldSlot::Resolved(*cell),
             WorkingPart::StagedSlot => FieldSlot::Other,
         }
     }
@@ -117,7 +130,7 @@ impl<'a> std::fmt::Debug for WorkingPart<'a> {
             WorkingPart::Ast(part) => part.fmt(f),
             WorkingPart::Expression(e) => f.debug_tuple("Expression").field(e).finish(),
             WorkingPart::RecordType(e) => f.debug_tuple("RecordType").field(e).finish(),
-            WorkingPart::Spliced { cell } => {
+            WorkingPart::Spliced { cell, .. } => {
                 write!(f, "Spliced({})", read_resting(cell, spliced_debug))
             }
             WorkingPart::StagedSlot => write!(f, "StagedSlot"),
@@ -157,7 +170,7 @@ impl<'a> WorkingPart<'a> {
             }
             // Reached through `read_resting`, which states the coverage a pin-less probe stands
             // under.
-            WorkingPart::Spliced { cell } => read_resting(cell, |carried| {
+            WorkingPart::Spliced { cell, .. } => read_resting(cell, |carried| {
                 carried.ktype(&registries.types).write_name(f, registries)
             }),
             // A node the scheduler synthesized and will dispatch, and a hole awaiting a sibling's
@@ -222,7 +235,7 @@ impl<'a> WorkingPart<'a> {
         types: &crate::machine::model::TypeRegistry,
     ) -> Held<'a> {
         match self {
-            WorkingPart::Spliced { cell } => {
+            WorkingPart::Spliced { cell, .. } => {
                 // The cell rests in this scope's region (the splice site put it there), so the
                 // scope's own owner covers the lift that re-owns its reach for the adoption below.
                 let delivered = scope.lift_spliced(cell);

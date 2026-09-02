@@ -155,3 +155,23 @@ fn a_keyworded_return_naming_a_later_announced_sibling_elaborates() {
         "the announced pair seals with the forward-naming return resolved",
     );
 }
+
+/// AC5: the `signature` slot is a pure kind expectation, so a bare `Type` token naming a record
+/// alias auto-wraps and resolves like any other — an alias and a `:{…}` literal reach the same
+/// body read. Parity with the shipped `:(FN Params -> Bool)` constructor surface.
+#[test]
+fn an_anonymous_signature_takes_a_record_alias() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "LET Params = :{x :Number}\n\
+         LET f = (FN Params -> Number = (x * 2))\n\
+         LET out = (f {x = 5})",
+    );
+    assert!(
+        matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 10.0),
+        "the aliased signature defines a function that runs",
+    );
+}

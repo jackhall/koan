@@ -404,8 +404,6 @@ digraph {
     "koan::builtins::record_projection" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::resolve_or_await" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::resolve_or_await" -> "koan::machine" [label="uses", style="dashed"];
-    "koan::builtins::resolve_or_await" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::builtins::resolve_or_await" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::builtins::resolve_or_await" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::result" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::result" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -442,11 +440,8 @@ digraph {
     "koan::builtins::using_scope" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::builtins" [label="uses", style="dashed"];
-    "koan::builtins::val_decl" -> "koan::builtins::resolve_or_await" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::val_decl" -> "koan::machine::model::labels" [label="uses", style="dashed"];
-    "koan::builtins::val_decl" -> "koan::source" [label="uses", style="dashed"];
     "koan::fold_fixture" -> "koan::machine" [label="uses", style="dashed"];
     "koan::fold_fixture" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::fold_fixture" -> "koan::machine::execute" [label="uses", style="dashed"];
@@ -652,6 +647,7 @@ digraph {
     "koan::machine::execute::decide::keyworded" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::decide::keyworded" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::decide::keyworded" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::keyworded" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::execute::decide::keyworded" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::decide::literal" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::literal" -> "koan::machine" [label="uses", style="dashed"];

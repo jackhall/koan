@@ -313,12 +313,14 @@ fn reduce_pairwise<'step>(
             let left = Spanned {
                 value: WorkingPart::Spliced {
                     cell: scope.rest_spliced(&terminals[i].cell),
+                    from_name: None,
                 },
                 span: operand_spans[i],
             };
             let right = Spanned {
                 value: WorkingPart::Spliced {
                     cell: scope.rest_spliced(&terminals[i + 1].cell),
+                    from_name: None,
                 },
                 span: operand_spans[i + 1],
             };

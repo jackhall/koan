@@ -697,6 +697,7 @@ pub(crate) fn spliced_part<'a>(
 ) -> crate::machine::model::WorkingPart<'a> {
     let brand = RegionBrand(RegionHandle::from_owner(&**host));
     crate::machine::model::WorkingPart::Spliced {
+        from_name: None,
         cell: Sealed::seal(
             brand.seal_resident::<crate::machine::model::CarriedFamily>(c),
             brand.handle(),
@@ -709,11 +710,11 @@ pub(crate) fn spliced_part<'a>(
 pub(crate) fn one_slot_sig<'a>(name: &'a str, kt: KType) -> SignatureDraft<'a> {
     SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
-        elements: vec![SignatureElement::Argument(Argument {
-            name: crate::machine::model::BinderSymbol::classify(name)
+        elements: vec![SignatureElement::Argument(Argument::new(
+            crate::machine::model::BinderSymbol::classify(name)
                 .expect("a test fixture parameter is a value token"),
-            ktype: kt,
-        })],
+            kt,
+        ))],
     }
 }
 

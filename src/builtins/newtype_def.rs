@@ -32,7 +32,7 @@ use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
 use crate::machine::{StepCarried, seal_type_identity};
 use crate::source::Spanned;
 
-use super::{arg, kw, sig};
+use super::{arg, arg_labeled, kw, sig};
 use crate::machine::model::BinderSymbol;
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
@@ -133,30 +133,15 @@ fn seal_outcome_into_carrier<'a>(
     }
 }
 
-/// A resolved repr finalizes synchronously; a bare-leaf name resolves against the scope chain,
-/// parks on an in-flight binder's claim edge, or errors; a raw sigil repr
-/// sub-dispatches via [`defer_resolved_sigil`].
+/// A resolved repr finalizes synchronously — a bare-leaf name arrives already elaborated, since the
+/// `:ProperType` repr slot is an ordinary kind expectation the dispatch lane resolves into. A raw
+/// sigil repr sub-dispatches via [`defer_resolved_sigil`].
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
-    use crate::builtins::resolve_or_await::{classify_name_lookup, resolve_or_await};
     use crate::machine::{Action, require_bare_type_name};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, &SLOTS.name));
-    let chain = ctx.chain.clone();
     let site = ctx.declaration_site();
-    if let Some(te) = ctx.args.unresolved_type(&SLOTS.repr) {
-        resolve_or_await(
-            ctx.scope,
-            "NEWTYPE repr slot",
-            move |scope, _registries| {
-                classify_name_lookup(scope.resolve_type_with_chain(te, chain.as_deref()), te)
-            },
-            // A bare-leaf name resolved against scope bindings, not a dep terminal.
-            move |fctx, kt| {
-                Action::done_writing(fctx.scratch, finalize_newtype(fctx, name, kt, site))
-            },
-            ctx.registries,
-        )
-    } else if let Some(repr_kt) = ctx.args.ktype(&SLOTS.repr) {
+    if let Some(repr_kt) = ctx.args.ktype(&SLOTS.repr) {
         Action::done_writing(
             ctx.scratch,
             finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site),
@@ -309,7 +294,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
                 kw(registries, "NEWTYPE"),
                 arg(registries, &SLOTS.name, KType::TYPE_NAME_TOKEN),
                 kw(registries, "="),
-                arg(registries, &SLOTS.repr, KType::of_kind(KKind::ProperType)),
+                arg_labeled(
+                    registries,
+                    &SLOTS.repr,
+                    KType::of_kind(KKind::ProperType),
+                    "NEWTYPE repr",
+                ),
             ],
         )
     };
@@ -543,6 +533,21 @@ mod tests {
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(n) if n == "Boxed"),
             "expected UnboundName(Boxed) after failed declaration, got {err}",
+        );
+    }
+
+    /// The repr slot is an ordinary kind expectation the dispatch lane resolves into, so the miss
+    /// is raised there — and stays pointed, because the slot registers the role the raise renders.
+    #[test]
+    fn unknown_repr_names_the_slot_role() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let err = test_run.run_one_err(test_run.parse_one("NEWTYPE Boxed = Nope"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg == "NEWTYPE repr `Nope` is not a known type"),
+            "expected the role-labeled unknown-type message, got {err}",
         );
     }
 

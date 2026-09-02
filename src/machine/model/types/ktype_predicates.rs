@@ -262,14 +262,17 @@ impl KType {
     }
 
     /// Whether a slot of this type *owns* a bare name part rather than letting it resolve — the
-    /// auto-wrap exclusion ([`KFunction::classify_for_pick`](crate::machine::KFunction)). Blanket
-    /// by slot type, not by part shape: an `:Identifier` slot owns even a bare `Type` token it
-    /// cannot admit, and a union owns one as soon as any member does.
+    /// auto-wrap exclusion ([`KFunction::classify_for_pick`](crate::machine::KFunction)). The
+    /// owners are exactly the **literal-name** slot types, whose whole content is the token: a
+    /// binder position, or name-data the body reads. Blanket by slot type, not by part shape: an
+    /// `:Identifier` slot owns even a bare `Type` token it cannot admit, and a union owns one as
+    /// soon as any member does. A kind expectation (`OfKind(ProperType)`) is not an owner — it
+    /// asks for a type *value*, so a bare name at one resolves like any other.
     pub fn owns_bare_name(self, types: &TypeRegistry) -> bool {
         fn is_owner(kt: KType) -> bool {
             matches!(
                 kt,
-                KType::IDENTIFIER | KType::PROPER_TYPE | KType::NAME_TOKEN | KType::TYPE_NAME_TOKEN
+                KType::IDENTIFIER | KType::NAME_TOKEN | KType::TYPE_NAME_TOKEN
             )
         }
         is_owner(self)
@@ -753,7 +756,7 @@ impl KType {
             WorkingPart::Ast(part) => self.accepts_part(part, types),
             // A resolved sub-result opens at its own brand through `accepts_cell`, which routes the
             // opened value through `accepts_carried` — no cast.
-            WorkingPart::Spliced { cell } => self.accepts_cell(cell, registries),
+            WorkingPart::Spliced { cell, .. } => self.accepts_cell(cell, registries),
             // A slot the scheduler has yet to fill — a node it synthesized and will dispatch, or a
             // staging hole awaiting its sibling's carrier. Neither denotes a value yet, and both
             // become a `Spliced` cell before anything binds, so only an `Any` slot admits one.

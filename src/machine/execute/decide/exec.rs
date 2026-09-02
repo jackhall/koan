@@ -291,7 +291,7 @@ fn carriers_from_expr<'step>(
 ) -> BumpVec<'step, Option<DeliveredCarried>> {
     let mut carriers = BumpVec::with_capacity_in(working_expr.parts.len(), view.scratch());
     carriers.extend(working_expr.parts.iter().map(|part| match &part.value {
-        WorkingPart::Spliced { cell } => Some(view.current_scope().lift_spliced(cell)),
+        WorkingPart::Spliced { cell, .. } => Some(view.current_scope().lift_spliced(cell)),
         _ => None,
     }));
     carriers

@@ -283,22 +283,22 @@ fn register_function_allows_overload_with_different_arg_types() {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("BAR")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::NUMBER,
-            }),
+                KType::NUMBER,
+            )),
         ],
     };
     let sig_str = SignatureDraft {
         return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword(probe_symbol("BAR")),
-            SignatureElement::Argument(Argument {
-                name: crate::machine::model::BinderSymbol::classify("v")
+            SignatureElement::Argument(Argument::new(
+                crate::machine::model::BinderSymbol::classify("v")
                     .expect("a test fixture parameter is a value token"),
-                ktype: KType::STR,
-            }),
+                KType::STR,
+            )),
         ],
     };
     let f1 =

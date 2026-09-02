@@ -19,10 +19,10 @@ fn carrier_union(registries: &RunRegistries) -> KType {
 }
 
 fn slot_of(ktype: KType) -> SignatureElement {
-    SignatureElement::Argument(Argument {
-        name: BinderSymbol::classify("operand").expect("a fixture parameter is a value token"),
+    SignatureElement::Argument(Argument::new(
+        BinderSymbol::classify("operand").expect("a fixture parameter is a value token"),
         ktype,
-    })
+    ))
 }
 
 /// Strict admission of a single AST part at a single slot, with the given bare-name outcome.
@@ -216,12 +216,12 @@ fn relaxed_admission_leans_on_a_parked_name_at_a_union_slot() {
     assert!(leans.is_empty());
 }
 
-/// A `ProperType` member brings its own shape-only admission into a union: a fresh `Type` token
-/// strict-admits at `union_of(ProperType, Identifier)` exactly as it does at the bare
-/// `:of_kind(ProperType)` slot, so the member's lowering is reachable rather than lost to the
-/// unbound name. It stays an eager member — the token is lowered at bind, not captured raw.
+/// A `ProperType` member brings its `:(…)` / `:{…}` shape-only admission into a union, and no
+/// more: a bare `Type` token is an ordinary resolving operand at a kind slot, so an unbound one
+/// rejects there exactly as it does at the bare `:of_kind(ProperType)` slot. It stays an eager
+/// member either way — the token is lowered at bind, not captured raw.
 #[test]
-fn a_kind_member_keeps_its_shape_only_admission_in_a_union() {
+fn a_kind_member_carries_only_its_shape_only_admission_into_a_union() {
     let program = program_storage();
     let brand = program.brand();
     let registries = RunRegistries::new();
@@ -231,13 +231,13 @@ fn a_kind_member_keeps_its_shape_only_admission_in_a_union() {
         .types
         .union_of(&[KType::PROPER_TYPE, KType::IDENTIFIER]);
 
-    assert!(admits_with(
+    assert!(!admits_with(
         &registries,
         KType::PROPER_TYPE,
         ExpressionPart::Type(token),
         unbound(),
     ));
-    assert!(admits_with(
+    assert!(!admits_with(
         &registries,
         slot,
         ExpressionPart::Type(token),

@@ -21,7 +21,7 @@ use crate::machine::model::KType;
 use crate::machine::{DeliveredCarried, KError, KErrorKind, Scope};
 
 use super::branch_walk::find_branch_body_for_member;
-use super::{arg, kw, sig};
+use super::{arg, arg_labeled, kw, sig};
 use crate::machine::model::RunRegistries;
 
 // This builtin's slot spellings, minted once and read back by symbol.
@@ -141,10 +141,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             kw(registries, "TRY"),
             arg(registries, &SLOTS.expr, KType::KEXPRESSION),
             kw(registries, "->"),
-            arg(
+            arg_labeled(
                 registries,
                 &SLOTS.return_type,
                 KType::of_kind(KKind::ProperType),
+                "TRY return type",
             ),
             kw(registries, "WITH"),
             arg(registries, &SLOTS.branches, KType::KEXPRESSION),

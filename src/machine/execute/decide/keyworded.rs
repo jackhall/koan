@@ -4,7 +4,8 @@
 use crate::machine::ProducerId;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::location_from_expr;
-use crate::machine::model::{WorkingExpression, WorkingPart};
+use crate::machine::model::labels::BinderSymbol;
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::{DispatchOutcome, KError, KErrorKind};
 use crate::source::Spanned;
 
@@ -85,10 +86,16 @@ fn resolve_and_invoke<'step>(
                 location: location_from_expr(&named),
             })));
         }
-        DispatchOutcome::UnboundName(name) => {
-            return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
-                crate::machine::model::render_label(name.symbol(), ctx.registries()),
-            ))));
+        DispatchOutcome::UnboundName(name, role) => {
+            let spelling = crate::machine::model::render_label(name.symbol(), ctx.registries());
+            // A slot that declared a role keeps the pointed noun its body used to render before the
+            // lane owned the resolution; every other slot reports the bare unbound name.
+            return Outcome::Done(Err(KError::new(match role {
+                Some(role) => {
+                    KErrorKind::ShapeError(format!("{role} `{spelling}` is not a known type"))
+                }
+                None => KErrorKind::UnboundName(spelling),
+            })));
         }
         DispatchOutcome::ParkOnProducers(sources) => {
             return park_on_claims(&sources, expr, ctx);
@@ -143,6 +150,7 @@ fn splice_resolved_names<'step>(
             Spanned {
                 value: WorkingPart::Spliced {
                     cell: ctx.current_scope().rest_delivered(cell),
+                    from_name: bare_part_name(&part.value),
                 },
                 span: part.span,
             }
@@ -240,6 +248,7 @@ pub(super) fn install_eager_subs<'step>(
                     Some((_, terminal)) => Spanned {
                         value: WorkingPart::Spliced {
                             cell: scope.rest_spliced(&terminal.cell),
+                            from_name: None,
                         },
                         span: part.span,
                     },
@@ -303,9 +312,20 @@ fn splice_wrap_slots<'step>(
             Spanned {
                 value: WorkingPart::Spliced {
                     cell: ctx.current_scope().rest_delivered(cell),
+                    from_name: bare_part_name(&part.value),
                 },
                 span: part.span,
             }
         }),
     ))
+}
+
+/// The bare name a part holds, for a splice to carry forward as the operand's surface spelling.
+/// Every other part shape answers `None`: it was never a name, so no diagnostic can quote one.
+fn bare_part_name(part: &WorkingPart<'_>) -> Option<BinderSymbol> {
+    match part.as_ast()? {
+        ExpressionPart::Identifier(v) => Some(BinderSymbol::Value(v)),
+        ExpressionPart::Type(t) => Some(BinderSymbol::Type(t)),
+        _ => None,
+    }
 }

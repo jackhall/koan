@@ -65,8 +65,10 @@ pub enum DispatchOutcome<'step> {
     ParkOnProducers(BumpVec<'step, ProducerId>),
     /// A bare-name arg resolves to nothing — no binding and no placeholder. The unbound name is the
     /// precise cause, so it surfaces here rather than as a dispatch miss. It travels as the symbol
-    /// the lookup held; the spelling is read back where the error is built.
-    UnboundName(BinderSymbol),
+    /// the lookup held; the spelling is read back where the error is built. The second field is
+    /// the rejecting slot's [`Argument::role`](crate::machine::model::Argument), when it declared
+    /// one, so the raise can name the form and role the name failed at.
+    UnboundName(BinderSymbol, Option<&'static str>),
     /// No candidate admits the expression. `quote_hint` is set when a forgotten `#(…)` explains
     /// the miss — see [`quote_would_help`].
     Unmatched {
@@ -120,7 +122,7 @@ impl<'step> Scope<'step> {
                 return outcome;
             }
         }
-        let mut dead_lean: Option<BinderSymbol> = None;
+        let mut dead_lean: Option<(BinderSymbol, Option<&'static str>)> = None;
         for scope in self.ancestors() {
             let lookup =
                 scope
@@ -128,16 +130,16 @@ impl<'step> Scope<'step> {
                     .lookup_function_stored(key, scope.binding_cutoff(chain), scratch);
             match decide_scope(scope, &lookup, expr, bare_outcomes, registries, scratch) {
                 ScopeDecision::Terminal(outcome) => return outcome,
-                ScopeDecision::DeadLean(name) => {
+                ScopeDecision::DeadLean(name, role) => {
                     if dead_lean.is_none() {
-                        dead_lean = Some(name);
+                        dead_lean = Some((name, role));
                     }
                 }
                 ScopeDecision::Continue => {}
             }
         }
         match dead_lean {
-            Some(name) => DispatchOutcome::UnboundName(name),
+            Some((name, role)) => DispatchOutcome::UnboundName(name, role),
             None => DispatchOutcome::Unmatched {
                 quote_hint: quote_would_help(
                     self,
@@ -200,7 +202,7 @@ fn holds_evaluated_non_code(
     bare_outcomes: &[Option<Resolution>],
     registries: &RunRegistries,
 ) -> bool {
-    if let WorkingPart::Spliced { cell } = part {
+    if let WorkingPart::Spliced { cell, .. } = part {
         return !KType::KEXPRESSION.accepts_cell(cell, registries);
     }
     match bare_outcomes.get(index).and_then(|o| o.as_ref()) {
@@ -256,7 +258,7 @@ fn parked_producers<'s>(
 /// bare name.
 enum ScopeDecision<'step> {
     Terminal(DispatchOutcome<'step>),
-    DeadLean(BinderSymbol),
+    DeadLean(BinderSymbol, Option<&'static str>),
     Continue,
 }
 
@@ -331,7 +333,7 @@ fn decide_relaxed<'step, 'e>(
     // deduped accumulator is bounded by the part count no matter how many candidates lean.
     let mut parked: BumpVec<'step, ProducerId> =
         BumpVec::with_capacity_in(expr.parts.len(), scratch);
-    let mut dead_name: Option<BinderSymbol> = None;
+    let mut dead_name: Option<(BinderSymbol, Option<&'static str>)> = None;
     for f in bucket.candidates.iter() {
         let Some(leans) = relaxed_admits(
             &f.value().signature,
@@ -349,9 +351,9 @@ fn decide_relaxed<'step, 'e>(
                         parked.push(p);
                     }
                 }
-                Lean::Dead(name) => {
+                Lean::Dead(name, role) => {
                     if dead_name.is_none() {
-                        dead_name = Some(name);
+                        dead_name = Some((name, role));
                     }
                 }
             }
@@ -361,7 +363,7 @@ fn decide_relaxed<'step, 'e>(
         return ScopeDecision::Terminal(DispatchOutcome::ParkOnProducers(parked));
     }
     match dead_name {
-        Some(name) => ScopeDecision::DeadLean(name),
+        Some((name, role)) => ScopeDecision::DeadLean(name, role),
         None => ScopeDecision::Continue,
     }
 }
@@ -448,11 +450,12 @@ enum PickPass {
 
 /// Which unresolved-slot kind the relaxed pass leaned on at a rejecting slot. `Dead` names an
 /// unbound bare name: no producer will ever bind it, so it labels the `UnboundName` terminal and
-/// never waits.
+/// never waits. It carries the rejecting slot's declared role along with the name, so the terminal
+/// can render the form-and-role noun the slot registered.
 #[derive(Clone, Copy)]
 enum Lean {
     Parked(ProducerId),
-    Dead(BinderSymbol),
+    Dead(BinderSymbol, Option<&'static str>),
 }
 
 /// Strict admission against the `bare_outcomes` cache. Rule table at
@@ -499,7 +502,13 @@ fn relaxed_admits<'e, 's>(
         }
         match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
             Some(Resolution::Parked(p)) => leans.push(Lean::Parked(*p)),
-            Some(Resolution::Unbound(name)) => leans.push(Lean::Dead(*name)),
+            Some(Resolution::Unbound(name)) => {
+                let role = match el {
+                    SignatureElement::Argument(arg) => arg.role,
+                    SignatureElement::Keyword(_) => None,
+                };
+                leans.push(Lean::Dead(*name, role));
+            }
             // Hard reject: no arriving input or binding can flip it.
             _ => return None,
         }
@@ -526,7 +535,7 @@ fn slot_admits_strict<'e>(
         // resolved cell opens at its own brand, and a synthesized node / staging hole names no value
         // an argument slot can admit.
         (SignatureElement::Argument(arg), None) => match slot {
-            WorkingPart::Spliced { cell } => arg.ktype.accepts_cell(cell, registries),
+            WorkingPart::Spliced { cell, .. } => arg.ktype.accepts_cell(cell, registries),
             _ => false,
         },
         (SignatureElement::Argument(arg), Some(part_value)) => {
@@ -538,23 +547,22 @@ fn slot_admits_strict<'e>(
             if arg.ktype.raw_capture_member(part_value, types).is_some() {
                 return arg.matches(part_value, types);
             }
-            // A declaration slot owns the name, so admission is shape-only. `ProperType` admits a
-            // `:(…)` / `:{…}` part on shape alone — whether that part reaches the declarator raw or
-            // as a resolved type-side carrier is the node's lazy-slot stamp's call, not this
-            // predicate's. `Identifier` stays part-kind-exact, so a `:{…}` return type is never
-            // mistaken for a value-named one. A `ProperType` *member* brings the same shape-only
-            // admission into a union, so a fresh `Type` token reaches the member that lowers it
-            // rather than dying on its unbound name — the member stays eager either way, since
-            // what it does with the token is lower it, not capture it raw.
-            if arg.ktype.union_has_member(KType::PROPER_TYPE, types) {
-                if matches!(
+            // `ProperType` admits a `:(…)` / `:{…}` part on shape alone — whether that part reaches
+            // the body raw or as a resolved type-side carrier is the node's lazy-slot stamp's call,
+            // not this predicate's — and the same holds for a `ProperType` member inside a union.
+            // A bare `Type` token gets no such pass: the slot is a kind expectation asking for a
+            // type *value*, so the token auto-wraps and admission reads its resolution below,
+            // exactly as at any other eager slot.
+            if arg.ktype.union_has_member(KType::PROPER_TYPE, types)
+                && matches!(
                     part_value,
                     ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)
-                ) {
-                    return true;
-                }
-                return arg.matches(part_value, types);
+                )
+            {
+                return true;
             }
+            // A declaration slot owns the name, so admission is shape-only. `Identifier` stays
+            // part-kind-exact, so a `:{…}` return type is never mistaken for a value-named one.
             if matches!(
                 arg.ktype,
                 KType::IDENTIFIER | KType::NAME_TOKEN | KType::TYPE_NAME_TOKEN
