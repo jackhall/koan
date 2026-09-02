@@ -1321,6 +1321,42 @@ mod tests {
         );
     }
 
+    /// The projected type *is* the field's declared type, so a slot spelled `:(Point.y)` admits
+    /// exactly what a slot spelled `:Str` admits — a `Str` binds, a `Number` is a dispatch
+    /// non-match.
+    #[test]
+    fn a_slot_typed_by_a_projected_field_admits_what_the_declared_type_admits() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+        test_run.run(
+            "NEWTYPE Point = :{x :Number, y :Str}\n\
+             FN (TAKEY v :(Point.y)) -> Str = (v)\n\
+             PRINT (TAKEY \"s\")",
+        );
+        let printed = String::from_utf8(captured.borrow().clone()).expect("PRINT output is UTF-8");
+        assert_eq!(printed, "s\n");
+
+        let err = test_run.run_one_err(test_run.parse_one("TAKEY 3"));
+        assert!(
+            matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
+            "a Number is a non-match for a `:Str`-declared slot, got {err}",
+        );
+    }
+
+    /// A union variant is a Type-class member, so both spellings name it and name the same thing.
+    #[test]
+    fn a_union_variant_projects_the_same_bare_and_under_the_sigil() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("UNION Maybe = (Some :Number None :Null)");
+        assert_eq!(
+            test_run.run_one_type(test_run.parse_one("Maybe.Some")),
+            test_run.run_one_type(test_run.parse_one(":(Maybe.Some)")),
+        );
+    }
+
     /// A `LET`-bound alias resolves to the same `KType`, so it enters the projection ladder
     /// identically.
     #[test]
