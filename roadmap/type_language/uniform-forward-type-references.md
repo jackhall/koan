@@ -47,21 +47,23 @@ sibling.
 
 **Directions.**
 
-- *Whether any surface may park on a later sibling — open.* Two readings.
-  (a) Strict source order stands as
-  [elaboration.md](../../design/typing/elaboration.md) states it, and the work is
-  purely diagnostic: one message, raised from one place, that says "declared
-  later". (b) A sigiled type expression may park on a later top-level sibling's
-  placeholder, and the work extends deferral to every surface uniformly. Reading
-  (b) is what the retired `sigil_fn_forward_reference_defers_via_combine` test
-  pinned for the `:(FN …)` parameter list alone (in `tests/type_language_sigil.rs`
-  before commit 473ba96d): FN's own field-list walk built its elaborator without
-  a lexical chain, so index gating never applied and the later sibling's
-  placeholder was visible to park on. That behaviour reached exactly one surface
-  and contradicts the invariant the design doc pins, which is why it is a fork to
-  rule rather than a regression to restore. Recommended: (a) — the strict-order
-  rule is stated as a language invariant, and (b) makes forward references legal
-  in type position while they stay illegal in value position.
+- *Whether any surface may park on a later sibling — decided.* No surface
+  parks: strict source order stands as
+  [elaboration.md](../../design/typing/elaboration.md) states it, and the work
+  is purely diagnostic — one message, raised from one place, that says
+  "declared later". Forward parks exist nowhere in the language: the claim
+  store's exclusive visibility cutoff makes a later sibling's placeholder
+  invisible ([name-placeholders.md](../../design/execution/name-placeholders.md)),
+  and a non-binder form's `Type`-token operands park at dispatch only on
+  *backward* in-flight producers
+  ([`resolve_dispatch.rs`](../../src/machine/execute/decide/resolve_dispatch.rs)),
+  so parking here would make forward references legal in type position while
+  they stay illegal in value position. (The retired
+  `sigil_fn_forward_reference_defers_via_combine` test pinned the parking
+  reading for the `:(FN …)` parameter list alone, in
+  `tests/type_language_sigil.rs` before commit 473ba96d: FN's field-list walk
+  built its elaborator without a lexical chain, so index gating never applied.
+  That reached exactly one surface and contradicted the invariant.)
 - *Where the uniform diagnostic is raised — open.* Either every surface routes
   its miss through `Scope::resolve_type_identifier`'s `Unbound` arm and the
   field-list contexts become extra framing on one error, or `unknown_type_name`

@@ -65,7 +65,7 @@ and fails with `unbound name 'left'`.
   item. On top of that machinery, this item rewrites
   [`fn_def.rs`](../../src/builtins/fn_def.rs) to two overloads — the
   binder-shaped keyworded form and the non-binder record form, each with a
-  return slot of `union_of(of_kind(ProperType), SIGILED_TYPE_EXPR,
+  return slot of `union_of(TYPE_NAME_TOKEN, SIGILED_TYPE_EXPR,
   IDENTIFIER)` and one body branching on the carrier
   (`extract_type_slot_raw` already branches on all three; the diagnose-only
   `IDENTIFIER` overload folds into an error arm) — and replaces
