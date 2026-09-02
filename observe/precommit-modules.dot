@@ -695,7 +695,9 @@ digraph {
     "koan::machine::execute::decide::single_poll" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::decide::single_poll" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::decide::single_poll" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::single_poll" -> "koan::machine::model::key_spec" [label="uses", style="dashed"];
     "koan::machine::execute::decide::single_poll" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::single_poll" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::decide::submit" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::decide::submit" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::submit" -> "koan::machine::execute::harness" [label="uses", style="dashed"];

@@ -105,7 +105,12 @@ fn invoke_builtin<'step>(
     ) {
         return Outcome::Done(Err(e));
     }
-    run_action_builtin(view, f, BoundArgs::new(schema, &slots))
+    run_action_builtin(
+        view,
+        f,
+        BoundArgs::new(schema, &slots),
+        working_expr.under_type_sigil(),
+    )
 }
 
 /// Enter a resolved **user-defined** call: mint the per-call cart and bind the call's arguments into
@@ -317,10 +322,14 @@ fn parameter_carriers<'e, 'step>(
 /// region-allocated, and never a per-call map. Its slots carry the bound cells and the
 /// per-parameter reach carriers (a value-embedding body folds / merges the one it embeds; an
 /// absent carrier is region-pure).
+///
+/// `under_type_sigil` is the call's own node speaking: the type-context stamp the `:(…)` handler
+/// left on the working expression this call folded from, forwarded verbatim.
 fn run_action_builtin<'step>(
     view: &DecideCtx<'_, 'step, '_>,
     f: crate::machine::core::ActionFn,
     args: BoundArgs<'step, '_>,
+    under_type_sigil: bool,
 ) -> Outcome<'step> {
     use crate::machine::core::BodyCtx;
 
@@ -338,6 +347,7 @@ fn run_action_builtin<'step>(
             out: view.out(),
             program: view.program(),
             scratch: view.scratch(),
+            under_type_sigil,
         };
         f(&body_ctx)
     };

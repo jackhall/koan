@@ -38,7 +38,7 @@ pub use values::{
 
 pub(crate) use ast::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, Part, PartClass, ProgramExpression,
-    WorkingExpression, WorkingPart, classify_dispatch_shape,
+    ProgramNode, WorkingExpression, WorkingPart, classify_dispatch_shape,
 };
 pub(crate) use binder::MACHINE_BINDERS;
 pub(crate) use binder::announce_type_members;

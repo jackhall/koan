@@ -290,6 +290,11 @@ impl<'a> WorkingPart<'a> {
 /// node carries `None` for both and installs nothing. The lazy-slot stamp is filled at every door,
 /// synthesized runs included: it is a fact about the bucket key, which a synthesized run carries as
 /// plainly as a parsed one.
+///
+/// One fact here is not structural: [`under_type_sigil`](Self::under_type_sigil), the type-context
+/// stamp the `:(…)` handler sets on the body it re-dispatches. It rides beside the cache because it
+/// is invariant under splice for the same reason the cache is — a splice substitutes slots, and the
+/// node's own context does not change with what fills them.
 #[derive(Clone, Copy)]
 pub struct WorkingExpression<'a> {
     pub parts: &'a [Spanned<WorkingPart<'a>>],
@@ -301,6 +306,7 @@ pub struct WorkingExpression<'a> {
     binder_plan: Option<&'a StoredBinderKey<'a>>,
     lazy_slots: Option<&'static LazySlotSpec>,
     binder_name_slot: Option<usize>,
+    under_type_sigil: bool,
 }
 
 /// The source extent a parts run covers: the union of the extents its parts carry, or `None` when
@@ -398,6 +404,7 @@ impl<'a> WorkingExpression<'a> {
             binder_plan: None,
             lazy_slots: crate::machine::model::lazy_slots::lazy_slot_spec_for(parts),
             binder_name_slot: None,
+            under_type_sigil: false,
         }
     }
 
@@ -420,6 +427,7 @@ impl<'a> WorkingExpression<'a> {
             binder_plan: ast.binder_plan_ref(),
             lazy_slots: ast.lazy_slots(),
             binder_name_slot: ast.binder_name_slot(),
+            under_type_sigil: false,
         }
     }
 
@@ -451,7 +459,28 @@ impl<'a> WorkingExpression<'a> {
             binder_plan: self.binder_plan,
             lazy_slots: self.lazy_slots,
             binder_name_slot: self.binder_name_slot,
+            under_type_sigil: self.under_type_sigil,
         }
+    }
+
+    /// Stamp this node as the body of a `:(…)` type expression — the one door, taken by the sigil
+    /// handler on the body it re-dispatches. See [`under_type_sigil`](Self::under_type_sigil).
+    pub fn in_type_context(mut self) -> Self {
+        self.under_type_sigil = true;
+        self
+    }
+
+    /// Was this node reached through the type sigil? A builtin body reads it off its
+    /// [`BodyCtx`](crate::machine::BodyCtx) to answer in the type universe where the bare
+    /// expression answers in the value universe — `:(Ordered.compare)` names the `VAL` slot's
+    /// declared type, `Ordered.compare` names no member at all.
+    ///
+    /// The stamp marks one node, not a subtree: the sigil handler re-labels each qualifying
+    /// value-context part of the body it dispatches, so a nested projection re-enters that handler
+    /// and stamps itself. A part that is not a type-lhs projection is left alone and keeps reading
+    /// on the value channel.
+    pub fn under_type_sigil(&self) -> bool {
+        self.under_type_sigil
     }
 
     /// Cached dispatch shape (see [`classify_dispatch_shape`]).

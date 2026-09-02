@@ -343,6 +343,13 @@ pub struct BodyCtx<'program: 'a, 'a, 'c> {
     /// reclaimed without a free. Branded at the step lifetime `'a`, so nothing staged here can
     /// outlive the step that staged it.
     pub scratch: BumpAllocator<'a>,
+    /// Was the call this body is running reached through the type sigil `:(…)`? Read off the
+    /// step's own working expression
+    /// ([`WorkingExpression::under_type_sigil`](crate::machine::model::WorkingExpression::under_type_sigil)),
+    /// which is where the sigil handler stamped it. A body that answers the same in either universe
+    /// never reads it; `ATTR`'s type-lhs body reads it to decide whether a value-token field names
+    /// the field's declared type or names no member at all.
+    pub under_type_sigil: bool,
 }
 
 impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {

@@ -16,6 +16,13 @@
 //! class, and it outranks `Str`, so the spelled forms above always win it; a field that arrives as
 //! a runtime string — computed or literal — falls to the dynamic pair, [`body_dynamic_field`] for
 //! a value lhs and [`body_dynamic_module_field`] for a module one.
+//!
+//! The overload table does not split on context either. [`body_type_lhs`] reads the type-sigil
+//! stamp off its own [`BodyCtx`](crate::machine::BodyCtx) and hands the projection ladder a
+//! [`ProjectionContext`]: a *value*-class field names a type only under `:(…)`, so
+//! `:(Ordered.compare)` names the `VAL` slot's declared type and `:(Point.x)` the record-repr
+//! newtype's field type, while the bare spellings name no member. A *type*-class field
+//! (`Maybe.Some`, `Ordered.Carrier`) is a type name already and projects either way.
 
 use std::borrow::Cow;
 
@@ -24,7 +31,7 @@ use crate::machine::StepCarried;
 use crate::machine::WriteGate;
 use crate::machine::model::KKind;
 use crate::machine::model::TypeResolution;
-use crate::machine::model::{BinderSymbol, Carried, Module, TypeSymbol};
+use crate::machine::model::{BinderSymbol, Carried, Module, NodeSchema, TypeSymbol};
 use crate::machine::model::{CarriedFamily, Held, KObject, KType, PartedCell, TypeNode};
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
@@ -166,6 +173,7 @@ pub fn body_identifier<'a>(
 /// and picks [`body_module`] instead, so `Foo.Carrier` projects off the module value.
 pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
+    let context = ProjectionContext::of(ctx.under_type_sigil);
     if let Some(te) = ctx.args.unresolved_type(&SLOTS.s) {
         let field_name = crate::try_action!(read_field_name(ctx.args));
         return match ctx.scope.resolve_type_identifier(te, None, ctx.registries) {
@@ -174,6 +182,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
                 kt,
                 Some(te),
                 &field_name,
+                context,
                 ctx.registries,
             )),
             TypeResolution::Unbound(name) => {
@@ -211,6 +220,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::ma
         s_kt,
         None,
         &field_name,
+        context,
         ctx.registries,
     ))
 }
@@ -338,18 +348,53 @@ fn module_lhs<'a>(
     }
 }
 
+/// Which universe a type-lhs projection is being read in — the type-sigil stamp
+/// ([`BodyCtx::under_type_sigil`](crate::machine::BodyCtx)) as the vocabulary the projection ladder
+/// takes it in.
+///
+/// A *type*-class field names a type in either context: `Maybe.Some` and `Ordered.Carrier` project
+/// bare and under the sigil alike, because the name that spells them is already a type name. A
+/// *value*-class field is the split. Token class is a binding rule
+/// ([tokens.md](../../design/typing/tokens.md)), so a value token names a type only where the
+/// surface says so, and `:(…)` is that surface: `:(Ordered.compare)` names the `VAL` slot's
+/// declared type, while bare `Ordered.compare` names no member at all.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProjectionContext {
+    /// An ordinary value-context expression. A value-class field names no member here.
+    Value,
+    /// Under the type sigil `:(…)`. A value-class field names its declared type.
+    Type,
+}
+
+impl ProjectionContext {
+    fn of(under_type_sigil: bool) -> Self {
+        if under_type_sigil {
+            ProjectionContext::Type
+        } else {
+            ProjectionContext::Value
+        }
+    }
+
+    /// May `field` name a type here? Only the sigil admits a value-class name into the type
+    /// universe; a type-class name is one already and needs no surface to say so.
+    fn admits(self, field: &FieldName<'_>) -> bool {
+        !matches!(field.class(), Some(BinderSymbol::Value(_))) || self == ProjectionContext::Type
+    }
+}
+
 /// Project `field` off a Type-channel lhs. A signature answers directly from its owned schema —
-/// a manifest or abstract type member first, then a declared value slot's type — with no
-/// decl-scope reverse-lookup; a union answers the variant `field` names, which is the one door to
-/// a variant (`Maybe.Some` names it, `Maybe.Some 42` constructs through it); an abstract identity
-/// carries no receiver and errors. A module rides the value channel, so a module lhs lands in
-/// [`body_module`] instead. A nominal record handle carries no members here and falls through to
-/// the memberless-type error.
+/// a manifest or abstract type member first, then, under the type sigil, a declared value slot's
+/// type — with no decl-scope reverse-lookup; a record-repr newtype answers its sealed record
+/// schema's field type under the same sigil rule; a union answers the variant `field` names, which
+/// is the one door to a variant (`Maybe.Some` names it, `Maybe.Some 42` constructs through it); an
+/// abstract identity carries no receiver and errors. A module rides the value channel, so a module
+/// lhs lands in [`body_module`] instead.
 fn access_type_member<'a>(
     scope: &Scope<'a>,
     kt: KType,
     spelling: Option<TypeSymbol>,
     field: &FieldName<'_>,
+    context: ProjectionContext,
     registries: &RunRegistries,
 ) -> Result<StepCarried<'a>, KError> {
     /// What the lhs node offers this read, decided under the registry borrow so the node is
@@ -361,6 +406,9 @@ fn access_type_member<'a>(
         /// A union node: its variants are its members, and the lookup rule needs the reading
         /// scope, so this arm carries the decision out of the borrow rather than answering under it.
         Union,
+        /// A nominal over a transparent representation. The fields live in *that* node, so the
+        /// handle rides out of this borrow and the record read runs in a second one.
+        NewTypeRepr(KType),
         Abstract(TypeSymbol),
         NoMembers,
     }
@@ -383,19 +431,34 @@ fn access_type_member<'a>(
             Projection::Signature(member.copied())
         }
         TypeNode::Union { .. } => Projection::Union,
+        TypeNode::SetMember {
+            schema: NodeSchema::NewType(repr),
+            ..
+        } => Projection::NewTypeRepr(*repr),
         TypeNode::AbstractType { name, .. } => Projection::Abstract(*name),
         _ => Projection::NoMembers,
     });
     match projection {
-        // The member type is allocated fresh into the read-site scope's own region.
-        Projection::Signature(Some(member)) => {
+        // The member type is allocated fresh into the read-site scope's own region. A value-class
+        // field is a `VAL` slot's declared type, which only the sigiled surface names.
+        Projection::Signature(Some(member)) if context.admits(field) => {
             Ok(StepCarried::born(scope.resident(Carried::Type(member))))
         }
-        Projection::Signature(None) => Err(KError::new(KErrorKind::ShapeError(format!(
-            "signature `{}` has no member `{}`",
-            kt.display_name(registries),
-            field.text(registries)
-        )))),
+        Projection::Signature(member) => Err(sigil_hinted(
+            KError::new(KErrorKind::ShapeError(format!(
+                "signature `{}` has no member `{}`",
+                lhs_spelling(spelling, kt, registries),
+                field.text(registries)
+            ))),
+            member.is_some(),
+            spelling,
+            kt,
+            field,
+            registries,
+        )),
+        Projection::NewTypeRepr(repr) => {
+            record_repr_member(scope, kt, repr, spelling, field, context, registries)
+        }
         // A variant reference reads against the member list — the same rule a `MATCH … OVER` arm
         // head reads by — so the two surfaces can never disagree about what names a variant.
         Projection::Union => match crate::builtins::union::union_member(
@@ -412,13 +475,7 @@ fn access_type_member<'a>(
             None => Err(KError::new(KErrorKind::ShapeError(format!(
                 "`{}` is not a member of `{}` (members: {})",
                 field.text(registries),
-                match spelling {
-                    // A user `UNION` binds an *anonymous* union, so the node renders structurally
-                    // and names nothing the source wrote. Report the lhs as it was spelled when
-                    // the read had a name to go on.
-                    Some(name) => crate::machine::model::render_label(name.symbol(), registries),
-                    None => kt.display_name(registries).to_string(),
-                },
+                lhs_spelling(spelling, kt, registries),
                 crate::builtins::union::union_member_names(kt, registries),
             )))),
         },
@@ -430,6 +487,106 @@ fn access_type_member<'a>(
             kt.name(registries),
             field.text(registries)
         )))),
+    }
+}
+
+/// The lhs as a diagnostic names it: the name the read was spelled with when it had one, and the
+/// node's own rendering otherwise. A user `UNION` binds an *anonymous* union, so the node renders
+/// structurally and names nothing the source wrote.
+fn lhs_spelling(spelling: Option<TypeSymbol>, kt: KType, registries: &RunRegistries) -> String {
+    match spelling {
+        Some(name) => crate::machine::model::render_label(name.symbol(), registries),
+        None => kt.display_name(registries).to_string(),
+    }
+}
+
+/// Append the sigiled spelling to a value-context miss the sigil *would* have answered — the one
+/// refinement the context split adds to the diagnostics. A miss the sigil would not rescue reports
+/// its message unchanged, so `Number.foo` and `Maybe.some` read exactly as they always have.
+fn sigil_hinted(
+    error: KError,
+    would_hit_under_sigil: bool,
+    spelling: Option<TypeSymbol>,
+    kt: KType,
+    field: &FieldName<'_>,
+    registries: &RunRegistries,
+) -> KError {
+    if !would_hit_under_sigil {
+        return error;
+    }
+    let KErrorKind::ShapeError(message) = &error.kind else {
+        return error;
+    };
+    KError::new(KErrorKind::ShapeError(format!(
+        "{message} — write `:({}.{})` to name the field's declared type",
+        lhs_spelling(spelling, kt, registries),
+        field.text(registries),
+    )))
+}
+
+/// Project `field` off the sealed record schema a record-repr newtype wraps — the product-side peer
+/// of the signature arm's `VAL` slot read, under the same sigil rule. `repr` is read in its own
+/// registry borrow, which is why [`access_type_member`]'s ladder carries the handle out rather than
+/// answering under the lhs node's borrow.
+///
+/// A newtype over anything else (`NEWTYPE Meters = Number`) has no fields to name and takes the
+/// memberless-type error.
+fn record_repr_member<'a>(
+    scope: &Scope<'a>,
+    kt: KType,
+    repr: KType,
+    spelling: Option<TypeSymbol>,
+    field: &FieldName<'_>,
+    context: ProjectionContext,
+    registries: &RunRegistries,
+) -> Result<StepCarried<'a>, KError> {
+    /// The representation as this read sees it, carried out of the borrow: the field's declared
+    /// type when the record has one, alongside the record's own field names for the miss.
+    enum Repr {
+        Record(Option<KType>, Vec<Symbol>),
+        Scalar,
+    }
+    let repr = registries.types.with_node(repr, |node| match node {
+        TypeNode::Record { fields } => Repr::Record(
+            fields.get(field.symbol()).copied(),
+            fields.keys().map(|name| name.symbol()).collect(),
+        ),
+        _ => Repr::Scalar,
+    });
+    let no_member = || {
+        KError::new(KErrorKind::ShapeError(format!(
+            "type `{}` has no member `{}`",
+            kt.name(registries),
+            field.text(registries)
+        )))
+    };
+    match repr {
+        Repr::Record(Some(declared), _) if context.admits(field) => {
+            Ok(StepCarried::born(scope.resident(Carried::Type(declared))))
+        }
+        Repr::Record(declared, names) => match context {
+            // The sigil asked for a field type and the record carries no such field: name what it
+            // does carry, the way a union names its variants on a member miss.
+            ProjectionContext::Type => Err(KError::new(KErrorKind::ShapeError(format!(
+                "`{}` is not a member of `{}` (fields: {})",
+                field.text(registries),
+                lhs_spelling(spelling, kt, registries),
+                names
+                    .iter()
+                    .map(|name| crate::machine::model::render_label(*name, registries))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )))),
+            ProjectionContext::Value => Err(sigil_hinted(
+                no_member(),
+                declared.is_some(),
+                spelling,
+                kt,
+                field,
+                registries,
+            )),
+        },
+        Repr::Scalar => Err(no_member()),
     }
 }
 
@@ -1087,17 +1244,221 @@ mod tests {
     }
 
     /// ATTR on a bare signature type value — not a module/view instance — reads a `VAL` slot's
-    /// declared type straight out of the decl scope's slot collector (the `sig_slot` fallback in
-    /// `access_type_member`): `Ordered.compare` yields the slot's declared `Number`, as a type-side
-    /// result (a `VAL` slot is a specification, never a value).
+    /// declared type under the type sigil: `:(Ordered.compare)` yields the slot's declared
+    /// `Number`, as a type-side result (a `VAL` slot is a specification, never a value).
     #[test]
-    fn attr_on_signature_type_reads_val_slot_declared_type() {
+    fn sigiled_attr_on_signature_type_reads_val_slot_declared_type() {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
         test_run.run("SIG Ordered = (VAL compare :Number)");
-        let kt = test_run.run_one_type(test_run.parse_one("Ordered.compare"));
+        let kt = test_run.run_one_type(test_run.parse_one(":(Ordered.compare)"));
         assert_eq!(kt, KType::NUMBER);
+    }
+
+    /// The bare spelling names no member: `compare` is a value token, and a value token never
+    /// names a type in an unsigiled expression. The schema does carry the slot, so the miss points
+    /// at the surface that reads it.
+    #[test]
+    fn bare_attr_on_signature_type_misses_with_the_sigil_hint() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("SIG Ordered = (VAL compare :Number)");
+        let err = test_run.run_one_err(test_run.parse_one("Ordered.compare"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("signature `Ordered` has no member `compare`")
+                    && msg.contains("`:(Ordered.compare)`")),
+            "expected the no-member miss hinting the sigiled spelling, got {err}",
+        );
+    }
+
+    /// A Type-class member is a type name already, so it projects in either context — the sigil
+    /// admits a *value* token into the type universe and changes nothing else.
+    #[test]
+    fn a_type_class_signature_member_projects_in_either_context() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("SIG Ordered = (TYPE Carrier)");
+        let bare = test_run.run_one_type(test_run.parse_one("Ordered.Carrier"));
+        let sigiled = test_run.run_one_type(test_run.parse_one(":(Ordered.Carrier)"));
+        assert_eq!(bare, sigiled);
+    }
+
+    /// A field the signature does not carry takes the plain miss: there is no sigiled spelling
+    /// that would answer it, so nothing is appended.
+    #[test]
+    fn a_signature_miss_the_sigil_would_not_rescue_is_unhinted() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("SIG Ordered = (VAL compare :Number)");
+        let err = test_run.run_one_err(test_run.parse_one("Ordered.missing"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("has no member `missing`") && !msg.contains("write `:(")),
+            "expected the bare no-member miss, got {err}",
+        );
+    }
+
+    /// `:(Point.x)` — the type sigil over an ATTR with a record-repr-newtype type lhs — yields the
+    /// field's declared type off the member's sealed `NodeSchema::NewType` record schema.
+    #[test]
+    fn sigiled_attr_on_a_record_repr_newtype_reads_the_field_type() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("NEWTYPE Point = :{x :Number, y :Str}");
+        assert_eq!(
+            test_run.run_one_type(test_run.parse_one(":(Point.x)")),
+            KType::NUMBER
+        );
+        assert_eq!(
+            test_run.run_one_type(test_run.parse_one(":(Point.y)")),
+            KType::STR
+        );
+    }
+
+    /// A `LET`-bound alias resolves to the same `KType`, so it enters the projection ladder
+    /// identically.
+    #[test]
+    fn a_let_bound_alias_of_the_nominal_projects_the_same_field_type() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("NEWTYPE Point = :{x :Number, y :Str}\nLET Pointer = Point");
+        assert_eq!(
+            test_run.run_one_type(test_run.parse_one(":(Pointer.x)")),
+            KType::NUMBER
+        );
+    }
+
+    /// The sigil marks one node, so the handler re-labels the qualifying lhs on its way down and
+    /// `:(Point.inner.x)` resolves both levels.
+    #[test]
+    fn a_sigiled_projection_chains_through_a_record_shaped_field() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("NEWTYPE Inner = :{x :Number}\nNEWTYPE Point = :{inner :Inner, tag :Str}");
+        assert_eq!(
+            test_run.run_one_type(test_run.parse_one(":(Point.inner.x)")),
+            KType::NUMBER
+        );
+    }
+
+    /// Bare `Point.x` names no member, and the schema carries the field, so the miss hints the
+    /// sigiled spelling — the same refinement the signature arm makes.
+    #[test]
+    fn bare_attr_on_a_record_repr_newtype_misses_with_the_sigil_hint() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("NEWTYPE Point = :{x :Number, y :Str}");
+        let err = test_run.run_one_err(test_run.parse_one("Point.x"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("type `Point` has no member `x`")
+                    && msg.contains("`:(Point.x)`")),
+            "expected the no-member miss hinting the sigiled spelling, got {err}",
+        );
+    }
+
+    /// A field the record does not carry reports the bare no-member message unhinted in value
+    /// context, and lists the record's fields under the sigil.
+    #[test]
+    fn an_unknown_record_repr_field_lists_the_fields_under_the_sigil() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("NEWTYPE Point = :{x :Number, y :Str}");
+        let bare = test_run.run_one_err(test_run.parse_one("Point.zz"));
+        assert!(
+            matches!(&bare.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("type `Point` has no member `zz`") && !msg.contains("write `:(")),
+            "expected the bare no-member miss, got {bare}",
+        );
+        let sigiled = test_run.run_one_err(test_run.parse_one(":(Point.zz)"));
+        assert!(
+            matches!(&sigiled.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("`zz` is not a member of `Point`") && msg.contains("x, y")),
+            "expected the field-list miss under the sigil, got {sigiled}",
+        );
+    }
+
+    /// The stamp is a fact about the node, so it rides the resplice a park installs: a forward
+    /// referenced nominal resolves on wake and the field read still runs in the type universe.
+    #[test]
+    fn the_sigil_survives_a_park_on_a_forward_referenced_nominal() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+        test_run.run(
+            "MODULE m = (\n  \
+               FN (TAKEX v :(Point.x)) -> Number = (v)\n  \
+               NEWTYPE Point = :{x :Number, y :Str}\n\
+             )\n\
+             USING m SCOPE (PRINT (TAKEX 3))",
+        );
+        let printed = String::from_utf8(captured.borrow().clone()).expect("PRINT output is UTF-8");
+        assert_eq!(printed, "3\n");
+    }
+
+    /// A chain whose lhs sigiled itself — `m.Wrapper` has a Type-class tail, so `build_attr`
+    /// already wrapped it — carries the stamp down the same way a re-labelled part does.
+    #[test]
+    fn a_module_qualified_nominal_chains_under_the_sigil() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+        test_run.run(
+            "MODULE m = (\n  \
+               NEWTYPE Wrapper = :{inner :Point}\n  \
+               NEWTYPE Point = :{x :Number}\n\
+             )\n\
+             USING m SCOPE (\n  \
+               FN (TAKEX v :(m.Wrapper.inner.x)) -> Number = (v)\n  \
+               PRINT (TAKEX 8)\n\
+             )",
+        );
+        let printed = String::from_utf8(captured.borrow().clone()).expect("PRINT output is UTF-8");
+        assert_eq!(printed, "8\n");
+    }
+
+    /// The value channel is untouched by the split: an `Identifier` lhs is a runtime value
+    /// wherever it is written, so a module member read answers the same bare and inside a sigil,
+    /// and neither spelling needs the other's.
+    #[test]
+    fn a_module_value_read_stays_on_the_value_channel_under_the_sigil() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+        test_run.run(
+            "MODULE int_ord = (LET compare = 5)\n\
+             PRINT int_ord.compare\n\
+             PRINT (TYPE OF int_ord.compare)\n\
+             PRINT (:(TYPE OF int_ord.compare))",
+        );
+        let printed = String::from_utf8(captured.borrow().clone()).expect("PRINT output is UTF-8");
+        assert_eq!(printed, "5\nNumber\nNumber\n");
+    }
+
+    /// A scalar-repr newtype has no fields to name, so it takes the memberless-type error in
+    /// either context.
+    #[test]
+    fn a_scalar_repr_newtype_still_reports_no_members() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("NEWTYPE Meters = Number");
+        let err = test_run.run_one_err(test_run.parse_one(":(Meters.x)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("type `Meters` has no member `x`")),
+            "expected the memberless-type error, got {err}",
+        );
     }
 
     /// A missing field on the wrapped record names the carrier's nominal type in the
@@ -1222,7 +1583,8 @@ mod tests {
         let err = test_run.run_one_err(test_run.parse_one("Number.foo"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
-                if msg.contains("Number") && msg.contains("`foo`") && !msg.contains("'s'")),
+                if msg.contains("Number") && msg.contains("`foo`") && !msg.contains("'s'")
+                    && !msg.contains("write `:(")),
             "expected ShapeError naming Number and foo, got {err}",
         );
     }
@@ -1292,7 +1654,8 @@ mod tests {
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("`some` is not a member of `Maybe`")
-                    && msg.contains("Some, None")),
+                    && msg.contains("Some, None")
+                    && !msg.contains("write `:(")),
             "expected the member-list miss for a value-class field, got {err}",
         );
     }

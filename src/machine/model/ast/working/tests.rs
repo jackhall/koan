@@ -44,3 +44,35 @@ fn a_resplice_inherits_the_key_run_and_the_operator_probe() {
     assert_eq!(chain.operator_probe(), respliced.operator_probe());
     assert_eq!(chain.untyped_key(), respliced.untyped_key());
 }
+
+/// The type-context stamp rides the splice too, and for the same reason the structural cache does:
+/// a splice substitutes slots, and whether the node was reached through `:(…)` does not change
+/// with what fills them. Without this a park anywhere under a sigil would silently downgrade the
+/// body to its value-context reading on wake.
+#[test]
+fn a_resplice_inherits_the_type_sigil_stamp() {
+    let program = program_storage();
+    let brand = program.brand().region();
+    let attr = WorkingExpression::from_ast(
+        brand,
+        parse_one(
+            &program,
+            &crate::machine::model::LabelInterner::new(),
+            "Point.x",
+        ),
+    );
+    assert!(!attr.under_type_sigil(), "a parsed node carries no stamp");
+
+    let stamped = attr.in_type_context();
+    let respliced = stamped.respliced(
+        brand,
+        stamped.parts.iter().map(|part| Spanned {
+            value: match part.value {
+                WorkingPart::Ast(ExpressionPart::Keyword(_)) => part.value,
+                _ => WorkingPart::StagedSlot,
+            },
+            span: part.span,
+        }),
+    );
+    assert!(respliced.under_type_sigil());
+}

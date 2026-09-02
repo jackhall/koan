@@ -9,9 +9,11 @@
 use crate::machine::core::{KoanRegion, KoanRegionExt, Scope};
 use crate::machine::model::Carried;
 use crate::machine::model::FieldParts;
+use crate::machine::model::key_spec::KEYWORDS;
 use crate::machine::model::labels::{TypeSymbol, ValueSymbol};
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{ExpressionPart, ProgramNode, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
+use crate::source::Spanned;
 
 use super::super::StepCarried;
 use super::super::lift::relocate_seam;
@@ -68,6 +70,17 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     }
 }
 
+/// `:(…)` — the sigil re-dispatches its body, stamped as reached through the type sigil
+/// ([`WorkingExpression::under_type_sigil`]). The stamp is the whole of what the sigil leaves
+/// behind: a body that answers the same in either universe never reads it, and `ATTR`'s type-lhs
+/// body reads it to project a value-token field's declared type.
+///
+/// The stamp marks one node, so a qualifying value-context part is re-labelled as it goes by
+/// ([`type_lhs_projection`]) — `:(Point.inner.x)`'s inner `Point.inner`, `:(LIST OF Point.x)`'s
+/// element. A re-labelled part is a `SigiledTypeExpr`, the very part `build_attr` emits for a
+/// Type-class tail, so it re-enters here and stamps itself. Every other part rides through
+/// untouched, which is why a module read inside a sigil (`:(Wrap m.field)`) stays on the value
+/// channel.
 pub(super) fn sigiled_type_expr<'step>(
     ctx: &DecideCtx<'_, 'step, '_>,
     expr: WorkingExpression<'step>,
@@ -76,10 +89,50 @@ pub(super) fn sigiled_type_expr<'step>(
         Some(WorkingPart::Ast(ExpressionPart::SigiledTypeExpr(inner))) => *inner,
         _ => unreachable!("SigiledTypeExpr shape implies single SigiledTypeExpr part"),
     };
-    become_dispatch(
-        ctx,
-        WorkingExpression::from_ast(ctx.current_scope().brand(), inner),
-    )
+    let brand = ctx.current_scope().brand();
+    let body = if inner
+        .parts
+        .iter()
+        .any(|part| type_lhs_projection(&part.value).is_some())
+    {
+        WorkingExpression::build_from_iter(
+            brand,
+            inner.parts.iter().map(|part| Spanned {
+                value: WorkingPart::Ast(match type_lhs_projection(&part.value) {
+                    Some(node) => ExpressionPart::SigiledTypeExpr(node),
+                    None => part.value,
+                }),
+                span: part.span,
+            }),
+            inner.span,
+            inner.file,
+        )
+    } else {
+        WorkingExpression::from_ast(brand, inner)
+    };
+    become_dispatch(ctx, body.in_type_context())
+}
+
+/// The `ATTR` node a value-context sub-expression part spells, when its lhs is a type-universe
+/// surface — a `Type` leaf (`Point.x`), a projection that already sigiled itself
+/// (`int_ord.Carrier.x`), or a nested qualifying `ATTR` (`Point.inner.x`). [`None`] for every other
+/// part, including an `ATTR` whose lhs bottoms out at an `Identifier`: that is a module or record
+/// value read, and it belongs to the value channel wherever it is written.
+fn type_lhs_projection<'a>(part: &ExpressionPart<'a>) -> Option<ProgramNode<'a>> {
+    let ExpressionPart::Expression(node) = part else {
+        return None;
+    };
+    let [head, lhs, _field] = node.parts else {
+        return None;
+    };
+    if !matches!(head.value, ExpressionPart::Keyword(kw) if kw == KEYWORDS.attr.symbol()) {
+        return None;
+    }
+    match &lhs.value {
+        ExpressionPart::Type(_) | ExpressionPart::SigiledTypeExpr(_) => Some(*node),
+        ExpressionPart::Expression(_) => type_lhs_projection(&lhs.value).map(|_| *node),
+        _ => None,
+    }
 }
 
 /// `:{x :Number, y :Str}` — a single-part record-type sigil. The record type is structural, so
