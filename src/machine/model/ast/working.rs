@@ -537,13 +537,57 @@ impl<'a> WorkingExpression<'a> {
     /// Every rail that reads a `Parked` bare-name outcome asks this one question, so none of them
     /// can drift from the others: the park scan
     /// (`parked_producers`), strict admission (`slot_admits_strict`), and the auto-wrap
-    /// classification ([`KFunction::classify_for_pick`](crate::machine::KFunction)). An exempt slot
-    /// that parked keeps its raw token — admission takes it on shape and the wrap leaves it alone —
-    /// because the body, not the lane, owns that name.
+    /// classification ([`KFunction::classify_for_pick`](crate::machine::KFunction)).
+    ///
+    /// Exemption alone is not the whole condition, and the other two rails narrow it further: a
+    /// parked exempt token keeps its raw token — admission on shape, no wrap — only at a **kind**
+    /// slot, where the body owns the name. At any other exempt slot (`LET Alias = Cell` reads its
+    /// sibling through `:Any`) admission still rejects and the relaxed pass installs the wait,
+    /// which is what a consumer of an unsealed sibling needs. `NEWTYPE`'s `repr` is today's only
+    /// slot meeting both halves — every other `of_kind(…)` in a binder form's registration is a
+    /// return type, not a slot. A binder form that gained one would have to widen the kind test
+    /// those two rails apply, which this predicate does not carry.
     pub fn park_exempt_slot(&self, index: usize, part: &WorkingPart<'_>) -> bool {
         self.binder_name_slot().is_some_and(|name_slot| {
             index == name_slot || matches!(part.as_ast(), Some(ExpressionPart::Type(_)))
         })
+    }
+
+    /// Whether the **binder body**, not the lane, owns the bare name at `index` — the whole
+    /// condition under which a parked token keeps its raw form, stated once so the two rails that
+    /// act on it ([`slot_admits_strict`] and
+    /// [`KFunction::classify_for_pick`](crate::machine::KFunction)) cannot reassemble it
+    /// differently. All four clauses are load-bearing:
+    ///
+    /// - **parked**: a resolved name wraps and rides the lane like any other operand; an unbound
+    ///   one rejects, so the relaxed pass's dead lean raises against the slot's registered role.
+    /// - **[park-exempt](Self::park_exempt_slot)**: only a binder form's own operand, where the
+    ///   pre-admission park deliberately did not wait.
+    /// - **a bare `Type` token**: the only shape a body resolves this way.
+    /// - **a `ProperType` slot**: the kind expectation whose shape admission hands the token over.
+    ///   `LET Alias = Cell` reads its sibling through an `:Any` slot, which parks and waits for the
+    ///   seal instead — that difference is the whole reason the clause is here.
+    ///
+    /// The `ProperType` clause is deliberately narrow: `of_kind(AnyType)` does not satisfy it, so a
+    /// binder form that grows an `AnyType` type slot would park where `NEWTYPE`'s repr does not.
+    /// No binder form has one today (`NEWTYPE`'s repr is the only kind *slot* among them; every
+    /// other `of_kind(…)` in a binder registration is a return type), and widening it would change
+    /// admission for every `AnyType` slot, binder or not — so it stays a known edge rather than a
+    /// speculative generalization.
+    ///
+    /// [`slot_admits_strict`]: crate::machine::execute
+    pub fn body_owns_parked_name(
+        &self,
+        index: usize,
+        part: &WorkingPart<'_>,
+        slot: crate::machine::model::KType,
+        parked: bool,
+        types: &crate::machine::model::TypeRegistry,
+    ) -> bool {
+        parked
+            && self.park_exempt_slot(index, part)
+            && matches!(part.as_ast(), Some(ExpressionPart::Type(_)))
+            && slot.union_has_member(crate::machine::model::KType::PROPER_TYPE, types)
     }
 
     /// The stored bucket key, as a borrow of the run bumped at construction.

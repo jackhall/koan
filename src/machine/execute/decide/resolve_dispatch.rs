@@ -20,6 +20,7 @@ use crate::machine::model::KeyElement;
 use crate::machine::model::labels::BinderSymbol;
 use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
+use crate::source::Spanned;
 use crate::witnessed::{BumpAllocator, BumpVec};
 
 use super::resolve::Resolution;
@@ -486,7 +487,7 @@ fn signature_admits_strict<'e>(
                 el,
                 &part.value,
                 i,
-                expr.park_exempt_slot(i, &part.value),
+                body_owns_parked_name(expr, i, el, part, bare_outcomes, registries),
                 bare_outcomes,
                 registries,
             )
@@ -518,7 +519,7 @@ fn relaxed_admits<'e, 's>(
             el,
             &part.value,
             i,
-            expr.park_exempt_slot(i, &part.value),
+            body_owns_parked_name(expr, i, el, part, bare_outcomes, registries),
             bare_outcomes,
             registries,
         ) {
@@ -540,13 +541,34 @@ fn relaxed_admits<'e, 's>(
     Some(leans)
 }
 
+/// [`WorkingExpression::body_owns_parked_name`] over one `(element, part)` pair, reading the part's
+/// parked-ness out of the `bare_outcomes` cache. Both admission passes route through here, so they
+/// ask the question the same way the auto-wrap classification does.
+fn body_owns_parked_name<'e>(
+    expr: &WorkingExpression<'e>,
+    i: usize,
+    el: &SignatureElement,
+    part: &Spanned<WorkingPart<'e>>,
+    bare_outcomes: &[Option<Resolution>],
+    registries: &RunRegistries,
+) -> bool {
+    let SignatureElement::Argument(arg) = el else {
+        return false;
+    };
+    let parked = matches!(
+        bare_outcomes.get(i).and_then(|o| o.as_ref()),
+        Some(Resolution::Parked(_))
+    );
+    expr.body_owns_parked_name(i, &part.value, arg.ktype, parked, &registries.types)
+}
+
 /// Per-slot strict admission, shared by [`signature_admits_strict`] and [`relaxed_admits`] so the
 /// two passes cannot drift on what "strict rejects here" means.
 fn slot_admits_strict<'e>(
     el: &SignatureElement,
     slot: &WorkingPart<'e>,
     i: usize,
-    park_exempt: bool,
+    body_owns_parked_name: bool,
     bare_outcomes: &[Option<Resolution>],
     registries: &RunRegistries,
 ) -> bool {
@@ -578,32 +600,23 @@ fn slot_admits_strict<'e>(
             // A bare `Type` token gets no such pass: the slot is a kind expectation asking for a
             // type *value*, so the token auto-wraps and admission reads its resolution below,
             // exactly as at any other eager slot.
-            if arg.ktype.union_has_member(KType::PROPER_TYPE, types) {
-                if matches!(
+            // A binder form's own `Type`-token operand naming a *still-finalizing* type: the
+            // pre-admission park skipped it because the binder body owns the resolve-or-park
+            // protocol through the declaration window, so admission is on shape and the token rides
+            // raw. Parking it instead would deadlock the declaration group the two names share.
+            // `WorkingExpression::body_owns_parked_name` states the whole condition; the auto-wrap
+            // classification asks the same question, so the two rails cannot disagree about who
+            // resolves this token.
+            if body_owns_parked_name {
+                return true;
+            }
+            if arg.ktype.union_has_member(KType::PROPER_TYPE, types)
+                && matches!(
                     part_value,
                     ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)
-                ) {
-                    return true;
-                }
-                // A binder form's own `Type`-token operand naming a *still-finalizing* type. The
-                // pre-admission park skipped it because the binder body owns the resolve-or-park
-                // protocol through the declaration window, so admission is on shape and the token
-                // rides raw — the one bare `Type` token a kind expectation does not resolve.
-                // Parking it instead would deadlock the declaration group the two names share.
-                //
-                // Only `Parked` takes this door. A resolved name wraps and rides the lane like any
-                // other; an unbound one rejects, so the relaxed pass's dead lean raises against the
-                // slot's registered role. And only a *kind* slot: `LET Alias = Cell` reads its
-                // sibling through an `:Any` slot, which parks below and waits for the seal.
-                if park_exempt
-                    && matches!(part_value, ExpressionPart::Type(_))
-                    && matches!(
-                        bare_outcomes.get(i).and_then(|o| o.as_ref()),
-                        Some(Resolution::Parked(_))
-                    )
-                {
-                    return true;
-                }
+                )
+            {
+                return true;
             }
             // A declaration slot owns the name, so admission is shape-only. `Identifier` stays
             // part-kind-exact, so a `:{…}` return type is never mistaken for a value-named one.

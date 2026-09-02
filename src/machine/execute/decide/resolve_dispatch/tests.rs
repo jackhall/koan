@@ -36,19 +36,21 @@ fn admits_with(
     admits_exempt(registries, ktype, part, outcome, false)
 }
 
-/// [`admits_with`] with the park exemption stated — the binder-form operand rail.
+/// [`admits_with`] with the body-owns-this-name verdict stated — the binder-form operand rail.
+/// The verdict itself is `WorkingExpression::body_owns_parked_name`, tested at its own seam; here
+/// it is an input, so this pins what admission *does* with it.
 fn admits_exempt(
     registries: &RunRegistries,
     ktype: KType,
     part: ExpressionPart<'_>,
     outcome: Option<Resolution>,
-    park_exempt: bool,
+    body_owns_parked_name: bool,
 ) -> bool {
     slot_admits_strict(
         &slot_of(ktype),
         &WorkingPart::Ast(part),
         0,
-        park_exempt,
+        body_owns_parked_name,
         &[outcome],
         registries,
     )
@@ -270,48 +272,80 @@ fn a_kind_member_carries_only_its_shape_only_admission_into_a_union() {
     );
 }
 
-/// The park exemption is one predicate read by three rails, and admission is the rail that decides
-/// whether the other two see a raw token. A binder form's `Type`-token operand naming a
-/// still-finalizing sibling strict-admits on shape at a kind slot — the body owns it — while the
-/// same outcome at every other slot rejects, so the relaxed pass parks and the consumer waits.
+/// The four clauses of `body_owns_parked_name` over a real binder form. `NEWTYPE <N> = <T>` is
+/// the one shape whose operand a body owns, and each clause is what keeps some other shape out:
+/// drop the park and a resolved operand wraps; drop the exemption and a non-binder form parks;
+/// drop the kind slot and `LET Alias = Cell` parks on its `:Any` slot and waits for the seal.
 #[test]
-fn a_parked_binder_operand_shape_admits_only_at_a_kind_slot() {
+fn only_a_parked_binder_operand_at_a_kind_slot_is_owned_by_the_body() {
     let program = program_storage();
-    let _brand = program.brand();
+    let region = run_root_storage();
+    let test_run = crate::builtins::test_support::TestRun::silent(&program, &region);
+    let brand = test_run.scope.brand();
+    let types = &test_run.registries().types;
+
+    let declarator = WorkingExpression::from_ast(brand, test_run.parse_one("NEWTYPE Bb = Aa"));
+    let repr = 3;
+    assert!(matches!(
+        declarator.parts[repr].value.as_ast(),
+        Some(ExpressionPart::Type(_))
+    ));
+    let part = declarator.parts[repr].value;
+
+    assert!(
+        declarator.body_owns_parked_name(repr, &part, KType::PROPER_TYPE, true, types),
+        "a parked sibling at NEWTYPE's kind repr slot is the body's to resolve",
+    );
+    assert!(
+        !declarator.body_owns_parked_name(repr, &part, KType::PROPER_TYPE, false, types),
+        "an already-resolved name wraps and rides the lane",
+    );
+    assert!(
+        !declarator.body_owns_parked_name(repr, &part, KType::ANY, true, types),
+        "an `:Any` slot parks and waits for the seal — `LET Alias = Cell`",
+    );
+
+    // A non-binder form has no exempt slot at all, so its operand parks like any other.
+    let consumer =
+        WorkingExpression::from_ast(brand, test_run.parse_one("MATCH (1) -> Aa WITH (x)"));
+    assert!(
+        consumer.binder_name_slot().is_none(),
+        "MATCH declares no name, so nothing about it is park-exempt",
+    );
+    assert!(!consumer.body_owns_parked_name(
+        3,
+        &consumer.parts[3].value,
+        KType::PROPER_TYPE,
+        true,
+        types
+    ),);
+}
+
+/// What admission does with that verdict: it is the shape pass, so the token is taken on shape and
+/// never read out of the `bare_outcomes` cache.
+#[test]
+fn admission_takes_a_body_owned_token_on_shape() {
     let registries = RunRegistries::new();
     let token = type_token("Sibling");
-    let parked = || Some(Resolution::Parked(crate::machine::ProducerId::for_test(7)));
-
     assert!(admits_exempt(
         &registries,
         KType::PROPER_TYPE,
         ExpressionPart::Type(token),
-        parked(),
+        Some(Resolution::Parked(crate::machine::ProducerId::for_test(7))),
         true,
     ));
-    // `LET Alias = Cell` reads its sibling through an `:Any` slot: no shape pass, so it parks.
-    assert!(!admits_exempt(
-        &registries,
-        KType::ANY,
-        ExpressionPart::Type(token),
-        parked(),
-        true,
-    ));
-    // Without the exemption the kind slot parks too — the ordinary non-binder operand.
-    assert!(!admits_exempt(
-        &registries,
-        KType::PROPER_TYPE,
-        ExpressionPart::Type(token),
-        parked(),
-        false,
-    ));
-    // An *unbound* name at the exempt kind slot still rejects, so the dead lean raises against the
-    // slot's registered role rather than handing the body a name nothing will ever bind.
-    assert!(!admits_exempt(
-        &registries,
-        KType::PROPER_TYPE,
-        ExpressionPart::Type(token),
+    // Without it, a parked operand rejects so the relaxed pass can park on the producer, and an
+    // unbound one rejects so the dead lean raises against the slot's registered role.
+    for outcome in [
+        Some(Resolution::Parked(crate::machine::ProducerId::for_test(7))),
         Some(Resolution::Unbound(BinderSymbol::Type(token))),
-        true,
-    ));
+    ] {
+        assert!(!admits_exempt(
+            &registries,
+            KType::PROPER_TYPE,
+            ExpressionPart::Type(token),
+            outcome,
+            false,
+        ));
+    }
 }

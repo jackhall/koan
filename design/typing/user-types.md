@@ -454,7 +454,10 @@ selected by the repr part-kind:
   which is a plain kind expectation: the dispatch lane resolves the name and the body seals a
   plain singleton Newtype over the `KType` it receives. The slot registers the role `NEWTYPE
   repr`, so a name that binds to nothing still reports ``NEWTYPE repr `Nope` is not a known
-  type`` from the lane's raise.
+  type`` from the lane's raise. The exception is a name still finalizing in `NEWTYPE`'s own
+  declaration group: that operand is exempt from the dispatch-time park, which would deadlock the
+  group, so it arrives raw and the body resolves-or-awaits it
+  ([slots-and-signatures.md § Type-position slot kinds](ktype/slots-and-signatures.md#type-position-slot-kinds)).
 - A **non-record sigil** repr (`= :(LIST OF Elem)`) rides a `:SigiledTypeExpr` slot that
   captures the sigil *raw* — more specific than `OfKind(ProperType)`, so it wins with no
   admission-rule change. The shared `body` threads the declarator's window names into

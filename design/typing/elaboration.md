@@ -319,12 +319,19 @@ own bare names. `OfKind(ProperType)` / `OfKind(AnyType)` own no bare name
 so a bare `Type` token at [NEWTYPE's `repr`](../../src/builtins/newtype_def.rs),
 [VAL's `ty`](../../src/builtins/val_decl.rs), [MATCH's union operand and `-> :T`](../../src/builtins/match_case.rs)
 or [ATTR's type-channel lhs](../../src/builtins/attr.rs) auto-wraps and travels the lane's own
-name-resolve rail; those bodies read a settled `KType` and own no resolution protocol. The forms
-that genuinely need the unresolved surface — `FN`'s return slot and `OP`'s operand / result slots,
-whose content may name an `FN` parameter unbound in the defining scope — say so by spelling a
-carrier union, and take the name on its `TypeNameToken` member's `Held::Name(BinderSymbol::Type)`
-rather than on this carrier
-([`return_type.rs`](../../src/builtins/fn_def/return_type.rs)).
+name-resolve rail, and those bodies read a settled `KType`.
+
+Two consumers still take a name unresolved, for two unrelated reasons:
+
+- **`NEWTYPE`'s `repr`**, on this carrier, when the name is a still-finalizing co-declared
+  sibling. `NEWTYPE` is a binder form, so that operand is exempt from the dispatch-time park
+  ([`park_exempt_slot`](../../src/machine/model/ast/working.rs)); the wait belongs to the body,
+  which runs `resolve_or_await` against its own scope and chain
+  ([`newtype_def.rs`](../../src/builtins/newtype_def.rs)). Every other repr name is lane-resolved.
+- **`FN`'s return slot and `OP`'s operand / result slots**, whose content may name an `FN`
+  parameter unbound in the defining scope. They say so by spelling a carrier union, and take the
+  name on its `TypeNameToken` member's `Held::Name(BinderSymbol::Type)` rather than on this
+  carrier ([`return_type.rs`](../../src/builtins/fn_def/return_type.rs)).
 
 The single-part bare-`Type` lookup that those consumers' siblings need is
 folded into the dispatcher's `BareTypeLeaf` fast lane
@@ -380,6 +387,13 @@ machinery and both statically known from the expression's cached spec-table fact
   type) — the binder body resolves these through the declaration-window / type-resolution
   protocol, which answers a declarator's reference to a co-declared sibling without waiting.
 
+Both are one predicate,
+[`WorkingExpression::park_exempt_slot`](../../src/machine/model/ast/working.rs), and **every rail
+that reads a `Parked` bare-name outcome asks it**: the park scan here, strict admission below, and
+the auto-wrap classification. They have to agree — a slot the scan declines to wait on must also
+admit on shape and keep its raw token, or the pick either fails or splices a hole, and the relaxed
+pass installs the very wait the exemption exists to avoid, on an edge that cycles.
+
 [`signature_admits_strict`](../../src/machine/execute/decide/resolve_dispatch.rs)
 then admits a candidate signature against the expression by walking slot/part
 pairs and consulting the cache. The admission rule per cache entry on a
@@ -388,7 +402,7 @@ bare-name part:
 | Cache entry              | Admission rule                                                                   |
 |--------------------------|----------------------------------------------------------------------------------|
 | `Resolved(obj)`          | Admit iff [`KType::accepts_part`](../../src/machine/model/types/ktype_predicates.rs) accepts `Future(obj)`. A wrong carried type strict-rejects rather than tentative-admitting into a bind-time `TypeMismatch`. |
-| `Parked` / `Unbound`     | Reject: a name that has not landed satisfies no typed value slot. An `Unbound` name's precise `UnboundName` diagnostic rides the relaxed pass's `Dead` lean; `Parked` reaches admission only on a pre-scan-exempt slot, where the reject leaves the pick to the binder overloads' shape-only slots. |
+| `Parked` / `Unbound`     | Reject: a name that has not landed satisfies no typed value slot. An `Unbound` name's precise `UnboundName` diagnostic rides the relaxed pass's `Dead` lean — including at an exempt slot, so a name nothing will ever bind is refused rather than handed to a body. `Parked` reaches admission only on a pre-scan-exempt slot, and is **admitted on shape** there when the slot is a kind expectation (the body owns that name); at any other exempt slot the reject sends the relaxed pass to park, which is the wait a consumer of an unsealed sibling needs. |
 | `None` (non-bare part)   | Fall back to shape-only `arg.matches(part)`.                                     |
 
 A producer error never reaches this table, and no fourth row is hiding: the
@@ -404,7 +418,10 @@ neither state is a `Resolution` variant admission must screen.
 `KType::NAME_TOKEN` or `KType::TYPE_NAME_TOKEN` owns the name (`x` in `LET x = …`, `Ty` in
 `NEWTYPE Ty = …`), so admission must be shape-only regardless of whether
 the name happens to be bound elsewhere. A kind expectation is not in that set: it asks for a type
-*value*, so a bare name at one reads the cache like any other eager slot. A `SigiledTypeExpr` or
+*value*, so a bare name at one reads the cache like any other eager slot — except at a
+[park-exempt](../../src/machine/model/ast/working.rs) binder operand whose entry is `Parked`,
+where the pre-admission scan already declined to wait, so admission takes the token on shape and
+the body owns it. A `SigiledTypeExpr` or
 `RecordType` part that the form's lazy-slot stamp keeps raw still admits shape-only at a kind
 slot — it reaches the declarator un-dispatched, which elaborates it to a
 type-side carrier. The same shape-only rule covers a raw `KExpression` part in
@@ -449,12 +466,15 @@ would buy only the elaborator walk while owning an invalidation question.
   window seals every member together, so a finalized `Foo`
   guarantees every user-type embedded in `Foo`'s payload is also finalized.
 
-The one consumer that still resolves a type name for itself is
+Two consumers still resolve a type name for themselves, matching the two raw-name carriers above.
 [`fn_def`'s return-type elaboration](../../src/builtins/fn_def/return_type.rs), shared with
-`OP`'s operand / result slots: it holds the name raw on its carrier union, so it calls
-`Scope::resolve_type_identifier` with its own scope and chain — and parks and re-resolves on wake
-when the name is a still-finalizing earlier binder. Every other type slot is a kind expectation
-whose name the dispatch lane resolved before bind, over the same bridge. A type-denoting FN parameter binds its already-resolved type
+`OP`'s operand / result slots, holds the name on its carrier union and calls
+`Scope::resolve_type_identifier` with its own scope and chain — parking and re-resolving on wake
+when the name is a still-finalizing earlier binder.
+[`newtype_def`'s bare-leaf repr](../../src/builtins/newtype_def.rs) does the same for the one name
+its park-exempt slot hands it raw, through `resolve_or_await` over the simpler
+`Scope::resolve_type_with_chain` lookup. Every other type slot is a kind expectation whose name
+the dispatch lane resolved before bind. A type-denoting FN parameter binds its already-resolved type
 argument directly via `register_type` in
 [`run_user_fn`](../../src/machine/core/kfunction/exec.rs), so the per-call
 type-side bind needs no scope re-resolution and cannot park.

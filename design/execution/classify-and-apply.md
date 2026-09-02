@@ -262,8 +262,13 @@ The rails the dispatch driver feeds:
   literal-name slot (`:Identifier` / `NameToken` / `TypeNameToken`) from
   `wrap_indices`
   uniformly (the slot owns its token — a declaration's name, or name-data the
-  body reads), and the pre-scan's binder exemptions read the expression's
-  cached spec-table facts.
+  body reads). It also skips a slot the pre-admission park *exempted* whose
+  name resolved to a still-finalizing producer: nothing waited on it, so there
+  is no resolved cell to splice and the token rides raw to the body that owns
+  it. The exemption is the one shared
+  [`park_exempt_slot`](../../src/machine/model/ast/working.rs) predicate, read
+  identically by the park scan, strict admission and this classification, off
+  the expression's cached spec-table facts.
 - **Staging arms** (Step 0). `Expression` parts sub-Dispatch;
   `SigiledTypeExpr` and `RecordType` parts wrap into a single-part
   `WorkingExpression` and sub-Dispatch (the sub-Dispatch enters
@@ -324,7 +329,8 @@ The rails the dispatch driver feeds:
   data at bind time. Nothing stages here: Step 0 already submitted every child
   that evaluates, so the only slot still to move once a pick exists is a bare
   name the pick classified. The walk is infallible and installs no parks —
-  dispatch resolution parked on every still-finalizing bare name and admission
+  dispatch resolution parked on every still-finalizing bare name it did not
+  exempt, the classification declined to name the exempt ones, and admission
   rejected every unbound one before the pick, so each wrap slot's cache entry
   is `Resolved` by the time the walk reads it. A pick that names no wrap slot
   rebuilds nothing and invokes over the run it was handed.

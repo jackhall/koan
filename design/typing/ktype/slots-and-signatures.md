@@ -19,8 +19,21 @@ type, `MATCH`/`TRY`'s `-> :T` contract, the `:(FN …)` constructor's parameter 
 `type_call`'s verb slot. `OfKind(AnyType)` is the same expectation one rung wider — it also
 admits a `Signature`-kinded value, which is why `ATTR`'s type-channel lhs takes it.
 
-Because the slot resolves rather than captures, the diagnostic for a name that binds to nothing
-is raised by the dispatch lane, not the body. A slot that needs the pointed form-and-role noun
+**The one bare `Type` token a kind slot does not resolve** is a binder form's own operand naming a
+*still-finalizing* co-declared sibling. A declarator's reference to a sibling in its own
+declaration group is exempt from the dispatch-time park
+([`WorkingExpression::park_exempt_slot`](../../../src/machine/model/ast/working.rs)) — waiting
+there would deadlock the group the two names share — so admission takes that token on shape, the
+auto-wrap leaves it alone, and it reaches the body raw on the
+[`UnresolvedType`](#unresolvedtype--surface-form-survives-bind) carrier for the body's own
+resolve-or-await. The exemption is narrow in all three directions: only a `Parked` outcome (a
+resolved name wraps like any other, an unbound one rejects so the lane still raises), only a
+binder form's `Type`-token operand, and only at a kind slot — `LET Alias = Cell` reads its sibling
+through an `:Any` slot, which parks and waits for the seal. `NEWTYPE`'s `repr` is the only
+production slot that meets all three.
+
+Because the slot otherwise resolves rather than captures, the diagnostic for a name that binds to
+nothing is raised by the dispatch lane, not the body. A slot that needs the pointed form-and-role noun
 registers it as an [`Argument::role`](../../../src/machine/model/types/signature.rs) through
 [`arg_labeled`](../../../src/builtins.rs), and the lane's unbound-name raise renders
 ``{role} `{Name}` is not a known type`` — `MATCH return type`, `MATCH OVER operand`,
@@ -91,6 +104,13 @@ and chain. The same applies to a user-bound alias like `MyT`: the carrier rememb
 written, and only at the resolution boundary does it elaborate to the underlying type. Pinned by
 `fn_return_type_surface_name_preserved_in_error` in
 [`src/builtins/fn_def/tests/return_type.rs`](../../../src/builtins/fn_def/tests/return_type.rs).
+
+The `UnresolvedType` arm itself is what the **park-exempt** kind slot delivers (above): a binder
+form's `Type`-token operand naming a still-finalizing sibling is the one bare name a kind slot
+hands to its body rather than resolving, and `NEWTYPE`'s `repr` reads it there
+([`newtype_def.rs`](../../../src/builtins/newtype_def.rs)) to run the resolve-or-await protocol
+against its own scope and chain. Every other kind slot's bare name is resolved by the lane and
+arrives on the `Type` arm.
 
 A resolving slot keeps the same pointedness by a different route: the name never reaches the body,
 so the lane raises against the slot's registered role (above), and a body that needs the surface
@@ -198,7 +218,9 @@ sub-dispatching shapes — a `:(…)` and a `:{…}` admit without consulting th
 because whether such a part reaches the body raw or as a resolved carrier is the node's lazy-slot
 stamp's call, not admission's. It brings none for a bare `Type` token: the member is a kind
 expectation asking for a type *value*, so the token wraps and admission reads its resolution like
-any other eager slot's. And it brings no raw capture — `raw_capture_member` answers `None` for
+any other eager slot's — the lone exception being the park-exempt binder operand of
+§ Type-position slot kinds, which admits on shape and stays raw. And it brings no raw capture —
+`raw_capture_member` answers `None` for
 it, so it stays an ordinary eager member and the capture semantics of a union carrier slot remain
 the exact carrier members' alone. Its footprint still lists the bare `Type` token, which is what
 keeps a kind member and `TypeNameToken` out of one union — the one shape over which the two would

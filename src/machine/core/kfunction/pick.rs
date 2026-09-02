@@ -56,15 +56,15 @@ impl<'a> KFunction<'a> {
             if arg.ktype.owns_bare_name(types) {
                 continue;
             }
-            // The one parked slot that keeps its raw token: a binder form's `Type`-token operand
-            // at a kind expectation, which `slot_admits_strict` admitted on shape because the
-            // binder body owns that name. There is no resolved cell to splice there.
-            if parked.get(i).copied().unwrap_or(false)
-                && expr.park_exempt_slot(i, &part.value)
-                && arg
-                    .ktype
-                    .union_has_member(crate::machine::model::KType::PROPER_TYPE, types)
-            {
+            // The one parked slot that keeps its raw token: strict admission took it on shape
+            // because the binder body owns that name, so there is no resolved cell to splice.
+            if expr.body_owns_parked_name(
+                i,
+                &part.value,
+                arg.ktype,
+                parked.get(i).copied().unwrap_or(false),
+                types,
+            ) {
                 continue;
             }
             wrap_indices.push(i);

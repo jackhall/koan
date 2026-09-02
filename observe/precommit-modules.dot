@@ -680,6 +680,7 @@ digraph {
     "koan::machine::execute::decide::resolve_dispatch" -> "koan::machine::execute::decide::resolve" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_dispatch" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_dispatch" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::execute::decide::resolve_dispatch" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_type_identifier" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_type_identifier" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::decide::resolve_type_identifier" -> "koan::machine::model" [label="uses", style="dashed"];
