@@ -24,9 +24,16 @@ pub type WrapIndices<'s> = BumpVec<'s, usize>;
 
 impl<'a> KFunction<'a> {
     /// Which slots of `expr` this signature auto-wraps — see [`WrapIndices`].
+    ///
+    /// `parked` marks the slots whose bare name resolved to a still-finalizing producer. One of
+    /// those is wrapped only if the pre-admission park would have waited on it: at a
+    /// [park-exempt slot](WorkingExpression::park_exempt_slot) the lane deliberately did *not*
+    /// wait, so there is no resolved cell to splice and the token rides raw to the body that owns
+    /// it. Wrapping there would splice a hole and deadlock the declaration group besides.
     pub fn classify_for_pick<'e, 's>(
         &self,
         expr: &WorkingExpression<'e>,
+        parked: &[bool],
         types: &TypeRegistry,
         scratch: BumpAllocator<'s>,
     ) -> WrapIndices<'s> {
@@ -46,9 +53,21 @@ impl<'a> KFunction<'a> {
                 continue;
             }
             // A literal-name slot owns its token; every other slot's bare name resolves.
-            if !arg.ktype.owns_bare_name(types) {
-                wrap_indices.push(i);
+            if arg.ktype.owns_bare_name(types) {
+                continue;
             }
+            // The one parked slot that keeps its raw token: a binder form's `Type`-token operand
+            // at a kind expectation, which `slot_admits_strict` admitted on shape because the
+            // binder body owns that name. There is no resolved cell to splice there.
+            if parked.get(i).copied().unwrap_or(false)
+                && expr.park_exempt_slot(i, &part.value)
+                && arg
+                    .ktype
+                    .union_has_member(crate::machine::model::KType::PROPER_TYPE, types)
+            {
+                continue;
+            }
+            wrap_indices.push(i);
         }
         wrap_indices
     }

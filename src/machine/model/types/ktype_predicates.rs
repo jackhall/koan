@@ -120,10 +120,11 @@ pub fn is_exact_carrier(kt: KType) -> bool {
 
 /// The raw part shapes `kt` claims: the shapes for which it imposes its own capture or shape-only
 /// admission semantics rather than letting the part sub-dispatch. `ProperType` / `AnyType` claim
-/// the `Type` token they lower plus the `:(…)` / `:{…}` shapes they shape-admit
-/// (`slot_admits_strict`), which is why a kind member cannot share a union with a carrier member
-/// over the same shape. Every other slot type — a value type, a container, a nominal — claims
-/// nothing.
+/// the `:(…)` / `:{…}` shapes they shape-admit (`slot_admits_strict`) plus the bare `Type` token
+/// they lower when a union reduces to them (`capture_member_for`) — a bare kind slot never sees an
+/// unwrapped one, since it owns no bare name. Claiming the token is what keeps a kind member and
+/// `TypeNameToken` out of one union, the one shape over which the two would disagree. Every other
+/// slot type — a value type, a container, a nominal — claims nothing.
 pub fn capture_footprint(kt: KType) -> CaptureShapes {
     use CaptureShape::{Code, Identifier, RecordType, TypeExpr, TypeToken};
     match kt {

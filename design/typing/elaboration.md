@@ -311,17 +311,20 @@ or is still in parser-form is an internal detail.
 
 The carrier is a type *reference* awaiting resolution, so it reaches only reference slots — a
 binder position never rides it (see
-[tokens.md § A binder position is a name](tokens.md#a-binder-position-is-a-name)). Downstream
-consumers branch on the two arms, handling the `UnresolvedType` carrier where a bare user name
-can still be pending:
+[tokens.md § A binder position is a name](tokens.md#a-binder-position-is-a-name)).
 
-- [ATTR's `body_type_lhs`](../../src/builtins/attr.rs), whose `s` operand is a type reference —
-  its `field` operand is a binder position and arrives classified instead;
-- [NEWTYPE's `repr` slot](../../src/builtins/newtype_def.rs), the
-  [FN return-type slot](../../src/builtins/fn_def/return_type.rs),
-  [VAL's `ty`](../../src/builtins/val_decl.rs) and
-  [MATCH's union operand](../../src/builtins/match_case.rs), which hand the pending name to the
-  park-capable resolver or quote it verbatim in a diagnostic.
+**Which slots still see it is a narrow question**, because a kind-expectation slot resolves its
+own bare names. `OfKind(ProperType)` / `OfKind(AnyType)` own no bare name
+([slots-and-signatures.md § Type-position slot kinds](ktype/slots-and-signatures.md#type-position-slot-kinds)),
+so a bare `Type` token at [NEWTYPE's `repr`](../../src/builtins/newtype_def.rs),
+[VAL's `ty`](../../src/builtins/val_decl.rs), [MATCH's union operand and `-> :T`](../../src/builtins/match_case.rs)
+or [ATTR's type-channel lhs](../../src/builtins/attr.rs) auto-wraps and travels the lane's own
+name-resolve rail; those bodies read a settled `KType` and own no resolution protocol. The forms
+that genuinely need the unresolved surface — `FN`'s return slot and `OP`'s operand / result slots,
+whose content may name an `FN` parameter unbound in the defining scope — say so by spelling a
+carrier union, and take the name on its `TypeNameToken` member's `Held::Name(BinderSymbol::Type)`
+rather than on this carrier
+([`return_type.rs`](../../src/builtins/fn_def/return_type.rs)).
 
 The single-part bare-`Type` lookup that those consumers' siblings need is
 folded into the dispatcher's `BareTypeLeaf` fast lane
@@ -397,12 +400,12 @@ probed here
 Cycle detection is likewise deferred — the cache carries no consumer id — so
 neither state is a `Resolution` variant admission must screen.
 
-**Binder declaration slots bypass the cache.** A slot typed `KType::Identifier`,
-`KType::NAME_TOKEN`, `KType::TYPE_NAME_TOKEN` or `KType::OfKind(KKind::ProperType)`
-owns the name (`x` in `LET x = …`, `Ty` in
+**Literal-name slots bypass the cache.** A slot typed `KType::Identifier`,
+`KType::NAME_TOKEN` or `KType::TYPE_NAME_TOKEN` owns the name (`x` in `LET x = …`, `Ty` in
 `NEWTYPE Ty = …`), so admission must be shape-only regardless of whether
-the name happens to be bound elsewhere. A `SigiledTypeExpr` or `RecordType`
-part that the form's lazy-slot stamp keeps raw admits shape-only in such a
+the name happens to be bound elsewhere. A kind expectation is not in that set: it asks for a type
+*value*, so a bare name at one reads the cache like any other eager slot. A `SigiledTypeExpr` or
+`RecordType` part that the form's lazy-slot stamp keeps raw still admits shape-only at a kind
 slot — it reaches the declarator un-dispatched, which elaborates it to a
 type-side carrier. The same shape-only rule covers a raw `KExpression` part in
 a builtin lazy slot: the slot owns its body, not a name lookup.
@@ -412,11 +415,10 @@ spellings (`union_of(TypeNameToken, SigiledTypeExpr, RecordType, Identifier)` �
 [ktype/slots-and-signatures.md § Union carrier slots](ktype/slots-and-signatures.md#union-carrier-slots)),
 the member that claims the part's shape decides the routing, and every shape-only rule above
 distributes: an exact carrier member routes its shape to raw capture, and an
-`OfKind(ProperType)` member brings the shape-only admission of its own bare slot — so a fresh
-`Type` token, a `:(…)` and a `:{…}` all admit at a union naming it without consulting the
-cache, exactly as they do at `:OfKind(ProperType)` itself, while the token is still *lowered*
-rather than captured raw. Either way the slot bypasses the cache and the verdict comes from
-`accepts_part` distributed over the members. Registration guarantees at most one member claims
+`OfKind(ProperType)` member brings the shape-only admission of its own bare slot — so a `:(…)`
+and a `:{…}` admit at a union naming it without consulting the cache, exactly as they do at
+`:OfKind(ProperType)` itself, while a bare `Type` token reaching that member reads the cache and
+is *lowered* rather than captured raw. Registration guarantees at most one member claims
 any shape, so the routing does not depend on how the union was written. The two
 mutually-exclusive raw-capture guards distribute the same way: a union capturing one of `:(…)`
 / `:{…}` raw must not speculatively admit the other, or a sibling overload's raw capture ties
@@ -447,14 +449,12 @@ would buy only the elaborator walk while owning an invalidation question.
   window seals every member together, so a finalized `Foo`
   guarantees every user-type embedded in `Foo`'s payload is also finalized.
 
-Consumers that need the scope-resolved identity —
-[`val_decl::body`](../../src/builtins/val_decl.rs)'s structural
-carrier path and its post-dep-finish, and
-[`fn_def::body`](../../src/builtins/fn_def.rs)'s return-type
-elaboration — go through `Scope::resolve_type_identifier`. NEWTYPE's bare-leaf
-user-bound repr path keeps the simpler `Scope::resolve_type` lookup (it's
-intentionally non-park-aware: an unresolvable repr is a hard error, not a
-forward reference). A type-denoting FN parameter binds its already-resolved type
+The one consumer that still resolves a type name for itself is
+[`fn_def`'s return-type elaboration](../../src/builtins/fn_def/return_type.rs), shared with
+`OP`'s operand / result slots: it holds the name raw on its carrier union, so it calls
+`Scope::resolve_type_identifier` with its own scope and chain — and parks and re-resolves on wake
+when the name is a still-finalizing earlier binder. Every other type slot is a kind expectation
+whose name the dispatch lane resolved before bind, over the same bridge. A type-denoting FN parameter binds its already-resolved type
 argument directly via `register_type` in
 [`run_user_fn`](../../src/machine/core/kfunction/exec.rs), so the per-call
 type-side bind needs no scope re-resolution and cannot park.

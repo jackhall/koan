@@ -80,19 +80,21 @@ value requiring a param the slot doesn't promise is a non-match, while
 extra slot params arrive unbound under call-by-name.
 
 **The parameter list is a record type, not a syntax of its own.** `FN`'s
-parameter-list slot is typed `OfKind(AnyType)` and takes an already-resolved
+parameter-list slot is typed `OfKind(ProperType)` and takes an already-resolved
 `KType`: the `:{…}` operand elaborates through the record-type sigil's own path
 before `FN` dispatches, so a nested parameterized param type sub-Dispatches
 (`:(FN :{xs :(LIST OF Number)} -> Bool)` elaborates its element type) and any
 record-valued type expression names a parameter list — a `LET`-bound alias
-included, `LET Params = :{x :Number}` then `:(FN Params -> Bool)`. The widest
-carrier is deliberate: an `OfKind(ProperType)` slot withholds the bare-name
-auto-wrap ([`classify_for_pick`](../../src/machine/core/kfunction/pick.rs)) that
-lets a bare alias token reach the body at all. The kind lattice carries no
-structural kinds, so record-ness is a *body* check
+included, `LET Params = :{x :Number}` then `:(FN Params -> Bool)`. A kind
+expectation withholds no bare name
+([`classify_for_pick`](../../src/machine/core/kfunction/pick.rs)), so the alias
+token auto-wraps and resolves to the very handle the literal spelling interns.
+`Signature` is a kind, so a first-class signature operand is refused at the kind
+level and the form reports a dispatch miss. Record-ness is not a kind — the
+lattice carries no structural kinds — so it stays a *body* check
 ([parameterized_types.rs](../../src/builtins/parameterized_types.rs)): every
-non-record the slot admits — a nominal `SetMember`, a bare `Number`, a signature
-kind — is rejected there with a pointed `ShapeError` naming the offending type.
+non-record proper type the slot admits, a nominal `SetMember` or a bare `Number`,
+is rejected there with a pointed `ShapeError` naming the offending type.
 
 `:(FN …)` is the only function-type surface, and it covers a functor — a
 module-returning function — with no separate spelling:

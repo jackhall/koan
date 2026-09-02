@@ -212,8 +212,9 @@ fn fn_return_type_forward_user_bound_name_is_a_resolution_error() {
     );
 }
 
-/// Pins the surface-form-survives-bind guarantee on `KObject::TypeNameRef` —
-/// see [ktype/slots-and-signatures.md § TypeNameRef](../../../../design/typing/ktype/slots-and-signatures.md#ktypeunresolved--surface-form-survives-bind).
+/// Pins the surface-form-survives-bind guarantee: the return slot's `TypeNameToken` carrier
+/// member holds the name as written, so the error quotes it verbatim — see
+/// [ktype/slots-and-signatures.md § UnresolvedType](../../../../design/typing/ktype/slots-and-signatures.md#unresolvedtype--surface-form-survives-bind).
 #[test]
 fn fn_return_type_surface_name_preserved_in_error() {
     let program = program_storage();

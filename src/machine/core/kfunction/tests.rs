@@ -89,6 +89,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
     let f = find_match(scope, &expr, types).expect("OP <Number> should match");
     let pick = f.classify_for_pick(
         &WorkingExpression::from_ast(brand, expr),
+        &[],
         types,
         brand.allocator(),
     );
@@ -144,6 +145,7 @@ fn classify_excludes_literal_name_slots_from_wrap() {
         .expect("test overload should match an Identifier-leading expression");
     let pick = f.classify_for_pick(
         &WorkingExpression::from_ast(brand, expr),
+        &[],
         types,
         brand.allocator(),
     );
@@ -172,6 +174,7 @@ fn classify_excludes_binder_name_slot_from_wrap() {
     let f = find_match(scope, &expr, &types).expect("LET should match");
     let pick = f.classify_for_pick(
         &WorkingExpression::from_ast(brand, expr),
+        &[],
         &types,
         brand.allocator(),
     );
@@ -186,7 +189,7 @@ fn classify_excludes_binder_name_slot_from_wrap() {
 /// A `ProperType` slot is a kind expectation, not a literal-name slot: it asks for a type
 /// *value*, so a bare `Type` token at one is wrapped and resolved like any other bare name.
 /// Only the literal-name slot types withhold the wrap — see
-/// [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
+/// [design/typing/ktype/slots-and-signatures.md § Type-position slot kinds](../../../../design/typing/ktype/slots-and-signatures.md#type-position-slot-kinds).
 #[test]
 fn classify_wraps_a_type_token_in_a_propertype_slot() {
     let registries = RunRegistries::new();
@@ -222,6 +225,7 @@ fn classify_wraps_a_type_token_in_a_propertype_slot() {
     let f = find_match(scope, &expr, types).expect("OP <ProperType> should match");
     let pick = f.classify_for_pick(
         &WorkingExpression::from_ast(brand, expr),
+        &[],
         types,
         brand.allocator(),
     );
@@ -298,6 +302,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
     let f = find_match(scope, &expr, types).expect("OP <Any> should match");
     let pick = f.classify_for_pick(
         &WorkingExpression::from_ast(brand, expr),
+        &[],
         types,
         brand.allocator(),
     );
@@ -346,6 +351,7 @@ fn classify_excludes_a_bare_token_at_a_union_carrier_slot() {
         let f = find_match(scope, &expr, types).expect("the fixture overload should match");
         let pick = f.classify_for_pick(
             &WorkingExpression::from_ast(brand, expr),
+            &[],
             types,
             brand.allocator(),
         );

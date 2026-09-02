@@ -108,8 +108,9 @@ where a field is itself record-shaped — `:(Outer.inner.x)` — and works throu
 alias of the type name.
 
 The sigil is not optional here. `x` and `y` are lowercase names, and a lowercase
-name never means a type in an ordinary expression, so the bare spelling names no
-value — the field is a declaration, not one:
+name never means a type in an ordinary expression — so the bare spelling asks for
+a *value* called `y`, and a record field is a declaration rather than a value. The
+error says exactly that, and points at the spelling that works:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Str}

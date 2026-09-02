@@ -439,16 +439,22 @@ identically.
 
 The sigil is required because `x` is a value token
 ([tokens.md § A value token names a type only under the sigil](tokens.md#a-value-token-names-a-type-only-under-the-sigil)):
-bare `Point.x` off the type names no member, and the miss appends the sigiled spelling as a hint
-when the schema does carry the field. Under the sigil an unknown field lists the record's fields
+bare `Point.x` off the type names no *value*. The miss splits on whether the schema carries the
+field: one the schema does declare is not "no member" — that would contradict the hint that
+follows — so it reports the field as a declaration and points at the sigiled spelling that names
+its type, while a field the schema does not carry is the plain memberless miss, which no spelling
+would answer. Under the sigil an unknown field lists the record's fields
 the way a union member miss lists its variants, and a scalar repr (`NEWTYPE Meters = Number`) has
 no fields to name and takes the memberless-type error in either context.
 
 The [`NEWTYPE`](../../src/builtins/newtype_def.rs) declarator carries three overloads
 selected by the repr part-kind:
 
-- A **scalar / bare-leaf** repr (`= Number`, `= Foo`) rides the `OfKind(ProperType)` slot
-  and resolves eagerly to a `KType`, sealing a plain singleton Newtype over it.
+- A **scalar / bare-leaf** repr (`= Number`, `= Foo`) rides the `OfKind(ProperType)` slot,
+  which is a plain kind expectation: the dispatch lane resolves the name and the body seals a
+  plain singleton Newtype over the `KType` it receives. The slot registers the role `NEWTYPE
+  repr`, so a name that binds to nothing still reports ``NEWTYPE repr `Nope` is not a known
+  type`` from the lane's raise.
 - A **non-record sigil** repr (`= :(LIST OF Elem)`) rides a `:SigiledTypeExpr` slot that
   captures the sigil *raw* — more specific than `OfKind(ProperType)`, so it wins with no
   admission-rule change. The shared `body` threads the declarator's window names into

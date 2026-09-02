@@ -404,6 +404,7 @@ digraph {
     "koan::builtins::record_projection" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::resolve_or_await" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::resolve_or_await" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::resolve_or_await" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::builtins::resolve_or_await" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::result" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::result" -> "koan::machine::model" [label="uses", style="dashed"];

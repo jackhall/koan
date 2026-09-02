@@ -259,8 +259,8 @@ The rails the dispatch driver feeds:
   below). Binder-ness itself is a static fact of the *expression* — its bucket
   key either matches a `BINDER_SPECS` entry or it doesn't — so the pick
   consults no per-function flag: `classify_for_pick` excludes every
-  literal-name slot (`:Identifier` / `:ProperType` / `NameToken` /
-  `TypeNameToken`) from `wrap_indices`
+  literal-name slot (`:Identifier` / `NameToken` / `TypeNameToken`) from
+  `wrap_indices`
   uniformly (the slot owns its token — a declaration's name, or name-data the
   body reads), and the pre-scan's binder exemptions read the expression's
   cached spec-table facts.

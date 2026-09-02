@@ -133,15 +133,34 @@ fn seal_outcome_into_carrier<'a>(
     }
 }
 
-/// A resolved repr finalizes synchronously — a bare-leaf name arrives already elaborated, since the
-/// `:ProperType` repr slot is an ordinary kind expectation the dispatch lane resolves into. A raw
-/// sigil repr sub-dispatches via [`defer_resolved_sigil`].
+/// A resolved repr finalizes synchronously: the `:ProperType` repr slot is an ordinary kind
+/// expectation, so the dispatch lane elaborates a bare-leaf name before the body runs. The one
+/// name it does not is a *co-declared sibling* still finalizing — `NEWTYPE` is a binder form, so
+/// its `Type`-token operand is exempt from the dispatch-time park
+/// ([`WorkingExpression::park_exempt_slot`](crate::machine::model::WorkingExpression::park_exempt_slot)),
+/// which would otherwise deadlock the declaration group the two names share. That token arrives
+/// raw and this body waits on the sibling's own claim edge instead. A raw sigil repr sub-dispatches
+/// via [`defer_resolved_sigil`].
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
+    use crate::builtins::resolve_or_await::{classify_name_lookup, resolve_or_await};
     use crate::machine::{Action, require_bare_type_name};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, &SLOTS.name));
+    let chain = ctx.chain.clone();
     let site = ctx.declaration_site();
-    if let Some(repr_kt) = ctx.args.ktype(&SLOTS.repr) {
+    if let Some(te) = ctx.args.unresolved_type(&SLOTS.repr) {
+        resolve_or_await(
+            ctx.scope,
+            "NEWTYPE repr",
+            move |scope, _registries| {
+                classify_name_lookup(scope.resolve_type_with_chain(te, chain.as_deref()), te)
+            },
+            move |fctx, kt| {
+                Action::done_writing(fctx.scratch, finalize_newtype(fctx, name, kt, site))
+            },
+            ctx.registries,
+        )
+    } else if let Some(repr_kt) = ctx.args.ktype(&SLOTS.repr) {
         Action::done_writing(
             ctx.scratch,
             finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site),
@@ -533,6 +552,26 @@ mod tests {
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(n) if n == "Boxed"),
             "expected UnboundName(Boxed) after failed declaration, got {err}",
+        );
+    }
+
+    /// A bare-leaf repr naming a *co-declared sibling* is the one name the lane does not resolve:
+    /// `NEWTYPE` is a binder form, so its `Type`-token operand is exempt from the dispatch-time
+    /// park, and the three rails that read a `Parked` outcome must agree the body owns it. When
+    /// they disagreed, the relaxed pass installed a wait on the sibling's own claim edge and the
+    /// scheduler aborted on the cycling edge — a `debug_assert!`, so a release build would have
+    /// installed it. Pins the shape rather than the message: what matters is that it neither
+    /// aborts nor hangs.
+    #[test]
+    fn a_bare_leaf_repr_naming_an_announced_sibling_does_not_cycle() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let scope = test_run.scope;
+        test_run.run("MODULE m = (\n  NEWTYPE Aa = Number\n  NEWTYPE Bb = Aa\n)");
+        assert!(
+            !binds_module(scope, "m") || lookup_type(scope, "Aa").is_none(),
+            "the declaration does not seal; it must fail as a value, never as an abort",
         );
     }
 

@@ -528,6 +528,24 @@ impl<'a> WorkingExpression<'a> {
         self.binder_name_slot
     }
 
+    /// Whether the pre-admission park skips the slot at `index` — a binder form's declared-name
+    /// position, or one of its `Type`-token operands. The binder body resolves those through the
+    /// declaration-window / type-resolution protocol, which answers a declarator's reference to a
+    /// co-declared sibling *without* waiting; waiting instead deadlocks the declaration group the
+    /// two names share.
+    ///
+    /// Every rail that reads a `Parked` bare-name outcome asks this one question, so none of them
+    /// can drift from the others: the park scan
+    /// (`parked_producers`), strict admission (`slot_admits_strict`), and the auto-wrap
+    /// classification ([`KFunction::classify_for_pick`](crate::machine::KFunction)). An exempt slot
+    /// that parked keeps its raw token — admission takes it on shape and the wrap leaves it alone —
+    /// because the body, not the lane, owns that name.
+    pub fn park_exempt_slot(&self, index: usize, part: &WorkingPart<'_>) -> bool {
+        self.binder_name_slot().is_some_and(|name_slot| {
+            index == name_slot || matches!(part.as_ast(), Some(ExpressionPart::Type(_)))
+        })
+    }
+
     /// The stored bucket key, as a borrow of the run bumped at construction.
     pub fn stored_key(&self) -> &'a [KeyElement] {
         self.untyped_key

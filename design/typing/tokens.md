@@ -71,14 +71,16 @@ name already and projects either way — `Maybe.Some`, `Ordered.Carrier` and `:(
 name the member. A **value**-class field is the split:
 
 - `:(Ordered.compare)` names the `VAL` slot's declared type; bare `Ordered.compare` names no
-  member at all.
+  value.
 - `:(Point.x)` names the field type of a record-repr newtype
   ([user-types.md § `NEWTYPE` and the `Wrapped` carrier](user-types.md#newtype-and-the-wrapped-carrier));
-  bare `Point.x` names no member.
+  bare `Point.x` names no value.
 
-The bare spelling is an ordinary value-context read landing on the ordinary no-member error, with
-no new refusal class. Where the schema *does* carry the field, the miss appends the sigiled
-spelling as a hint; where it does not, the message is the unhinted one every other miss reports.
+The bare spelling is an ordinary value-context read, with no new refusal class, and the miss it
+lands on says which of two things went wrong. Where the schema *does* carry the field, the read
+failed on context alone — the member is a declaration, not a value — so the message says so and
+points at the sigiled spelling that names its declared type. Where it does not, the message is
+the plain no-member miss every other read reports, and no spelling would answer it.
 
 The value channel is untouched by the rule. An lhs that bottoms out at an `Identifier` is a
 runtime value wherever it is written, so a module member read (`int_ord.compare`) or a record

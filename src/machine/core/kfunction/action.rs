@@ -423,8 +423,8 @@ impl<'program: 'a, 'a, 'c> BodyCtx<'program, 'a, 'c> {
     }
 
     /// A [`FinishCtx`] over this body's own scope and context — for a synchronous body that hands its
-    /// resolve/dispatch continuation the same shape a wake-time finish receives (e.g.
-    /// `resolve_or_await`'s synchronous arm).
+    /// resolve/dispatch continuation the same shape a wake-time finish receives, so both arms
+    /// allocate against the same region (e.g. `newtype_def`'s already-resolved repr arm).
     pub fn finish_ctx(&self) -> FinishCtx<'a, 'c> {
         FinishCtx {
             scope: self.scope,

@@ -232,7 +232,6 @@ fn parked_producers<'s>(
     bare_outcomes: &[Option<Resolution>],
     scratch: BumpAllocator<'s>,
 ) -> BumpVec<'s, ProducerId> {
-    let name_slot = expr.binder_name_slot();
     // A `Parked` entry can only come from `bare_outcomes[i]`, one per part, so the deduped list
     // never exceeds the part count — see `decide_scope` on why the reserve must be exact.
     let mut producers: BumpVec<'s, ProducerId> =
@@ -241,9 +240,7 @@ fn parked_producers<'s>(
         let Some(Resolution::Parked(p)) = outcome else {
             continue;
         };
-        if let Some(pos) = name_slot
-            && (i == pos || matches!(part.value.as_ast(), Some(ExpressionPart::Type(_))))
-        {
+        if expr.park_exempt_slot(i, &part.value) {
             continue;
         }
         if !producers.contains(p) {
@@ -305,9 +302,20 @@ fn decide_scope<'step, 'e>(
     match bucket.pick_strict(expr, bare_outcomes, registries, scratch) {
         PickPass::Picked(index) => {
             let function = scope.open_function(&lookup.overloads[index]);
-            let wrap_indices = function
-                .value()
-                .classify_for_pick(expr, &registries.types, scratch);
+            // One flag per part, exactly the parts run's length, so the classification indexes it
+            // positionally alongside the signature's elements.
+            let mut parked: BumpVec<'_, bool> =
+                BumpVec::with_capacity_in(expr.parts.len(), scratch);
+            for i in 0..expr.parts.len() {
+                parked.push(matches!(
+                    bare_outcomes.get(i).and_then(|o| o.as_ref()),
+                    Some(Resolution::Parked(_))
+                ));
+            }
+            let wrap_indices =
+                function
+                    .value()
+                    .classify_for_pick(expr, &parked, &registries.types, scratch);
             ScopeDecision::Terminal(DispatchOutcome::Resolved(Resolved {
                 function,
                 wrap_indices,
@@ -473,7 +481,16 @@ fn signature_admits_strict<'e>(
         .iter()
         .zip(expr.parts)
         .enumerate()
-        .all(|(i, (el, part))| slot_admits_strict(el, &part.value, i, bare_outcomes, registries))
+        .all(|(i, (el, part))| {
+            slot_admits_strict(
+                el,
+                &part.value,
+                i,
+                expr.park_exempt_slot(i, &part.value),
+                bare_outcomes,
+                registries,
+            )
+        })
 }
 
 /// Relaxed admission: assume every *unresolved* slot satisfiable and report which kinds were leaned
@@ -497,7 +514,14 @@ fn relaxed_admits<'e, 's>(
     // no scratch.
     let mut leans: BumpVec<'s, Lean> = BumpVec::with_capacity_in(sig.elements().len(), scratch);
     for (i, (el, part)) in sig.elements().iter().zip(expr.parts).enumerate() {
-        if slot_admits_strict(el, &part.value, i, bare_outcomes, registries) {
+        if slot_admits_strict(
+            el,
+            &part.value,
+            i,
+            expr.park_exempt_slot(i, &part.value),
+            bare_outcomes,
+            registries,
+        ) {
             continue;
         }
         match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
@@ -522,6 +546,7 @@ fn slot_admits_strict<'e>(
     el: &SignatureElement,
     slot: &WorkingPart<'e>,
     i: usize,
+    park_exempt: bool,
     bare_outcomes: &[Option<Resolution>],
     registries: &RunRegistries,
 ) -> bool {
@@ -553,13 +578,32 @@ fn slot_admits_strict<'e>(
             // A bare `Type` token gets no such pass: the slot is a kind expectation asking for a
             // type *value*, so the token auto-wraps and admission reads its resolution below,
             // exactly as at any other eager slot.
-            if arg.ktype.union_has_member(KType::PROPER_TYPE, types)
-                && matches!(
+            if arg.ktype.union_has_member(KType::PROPER_TYPE, types) {
+                if matches!(
                     part_value,
                     ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)
-                )
-            {
-                return true;
+                ) {
+                    return true;
+                }
+                // A binder form's own `Type`-token operand naming a *still-finalizing* type. The
+                // pre-admission park skipped it because the binder body owns the resolve-or-park
+                // protocol through the declaration window, so admission is on shape and the token
+                // rides raw — the one bare `Type` token a kind expectation does not resolve.
+                // Parking it instead would deadlock the declaration group the two names share.
+                //
+                // Only `Parked` takes this door. A resolved name wraps and rides the lane like any
+                // other; an unbound one rejects, so the relaxed pass's dead lean raises against the
+                // slot's registered role. And only a *kind* slot: `LET Alias = Cell` reads its
+                // sibling through an `:Any` slot, which parks below and waits for the seal.
+                if park_exempt
+                    && matches!(part_value, ExpressionPart::Type(_))
+                    && matches!(
+                        bare_outcomes.get(i).and_then(|o| o.as_ref()),
+                        Some(Resolution::Parked(_))
+                    )
+                {
+                    return true;
+                }
             }
             // A declaration slot owns the name, so admission is shape-only. `Identifier` stays
             // part-kind-exact, so a `:{…}` return type is never mistaken for a value-named one.
@@ -594,9 +638,9 @@ fn slot_admits_strict<'e>(
                 Some(Resolution::Resolved(delivered)) => arg
                     .ktype
                     .accepts_carried(delivered.open_at().value(), registries),
-                // The relaxed pass's `Dead` lean carries the precise `UnboundName`. `Parked` reaches
-                // here only on a slot exempt from the pre-admission park (a binder form's own
-                // operand), where rejecting leaves the pick to the shape-only binder slots.
+                // The relaxed pass's `Dead` lean carries the precise `UnboundName`. `Parked`
+                // reaching here means the slot did not shape-admit the token above, so the relaxed
+                // pass parks on it — the wait a consumer of an unsealed sibling needs.
                 Some(Resolution::Parked(_)) | Some(Resolution::Unbound(_)) => false,
                 None => arg.matches(part_value, types),
             }
