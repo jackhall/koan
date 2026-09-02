@@ -375,7 +375,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
     match parse_typed_field_list_via_elaborator(
         fields,
         FieldListContext::RECORD_TYPE,
-        FieldNameKind::Identifier,
+        FieldNameKind::IdentifierOrType,
         &mut elaborator,
         None,
         view.registries(),
@@ -393,7 +393,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
             awaited_producers,
             sub_dispatches,
             FieldListContext::RECORD_TYPE,
-            FieldNameKind::Identifier,
+            FieldNameKind::IdentifierOrType,
         )
         .outcome(view, |pairs, registries| {
             Ok(registries.types.record(Record::from_pairs(pairs)))

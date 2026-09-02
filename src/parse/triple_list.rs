@@ -13,14 +13,13 @@ use crate::source::Spanned;
 
 /// Which token shapes are accepted as a field/parameter *name* by [`parse_pair_list`].
 ///
-/// STRUCT / record fields are lowercase user identifiers, so they require `Identifier`.
-/// FN parameters may be capitalized (`Ty`, `Er`) when they name a type or a
-/// signature value, which lexes as a `Type` token, so they opt into `IdentifierOrType`. UNION variant tags *are*
-/// types (`Some`, `Ok`) and so require `Type` — a lowercase tag is rejected. Each admitted
-/// token hands over the symbol its own parse minted, so the name carries its class already.
+/// Record / STRUCT fields and FN parameters take `IdentifierOrType`: a name may be a lowercase
+/// identifier (`x`) or capitalized (`Ty`, `Er`) when it names a type or a signature value, which
+/// lexes as a `Type` token. UNION variant tags *are* types (`Some`, `Ok`) and so require `Type` — a
+/// lowercase tag is rejected. Each admitted token hands over the symbol its own parse minted, so
+/// the name carries its class already.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FieldNameKind {
-    Identifier,
     IdentifierOrType,
     Type,
 }
@@ -48,12 +47,9 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
     let mut i = 0;
     while i < parts.len() {
         let name = match (parts[i].value.field_slot(), name_kind) {
-            (FieldSlot::Name(v), FieldNameKind::Identifier | FieldNameKind::IdentifierOrType) => {
-                BinderSymbol::Value(v)
-            }
+            (FieldSlot::Name(v), FieldNameKind::IdentifierOrType) => BinderSymbol::Value(v),
             // Capitalized names (`Ty`, `Er` params; `Some`, `Ok` variant tags) lex as
-            // `Type` tokens; admitted under `IdentifierOrType` (FN) and `Type`
-            // (UNION tags), never for STRUCT / record fields.
+            // `Type` tokens, admitted under both policies.
             (FieldSlot::Type(t), FieldNameKind::IdentifierOrType | FieldNameKind::Type) => {
                 BinderSymbol::Type(t)
             }
@@ -226,25 +222,6 @@ mod tests {
         assert!(
             matches!(&result, Err(msg) if msg.contains("duplicate name")),
             "a repeated tag must be rejected, got {result:?}",
-        );
-    }
-
-    #[test]
-    fn identifier_only_rejects_type_token_name() {
-        let program = program_storage();
-        let registries = RunRegistries::new();
-        let labels = &registries.labels;
-        let expr = type_named_pair(program.brand().region(), labels);
-        let result = parse_pair_list(
-            expr.parts,
-            "STRUCT schema",
-            FieldNameKind::Identifier,
-            &registries,
-            |_, _| Ok::<_, String>(()),
-        );
-        assert!(
-            matches!(&result, Err(msg) if msg.contains("bare identifier")),
-            "Type-token name must be rejected under Identifier-only, got {result:?}",
         );
     }
 }

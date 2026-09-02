@@ -236,7 +236,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                 match parse_typed_field_list_via_elaborator(
                     FieldParts::threaded(body),
                     FieldListContext::RECORD_TYPE,
-                    FieldNameKind::Identifier,
+                    FieldNameKind::IdentifierOrType,
                     elaborator,
                     results.as_deref_mut(),
                     registries,
@@ -311,7 +311,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                 match parse_typed_field_list_via_elaborator(
                     FieldParts::of(boxed),
                     FieldListContext::RECORD_TYPE,
-                    FieldNameKind::Identifier,
+                    FieldNameKind::IdentifierOrType,
                     elaborator,
                     results.as_deref_mut(),
                     registries,

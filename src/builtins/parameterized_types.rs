@@ -647,6 +647,33 @@ mod tests {
         }
     }
 
+    /// A record type admits a capitalized field name: `Ty` lexes as a `Type` token and keys the
+    /// record by `BinderSymbol::Type`, the class a functor parameter list needs.
+    #[test]
+    fn record_admits_a_capitalized_field_name() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let result = test_run.run_one_type(test_run.parse_one(":{Ty :Signature}"));
+        let types = test_run.types();
+        assert_eq!(
+            result,
+            types.record(Record::from_pairs(vec![(
+                crate::builtins::test_support::binder_name("Ty", test_run.registries()),
+                KType::of_kind(KKind::Signature)
+            )])),
+        );
+        match types.node(result) {
+            TypeNode::Record { fields } => assert!(
+                fields
+                    .iter()
+                    .all(|(key, _)| matches!(key, crate::machine::model::BinderSymbol::Type(_))),
+                "a capitalized field name must key the record as a Type symbol",
+            ),
+            _ => panic!("expected a Record, got {result:?}"),
+        }
+    }
+
     /// A sync FN whose parameter type names a `NEWTYPE` alias (`x :Wrapped`, a `SetMember`) resolves
     /// in one ambient walk, so its function type composes directly from the elaborated pairs:
     /// the `SetMember` param survives as owned data alongside the plain `Bool` return type.

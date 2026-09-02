@@ -236,7 +236,7 @@ pub fn body_record_repr<'a>(
         window,
         fields,
         FieldListContext::NEWTYPE_RECORD_REPR,
-        FieldNameKind::Identifier,
+        FieldNameKind::IdentifierOrType,
         error_frame,
         finalize_record_newtype,
     )
@@ -635,6 +635,26 @@ mod tests {
                     if name == "Foo" && *first == 1 && *second == 2,
             ),
             "expected DuplicateDeclaration on identical-content redeclare, got {err}",
+        );
+    }
+
+    /// A record repr admits a capitalized field name: `Ty` lexes as a `Type` token and keys the
+    /// sealed repr by `BinderSymbol::Type`, the same policy a standalone `:{…}` follows.
+    #[test]
+    fn record_repr_admits_a_capitalized_field_name() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let scope = test_run.scope;
+        test_run.run("NEWTYPE Wrapper = :{Ty :Signature}");
+        let types = test_run.types();
+        let (_, _, fields) = record_fields(scope, types, "Wrapper");
+        assert_eq!(
+            fields,
+            vec![(
+                crate::machine::model::BinderSymbol::Type(type_name("Ty", test_run.registries())),
+                KType::of_kind(KKind::Signature),
+            )],
         );
     }
 
