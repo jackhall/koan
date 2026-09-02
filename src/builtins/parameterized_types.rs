@@ -185,13 +185,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             vec![
                 kw(registries, "FN"),
                 // The parameter list is a record type, so it sub-dispatches to a resolved `KType`
-                // before this body fires. `OfKind(AnyType)` is the widest carrier — it matches
-                // every sibling slot here and, unlike `OfKind(ProperType)`, does not withhold the
-                // bare-name auto-wrap a `LET`-bound alias operand needs
-                // ([`classify_for_pick`](../machine/core/kfunction/pick.rs)). Everything it admits
-                // beyond a record — a nominal handle, a signature kind — the body's record check
-                // rejects with a pointed error.
-                arg(registries, &SLOTS.sig, KType::of_kind(KKind::AnyType)),
+                // before this body fires — and a `LET`-bound alias of one auto-wraps to the same
+                // handle, since a kind expectation withholds no bare name. `ProperType` refuses a
+                // `Signature`-kinded operand at the kind level; record-ness is not a kind, so the
+                // body still checks it, and every other proper type it admits takes that check's
+                // pointed error.
+                arg(registries, &SLOTS.sig, KType::of_kind(KKind::ProperType)),
                 kw(registries, "->"),
                 // `OfKind(AnyType)` admits every type value — a `-> Ordered` signature return
                 // and `-> Module` (which lowers to the empty signature) included.
@@ -394,6 +393,36 @@ mod tests {
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("must be a record type")),
             "expected a pointed non-record ShapeError, got {err}",
         );
+    }
+
+    /// A `Signature`-kinded operand is refused at the *kind* level rather than by the body's
+    /// record check: `ProperType` does not admit `Signature`, so the slot never matches and the
+    /// form reports a dispatch miss. The accepted cost of spelling the slot as the kind
+    /// expectation it is.
+    #[test]
+    fn fn_with_a_signature_parameter_list_is_a_dispatch_miss() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("SIG Ordered = ((VAL compare :Number))");
+        let err = test_run.run_one_err(test_run.parse_one(":(FN Ordered -> Str)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
+            "expected a dispatch miss for a Signature-kinded parameter list, got {err}",
+        );
+    }
+
+    /// A `LET`-bound alias of a record type reaches the slot as the same handle the literal does:
+    /// a kind expectation withholds no bare name, so the alias auto-wraps and resolves.
+    #[test]
+    fn fn_parameter_list_takes_a_record_alias() {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        test_run.run("LET Params = :{x :Number}");
+        let aliased = test_run.run_one_type(test_run.parse_one(":(FN Params -> Bool)"));
+        let literal = test_run.run_one_type(test_run.parse_one(":(FN :{x :Number} -> Bool)"));
+        assert_eq!(aliased, literal, "the alias interns the same function type");
     }
 
     /// The parenthesized parameter list is gone: `(x :Number)` is a parenthesized group, not a
