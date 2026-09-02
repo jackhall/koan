@@ -65,10 +65,13 @@ and fails with `unbound name 'left'`.
   On top of that machinery, this item rewrites
   [`fn_def.rs`](../../src/builtins/fn_def.rs) to two overloads — the
   binder-shaped keyworded form and the non-binder record form, each with a
-  return slot of `union_of(TYPE_NAME_TOKEN, SIGILED_TYPE_EXPR,
+  return slot of `union_of(TYPE_NAME_TOKEN, SIGILED_TYPE_EXPR, RECORD_TYPE,
   IDENTIFIER)` and one body branching on the carrier
-  (`extract_type_slot_raw` already branches on all three; the diagnose-only
-  `IDENTIFIER` overload folds into an error arm) — and replaces
+  (`extract_type_slot_raw` already branches on the first three's carriers;
+  the diagnose-only `IDENTIFIER` overload folds into an error arm, and the
+  `RECORD_TYPE` member keeps the record-typed return `-> :{…}` admitting —
+  today it rides the `of_kind` slot's shape admission, which the union
+  drops) — and replaces
   [`op_def.rs`](../../src/builtins/op_def.rs)'s `for operand { for result { …
   } }` registration loop with flat union-slot registrations. The signature
   dimension stays two overloads because their signature slots and bodies

@@ -60,7 +60,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)
 - [Bare parenthesized return annotations](type_language/function-typed-return-annotations.md)
 - [Module element-type join](type_language/module-element-type-join.md)
-- [Type-slot resolution untangle](type_language/type-slot-resolution-untangle.md)
 - [Uniform forward type references in sigiled type expressions](type_language/uniform-forward-type-references.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
 

@@ -17,26 +17,43 @@ next line — the surfaces answer:
 | record type field (`:{Ty :Ordered}`) | shape error: unknown type name Ordered in record fields for Ty |
 | `:(FN :{Ty :Ordered} -> Module)` | the record field's message, since the parameter list is a record type |
 | NEWTYPE record repr (`NEWTYPE Box = :{v :Later}`) | shape error: unknown type name Later in NEWTYPE record repr for v |
+| NEWTYPE bare-leaf repr (`NEWTYPE Box = Later`) | shape error: NEWTYPE repr \`Later\` is not a known type |
 
-Three renders of one rule, and none of them says that the name exists but is
+Four renders of one rule, and none of them says that the name exists but is
 declared too late — the writer is told the name is unknown, so the fix the
-message suggests (declare it) is the fix they already applied. The two message
-shapes come from different raisers: the field-list surfaces build theirs through
+message suggests (declare it) is the fix they already applied. The message
+shapes come from three raisers: the field-list surfaces build theirs through
 `unknown_type_name`
 ([`resolver.rs`](../../src/machine/model/types/resolver.rs)) with the field-list
-context noun attached, while the bare-leaf and type-constructor operand paths
-surface the resolver's `Unbound` arm as an ordinary unbound-name error
-([`resolve_type_identifier.rs`](../../src/machine/execute/decide/resolve_type_identifier.rs)).
+context noun attached; the bare-leaf annotation and type-constructor operand
+paths surface the resolver's `Unbound` arm as an ordinary unbound-name error
+([`resolve_type_identifier.rs`](../../src/machine/execute/decide/resolve_type_identifier.rs));
+and a slot carrying an
+[`Argument::role`](../../src/machine/model/types/signature.rs) label is raised by
+the dispatch lane instead
+([`keyworded.rs`](../../src/machine/execute/decide/keyworded.rs)), which renders
+the role noun and drops the "unknown type name" wording.
 The `NameLookup::Parked` arm — the one path that does wait — is reachable only
 for an *earlier* still-finalizing binder, so no surface parks on a later
 sibling.
+
+The bare-leaf `NEWTYPE` repr additionally speaks with **two** voices for one
+slot. Its `Type`-token operand is exempt from the dispatch-time park, so a name
+naming a co-declared sibling reaches the body raw and misses there as
+`NEWTYPE repr: unknown type name \`Aa\``
+([`newtype_def.rs`](../../src/builtins/newtype_def.rs)), while every other miss
+at the same slot is the lane's role-labeled render above. Both are pointed and
+neither is wrong; they are two wordings for one position, which is the split
+this item collapses.
 
 **Acceptance criteria.**
 
 - A forward type reference reports one diagnostic across every type-expression
   surface: a bare leaf annotation, a `:(LIST OF …)` element, a `:(MAP … -> …)`
   key or value, a record-type field, an `:(FN :{…} -> …)` parameter list, and a
-  NEWTYPE record repr.
+  NEWTYPE repr in both its record and bare-leaf spellings — the bare-leaf one
+  through a single raiser, not one wording from the dispatch lane and another
+  from the body.
 - That diagnostic distinguishes a name that is declared later from a name that
   is never declared, and names the declaration whose position is the problem.
 - A test walks one forward-reference program shape across each surface above and
