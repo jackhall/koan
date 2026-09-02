@@ -212,9 +212,9 @@ pub fn body_record_repr<'a>(
     use crate::machine::{Action, require_bare_type_name};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, &SLOTS.name));
-    let fields = match ctx.args.object(&SLOTS.repr) {
-        Some(KObject::KExpression(e)) => e.node(),
-        _ => {
+    let fields = match ctx.args.record_type(&SLOTS.repr) {
+        Some(node) => *node.reference(),
+        None => {
             return Action::done(Err(KError::new(KErrorKind::ShapeError(
                 "NEWTYPE record repr slot must be a record type `:{…}`".to_string(),
             ))));

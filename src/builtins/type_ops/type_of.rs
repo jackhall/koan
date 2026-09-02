@@ -26,9 +26,9 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
                 crate::machine::model::display_label(ti.symbol(), ctx.registries),
             )))));
         }
-        // The `value` slot is `:Any`, which admits no raw name part.
-        Some(Held::Name(_)) => {
-            unreachable!("`TYPE OF`'s value slot never captures a name")
+        // The `value` slot is `:Any`, which admits no raw part capture.
+        Some(Held::Name(_) | Held::RecordType(_)) => {
+            unreachable!("`TYPE OF`'s value slot never captures a raw part")
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("value".into())))),
     };

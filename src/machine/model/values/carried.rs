@@ -18,6 +18,7 @@ use crate::witnessed::reattachable;
 
 use super::KObject;
 use crate::machine::model::RunRegistries;
+use crate::machine::model::ast::ProgramNode;
 
 /// Three-arm value currency. `Copy` — the object arms wrap `&'a` references and the `Type` arm a
 /// `Copy` [`KType`] handle, so it threads through node results and the lift path without clones.
@@ -114,8 +115,8 @@ impl<'a> Carried<'a> {
 
 /// Owned by-value cell — the owned dual of the borrowed [`Carried`], holding each arm inline (no `Rc`).
 /// The cell type of a `List` / `Dict` / `Record` substrate, and the value half of a builtin's bound
-/// argument slot (`BoundArg`). The `Name` arm is the one arm with no [`Carried`] peer: a captured
-/// name is a bound argument only, never a produced result, so it reaches a bound slot and no
+/// argument slot (`BoundArg`). The `Name` and `RecordType` arms are the two with no [`Carried`]
+/// peer: each is minted only by a part-kind-exact capture slot, so it reaches a bound slot and no
 /// substrate.
 ///
 /// `Copy` for the same reason [`KObject`] is: every arm is a scalar handle or a region borrow, so a
@@ -135,6 +136,13 @@ pub enum Held<'a> {
     /// from a rendering. There is no [`Carried`] peer: a captured name is never a produced
     /// result, only a bound argument.
     Name(BinderSymbol),
+    /// The bind seam's carrier for a `:{…}` captured raw at a [`KType::RECORD_TYPE`] slot. A sigil
+    /// capture (`:(…)`) rides [`KObject::KExpression`], so the two raw type-expression shapes stay
+    /// distinguishable in a body under a union carrier slot — the inner expression cannot be
+    /// sniffed for the difference, since `:( :{…} )` makes a sigil's inner a lone record part.
+    /// There is no [`Carried`] peer: `RECORD_TYPE` is part-kind-exact, so no resolved cell ever
+    /// lands here.
+    RecordType(ProgramNode<'a>),
 }
 
 impl<'a> Held<'a> {
@@ -152,7 +160,7 @@ impl<'a> Held<'a> {
     pub fn as_object(&self) -> Option<&KObject<'a>> {
         match self {
             Held::Object(o) => Some(o),
-            Held::Type(_) | Held::UnresolvedType(_) | Held::Name(_) => None,
+            Held::Type(_) | Held::UnresolvedType(_) | Held::Name(_) | Held::RecordType(_) => None,
         }
     }
 
@@ -160,7 +168,7 @@ impl<'a> Held<'a> {
     pub fn as_type(&self) -> Option<KType> {
         match self {
             Held::Type(t) => Some(*t),
-            Held::Object(_) | Held::UnresolvedType(_) | Held::Name(_) => None,
+            Held::Object(_) | Held::UnresolvedType(_) | Held::Name(_) | Held::RecordType(_) => None,
         }
     }
 
@@ -181,6 +189,7 @@ impl<'a> Held<'a> {
                 "expected an Object cell, got a captured name: 0x{:032x}",
                 b.symbol().0
             ),
+            Held::RecordType(_) => panic!("expected an Object cell, got a captured record type"),
         }
     }
 
@@ -191,6 +200,7 @@ impl<'a> Held<'a> {
             Held::Type(t) => Held::Type(*t),
             Held::UnresolvedType(ti) => Held::UnresolvedType(*ti),
             Held::Name(b) => Held::Name(*b),
+            Held::RecordType(e) => Held::RecordType(*e),
         }
     }
 
@@ -203,6 +213,7 @@ impl<'a> Held<'a> {
             Held::UnresolvedType(_) => KType::of_kind(KKind::ProperType),
             Held::Name(BinderSymbol::Value(_)) => KType::IDENTIFIER,
             Held::Name(BinderSymbol::Type(_)) => KType::NAME_TOKEN,
+            Held::RecordType(_) => KType::RECORD_TYPE,
         }
     }
 
@@ -218,6 +229,7 @@ impl<'a> Held<'a> {
             Held::Type(t) => t.write_name(f, registries),
             Held::UnresolvedType(ti) => write!(f, "{}", display_label(ti.symbol(), registries)),
             Held::Name(b) => write!(f, "{}", display_label(b.symbol(), registries)),
+            Held::RecordType(e) => e.write_summary(f, &registries.labels),
         }
     }
 

@@ -617,7 +617,9 @@ fn cell_reach<'a>(cell: &Rehomed<'a>, door: SubstrateDoor<'a, '_>) -> CellReach<
     match cell.cell() {
         Held::Type(_) | Held::UnresolvedType(_) => CellReach::Owned,
         // A name carrier lives in a bound-argument slot, never in a container substrate.
-        Held::Name(_) => unreachable!("a captured name is never a substrate cell"),
+        Held::Name(_) | Held::RecordType(_) => {
+            unreachable!("a raw part capture is never a substrate cell")
+        }
         Held::Object(o) => object_cell_reach(o, door),
     }
 }
@@ -891,7 +893,9 @@ fn copy_held_into<'b>(cell: &Held<'b>, dest: SubstrateDoor<'b, '_>) -> Held<'b> 
         Held::Type(t) => Held::Type(*t),
         Held::UnresolvedType(ti) => Held::UnresolvedType(*ti),
         // A name carrier lives in a bound-argument slot, never in a container substrate.
-        Held::Name(_) => unreachable!("a captured name is never a substrate cell"),
+        Held::Name(_) | Held::RecordType(_) => {
+            unreachable!("a raw part capture is never a substrate cell")
+        }
     }
 }
 

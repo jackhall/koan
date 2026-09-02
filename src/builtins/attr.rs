@@ -281,9 +281,9 @@ pub fn body_dynamic_field<'a>(
                 field_name.text(ctx.registries),
             )))));
         }
-        // The `s` slot is `:Any`, which admits no raw name part.
-        Some(Held::Name(_)) => {
-            unreachable!("ATTR's lhs slot never captures a name")
+        // The `s` slot is `:Any`, which admits no raw part capture.
+        Some(Held::Name(_) | Held::RecordType(_)) => {
+            unreachable!("ATTR's lhs slot never captures a raw part")
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
@@ -695,9 +695,11 @@ fn access_field<'a>(
         // A record field cell is a value or a resolved type; the bind seam's unlowered carrier
         // never lands in one.
         Held::UnresolvedType(_) => unreachable!("a record field is never an unlowered type name"),
-        // A name carrier is minted only for an `:Identifier` slot at the bind seam; a member cell
-        // comes from a container, which never holds one.
-        Held::Name(_) => unreachable!("a record field is never a captured name"),
+        // A raw-capture carrier is minted only at a part-kind-exact slot of the bind seam; a
+        // member cell comes from a container, which never holds one.
+        Held::Name(_) | Held::RecordType(_) => {
+            unreachable!("a record field is never a raw part capture")
+        }
         Held::Object(value) => {
             // A shallow scalar embeds no borrow at all, so it rebuilds owned and seals empty rather
             // than naming the member's run.

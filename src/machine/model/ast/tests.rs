@@ -647,8 +647,8 @@ fn debug_for_expression_part_and_kexpression() {
 }
 
 /// A union carrier slot captures each part shape through the member that claims it: the raw
-/// type-expression members ride `Held::Object(KExpression)`, and the two name members ride
-/// `Held::Name` carrying the class the parser assigned the token.
+/// sigil member rides `Held::Object(KExpression)`, the record member its own `Held::RecordType`,
+/// and the two name members ride `Held::Name` carrying the class the parser assigned the token.
 #[test]
 fn resolve_for_captures_through_a_union_carrier_member() {
     let storage = crate::machine::core::run_root_storage();
@@ -665,15 +665,14 @@ fn resolve_for_captures_through_a_union_carrier_member() {
     ]);
 
     let inner = brand.nested_node_from_iter(parts_of(vec![ty("Number")]));
-    for raw in [
-        ExpressionPart::SigiledTypeExpr(inner),
-        ExpressionPart::RecordType(inner),
-    ] {
-        assert!(matches!(
-            raw.resolve_for(&slot, scope, types),
-            Held::Object(crate::machine::model::KObject::KExpression(_)),
-        ));
-    }
+    assert!(matches!(
+        ExpressionPart::SigiledTypeExpr(inner).resolve_for(&slot, scope, types),
+        Held::Object(crate::machine::model::KObject::KExpression(_)),
+    ));
+    assert!(matches!(
+        ExpressionPart::RecordType(inner).resolve_for(&slot, scope, types),
+        Held::RecordType(_),
+    ));
 
     let type_part = ExpressionPart::Type(type_name("Meters", &registries));
     assert!(matches!(

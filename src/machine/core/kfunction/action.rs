@@ -154,6 +154,19 @@ impl<'a, 'c> BoundArgs<'a, 'c> {
         }
     }
 
+    /// The argument's raw `:{…}` capture — the read of a `RecordType` slot. Distinct from
+    /// [`Self::object`]'s `KExpression` arm, which a `:(…)` sigil capture rides, so a body under a
+    /// union carrier slot tells the two raw type-expression shapes apart by carrier.
+    pub fn record_type(
+        &self,
+        name: &StaticName<ValueSymbol>,
+    ) -> Option<crate::machine::model::ast::ProgramNode<'a>> {
+        match self.held(name) {
+            Some(Held::RecordType(e)) => Some(*e),
+            _ => None,
+        }
+    }
+
     /// The argument's unlowered type name. The bind seam parks a bare user type name here rather
     /// than lowering it to a handle, so a type-slot consumer probes this before [`Self::ktype`] and
     /// resolves the name against its own scope chain.
@@ -208,9 +221,9 @@ pub fn require_ktype<'a>(
             expected: "ProperType".to_string(),
             got: crate::machine::model::types::render_label(ti.symbol(), registries),
         })),
-        // Every slot reaching here is a type slot, which admits no raw name part.
-        Some(Held::Name(_)) => {
-            unreachable!("a type slot never captures a name")
+        // Every slot reaching here is a type slot, which admits no raw part capture.
+        Some(Held::Name(_) | Held::RecordType(_)) => {
+            unreachable!("a type slot never captures a raw part")
         }
         None => Err(KError::new(KErrorKind::MissingArg(name.text().to_string()))),
     }
@@ -255,7 +268,8 @@ pub fn require_bare_type_name<'a>(
         // A `TypeNameToken` slot admits no Identifier part, and no binder slot lowers or resolves.
         Some(Held::Name(BinderSymbol::Value(_)))
         | Some(Held::Type(_))
-        | Some(Held::UnresolvedType(_)) => {
+        | Some(Held::UnresolvedType(_))
+        | Some(Held::RecordType(_)) => {
             unreachable!("a type-binder slot captures only a Type-class name token")
         }
         Some(Held::Object(_)) | None => {

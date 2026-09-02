@@ -264,6 +264,9 @@ impl<'a> ExpressionPart<'a> {
     /// [`KType::from_symbol`] for nothing, so a binder name is never lowered and never rendered to
     /// a string to be bound.
     ///
+    /// The two raw type-expression captures ride distinct carriers so a body can tell them apart:
+    /// a `:(…)` sigil rides [`KObject::KExpression`], a `:{…}` record rides [`Held::RecordType`].
+    ///
     /// A union carrier slot reduces to the one member that claims this part's shape
     /// ([`KType::capture_member_for`]) before the arms below run, so a union spelling of a carrier
     /// slot captures exactly as the bare member would. A part no member claims keeps the union
@@ -289,7 +292,7 @@ impl<'a> ExpressionPart<'a> {
             return Held::Object(KObject::KExpression(inner.expression()));
         }
         if let (ExpressionPart::RecordType(inner), KType::RECORD_TYPE) = (self, slot) {
-            return Held::Object(KObject::KExpression(inner.expression()));
+            return Held::RecordType(*inner);
         }
         if let (ExpressionPart::Identifier(name), KType::IDENTIFIER | KType::NAME_TOKEN) =
             (self, slot)

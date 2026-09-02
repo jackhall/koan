@@ -144,7 +144,7 @@ pub(in crate::machine::execute) fn relocated_cell_still_borrows(
 ) -> bool {
     let object = match cell {
         Held::Object(object) => Some(object),
-        Held::Type(_) | Held::UnresolvedType(_) | Held::Name(_) => None,
+        Held::Type(_) | Held::UnresolvedType(_) | Held::Name(_) | Held::RecordType(_) => None,
     };
     product_reaches_region(source, object, region)
 }

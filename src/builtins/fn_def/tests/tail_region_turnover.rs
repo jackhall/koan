@@ -248,7 +248,10 @@ fn loop_carried_aggregate_survives_tail_hop_adoption() {
                 depth += 1;
                 current = match &items.elements()[0] {
                     Held::Object(obj) => obj,
-                    Held::Type(_) | Held::UnresolvedType(_) | Held::Name(_) => {
+                    Held::Type(_)
+                    | Held::UnresolvedType(_)
+                    | Held::Name(_)
+                    | Held::RecordType(_) => {
                         panic!("expected an object element, got a type")
                     }
                 };

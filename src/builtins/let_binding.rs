@@ -48,9 +48,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 }
                 Held::Type(_) | Held::UnresolvedType(_) => Some("type"),
                 Held::Object(_) => None,
-                // The RHS slot is `:Any`, which admits no raw name part.
-                Held::Name(_) => {
-                    unreachable!("LET's bound-value slot never captures a name")
+                // The RHS slot is `:Any`, which admits no raw part capture.
+                Held::Name(_) | Held::RecordType(_) => {
+                    unreachable!("LET's bound-value slot never captures a raw part")
                 }
             };
             if let Some(kind) = type_kind {
@@ -81,9 +81,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 // A module is a value, and the Type-token namespace names things that type a field.
                 // `LET view = (m :| S)` is the wrong spelling for a module binding, whatever the RHS
                 // produced it (an ascription view, a functor call) — respell it snake_case.
-                // The RHS slot is `:Any`, which admits no raw name part.
-                Held::Name(_) => {
-                    unreachable!("LET's bound-value slot never captures a name")
+                // The RHS slot is `:Any`, which admits no raw part capture.
+                Held::Name(_) | Held::RecordType(_) => {
+                    unreachable!("LET's bound-value slot never captures a raw part")
                 }
                 Held::Object(KObject::Module(_)) => {
                     let spelling =

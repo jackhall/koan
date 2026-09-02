@@ -100,8 +100,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
                 ))));
             }
             // A pin value arrives as a bound cell from the record's own slots, never as a raw
-            // name part.
-            Held::Name(_) => unreachable!("a WITH pin value is never a captured name"),
+            // part capture.
+            Held::Name(_) | Held::RecordType(_) => {
+                unreachable!("a WITH pin value is never a raw part capture")
+            }
         };
         match manifest {
             // An equal re-pin of a fixed member normalizes away: not an error, and not a pin.
