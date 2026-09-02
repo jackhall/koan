@@ -417,13 +417,10 @@ fn access_type_member<'a>(
         Projection::Signature(Some(member)) if context.admits(field) => {
             Ok(StepCarried::born(scope.resident(Carried::Type(member))))
         }
-        Projection::Signature(member) => Err(sigil_hinted(
-            KError::new(KErrorKind::ShapeError(format!(
-                "signature `{}` has no member `{}`",
-                lhs_spelling(spelling, kt, registries),
-                field.text(registries)
-            ))),
+        Projection::Signature(member) => Err(value_context_miss(
             member.is_some(),
+            "signature",
+            "a value slot",
             spelling,
             kt,
             field,
@@ -473,29 +470,36 @@ fn lhs_spelling(spelling: Option<BinderSymbol>, kt: KType, registries: &RunRegis
     }
 }
 
-/// Append the sigiled spelling to a value-context miss the sigil *would* have answered — the one
-/// refinement the context split adds to the diagnostics. A miss the sigil would not rescue carries
-/// no hint: `Number.foo` names a memberless type and `Maybe.some` names no variant, and neither
-/// has a spelling that would answer.
-fn sigil_hinted(
-    error: KError,
-    would_hit_under_sigil: bool,
+/// The miss a Type-channel projection reports, split on whether the member is actually there.
+///
+/// `declared` distinguishes the two failures the value context produces. A member the lhs does not
+/// carry is a plain miss — `Number.foo` names a memberless type, `Maybe.some` names no variant —
+/// and no spelling would answer it. A member it *does* carry failed on context alone: a
+/// lowercase name reads as a value here, and a declared slot or field is a specification rather
+/// than a value, so only the type sigil names what it declares. Reporting that one as "has no
+/// member" would contradict the very hint that follows it.
+///
+/// `lhs_noun` and `member_kind` name the two halves the caller knows: what the lhs is (`signature`
+/// / `type`) and what it declared (`a value slot` / `a record field`).
+fn value_context_miss(
+    declared: bool,
+    lhs_noun: &str,
+    member_kind: &str,
     spelling: Option<BinderSymbol>,
     kt: KType,
     field: &FieldName<'_>,
     registries: &RunRegistries,
 ) -> KError {
-    if !would_hit_under_sigil {
-        return error;
-    }
-    let KErrorKind::ShapeError(message) = &error.kind else {
-        return error;
-    };
-    KError::new(KErrorKind::ShapeError(format!(
-        "{message} — write `:({}.{})` to name the field's declared type",
-        lhs_spelling(spelling, kt, registries),
-        field.text(registries),
-    )))
+    let lhs = lhs_spelling(spelling, kt, registries);
+    let field = field.text(registries);
+    KError::new(KErrorKind::ShapeError(if declared {
+        format!(
+            "{lhs_noun} `{lhs}` declares `{field}` as {member_kind}, which names no value here — \
+             write `:({lhs}.{field})` to name its declared type"
+        )
+    } else {
+        format!("{lhs_noun} `{lhs}` has no member `{field}`")
+    }))
 }
 
 /// Project `field` off the sealed record schema a record-repr newtype wraps — the product-side peer
@@ -551,9 +555,10 @@ fn record_repr_member<'a>(
                     .collect::<Vec<_>>()
                     .join(", "),
             )))),
-            ProjectionContext::Value => Err(sigil_hinted(
-                no_member(),
+            ProjectionContext::Value => Err(value_context_miss(
                 declared.is_some(),
+                "type",
+                "a record field",
                 spelling,
                 kt,
                 field,
@@ -1235,11 +1240,12 @@ mod tests {
         assert_eq!(kt, KType::NUMBER);
     }
 
-    /// The bare spelling names no member: `compare` is a value token, and a value token never
-    /// names a type in an unsigiled expression. The schema does carry the slot, so the miss points
-    /// at the surface that reads it.
+    /// The bare spelling names no *value*: `compare` is a value token, and a `VAL` slot is a
+    /// specification rather than a value. The schema does carry the slot, so the miss says so and
+    /// points at the surface that reads its declared type — never "has no member", which the hint
+    /// that follows would contradict.
     #[test]
-    fn bare_attr_on_signature_type_misses_with_the_sigil_hint() {
+    fn bare_attr_on_a_declared_signature_slot_names_the_sigiled_surface() {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
@@ -1247,9 +1253,9 @@ mod tests {
         let err = test_run.run_one_err(test_run.parse_one("Ordered.compare"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
-                if msg.contains("signature `Ordered` has no member `compare`")
-                    && msg.contains("`:(Ordered.compare)`")),
-            "expected the no-member miss hinting the sigiled spelling, got {err}",
+                if msg == "signature `Ordered` declares `compare` as a value slot, which names \
+                    no value here — write `:(Ordered.compare)` to name its declared type"),
+            "expected the declared-slot miss naming the sigiled surface, got {err}",
         );
     }
 
@@ -1364,10 +1370,10 @@ mod tests {
         );
     }
 
-    /// Bare `Point.x` names no member, and the schema carries the field, so the miss hints the
-    /// sigiled spelling — the same refinement the signature arm makes.
+    /// Bare `Point.x` names no value, and the schema carries the field, so the miss says which it
+    /// is and points at the sigiled surface — the same split the signature arm makes.
     #[test]
-    fn bare_attr_on_a_record_repr_newtype_misses_with_the_sigil_hint() {
+    fn bare_attr_on_a_record_repr_field_names_the_sigiled_surface() {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
@@ -1375,9 +1381,9 @@ mod tests {
         let err = test_run.run_one_err(test_run.parse_one("Point.x"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
-                if msg.contains("type `Point` has no member `x`")
-                    && msg.contains("`:(Point.x)`")),
-            "expected the no-member miss hinting the sigiled spelling, got {err}",
+                if msg == "type `Point` declares `x` as a record field, which names no value \
+                    here — write `:(Point.x)` to name its declared type"),
+            "expected the declared-field miss naming the sigiled surface, got {err}",
         );
     }
 

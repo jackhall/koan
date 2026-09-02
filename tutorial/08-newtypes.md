@@ -108,8 +108,8 @@ where a field is itself record-shaped — `:(Outer.inner.x)` — and works throu
 alias of the type name.
 
 The sigil is not optional here. `x` and `y` are lowercase names, and a lowercase
-name never means a type in an ordinary expression, so the bare spelling is a
-missing member:
+name never means a type in an ordinary expression, so the bare spelling names no
+value — the field is a declaration, not one:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Str}
@@ -117,7 +117,7 @@ Point.y
 ```
 
 ```text
-error: shape error: type `Point` has no member `y` — write `:(Point.y)` to name the field's declared type
+error: shape error: type `Point` declares `y` as a record field, which names no value here — write `:(Point.y)` to name its declared type
 ```
 
 Uppercase members need no sigil, because an uppercase name already means a type:
