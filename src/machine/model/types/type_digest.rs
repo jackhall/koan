@@ -417,11 +417,17 @@ fn feed_named_types(
 }
 
 /// A member type's digest, with references to `schema`'s own abstract members canonicalized to a
-/// `(TAG_SIG_SELF_REF, name)` leaf. Recurses through exactly the composite shapes
-/// [`substitute_sig_members`](super::sig_schema::substitute_sig_members) rewrites — List, Dict,
-/// Record, KFunction, Union, ConstructorApply — rebuilding each composite's digest from its
-/// canonicalized children. Every other shape contributes its handle's own digest, so a minted
-/// `AbstractType` from another source keeps its generative identity.
+/// `(TAG_SIG_SELF_REF, name)` leaf. Recurses through the composite shapes List, Dict, Record,
+/// KFunction, Union and ConstructorApply, rebuilding each composite's digest from its canonicalized
+/// children. Every other shape contributes its handle's own digest, so a minted `AbstractType` from
+/// another source keeps its generative identity.
+///
+/// A nested `Signature` is deliberately *not* one of those composites, though
+/// [`substitute_sig_members`](super::sig_schema::substitute_sig_members) descends into it: a
+/// nested handle inside a projected schema is already canonical, its outer references re-sourced to
+/// `ScopeId::SENTINEL` at projection, and shadowing there is by name — so handle identity is
+/// textually determined and the handle's own digest is exact. Collapsing the name leaves inside it
+/// would gain nothing and would conflate an inner binder with an outer reference of the same name.
 fn canonical_type_digest(kt: KType, schema: &SigSchema, types: &TypeRegistry) -> TypeDigest {
     let node = types.node(kt);
     if let Some(name) = schema_self_ref(&node, schema) {

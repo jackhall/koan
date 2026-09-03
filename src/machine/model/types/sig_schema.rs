@@ -13,6 +13,7 @@
 //!
 //! See [design/typing/modules.md](../../../../design/typing/modules.md).
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::machine::core::{Scope, ScopeId};
@@ -268,6 +269,13 @@ pub(super) fn name_sets_equal(left: &[TypeSymbol], right: &[TypeSymbol]) -> bool
 /// `ConstructorApply`. Compound types recurse; every other shape is returned unchanged. A nonced
 /// `AbstractType` is an opaque ascription's generative mint, not a reference to a declaration, so
 /// it never substitutes even when it shares its binder's `source` and name.
+///
+/// A **nested `Signature`** recurses like any other compound: a signature standing in a slot type
+/// (`VAL subs :(LIST OF (Inner WITH {Item = Elt}))`) carries references to the enclosing
+/// signature's members in its own manifest members and value slots, and those rewrite. The nested
+/// schema's *own* abstract members shadow the enclosing binder's **by name** — every projected SIG
+/// canonicalizes to [`ScopeId::SENTINEL`], so `source` cannot tell an inner binder from an outer
+/// one and the shadowed names are subtracted from the substitution before the descent.
 pub fn substitute_sig_members(
     kt: KType,
     sig_id: ScopeId,
@@ -314,8 +322,42 @@ pub fn substitute_sig_members(
             let arguments = arguments.map(|a| substitute_sig_members(*a, sig_id, members, types));
             types.constructor_apply(constructor, arguments)
         }
+        TypeNode::Signature { mut schema, .. } => {
+            let effective = unshadowed(members, &schema);
+            if effective.is_empty() {
+                return kt;
+            }
+            // The nested schema's own `abstract_members` are binders, not references, and its
+            // `sig_id` names its own binder — neither is touched. `types.signature` is
+            // content-addressed, so re-interning an unchanged schema returns `kt` itself.
+            for member in schema
+                .manifest_members
+                .values_mut()
+                .chain(schema.value_slots.values_mut())
+            {
+                *member = substitute_sig_members(*member, sig_id, &effective, types);
+            }
+            types.signature(schema)
+        }
         _ => kt,
     }
+}
+
+/// `members` with `nested`'s own abstract-member names removed — the substitution a walk carries
+/// into a nested signature, since a nested binder shadows the enclosing one by name. Borrows when
+/// nothing shadows, which is the common case (folding a `WITH` pin usually empties
+/// `abstract_members` outright).
+fn unshadowed<'m>(members: &'m TypeMemberMap, nested: &SigSchema) -> Cow<'m, TypeMemberMap> {
+    if nested.abstract_members.is_empty() {
+        return Cow::Borrowed(members);
+    }
+    Cow::Owned(
+        members
+            .iter()
+            .filter(|(name, _)| !nested.abstract_members.contains_key(*name))
+            .map(|(name, kt)| (*name, *kt))
+            .collect(),
+    )
 }
 
 /// Two bindings for one signature's abstract members: the pair a value read across an ascription
@@ -426,9 +468,8 @@ fn member_table_handle(members: &TypeMemberMap, types: &TypeRegistry) -> KType {
     })
 }
 
-/// Read a member table back out of the handle [`member_table_handle`] interned it into. The clone
-/// is what lets the walk intern types as it recurses — an intern under the `with_node` read's own
-/// borrow would deadlock the registry.
+/// Read a member table back out of the handle [`member_table_handle`] interned it into. The table
+/// is cloned because the walk carries it across the whole recursion, outliving the read.
 fn member_table(handle: KType, types: &TypeRegistry) -> TypeMemberMap {
     types.with_node(handle, |node| match node {
         TypeNode::Signature { schema, .. } => schema.manifest_members.clone(),
@@ -681,6 +722,19 @@ fn canonicalize_binder(kt: KType, declared: ScopeId, types: &TypeRegistry) -> KT
             let arguments = arguments.map(|a| canonicalize_binder(*a, declared, types));
             types.constructor_apply(constructor, arguments)
         }
+        TypeNode::Signature { mut schema, .. } => {
+            // Keyed on the *real* declaring scope id, so no shadow subtraction: the nested
+            // schema's own members were re-sourced to `SENTINEL` when the nested SIG was
+            // projected, and `source == declared` can only match a genuine outer reference.
+            for member in schema
+                .manifest_members
+                .values_mut()
+                .chain(schema.value_slots.values_mut())
+            {
+                *member = canonicalize_binder(*member, declared, types);
+            }
+            types.signature(schema)
+        }
         _ => kt,
     }
 }
@@ -875,7 +929,8 @@ pub fn sig_subtype(
 /// True iff `declared` contains a reference to one of `sig_id`'s abstract members that
 /// [`substitute_sig_members`] would rewrite (an `AbstractType` sourced at `sig_id` whose name
 /// `members` binds). When false, substitution is the identity and a plain compare on `declared`
-/// is exact.
+/// is exact. A reference inside a nested signature counts, under the same by-name shadowing the
+/// substitution applies — that is what routes such a slot off the structural fast path.
 fn references_sig_member(
     declared: KType,
     sig_id: ScopeId,
@@ -915,6 +970,15 @@ fn references_sig_member(
                     .values()
                     .any(|a| references_sig_member(*a, sig_id, members, types))
         }
+        TypeNode::Signature { schema, .. } => {
+            let effective = unshadowed(members, &schema);
+            !effective.is_empty()
+                && schema
+                    .manifest_members
+                    .values()
+                    .chain(schema.value_slots.values())
+                    .any(|kt| references_sig_member(*kt, sig_id, &effective, types))
+        }
         _ => false,
     }
 }
@@ -944,6 +1008,10 @@ fn substitution_binding(
 /// compare against `sub`'s binding; on a member-free node it falls to plain
 /// `satisfied_by`; otherwise it descends the shared container structure with the same covariance
 /// [`KType::satisfied_by`] applies (`Dict`/`Record`/`KFunction` component rules included).
+///
+/// A nested `Signature` is the one position that does materialize: the relation between two
+/// signatures is `sig_subtype`, itself schema-recursive, so the walk substitutes once and hands the
+/// interned result to `satisfied_by` rather than re-deriving that recursion.
 fn slot_satisfied_by(
     declared: KType,
     sub_type: KType,
@@ -959,6 +1027,12 @@ fn slot_satisfied_by(
         return declared.satisfied_by(sub_type, registries);
     }
     match (types.node(declared), types.node(sub_type)) {
+        // A nested signature is the one position the no-materialize walks materialize at: the
+        // relation between two signatures is `sig_subtype`, which is already schema-recursive, so
+        // substituting once and handing the interned result to it beats re-deriving that recursion
+        // here. Nesting is rare, and one intern is cheaper than a fourth structural walk.
+        (TypeNode::Signature { .. }, _) => substitute_sig_members(declared, sig_id, members, types)
+            .satisfied_by(sub_type, registries),
         (TypeNode::List { element: ed }, TypeNode::List { element: es }) => {
             slot_satisfied_by(ed, es, members, sig_id, registries)
         }
@@ -1030,7 +1104,7 @@ fn slot_satisfied_by(
 /// Verdict of `substitute_sig_members(declared, ...) == target
 /// || substitute_sig_members(declared, ...).is_more_specific_than(target)` — the contravariant
 /// direction [`slot_satisfied_by`] needs for a function parameter, computed without building the
-/// substituted type.
+/// substituted type except at a nested `Signature`, which materializes for the same reason.
 fn slot_more_specific_or_equal(
     declared: KType,
     target: KType,
@@ -1062,6 +1136,13 @@ fn slot_more_specific_or_equal(
             .any(|t| slot_more_specific_or_equal(declared, *t, members, sig_id, registries));
     }
     match (types.node(declared), target_node) {
+        // Materialize at a nested signature, as [`slot_satisfied_by`] does — the
+        // `Signature`-vs-`Signature` relation rides `is_more_specific_than`'s own strict
+        // `sig_subtype` arm.
+        (TypeNode::Signature { .. }, _) => {
+            let substituted = substitute_sig_members(declared, sig_id, members, types);
+            substituted == target || substituted.is_more_specific_than(target, registries)
+        }
         (TypeNode::List { element: ed }, TypeNode::List { element: et }) => {
             slot_more_specific_or_equal(ed, et, members, sig_id, registries)
         }
@@ -1122,6 +1203,7 @@ fn slot_more_specific_or_equal(
 /// Verdict of `substitute_sig_members(declared, ...) == other` — structural equality with `sub`'s
 /// bindings spliced in. Only the constructor identity of a `ConstructorApply` needs this (a
 /// constructor is a leaf member reference, so the recursion bottoms out immediately in practice).
+/// A nested `Signature` materializes and compares handles — content addressing makes that exact.
 fn slot_types_equal(
     declared: KType,
     other: KType,
@@ -1136,6 +1218,11 @@ fn slot_types_equal(
         return declared == other;
     }
     match (types.node(declared), types.node(other)) {
+        // Materialize at a nested signature: a `Signature` handle is content-addressed, so handle
+        // equality against the substituted type *is* the structural comparison.
+        (TypeNode::Signature { .. }, _) => {
+            substitute_sig_members(declared, sig_id, members, types) == other
+        }
         (TypeNode::List { element: ed }, TypeNode::List { element: eo }) => {
             slot_types_equal(ed, eo, members, sig_id, types)
         }

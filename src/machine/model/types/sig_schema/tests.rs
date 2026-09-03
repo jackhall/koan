@@ -718,6 +718,204 @@ fn substitute_leaves_non_matching_sig_id_and_unknown_names() {
     );
 }
 
+// --- nested signatures ------------------------------------------------------------------
+
+/// A nested signature carrying references to the *enclosing* signature's abstract members, as
+/// `Inner WITH {Item = Elt}` folds to: `Item` fixed manifest to the outer `Elt`, and the `one`
+/// slot typed by it. `own` names an abstract member the nested schema declares itself, which
+/// shadows the enclosing binder of that name.
+fn nested_sig(
+    own: Vec<(&str, KType)>,
+    manifest: Vec<(&str, KType)>,
+    slots: Vec<(&str, KType)>,
+    registries: &RunRegistries,
+) -> KType {
+    registries
+        .types
+        .signature(schema(Some(SUP_ID), own, manifest, slots, registries))
+}
+
+#[test]
+fn substitute_descends_into_a_nested_signature() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let elt = sig_abstract(SUP_ID, "Elt", &registries);
+    let mut map = TypeMemberMap::default();
+    map.insert(type_name("Elt", &registries), KType::NUMBER);
+
+    let nested = nested_sig(vec![], vec![("Item", elt)], vec![("one", elt)], &registries);
+    let substituted = nested_sig(
+        vec![],
+        vec![("Item", KType::NUMBER)],
+        vec![("one", KType::NUMBER)],
+        &registries,
+    );
+    // Manifest members and value slots alike.
+    assert_eq!(
+        substitute_sig_members(nested, SUP_ID, &map, types),
+        substituted
+    );
+    // And through the container the slot shape actually writes.
+    assert_eq!(
+        substitute_sig_members(types.list(nested), SUP_ID, &map, types),
+        types.list(substituted)
+    );
+}
+
+/// Capture avoidance: a nested signature declaring its own member of the same name shadows the
+/// enclosing one, so references in its slots are left alone.
+#[test]
+fn substitute_leaves_a_shadowed_nested_member_alone() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let elt = sig_abstract(SUP_ID, "Elt", &registries);
+    let mut map = TypeMemberMap::default();
+    map.insert(type_name("Elt", &registries), KType::NUMBER);
+
+    let shadowing = nested_sig(vec![("Elt", elt)], vec![], vec![("one", elt)], &registries);
+    assert_eq!(
+        substitute_sig_members(shadowing, SUP_ID, &map, types),
+        shadowing
+    );
+    // A second member the nested schema does *not* declare still substitutes.
+    let other = sig_abstract(SUP_ID, "Other", &registries);
+    map.insert(type_name("Other", &registries), KType::STR);
+    let mixed = nested_sig(
+        vec![("Elt", elt)],
+        vec![],
+        vec![("one", elt), ("two", other)],
+        &registries,
+    );
+    assert_eq!(
+        substitute_sig_members(mixed, SUP_ID, &map, types),
+        nested_sig(
+            vec![("Elt", elt)],
+            vec![],
+            vec![("one", elt), ("two", KType::STR)],
+            &registries,
+        )
+    );
+}
+
+/// The reference probe routes a nested-signature slot off `slot_satisfied_by`'s structural fast
+/// path — and keeps it on that path when the only same-named references are shadowed.
+#[test]
+fn references_reports_a_nested_reference_under_shadowing() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let elt = sig_abstract(SUP_ID, "Elt", &registries);
+    let mut map = TypeMemberMap::default();
+    map.insert(type_name("Elt", &registries), KType::NUMBER);
+
+    let referencing = types.list(nested_sig(
+        vec![],
+        vec![("Item", elt)],
+        vec![("one", elt)],
+        &registries,
+    ));
+    assert!(references_sig_member(referencing, SUP_ID, &map, types));
+
+    let shadowed = types.list(nested_sig(
+        vec![("Elt", elt)],
+        vec![],
+        vec![("one", elt)],
+        &registries,
+    ));
+    assert!(!references_sig_member(shadowed, SUP_ID, &map, types));
+}
+
+/// **AC 5.** `canonicalize_binder` re-sources a nested reference to `ScopeId::SENTINEL`, so two
+/// textually identical declarations carrying one project to a single schema and intern to a
+/// single handle.
+#[test]
+fn identical_declarations_carrying_a_nested_signature_intern_once() {
+    use crate::builtins::test_support::TestRun;
+    use crate::machine::core::{program_storage, run_root_storage};
+
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "SIG Inner = ((TYPE Item) (VAL one :Item))\n\
+         SIG First = ((TYPE Elt) (VAL subs :(LIST OF (Inner WITH {Item = Elt}))))\n\
+         SIG Second = ((TYPE Elt) (VAL subs :(LIST OF (Inner WITH {Item = Elt}))))",
+    );
+    assert_eq!(lookup_type(scope, "First"), lookup_type(scope, "Second"));
+}
+
+/// Pinning the outer member folds through the nesting: `Outer WITH {Elt = Number}`'s slot is the
+/// handle the directly-written `LIST OF (Inner WITH {Item = Number})` interns to.
+#[test]
+fn pinning_the_outer_member_folds_through_the_nesting() {
+    use crate::builtins::test_support::TestRun;
+    use crate::machine::core::{program_storage, run_root_storage};
+
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "SIG Inner = ((TYPE Item) (VAL one :Item))\n\
+         SIG Outer = ((TYPE Elt) (VAL subs :(LIST OF (Inner WITH {Item = Elt}))))\n\
+         SIG Direct = ((VAL subs :(LIST OF (Inner WITH {Item = Number}))))",
+    );
+    let subs = value_name("subs", test_run.registries());
+    let outer = signature_of(&test_run, scope, "Outer");
+    let direct = signature_of(&test_run, scope, "Direct");
+    let elt = type_name("Elt", test_run.registries());
+    let pinned = outer.fold_pins(&[(elt, KType::NUMBER)], test_run.types());
+    assert_eq!(pinned.value_slots.get(&subs), direct.value_slots.get(&subs),);
+}
+
+/// **AC 4, unit level.** The running example's satisfaction verdict: a module binding `Elt` to a
+/// newtype and supplying a list of `Inner`s over *that* type satisfies `Outer`, and one supplying
+/// `Inner`s over another type does not.
+#[test]
+fn nested_signature_slot_is_satisfied_by_a_matching_module() {
+    use crate::builtins::test_support::{TestRun, lookup_module};
+    use crate::machine::core::{program_storage, run_root_storage};
+
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "NEWTYPE Carrier = Number\n\
+         NEWTYPE Other = Number\n\
+         SIG Inner = ((TYPE Item) (VAL one :Item))\n\
+         SIG Outer = ((TYPE Elt) (VAL subs :(LIST OF (Inner WITH {Item = Elt}))))\n\
+         MODULE carrier_inner = ((LET Item = Carrier) (LET one = (Carrier 1)))\n\
+         MODULE other_inner = ((LET Item = Other) (LET one = (Other 1)))\n\
+         MODULE matching = ((LET Elt = Carrier) (LET subs = [carrier_inner]))\n\
+         MODULE mismatched = ((LET Elt = Carrier) (LET subs = [other_inner]))",
+    );
+    let outer = signature_of(&test_run, scope, "Outer");
+    let registries = test_run.registries();
+    let matching = lookup_module(scope, "matching", registries).self_sig(test_run.types());
+    let mismatched = lookup_module(scope, "mismatched", registries).self_sig(test_run.types());
+    assert!(check(&matching, &outer, registries).is_ok());
+    assert!(matches!(
+        check(&mismatched, &outer, registries),
+        Err(SigSubtypeFailure::ValueSlotMismatch { .. })
+    ));
+}
+
+/// The schema behind a SIG declaration bound at `name`.
+fn signature_of(
+    test_run: &crate::builtins::test_support::TestRun<'_>,
+    scope: &Scope<'_>,
+    name: &str,
+) -> SigSchema {
+    match lookup_type(scope, name) {
+        Some(kt) => match test_run.types().node(kt) {
+            TypeNode::Signature { schema, .. } => schema,
+            _ => panic!("`{name}` should resolve to a signature"),
+        },
+        None => panic!("`{name}` should resolve to a signature"),
+    }
+}
+
 #[test]
 fn constructor_param_names_probe() {
     let registries = RunRegistries::new();

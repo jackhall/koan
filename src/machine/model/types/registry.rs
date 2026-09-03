@@ -92,11 +92,11 @@ pub(crate) enum Relation {
 }
 
 /// The run-scoped store of type content and subtype verdicts. Interior mutability via `RefCell`,
-/// in two independent cells: a read of `nodes` spans the reading closure and may nest freely
-/// inside another, while `verdicts` is written under its own borrow, so a memoizing walk records
-/// its verdict without touching the read it is running under. What no read may do is intern —
-/// [`TypeRegistry::intern`] names the rule. Both maps are uncapped: they drop with the run frame
-/// that owns them, so growth is bounded by the run.
+/// in two independent cells: a read of `nodes` takes an `O(1)` snapshot and releases the cell
+/// before its closure runs, so reads nest freely and a reader may intern, while `verdicts` is
+/// written under its own borrow, so a memoizing walk records its verdict without touching the read
+/// it is running under. Both maps are uncapped: they drop with the run frame that owns them, so
+/// growth is bounded by the run.
 pub struct TypeRegistry {
     nodes: RefCell<NodeMap>,
     verdicts: RefCell<HashMap<(TypeDigest, TypeDigest, Relation), bool>>,
@@ -159,41 +159,44 @@ impl TypeRegistry {
     // --- Content: interning and node reads ---
     //
     // [`with_node`](Self::with_node) is the one read door; `node` and the per-query verbs below are
-    // written over it or over the same borrow. The borrow spans the reading closure, so **a read
-    // must not intern** — the single rule this section rests on, checked by
-    // [`intern`](Self::intern)'s own diagnostic below.
+    // written over it. A read holds no borrow while its closure runs — it reads through an `O(1)`
+    // persistent snapshot — so **a reader may intern freely**, and a walk that rewrites types as it
+    // recurses runs at any depth under a read.
 
     /// Intern `node` and return its handle. Computes the node's digest, inserts it if the digest
     /// is not already present, and returns the digest as a [`KType`]. Interning the same content
     /// twice yields one node and two equal handles.
     ///
-    /// Never reachable from inside a [`with_node`](Self::with_node) closure — the read holds the
-    /// table borrow, so an intern under one is the rule violation the `expect` below names.
+    /// Reachable from inside a [`with_node`](Self::with_node) closure: that read borrows the cell
+    /// only long enough to take its snapshot, so the write borrow here is uncontended.
     pub fn intern(&self, node: TypeNode) -> KType {
         let digest = type_digest::node_digest(&node);
-        let mut nodes = self
-            .nodes
-            .try_borrow_mut()
-            .expect("a node read must not intern: the read holds the table borrow");
+        let mut nodes = self.nodes.borrow_mut();
         if !nodes.contains_key(&digest) {
             nodes.insert(digest, node);
         }
         KType::from_digest(digest)
     }
 
-    /// Read the content `handle` names **by reference**, under the table borrow, and hand back
-    /// whatever `read` derives from it.
+    /// Read the content `handle` names **by reference** and hand back whatever `read` derives
+    /// from it.
     ///
     /// The one read door. `read`'s result type is fixed at the call site and the node's lifetime is
     /// this call's, so no reference into the table can escape: a reader is confined to derived
     /// data by construction, which is what lets a shape probe answer without copying the node.
-    /// Reads nest freely — the borrow is shared — but a reader must not intern.
+    ///
+    /// The node is read out of a **snapshot** — `nodes` is a persistent HAMT, so cloning it is a
+    /// root-pointer bump and the `RefCell` borrow ends before `read` runs. That is what lets a
+    /// reader intern: [`Self::intern`] inserts into the live table, which the snapshot in hand does
+    /// not share, and a handle minted mid-read resolves through the fresh snapshot its own
+    /// `with_node` takes. Reads nest freely.
     ///
     /// A miss is a bug, not a state: a handle is only ever produced by [`Self::intern`], and the
     /// table is insert-only.
     pub fn with_node<R>(&self, handle: KType, read: impl FnOnce(&TypeNode) -> R) -> R {
         let digest = handle.digest();
-        match self.nodes.borrow().get(&digest) {
+        let snapshot = self.nodes.borrow().clone();
+        match snapshot.get(&digest) {
             Some(node) => read(node),
             None => panic!("type handle 0x{:032x} names no interned node", digest.0),
         }
@@ -362,17 +365,12 @@ impl TypeRegistry {
     /// canonicalization pays, which is what the inline width is chosen against. `flat` arrives
     /// owned so the miss path hands its buffer to the node rather than copying it: a member list
     /// wide enough to have spilled is moved, not reallocated.
-    ///
-    /// Keeps [`intern`](Self::intern)'s "a node read must not intern" discipline: the probe's
-    /// shared borrow ends with the statement that takes it, before the mutable borrow below.
     fn intern_union_members(&self, flat: MemberList) -> KType {
         let digest = type_digest::union_digest(&flat);
+        // The probe's shared borrow ends with the statement that takes it, before the write below.
         let present = self.nodes.borrow().contains_key(&digest);
         if !present {
-            let mut nodes = self
-                .nodes
-                .try_borrow_mut()
-                .expect("a node read must not intern: the read holds the table borrow");
+            let mut nodes = self.nodes.borrow_mut();
             nodes.insert(
                 digest,
                 TypeNode::Union {

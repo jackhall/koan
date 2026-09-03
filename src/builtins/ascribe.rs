@@ -157,10 +157,6 @@ fn view_type_members(
     // `TypeConstructor` family over the slot's declared parameter names rather than the default
     // `AbstractType` arm, preserving the higher-kinded shape across the ascription barrier.
     for (name, kt) in &signature.abstract_members {
-        // The node is cloned rather than read in place. Both arms below intern through `types` —
-        // `seal_singleton` mints a family, and the generative arm interns directly — and an intern
-        // under a `with_node` closure hits the borrow that read holds. Reading this one in place
-        // waits on the registry's read/intern split.
         let minted_kt = match types.node(*kt) {
             TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => {
                 // The mint carries the SIG member's own classified name straight across: the
