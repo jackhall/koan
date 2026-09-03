@@ -34,7 +34,7 @@ use super::kkind::KKind;
 use super::ktype::KType;
 use super::node::TypeNode;
 use super::record::Record;
-use super::sig_schema::SigSchema;
+use super::sig_schema::{SigSchema, join_schemas};
 use super::type_digest::{self, TypeDigest, schema_content_digest};
 
 /// A union's members under construction. Inline up to four — the width that covers a hand-written
@@ -436,6 +436,14 @@ impl TypeRegistry {
                 }
                 None => self.intern(TypeNode::Any),
             },
+            // Two interfaces bound at their least common interface, not at `Any`: width
+            // intersection with a per-member depth reconciliation ([`join_schemas`]). Disjoint
+            // operands land on the empty schema — the module-lattice top `:Module` — by digest.
+            // `self.node` cloned both schemas out, so the table borrow is closed before
+            // `signature` interns.
+            (TypeNode::Signature { schema: xs, .. }, TypeNode::Signature { schema: ys, .. }) => {
+                self.signature(join_schemas(&xs, &ys, self))
+            }
             _ => self.intern(TypeNode::Any),
         }
     }

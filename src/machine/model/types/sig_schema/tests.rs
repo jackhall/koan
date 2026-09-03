@@ -774,3 +774,285 @@ fn abstract_hk_refused_by_differently_named_parameter() {
         failure.render_fragment(),
     );
 }
+
+// --- join -----------------------------------------------------------------------------
+
+/// The joined schema must be an upper bound: both operands `sig_subtype` it.
+#[track_caller]
+fn assert_upper_bound(
+    a: &SigSchema,
+    b: &SigSchema,
+    joined: &SigSchema,
+    registries: &RunRegistries,
+) {
+    assert!(
+        check(a, joined, registries).is_ok(),
+        "the left operand must satisfy the join"
+    );
+    assert!(
+        check(b, joined, registries).is_ok(),
+        "the right operand must satisfy the join"
+    );
+}
+
+/// A member both operands fix to the same type survives manifest — the join keeps every
+/// requirement both operands already meet.
+#[test]
+fn join_keeps_an_equal_manifest_member_manifest() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let a = schema(
+        None,
+        vec![],
+        vec![("Tag", KType::NUMBER)],
+        vec![("v", KType::NUMBER)],
+        &registries,
+    );
+    let b = schema(
+        None,
+        vec![],
+        vec![("Tag", KType::NUMBER)],
+        vec![("v", KType::NUMBER)],
+        &registries,
+    );
+    let joined = join_schemas(&a, &b, types);
+    assert_eq!(
+        joined.manifest_members.get(&type_name("Tag", &registries)),
+        Some(&KType::NUMBER)
+    );
+    assert!(joined.abstract_members.is_empty());
+    assert_eq!(joined.sig_id, None, "no abstract member, nothing to bind");
+    assert_upper_bound(&a, &b, &joined, &registries);
+}
+
+/// Two differing manifest bindings at the same kind demote to an abstract member, and a value slot
+/// typed by each operand's binding generalizes to a reference to it rather than coarsening to
+/// `Any`. The joined interface is exactly what a `SIG` declaring `(TYPE Carrier) (VAL item
+/// :Carrier)` asks for, so both operands satisfy it — and so does that SIG's own schema.
+#[test]
+fn join_demotes_a_differing_manifest_member_and_generalizes_its_slots() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let a = schema(
+        None,
+        vec![],
+        vec![("Carrier", KType::NUMBER)],
+        vec![("item", KType::NUMBER)],
+        &registries,
+    );
+    let b = schema(
+        None,
+        vec![],
+        vec![("Carrier", KType::STR)],
+        vec![("item", KType::STR)],
+        &registries,
+    );
+    let joined = join_schemas(&a, &b, types);
+    let carrier = joined
+        .abstract_members
+        .get(&type_name("Carrier", &registries))
+        .copied()
+        .expect("a differing manifest member demotes to abstract");
+    assert_eq!(joined.sig_id, Some(ScopeId::SENTINEL));
+    assert!(joined.manifest_members.is_empty());
+    assert_eq!(
+        joined.value_slots.get(&value_name("item", &registries)),
+        Some(&carrier),
+        "the slot rejoins as a reference to the demoted member"
+    );
+    assert_upper_bound(&a, &b, &joined, &registries);
+
+    // And the joined content is the interface an equivalent SIG declaration carries — the
+    // canonical binder and nonce-free members are what make the two one type.
+    let ordered = schema(
+        Some(ScopeId::SENTINEL),
+        vec![(
+            "Carrier",
+            sig_abstract(ScopeId::SENTINEL, "Carrier", &registries),
+        )],
+        vec![],
+        vec![(
+            "item",
+            sig_abstract(ScopeId::SENTINEL, "Carrier", &registries),
+        )],
+        &registries,
+    );
+    assert_eq!(
+        types.signature(joined.clone()),
+        types.signature(ordered),
+        "a joined signature is the handle the equivalent SIG declaration projects to"
+    );
+}
+
+/// Kind is a requirement of its own: a first-order binding against a constructor binding has no
+/// common requirement, so the member drops rather than demoting. Two constructors agree only over
+/// the same parameter-name set.
+#[test]
+fn join_drops_a_member_whose_kinds_disagree() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let one_param = ctor("Boxed", 1, &registries);
+    let first_order = schema(
+        None,
+        vec![],
+        vec![("Wrap", KType::NUMBER)],
+        vec![],
+        &registries,
+    );
+    let constructor = schema(None, vec![], vec![("Wrap", one_param)], vec![], &registries);
+    assert!(
+        join_schemas(&first_order, &constructor, types)
+            .abstract_members
+            .is_empty(),
+        "a proper type and a constructor share no requirement"
+    );
+
+    // Equal parameter-name sets keep the member, at constructor kind.
+    let other = ctor("Wrapper", 1, &registries);
+    let joined = join_schemas(
+        &constructor,
+        &schema(None, vec![], vec![("Wrap", other)], vec![], &registries),
+        types,
+    );
+    let demoted = joined
+        .abstract_members
+        .get(&type_name("Wrap", &registries))
+        .copied()
+        .expect("same parameter names keep the member");
+    assert_eq!(
+        constructor_param_names(demoted, types),
+        Some(params(1, &registries)),
+        "the demoted member stays at the shared constructor kind"
+    );
+
+    // Unequal parameter-name sets do not.
+    let two_params = ctor("Pair", 2, &registries);
+    assert!(
+        join_schemas(
+            &constructor,
+            &schema(
+                None,
+                vec![],
+                vec![("Wrap", two_params)],
+                vec![],
+                &registries
+            ),
+            types,
+        )
+        .abstract_members
+        .is_empty()
+    );
+}
+
+/// Width intersection with nothing in common is the empty interface — the module-lattice top
+/// `:Module` — not `Any`.
+#[test]
+fn join_of_disjoint_signatures_is_the_empty_interface() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let a = schema(
+        None,
+        vec![],
+        vec![("Tag", KType::NUMBER)],
+        vec![("left", KType::NUMBER)],
+        &registries,
+    );
+    let b = schema(
+        None,
+        vec![],
+        vec![("Other", KType::STR)],
+        vec![("right", KType::STR)],
+        &registries,
+    );
+    let joined = types.signature(join_schemas(&a, &b, types));
+    assert_eq!(joined, KType::EMPTY_SIGNATURE);
+    assert_eq!(types.join(types.signature(a), types.signature(b)), joined);
+}
+
+/// The registry arm: a signature joined with itself is itself, and with a non-signature it
+/// coarsens to `Any` as any unrelated pair does.
+#[test]
+fn join_through_the_registry_arm() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let sig = types.signature(schema(
+        None,
+        vec![],
+        vec![("Tag", KType::NUMBER)],
+        vec![],
+        &registries,
+    ));
+    assert_eq!(types.join(sig, sig), sig);
+    assert_eq!(types.join(sig, KType::NUMBER), KType::ANY);
+}
+
+/// A function-typed slot generalizes through the demoted member in both variances: the parameters
+/// are contravariant, so a pair the operands bind the member to is still that member there.
+#[test]
+fn join_generalizes_a_function_slot_through_its_parameters() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let compare =
+        |element: KType| fn_type(vec![("a", element), ("b", element)], KType::BOOL, types);
+    let a = schema(
+        None,
+        vec![],
+        vec![("Carrier", KType::NUMBER)],
+        vec![("compare", compare(KType::NUMBER))],
+        &registries,
+    );
+    let b = schema(
+        None,
+        vec![],
+        vec![("Carrier", KType::STR)],
+        vec![("compare", compare(KType::STR))],
+        &registries,
+    );
+    let joined = join_schemas(&a, &b, types);
+    let carrier = joined
+        .abstract_members
+        .get(&type_name("Carrier", &registries))
+        .copied()
+        .expect("the member demotes");
+    assert_eq!(
+        joined.value_slots.get(&value_name("compare", &registries)),
+        Some(&compare(carrier)),
+        "both parameter positions and the return generalize"
+    );
+    assert_upper_bound(&a, &b, &joined, &registries);
+}
+
+/// A parameter position that does *not* generalize meets rather than joining: widening it would
+/// claim a satisfying module accepts arguments neither operand does. The joined slot bottoms out
+/// at `Never`, which is the true — and useless — bound.
+#[test]
+fn join_meets_an_ungeneralizable_function_parameter() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let a = schema(
+        None,
+        vec![],
+        vec![],
+        vec![(
+            "apply",
+            fn_type(vec![("x", KType::NUMBER)], KType::BOOL, types),
+        )],
+        &registries,
+    );
+    let b = schema(
+        None,
+        vec![],
+        vec![],
+        vec![(
+            "apply",
+            fn_type(vec![("x", KType::STR)], KType::BOOL, types),
+        )],
+        &registries,
+    );
+    let joined = join_schemas(&a, &b, types);
+    assert_eq!(
+        joined.value_slots.get(&value_name("apply", &registries)),
+        Some(&fn_type(vec![("x", KType::NEVER)], KType::BOOL, types))
+    );
+    assert_upper_bound(&a, &b, &joined, &registries);
+}

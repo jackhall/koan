@@ -107,6 +107,45 @@ fn fn_with_signature_element_list_param_dispatches_on_satisfaction() {
     assert_eq!(bytes, b"labelled\ngeneric\n");
 }
 
+/// Modules with *distinct* self-sigs join at their least common interface, not at `Any`: the list
+/// memoizes the width-intersection of the two self-sigs, with the differing `Carrier` bindings
+/// demoted to an abstract member and the `zero` slot generalized to a reference to it — which is
+/// exactly `Ordered`. So the list fills a `:(LIST OF Ordered)` slot even though no two elements
+/// share a type, and a list holding a module that does not satisfy `Ordered` still falls through.
+#[test]
+fn fn_with_signature_element_list_param_admits_distinct_self_sigs() {
+    let bytes = capture_program_output(
+        "SIG Ordered = ((TYPE Carrier) (VAL zero :Carrier))\n\
+         MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
+         MODULE str_ord = ((LET Carrier = Str) (LET zero = \"\"))\n\
+         MODULE plain = (LET count = 3)\n\
+         FN (DESCRIBE xs :(LIST OF Ordered)) -> Str = (\"ordered\")\n\
+         FN (DESCRIBE xs :Any) -> Str = (\"generic\")\n\
+         PRINT (DESCRIBE [int_ord, str_ord])\n\
+         PRINT (DESCRIBE [int_ord, plain])",
+    );
+    assert_eq!(bytes, b"ordered\ngeneric\n");
+}
+
+/// The element type the list above memoizes, read directly: the join of two distinct self-sigs is
+/// the signature type `Ordered` names, not `Any`.
+#[test]
+fn a_list_of_distinct_module_self_sigs_memoizes_their_join() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(
+        "SIG Ordered = ((TYPE Carrier) (VAL zero :Carrier))\n\
+         MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
+         MODULE str_ord = ((LET Carrier = Str) (LET zero = \"\"))",
+    );
+    let ordered = test_run.run_one_type(test_run.parse_one("Ordered"));
+    let carried = test_run
+        .run_one(test_run.parse_one("[int_ord, str_ord]"))
+        .ktype();
+    assert_eq!(carried, test_run.types().list(ordered));
+}
+
 /// `:(MAP Str -> S)` elaborates with a signature value type and admits a dict of satisfying
 /// module values.
 #[test]

@@ -320,6 +320,198 @@ pub fn substitute_sig_members(
     }
 }
 
+/// The least upper bound of two schemas under the relation [`sig_subtype`] decides — the join of
+/// the module lattice, and the `Signature` arm of [`TypeRegistry::join`].
+///
+/// **Width intersects.** A member only one operand names is dropped: the bound may promise only
+/// what both operands supply.
+///
+/// **Depth reconciles per member.** Two equal manifest bindings survive manifest, since both
+/// operands meet that exact requirement. Anything else at a matching kind — two differing
+/// manifests, a manifest against an abstract, two abstracts — demotes to an abstract member at
+/// that kind, the strongest requirement both bindings still satisfy. A kind disagreement (one
+/// side first-order, or two constructors over different parameter names) has no common
+/// requirement at all, so the member drops.
+///
+/// **Value slots join pointwise**, but through the demoted members first ([`sig_slot_join`]): a
+/// slot typed by one operand's binding of `Carrier` and the other's rejoins as a reference to
+/// `Carrier` itself rather than coarsening to `Any`.
+///
+/// The result carries the canonical [`ScopeId::SENTINEL`] binder every projected SIG carries and
+/// mints nonce-free abstract members, so a joined schema is content-identical to the equivalent
+/// written `SIG` declaration — and a join that keeps nothing lands on [`SigSchema::empty`], the
+/// lattice top `:Module`, by digest.
+pub fn join_schemas(a: &SigSchema, b: &SigSchema, types: &TypeRegistry) -> SigSchema {
+    let binding_of = |schema: &SigSchema, name: &TypeSymbol| {
+        schema
+            .manifest_members
+            .get(name)
+            .or_else(|| schema.abstract_members.get(name))
+            .copied()
+    };
+    // Sorted, so the demoted-member choice a binding-pair collision below settles on is the lowest
+    // member symbol rather than a hash order.
+    let mut names: Vec<TypeSymbol> = a
+        .manifest_members
+        .keys()
+        .chain(a.abstract_members.keys())
+        .copied()
+        .collect();
+    names.sort_unstable();
+
+    let mut abstract_members = TypeMemberMap::default();
+    let mut manifest_members = TypeMemberMap::default();
+    // (`a`'s binding, `b`'s binding) → the member demoted over that pair. Two members demoting over
+    // one pair of bindings are interchangeable in a slot position, so the first — the lowest
+    // symbol — wins.
+    let mut generalizations: HashMap<(KType, KType), KType> = HashMap::new();
+    for name in names {
+        let (Some(left), Some(right)) = (binding_of(a, &name), binding_of(b, &name)) else {
+            continue;
+        };
+        let left_params = constructor_param_names(left, types);
+        let param_names = match (&left_params, &constructor_param_names(right, types)) {
+            (None, None) => Vec::new(),
+            (Some(x), Some(y)) if name_sets_equal(x, y) => x.clone(),
+            _ => continue,
+        };
+        let manifest_in_both =
+            a.manifest_members.contains_key(&name) && b.manifest_members.contains_key(&name);
+        if left == right && manifest_in_both {
+            manifest_members.insert(name, left);
+            continue;
+        }
+        let demoted = types.intern(TypeNode::AbstractType {
+            source: ScopeId::SENTINEL,
+            name,
+            param_names,
+            nonce: None,
+        });
+        abstract_members.insert(name, demoted);
+        generalizations.entry((left, right)).or_insert(demoted);
+    }
+
+    let mut value_slots = HashMap::default();
+    for (name, left) in &a.value_slots {
+        if let Some(right) = b.value_slots.get(name) {
+            value_slots.insert(*name, sig_slot_join(*left, *right, &generalizations, types));
+        }
+    }
+
+    SigSchema {
+        // A schema with no abstract member names nothing for a slot to substitute against, which
+        // is what `None` records — the same `sig_id` a module self-sig and the empty schema carry.
+        sig_id: (!abstract_members.is_empty()).then_some(ScopeId::SENTINEL),
+        abstract_members,
+        manifest_members,
+        value_slots,
+    }
+}
+
+/// Anti-unify two slot types against `generalizations`, then join what does not generalize — the
+/// **covariant** half of the value-slot join, used at a slot's own position, a container's
+/// element, and a function's return.
+///
+/// A pair the two operands bind one demoted member to *is* that member: a module satisfying the
+/// join supplies some binding for it, and each operand's slot type is exactly its own binding, so
+/// the reference is satisfied in either variance. Anything left over falls to
+/// [`TypeRegistry::join`], which coarsens to `Any` where no structure relates the two.
+fn sig_slot_join(
+    x: KType,
+    y: KType,
+    generalizations: &HashMap<(KType, KType), KType>,
+    types: &TypeRegistry,
+) -> KType {
+    if let Some(member) = generalizations.get(&(x, y)) {
+        return *member;
+    }
+    if x == y {
+        return x;
+    }
+    match (types.node(x), types.node(y)) {
+        (TypeNode::List { element: ex }, TypeNode::List { element: ey }) => {
+            let element = sig_slot_join(ex, ey, generalizations, types);
+            types.list(element)
+        }
+        (TypeNode::Dict { key: kx, value: vx }, TypeNode::Dict { key: ky, value: vy }) => {
+            let key = sig_slot_join(kx, ky, generalizations, types);
+            let value = sig_slot_join(vx, vy, generalizations, types);
+            types.dict(key, value)
+        }
+        (
+            TypeNode::KFunction {
+                params: px,
+                ret: rx,
+            },
+            TypeNode::KFunction {
+                params: py,
+                ret: ry,
+            },
+        ) if px.len() == py.len() && px.keys().all(|k| py.get(k.symbol()).is_some()) => {
+            let params = px
+                .iter()
+                .map(|(name, t)| {
+                    let other = *py.get(name.symbol()).expect("the key sets were compared");
+                    (name, sig_slot_meet(*t, other, generalizations, types))
+                })
+                .collect();
+            let ret = sig_slot_join(rx, ry, generalizations, types);
+            types.function_type(params, ret)
+        }
+        _ => types.join(x, y),
+    }
+}
+
+/// The **contravariant** half of [`sig_slot_join`]: a function parameter position, where the bound
+/// admits only what both operands admit. Generalization still comes first — a demoted member is
+/// the common requirement in either variance — and what does not generalize meets, so two
+/// unrelated parameter types bottom out at `Never` rather than falsely widening to `Any`.
+fn sig_slot_meet(
+    x: KType,
+    y: KType,
+    generalizations: &HashMap<(KType, KType), KType>,
+    types: &TypeRegistry,
+) -> KType {
+    if let Some(member) = generalizations.get(&(x, y)) {
+        return *member;
+    }
+    if x == y {
+        return x;
+    }
+    match (types.node(x), types.node(y)) {
+        (TypeNode::List { element: ex }, TypeNode::List { element: ey }) => {
+            let element = sig_slot_meet(ex, ey, generalizations, types);
+            types.list(element)
+        }
+        (TypeNode::Dict { key: kx, value: vx }, TypeNode::Dict { key: ky, value: vy }) => {
+            let key = sig_slot_meet(kx, ky, generalizations, types);
+            let value = sig_slot_meet(vx, vy, generalizations, types);
+            types.dict(key, value)
+        }
+        (
+            TypeNode::KFunction {
+                params: px,
+                ret: rx,
+            },
+            TypeNode::KFunction {
+                params: py,
+                ret: ry,
+            },
+        ) if px.len() == py.len() && px.keys().all(|k| py.get(k.symbol()).is_some()) => {
+            let params = px
+                .iter()
+                .map(|(name, t)| {
+                    let other = *py.get(name.symbol()).expect("the key sets were compared");
+                    (name, sig_slot_join(*t, other, generalizations, types))
+                })
+                .collect();
+            let ret = sig_slot_meet(rx, ry, generalizations, types);
+            types.function_type(params, ret)
+        }
+        _ => types.meet(x, y),
+    }
+}
+
 /// Rewrite every reference to `declared`'s own abstract members so it is sourced at
 /// [`ScopeId::SENTINEL`] instead — the canonical binder every projected SIG schema shares.
 ///
