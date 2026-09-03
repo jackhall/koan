@@ -134,7 +134,7 @@ fn the_empty_program_stays_within_its_startup_bound() {
 /// [`FORCED_PIN_ALLOWANCE`] on top.
 #[test]
 fn the_wide_shape_stays_within_its_per_step_bound() {
-    const BOUND: u64 = 22_220;
+    const BOUND: u64 = 22_020;
     let delta = allocations_for(
         include_str!("../audit/shapes/wide_n100.koan"),
         "audit/shapes/wide_n100.koan",
@@ -161,7 +161,7 @@ fn the_wide_shape_stays_within_its_per_step_bound() {
 /// doc gives.
 #[test]
 fn the_deep_shape_stays_within_its_per_frame_bound() {
-    const BOUND: u64 = 22_830;
+    const BOUND: u64 = 22_630;
     let delta = allocations_for(
         include_str!("../audit/shapes/deep_n100.koan"),
         "audit/shapes/deep_n100.koan",

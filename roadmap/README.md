@@ -54,7 +54,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Parse at runtime](metaprogramming/parse-at-runtime.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Frame recycling](reduce_allocs/frame-recycling.md)
-- [Node reads in place past the read/intern split](reduce_allocs/node-reads-in-place.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)

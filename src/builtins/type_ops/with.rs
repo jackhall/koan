@@ -42,20 +42,22 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             _ => return done_err(KError::new(KErrorKind::MissingArg("sig".to_string()))),
         },
     };
-    let bindings = match ctx.args.object(&super::SLOTS.bindings) {
-        Some(KObject::Record(substrate, _types)) => substrate,
-        _ => {
-            return done_err(KError::new(KErrorKind::ShapeError(
-                "WITH bindings must be a record literal `{Slot = Type, …}`".to_string(),
-            )));
-        }
-    };
     // The schema is read in place and the whole pin validation runs under the read, down to the
     // fold that consumes it: reading the sig's node borrows the table only long enough to snapshot
     // it, so `fold_pins`' interning below is legal here and nothing has to own a schema.
     let folded = ctx.types().with_node(sig_handle, |node| {
         let TypeNode::Signature { schema, .. } = node else {
             return Err(mismatch(sig_handle.name(ctx.registries)));
+        };
+        // Read after the sig, so a non-signature `sig` operand reports its own mismatch ahead of
+        // a malformed bindings record.
+        let bindings = match ctx.args.object(&super::SLOTS.bindings) {
+            Some(KObject::Record(substrate, _types)) => substrate,
+            _ => {
+                return Err(KError::new(KErrorKind::ShapeError(
+                    "WITH bindings must be a record literal `{Slot = Type, …}`".to_string(),
+                )));
+            }
         };
         // Every pin must name a known slot and hold a type. A slot already fixed — a manifest
         // member, which is also what an earlier WITH's fold left behind — admits only an equal

@@ -394,7 +394,7 @@ impl<'a> KObject<'a> {
     /// applications adopts the application over its own member. A member the slot left bare, and a
     /// value whose member the slot never declares, pass through.
     pub fn stamp_type(self, declared: KType, types: &TypeRegistry) -> KObject<'a> {
-        match (self, types.node(declared)) {
+        types.with_node(declared, |node| match (self, node) {
             (KObject::List(substrate, _), TypeNode::List { .. }) => {
                 KObject::List(substrate, declared)
             }
@@ -409,7 +409,8 @@ impl<'a> KObject<'a> {
             (KObject::Wrapped { inner, type_id }, TypeNode::Union { members }) => {
                 // Peel each side to its bare constructor: the value may already be stamped, and a
                 // declared member may be an application, but the member a value inhabits is
-                // decided by the constructor both sides name.
+                // decided by the constructor both sides name. Reads nest, so the peel runs under
+                // the read the member list is being walked through.
                 let peel = |handle: KType| {
                     types.with_node(handle, |node| match node {
                         TypeNode::ConstructorApply { constructor, .. } => *constructor,
@@ -426,7 +427,7 @@ impl<'a> KObject<'a> {
                 }
             }
             (other, _) => other,
-        }
+        })
     }
 
     /// This value's owned leaf form, or `None` if it is not one — the **shallow scalar** test and the

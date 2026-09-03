@@ -195,8 +195,12 @@ candidate. The other doors are written over it:
 - **The owning door.** `node(handle)` is `with_node(handle, TypeNode::clone)`, for a
   caller that needs the node to outlive the read. A node is shallow — scalar payload plus
   child handles — so the clone never copies a type subtree, but a variant carrying a field
-  record, a member list or a schema allocates to clone, which is why every reader on an
-  allocation-sensitive path takes the borrowing door instead.
+  record, a member list or a schema allocates to clone. No production reader takes it:
+  each one either answers from inside the closure — including the rewriting walks, which
+  intern as they recurse — or copies past the read the single field it must own, saying at
+  the site why owning it is structural rather than a way around the borrow. The door stays
+  public for the test suites, which match a node against an expected shape outside any
+  closure.
 - **Per-query verbs.** `is_union`, `union_variant_target`, `union_member_named` walk the
   outer node and the members it names under one borrow and answer with `Copy` data, so a
   probe that wants a verdict rather than a node reads nothing back out.
@@ -209,8 +213,13 @@ the node table is a persistent HAMT, so the read door clones it — a root-point
 — and releases the `RefCell` borrow before the reading closure runs. `intern` takes the live
 table mutably against no outstanding borrow; the snapshot in the reader's hand does not
 share the insert, and a handle minted mid-read resolves through the fresh snapshot its own
-`with_node` takes. The consequence that matters is that a walk which *rewrites* types as it
-recurses runs at any depth under a read: signature satisfaction meets a nested signature in a
+`with_node` takes. The snapshot is what that costs: an insert made while a read is live
+copies the lookup path instead of updating the table in place, so reading in place trades a
+node clone per read for a path copy per intern-under-a-read. Every interning door — `intern`
+and the union-member door alike — funnels through one insert-if-absent path, so a digest is
+probed once per intern rather than once per door. The consequence that matters is that a
+walk which *rewrites* types as it recurses runs at any depth under a read: signature
+satisfaction meets a nested signature in a
 slot type and materializes the substituted schema right there
 ([modules.md § VAL-slot reads carry the abstract member identity](modules.md#val-slot-reads-carry-the-abstract-member-identity)),
 under the `with_node` its own entry point is holding.

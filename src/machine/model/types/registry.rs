@@ -184,6 +184,10 @@ impl TypeRegistry {
     /// lookup, but its occupied arm copies the whole lookup path out of the shared structure, which
     /// is exactly the hit path; a digest hashes by identity, so the second lookup here costs a
     /// descent and no hashing at all.
+    ///
+    /// `build` runs under the write borrow, so unlike a
+    /// [`with_node`](Self::with_node) closure it may not read or intern: it materializes the node
+    /// the caller already has the parts for and nothing else.
     fn intern_digested(&self, digest: TypeDigest, build: impl FnOnce() -> TypeNode) -> KType {
         let mut nodes = self.nodes.borrow_mut();
         if !nodes.contains_key(&digest) {
