@@ -35,11 +35,15 @@ production slot that meets all three.
 Because the slot otherwise resolves rather than captures, the diagnostic for a name that binds to
 nothing is raised by the dispatch lane, not the body. A slot that needs the pointed form-and-role noun
 registers it as an [`Argument::role`](../../../src/machine/model/types/signature.rs) through
-[`arg_labeled`](../../../src/builtins.rs), and the lane's unbound-name raise renders
-``{role} `{Name}` is not a known type`` — `MATCH return type`, `MATCH OVER operand`,
-`TRY return type`, `NEWTYPE repr`, `VAL slot type`. An unlabeled slot reports the bare unbound
-name. The label is a `&'static str` on a `Copy` `Argument`, so it costs nothing off the error
-path.
+[`arg_labeled`](../../../src/builtins.rs) — `MATCH return type`, `MATCH OVER operand`,
+`TRY return type`, `NEWTYPE repr`, `VAL slot type`. The lane hands a type-symbol miss and that
+role to [`type_name_miss`](../../../src/machine/model/types/resolver.rs), the one raiser every
+type-expression surface shares
+([elaboration.md § Type names obey strict source order](../elaboration.md)), which renders the
+role as the miss's context: `` unknown type name `{Name}` in {role} `` for a name declared
+nowhere, and `` `{Name}` is used in {role} before being declared `` for one declared further
+down the block. An unlabeled slot reports the bare unbound name. The label is a `&'static str`
+on a `Copy` `Argument`, so it costs nothing off the error path.
 
 A slot that wants a bare *name* rather than a resolved type is a binder position and takes one of
 the slot kinds below instead, so no consuming builtin re-checks an elaborated shape to recover

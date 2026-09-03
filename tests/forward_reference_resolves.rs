@@ -383,10 +383,10 @@ fn forward_reference_name(source: &str) -> String {
     }
 }
 
-/// The acceptance criterion: one program shape — a consumer naming a type declared on the next
-/// line — walked across every sigiled type surface, each answering with the same error kind. The
-/// two `NEWTYPE` reprs are the pair that used to speak with two voices, the lane's role-labeled
-/// render and the body's own; both reach this one kind now.
+/// One program shape — a consumer naming a type declared on the next line — walked across every
+/// sigiled type surface, each answering with the same error kind. The two `NEWTYPE` reprs are the
+/// pair that reaches the raiser by two routes, the dispatch lane's role-labeled slot and the
+/// body's own resolve-or-await; both land on this one kind.
 #[test]
 fn forward_type_reference_is_uniform_across_surfaces() {
     for (surface, source) in [
@@ -436,8 +436,8 @@ fn forward_type_reference_is_uniform_across_surfaces() {
 }
 
 /// The contexted surfaces frame the position with the slot the writer wrote, so one kind still
-/// points at one place. `NEWTYPE Box = Later` is the row that proves the two-voice split closed:
-/// its render is the lane's role noun, not the body's separate wording.
+/// points at one place. `NEWTYPE Box = Later` is the row that pins the bare-leaf repr to a single
+/// voice: its render is the lane's role noun, with no separate wording from the body.
 #[test]
 fn forward_reference_renders_its_surface_context() {
     for (source, expected) in [

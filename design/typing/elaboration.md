@@ -24,6 +24,32 @@ is what marks it in flight. This composes with value-name forward
 references uniformly — both are lexically gated
 ([execution/name-placeholders.md § Dispatch-time name placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)).
 
+**One raiser answers every type-name miss.** Every type-expression surface — a bare
+leaf annotation, a `:(LIST OF …)` element, a `:(MAP … -> …)` key or value, a
+record-type field, an `:(FN :{…} -> …)` parameter list, an `FN` signature parameter
+or return slot, a `NEWTYPE` repr in either spelling — reports its gated miss through
+[`type_name_miss`](../../src/machine/model/types/resolver.rs), so one rule has one
+diagnostic. The raiser splits the miss by re-probing the name on the error path:
+
+- **Declared later** — the name resolves unfiltered but not one statement forward.
+  That is `KErrorKind::ForwardReference { name, context, hint }`, rendering
+  `` `{name}` is used{ in {context}} before being declared `` plus the type channel's
+  fix hint (move the declaration earlier, or co-declare the cycle in a `MODULE` body).
+  `context` is the surface's own framing — *record fields for `Ty`*, *NEWTYPE repr*,
+  *FN signature for parameter `x`* — so one kind still points at one place.
+- **Declared nowhere** — the name misses unfiltered too. A contexted surface renders
+  `` shape error: unknown type name `{name}` in {context} ``; a context-free bare leaf
+  renders `KErrorKind::UnboundName`, symmetric with the value channel's unbound name.
+- **Declared by the consumer's own statement** — a self-reference like `LET Ty = Ty`,
+  found by the one-statement-forward probe ([`LexicalFrame::including_own_statement`](../../src/machine/core/lexical_frame.rs)).
+  It is not a position error: the declared-later hint would name a fix that shape does
+  not have, so it reports as a never-declared miss does.
+
+The classification runs before the dispatch lane's shape diagnosis, because a name
+declared later in the block is the true cause and a guess at what the writer meant
+would mask it. No surface parks on a later sibling; the raiser is reached only after
+the gate has already refused, and both probes cost nothing off the error path.
+
 **Self-recursion threads the declaring name.** A binder threads its own name into
 its body, so a self-reference (`NEWTYPE Tree = :{left :Tree}`) lowers to a relative
 [`TypeNode::Sibling`](../../src/machine/model/types/node.rs) reference against the
@@ -460,7 +486,7 @@ would buy only the elaborator walk while owning an invalidation question.
   handle alone, with no stored reach beside it, since a `KType` owns all its content. An
   `Unbound` carries the *name that missed*, not a message: the symbol the lookup already
   held, so a miss renders nothing and a diagnostic that quotes the name builds its wording
-  through `unknown_type_name` ([`resolver.rs`](../../src/machine/model/types/resolver.rs))
+  through `type_name_miss` ([`resolver.rs`](../../src/machine/model/types/resolver.rs))
   where the error is raised.
   A `Done` passes a **finalize gate** first: every user-type referenced by the
   result must be fully finalized (no type-side placeholder left in the owning scope)
@@ -480,10 +506,3 @@ the dispatch lane resolved before bind. A type-denoting FN parameter binds its a
 argument directly via `register_type` in
 [`run_user_fn`](../../src/machine/core/kfunction/exec.rs), so the per-call
 type-side bind needs no scope re-resolution and cannot park.
-
-## Open work
-
-- [Uniform forward type references in sigiled type expressions](../../roadmap/type_language/uniform-forward-type-references.md)
-  — the strict-source-order rule above is enforced by every type-expression
-  surface, but each renders the refusal differently and none of them says the
-  name is declared too late.

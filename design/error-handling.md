@@ -30,6 +30,10 @@ with these `KErrorKind` variants:
 - `TypeMismatch` — arg or return type didn't match.
 - `MissingArg` — required argument absent from the call.
 - `UnboundName` — identifier resolves to nothing.
+- `ForwardReference` — a name is used before the statement that declares it. A
+  position error, not an unknown name: every type-expression surface raises it
+  through one raiser (see
+  [typing/elaboration.md § Type names obey strict source order](typing/elaboration.md)).
 - `ArityMismatch` — wrong number of args at bind.
 - `AmbiguousDispatch` — two or more functions matched at equal specificity.
 - `DispatchFailed` — no function matched.
@@ -297,6 +301,7 @@ User-meaningful subset, with the payload record each kind's arm binds; `Ok` bind
 | `TypeMismatch` | `{arg :Str, expected :Str, got :Str, frames :List<Str>}` |
 | `MissingArg` | `{name :Str, frames :List<Str>}` |
 | `UnboundName` | `{name :Str, frames :List<Str>}` |
+| `ForwardReference` | `{name :Str, frames :List<Str>}` — the context noun and the fix hint are Display-only |
 | `ArityMismatch` | `{expected :Number, got :Number, frames :List<Str>}` |
 | `AmbiguousDispatch` | `{expr :Str, candidates :Number, frames :List<Str>}` |
 | `DispatchFailed` | `{expr :Str, reason :Str, frames :List<Str>}` |

@@ -156,7 +156,17 @@ opening line. `USING listy SCOPE (…)` opens the module so its type names are
 reachable bare; outside such a window they are `listy`'s members.
 
 A mutually recursive group needs the module wrapper. At the program's own top
-level the same two declarations are an ordinary forward reference, and `Rest` is
-an unknown type name where `Cell` names it.
+level the same two declarations are an ordinary forward reference, and koan says
+exactly that where `Cell` names `Rest` — naming the late declaration and the
+spelling that fixes it:
+
+```koan
+NEWTYPE Cell = :{head :Number, tail :Rest}
+NEWTYPE Rest = :{next :(Cell | Null)}
+```
+
+```text
+error: `Rest` is used in NEWTYPE record repr for `tail` before being declared — move the declaration earlier, or group mutually recursive types in a MODULE body
+```
 
 Next: [Errors](09-errors.md).

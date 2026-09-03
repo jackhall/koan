@@ -455,7 +455,7 @@ misses carries the symbol out rather than a message — `Resolution::Unbound` an
 and its `DispatchOutcome::UnboundName`
 ([resolve_dispatch.rs](../src/machine/execute/decide/resolve_dispatch.rs)), and
 `TypeResolution::Unbound` ([resolver.rs](../src/machine/model/types/resolver.rs)), whose
-one wording every unbound type-name arm shares through `unknown_type_name`. That matters
+one wording every unbound type-name arm shares through `type_name_miss`. That matters
 because the value-side miss is not an error arm at all: it is the ordinary "this bare name
 is not a value" fall-through every keyworded dispatch takes, so a program that never
 prints a name never renders one. A binder builtin reads its own name back the same way —

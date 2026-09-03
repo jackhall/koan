@@ -215,9 +215,16 @@ pub fn run_user_fn<'ast>(
                                 // here rather than widening to Any is what makes `-> some_value` (a
                                 // return slot naming a value — a module included) a diagnostic
                                 // instead of a silently unconstrained return.
+                                // The per-call elaboration runs unfiltered, so no chain gates it
+                                // and the miss is always a never-declared one; the slot noun is
+                                // what keeps it pointed at the return position.
                                 TypeResolution::Unbound(name) => {
                                     Err(crate::machine::model::type_name_miss(
-                                        child, name, None, None, registries,
+                                        child,
+                                        name,
+                                        None,
+                                        Some("FN return-type slot"),
+                                        registries,
                                     ))
                                 }
                             };
