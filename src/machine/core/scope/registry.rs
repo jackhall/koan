@@ -35,6 +35,25 @@ use crate::machine::model::{
     BinderSymbol, Carried, KObject, KType, ReductionMode, TypeSymbol, ValueSymbol, render_label,
 };
 
+/// What an ascription decides about a view's members once the newborn view scope's id — the
+/// generativity nonce every per-call mint folds in — is known. Handed to
+/// [`Scope::alloc_module_view`] as the plan the door fills the scope from, so the ordering
+/// obligation ("the nonce first, then the members") is discharged by the signature rather than by a
+/// caller's statement order.
+pub(crate) struct ViewMembers {
+    /// The view's own type members, seeded into its `types` table: a per-call mint per abstract
+    /// member of the ascribed signature, plus each manifest member at its fixed type.
+    pub(crate) types: Vec<(TypeSymbol, KType)>,
+    /// SIG value-slot name → the slot's **declared** type, for every member whose value has to be
+    /// rewritten as the replay installs it. The declared type is the coercion walk's root; a slot
+    /// whose two substitutions agree is absent, and its member replays verbatim.
+    pub(crate) coerced_slots:
+        std::collections::HashMap<ValueSymbol, KType, crate::machine::model::IdentityBuildHasher>,
+    /// The two member bindings every coerced slot is rewritten between — the source module's, and
+    /// the view's own mints.
+    pub(crate) coercion: crate::machine::model::MemberCoercion,
+}
+
 impl<'a> Scope<'a> {
     /// Spike guard: a bind after [`Self::close`] means the scope's defining block finished yet a
     /// write still arrived. `debug_assert` so release builds pay nothing.
@@ -391,32 +410,47 @@ impl<'a> Scope<'a> {
         .apply(self, registries, gate)
     }
 
-    /// Allocate an ascription view's scope under `outer`, replay `src`'s bindings into it — value
-    /// entries and dispatch buckets both, so the view preserves the source module's keyworded
-    /// surface as-is — and seed the view's own type members from `type_entries`, which receives the
-    /// newborn scope's id (the generativity nonce a per-call abstract mint folds in). The replay is
-    /// pure seal duplication; the binding table opens nothing. The seeded `types` table *is* the
-    /// view's type interface: what the table does not hold — the source's representation types
-    /// behind an abstract member — is unreachable through the view by construction.
+    /// Allocate an ascription view's scope under `outer`, replay `source`'s bindings into it —
+    /// value entries and dispatch buckets both, so the view preserves the source module's keyworded
+    /// surface as-is — and seed the view's own type members, all from the [`ViewMembers`] `plan`
+    /// decides once the newborn scope's id (the generativity nonce a per-call abstract mint folds
+    /// in) is known. The seeded `types` table *is* the view's type interface: what the table does
+    /// not hold — the source's representation types behind an abstract member — is unreachable
+    /// through the view by construction.
+    ///
+    /// A member the plan names is **born coerced**: the replayed entry is not the source's seal but
+    /// a value rewritten into this scope's region so it inhabits the view's types
+    /// ([`Scope::seal_coerced_member`]). Every other member — and every non-SIG member — replays as
+    /// pure seal duplication. Coercing here rather than at each read is what makes ATTR, a `USING`
+    /// window over this same table, a dynamic read, and a functor's deferred return agree by
+    /// construction.
     ///
     /// Born-inside-the-door like [`Self::alloc_group_child`]: the view scope is returned only once
     /// the replay and the seeding have landed, and nothing else has a reference to it before then,
     /// so the door mints its own [`WriteGate`].
     pub(crate) fn alloc_module_view(
         outer: &'a Scope<'a>,
-        src: &'a crate::machine::core::Bindings<'a>,
+        source: &'a Scope<'a>,
         registries: &RunRegistries,
-        type_entries: impl FnOnce(crate::machine::core::ScopeId) -> Vec<(TypeSymbol, KType)>,
+        plan: impl FnOnce(crate::machine::core::ScopeId) -> ViewMembers,
     ) -> Result<&'a Scope<'a>, KError> {
         let view = outer.alloc_child_under_module(None);
+        let members = plan(view.id);
+        let tables = members.coercion.tables(&registries.types);
         view.bindings().bulk_install_from(
-            src,
+            source.bindings(),
             registries,
             &mut WriteGate::for_unpublished_scope(),
+            |name, sealed| match members.coerced_slots.get(&name) {
+                Some(declared) => {
+                    view.seal_coerced_member(source, sealed, *declared, &tables, registries)
+                }
+                None => sealed,
+            },
         )?;
         // A view's type member is installed by the ascription, not by a declaration statement
         // running in the view scope, so it takes the born-with-the-scope site.
-        for (name, ktype) in type_entries(view.id) {
+        for (name, ktype) in members.types {
             view.register_type_direct(
                 name,
                 ktype,

@@ -20,7 +20,7 @@
 //!
 //! **Built once, then frozen.** A module is assembled complete: construction gathers its members
 //! into an owned [`ModuleDraft`] and derives the self-sig from that draft *before* the value
-//! exists, so the value itself carries a bumped `path`, two build-once frozen bump-backed tables
+//! exists, so the value itself carries a bumped `path`, one build-once frozen bump-backed table
 //! ([`BumpAllocator::frozen_table`](crate::witnessed::BumpAllocator::frozen_table)) and a plain interned self-sig handle.
 //! `Module` is
 //! therefore `Copy` and `Drop`-free: it rides the region bump and region death frees it as a chunk
@@ -36,15 +36,15 @@ use super::super::types::{
     empty_schema_digest, sig_subtype,
 };
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{TypeSymbol, ValueSymbol};
+use crate::machine::model::TypeSymbol;
 
 /// The owned members a module is assembled from — gathered by a construction site before the value
-/// exists, because a built module's maps are frozen. Both maps are keyed by member name and resolve
+/// exists, because a built module's map is frozen. The map is keyed by member name and resolves
 /// duplicates last-wins, so an overlay (an opaque ascription's per-call mints under its mirrored
 /// manifest members) is expressed by insertion order here rather than by a post-alloc write.
 ///
-/// Plain owned data with no lifetime: the draft never enters a region. Both maps key by the
-/// classified symbol vocabulary the scope binding tables use, so [`Module::assemble`] freezes them
+/// Plain owned data with no lifetime: the draft never enters a region. The map keys by the
+/// classified symbol vocabulary the scope binding tables use, so [`Module::assemble`] freezes it
 /// with no key re-home at all.
 #[derive(Default)]
 pub struct ModuleDraft {
@@ -53,11 +53,6 @@ pub struct ModuleDraft {
     /// the signature's manifest members, then reads them straight back out). A transparent view
     /// reuses its source's child scope and leaves this map empty, reading types through that scope.
     pub type_members: HashMap<TypeSymbol, KType>,
-    /// VAL-slot name → the per-call abstract `KType` an opaque ascription minted for the slot's
-    /// SIG-declared type. ATTR re-tags a value-side slot read with this identity so
-    /// `(int_ord.zero)` reads as the abstract `Type`, not the underlying concrete value. Empty for
-    /// unascribed and transparently-ascribed (`:!`) modules.
-    pub slot_type_tags: HashMap<ValueSymbol, KType>,
 }
 
 impl ModuleDraft {
@@ -79,9 +74,6 @@ pub struct Module<'a> {
     /// Member name → type, frozen at assembly from [`ModuleDraft::type_members`]. Keyed by the
     /// member's [`TypeSymbol`], so a probe is a `u128` compare.
     pub type_members: &'a BumpBackedMap<'a, TypeSymbol, KType, IdentityBuildHasher>,
-    /// VAL-slot name → the opaque-ascription tag, frozen at assembly from
-    /// [`ModuleDraft::slot_type_tags`]. Empty for unascribed and transparently-ascribed modules.
-    pub slot_type_tags: &'a BumpBackedMap<'a, ValueSymbol, KType, IdentityBuildHasher>,
     /// The module's principal signature (self-sig): the handle naming the interned `Signature`
     /// node this module is typed by. Interned from the draft before the value exists, so "every
     /// mint seals" is structural rather than an invariant a read has to check.
@@ -121,7 +113,7 @@ impl<'a> Module<'a> {
     /// ([`BumpAllocator::frozen_table_with_hasher`](crate::witnessed::BumpAllocator::frozen_table_with_hasher)).
     /// Crate-internal, and never a store: the caller places the assembled value.
     ///
-    /// The single `brand` parameter is the residence discipline: path bytes and both bucket arrays
+    /// The single `brand` parameter is the residence discipline: path bytes and the bucket array
     /// land in one region, and it is the destination's. The keys are `Copy` digests, so nothing
     /// else crosses.
     pub(crate) fn assemble<'b>(
@@ -137,9 +129,6 @@ impl<'a> Module<'a> {
             type_members: brand
                 .allocator()
                 .frozen_table_with_hasher(draft.type_members),
-            slot_type_tags: brand
-                .allocator()
-                .frozen_table_with_hasher(draft.slot_type_tags),
             self_sig,
         }
     }

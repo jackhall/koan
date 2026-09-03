@@ -55,6 +55,10 @@ pub(crate) use binder::{StoredBinderKey, symbol_from_parts, symbol_from_quote_bo
 pub use close_inference::DynamicNameForm;
 pub(crate) use close_inference::infer_close_captures;
 pub(crate) use miss_diagnostics::{diagnose_miss, key_is_reserved};
+/// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
+pub(crate) use types::{
+    CoercionTables, MemberCoercion, TypeDigest, sig_subtype, substitute_sig_members,
+};
 pub(crate) use types::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
     SealOutcome, SigSchema, TypeMemberMap, TypeResolution, constructor_param_names,
@@ -62,9 +66,7 @@ pub(crate) use types::{
     parse_typed_field_list_via_elaborator, rewrite_window_refs, seal_writes, type_name_miss,
     unsaturated_constructor_message,
 };
-/// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
-pub(crate) use types::{TypeDigest, sig_subtype, substitute_sig_members};
 pub(crate) use values::{
-    CarriedFamily, Module, ModuleDraft, NamedPairs, RegionEscape, copy_or_pin,
+    CarriedFamily, Module, ModuleDraft, NamedPairs, RegionEscape, coerce_object_into, copy_or_pin,
     copy_or_pin_callable, object_copy_cost, relocate_object_into, retains_home,
 };

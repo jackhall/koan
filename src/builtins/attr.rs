@@ -705,17 +705,11 @@ fn access_field<'a>(
 /// A nested `MODULE sub = (...)` is a value member, so chained access `Outer.Inner.X` reads the
 /// inner module value from `data` and the next ATTR step recurses into its child scope.
 ///
-/// On a value-side hit, an opaque-ascription `slot_type_tags` entry re-tags the read: the
-/// raw value is rewrapped in a `KObject::Wrapped` carrier whose `ktype()` is the per-call
-/// abstract identity the SIG named (so `(int_ord.zero)` reads as the view's nonced
-/// `AbstractType` for `Type`, not the underlying `Number`). Transparent `:!` leaves `slot_type_tags` empty,
-/// so transparent reads stay concrete.
-///
-/// The re-tag carrier is alloc'd in the *module*'s region, not the read-site `scope`'s:
-/// `inner` is a pre-existing reference into the module region, so the wrapper is built
-/// beside it under the module's home frame, which transitively pins the module's
-/// reach-set for the read value. (`type_id` is a Copy handle and imposes no placement
-/// constraint.)
+/// A value-side hit reads the member exactly as it is bound. An opaque view's members are already
+/// the view's: its scope is born holding values coerced to the per-call abstract identities the SIG
+/// named (so `(int_ord.zero)` reads as the view's nonced `AbstractType` for `Type`, not the
+/// underlying `Number`), so this read patches nothing. Transparent `:!` reuses the source's child
+/// scope, so transparent reads stay concrete for the same reason.
 fn access_module_member<'a>(
     m: &'a Module<'a>,
     field: &FieldName<'_>,
@@ -750,48 +744,14 @@ fn access_module_member<'a>(
     // One classified lookup over the module's own bindings — the cross-kind exclusion makes a
     // name value-xor-type, so a single read decides the arm instead of probing `data` then
     // `types` by hand. A value member lives in the module's region; it seals under the module
-    // scope's home frame, which transitively pins the module's reach-set — so the read value
-    // (or its re-tag carrier) names the full reach without an embedded lhs to fold (the module
-    // identity is the lhs).
+    // scope's home frame, which transitively pins the module's reach-set — so the read value names
+    // the full reach without an embedded lhs to fold (the module identity is the lhs).
     match module_scope.bindings().lookup_member(binder, None) {
-        Some(MemberResolution::Value(sealed)) => {
-            let tag = match binder {
-                BinderSymbol::Value(name) => m.slot_type_tags.get(&name).copied(),
-                BinderSymbol::Type(_) => None,
-            };
-            if let Some(tag) = tag {
-                // The re-tag allocates in the module region (not the read site's): both the value
-                // member and the re-tag identity `tag` cross as declared fold operands. The member
-                // is a binding seal lifted into an envelope pinned by the module scope's own region
-                // owner; `tag` is a Copy handle sealed resident via `Scope::resident`. Both
-                // carriers union into the wrapped result's witness via `alloc_carried_with`.
-                let obj_carrier = module_scope.lift_resident(sealed);
-                let tag_carrier = module_scope.deliver_resident(Carried::Type(tag));
-                let ctx = StepAllocator::for_scope(module_scope);
-                // The peel keeps the member's payload verbatim, so a payload substrate that stays
-                // in the module's region rides as the payload cell's own stored run; the member
-                // carrier's coverage is the holder-rule proof for reading it at the door.
-                let holder = obj_carrier.coverage().clone();
-                return Ok(ctx.alloc_carried_with(
-                    &[&obj_carrier, &tag_carrier],
-                    |b, views| match (views[0], views[1]) {
-                        (Carried::Object(o), Carried::Type(tag)) => {
-                            Carried::Object(b.alloc_object_folded(KObject::wrapped_peel(
-                                b.with_holder(&holder),
-                                o,
-                                tag,
-                            )))
-                        }
-                        _ => unreachable!("operand order: [value member, re-tag identity]"),
-                    },
-                ));
-            }
-            // A value member read reaches into the module's region; the lift upgrades the member's
-            // exact reach into the owned pins that ride the step.
-            Ok(StepCarried::born_delivered(
-                module_scope.lift_resident(sealed),
-            ))
-        }
+        // A value member read reaches into the module's region; the lift upgrades the member's
+        // exact reach into the owned pins that ride the step.
+        Some(MemberResolution::Value(sealed)) => Ok(StepCarried::born_delivered(
+            module_scope.lift_resident(sealed),
+        )),
         Some(MemberResolution::Type { kt }) => {
             Ok(StepCarried::born(module_scope.resident(Carried::Type(kt))))
         }
@@ -1207,8 +1167,9 @@ mod tests {
         );
     }
 
-    /// Transparent (`:!`) views leave `slot_type_tags` empty, so the slot read stays
-    /// concrete: `int_ord_view.zero` reads as the underlying `Number`, not the abstract `Type`.
+    /// A transparent (`:!`) view reuses the source module's own child scope, so nothing is coerced
+    /// and the slot read stays concrete: `int_ord_view.zero` reads as the underlying `Number`, not
+    /// the abstract `Type`.
     #[test]
     fn transparent_view_slot_read_stays_concrete() {
         let program = program_storage();

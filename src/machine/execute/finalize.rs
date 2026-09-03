@@ -16,7 +16,13 @@ enum Disposition {
     /// The value keeps its runtime type. A declared *union* return lands here too: union
     /// elimination dispatches on the value's own runtime type, so it is never re-stamped.
     PassThrough,
-    Restamp,
+    /// The value is rebuilt in its own region: re-stamped to the declared type when `restamp`,
+    /// then rewritten across the ascription barrier when the obligation carries a coercion. Both
+    /// legs ride one [`Delivered::restamp_in_place`](crate::witnessed::Delivered::restamp_in_place),
+    /// so a coerced return costs the same single re-anchor an ordinary re-stamp does.
+    Rebuild {
+        restamp: bool,
+    },
     Mismatch(String),
 }
 
@@ -67,18 +73,24 @@ impl NodeFinalize for Host<'_> {
         };
         let registries = self.ambient.registries();
         let types = &registries.types;
+        // A view's coercion wrapper rewrites its result across the ascription barrier once the
+        // declared check has passed; the tables are materialized here, before the rebuild, so the
+        // walk reads them rather than the interned handles at every position.
+        let coercion = obligation
+            .coercion()
+            .map(|(slot, plan)| (slot, plan.tables(types)));
         // Classifying under the envelope's own host pin keeps this a pure read: no relocation,
         // nothing allocated until the disposition is known.
         let disposition = envelope.open(|carried| match carried {
             Carried::Object(object) => {
+                // Only a substrate carrier carries a re-stampable type tag, and a declared
+                // union return keeps its runtime type for union-elimination dispatch.
+                let restamp = object.embeds_substrate()
+                    && !matches!(types.node(declared), TypeNode::Union { .. });
                 if !declared.matches_value(object, registries) {
                     Disposition::Mismatch(object.ktype().name(registries))
-                } else if object.embeds_substrate()
-                    && !matches!(types.node(declared), TypeNode::Union { .. })
-                {
-                    // Only a substrate carrier carries a re-stampable type tag, and a declared
-                    // union return keeps its runtime type for union-elimination dispatch.
-                    Disposition::Restamp
+                } else if restamp || coercion.is_some() {
+                    Disposition::Rebuild { restamp }
                 } else {
                     Disposition::PassThrough
                 }
@@ -104,17 +116,33 @@ impl NodeFinalize for Host<'_> {
             )),
             Disposition::PassThrough => Ok(envelope),
             // `home` is the region the value already resides in, so the re-mint leaves residence
-            // unchanged and the product envelope covers exactly what the input did.
-            Disposition::Restamp => Ok(envelope
-                .restamp_in_place::<CarriedFamily, KoanStorageProfile>(
-                    home,
-                    |value, _handle, placement| {
-                        let region = FoldingBrand::in_fold_closure(placement);
-                        Carried::Object(region.alloc_object_folded(
-                            value.object().deep_clone().stamp_type(declared, types),
-                        ))
-                    },
-                )),
+            // unchanged and the product envelope covers exactly what the input did. A coercion
+            // rebuilding a container lands its cells there too, and a re-tag shares the source
+            // payload substrate, so neither leg widens the product's reach past the input's — the
+            // envelope's own coverage is the holder-rule proof the door reads stored cell reach
+            // under.
+            Disposition::Rebuild { restamp } => {
+                let holder = envelope.coverage().clone();
+                Ok(
+                    envelope.restamp_in_place::<CarriedFamily, KoanStorageProfile>(
+                        home,
+                        |value, _handle, placement| {
+                            let door =
+                                FoldingBrand::in_fold_closure(placement).with_holder(&holder);
+                            let mut object = value.object().deep_clone();
+                            if restamp {
+                                object = object.stamp_type(declared, types);
+                            }
+                            if let Some((slot, tables)) = &coercion {
+                                object = crate::machine::model::coerce_object_into(
+                                    &object, *slot, tables, door, registries,
+                                );
+                            }
+                            Carried::Object(door.alloc_object_folded(object))
+                        },
+                    ),
+                )
+            }
         }
     }
 }

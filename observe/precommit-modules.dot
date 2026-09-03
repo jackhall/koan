@@ -128,6 +128,7 @@ digraph {
     "koan::machine::model::types::typed_field_list" [label="koan::machine::model::types::typed_field_list"];
     "koan::machine::model::values" [label="koan::machine::model::values"];
     "koan::machine::model::values::carried" [label="koan::machine::model::values::carried"];
+    "koan::machine::model::values::coerce" [label="koan::machine::model::values::coerce"];
     "koan::machine::model::values::container_substrate" [label="koan::machine::model::values::container_substrate"];
     "koan::machine::model::values::kkey" [label="koan::machine::model::values::kkey"];
     "koan::machine::model::values::kobject" [label="koan::machine::model::values::kobject"];
@@ -278,6 +279,7 @@ digraph {
     "koan::machine::model::types" -> "koan::machine::model::types::type_digest" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::typed_field_list" [label="owns", style="solid"];
     "koan::machine::model::values" -> "koan::machine::model::values::carried" [label="owns", style="solid"];
+    "koan::machine::model::values" -> "koan::machine::model::values::coerce" [label="owns", style="solid"];
     "koan::machine::model::values" -> "koan::machine::model::values::container_substrate" [label="owns", style="solid"];
     "koan::machine::model::values" -> "koan::machine::model::values::kkey" [label="owns", style="solid"];
     "koan::machine::model::values" -> "koan::machine::model::values::kobject" [label="owns", style="solid"];
@@ -299,9 +301,9 @@ digraph {
     "koan::builtins::arithmetic" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::arithmetic" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::arithmetic" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::ascribe" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::ascribe" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::attr" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::attr" -> "koan::machine" [label="uses", style="dashed"];
@@ -932,6 +934,11 @@ digraph {
     "koan::machine::model::values::carried" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::model::values::coerce" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::values::coerce" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::values::coerce" -> "koan::machine::model::registries" [label="uses", style="dashed"];
+    "koan::machine::model::values::coerce" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::machine::model::values::coerce" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::container_substrate" -> "koan::machine::model::labels" [label="uses", style="dashed"];

@@ -6,6 +6,7 @@ use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
 use crate::machine::model::KType;
+use crate::machine::model::MemberCoercion;
 use crate::source::SourceRef;
 
 use crate::machine::core::carrier_witness::SealedFunction;
@@ -47,6 +48,22 @@ pub enum ReturnContract<'a> {
     PerCall {
         func: SealedFunction<'a>,
         ret: KType,
+        site: Option<SourceRef>,
+    },
+    /// A call that entered through an opaque view's coercion wrapper
+    /// ([`Body::CoercedDelegate`]): the body that ran is the *underlying* callable's, so its result
+    /// inhabits the source's types and has to be rewritten to the view's before it leaves.
+    ///
+    /// `expected` is what the underlying's result must satisfy — the `from` substitution of
+    /// `declared`, resolved at the invoke where the registry is in hand, so the sealed obligation
+    /// stays lifetime- and registry-free like every other arm. `declared` is the SIG-declared
+    /// return type the coercion walk recurses on, and `coercion` carries the two member bindings.
+    /// `func` is the **wrapper**, so the error frame names the callable as the caller spelled it.
+    Coerced {
+        func: SealedFunction<'a>,
+        expected: KType,
+        declared: KType,
+        coercion: MemberCoercion,
         site: Option<SourceRef>,
     },
 }
@@ -129,6 +146,25 @@ pub enum Body<'a> {
     /// A builtin authored against the `Action` harness. Runs through
     /// `machine::execute`'s `run_action`.
     Builtin(super::action::ActionFn),
+    /// An opaque view's coercion wrapper around a member function: it binds against its own
+    /// (substituted) signature, coerces each argument **inward** to the types `underlying` expects,
+    /// delegates to it, and coerces the result **outward** to the view's types.
+    ///
+    /// `underlying` is a plain borrow, not a sealed carrier: the wrapper is born at the
+    /// underlying's own captured scope
+    /// ([`KFunction::alloc_captured_resident`](crate::machine::core::KFunction::alloc_captured_resident)),
+    /// so both callables live in that one region and the reference is the same same-region borrow
+    /// `KFunction::captured` already is.
+    ///
+    /// `declared` is the SIG-declared FN slot type, in the signature's own vocabulary — the type
+    /// the coercion walk recurses on, per parameter and for the return. `coercion` binds the
+    /// signature's abstract members `from` the underlying's side `to` the view's, so the result
+    /// coerces under it and an argument under [`MemberCoercion::flipped`].
+    CoercedDelegate {
+        underlying: &'a super::KFunction<'a>,
+        declared: KType,
+        coercion: MemberCoercion,
+    },
 }
 
 #[cfg(test)]

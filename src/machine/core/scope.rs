@@ -17,6 +17,7 @@ use crate::witnessed::BumpBackedMap;
 mod copy;
 mod reach;
 mod registry;
+pub(crate) use registry::ViewMembers;
 mod resolve;
 #[cfg(test)]
 mod tests;

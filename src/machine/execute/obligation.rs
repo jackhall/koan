@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use crate::machine::CallFrame;
 use crate::machine::core::{KFunction, ReturnContract};
-use crate::machine::model::{KType, ReturnType};
+use crate::machine::model::{KType, MemberCoercion, ReturnType};
 
 use super::outcome::DeferredTraceFrame;
 
@@ -37,6 +37,12 @@ pub(in crate::machine::execute) struct ParkState {
 #[derive(Clone, Copy)]
 pub(in crate::machine::execute) struct ReturnObligation {
     declared: Option<(KType, bool)>,
+    /// The ascription-barrier rewrite a coerced call's result takes once it has satisfied
+    /// `declared`: the SIG-declared return type the walk recurses on, and the two member bindings
+    /// it rewrites between. `None` for every ordinary return. Both halves are `Copy` and
+    /// lifetime-free — a [`MemberCoercion`] carries its tables as interned handles — so the
+    /// obligation still names no region.
+    coercion: Option<(KType, MemberCoercion)>,
     frame: DeferredTraceFrame<'static>,
 }
 
@@ -48,6 +54,7 @@ impl ReturnObligation {
         match contract {
             ReturnContract::Arm { ret, kind } => ReturnObligation {
                 declared: Some((ret, false)),
+                coercion: None,
                 frame: DeferredTraceFrame::Bare {
                     function: kind,
                     expression: kind,
@@ -61,6 +68,7 @@ impl ReturnObligation {
                         ReturnType::Resolved(d) => Some((d, false)),
                         _ => None,
                     },
+                    coercion: None,
                     frame: DeferredTraceFrame::Callable {
                         site,
                         ktype: f.value_ktype(),
@@ -70,18 +78,38 @@ impl ReturnObligation {
             ReturnContract::PerCall { func, ret, site } => {
                 func.open(|f: &KFunction<'_>| ReturnObligation {
                     declared: Some((ret, true)),
+                    coercion: None,
                     frame: DeferredTraceFrame::Callable {
                         site,
                         ktype: f.value_ktype(),
                     },
                 })
             }
+            ReturnContract::Coerced {
+                func,
+                expected,
+                declared,
+                coercion,
+                site,
+            } => func.open(|f: &KFunction<'_>| ReturnObligation {
+                declared: Some((expected, false)),
+                coercion: Some((declared, coercion)),
+                frame: DeferredTraceFrame::Callable {
+                    site,
+                    ktype: f.value_ktype(),
+                },
+            }),
         }
     }
 
     /// The declared return type and its per-call flag, `None` when nothing is declared.
     pub(in crate::machine::execute) fn declared(&self) -> Option<(KType, bool)> {
         self.declared
+    }
+
+    /// The ascription-barrier rewrite this return takes after its declared check, if any.
+    pub(in crate::machine::execute) fn coercion(&self) -> Option<(KType, MemberCoercion)> {
+        self.coercion
     }
 
     /// The retained error frame, rendered only by the error arms that spend it.

@@ -1,6 +1,6 @@
 //! Primitive ascription behaviors: transparent passthrough, missing-member errors, opaque type-minting.
 
-use crate::builtins::test_support::{TestRun, binds_module, lookup_module, type_name, value_name};
+use crate::builtins::test_support::{TestRun, binds_module, lookup_module, type_name};
 use crate::machine::KErrorKind;
 use crate::machine::model::{KObject, KType, TypeNode, render_label};
 use crate::machine::{program_storage, run_root_storage};
@@ -170,8 +170,9 @@ fn opaque_view_reads_manifest_type_member_concretely() {
 
 /// A VAL slot whose declared type is a *manifest* member (`VAL x :Tag` after
 /// `LET Tag = Number`) resolves concrete: its declared type is `Number`, not a
-/// `Sig`-rooted `AbstractType`, so opaque ascription records no `slot_type_tags`
-/// entry for it and `view.x` reads the underlying `Number` unwrapped.
+/// `Sig`-rooted `AbstractType`, so the two substitutions of the slot type agree, the
+/// opaque view replays the member verbatim, and `view.x` reads the underlying `Number`
+/// unwrapped.
 #[test]
 fn opaque_view_manifest_typed_val_slot_reads_concrete() {
     let program = program_storage();
@@ -184,11 +185,10 @@ fn opaque_view_manifest_typed_val_slot_reads_concrete() {
          LET view = (implementation :| Tagged)",
     );
     let view = lookup_module(scope, "view", test_run.registries());
-    assert!(
-        view.slot_type_tags
-            .get(&value_name("x", test_run.registries()))
-            .is_none(),
-        "a manifest-typed VAL slot must not be re-tagged in slot_type_tags",
+    assert_eq!(
+        view.child_scope().lookup("x").map(KObject::ktype),
+        Some(KType::NUMBER),
+        "a manifest-typed VAL slot's member is replayed verbatim, not coerced",
     );
     let result = test_run.run_one(test_run.parse_one("view.x"));
     assert!(

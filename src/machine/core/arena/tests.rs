@@ -1172,7 +1172,7 @@ fn region_death_frees_every_drop_free_family() {
     assert_eq!(callables.len(), 4, "every callable is live in the region");
 
     // A module at a child scope of this region, born through its own door: the path bytes, every
-    // member-map key's bytes and both member tables' bucket arrays land in the same bump. Synthesized
+    // member-map key's bytes and the member table's bucket array land in the same bump. Synthesized
     // names again, for the same reason the callables' are.
     let modules: Vec<&Module<'_>> = (0..2)
         .map(|i| {
@@ -1180,10 +1180,6 @@ fn region_death_frees_every_drop_free_family() {
             let mut draft = ModuleDraft::empty();
             draft.type_members.insert(
                 type_name(&format!("Member_{i}"), types.registries()),
-                KType::NUMBER,
-            );
-            draft.slot_type_tags.insert(
-                value_name(&format!("slot_{i}"), types.registries()),
                 KType::NUMBER,
             );
             let self_sig = types.signature(SigSchema::raw_self_sig(child, &draft));

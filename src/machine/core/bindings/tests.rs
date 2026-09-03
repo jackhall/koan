@@ -496,7 +496,7 @@ fn bulk_install_copies_committed_bindings_past_a_live_claim() {
         .expect("the second statement is still running");
 
     target
-        .bulk_install_from(&source, &registries, &mut gate)
+        .bulk_install_from(&source, &registries, &mut gate, |_, sealed| sealed)
         .expect("the view replays the source's committed surface");
     assert!(matches!(
         target.lookup_value(value_name("settled", &registries), None),

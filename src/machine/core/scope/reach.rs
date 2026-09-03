@@ -20,7 +20,8 @@ use crate::machine::core::{
 use crate::machine::model::KeywordSymbol;
 use crate::machine::model::{
     Carried, CarriedFamily, KObject, KType, Module, ModuleDraft, OperatorGroup,
-    OperatorGroupFamily, ReductionMode, RegionEscape, copy_or_pin, relocate_object_into,
+    OperatorGroupFamily, ReductionMode, RegionEscape, coerce_object_into, copy_or_pin,
+    relocate_object_into,
 };
 use crate::machine::{
     CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, KError, SplicedCell,
@@ -594,6 +595,62 @@ impl<'a> Scope<'a> {
         // The transfer gives the product the destination operand's own residence — this scope's
         // region owner — so the envelope it hands back is already the finished one.
         Ok(copied)
+    }
+
+    /// Rebuild a delivered value **across an ascription barrier** into this scope's region: the
+    /// product inhabits the `to` substitution of `declared` where the source inhabited the `from`
+    /// one ([`coerce_object_into`]). The door an opaque view's replay installs a coerced member
+    /// through, and the one its coercion wrapper coerces an argument inward through.
+    ///
+    /// The retention claim is the **pin's**: a re-tag shares the source value's payload substrate
+    /// verbatim and a rebuilt container's cells may too, so the composition keeps every member the
+    /// source envelope named — the source region among them — for this region's life. Deriving a
+    /// release-exact claim instead would have to prove the rebuild total, which coercion is
+    /// deliberately not: it rewrites identities and leaves representation alone.
+    ///
+    /// `cell`'s coverage is the holder-rule proof the substrate door reads stored cell reach
+    /// under, captured before the fold because a `for<'b>` closure has no route back to its
+    /// operand's pins.
+    pub(crate) fn coerce_delivered(
+        &self,
+        cell: &DeliveredCarried,
+        declared: KType,
+        tables: &crate::machine::model::CoercionTables,
+        registries: &crate::machine::model::RunRegistries,
+    ) -> DeliveredCarried {
+        let holder = cell.coverage().clone();
+        cell.transfer_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
+            self.dest_operand(),
+            |_product, _region| true,
+            |value, _handle, placement| {
+                let door = FoldingBrand::in_fold_closure(placement).with_holder(&holder);
+                Carried::Object(door.alloc_object_folded(coerce_object_into(
+                    value.object(),
+                    declared,
+                    tables,
+                    door,
+                    registries,
+                )))
+            },
+        )
+    }
+
+    /// The replay's coercion door: lift a source module's dormant binding carrier at the scope
+    /// whose arena hosts its description, rewrite it across the ascription barrier into this
+    /// scope's region ([`Self::coerce_delivered`]), and rest the product as this scope's own
+    /// binding entry. `source` must be the scope `sealed` was read from — the module child scope
+    /// [`Scope::alloc_module_view`](crate::machine::core::Scope) replays from.
+    pub(crate) fn seal_coerced_member(
+        &self,
+        source: &Scope<'a>,
+        sealed: SealedValue<'a>,
+        declared: KType,
+        tables: &crate::machine::model::CoercionTables,
+        registries: &crate::machine::model::RunRegistries,
+    ) -> SealedValue<'a> {
+        let delivered = source.lift_resident(sealed);
+        self.coerce_delivered(&delivered, declared, tables, registries)
+            .rest_into(self.brand().handle())
     }
 
     /// This scope's own region handle as a destination operand — the envelope every fold door here

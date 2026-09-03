@@ -177,6 +177,14 @@ pub fn run_user_fn<'ast>(
                 "run_user_fn called on an action builtin body".to_string(),
             )));
         }
+        // A coercion wrapper never reaches here either: the invoke resolves it to its underlying
+        // callable and runs *that* body, so the arguments this entry binds are already the
+        // underlying's own (coerced inward) and `func` is the underlying.
+        Body::CoercedDelegate { .. } => {
+            return ExecOutcome::Errored(KError::new(crate::machine::KErrorKind::User(
+                "run_user_fn called on a view's coercion wrapper".to_string(),
+            )));
+        }
     };
     match func.signature.return_type() {
         ReturnType::Resolved(_) => {

@@ -91,8 +91,8 @@ fn functor_application_mints_distinct_abstract_types() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
-    // `VAL zero :Carrier` is typed against the SIG's abstract member, so each view records a
-    // `slot_type_tags` entry for it — the second member map, read back below.
+    // `VAL zero :Carrier` is typed against the SIG's abstract member, so each view's scope is born
+    // holding a `zero` coerced to that view's own mint — read back off the value below.
     let src = "SIG Ordered = ((TYPE Carrier) (VAL zero :Carrier) (VAL compare :Number))\n\
                MODULE int_ord = ((LET Carrier = Number) (LET zero = 0) (LET compare = 7))\n\
                FN (MAKESET er :Ordered) -> Module = (er :| Ordered)\n\
@@ -135,17 +135,16 @@ fn functor_application_mints_distinct_abstract_types() {
         "two applications of a module-returning FN must mint distinct abstract types",
     );
 
-    // The second map and the bumped path, read out of the same dead call regions.
-    let zero = value_name("zero", test_run.registries());
+    // The coerced member values and the bumped path, read out of the same dead call regions.
     assert_eq!(
-        one.slot_type_tags.get(&zero).copied(),
+        one.child_scope().lookup("zero").map(KObject::ktype),
         one_carrier,
-        "the abstract-typed VAL slot is tagged with that application's own minted Carrier",
+        "the abstract-typed VAL slot's member is born carrying that application's own minted Carrier",
     );
     assert_eq!(
-        two.slot_type_tags.get(&zero).copied(),
+        two.child_scope().lookup("zero").map(KObject::ktype),
         two_carrier,
-        "and the second application's tag names its own mint, not the first's",
+        "and the second application's member names its own mint, not the first's",
     );
     assert_eq!(
         (one.path, two.path),

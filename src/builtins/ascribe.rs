@@ -9,16 +9,16 @@
 
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
+use crate::machine::core::ViewMembers;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
-    KKind, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeNode, sig_subtype,
+    KKind, MemberCoercion, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeNode, sig_subtype,
     substitute_sig_members,
 };
 use crate::machine::model::{KObject, Module, ModuleDraft};
 use crate::machine::model::{TypeMemberMap, TypeSymbol, ValueSymbol};
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
-use crate::witnessed::BumpVec;
 
 use super::{arg, kw, sig};
 use crate::machine::BoundArgs;
@@ -37,22 +37,36 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.registries));
     let (s_schema, s_digest) = signature_schema(s, ctx.types());
+    // Checked before the view is built, so the coercion plan below is founded on a module that
+    // genuinely supplies every member the signature names.
+    if let Err(e) = check_satisfies(m, &s_schema, s_digest, s, ctx.registries) {
+        return Action::done(Err(e));
+    }
+    // The source side of the barrier: what the *module* binds each abstract member of the ascribed
+    // signature to. Read off the module's own self-sig, which is the same table satisfaction
+    // substituted through above.
+    let source_members = source_member_bindings(m, &s_schema, ctx.types());
+    let sig_id = s_schema.sig_id.unwrap_or(ScopeId::SENTINEL);
 
-    // Allocate the view scope, replay the source module's members into it, and seed its `types`
-    // table with the view's own type members, all in one door: the scope is unreachable until the
-    // whole install has landed, which is what lets the writes happen at construction time rather
-    // than riding a step outcome. The seeded table is what a `USING` window over this view borrows,
-    // so the view's members resolve by bare name in the block and the source's representation types
-    // are absent rather than masked.
+    // Allocate the view scope, replay the source module's members into it — each SIG-declared
+    // member whose slot type substitutes differently under the view's mints born *coerced* — and
+    // seed its `types` table with the view's own type members, all in one door: the scope is
+    // unreachable until the whole install has landed, which is what lets the writes happen at
+    // construction time rather than riding a step outcome. The seeded table is what a `USING`
+    // window over this view borrows, so the view's members resolve by bare name in the block, read
+    // at the view's types, and the source's representation types are absent rather than masked.
     let new_scope = match Scope::alloc_module_view(
         ctx.scope,
-        m.child_scope().bindings(),
+        m.child_scope(),
         ctx.registries,
         // The nonce every per-call mint carries is the newborn view scope's id, handed in by the
         // door before the scope is published (`Module::scope_id` reports the same id once the
         // module is built). Abstract and manifest members are disjoint by `SigSchema` construction
         // — a SIG member is one or the other — so the strict inserts cannot collide.
-        |nonce| view_type_members(&s_schema, nonce, ctx.registries),
+        |nonce| {
+            let types = view_type_members(&s_schema, nonce, ctx.registries);
+            view_members(&s_schema, sig_id, &source_members, types, ctx.registries)
+        },
     ) {
         Ok(scope) => scope,
         Err(e) => return Action::done(Err(e)),
@@ -71,37 +85,11 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
         draft.type_members.insert(name, kt);
     }
 
-    // A slot's tag is keyed by the slot's own name, its value by the per-call mint the abstract
-    // member resolved to — the schema and the draft share the classified currency, so both keys
-    // travel straight across.
-    // The tags are read by the loop right below and never leave the step, so they stage on the
-    // step scratch. One value slot contributes at most one tag — a slot whose type is not an
-    // abstract member of the draft pushes nothing — so the slot count is an upper bound, which is
-    // what taking the capacity up front needs to rule out a regrow.
-    let mut tags: BumpVec<'a, (ValueSymbol, KType)> =
-        BumpVec::with_capacity_in(s_schema.value_slots.len(), ctx.scratch);
-    for (slot_name, kt) in &s_schema.value_slots {
-        if let Some(member) = ctx.types().with_node(*kt, |node| match node {
-            TypeNode::AbstractType { name, .. } => Some(*name),
-            _ => None,
-        }) && let Some(per_call) = draft.type_members.get(&member)
-        {
-            tags.push((*slot_name, *per_call));
-        }
-    }
-    for &(slot_name, tag) in tags.iter() {
-        draft.slot_type_tags.insert(slot_name, tag);
-    }
-
-    // The view's self-sig is derived from the draft the mints and slot tags just filled, then the
-    // module is born carrying it.
+    // The view's self-sig is derived from the draft the mints just filled, then the module is born
+    // carrying it.
     let self_sig = view_self_sig(new_scope, &draft, &s_schema, ctx.registries);
     let new_module: &'a Module<'a> =
         Module::alloc_at_child_scope(m.path, new_scope, draft, self_sig);
-
-    if let Err(e) = check_satisfies(m, &s_schema, s_digest, s, ctx.registries) {
-        return Action::done(Err(e));
-    }
 
     // The view surfaces as the Object-arm module value; a LET around it binds that value like any
     // other. The store door merges the resident module reference — enveloped at `new_scope`'s own
@@ -207,6 +195,62 @@ fn view_type_members(
         members.push((*name, *kt));
     }
     members
+}
+
+/// What the source module binds each abstract member of the ascribed signature to — the `from`
+/// side of every coercion the view's replay performs. Read off the module's own self-sig, which is
+/// the table [`check_satisfies`] substituted the signature's slot types through, so the two sides
+/// of the barrier are decided from one place.
+fn source_member_bindings(
+    m: &Module<'_>,
+    signature: &SigSchema,
+    types: &TypeRegistry,
+) -> TypeMemberMap {
+    m.with_self_sig(types, |mine| {
+        signature
+            .abstract_members
+            .keys()
+            .filter_map(|name| mine.manifest_members.get(name).map(|kt| (*name, *kt)))
+            .collect()
+    })
+}
+
+/// The view's members, decided once its scope id is known: the seeded type members, the two member
+/// bindings a coerced read is rewritten between, and the SIG value slots whose members have to be
+/// rewritten at all.
+///
+/// A slot is coerced exactly when its declared type substitutes differently under the two bindings
+/// — so a concrete slot (`VAL size :Number`), a manifest-typed slot, and every slot naming no
+/// abstract member replay as the source's own seal. `view_types` is [`view_type_members`]'s output,
+/// consumed here and handed on as the plan's own field.
+fn view_members(
+    signature: &SigSchema,
+    sig_id: ScopeId,
+    source_members: &TypeMemberMap,
+    view_types: Vec<(TypeSymbol, KType)>,
+    registries: &RunRegistries,
+) -> ViewMembers {
+    let types = &registries.types;
+    // Only the abstract members are substitution points: a manifest member is a concrete type a
+    // slot names directly, never a reference the walk rewrites.
+    let view_members: TypeMemberMap = view_types
+        .iter()
+        .filter(|(name, _)| signature.abstract_members.contains_key(name))
+        .copied()
+        .collect();
+    let coercion = MemberCoercion::new(sig_id, source_members, &view_members, types);
+    let tables = coercion.tables(types);
+    let coerced_slots = signature
+        .value_slots
+        .iter()
+        .filter(|(_, declared)| tables.coerces(**declared, types))
+        .map(|(name, declared)| (*name, *declared))
+        .collect();
+    ViewMembers {
+        types: view_types,
+        coerced_slots,
+        coercion,
+    }
 }
 
 /// Intern an ascription view's self-sig, from the child scope it is being built over and the

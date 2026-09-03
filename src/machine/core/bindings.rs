@@ -1146,11 +1146,18 @@ impl<'a> Bindings<'a> {
     /// [`Scope::alloc_module_view`](crate::machine::core::Scope) from the ascribed signature rather
     /// than inherited from the source. Snapshots the source maps and releases the source `Ref`
     /// before the replay so re-entrant ascription cannot deadlock.
+    ///
+    /// `install` is the per-value-member hook the replay writes through. It is the identity for a
+    /// plain duplication and, for an opaque view, the door that rewrites a SIG-declared member
+    /// across the ascription barrier so the view's scope is **born holding coerced values** — the
+    /// reason every read surface over that table (ATTR, a `USING` window, a dynamic read) reports
+    /// the view's types without patching the read.
     pub(crate) fn bulk_install_from(
         &self,
         src: &Bindings<'a>,
         registries: &RunRegistries,
         gate: &mut WriteGate,
+        mut install: impl FnMut(ValueSymbol, SealedValue<'a>) -> SealedValue<'a>,
     ) -> Result<(), KError> {
         // Duplicate each entry into the snapshot: each seal is a bit-copy naming the source's own
         // minted description, so the replayed entry replays that same claim. The reached regions
@@ -1178,7 +1185,8 @@ impl<'a> Bindings<'a> {
             (data, functions)
         };
         for (name, entry) in data {
-            self.write_value(name, entry.index, entry.sealed, registries, gate)?;
+            let sealed = install(name, entry.sealed);
+            self.write_value(name, entry.index, sealed, registries, gate)?;
         }
         let mut tables = self.tables.borrow_mut();
         for (key, slots) in functions {

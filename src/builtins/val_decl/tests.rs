@@ -190,8 +190,8 @@ fn val_slot_satisfied_by_module_let_member() {
 /// Pins the canonical SIG form: abstract type via `TYPE Carrier` plus a VAL
 /// slot whose declared type references it. `Carrier` lives in the schema's abstract members,
 /// `zero` in the signature's stored schema `value_slots`; both carry the same `AbstractType`
-/// identity, sourced at the canonical binder (so opacity threads to the per-call module's
-/// `slot_type_tags`), not the collapsed underlying `Number`.
+/// identity, sourced at the canonical binder (so opacity threads to the per-call mints an opaque
+/// view coerces its members to), not the collapsed underlying `Number`.
 #[test]
 fn val_with_abstract_type_member_declaration() {
     let program = program_storage();

@@ -20,6 +20,7 @@ use crate::machine::core::ReturnContract;
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::{Body, CallFrame, KFunction, OpenedFunction};
 use crate::machine::core::{ExecFrame, ExecOutcome, LeadingStatements, PerCallReturn, run_user_fn};
+use crate::machine::model::{CoercionTables, KType, TypeNode, TypeRegistry};
 use crate::machine::model::{ExpressionPart, KExpression, WorkingExpression, WorkingPart};
 use crate::machine::{DeliveredCarried, KError, KErrorKind, NodeId};
 use crate::witnessed::BumpVec;
@@ -125,11 +126,13 @@ fn enter_user_fn<'step>(
     picked: OpenedFunction<'step>,
     working_expr: WorkingExpression<'step>,
 ) -> Outcome<'step> {
-    let function = picked.value();
+    let wrapper = picked.value();
     // A uniquely-picked call is admitted shape-only by dispatch, so validate each argument against
     // its declared parameter type before the type-trusting frame bind — a non-satisfying typed
-    // argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
-    if let Err(e) = function.validate_call_args(working_expr.parts, view.registries()) {
+    // argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here. For a
+    // view's coercion wrapper this is the *inward* half of the barrier: the signature it validates
+    // against carries the view's types, so a source-typed argument is a mismatch here.
+    if let Err(e) = wrapper.validate_call_args(working_expr.parts, view.registries()) {
         return Outcome::Done(Err(e));
     }
     let mut arg_carriers = carriers_from_expr(view, &working_expr);
@@ -139,7 +142,51 @@ fn enter_user_fn<'step>(
     // Each envelope's relocation at the bind door mints that binding's reach in the per-call region,
     // so every foreign region an argument borrows into is pinned for the call's life — no separate
     // deposit here.
-    let named_carriers = parameter_carriers(function, &arg_carriers, view.scratch());
+    let named_carriers = parameter_carriers(wrapper, &arg_carriers, view.scratch());
+    // A coercion wrapper introduces no body of its own: it rewrites each argument to the types the
+    // underlying callable expects and runs *that* body, under a contract that rewrites the result
+    // back. The call shape is shared — the wrapper's elements are the underlying's, re-typed — so
+    // the coerced envelopes stay in the same declaration order and the invoke below reads as any
+    // other.
+    let (function, coerced_return, inward) = match wrapper.body {
+        Body::CoercedDelegate {
+            underlying,
+            declared,
+            coercion,
+        } => {
+            let types = view.types();
+            let declared_return = declared_fn_return(declared, types);
+            let expected = coercion
+                .tables(types)
+                .substitute_from(declared_return, types);
+            let inward = coerce_arguments_inward(
+                view,
+                wrapper,
+                declared,
+                &coercion.flipped().tables(types),
+                &named_carriers,
+            );
+            (
+                underlying,
+                Some((declared_return, expected, coercion)),
+                Some(inward),
+            )
+        }
+        _ => (wrapper, None, None),
+    };
+    // One borrow run for the frame bind, whichever lane filled it.
+    let call_carriers: BumpVec<'step, &DeliveredCarried> = match &inward {
+        Some(coerced) => {
+            let mut run = BumpVec::with_capacity_in(coerced.len(), view.scratch());
+            run.extend(coerced.iter());
+            run
+        }
+        None => {
+            let mut run = BumpVec::with_capacity_in(named_carriers.len(), view.scratch());
+            run.extend(named_carriers.iter().copied());
+            run
+        }
+    };
     // Chained off the closure's captured (definition) scope, so a closure's captured per-call frame
     // survives the hop while the caller's cart does not.
     let frame = CallFrame::new(function.captured_scope());
@@ -157,7 +204,7 @@ fn enter_user_fn<'step>(
     let site = working_expr.source_ref();
     match run_user_fn(
         function,
-        &named_carriers,
+        &call_carriers,
         &exec_frame,
         in_chain,
         view.registries(),
@@ -166,12 +213,22 @@ fn enter_user_fn<'step>(
             // A deferred `Type` return's per-call type rides a `PerCall` contract, checked +
             // stamped at the lift boundary like any FN return, so a recursive deferred body stays
             // TCO-flat.
-            let contract = match ret {
-                PerCallReturn::FromSignature => ReturnContract::Function {
+            let contract = match (coerced_return, ret) {
+                // A coerced call's body is the underlying's, so its result is checked against the
+                // underlying's side of the barrier and rewritten to the view's on the way out. The
+                // sealed wrapper names the callable in the error frame, as the caller spelled it.
+                (Some((declared, expected, coercion)), _) => ReturnContract::Coerced {
+                    func: picked.reseal(),
+                    expected,
+                    declared,
+                    coercion,
+                    site,
+                },
+                (None, PerCallReturn::FromSignature) => ReturnContract::Function {
                     func: picked.reseal(),
                     site,
                 },
-                PerCallReturn::Resolved(ret) => ReturnContract::PerCall {
+                (None, PerCallReturn::Resolved(ret)) => ReturnContract::PerCall {
                     func: picked.reseal(),
                     ret,
                     site,
@@ -295,6 +352,60 @@ fn carriers_from_expr<'step>(
         _ => None,
     }));
     carriers
+}
+
+/// The return type of a SIG-declared FN slot, in the signature's own vocabulary — the root the
+/// outward coercion walk recurses on. A [`Body::CoercedDelegate`]'s `declared` is always a
+/// `KFunction` node: the wrapper is built only at a declared function position.
+fn declared_fn_return(declared: KType, types: &TypeRegistry) -> KType {
+    types.with_node(declared, |node| match node {
+        TypeNode::KFunction { ret, .. } => *ret,
+        _ => unreachable!("a coercion wrapper's declared slot type is a function type"),
+    })
+}
+
+/// The **inward** half of a coercion wrapper's boundary: rewrite each delivered argument from the
+/// view's types to the ones the underlying callable expects, in declaration order.
+///
+/// A parameter the SIG-declared FN type does not name crosses no barrier, so its envelope is
+/// carried over verbatim (duplicated, which clones the reference-only witness and moves no bytes).
+/// Every coerced product is built in the *call site's* region, whose composition retains the
+/// source envelope's whole reach — the pin the wrapper's inward door claims.
+fn coerce_arguments_inward<'step>(
+    view: &DecideCtx<'_, 'step, '_>,
+    wrapper: &KFunction<'step>,
+    declared: KType,
+    inward: &CoercionTables,
+    named_carriers: &[&DeliveredCarried],
+) -> BumpVec<'step, DeliveredCarried> {
+    let types = view.types();
+    let declared_params = types.with_node(declared, |node| match node {
+        TypeNode::KFunction { params, .. } => params.clone(),
+        _ => unreachable!("a coercion wrapper's declared slot type is a function type"),
+    });
+    let mut coerced = BumpVec::with_capacity_in(named_carriers.len(), view.scratch());
+    coerced.extend(
+        wrapper
+            .signature
+            .params()
+            .iter()
+            .zip(named_carriers.iter())
+            .map(|((name, _), carrier)| {
+                match declared_params
+                    .get(name.symbol())
+                    .filter(|declared_param| inward.coerces(**declared_param, types))
+                {
+                    Some(declared_param) => view.current_scope().coerce_delivered(
+                        carrier,
+                        *declared_param,
+                        inward,
+                        view.registries(),
+                    ),
+                    None => carrier.duplicate(),
+                }
+            }),
+    );
+    coerced
 }
 
 /// Select the delivery envelopes belonging to a call's *parameters*, in declaration order — the

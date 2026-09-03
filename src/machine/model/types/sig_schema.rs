@@ -143,8 +143,9 @@ impl SigSchema {
     /// installs) and the child scope's type-class entries — the map wins on a shared name, so
     /// this covers a plain module and an opaque view (map and scope agree, the map being a mirror
     /// of the scope) and a transparent view (scope only — the map is empty).
-    /// Value slots are the child scope's data bindings read through [`KObject::ktype`], with the
-    /// `slot_type_tags` map overriding by name (an opaque view's abstract slot identities).
+    /// Value slots are the child scope's data bindings read through [`KObject::ktype`]. An opaque
+    /// view needs no override for its abstract slot identities: its scope is born holding *coerced*
+    /// member values, so the ktype read off a member already reports the view's own identity.
     ///
     /// [`KObject::ktype`]: crate::machine::model::values::KObject::ktype
     pub fn raw_self_sig(child: &Scope<'_>, draft: &ModuleDraft) -> SigSchema {
@@ -160,9 +161,6 @@ impl SigSchema {
         // the `Copy` `KType` leaves the open.
         for (name, sealed) in child.bindings().iter_data() {
             value_slots.insert(name, sealed.open_at().value().object().ktype());
-        }
-        for (name, tag) in draft.slot_type_tags.iter() {
-            value_slots.insert(*name, *tag);
         }
         SigSchema {
             sig_id: None,
@@ -318,6 +316,130 @@ pub fn substitute_sig_members(
         }
         _ => kt,
     }
+}
+
+/// Two bindings for one signature's abstract members: the pair a value read across an ascription
+/// barrier is rewritten between. A value inhabiting
+/// `substitute_sig_members(declared, sig_id, from)` coerces to
+/// `substitute_sig_members(declared, sig_id, to)` for every SIG-declared slot type `declared`.
+///
+/// **Both tables ride as interned `Signature` handles** whose manifest members *are* the table —
+/// a signature is already the canonical carrier of a name → type binding set, and interning one
+/// makes the whole carrier `Copy` and lifetime-free. That is what lets a coercion plan sit inside
+/// a [`Body`](crate::machine::core::Body) and inside a sealed return obligation, neither of which
+/// may name a region.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct MemberCoercion {
+    sig_id: ScopeId,
+    from: KType,
+    to: KType,
+}
+
+impl MemberCoercion {
+    /// Intern the two tables into their handles. `sig_id` is the binder whose abstract members the
+    /// declared slot types reference — [`SigSchema::sig_id`], canonically [`ScopeId::SENTINEL`].
+    pub fn new(
+        sig_id: ScopeId,
+        from: &TypeMemberMap,
+        to: &TypeMemberMap,
+        types: &TypeRegistry,
+    ) -> MemberCoercion {
+        MemberCoercion {
+            sig_id,
+            from: member_table_handle(from, types),
+            to: member_table_handle(to, types),
+        }
+    }
+
+    /// The same pair read in the other direction — a wrapper coerces its arguments inward under
+    /// this and its result outward under [`Self::flipped`], off one stored plan.
+    pub fn flipped(self) -> MemberCoercion {
+        MemberCoercion {
+            sig_id: self.sig_id,
+            from: self.to,
+            to: self.from,
+        }
+    }
+
+    /// Whether the two tables bind every member identically, so every slot type substitutes to
+    /// itself and coercion is the identity. Decided on the interned handles, so it costs a compare.
+    pub fn is_identity(self) -> bool {
+        self.from == self.to
+    }
+
+    /// Materialize the plan for a walk: the two tables read back out of their handles, once.
+    pub fn tables(self, types: &TypeRegistry) -> CoercionTables {
+        CoercionTables {
+            plan: self,
+            from: member_table(self.from, types),
+            to: member_table(self.to, types),
+        }
+    }
+}
+
+/// A [`MemberCoercion`] with its two tables materialized — what a coercion walk carries down its
+/// recursion, so the handles are read once per coercion rather than once per position.
+pub struct CoercionTables {
+    plan: MemberCoercion,
+    from: TypeMemberMap,
+    to: TypeMemberMap,
+}
+
+impl CoercionTables {
+    /// The `Copy` plan these tables were read out of — what a wrapper built mid-walk stores, so a
+    /// per-call coercion re-materializes from the same handles rather than from a rebuilt table.
+    pub fn coercion(&self) -> MemberCoercion {
+        self.plan
+    }
+
+    /// The pair of substituted types a declared position rewrites between, or `None` when the two
+    /// substitutions agree — the walk's fast path, which covers a concrete slot, a manifest-only
+    /// slot, and every sub-position holding no reference to an abstract member.
+    pub fn substitutions(&self, declared: KType, types: &TypeRegistry) -> Option<(KType, KType)> {
+        let from = substitute_sig_members(declared, self.plan.sig_id, &self.from, types);
+        let to = substitute_sig_members(declared, self.plan.sig_id, &self.to, types);
+        (from != to).then_some((from, to))
+    }
+
+    /// Whether a value filling the slot typed `declared` has to be coerced at all — the replay's
+    /// per-member plan question, and the same test the walk's own first step runs.
+    pub fn coerces(&self, declared: KType, types: &TypeRegistry) -> bool {
+        self.substitutions(declared, types).is_some()
+    }
+
+    /// The `to`-side substitution of a declared position — the identity a re-tag stamps and the
+    /// type a rebuilt container is re-stamped to.
+    pub fn substitute_to(&self, declared: KType, types: &TypeRegistry) -> KType {
+        substitute_sig_members(declared, self.plan.sig_id, &self.to, types)
+    }
+
+    /// The `from`-side substitution — the type the value being coerced currently inhabits, which a
+    /// union arm tests a value against to pick its declared member.
+    pub fn substitute_from(&self, declared: KType, types: &TypeRegistry) -> KType {
+        substitute_sig_members(declared, self.plan.sig_id, &self.from, types)
+    }
+}
+
+/// Intern a member table as the `Signature` handle carrying it — manifest members only, since a
+/// binding table names concrete witnesses. `sig_id: None`: the table is a substitution, not an
+/// interface, so it declares no abstract member for a slot type to reference.
+fn member_table_handle(members: &TypeMemberMap, types: &TypeRegistry) -> KType {
+    types.signature(SigSchema {
+        sig_id: None,
+        abstract_members: TypeMemberMap::default(),
+        manifest_members: members.clone(),
+        value_slots: HashMap::default(),
+    })
+}
+
+/// Read a member table back out of the handle [`member_table_handle`] interned it into. The clone
+/// is what lets the walk intern types as it recurses — an intern under the `with_node` read's own
+/// borrow would deadlock the registry.
+fn member_table(handle: KType, types: &TypeRegistry) -> TypeMemberMap {
+    types.with_node(handle, |node| match node {
+        TypeNode::Signature { schema, .. } => schema.manifest_members.clone(),
+        _ => unreachable!("a member table handle is interned as a `Signature` node"),
+    })
 }
 
 /// The least upper bound of two schemas under the relation [`sig_subtype`] decides — the join of
