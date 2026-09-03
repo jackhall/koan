@@ -186,10 +186,10 @@ pub(crate) fn union_member<'a>(
     else {
         return None;
     };
-    match registries.types.node(union) {
-        TypeNode::Union { members } => members.into_iter().find(|m| *m == resolved),
+    registries.types.with_node(union, |node| match node {
+        TypeNode::Union { members } => members.iter().copied().find(|m| *m == resolved),
         _ => None,
-    }
+    })
 }
 
 /// Apply a union head to named type arguments — `:(Result {Ok = Number, Error = MyError})`, and
@@ -207,57 +207,60 @@ pub(crate) fn apply_union_type_args(
     registries: &RunRegistries,
 ) -> Result<KType, KError> {
     let types = &registries.types;
-    let TypeNode::Union { members } = types.node(union) else {
-        return Err(KError::new(KErrorKind::ShapeError(format!(
-            "`{}` is not a union, so it takes no named type arguments",
-            union.display_name(registries),
-        ))));
-    };
-    // A supplied name is a record-literal key carrying bare symbol bits; the member list it probes
-    // is keyed by the `TypeSymbol` each member's declaration minted, so a hit witnesses the class.
-    let mut unknown: Vec<String> = supplied
-        .iter()
-        .filter(|(name, _)| types.union_member_named(union, *name).is_none())
-        .map(|(name, _)| render_label(*name, registries))
-        .collect();
-    if !unknown.is_empty() {
-        unknown.sort_unstable();
-        return Err(KError::new(KErrorKind::ShapeError(format!(
-            "type argument{} {} name{} no member of `{}` (members: {})",
-            if unknown.len() == 1 { "" } else { "s" },
-            unknown
-                .iter()
-                .map(|name| format!("`{name}`"))
-                .collect::<Vec<_>>()
-                .join(", "),
-            if unknown.len() == 1 { "s" } else { "" },
-            union.display_name(registries),
-            union_member_names(union, registries),
-        ))));
-    }
-    let applied: Vec<KType> = members
-        .iter()
-        .map(|member| {
-            let declared = types.with_node(*member, |node| match node {
-                TypeNode::SetMember { name, .. } => Some(*name),
-                _ => None,
-            });
-            let Some(declared) = declared else {
-                return *member;
-            };
-            match supplied.iter().find(|(name, _)| *name == declared.symbol()) {
-                Some((_, argument)) => types.constructor_apply(
-                    *member,
-                    crate::machine::model::Record::from_pairs([(
-                        BinderSymbol::Type(declared),
-                        *argument,
-                    )]),
-                ),
-                None => *member,
-            }
-        })
-        .collect();
-    Ok(types.union_of(&applied))
+    types.with_node(union, |node| {
+        let TypeNode::Union { members } = node else {
+            return Err(KError::new(KErrorKind::ShapeError(format!(
+                "`{}` is not a union, so it takes no named type arguments",
+                union.display_name(registries),
+            ))));
+        };
+        // A supplied name is a record-literal key carrying bare symbol bits; the member list it
+        // probes is keyed by the `TypeSymbol` each member's declaration minted, so a hit
+        // witnesses the class.
+        let mut unknown: Vec<String> = supplied
+            .iter()
+            .filter(|(name, _)| types.union_member_named(union, *name).is_none())
+            .map(|(name, _)| render_label(*name, registries))
+            .collect();
+        if !unknown.is_empty() {
+            unknown.sort_unstable();
+            return Err(KError::new(KErrorKind::ShapeError(format!(
+                "type argument{} {} name{} no member of `{}` (members: {})",
+                if unknown.len() == 1 { "" } else { "s" },
+                unknown
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if unknown.len() == 1 { "s" } else { "" },
+                union.display_name(registries),
+                union_member_names(union, registries),
+            ))));
+        }
+        let applied: Vec<KType> = members
+            .iter()
+            .map(|member| {
+                let declared = types.with_node(*member, |node| match node {
+                    TypeNode::SetMember { name, .. } => Some(*name),
+                    _ => None,
+                });
+                let Some(declared) = declared else {
+                    return *member;
+                };
+                match supplied.iter().find(|(name, _)| *name == declared.symbol()) {
+                    Some((_, argument)) => types.constructor_apply(
+                        *member,
+                        crate::machine::model::Record::from_pairs([(
+                            BinderSymbol::Type(declared),
+                            *argument,
+                        )]),
+                    ),
+                    None => *member,
+                }
+            })
+            .collect();
+        Ok(types.union_of(&applied))
+    })
 }
 
 /// One union member's surface label: a `SetMember` by the name its declaration minted, a
@@ -273,10 +276,10 @@ pub(crate) fn member_label(member: KType, registries: &RunRegistries) -> String 
 /// Every member of `union` in declaration order, comma-joined for a miss diagnostic. Empty when
 /// `union` names no union at all — the same miss [`union_member`] reports.
 pub(crate) fn union_member_names(union: KType, registries: &RunRegistries) -> String {
-    let TypeNode::Union { members } = registries.types.node(union) else {
-        return String::new();
-    };
-    member_labels(&members, registries)
+    registries.types.with_node(union, |node| match node {
+        TypeNode::Union { members } => member_labels(members, registries),
+        _ => String::new(),
+    })
 }
 
 /// [`union_member_names`] over an explicit member slate — what a walk reads when its member set is

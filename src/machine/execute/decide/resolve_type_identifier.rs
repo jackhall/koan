@@ -111,15 +111,15 @@ struct UserTypeRef {
 /// A `Signature` is a leaf too: the node carries no binder and no label, so two textually
 /// identical declarations are one type and there is no declaration for a consumer to park on.
 fn for_each_user_type_ref(kt: KType, types: &TypeRegistry, found: &mut impl FnMut(UserTypeRef)) {
-    match types.node(kt) {
+    types.with_node(kt, |node| match node {
         TypeNode::AbstractType { source, name, .. } => found(UserTypeRef {
-            scope_id: source,
-            name,
+            scope_id: *source,
+            name: *name,
         }),
-        TypeNode::List { element } => for_each_user_type_ref(element, types, found),
+        TypeNode::List { element } => for_each_user_type_ref(*element, types, found),
         TypeNode::Dict { key, value } => {
-            for_each_user_type_ref(key, types, found);
-            for_each_user_type_ref(value, types, found);
+            for_each_user_type_ref(*key, types, found);
+            for_each_user_type_ref(*value, types, found);
         }
         TypeNode::Record { fields } => {
             for field in fields.values() {
@@ -130,24 +130,24 @@ fn for_each_user_type_ref(kt: KType, types: &TypeRegistry, found: &mut impl FnMu
             for param in params.values() {
                 for_each_user_type_ref(*param, types, found);
             }
-            for_each_user_type_ref(ret, types, found);
+            for_each_user_type_ref(*ret, types, found);
         }
         TypeNode::ConstructorApply {
             constructor,
             arguments,
         } => {
-            for_each_user_type_ref(constructor, types, found);
+            for_each_user_type_ref(*constructor, types, found);
             for argument in arguments.values() {
                 for_each_user_type_ref(*argument, types, found);
             }
         }
         TypeNode::Union { members } => {
-            for member in members {
+            for member in members.iter().copied() {
                 for_each_user_type_ref(member, types, found);
             }
         }
         _ => {}
-    }
+    })
 }
 
 #[cfg(test)]

@@ -56,7 +56,7 @@ pub fn coerce_object_into<'b>(
     let Some((_, to)) = tables.substitutions(declared, types) else {
         return value.deep_clone();
     };
-    match types.node(declared) {
+    types.with_node(declared, |node| match node {
         TypeNode::AbstractType { .. } | TypeNode::ConstructorApply { .. } => {
             KObject::wrapped_peel(door, value, to)
         }
@@ -65,7 +65,7 @@ pub fn coerce_object_into<'b>(
                 let cells: Vec<Held<'b>> = substrate
                     .elements()
                     .iter()
-                    .map(|cell| coerce_held_into(cell, element, tables, door, registries))
+                    .map(|cell| coerce_held_into(cell, *element, tables, door, registries))
                     .collect();
                 KObject::list_rehomed(door, cells, to)
             }
@@ -84,7 +84,7 @@ pub fn coerce_object_into<'b>(
                     .map(|(key, cell)| {
                         (
                             *key,
-                            coerce_held_into(cell, declared_value, tables, door, registries),
+                            coerce_held_into(cell, *declared_value, tables, door, registries),
                         )
                     })
                     .collect();
@@ -120,7 +120,7 @@ pub fn coerce_object_into<'b>(
             _ => value.deep_clone(),
         },
         TypeNode::Signature { schema, .. } => match value {
-            KObject::Module(m) => KObject::Module(coerce_module(m, &schema, tables, registries)),
+            KObject::Module(m) => KObject::Module(coerce_module(m, schema, tables, registries)),
             _ => value.deep_clone(),
         },
         TypeNode::Union { members } => {
@@ -138,7 +138,7 @@ pub fn coerce_object_into<'b>(
             }
         }
         _ => value.deep_clone(),
-    }
+    })
 }
 
 /// [`coerce_object_into`]'s per-cell dispatch for a container's [`Held`] cell. A type-channel cell

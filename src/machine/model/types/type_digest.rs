@@ -341,10 +341,12 @@ pub(crate) fn schema_content_digest(schema: &SigSchema, types: &TypeRegistry) ->
         .abstract_members
         .iter()
         .map(|(name, kt)| {
-            let params = match types.node(*kt) {
-                TypeNode::AbstractType { param_names, .. } => param_names,
+            // `param_names` outlives the read: it feeds the sorted digest-input vector being
+            // built here, past the closure that reads it.
+            let params = types.with_node(*kt, |node| match node {
+                TypeNode::AbstractType { param_names, .. } => param_names.clone(),
                 _ => Vec::new(),
-            };
+            });
             (*name, params)
         })
         .collect();
@@ -429,54 +431,56 @@ fn feed_named_types(
 /// textually determined and the handle's own digest is exact. Collapsing the name leaves inside it
 /// would gain nothing and would conflate an inner binder with an outer reference of the same name.
 fn canonical_type_digest(kt: KType, schema: &SigSchema, types: &TypeRegistry) -> TypeDigest {
-    let node = types.node(kt);
-    if let Some(name) = schema_self_ref(&node, schema) {
-        return DigestHasher::new(TAG_SIG_SELF_REF)
-            .symbol(name.symbol())
-            .finish();
-    }
-    match node {
-        TypeNode::List { element } => DigestHasher::new(TAG_LIST)
-            .digest(canonical_type_digest(element, schema, types))
-            .finish(),
-        TypeNode::Dict { key, value } => DigestHasher::new(TAG_DICT)
-            .digest(canonical_type_digest(key, schema, types))
-            .digest(canonical_type_digest(value, schema, types))
-            .finish(),
-        TypeNode::Record { fields } => {
-            let mut h = DigestHasher::new(TAG_RECORD);
-            feed_record_canonical(&mut h, &fields, schema, types);
-            h.finish()
+    types.with_node(kt, |node| {
+        if let Some(name) = schema_self_ref(node, schema) {
+            return DigestHasher::new(TAG_SIG_SELF_REF)
+                .symbol(name.symbol())
+                .finish();
         }
-        TypeNode::KFunction { params, ret } => {
-            let mut h = DigestHasher::new(TAG_KFUNCTION);
-            feed_record_canonical(&mut h, &params, schema, types);
-            h.digest(canonical_type_digest(ret, schema, types)).finish()
-        }
-        TypeNode::Union { members } => {
-            let mut member_digests: Vec<TypeDigest> = members
-                .iter()
-                .map(|m| canonical_type_digest(*m, schema, types))
-                .collect();
-            member_digests.sort_unstable();
-            let mut h = DigestHasher::new(TAG_UNION);
-            h.count(member_digests.len());
-            for d in member_digests {
-                h.digest(d);
+        match node {
+            TypeNode::List { element } => DigestHasher::new(TAG_LIST)
+                .digest(canonical_type_digest(*element, schema, types))
+                .finish(),
+            TypeNode::Dict { key, value } => DigestHasher::new(TAG_DICT)
+                .digest(canonical_type_digest(*key, schema, types))
+                .digest(canonical_type_digest(*value, schema, types))
+                .finish(),
+            TypeNode::Record { fields } => {
+                let mut h = DigestHasher::new(TAG_RECORD);
+                feed_record_canonical(&mut h, fields, schema, types);
+                h.finish()
             }
-            h.finish()
+            TypeNode::KFunction { params, ret } => {
+                let mut h = DigestHasher::new(TAG_KFUNCTION);
+                feed_record_canonical(&mut h, params, schema, types);
+                h.digest(canonical_type_digest(*ret, schema, types))
+                    .finish()
+            }
+            TypeNode::Union { members } => {
+                let mut member_digests: Vec<TypeDigest> = members
+                    .iter()
+                    .map(|m| canonical_type_digest(*m, schema, types))
+                    .collect();
+                member_digests.sort_unstable();
+                let mut h = DigestHasher::new(TAG_UNION);
+                h.count(member_digests.len());
+                for d in member_digests {
+                    h.digest(d);
+                }
+                h.finish()
+            }
+            TypeNode::ConstructorApply {
+                constructor,
+                arguments,
+            } => {
+                let mut h = DigestHasher::new(TAG_CONSTRUCTOR_APPLY);
+                h.digest(canonical_type_digest(*constructor, schema, types));
+                feed_record_canonical(&mut h, arguments, schema, types);
+                h.finish()
+            }
+            _ => kt.digest(),
         }
-        TypeNode::ConstructorApply {
-            constructor,
-            arguments,
-        } => {
-            let mut h = DigestHasher::new(TAG_CONSTRUCTOR_APPLY);
-            h.digest(canonical_type_digest(constructor, schema, types));
-            feed_record_canonical(&mut h, &arguments, schema, types);
-            h.finish()
-        }
-        _ => kt.digest(),
-    }
+    })
 }
 
 /// `Some(member name)` iff `node` is a reference to one of `schema`'s own abstract members — a

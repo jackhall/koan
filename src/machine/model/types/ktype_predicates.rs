@@ -1029,13 +1029,13 @@ pub(super) fn function_compat<'v>(
     use crate::machine::model::types::{DeferredReturnSurface, ReturnType};
     let ret_ok = match &sig.return_type() {
         ReturnType::Resolved(kt) => *kt == ret || kt.is_more_specific_than(ret, registries),
-        ReturnType::Deferred(d) => match types.node(ret) {
+        ReturnType::Deferred(d) => types.with_node(ret, |node| match node {
             TypeNode::Any => true,
             TypeNode::DeferredReturn(slot) => {
-                DeferredReturnSurface::from_deferred(d, &registries.labels) == slot
+                DeferredReturnSurface::from_deferred(d, &registries.labels) == *slot
             }
             _ => false,
-        },
+        }),
     };
     if !ret_ok {
         return false;

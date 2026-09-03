@@ -177,15 +177,18 @@ impl SigSchema {
 /// higher-kinded member (an `AbstractType` node carrying them directly). `None` for a
 /// first-order type. Arity is the returned list's length.
 pub fn constructor_param_names(kt: KType, types: &TypeRegistry) -> Option<Vec<TypeSymbol>> {
-    match types.node(kt) {
-        TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => Some(param_names),
+    // Owns: the parameter list is the function's own return value, so it must outlive this read.
+    types.with_node(kt, |node| match node {
+        TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => {
+            Some(param_names.clone())
+        }
         TypeNode::SetMember {
             kind: KKind::TypeConstructor,
             schema: NodeSchema::TypeConstructor { param_names, .. },
             ..
-        } => Some(param_names),
+        } => Some(param_names.clone()),
         _ => None,
-    }
+    })
 }
 
 /// The diagnostic for a bare type constructor standing in a value type position, or `None` when
@@ -282,20 +285,20 @@ pub fn substitute_sig_members(
     members: &TypeMemberMap,
     types: &TypeRegistry,
 ) -> KType {
-    match types.node(kt) {
+    types.with_node(kt, |node| match node {
         TypeNode::AbstractType {
             source,
             name,
             nonce: None,
             ..
-        } if source == sig_id => members.get(&name).copied().unwrap_or(kt),
+        } if *source == sig_id => members.get(name).copied().unwrap_or(kt),
         TypeNode::List { element } => {
-            let element = substitute_sig_members(element, sig_id, members, types);
+            let element = substitute_sig_members(*element, sig_id, members, types);
             types.list(element)
         }
         TypeNode::Dict { key, value } => {
-            let key = substitute_sig_members(key, sig_id, members, types);
-            let value = substitute_sig_members(value, sig_id, members, types);
+            let key = substitute_sig_members(*key, sig_id, members, types);
+            let value = substitute_sig_members(*value, sig_id, members, types);
             types.dict(key, value)
         }
         TypeNode::Record { fields } => {
@@ -304,13 +307,13 @@ pub fn substitute_sig_members(
         }
         TypeNode::KFunction { params, ret } => {
             let params = params.map(|v| substitute_sig_members(*v, sig_id, members, types));
-            let ret = substitute_sig_members(ret, sig_id, members, types);
+            let ret = substitute_sig_members(*ret, sig_id, members, types);
             types.function_type(params, ret)
         }
         TypeNode::Union { members: us } => {
             let substituted: Vec<KType> = us
-                .into_iter()
-                .map(|m| substitute_sig_members(m, sig_id, members, types))
+                .iter()
+                .map(|m| substitute_sig_members(*m, sig_id, members, types))
                 .collect();
             types.union_of(&substituted)
         }
@@ -318,18 +321,22 @@ pub fn substitute_sig_members(
             constructor,
             arguments,
         } => {
-            let constructor = substitute_sig_members(constructor, sig_id, members, types);
+            let constructor = substitute_sig_members(*constructor, sig_id, members, types);
             let arguments = arguments.map(|a| substitute_sig_members(*a, sig_id, members, types));
             types.constructor_apply(constructor, arguments)
         }
-        TypeNode::Signature { mut schema, .. } => {
-            let effective = unshadowed(members, &schema);
+        TypeNode::Signature { schema, .. } => {
+            let effective = unshadowed(members, schema);
             if effective.is_empty() {
                 return kt;
             }
             // The nested schema's own `abstract_members` are binders, not references, and its
             // `sig_id` names its own binder — neither is touched. `types.signature` is
             // content-addressed, so re-interning an unchanged schema returns `kt` itself.
+            //
+            // Owns: the manifest members and value slots are rewritten in place before
+            // re-interning, which needs a mutable schema.
+            let mut schema = schema.clone();
             for member in schema
                 .manifest_members
                 .values_mut()
@@ -340,7 +347,7 @@ pub fn substitute_sig_members(
             types.signature(schema)
         }
         _ => kt,
-    }
+    })
 }
 
 /// `members` with `nested`'s own abstract-member names removed — the substitution a walk carries
@@ -604,38 +611,40 @@ fn sig_slot_join(
     if x == y {
         return x;
     }
-    match (types.node(x), types.node(y)) {
-        (TypeNode::List { element: ex }, TypeNode::List { element: ey }) => {
-            let element = sig_slot_join(ex, ey, generalizations, types);
-            types.list(element)
-        }
-        (TypeNode::Dict { key: kx, value: vx }, TypeNode::Dict { key: ky, value: vy }) => {
-            let key = sig_slot_join(kx, ky, generalizations, types);
-            let value = sig_slot_join(vx, vy, generalizations, types);
-            types.dict(key, value)
-        }
-        (
-            TypeNode::KFunction {
-                params: px,
-                ret: rx,
-            },
-            TypeNode::KFunction {
-                params: py,
-                ret: ry,
-            },
-        ) if px.len() == py.len() && px.keys().all(|k| py.get(k.symbol()).is_some()) => {
-            let params = px
-                .iter()
-                .map(|(name, t)| {
-                    let other = *py.get(name.symbol()).expect("the key sets were compared");
-                    (name, sig_slot_meet(*t, other, generalizations, types))
-                })
-                .collect();
-            let ret = sig_slot_join(rx, ry, generalizations, types);
-            types.function_type(params, ret)
-        }
-        _ => types.join(x, y),
-    }
+    types.with_node(x, |nx| {
+        types.with_node(y, |ny| match (nx, ny) {
+            (TypeNode::List { element: ex }, TypeNode::List { element: ey }) => {
+                let element = sig_slot_join(*ex, *ey, generalizations, types);
+                types.list(element)
+            }
+            (TypeNode::Dict { key: kx, value: vx }, TypeNode::Dict { key: ky, value: vy }) => {
+                let key = sig_slot_join(*kx, *ky, generalizations, types);
+                let value = sig_slot_join(*vx, *vy, generalizations, types);
+                types.dict(key, value)
+            }
+            (
+                TypeNode::KFunction {
+                    params: px,
+                    ret: rx,
+                },
+                TypeNode::KFunction {
+                    params: py,
+                    ret: ry,
+                },
+            ) if px.len() == py.len() && px.keys().all(|k| py.get(k.symbol()).is_some()) => {
+                let params = px
+                    .iter()
+                    .map(|(name, t)| {
+                        let other = *py.get(name.symbol()).expect("the key sets were compared");
+                        (name, sig_slot_meet(*t, other, generalizations, types))
+                    })
+                    .collect();
+                let ret = sig_slot_join(*rx, *ry, generalizations, types);
+                types.function_type(params, ret)
+            }
+            _ => types.join(x, y),
+        })
+    })
 }
 
 /// The **contravariant** half of [`sig_slot_join`]: a function parameter position, where the bound
@@ -654,38 +663,40 @@ fn sig_slot_meet(
     if x == y {
         return x;
     }
-    match (types.node(x), types.node(y)) {
-        (TypeNode::List { element: ex }, TypeNode::List { element: ey }) => {
-            let element = sig_slot_meet(ex, ey, generalizations, types);
-            types.list(element)
-        }
-        (TypeNode::Dict { key: kx, value: vx }, TypeNode::Dict { key: ky, value: vy }) => {
-            let key = sig_slot_meet(kx, ky, generalizations, types);
-            let value = sig_slot_meet(vx, vy, generalizations, types);
-            types.dict(key, value)
-        }
-        (
-            TypeNode::KFunction {
-                params: px,
-                ret: rx,
-            },
-            TypeNode::KFunction {
-                params: py,
-                ret: ry,
-            },
-        ) if px.len() == py.len() && px.keys().all(|k| py.get(k.symbol()).is_some()) => {
-            let params = px
-                .iter()
-                .map(|(name, t)| {
-                    let other = *py.get(name.symbol()).expect("the key sets were compared");
-                    (name, sig_slot_join(*t, other, generalizations, types))
-                })
-                .collect();
-            let ret = sig_slot_meet(rx, ry, generalizations, types);
-            types.function_type(params, ret)
-        }
-        _ => types.meet(x, y),
-    }
+    types.with_node(x, |nx| {
+        types.with_node(y, |ny| match (nx, ny) {
+            (TypeNode::List { element: ex }, TypeNode::List { element: ey }) => {
+                let element = sig_slot_meet(*ex, *ey, generalizations, types);
+                types.list(element)
+            }
+            (TypeNode::Dict { key: kx, value: vx }, TypeNode::Dict { key: ky, value: vy }) => {
+                let key = sig_slot_meet(*kx, *ky, generalizations, types);
+                let value = sig_slot_meet(*vx, *vy, generalizations, types);
+                types.dict(key, value)
+            }
+            (
+                TypeNode::KFunction {
+                    params: px,
+                    ret: rx,
+                },
+                TypeNode::KFunction {
+                    params: py,
+                    ret: ry,
+                },
+            ) if px.len() == py.len() && px.keys().all(|k| py.get(k.symbol()).is_some()) => {
+                let params = px
+                    .iter()
+                    .map(|(name, t)| {
+                        let other = *py.get(name.symbol()).expect("the key sets were compared");
+                        (name, sig_slot_join(*t, other, generalizations, types))
+                    })
+                    .collect();
+                let ret = sig_slot_meet(*rx, *ry, generalizations, types);
+                types.function_type(params, ret)
+            }
+            _ => types.meet(x, y),
+        })
+    })
 }
 
 /// Rewrite every reference to `declared`'s own abstract members so it is sourced at
@@ -696,25 +707,26 @@ fn sig_slot_meet(
 /// changes. Running it at projection is what makes two textually identical declarations one
 /// interned type, since after it nothing in the schema records which scope declared it.
 fn canonicalize_binder(kt: KType, declared: ScopeId, types: &TypeRegistry) -> KType {
-    match types.node(kt) {
+    types.with_node(kt, |node| match node {
         TypeNode::AbstractType {
             source,
             name,
             param_names,
             nonce: None,
-        } if source == declared => types.intern(TypeNode::AbstractType {
+        } if *source == declared => types.intern(TypeNode::AbstractType {
             source: ScopeId::SENTINEL,
-            name,
-            param_names,
+            name: *name,
+            // Owns: re-interned as a fresh node's own field.
+            param_names: param_names.clone(),
             nonce: None,
         }),
         TypeNode::List { element } => {
-            let element = canonicalize_binder(element, declared, types);
+            let element = canonicalize_binder(*element, declared, types);
             types.list(element)
         }
         TypeNode::Dict { key, value } => {
-            let key = canonicalize_binder(key, declared, types);
-            let value = canonicalize_binder(value, declared, types);
+            let key = canonicalize_binder(*key, declared, types);
+            let value = canonicalize_binder(*value, declared, types);
             types.dict(key, value)
         }
         TypeNode::Record { fields } => {
@@ -723,13 +735,13 @@ fn canonicalize_binder(kt: KType, declared: ScopeId, types: &TypeRegistry) -> KT
         }
         TypeNode::KFunction { params, ret } => {
             let params = params.map(|v| canonicalize_binder(*v, declared, types));
-            let ret = canonicalize_binder(ret, declared, types);
+            let ret = canonicalize_binder(*ret, declared, types);
             types.function_type(params, ret)
         }
         TypeNode::Union { members } => {
             let canonical: Vec<KType> = members
-                .into_iter()
-                .map(|m| canonicalize_binder(m, declared, types))
+                .iter()
+                .map(|m| canonicalize_binder(*m, declared, types))
                 .collect();
             types.union_of(&canonical)
         }
@@ -737,14 +749,18 @@ fn canonicalize_binder(kt: KType, declared: ScopeId, types: &TypeRegistry) -> KT
             constructor,
             arguments,
         } => {
-            let constructor = canonicalize_binder(constructor, declared, types);
+            let constructor = canonicalize_binder(*constructor, declared, types);
             let arguments = arguments.map(|a| canonicalize_binder(*a, declared, types));
             types.constructor_apply(constructor, arguments)
         }
-        TypeNode::Signature { mut schema, .. } => {
+        TypeNode::Signature { schema, .. } => {
             // Keyed on the *real* declaring scope id, so no shadow subtraction: the nested
             // schema's own members were re-sourced to `SENTINEL` when the nested SIG was
             // projected, and `source == declared` can only match a genuine outer reference.
+            //
+            // Owns: the manifest members and value slots are rewritten in place before
+            // re-interning, which needs a mutable schema.
+            let mut schema = schema.clone();
             for member in schema
                 .manifest_members
                 .values_mut()
@@ -755,7 +771,7 @@ fn canonicalize_binder(kt: KType, declared: ScopeId, types: &TypeRegistry) -> KT
             types.signature(schema)
         }
         _ => kt,
-    }
+    })
 }
 
 /// Why a [`sig_subtype`] check failed — the per-member rule that rejected, carrying the offending
@@ -956,17 +972,17 @@ fn references_sig_member(
     members: &TypeMemberMap,
     types: &TypeRegistry,
 ) -> bool {
-    match types.node(declared) {
+    types.with_node(declared, |node| match node {
         TypeNode::AbstractType {
             source,
             name,
             nonce: None,
             ..
-        } => source == sig_id && members.contains_key(&name),
-        TypeNode::List { element } => references_sig_member(element, sig_id, members, types),
+        } => *source == sig_id && members.contains_key(name),
+        TypeNode::List { element } => references_sig_member(*element, sig_id, members, types),
         TypeNode::Dict { key, value } => {
-            references_sig_member(key, sig_id, members, types)
-                || references_sig_member(value, sig_id, members, types)
+            references_sig_member(*key, sig_id, members, types)
+                || references_sig_member(*value, sig_id, members, types)
         }
         TypeNode::Record { fields } => fields
             .values()
@@ -975,7 +991,7 @@ fn references_sig_member(
             params
                 .values()
                 .any(|v| references_sig_member(*v, sig_id, members, types))
-                || references_sig_member(ret, sig_id, members, types)
+                || references_sig_member(*ret, sig_id, members, types)
         }
         TypeNode::Union { members: us } => us
             .iter()
@@ -984,13 +1000,13 @@ fn references_sig_member(
             constructor,
             arguments,
         } => {
-            references_sig_member(constructor, sig_id, members, types)
+            references_sig_member(*constructor, sig_id, members, types)
                 || arguments
                     .values()
                     .any(|a| references_sig_member(*a, sig_id, members, types))
         }
         TypeNode::Signature { schema, .. } => {
-            let effective = unshadowed(members, &schema);
+            let effective = unshadowed(members, schema);
             !effective.is_empty()
                 && schema
                     .manifest_members
@@ -999,7 +1015,7 @@ fn references_sig_member(
                     .any(|kt| references_sig_member(*kt, sig_id, &effective, types))
         }
         _ => false,
-    }
+    })
 }
 
 /// The `sub`-side binding a substitution point in `declared` resolves to, if any — the type
@@ -1010,15 +1026,15 @@ fn substitution_binding(
     members: &TypeMemberMap,
     types: &TypeRegistry,
 ) -> Option<KType> {
-    match types.node(declared) {
+    types.with_node(declared, |node| match node {
         TypeNode::AbstractType {
             source,
             name,
             nonce: None,
             ..
-        } if source == sig_id => members.get(&name).copied(),
+        } if *source == sig_id => members.get(name).copied(),
         _ => None,
-    }
+    })
 }
 
 /// Verdict of `substitute_sig_members(declared, sig_id, members).satisfied_by(sub_type)` — does the
@@ -1045,79 +1061,83 @@ fn slot_satisfied_by(
     if !references_sig_member(declared, sig_id, members, types) {
         return declared.satisfied_by(sub_type, registries);
     }
-    match (types.node(declared), types.node(sub_type)) {
-        // A nested signature is the one position the no-materialize walks materialize at: the
-        // relation between two signatures is `sig_subtype`, which is already schema-recursive, so
-        // substituting once and handing the interned result to it beats re-deriving that recursion
-        // here. Nesting is rare, and one intern is cheaper than a fourth structural walk.
-        (TypeNode::Signature { .. }, _) => substitute_sig_members(declared, sig_id, members, types)
-            .satisfied_by(sub_type, registries),
-        (TypeNode::List { element: ed }, TypeNode::List { element: es }) => {
-            slot_satisfied_by(ed, es, members, sig_id, registries)
-        }
-        (TypeNode::Dict { key: kd, value: vd }, TypeNode::Dict { key: ks, value: vs }) => {
-            slot_satisfied_by(kd, ks, members, sig_id, registries)
-                && slot_satisfied_by(vd, vs, members, sig_id, registries)
-        }
-        (TypeNode::Record { fields: fd }, TypeNode::Record { fields: fs }) => {
-            // Record-value covariance: every slot field present in the value, covariantly.
-            fd.iter().all(|(name, dt)| {
-                fs.get(name.symbol())
-                    .is_some_and(|st| slot_satisfied_by(*dt, *st, members, sig_id, registries))
-            })
-        }
-        (
-            TypeNode::ConstructorApply {
-                constructor: cd,
-                arguments: ad,
-            },
-            TypeNode::ConstructorApply {
-                constructor: cs,
-                arguments: as_,
-            },
-        ) => {
-            ad.len() == as_.len()
-                && slot_types_equal(cd, cs, members, sig_id, types)
-                && ad.iter().all(|(name, d)| {
-                    as_.get(name.symbol())
-                        .is_some_and(|s| slot_satisfied_by(*d, *s, members, sig_id, registries))
+    types.with_node(declared, |dn| {
+        types.with_node(sub_type, |sn| match (dn, sn) {
+            // A nested signature is the one position the no-materialize walks materialize at: the
+            // relation between two signatures is `sig_subtype`, which is already schema-recursive, so
+            // substituting once and handing the interned result to it beats re-deriving that recursion
+            // here. Nesting is rare, and one intern is cheaper than a fourth structural walk.
+            (TypeNode::Signature { .. }, _) => {
+                substitute_sig_members(declared, sig_id, members, types)
+                    .satisfied_by(sub_type, registries)
+            }
+            (TypeNode::List { element: ed }, TypeNode::List { element: es }) => {
+                slot_satisfied_by(*ed, *es, members, sig_id, registries)
+            }
+            (TypeNode::Dict { key: kd, value: vd }, TypeNode::Dict { key: ks, value: vs }) => {
+                slot_satisfied_by(*kd, *ks, members, sig_id, registries)
+                    && slot_satisfied_by(*vd, *vs, members, sig_id, registries)
+            }
+            (TypeNode::Record { fields: fd }, TypeNode::Record { fields: fs }) => {
+                // Record-value covariance: every slot field present in the value, covariantly.
+                fd.iter().all(|(name, dt)| {
+                    fs.get(name.symbol())
+                        .is_some_and(|st| slot_satisfied_by(*dt, *st, members, sig_id, registries))
                 })
-        }
-        (
-            TypeNode::KFunction {
-                params: pd,
-                ret: rd,
-            },
-            TypeNode::KFunction {
-                params: ps,
-                ret: rs,
-            },
-        ) => {
-            // Contravariant params (width-drop): every value param names a slot param the
-            // substituted slot fixes equal-or-more-specific. Covariant return.
-            ps.keys().all(|k| pd.get(k.symbol()).is_some())
-                && ps.iter().all(|(name, sp)| {
-                    pd.get(name.symbol()).is_some_and(|dp| {
-                        slot_more_specific_or_equal(*dp, *sp, members, sig_id, registries)
+            }
+            (
+                TypeNode::ConstructorApply {
+                    constructor: cd,
+                    arguments: ad,
+                },
+                TypeNode::ConstructorApply {
+                    constructor: cs,
+                    arguments: as_,
+                },
+            ) => {
+                ad.len() == as_.len()
+                    && slot_types_equal(*cd, *cs, members, sig_id, types)
+                    && ad.iter().all(|(name, d)| {
+                        as_.get(name.symbol())
+                            .is_some_and(|s| slot_satisfied_by(*d, *s, members, sig_id, registries))
                     })
-                })
-                && slot_satisfied_by(rd, rs, members, sig_id, registries)
-        }
-        (TypeNode::Union { members: ud }, sub_node) => {
-            // A value satisfies a substituted union slot iff it (each of its members, if it is
-            // itself a union) refines some slot member — the union-membership rule of
-            // `satisfied_by`.
-            let ys: Vec<KType> = match sub_node {
-                TypeNode::Union { members: us } => us,
-                _ => vec![sub_type],
-            };
-            ys.iter().all(|y| {
-                ud.iter()
-                    .any(|md| slot_satisfied_by(*md, *y, members, sig_id, registries))
-            })
-        }
-        _ => false,
-    }
+            }
+            (
+                TypeNode::KFunction {
+                    params: pd,
+                    ret: rd,
+                },
+                TypeNode::KFunction {
+                    params: ps,
+                    ret: rs,
+                },
+            ) => {
+                // Contravariant params (width-drop): every value param names a slot param the
+                // substituted slot fixes equal-or-more-specific. Covariant return.
+                ps.keys().all(|k| pd.get(k.symbol()).is_some())
+                    && ps.iter().all(|(name, sp)| {
+                        pd.get(name.symbol()).is_some_and(|dp| {
+                            slot_more_specific_or_equal(*dp, *sp, members, sig_id, registries)
+                        })
+                    })
+                    && slot_satisfied_by(*rd, *rs, members, sig_id, registries)
+            }
+            (TypeNode::Union { members: ud }, sub_node) => {
+                // A value satisfies a substituted union slot iff it (each of its members, if it is
+                // itself a union) refines some slot member — the union-membership rule of
+                // `satisfied_by`.
+                let refines_a_member = |y: KType| {
+                    ud.iter()
+                        .any(|md| slot_satisfied_by(*md, y, members, sig_id, registries))
+                };
+                match sub_node {
+                    TypeNode::Union { members: us } => us.iter().all(|y| refines_a_member(*y)),
+                    _ => refines_a_member(sub_type),
+                }
+            }
+            _ => false,
+        })
+    })
 }
 
 /// Verdict of `substitute_sig_members(declared, ...) == target
@@ -1148,75 +1168,79 @@ fn slot_more_specific_or_equal(
     {
         return true;
     }
-    let target_node = types.node(target);
-    if let TypeNode::Union { members: ts } = &target_node {
-        return ts
-            .iter()
-            .any(|t| slot_more_specific_or_equal(declared, *t, members, sig_id, registries));
-    }
-    match (types.node(declared), target_node) {
-        // Materialize at a nested signature, as [`slot_satisfied_by`] does — the
-        // `Signature`-vs-`Signature` relation rides `is_more_specific_than`'s own strict
-        // `sig_subtype` arm.
-        (TypeNode::Signature { .. }, _) => {
-            let substituted = substitute_sig_members(declared, sig_id, members, types);
-            substituted == target || substituted.is_more_specific_than(target, registries)
+    types.with_node(target, |target_node| {
+        if let TypeNode::Union { members: ts } = target_node {
+            return ts
+                .iter()
+                .any(|t| slot_more_specific_or_equal(declared, *t, members, sig_id, registries));
         }
-        (TypeNode::List { element: ed }, TypeNode::List { element: et }) => {
-            slot_more_specific_or_equal(ed, et, members, sig_id, registries)
-        }
-        (TypeNode::Dict { key: kd, value: vd }, TypeNode::Dict { key: kt, value: vt }) => {
-            slot_more_specific_or_equal(kd, kt, members, sig_id, registries)
-                && slot_more_specific_or_equal(vd, vt, members, sig_id, registries)
-        }
-        (TypeNode::Record { fields: fd }, TypeNode::Record { fields: ft }) => {
-            // Record-value covariance with width-superset: the more-specific record has every
-            // field of `target`, each covariantly refined.
-            ft.keys().all(|k| fd.get(k.symbol()).is_some())
-                && ft.iter().all(|(name, tt)| {
-                    fd.get(name.symbol()).is_some_and(|dt| {
-                        slot_more_specific_or_equal(*dt, *tt, members, sig_id, registries)
-                    })
-                })
-        }
-        (
-            TypeNode::ConstructorApply {
-                constructor: cd,
-                arguments: ad,
-            },
-            TypeNode::ConstructorApply {
-                constructor: ct,
-                arguments: at,
-            },
-        ) => {
-            ad.len() == at.len()
-                && slot_types_equal(cd, ct, members, sig_id, types)
-                && ad.iter().all(|(name, d)| {
-                    at.get(name.symbol()).is_some_and(|t| {
-                        slot_more_specific_or_equal(*d, *t, members, sig_id, registries)
-                    })
-                })
-        }
-        (
-            TypeNode::KFunction {
-                params: pd,
-                ret: rd,
-            },
-            TypeNode::KFunction {
-                params: pt,
-                ret: rt,
-            },
-        ) => {
-            // Contravariant params, covariant return — the dual of the `slot_satisfied_by` case.
-            pd.keys().all(|k| pt.get(k.symbol()).is_some())
-                && pd.iter().all(|(name, dp)| {
-                    pt.get(name.symbol())
-                        .is_some_and(|tp| slot_satisfied_by(*dp, *tp, members, sig_id, registries))
-                })
-                && slot_more_specific_or_equal(rd, rt, members, sig_id, registries)
-        }
-        _ => false,
-    }
+        types.with_node(declared, |declared_node| {
+            match (declared_node, target_node) {
+                // Materialize at a nested signature, as [`slot_satisfied_by`] does — the
+                // `Signature`-vs-`Signature` relation rides `is_more_specific_than`'s own strict
+                // `sig_subtype` arm.
+                (TypeNode::Signature { .. }, _) => {
+                    let substituted = substitute_sig_members(declared, sig_id, members, types);
+                    substituted == target || substituted.is_more_specific_than(target, registries)
+                }
+                (TypeNode::List { element: ed }, TypeNode::List { element: et }) => {
+                    slot_more_specific_or_equal(*ed, *et, members, sig_id, registries)
+                }
+                (TypeNode::Dict { key: kd, value: vd }, TypeNode::Dict { key: kt, value: vt }) => {
+                    slot_more_specific_or_equal(*kd, *kt, members, sig_id, registries)
+                        && slot_more_specific_or_equal(*vd, *vt, members, sig_id, registries)
+                }
+                (TypeNode::Record { fields: fd }, TypeNode::Record { fields: ft }) => {
+                    // Record-value covariance with width-superset: the more-specific record has every
+                    // field of `target`, each covariantly refined.
+                    ft.keys().all(|k| fd.get(k.symbol()).is_some())
+                        && ft.iter().all(|(name, tt)| {
+                            fd.get(name.symbol()).is_some_and(|dt| {
+                                slot_more_specific_or_equal(*dt, *tt, members, sig_id, registries)
+                            })
+                        })
+                }
+                (
+                    TypeNode::ConstructorApply {
+                        constructor: cd,
+                        arguments: ad,
+                    },
+                    TypeNode::ConstructorApply {
+                        constructor: ct,
+                        arguments: at,
+                    },
+                ) => {
+                    ad.len() == at.len()
+                        && slot_types_equal(*cd, *ct, members, sig_id, types)
+                        && ad.iter().all(|(name, d)| {
+                            at.get(name.symbol()).is_some_and(|t| {
+                                slot_more_specific_or_equal(*d, *t, members, sig_id, registries)
+                            })
+                        })
+                }
+                (
+                    TypeNode::KFunction {
+                        params: pd,
+                        ret: rd,
+                    },
+                    TypeNode::KFunction {
+                        params: pt,
+                        ret: rt,
+                    },
+                ) => {
+                    // Contravariant params, covariant return — the dual of the `slot_satisfied_by` case.
+                    pd.keys().all(|k| pt.get(k.symbol()).is_some())
+                        && pd.iter().all(|(name, dp)| {
+                            pt.get(name.symbol()).is_some_and(|tp| {
+                                slot_satisfied_by(*dp, *tp, members, sig_id, registries)
+                            })
+                        })
+                        && slot_more_specific_or_equal(*rd, *rt, members, sig_id, registries)
+                }
+                _ => false,
+            }
+        })
+    })
 }
 
 /// Verdict of `substitute_sig_members(declared, ...) == other` — structural equality with `sub`'s
@@ -1236,69 +1260,71 @@ fn slot_types_equal(
     if !references_sig_member(declared, sig_id, members, types) {
         return declared == other;
     }
-    match (types.node(declared), types.node(other)) {
-        // Materialize at a nested signature: a `Signature` handle is content-addressed, so handle
-        // equality against the substituted type *is* the structural comparison.
-        (TypeNode::Signature { .. }, _) => {
-            substitute_sig_members(declared, sig_id, members, types) == other
-        }
-        (TypeNode::List { element: ed }, TypeNode::List { element: eo }) => {
-            slot_types_equal(ed, eo, members, sig_id, types)
-        }
-        (TypeNode::Dict { key: kd, value: vd }, TypeNode::Dict { key: ko, value: vo }) => {
-            slot_types_equal(kd, ko, members, sig_id, types)
-                && slot_types_equal(vd, vo, members, sig_id, types)
-        }
-        (TypeNode::Record { fields: fd }, TypeNode::Record { fields: fo }) => {
-            fd.len() == fo.len()
-                && fd.iter().all(|(name, dt)| {
-                    fo.get(name.symbol())
-                        .is_some_and(|ot| slot_types_equal(*dt, *ot, members, sig_id, types))
-                })
-        }
-        (
-            TypeNode::ConstructorApply {
-                constructor: cd,
-                arguments: ad,
-            },
-            TypeNode::ConstructorApply {
-                constructor: co,
-                arguments: ao,
-            },
-        ) => {
-            ad.len() == ao.len()
-                && slot_types_equal(cd, co, members, sig_id, types)
-                && ad.iter().all(|(name, d)| {
-                    ao.get(name.symbol())
-                        .is_some_and(|o| slot_types_equal(*d, *o, members, sig_id, types))
-                })
-        }
-        (
-            TypeNode::KFunction {
-                params: pd,
-                ret: rd,
-            },
-            TypeNode::KFunction {
-                params: po,
-                ret: ro,
-            },
-        ) => {
-            pd.len() == po.len()
-                && pd.iter().all(|(name, dt)| {
-                    po.get(name.symbol())
-                        .is_some_and(|ot| slot_types_equal(*dt, *ot, members, sig_id, types))
-                })
-                && slot_types_equal(rd, ro, members, sig_id, types)
-        }
-        (TypeNode::Union { members: ud }, TypeNode::Union { members: uo }) => {
-            ud.len() == uo.len()
-                && ud.iter().all(|dm| {
-                    uo.iter()
-                        .any(|om| slot_types_equal(*dm, *om, members, sig_id, types))
-                })
-        }
-        _ => false,
-    }
+    types.with_node(declared, |dn| {
+        types.with_node(other, |on| match (dn, on) {
+            // Materialize at a nested signature: a `Signature` handle is content-addressed, so handle
+            // equality against the substituted type *is* the structural comparison.
+            (TypeNode::Signature { .. }, _) => {
+                substitute_sig_members(declared, sig_id, members, types) == other
+            }
+            (TypeNode::List { element: ed }, TypeNode::List { element: eo }) => {
+                slot_types_equal(*ed, *eo, members, sig_id, types)
+            }
+            (TypeNode::Dict { key: kd, value: vd }, TypeNode::Dict { key: ko, value: vo }) => {
+                slot_types_equal(*kd, *ko, members, sig_id, types)
+                    && slot_types_equal(*vd, *vo, members, sig_id, types)
+            }
+            (TypeNode::Record { fields: fd }, TypeNode::Record { fields: fo }) => {
+                fd.len() == fo.len()
+                    && fd.iter().all(|(name, dt)| {
+                        fo.get(name.symbol())
+                            .is_some_and(|ot| slot_types_equal(*dt, *ot, members, sig_id, types))
+                    })
+            }
+            (
+                TypeNode::ConstructorApply {
+                    constructor: cd,
+                    arguments: ad,
+                },
+                TypeNode::ConstructorApply {
+                    constructor: co,
+                    arguments: ao,
+                },
+            ) => {
+                ad.len() == ao.len()
+                    && slot_types_equal(*cd, *co, members, sig_id, types)
+                    && ad.iter().all(|(name, d)| {
+                        ao.get(name.symbol())
+                            .is_some_and(|o| slot_types_equal(*d, *o, members, sig_id, types))
+                    })
+            }
+            (
+                TypeNode::KFunction {
+                    params: pd,
+                    ret: rd,
+                },
+                TypeNode::KFunction {
+                    params: po,
+                    ret: ro,
+                },
+            ) => {
+                pd.len() == po.len()
+                    && pd.iter().all(|(name, dt)| {
+                        po.get(name.symbol())
+                            .is_some_and(|ot| slot_types_equal(*dt, *ot, members, sig_id, types))
+                    })
+                    && slot_types_equal(*rd, *ro, members, sig_id, types)
+            }
+            (TypeNode::Union { members: ud }, TypeNode::Union { members: uo }) => {
+                ud.len() == uo.len()
+                    && ud.iter().all(|dm| {
+                        uo.iter()
+                            .any(|om| slot_types_equal(*dm, *om, members, sig_id, types))
+                    })
+            }
+            _ => false,
+        })
+    })
 }
 
 /// Classify a SIG type-table entry by its *representation*: an abstract member carries no
@@ -1307,7 +1333,7 @@ fn slot_types_equal(
 /// Everything else — a manifest `LET Tag = Number` binding a concrete type, a minted constructor
 /// family — is manifest.
 pub(crate) fn is_abstract_sig_member(kt: KType, types: &TypeRegistry) -> bool {
-    matches!(types.node(kt), TypeNode::AbstractType { .. })
+    types.with_node(kt, |node| matches!(node, TypeNode::AbstractType { .. }))
 }
 
 #[cfg(test)]

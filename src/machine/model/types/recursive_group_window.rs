@@ -612,15 +612,15 @@ pub fn seal_group(
 /// inside; a sealed member handle is a leaf, so a cyclic edge into already-sealed content
 /// terminates here rather than descending forever.
 fn rewrite_siblings(types: &TypeRegistry, kt: KType, resolve: &impl Fn(usize) -> KType) -> KType {
-    match types.node(kt) {
-        TypeNode::Sibling(index) => resolve(index),
+    types.with_node(kt, |node| match node {
+        TypeNode::Sibling(index) => resolve(*index),
         TypeNode::List { element } => {
-            let element = rewrite_siblings(types, element, resolve);
+            let element = rewrite_siblings(types, *element, resolve);
             types.list(element)
         }
         TypeNode::Dict { key, value } => {
-            let key = rewrite_siblings(types, key, resolve);
-            let value = rewrite_siblings(types, value, resolve);
+            let key = rewrite_siblings(types, *key, resolve);
+            let value = rewrite_siblings(types, *value, resolve);
             types.dict(key, value)
         }
         TypeNode::Record { fields } => {
@@ -629,14 +629,14 @@ fn rewrite_siblings(types: &TypeRegistry, kt: KType, resolve: &impl Fn(usize) ->
         }
         TypeNode::KFunction { params, ret } => {
             let params = params.map(|t| rewrite_siblings(types, *t, resolve));
-            let ret = rewrite_siblings(types, ret, resolve);
+            let ret = rewrite_siblings(types, *ret, resolve);
             types.function_type(params, ret)
         }
         TypeNode::ConstructorApply {
             constructor,
             arguments,
         } => {
-            let constructor = rewrite_siblings(types, constructor, resolve);
+            let constructor = rewrite_siblings(types, *constructor, resolve);
             let arguments = arguments.map(|t| rewrite_siblings(types, *t, resolve));
             types.constructor_apply(constructor, arguments)
         }
@@ -646,24 +646,24 @@ fn rewrite_siblings(types: &TypeRegistry, kt: KType, resolve: &impl Fn(usize) ->
         // members are already flat.
         TypeNode::Union { members } => {
             let members: Vec<KType> = members
-                .into_iter()
-                .map(|m| rewrite_siblings(types, m, resolve))
+                .iter()
+                .map(|m| rewrite_siblings(types, *m, resolve))
                 .collect();
             types.intern_union_flat(&members)
         }
         // Leaves and already-absolute handles pass through.
         _ => kt,
-    }
+    })
 }
 
 /// Collect every sibling index `kt` references, at any depth. Mirrors [`rewrite_siblings`]'s walk.
 fn collect_siblings(types: &TypeRegistry, kt: KType, out: &mut Vec<usize>) {
-    match types.node(kt) {
-        TypeNode::Sibling(index) => out.push(index),
-        TypeNode::List { element } => collect_siblings(types, element, out),
+    types.with_node(kt, |node| match node {
+        TypeNode::Sibling(index) => out.push(*index),
+        TypeNode::List { element } => collect_siblings(types, *element, out),
         TypeNode::Dict { key, value } => {
-            collect_siblings(types, key, out);
-            collect_siblings(types, value, out);
+            collect_siblings(types, *key, out);
+            collect_siblings(types, *value, out);
         }
         TypeNode::Record { fields } => {
             for t in fields.values() {
@@ -674,24 +674,24 @@ fn collect_siblings(types: &TypeRegistry, kt: KType, out: &mut Vec<usize>) {
             for t in params.values() {
                 collect_siblings(types, *t, out);
             }
-            collect_siblings(types, ret, out);
+            collect_siblings(types, *ret, out);
         }
         TypeNode::ConstructorApply {
             constructor,
             arguments,
         } => {
-            collect_siblings(types, constructor, out);
+            collect_siblings(types, *constructor, out);
             for t in arguments.values() {
                 collect_siblings(types, *t, out);
             }
         }
         TypeNode::Union { members } => {
             for m in members {
-                collect_siblings(types, m, out);
+                collect_siblings(types, *m, out);
             }
         }
         _ => {}
-    }
+    })
 }
 
 /// Tarjan's strongly-connected components over `edges` (`edges[i]` = the members `i` references).
