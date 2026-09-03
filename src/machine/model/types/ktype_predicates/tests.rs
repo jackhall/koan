@@ -108,6 +108,50 @@ fn a_never_slot_admits_nothing() {
     ));
 }
 
+/// The two ascription-boundary predicates carry no `Never` arm of their own — they refuse it
+/// through their wildcards, which holds only because *no value reports `Never`* as its own type
+/// and `Never` is neither a signature handle nor the `OfKind(ProperType)` marker a type carrier
+/// fills. Both are invariants of the bottom rather than of these two functions, so pin them here.
+#[test]
+fn a_never_slot_matches_no_value_and_no_type() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    container_door!(_storage, door);
+    let values = [
+        KObject::Number(1.0),
+        KObject::KString("x"),
+        KObject::Bool(true),
+        KObject::Null,
+        KObject::list(door, vec![KObject::Number(1.0)], types),
+        KObject::list(door, vec![], types),
+    ];
+    for value in &values {
+        assert!(
+            !KType::NEVER.matches_value(value, &registries),
+            "no value inhabits the bottom, `{}` included",
+            value.summarize(&registries),
+        );
+        assert_ne!(
+            value.ktype(),
+            KType::NEVER,
+            "no value reports `Never` as its own type",
+        );
+    }
+    for candidate in [
+        KType::ANY,
+        KType::NUMBER,
+        KType::EMPTY_SIGNATURE,
+        KType::NEVER,
+        types.list(KType::NEVER),
+        newtype_member("Wrapper", KType::NUMBER, types),
+    ] {
+        assert!(
+            !KType::NEVER.matches_type(candidate, types),
+            "a `:Never` slot admits no first-class type value either"
+        );
+    }
+}
+
 /// Dispatch treats two structurally identical nominal declarations interchangeably — the
 /// content-digest identity a `NEWTYPE` elaborated twice (an FN body called twice) yields. Two
 /// independently sealed same-content newtype members intern to the same handle, so a value of one
