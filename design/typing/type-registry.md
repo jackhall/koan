@@ -186,11 +186,11 @@ the type-system surface entirely.
 
 The registry keeps content and verdicts in two independent `RefCell`s, and the node
 table has **one read door**: `TypeRegistry::with_node(handle, |node| …)` on
-[`registry.rs`](../../src/machine/model/types/registry.rs), which holds the table borrow
-across the reading closure and hands the node **by reference**. A shape question — which
+[`registry.rs`](../../src/machine/model/types/registry.rs), which hands the node **by
+reference** for the reading closure's duration. A shape question — which
 variant, which child handles, which field types — is therefore answered without copying
 the node, which is what keeps a dispatch that matches nothing from allocating per
-candidate. The other doors are written over it or over the same borrow:
+candidate. The other doors are written over it:
 
 - **The owning door.** `node(handle)` is `with_node(handle, TypeNode::clone)`, for a
   caller that needs the node to outlive the read. A node is shallow — scalar payload plus
@@ -203,20 +203,28 @@ candidate. The other doors are written over it or over the same borrow:
 
 Two properties bound what a reader may do. **No reference into the table can escape**, and
 that is compile-enforced: the closure's result type is fixed at the call site and the
-node's lifetime is the call's, so a reader is confined to data it derives. **A reader must
-not intern**, and that is a discipline rather than a type: `intern` is the only site that
-takes the table mutably, and it names the rule in the diagnostic its `try_borrow_mut`
-raises, so a violation is a panic at the interning site rather than silent corruption. The
-predicate family the door exists for keeps the rule structurally — the specificity walk,
-the value and carried classifiers, and signature satisfaction compare types structurally
-and build no substituted type (`slot_satisfied_by` in
-[`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs) is the substituting
-comparison that deliberately materializes nothing), and the interning walk
-`substitute_sig_members` is reached only from the ascription and functor lanes, which hold
-no read.
+node's lifetime is the call's, so a reader is confined to data it derives. **A reader may
+intern**, and that is a property of the storage rather than a discipline the callers keep:
+the node table is a persistent HAMT, so the read door clones it — a root-pointer bump, `O(1)`
+— and releases the `RefCell` borrow before the reading closure runs. `intern` takes the live
+table mutably against no outstanding borrow; the snapshot in the reader's hand does not
+share the insert, and a handle minted mid-read resolves through the fresh snapshot its own
+`with_node` takes. The consequence that matters is that a walk which *rewrites* types as it
+recurses runs at any depth under a read: signature satisfaction meets a nested signature in a
+slot type and materializes the substituted schema right there
+([modules.md § VAL-slot reads carry the abstract member identity](modules.md#val-slot-reads-carry-the-abstract-member-identity)),
+under the `with_node` its own entry point is holding.
 
-Reads nest freely, since the borrow is shared: the specificity walk reads both sides at
-once and recurses under both. Recording a verdict under a read is likewise fine — verdicts
+The predicate family the door exists for still avoids materializing where it can, for cost
+rather than for legality: the specificity walk, the value and carried classifiers, and
+signature satisfaction compare types structurally and build no substituted type
+(`slot_satisfied_by` in
+[`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs) is the substituting comparison
+that materializes only at a nested signature, where the relation between two signatures is
+the schema recursion itself).
+
+Reads nest freely, since each takes its own snapshot: the specificity walk reads both sides
+at once and recurses under both. Recording a verdict under a read is likewise fine — verdicts
 live in their own cell — so a memoizing predicate writes its answer without touching the
 read it is running under.
 
@@ -230,7 +238,7 @@ across threads by content, so two registries never need reconciling to agree on
 identity. Moving a value between threads means its types' content must land in the
 receiving frame's registry. Two candidate mechanisms: copy the value's type nodes
 plus everything reachable through their composition edges, skipping any digest the
-receiver already holds; or, if node storage is a persistent (immutable) map, merge
+receiver already holds; or, since node storage is a persistent (immutable) map, merge
 the two maps outright, sharing structure instead of copying. Under either mechanism
 the handles themselves need no translation — a digest is the same value in both
 registries.

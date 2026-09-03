@@ -63,18 +63,8 @@ Holes with no map row, because the map's over-pin / under-pin axis does not
 describe them. Same promotion rule as a row: write the item first, then link it
 from here.
 
-**A type-registry read must not intern, and only a panic says so.**
-[`TypeRegistry::with_node`](../../src/machine/model/types/registry.rs) hands a
-reader the node by reference under the `nodes` borrow. Half the confinement is
-compile-enforced — the reader's result type is fixed at the call site and the
-node's lifetime is the call's, so no reference into the table escapes the
-borrow. The other half is not: a reader that reaches
-[`TypeRegistry::intern`](../../src/machine/model/types/registry.rs) takes a
-second, mutable borrow of the same cell, and what reports it is the `expect` on
-that door's `try_borrow_mut`. Every reader on the shipped predicate paths is
-clear of it — `sig_subtype` compares structurally rather than building a
-substituted type, and `substitute_sig_members` is reached only from the
-ascription and functor lanes — but that is an audit of today's call graph, not a
-property of the door. A signature that made an intern under a read a type error
-would close it; a read token the interning verbs cannot be called under is the
-shape to try first.
+None open. The type registry's read door is clear by construction rather than by
+audit: node storage is a persistent map, so
+[`TypeRegistry::with_node`](../../src/machine/model/types/registry.rs) releases
+the cell before the reading closure runs and there is no borrow for an intern to
+collide with ([type-registry.md § Reading a node](../../design/typing/type-registry.md#reading-a-node)).

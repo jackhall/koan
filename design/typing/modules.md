@@ -196,7 +196,9 @@ separate substitutions is therefore not stable. Its arms mirror
 - a `KFunction` position takes the **eta-wrapper** below rather than recursing into
   the value — a callable crosses the barrier per call, at its own boundary;
 - a `Union` picks the declared member whose source-side substitution the value
-  inhabits, and coerces by that member alone.
+  inhabits, and coerces by that member alone;
+- a nested `Signature` position takes the **module boundary** below — the member is a
+  module, and it is rebuilt as a view of itself.
 
 A member the signature does not name has no declared slot type to coerce against, so
 width subtyping surfaces it exactly as the source bound it. Transparent `:!` binds
@@ -223,6 +225,44 @@ same single re-anchor an ordinary declared-return re-stamp takes). The wrapper i
 born at the underlying's **own captured scope**, so both callables live in one
 region: a callable's residence *is* its captured scope's region, the invariant every
 callable read depends on.
+
+**The module boundary.** A slot type may name another signature — `VAL subs :(LIST OF
+(Inner WITH {Item = Elt}))` says "a list of `Inner`s over *my* element type". The member
+filling such a slot is itself a module, and it is rebuilt as an opaque view **of itself**
+through the same [`Scope::alloc_module_view`](../../src/machine/core/scope/registry.rs)
+door the outer view took, carrying the outer coercion plan
+([`coerce_module`](../../src/machine/model/values/coerce.rs)). Its type members are the
+source module's, with every member the nested signature fixes overridden by the outer
+view's substitution, and its value slots are born coerced by the replay — so the nested
+member reports the outer view's `Elt` mint rather than the source's representation, on the
+same terms every other slot shape does, and width rides through unchanged. Nothing is
+minted at the nested boundary: a nested view's abstract identities *are* the outer view's
+mints, arriving through the substitution. The view is born at the source module's own child
+scope, so it lives in the source's region exactly as a function wrapper lives in its
+underlying's, and the enclosing coercion's pin keeps that region for the product's life. The
+nested view's self-sig is the plain `raw_self_sig` derivation, because a scope born holding
+coerced values already reports the view's identities off each member. Nesting composes: a
+nested view's own replay re-enters the walk, so a signature inside a signature inside a
+container coerces at every depth.
+
+**Substitution recurses through a nested signature.** The three schema walks in
+[`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs) — `substitute_sig_members`,
+`references_sig_member` and `canonicalize_binder` — descend into a nested `Signature`'s own
+manifest members and value slots like any other compound, so a reference to the enclosing
+signature's `Elt` inside one is rewritten, is reported by the fast-path probe, and is
+re-sourced to `ScopeId::SENTINEL` at projection (which is what makes two textually identical
+declarations carrying a nested signature intern to one type). **Shadowing is by name**: every
+projected SIG canonicalizes its own binders to `ScopeId::SENTINEL`, so `source` cannot tell an
+inner binder from an outer one, and a nested schema's own abstract-member names are subtracted
+from the substitution before the descent. A nested binder is therefore inexpressible from the
+enclosing signature and untouched by the outer view's plan — the nested member keeps its own
+binding for that name. The digest walk
+([`type_digest.rs`](../../src/machine/model/types/type_digest.rs)) deliberately stops at a
+nested `Signature` instead: the nested handle inside a projected schema is already canonical,
+so its own digest is exact, and collapsing the name leaves inside it would conflate an inner
+binder with an outer reference of the same name. A signature is not admissible in a `VAL`
+slot directly — `VAL`'s type slot is `KKind::ProperType` — so a module-typed member is
+reachable only nested inside a container.
 
 **Satisfaction and `WITH`.** Satisfaction is a **signature-subtyping** check
 ([`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)). Every module carries a

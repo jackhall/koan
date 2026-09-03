@@ -742,11 +742,13 @@ party's death schedule reaches into another's subtree.
   the declaring region with no members — so both structural claims are checked as facts a
   composition produced rather than as prose.
 - [`functor_application_mints_distinct_abstract_types`](../src/builtins/ascribe/tests/functor.rs),
-  [`a_returned_opaque_view_keeps_every_coerced_member_alive`](../src/builtins/ascribe/tests/views.rs)
+  [`a_returned_opaque_view_keeps_every_coerced_member_alive`](../src/builtins/ascribe/tests/views.rs),
+  [`a_returned_view_keeps_its_nested_member_alive`](../src/builtins/ascribe/tests/nested.rs)
   and [`a_returned_transparent_view_keeps_the_region_it_was_minted_in`](../src/builtins/ascribe/tests/ascription.rs)
   are the escaping-module half of the slate: an opaque view's path, member map and coerced member
-  values — a re-tag sharing the source's payload substrate, a rebuilt list, and a coercion wrapper
-  born in the source module's region — are read back after the call region that bumped them is
+  values — a re-tag sharing the source's payload substrate, a rebuilt list, a coercion wrapper
+  born in the source module's region, and a nested-signature member rebuilt there as a whole
+  scope and module of its own — are read back after the call region that bumped them is
   gone, and a transparent view — the one shape whose
   residence and the scope it borrows are different regions — is read back after its minting frame
   dies. A release claim derived from the borrowed child scope would free the storage those reads
