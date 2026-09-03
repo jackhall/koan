@@ -35,6 +35,7 @@ fn constants_match_freshly_interned_nodes() {
         ),
         ("RecordType", KType::RECORD_TYPE, TypeNode::RecordType),
         ("Any", KType::ANY, TypeNode::Any),
+        ("Never", KType::NEVER, TypeNode::Never),
     ];
     for (label, constant, node) in leaves {
         assert_eq!(types.intern(node), constant, "{label}");

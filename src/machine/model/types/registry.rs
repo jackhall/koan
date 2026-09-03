@@ -137,6 +137,7 @@ impl TypeRegistry {
             TypeNode::SigiledTypeExpr,
             TypeNode::RecordType,
             TypeNode::Any,
+            TypeNode::Never,
         ] {
             self.intern(leaf);
         }
@@ -292,14 +293,15 @@ impl TypeRegistry {
     }
 
     /// Canonicalizing constructor for a union — the single entry point that builds one. Flattens
-    /// any nested union member into its members, deduplicates by handle, and collapses a single
-    /// surviving member to that member (`:(A | A)` is `:A`). Callers guarantee at least one
-    /// member.
+    /// any nested union member into its members, drops `Never` (the identity element: it admits
+    /// nothing, so it widens nothing — `:(Never | Number)` is `:Number`), deduplicates by handle,
+    /// and collapses a single surviving member to that member (`:(A | A)` is `:A`). A union of
+    /// nothing but `Never` is `Never`. Callers guarantee at least one member.
     pub fn union_of(&self, members: &[KType]) -> KType {
         debug_assert!(!members.is_empty(), "union_of requires at least one member");
         let mut flat: MemberList = MemberList::with_capacity(members.len());
         let push_unique = |handle: KType, flat: &mut MemberList| {
-            if !flat.contains(&handle) {
+            if handle != KType::NEVER && !flat.contains(&handle) {
                 flat.push(handle);
             }
         };
@@ -314,6 +316,9 @@ impl TypeRegistry {
                 }
                 _ => push_unique(*member, &mut flat),
             });
+        }
+        if flat.is_empty() {
+            return KType::NEVER;
         }
         if flat.len() == 1 {
             return flat[0];
@@ -380,8 +385,20 @@ impl TypeRegistry {
 
     /// Least-upper-bound of two types. `[1, 2]` → `List<Number>`, `[1, "x"]` → `List<Any>`;
     /// nested containers join element-wise.
+    ///
+    /// `Never` is the identity — joining the bottom with anything is that thing, which is what
+    /// makes an empty container's element type absorb the first element it is joined against.
+    /// A function joins its **parameters by [`meet`](Self::meet)**: parameters are
+    /// contravariant, so only their greatest lower bound is admitted by both operands, and
+    /// joining them instead would produce a type neither operand fills.
     pub fn join(&self, a: KType, b: KType) -> KType {
         if a == b {
+            return a;
+        }
+        if a == KType::NEVER {
+            return b;
+        }
+        if b == KType::NEVER {
             return a;
         }
         match (self.node(a), self.node(b)) {
@@ -412,7 +429,7 @@ impl TypeRegistry {
                     ret: yr,
                     ..
                 },
-            ) => match self.join_param_record(&xp, &yp) {
+            ) => match self.param_record_pointwise(&xp, &yp, |s, x, y| s.meet(x, y)) {
                 Some(params) => {
                     let ret = self.join(xr, yr);
                     self.function_type(params, ret)
@@ -423,6 +440,86 @@ impl TypeRegistry {
         }
     }
 
+    /// Greatest-lower-bound of two types — the dual of [`join`](Self::join), and total: a pair
+    /// with no common refinement meets at `Never`, which is always a sound lower bound.
+    ///
+    /// `join` calls this for function parameters, and this calls `join` for a function's own
+    /// parameters and for a union's distribution; the mutual recursion descends the two operands
+    /// together and terminates with them.
+    pub fn meet(&self, a: KType, b: KType) -> KType {
+        if a == b {
+            return a;
+        }
+        if a == KType::ANY {
+            return b;
+        }
+        if b == KType::ANY {
+            return a;
+        }
+        if a == KType::NEVER || b == KType::NEVER {
+            return KType::NEVER;
+        }
+        match (self.node(a), self.node(b)) {
+            // A union meets by distribution: a value in both operands is in some member of the
+            // union and in the other side, so the meet is the union of the per-member meets.
+            // Members that meet at `Never` contribute nothing, and `union_of` drops them.
+            (TypeNode::Union { members }, _) => {
+                let met: Vec<KType> = members.iter().map(|m| self.meet(*m, b)).collect();
+                self.union_of(&met)
+            }
+            (_, TypeNode::Union { members }) => {
+                let met: Vec<KType> = members.iter().map(|m| self.meet(a, *m)).collect();
+                self.union_of(&met)
+            }
+            (TypeNode::List { element: x }, TypeNode::List { element: y }) => {
+                let element = self.meet(x, y);
+                self.list(element)
+            }
+            (TypeNode::Dict { key: xk, value: xv }, TypeNode::Dict { key: yk, value: yv }) => {
+                let key = self.meet(xk, yk);
+                let value = self.meet(xv, yv);
+                self.dict(key, value)
+            }
+            // Record values are width-superset subtypes, so the greatest lower bound keeps every
+            // field of either operand — shared names meeting pointwise.
+            (TypeNode::Record { fields: xf }, TypeNode::Record { fields: yf }) => {
+                let mut merged: Record<KType> = xf
+                    .iter()
+                    .map(|(name, x)| match yf.get(name.symbol()) {
+                        Some(y) => (name, self.meet(*x, *y)),
+                        None => (name, *x),
+                    })
+                    .collect();
+                for (name, y) in yf.iter() {
+                    if xf.get(name.symbol()).is_none() {
+                        merged.insert(name, *y);
+                    }
+                }
+                self.record(merged)
+            }
+            // Dual of the join arm: parameters are contravariant, so they join here, and the
+            // return meets. Differing key sets have no common function shape below them.
+            (
+                TypeNode::KFunction {
+                    params: xp,
+                    ret: xr,
+                },
+                TypeNode::KFunction {
+                    params: yp,
+                    ret: yr,
+                },
+            ) => match self.param_record_pointwise(&xp, &yp, |s, x, y| s.join(x, y)) {
+                Some(params) => {
+                    let ret = self.meet(xr, yr);
+                    self.function_type(params, ret)
+                }
+                None => KType::NEVER,
+            },
+            // No structural rule relates the two shapes, so nothing inhabits both.
+            _ => KType::NEVER,
+        }
+    }
+
     /// Reduce an iterator of types to their least upper bound. Empty iterator → `Any`.
     pub fn join_iter<I: IntoIterator<Item = KType>>(&self, iter: I) -> KType {
         iter.into_iter()
@@ -430,18 +527,24 @@ impl TypeRegistry {
             .unwrap_or_else(|| self.intern(TypeNode::Any))
     }
 
-    /// Name-keyed join of two parameter records. `Some(joined)` when the records have equal
-    /// length and the same key set; `None` on differing key sets, which [`Self::join`] coarsens
-    /// to `Any`.
-    fn join_param_record(&self, a: &Record<KType>, b: &Record<KType>) -> Option<Record<KType>> {
+    /// Name-keyed pointwise combination of two parameter records under `combine`. `Some(built)`
+    /// when the records have equal length and the same key set; `None` on differing key sets,
+    /// which the caller coarsens to its own bound. [`join`](Self::join) passes `meet` here and
+    /// [`meet`](Self::meet) passes `join` — the contravariance of the parameter position.
+    fn param_record_pointwise(
+        &self,
+        a: &Record<KType>,
+        b: &Record<KType>,
+        combine: impl Fn(&Self, KType, KType) -> KType,
+    ) -> Option<Record<KType>> {
         if a.len() != b.len() || !a.keys().all(|k| b.get(k.symbol()).is_some()) {
             return None;
         }
-        // The joined record keeps the left operand's classified keys; both sides agree on the
+        // The built record keeps the left operand's classified keys; both sides agree on the
         // symbol bits, which is what identity reads.
         Some(
             a.iter()
-                .map(|(name, x)| (name, self.join(*x, *b.get(name.symbol()).unwrap())))
+                .map(|(name, x)| (name, combine(self, *x, *b.get(name.symbol()).unwrap())))
                 .collect(),
         )
     }

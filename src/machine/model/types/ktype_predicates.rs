@@ -314,6 +314,15 @@ impl KType {
         if other == KType::ANY && self != KType::ANY {
             return true;
         }
+        // The bottom guard, dual to the top guard above: `Never` refines everything and nothing
+        // but `Never` refines it. Both directions answer before any structural arm, so no other
+        // rule ever sees the bottom.
+        if self == KType::NEVER {
+            return other != KType::NEVER;
+        }
+        if other == KType::NEVER {
+            return false;
+        }
         // An `Identifier` slot claims the token itself; a `Str` slot claims the token's resolved
         // value. When one bucket offers both readings of the same bare token, the token reading
         // wins: a name binds bare wherever an `Identifier` slot admits it, and a string binding
@@ -631,6 +640,8 @@ impl KType {
         let types = &registries.types;
         types.with_node(self, |node| match node {
             TypeNode::Any => true,
+            // Uninhabited: a `:Never` slot admits nothing at all.
+            TypeNode::Never => false,
             TypeNode::Number => matches!(c, Carried::Object(KObject::Number(_))),
             TypeNode::Str => matches!(c, Carried::Object(KObject::KString(_))),
             TypeNode::Bool => matches!(c, Carried::Object(KObject::Bool(_))),
@@ -835,6 +846,7 @@ impl KType {
     pub fn accepts_part(self, part: &ExpressionPart<'_>, types: &TypeRegistry) -> bool {
         types.with_node(self, |node| match node {
             TypeNode::Any => true,
+            TypeNode::Never => false,
             TypeNode::Number => matches!(part, ExpressionPart::Literal(KLiteral::Number(_))),
             TypeNode::Str => matches!(part, ExpressionPart::Literal(KLiteral::String(_))),
             TypeNode::Bool => matches!(part, ExpressionPart::Literal(KLiteral::Boolean(_))),

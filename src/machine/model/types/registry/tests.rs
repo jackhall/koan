@@ -154,6 +154,7 @@ fn the_constant_nodes_are_pre_seeded() {
         TypeNode::SigiledTypeExpr,
         TypeNode::RecordType,
         TypeNode::Any,
+        TypeNode::Never,
         TypeNode::OfKind(KKind::ProperType),
         TypeNode::OfKind(KKind::Signature),
         TypeNode::OfKind(KKind::AnyType),
@@ -226,6 +227,19 @@ fn union_of_collapses_to_a_lone_member() {
     assert_eq!(registry.union_of(&[number, number]), number);
 }
 
+/// `Never` is the union's identity element — it admits nothing, so it widens nothing.
+#[test]
+fn union_of_drops_never_members() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    assert_eq!(registry.union_of(&[KType::NEVER, number]), number);
+    assert_eq!(
+        registry.union_of(&[KType::NEVER, KType::NEVER]),
+        KType::NEVER,
+        "nothing survives, so the union is the bottom itself"
+    );
+}
+
 // --- Join ---
 
 #[test]
@@ -264,5 +278,150 @@ fn join_iter_over_nothing_is_any() {
     assert_eq!(
         registry.join_iter(Vec::new()),
         registry.intern(TypeNode::Any)
+    );
+}
+
+/// A function type over the named parameters, for the variance tests below.
+fn function(registry: &TypeRegistry, params: Vec<(&str, KType)>, ret: KType) -> KType {
+    registry.function_type(
+        Record::from_pairs(
+            params
+                .into_iter()
+                .map(|(name, t)| (crate::builtins::test_support::binder_token(name), t)),
+        ),
+        ret,
+    )
+}
+
+/// `Never` is the join's identity element, in both operand positions.
+#[test]
+fn join_with_never_is_the_other_operand() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    assert_eq!(registry.join(KType::NEVER, number), number);
+    assert_eq!(registry.join(number, KType::NEVER), number);
+    assert_eq!(registry.join(KType::NEVER, KType::NEVER), KType::NEVER);
+}
+
+/// The parameter position is contravariant, so a same-shape function join meets its parameters:
+/// only a value both operands admit is admitted by the bound, and no value is both a `Number` and
+/// a `Str`.
+#[test]
+fn join_of_functions_meets_their_parameters() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    let string = registry.intern(TypeNode::Str);
+    let boolean = registry.intern(TypeNode::Bool);
+    assert_eq!(
+        registry.join(
+            function(&registry, vec![("x", number)], boolean),
+            function(&registry, vec![("x", string)], boolean),
+        ),
+        function(&registry, vec![("x", KType::NEVER)], boolean),
+    );
+}
+
+// --- Meet ---
+
+#[test]
+fn meet_identities_hold() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    let any = registry.intern(TypeNode::Any);
+    assert_eq!(registry.meet(number, number), number);
+    assert_eq!(registry.meet(any, number), number);
+    assert_eq!(registry.meet(number, any), number);
+    assert_eq!(registry.meet(KType::NEVER, number), KType::NEVER);
+    assert_eq!(registry.meet(number, KType::NEVER), KType::NEVER);
+}
+
+/// Nothing inhabits two unrelated leaves, so they meet at the bottom.
+#[test]
+fn meet_of_unrelated_types_is_never() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    let string = registry.intern(TypeNode::Str);
+    assert_eq!(registry.meet(number, string), KType::NEVER);
+}
+
+#[test]
+fn meet_of_containers_is_pointwise() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    let any = registry.intern(TypeNode::Any);
+    assert_eq!(
+        registry.meet(registry.list(any), registry.list(number)),
+        registry.list(number)
+    );
+    assert_eq!(
+        registry.meet(registry.dict(any, any), registry.dict(number, any)),
+        registry.dict(number, any)
+    );
+}
+
+/// Record values are width-superset subtypes, so their greatest lower bound keeps every field of
+/// either operand and meets the shared ones.
+#[test]
+fn meet_of_records_unions_their_fields() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    let any = registry.intern(TypeNode::Any);
+    let field = |name: &str, t: KType| (crate::builtins::test_support::binder_token(name), t);
+    let met = registry.meet(
+        registry.record(Record::from_pairs(vec![
+            field("x", any),
+            field("y", number),
+        ])),
+        registry.record(Record::from_pairs(vec![
+            field("x", number),
+            field("z", number),
+        ])),
+    );
+    match registry.node(met) {
+        TypeNode::Record { fields } => {
+            assert_eq!(fields.len(), 3);
+            assert_eq!(
+                fields.get(crate::builtins::test_support::binder_token("x").symbol()),
+                Some(&number)
+            );
+        }
+        _ => panic!("two records meet at a record"),
+    }
+}
+
+/// A union distributes over the meet, and members that meet at the bottom drop out.
+#[test]
+fn meet_distributes_over_a_union() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    let string = registry.intern(TypeNode::Str);
+    let boolean = registry.intern(TypeNode::Bool);
+    let union = registry.union_of(&[number, string]);
+    assert_eq!(registry.meet(union, number), number);
+    assert_eq!(registry.meet(union, boolean), KType::NEVER);
+}
+
+/// The dual of the join arm: parameters join, the return meets, and a differing key set has no
+/// common function shape below it.
+#[test]
+fn meet_of_functions_joins_their_parameters() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    let string = registry.intern(TypeNode::Str);
+    let boolean = registry.intern(TypeNode::Bool);
+    let any = registry.intern(TypeNode::Any);
+    assert_eq!(
+        registry.meet(
+            function(&registry, vec![("x", number)], boolean),
+            function(&registry, vec![("x", string)], boolean),
+        ),
+        function(&registry, vec![("x", any)], boolean),
+    );
+    assert_eq!(
+        registry.meet(
+            function(&registry, vec![("x", number)], boolean),
+            function(&registry, vec![("y", number)], boolean),
+        ),
+        KType::NEVER,
     );
 }

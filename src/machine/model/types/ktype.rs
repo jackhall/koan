@@ -50,13 +50,14 @@ static SIGILED_TYPE_EXPR_NAME: StaticName<TypeSymbol> =
     crate::static_name!(TypeSymbol, "SigiledTypeExpr");
 static RECORD_TYPE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "RecordType");
 static ANY_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Any");
+static NEVER_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Never");
 /// The empty signature's surface name — the `:Module` lattice top.
 static MODULE_NAME: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Module");
 
 impl KType {
     // --- Fixed handles ---
     //
-    // The eleven leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>` and the empty
+    // The twelve leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>` and the empty
     // signature name content every registry pre-seeds (`TypeRegistry::new`), so their digests are
     // known at compile time and lowering a builtin type name needs no registry in hand. The
     // literals below are the digest recipe's output; `constants_match_freshly_interned_nodes`
@@ -76,6 +77,9 @@ impl KType {
     pub const SIGILED_TYPE_EXPR: KType = KType(TypeDigest(0xf6d652dc_848e0f69_4a152496_ddd88b44));
     pub const RECORD_TYPE: KType = KType(TypeDigest(0x387dfced_dc0a5d96_da3b29a5_dde0f32e));
     pub const ANY: KType = KType(TypeDigest(0xd9f70f99_49f95b5c_44d7ce99_10aa1972));
+    /// The uninhabited bottom of the lattice — more specific than every other type, admitted by
+    /// no value, and the identity element of join and of union canonicalization.
+    pub const NEVER: KType = KType(TypeDigest(0x59dd8c1f_71e395f4_77717ff5_a93c2600));
 
     pub const PROPER_TYPE: KType = KType(TypeDigest(0xe082d96a_231e2f4c_af1e256b_459a681f));
     pub const SIGNATURE_KIND: KType = KType(TypeDigest(0xa74d105b_68705a5a_4c93c325_b2bb4032));
@@ -137,6 +141,7 @@ impl KType {
             TypeNode::SigiledTypeExpr => f.write_str(SIGILED_TYPE_EXPR_NAME.text()),
             TypeNode::RecordType => f.write_str(RECORD_TYPE_NAME.text()),
             TypeNode::Any => f.write_str(ANY_NAME.text()),
+            TypeNode::Never => f.write_str(NEVER_NAME.text()),
             TypeNode::OfKind(kind) => f.write_str(kind.surface_keyword()),
             TypeNode::List { element } => {
                 f.write_str(":(LIST OF ")?;
@@ -283,6 +288,7 @@ impl KType {
             TypeNode::SigiledTypeExpr => fixed(&SIGILED_TYPE_EXPR_NAME),
             TypeNode::RecordType => fixed(&RECORD_TYPE_NAME),
             TypeNode::Any => fixed(&ANY_NAME),
+            TypeNode::Never => fixed(&NEVER_NAME),
             TypeNode::OfKind(kind) => Some(kind.surface_symbol(&registries.labels)),
             TypeNode::AbstractType { name, .. } => Some(*name),
             TypeNode::SetMember { name, .. } => Some(*name),

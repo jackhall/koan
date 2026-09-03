@@ -12,7 +12,7 @@ impl KType {
     /// name here lowers to a fixed handle, so the lookup needs no registry: the content each one
     /// names is pre-seeded into every registry at construction.
     ///
-    /// Eleven symbol compares against the memoized [`builtin_types`] table — no hashing, no
+    /// Twelve symbol compares against the memoized [`builtin_types`] table — no hashing, no
     /// allocation.
     pub fn from_symbol(name: TypeSymbol) -> Option<KType> {
         builtin_types()

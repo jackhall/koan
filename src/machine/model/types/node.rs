@@ -47,6 +47,12 @@ pub enum TypeNode {
     /// owns its elaboration and threads its own binder name.
     RecordType,
     Any,
+    /// The uninhabited bottom of the type lattice: admitted by no value, more specific than every
+    /// other type, and the identity element of both join and union canonicalization. Produced by
+    /// [`TypeRegistry::meet`](super::registry::TypeRegistry::meet) and by the empty container's
+    /// element join; no value's `ktype()` is ever `Never`. Spellable as the builtin name `Never`,
+    /// where it declares a slot nothing fills.
+    Never,
     /// Type-accepting argument slot, carrying the shallow [`KKind`] it admits — and the type a
     /// non-signature type value reports (`OfKind(ProperType)`).
     OfKind(KKind),

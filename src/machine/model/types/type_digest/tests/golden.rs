@@ -208,7 +208,7 @@ fn constructor_apply(types: &TypeRegistry, pairs: Vec<(&str, KType)>) -> KType {
     )
 }
 
-/// The eleven leaf types. Each is a bare domain tag, so these are the most load-bearing pins in
+/// The twelve leaf types. Each is a bare domain tag, so these are the most load-bearing pins in
 /// the file: they are the leaves every composite digest is built from.
 #[test]
 fn leaf_digests_are_pinned() {
@@ -251,6 +251,7 @@ fn leaf_digests_are_pinned() {
         0x387dfced_dc0a5d96_da3b29a5_dde0f32e,
     );
     assert_handle_pinned("Any", KType::ANY, 0xd9f70f99_49f95b5c_44d7ce99_10aa1972);
+    assert_handle_pinned("Never", KType::NEVER, 0x59dd8c1f_71e395f4_77717ff5_a93c2600);
 }
 
 /// The five kind values, each a tag plus its stable `kkind_tag` byte.

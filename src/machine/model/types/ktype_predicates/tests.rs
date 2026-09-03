@@ -58,6 +58,56 @@ fn is_more_specific_concrete_beats_any() {
     assert!(!KType::ANY.is_more_specific_than(KType::NUMBER, &registries));
 }
 
+/// The bottom guard, in both directions and against every shape of type: `Never` refines
+/// everything, and nothing refines `Never`.
+#[test]
+fn never_is_more_specific_than_everything() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let others = [
+        KType::ANY,
+        KType::NUMBER,
+        KType::IDENTIFIER,
+        KType::NAME_TOKEN,
+        KType::of_kind(KKind::ProperType),
+        KType::EMPTY_SIGNATURE,
+        types.list(KType::NUMBER),
+        types.union_of(&[KType::NUMBER, KType::STR]),
+        newtype_member("Wrapper", KType::NUMBER, types),
+    ];
+    for other in others {
+        assert!(
+            KType::NEVER.is_more_specific_than(other, &registries),
+            "Never refines every type"
+        );
+        assert!(
+            !other.is_more_specific_than(KType::NEVER, &registries),
+            "nothing refines the bottom"
+        );
+        assert!(
+            other.satisfied_by(KType::NEVER, &registries),
+            "a bottom-typed carrier fills every slot"
+        );
+    }
+    assert!(!KType::NEVER.is_more_specific_than(KType::NEVER, &registries));
+}
+
+/// A `:Never` slot is legal to write and admits nothing — no value, no part shape.
+#[test]
+fn a_never_slot_admits_nothing() {
+    let registries = RunRegistries::new();
+    assert_eq!(
+        KType::from_symbol(type_name("Never", &registries)),
+        Some(KType::NEVER),
+        "`Never` is a builtin type name"
+    );
+    assert!(!KType::NEVER.accepts_carried(Carried::Object(&KObject::Number(1.0)), &registries));
+    assert!(!KType::NEVER.accepts_part(
+        &ExpressionPart::Literal(KLiteral::Number(1.0)),
+        &registries.types
+    ));
+}
+
 /// Dispatch treats two structurally identical nominal declarations interchangeably — the
 /// content-digest identity a `NEWTYPE` elaborated twice (an FN body called twice) yields. Two
 /// independently sealed same-content newtype members intern to the same handle, so a value of one

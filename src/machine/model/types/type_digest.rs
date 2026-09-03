@@ -77,6 +77,7 @@ const TAG_SIG_CONTENT: u8 = 0x1C;
 const TAG_SIG_SELF_REF: u8 = 0x1D;
 const TAG_NAME_TOKEN: u8 = 0x1E;
 const TAG_TYPE_NAME_TOKEN: u8 = 0x1F;
+const TAG_NEVER: u8 = 0x20;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -167,6 +168,7 @@ pub(crate) fn node_digest(node: &TypeNode) -> TypeDigest {
         TypeNode::SigiledTypeExpr => leaf_digest(TAG_SIGILED_TYPE_EXPR),
         TypeNode::RecordType => leaf_digest(TAG_RECORD_TYPE),
         TypeNode::Any => leaf_digest(TAG_ANY),
+        TypeNode::Never => leaf_digest(TAG_NEVER),
         TypeNode::OfKind(k) => of_kind_digest(*k),
         TypeNode::DeferredReturn(surface) => deferred_return_digest(surface),
         TypeNode::AbstractType {
