@@ -103,6 +103,28 @@ If you annotated `ANNOUNCE` as `-> Null` it would fail the return check. A
 function that genuinely produces nothing returns the `null` literal and is
 annotated `-> Null`. Use `-> Any` to opt out of return checking entirely.
 
+### Return types built from several words
+
+A return type is not always one word. `LIST OF Str`, `MAP Str -> Number` and
+`FN :{x :Number} -> Number` are all types, and after `->` you write them in
+parentheses:
+
+```koan
+FN (WORDS text :Str) -> (LIST OF Str) = ([text])
+PRINT (WORDS "hi")
+```
+
+```text
+[hi]
+```
+
+You will also see these written `-> :(LIST OF Str)`, with a leading `:`. In a
+definition's type positions — a return type, and an operator's `OVER` and `->`
+types — the two spellings mean exactly the same thing, so pick whichever reads
+better. The `:` is only *required* where a type would otherwise be read as
+ordinary code, which is why it shows up in a slot annotation like
+`x :(LIST OF Str)`.
+
 ## Overloading by specificity
 
 Because dispatch matches on slot *type*, several functions can share a keyword
@@ -208,7 +230,8 @@ hi
 `CONSTANTLY` returns a fresh zero-argument function that closes over `value`. Its
 return type, `:(FN :{} -> Str)`, is the type of that function — a function that
 returns a function declares the function type it produces, and the returned
-function is checked against it.
+function is checked against it. As everywhere else after `->`, the sigil is
+optional: `-> (FN :{} -> Str)` declares the same thing.
 
 ### Severing captures with `CLOSE OVER`
 

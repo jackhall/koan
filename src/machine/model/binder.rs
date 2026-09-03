@@ -468,7 +468,8 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         name_slot: Some(1),
         type_slots: &[],
     },
-    // MODULE <name> = <body> (identifier overload; the type-named overload has no hooks).
+    // MODULE <name> = <body> (a module is a value, so the name slot is an `Identifier`; a
+    // Type-token name registers nothing and takes the miss table's respelling diagnostic).
     BinderSpec {
         key: &[Kw(&KEYWORDS.module), Slot, Kw(&KEYWORDS.equals), Slot],
         names: &[identifier_part_binder_name],

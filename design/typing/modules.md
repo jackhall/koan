@@ -367,9 +367,11 @@ Three consequences:
   a reach that still pins the module's region.
 
 A return slot naming a value directly (`-> er`) is an error rather than a silent
-widening: FN carries a value-named-return overload whose only job is to name the
-`:(TYPE OF er)` respelling, and a return-type elaboration miss is surfaced instead of
-falling back to `Any`. All of this is pinned by
+widening: no member of the return slot's carrier union admits a value name, and the
+[dispatch-miss diagnosis table](../../src/machine/model/miss_diagnostics.rs) names the
+`:(TYPE OF er)` respelling on the miss — whether `er` is unbound in the defining scope
+(the parameter case) or bound to a value there. A return-type elaboration miss is surfaced
+instead of falling back to `Any`. All of this is pinned by
 [`module_head_in_type_position`](../../src/builtins/fn_def/tests/functor/module_head_in_type_position.rs)
 and [`type_of/tests.rs`](../../src/builtins/type_ops/type_of/tests.rs).
 

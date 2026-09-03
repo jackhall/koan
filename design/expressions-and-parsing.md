@@ -268,7 +268,13 @@ etc.) are the dispatcher's responsibility: the
 sigil's only job is to flag "this slot evaluates to a type, not a value". The
 framing logic lives in [frame.rs](../src/parse/frame.rs)
 (`Frame::TypeExpr`); the dispatcher's `sigiled_type_expr` handler
-tail-replaces the slot with a `Dispatch` of the wrapped expression. See
+tail-replaces the slot with a `Dispatch` of the wrapped expression.
+
+The same marker is minted without a sigil in one place: as each parts run closes,
+[`admit_bare_type_slots`](../src/machine/model/binder.rs) rewrites a plain `(…)` sitting
+in a binder form's **type slot** to `SigiledTypeExpr`, so `-> (LIST OF Str)` and
+`-> :(LIST OF Str)` are the same part. It runs on the still-unfrozen `Vec`, before
+the construction chokepoint fills the node's cache. See
 [typing/type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
 for the full sigil-and-dispatch contract.
 
@@ -295,8 +301,8 @@ Only the fixed builtin forms opt out of eager evaluation, and which of their
 slots are lazy is a parse-static fact: `KExpression::seal` stamps the node's
 lazy slots from the [`LAZY_SLOT_SPECS`](../src/machine/model/lazy_slots.rs)
 table, keyed by the unshadowable builtin keys — the same probe pattern that
-fills `binder_plan`, written in the bucket-key vocabulary both spec tables
-share ([key_spec.rs](../src/machine/model/key_spec.rs)) — and the scheduler
+fills `binder_plan`, written in the bucket-key vocabulary every spec table
+shares ([key_spec.rs](../src/machine/model/key_spec.rs)) — and the scheduler
 reads the stamp to know which children not to submit. Dispatch never decides
 evaluation — by the time an expression dispatches, every child the stamp
 left eager has already evaluated. The builtin receives the unevaluated

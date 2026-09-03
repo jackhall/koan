@@ -249,9 +249,11 @@ Type-token namespace names what can type a field. A **function** RHS is refused 
 the same reason: a function is a value whatever it returns, so a module-returning FN
 binds value-side like any other (see
 [functors.md § Application and binding](functors.md#application-and-binding)), and
-`bindings.types` holds no callable. The combined statement form is refused at its own
-overload — `LET <Name> = FN …` is a `ShapeError` carrying the snake_case respelling,
-before any definition is built. Any other object rejects with
+`bindings.types` holds no callable. The combined statement form registers only under a
+value-classified binder, so `LET <Name> = FN …` matches no overload and the
+[dispatch-miss diagnosis table](../../src/machine/model/miss_diagnostics.rs) renders the
+`ShapeError` carrying the snake_case respelling, before any definition is built. Any other
+object rejects with
 `KErrorKind::TypeClassBindingExpectsType`. Every admitted RHS — struct / union /
 Result, and signature —
 routes through `register_type` (type-only): the schema or `&Signature`
@@ -428,7 +430,7 @@ type-side carrier. The same shape-only rule covers a raw `KExpression` part in
 a builtin lazy slot: the slot owns its body, not a name lookup.
 
 **A union carrier slot routes by its claiming member.** When a slot lists several carrier
-spellings (`union_of(TypeNameToken, SigiledTypeExpr, RecordType, Identifier)` — see
+spellings (`union_of(TypeNameToken, SigiledTypeExpr, RecordType)` — see
 [ktype/slots-and-signatures.md § Union carrier slots](ktype/slots-and-signatures.md#union-carrier-slots)),
 the member that claims the part's shape decides the routing, and every shape-only rule above
 distributes: an exact carrier member routes its shape to raw capture, and an

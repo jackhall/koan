@@ -38,7 +38,12 @@ alphabetic name (`OP #(MAX) OVER Number` is fine).
 OP #(<sym>) OVER <Operand> = (<body>)
 OP #(<sym>) OVER :<Operand> = (<body>)          -- the `:` is optional after OVER
 OP #(<sym>) OVER :(LIST OF Elt) = (<body>)      -- or a sigiled type expression
+OP #(<sym>) OVER (LIST OF Elt) = (<body>)       -- the sigil is optional here too
 ```
+
+The last two are the same declaration: `OVER` and `->` are binder-form **type slots**, where
+a bare `(…)` is admitted as the sigiled spelling at parse
+([type-language-via-dispatch.md § The bare parenthesized spelling in a type slot](typing/type-language-via-dispatch.md#the-bare-parenthesized-spelling-in-a-type-slot)).
 
 The body binds `left` and `right`, both of the operand type, and its result type
 *is* the operand type — a fold member feeds its result back in as the next
@@ -66,7 +71,12 @@ A unary operator takes the **whole run as one list**: the body binds `operands`
 of type `:(LIST OF Operand)`, and infix (`a ~ b ~ c`) and prefix (`~ [a b c]`)
 forms reduce to the same keyword-first call. The `-> Result` segment is mandatory
 — the body consumes a list of operands, so there is nothing to default the result
-type from. A two-operand use (`a ~ b`) names one keyword and so dispatches as a
+type from. The result-less shape therefore has no success reading at all: both its
+spellings (`UNARY OP … OVER <Operand> = (…)` and the `LET`-combined twin) are
+**reserved** keys, registered by nothing and refused to user registration at the
+overload write door, so they always reach the
+[dispatch-miss diagnosis table](../src/machine/model/miss_diagnostics.rs)'s pointed
+"must declare its result type" message. A two-operand use (`a ~ b`) names one keyword and so dispatches as a
 plain keyworded call rather than a chain; the declaration registers a synthesized
 binary **bridge** whose body is `sym [left right]`, so that surface lands on the
 one list body the user wrote.
@@ -147,8 +157,10 @@ bucket only, while a *bare* `OP` (outside any group) also writes a size-1 regist
 entry, so it self-chains — fold-left for a binary operator, unary for a
 `UNARY OP`.
 
-A Type-token group name takes the same respelling diagnostic `MODULE`'s
-Type-named overload reports: a group is a module, and a module is a value.
+A Type-token group name registers nothing and takes the same respelling diagnostic
+`MODULE`'s Type-token name takes, from the
+[dispatch-miss diagnosis table](../src/machine/model/miss_diagnostics.rs): a group is a
+module, and a module is a value.
 
 ## The registry record lives in the declaring scope's region
 

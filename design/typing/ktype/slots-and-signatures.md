@@ -123,25 +123,27 @@ resolved handle renders `:(Some | None)` and names nothing the source wrote.
 ## Union carrier slots
 
 One slot can list several carrier spellings at once. A slot typed
-`union_of(TypeNameToken, SigiledTypeExpr, RecordType, Identifier)` admits a bare `Type`
-token, a `:(…)`, a `:{…}` and a bare value name through a single overload, each captured by
+`union_of(TypeNameToken, SigiledTypeExpr, RecordType)` admits a bare `Type`
+token, a `:(…)` and a `:{…}` through a single overload, each captured by
 the semantics of the member that claims it — so a form spells the carrier dimension once
 instead of enumerating an overload per carrier combination. Only builtin registration can
 build one: none of the exact carrier constants is spellable from source
 ([the declared builtin names](../../../src/machine/model/types/builtin_names.rs) lists none
 of them), so no user signature can carry raw-capture semantics.
 
-**The deferral slots are the production case.** `FN`'s return slot takes exactly the union
-spelled above ([`fn_def.rs`](../../../src/builtins/fn_def.rs)); `OP`'s operand and result slots
-take `union_of(TypeNameToken, SigiledTypeExpr, RecordType)`
-([`op_def.rs`](../../../src/builtins/op_def.rs)). They spell it because a return type may name an
+**The deferral slots are the production case.** `FN`'s return slot and `OP`'s operand and result
+slots take exactly the union spelled above, from one shared constructor
+([`type_carrier_union`](../../../src/builtins/fn_def/return_type.rs)) since
+[`TypeSlotThunk::from_slot`](../../../src/builtins/fn_def/return_type.rs) is the single read
+behind them and its arms *are* those members. They spell it because a return type may name an
 `FN` parameter that is unbound in the defining scope, so the surface has to survive verbatim to
-the dispatch boundary and be elaborated per call. Spelling the dimension once collapses what was
-an overload per carrier combination — one keyworded `FN` overload instead of three, eight `OP`
-registrations instead of a 2×2 cartesian product's twenty-four. The `Identifier` member is
-diagnostic-only: a return slot names a type, so a value name there is an error, and listing the
-member is what lets the body raise the pointed one instead of the shape falling through every
-overload as "no matching function".
+the dispatch boundary and be elaborated per call. Spelling the dimension once collapses what
+would otherwise be an overload per carrier combination — one keyworded `FN` overload instead of
+three, eight `OP` registrations instead of a 2×2 cartesian product's twenty-four. A value name
+is *no* member: a return slot names a type, so `-> er` is a mistake with no success reading, and
+its pointed message comes from the
+[dispatch-miss diagnosis table](../../../src/machine/model/miss_diagnostics.rs) rather than from
+an always-erroring overload sitting in the bucket.
 
 Because every member is part-kind-exact, no resolved cell can reach such a slot — the union owns
 its bare names, so nothing auto-wraps, and `accepts_carried` refuses every `Carried` arm for each

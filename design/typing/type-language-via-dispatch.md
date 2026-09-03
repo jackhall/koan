@@ -46,6 +46,38 @@ the payload's shape, and it is why the pre-seal window path
 ([typed_field_list.rs](../../src/machine/model/types/typed_field_list.rs)) sees `Tree.Leaf` and
 `:(Tree.Leaf)` as the same body.
 
+### The bare parenthesized spelling in a type slot
+
+Every other return type is written without a sigil (`-> Number`, not `-> :Number`), so the
+parenthesized constructor forms are spelled bare too: **inside a binder form's type slots,
+`(…)` ≡ `:(…)`.** `FN (WRAP s :Str) -> (LIST OF Str) = ([s])` and
+`OP #(++) OVER (LIST OF Str) = (…)` are the same declarations as their sigiled twins.
+
+The equivalence is minted at parse, and its scope is exactly the masked slots. Each entry of
+[`BINDER_SPECS`](../../src/machine/model/binder.rs) carries a `type_slots` mask — the parts-run
+positions its form reads as a type expression — and
+[`admit_bare_type_slots`](../../src/machine/model/binder.rs), called from the parse frames as
+each run closes ([`BracketFrame::into_part`](../../src/parse/frame.rs)), rewrites a plain
+`Expression` part at each masked index to `SigiledTypeExpr`. Same `KExpression` payload, new
+parse-context marker; any other part kind there (a `Type` token, a `:(…)`, a `:{…}`, an
+identifier) is left alone, a run matching no binder key is untouched, and the rewrite is
+idempotent. The masked slots are `FN`'s return, `OP`'s operand and result, and the same slots of
+each form's `LET <name> = …` combined spelling; a `#(…)` quote body and a `$(…)` body take the
+normalization like any other run, so a quoted definition evaluated later reads identically to
+its sigiled spelling.
+
+Everything downstream follows by construction, which is why parity is exact rather than
+maintained: the statement's untyped bucket key is unchanged (both variants are slots), the
+form's [`LAZY_SLOT_SPECS`](../../src/machine/model/lazy_slots.rs) entry already stamps the index
+raw so the part is captured rather than staged as an eager sub-dispatch, and the slot's carrier
+union already lists `SigiledTypeExpr`. The two spellings are the *same part* by the time
+anything semantic looks at them. The one visible consequence is cosmetic: a diagnostic that
+renders the slot echoes `:(…)` even where the source wrote `(…)`.
+
+The mask is opt-in rather than derived from the slot's registered type. `NEWTYPE <name> =
+<repr>` takes a type at its repr slot and stays unmasked, because a bare `(…)` there already
+works by evaluation and flipping it would reroute a working spelling for nothing.
+
 ## Fully-uppercase head keywords
 
 `LIST`, `MAP`, `FN` keep parameterized-type construction in

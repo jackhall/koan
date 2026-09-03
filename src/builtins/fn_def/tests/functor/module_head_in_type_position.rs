@@ -176,8 +176,8 @@ fn module_name_in_a_slot_is_a_parse_error() {
     );
 }
 
-/// A module-valued parameter in return position (`-> er`) is a return slot naming a value. FN's
-/// value-named-return overload exists to say so and to name the replacement spelling.
+/// A module-valued parameter in return position (`-> er`) is a return slot naming a value. The
+/// dispatch-miss diagnosis table says so and names the replacement spelling.
 #[test]
 fn module_param_in_return_position_errors() {
     let program = program_storage();

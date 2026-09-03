@@ -69,9 +69,10 @@ Dispatch tells the two forms apart by the signature operand's part kind: a
 parenthesized `(…)` signature is a `KExpression`, while a `:{…}` schema is a
 first-class `RecordType` part that sub-dispatches to a resolved
 [`KType::Record`](../src/machine/model/types/ktype.rs) before the binder runs.
-Three `FN` overloads share one bucket ([fn_def.rs](../src/builtins/fn_def.rs)) —
-two keyworded ones split on the return-type carrier, and one whose signature slot
-admits the resolved record schema. The record's
+Two `FN` overloads share one bucket ([fn_def.rs](../src/builtins/fn_def.rs)) — the
+keyworded one and the one whose signature slot admits the resolved record schema. The
+return-type carrier needs no third: both spell that slot as a single
+[union carrier slot](typing/ktype/slots-and-signatures.md#union-carrier-slots). The record's
 fields become keyword-less `Argument`s, and everything downstream —
 `reconstruct_positional`, lexical closure capture, and contravariant function
 subtyping — is shared with the keyworded form, so an anonymous function projects
