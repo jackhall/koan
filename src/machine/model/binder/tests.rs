@@ -8,6 +8,7 @@ use crate::builtins::test_support::{identifier_part, kw_part};
 use crate::machine::core::{ProgramBrand, RegionBrand, program_storage};
 use crate::machine::model::UntypedKey;
 use crate::machine::model::ast::{DispatchShape, ExpressionPart, KExpression};
+use crate::machine::model::key_spec::key_matches_untyped;
 use crate::parse::parse;
 use crate::source::Spanned;
 
@@ -119,6 +120,83 @@ fn operator_def_marker_agrees_with_the_keys_it_labels() {
             "spec key {:?} disagrees with its surface marker",
             render_key(spec.key),
         );
+    }
+}
+
+// ---------- the type-slot mask ----------
+
+/// Every masked index is a slot position of its own key — the flip writes `parts[index]`, so a
+/// keyword position or an index past the run would corrupt the statement.
+#[test]
+fn every_masked_index_names_a_slot_position() {
+    for spec in BINDER_SPECS {
+        for &index in spec.type_slots {
+            assert!(
+                index < spec.key.len(),
+                "spec key {:?} masks slot {index} past its run",
+                render_key(spec.key)
+            );
+            assert!(
+                matches!(spec.key[index], super::KeyElementSpec::Slot),
+                "spec key {:?} masks its keyword position {index}",
+                render_key(spec.key)
+            );
+        }
+    }
+}
+
+/// A masked index is a slot the bucket's live registrations really read as a raw type expression:
+/// some overload types it with a carrier admitting `:(…)`, and **no** overload types it
+/// `:KExpression`. The second half is what matters — flipping a code slot's `(…)` to
+/// `SigiledTypeExpr` would silently retype a body.
+///
+/// One-directional on purpose: the mask is opt-in, not derived. `NEWTYPE <name> = <repr>` satisfies
+/// the predicate and stays unmasked, because a bare `(…)` there already works by evaluation.
+#[test]
+fn every_masked_index_is_a_raw_type_expression_slot() {
+    use crate::machine::model::{KType, SignatureElement};
+    let program = crate::machine::core::program_storage();
+    let storage = crate::machine::core::run_root_storage();
+    let run = crate::builtins::test_support::TestRun::silent(&program, &storage);
+    let types = run.registry_handle();
+    for spec in BINDER_SPECS {
+        for &index in spec.type_slots {
+            // Every slot type the seeded root registers at this index of a bucket matching the key.
+            let mut live: Vec<KType> = Vec::new();
+            for scope in run.scope.ancestors() {
+                for (key, bucket) in scope.bindings().functions().iter() {
+                    if !key_matches_untyped(spec.key, &key.to_vec()) {
+                        continue;
+                    }
+                    for entry in bucket.iter() {
+                        let opened = entry.sealed.open_at();
+                        if let Some(SignatureElement::Argument(argument)) =
+                            opened.value().signature.elements().get(index)
+                        {
+                            live.push(argument.ktype);
+                        }
+                    }
+                }
+            }
+            assert!(
+                !live.is_empty(),
+                "spec key {:?} masks slot {index}, which no live registration types",
+                render_key(spec.key)
+            );
+            assert!(
+                live.iter()
+                    .any(|kt| kt.union_has_member(KType::SIGILED_TYPE_EXPR, &types)),
+                "spec key {:?} masks slot {index}, which no registration admits a `:(…)` at",
+                render_key(spec.key)
+            );
+            assert!(
+                !live
+                    .iter()
+                    .any(|kt| kt.union_has_member(KType::KEXPRESSION, &types)),
+                "spec key {:?} masks slot {index}, which some registration reads as code",
+                render_key(spec.key)
+            );
+        }
     }
 }
 

@@ -410,6 +410,17 @@ pub struct BinderSpec {
     /// still-finalizing same-named outer binder. Pinned against `names` by the
     /// name-slot⟺extractor consistency test.
     pub name_slot: Option<usize>,
+    /// Parts-run positions where a bare parenthesized part is a **type expression**: the parser
+    /// rewrites a plain `Expression` part at each listed index to `SigiledTypeExpr`, making `(…)` ≡
+    /// `:(…)` in exactly those slots (see [`admit_bare_type_slots`]). Indices are
+    /// element-for-element with `key`, like `name_slot`.
+    ///
+    /// The mask is opt-in, not derived: a slot may take a type without wanting the flip.
+    /// `NEWTYPE <name> = <repr>` is the standing case — a bare `(…)` there already works by
+    /// evaluation, so it stays unmasked. The consistency test pins that every masked index is a
+    /// slot its bucket's live registrations type as a raw type-expression carrier and never as
+    /// code.
+    pub type_slots: &'static [usize],
 }
 
 impl BinderSpec {
@@ -446,6 +457,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
+        type_slots: &[],
     },
     // TYPE <name> — SIG-body-only abstract-type declarator (bare and higher-kinded share the key).
     BinderSpec {
@@ -454,6 +466,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
+        type_slots: &[],
     },
     // MODULE <name> = <body> (identifier overload; the type-named overload has no hooks).
     BinderSpec {
@@ -462,6 +475,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
+        type_slots: &[],
     },
     // GROUP <name> FOLD LEFT = <body>.
     BinderSpec {
@@ -477,6 +491,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
+        type_slots: &[],
     },
     // GROUP <name> FOLD RIGHT = <body>.
     BinderSpec {
@@ -492,6 +507,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
+        type_slots: &[],
     },
     // GROUP <name> PAIRWISE FOLD <combiner> LEFT = <body>.
     BinderSpec {
@@ -509,6 +525,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
+        type_slots: &[],
     },
     // GROUP <name> PAIRWISE FOLD <combiner> RIGHT = <body>.
     BinderSpec {
@@ -526,6 +543,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
+        type_slots: &[],
     },
     // SIG <name> = <body>.
     BinderSpec {
@@ -534,6 +552,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
+        type_slots: &[],
     },
     // UNION <name> = <schema>.
     BinderSpec {
@@ -542,14 +561,18 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: None,
         surface: BinderSurface::UnionDef,
         name_slot: Some(1),
+        type_slots: &[],
     },
-    // NEWTYPE <name> = <repr> (scalar / sigil / record reprs share the key).
+    // NEWTYPE <name> = <repr> (scalar / sigil / record reprs share the key). The repr slot takes a
+    // type but is deliberately unmasked: a bare `(…)` there already works by evaluation, so flipping
+    // it would change a working spelling's route for nothing.
     BinderSpec {
         key: &[Kw(&KEYWORDS.newtype), Slot, Kw(&KEYWORDS.equals), Slot],
         names: &[type_part_binder_name],
         bucket: None,
         surface: BinderSurface::NewTypeDef,
         name_slot: Some(1),
+        type_slots: &[],
     },
     // NEWTYPE <decl> — constructor family (keyword set {NEWTYPE}, disjoint from the `= _` forms).
     BinderSpec {
@@ -558,6 +581,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
+        type_slots: &[],
     },
     // FN <signature> -> <return_type> = <body> (every FN overload shares this key; the anonymous
     // record-schema form claims no bucket because the extractor rejects its signature operand).
@@ -574,6 +598,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: Some(fn_def_binder_bucket),
         surface: BinderSurface::Other,
         name_slot: None,
+        type_slots: &[3],
     },
     // OP <symbol> OVER <operand> = <body>.
     BinderSpec {
@@ -589,6 +614,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
         name_slot: None,
+        type_slots: &[3],
     },
     // OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -606,6 +632,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
         name_slot: None,
+        type_slots: &[3, 5],
     },
     // UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -624,6 +651,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
         name_slot: None,
+        type_slots: &[4, 6],
     },
     // The combined statement forms: one binder filling both channels — the LET value name and the
     // bucket key(s) the declaration's body registers under. `LET <name> = UNARY OP …` is the
@@ -646,6 +674,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: Some(fn_def_binder_bucket),
         surface: BinderSurface::Other,
         name_slot: Some(1),
+        type_slots: &[6],
     },
     // LET <name> = OP <symbol> OVER <operand> = <body>.
     BinderSpec {
@@ -664,6 +693,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
         name_slot: Some(1),
+        type_slots: &[6],
     },
     // LET <name> = OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -684,6 +714,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
         name_slot: Some(1),
+        type_slots: &[6, 8],
     },
     // LET <name> = UNARY OP <symbol> OVER <operand> -> <return_type> = <body>.
     BinderSpec {
@@ -705,6 +736,7 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: Some(op_def_binder_bucket),
         surface: BinderSurface::OperatorDef,
         name_slot: Some(1),
+        type_slots: &[7, 9],
     },
     // VAL <name> <ty> — a declaration form with no install channel. It records
     // into the decl scope's slot collector, not a binding map any name lookup can see, so it
@@ -716,8 +748,39 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         bucket: None,
         surface: BinderSurface::Other,
         name_slot: Some(1),
+        type_slots: &[],
     },
 ];
+
+/// Parse-side admission of the bare parenthesized type spelling. If `parts` matches a binder form's
+/// key, every plain `Expression` part at one of that form's [`type_slots`](BinderSpec::type_slots)
+/// is rewritten to `SigiledTypeExpr` — the same `ProgramNode` payload under a different
+/// parse-context marker, so `(LIST OF Str)` ≡ `:(LIST OF Str)` in exactly those positions and
+/// nowhere else.
+///
+/// A variant change is the whole of it, and everything downstream follows by construction: the
+/// statement's untyped key is unchanged (both variants are slots), the form's `LAZY_SLOT_SPECS`
+/// entry already stamps `TYPE_EXPR` at each masked index so the part is captured raw instead of
+/// staged, and the return/operand slot's carrier union already lists `SIGILED_TYPE_EXPR`. The two
+/// spellings are the same part by the time anything semantic looks at them, so parity is exact.
+///
+/// Any other part kind at a masked index — a `Type` token, a `:(…)`, a `:{…}`, an identifier — is
+/// left alone, and a run matching no binder key is untouched. Idempotent.
+///
+/// Called from the parse frames, on a run that is still an unfrozen `Vec`: a node's parts and its
+/// structural cache are bumped together and never touched again, so this must run before the freeze.
+pub(crate) fn admit_bare_type_slots(parts: &mut [Spanned<ExpressionPart<'_>>]) {
+    let Some(spec) = BINDER_SPECS.iter().find(|spec| spec.matches_parts(parts)) else {
+        return;
+    };
+    for &index in spec.type_slots {
+        // `matches_parts` pinned `key.len() == parts.len()`, and the consistency test pins every
+        // masked index to a slot position of that key, so the index is in range.
+        if let ExpressionPart::Expression(node) = parts[index].value {
+            parts[index].value = ExpressionPart::SigiledTypeExpr(node);
+        }
+    }
+}
 
 /// The nominal-type declaration surfaces a module body pre-announces, as
 /// [`announced_type_declaration`] classifies them.

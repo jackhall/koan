@@ -979,6 +979,7 @@ digraph {
     "koan::parse::expression_tree" -> "koan::source" [label="uses", style="dashed"];
     "koan::parse::frame" -> "koan::machine" [label="uses", style="dashed"];
     "koan::parse::frame" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::parse::frame" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::parse::frame" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::parse::frame" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::parse::frame" -> "koan::parse::dict_literal" [label="uses", style="dashed"];

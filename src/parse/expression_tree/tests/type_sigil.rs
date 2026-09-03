@@ -308,3 +308,54 @@ fn a_multi_part_sigil_body_is_untouched() {
         "[:(:(t(ATTR) T(Maybe) T(Some)) n(42))]"
     );
 }
+
+/// The bare parenthesized type spelling: in a binder form's **type slots** the parser rewrites a
+/// plain `(…)` to `SigiledTypeExpr`, so `(LIST OF Str)` ≡ `:(LIST OF Str)` there and everything
+/// downstream sees the one part kind. Every other slot of the same statement — the signature at
+/// index 1, the body at index 5 — keeps its `(…)`.
+#[test]
+fn a_binder_forms_type_slot_admits_the_bare_parenthesized_spelling() {
+    use super::top;
+    assert_eq!(
+        top("FN (WRAP s :Str) -> (LIST OF Str) = (s)").unwrap(),
+        ["[t(FN) [t(WRAP) t(s) T(Str)] t(->) :(t(LIST) t(OF) T(Str)) t(=) [t(s)]]"],
+    );
+    assert_eq!(
+        top("FN (WRAP s :Str) -> (LIST OF Str) = (s)").unwrap(),
+        top("FN (WRAP s :Str) -> :(LIST OF Str) = (s)").unwrap(),
+        "the two spellings are the same parts run",
+    );
+}
+
+/// The flip is keyed on the whole binder key, not on the paren shape: a run spelling the same
+/// arity and the same `-> … = …` keywords under a different head is an ordinary call, and every
+/// one of its `(…)` slots stays code.
+#[test]
+fn a_non_binder_run_with_the_same_shape_does_not_flip() {
+    use super::top;
+    assert_eq!(
+        top("MYFORM (a) -> (LIST OF Str) = (b)").unwrap(),
+        ["[t(MYFORM) [t(a)] t(->) [t(LIST) t(OF) T(Str)] t(=) [t(b)]]"],
+    );
+}
+
+/// Parse normalization applies uniformly inside a `#(…)` quote and a `$(…)` body, as suffix
+/// folding already does — so a quoted definition evaluated later reads identically to its sigiled
+/// spelling.
+#[test]
+fn the_flip_reaches_quote_and_eval_bodies() {
+    use super::top;
+    assert_eq!(
+        top("#(FN (WRAP s :Str) -> (LIST OF Str) = (s))").unwrap(),
+        top("#(FN (WRAP s :Str) -> :(LIST OF Str) = (s))").unwrap(),
+    );
+    assert!(
+        top("#(FN (WRAP s :Str) -> (LIST OF Str) = (s))").unwrap()[0]
+            .contains(":(t(LIST) t(OF) T(Str))"),
+        "a quote body's type slot takes the flip",
+    );
+    assert_eq!(
+        top("$(FN (WRAP s :Str) -> (LIST OF Str) = (s))").unwrap(),
+        top("$(FN (WRAP s :Str) -> :(LIST OF Str) = (s))").unwrap(),
+    );
+}

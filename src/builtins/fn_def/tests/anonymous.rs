@@ -175,3 +175,36 @@ fn an_anonymous_signature_takes_a_record_alias() {
         "the aliased signature defines a function that runs",
     );
 }
+
+/// A constructed return type on the anonymous record-schema form, in both spellings. The signature
+/// slot is a `:{…}` record and the return slot a type expression, so the statement is the
+/// record-schema overload with a raw-captured return — a combination that must elaborate, run and
+/// return-check like the keyworded form.
+#[test]
+fn an_anonymous_fn_takes_a_constructed_return_type_in_either_spelling() {
+    let sigiled = capture_program_output(
+        "LET f = (FN :{s :Str} -> :(LIST OF Str) = ([s]))\n\
+         PRINT (f {s = \"hi\"})",
+    );
+    assert_eq!(sigiled, b"[hi]\n");
+    let bare = capture_program_output(
+        "LET g = (FN :{s :Str} -> (LIST OF Str) = ([s]))\n\
+         PRINT (g {s = \"hi\"})",
+    );
+    assert_eq!(bare, sigiled, "the bare and sigiled spellings run alike");
+}
+
+/// …and the bare spelling return-checks: a `Str` body under `-> (LIST OF Str)` is a `<return>`
+/// mismatch, not a silent pass.
+#[test]
+fn an_anonymous_fns_bare_constructed_return_is_checked() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("LET g = (FN :{s :Str} -> (LIST OF Str) = (s))");
+    let error = test_run.run_one_err(test_run.parse_one("g {s = \"hi\"}"));
+    assert!(
+        matches!(&error.kind, KErrorKind::TypeMismatch { arg, .. } if arg == "<return>"),
+        "expected a <return> mismatch, got {error}",
+    );
+}

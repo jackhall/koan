@@ -558,3 +558,106 @@ fn a_bound_value_named_return_stays_pointed_too() {
         "expected the pointed value-named-return error, got {error}",
     );
 }
+
+/// The bare parenthesized return annotation `-> (LIST OF Str)` — the spelling every other return
+/// type already uses, without the `:` sigil. The parse admits it in the binder form's type slot as
+/// a `SigiledTypeExpr`, so it rides the shipped sigiled machinery and the two spellings are the
+/// same declaration.
+#[test]
+fn a_bare_parenthesized_return_type_elaborates_and_runs() {
+    use super::capture_program_output;
+    let bare = capture_program_output(
+        "FN (WRAP s :Str) -> (LIST OF Str) = ([s])\n\
+         PRINT (WRAP \"hi\")",
+    );
+    assert_eq!(bare, b"[hi]\n");
+    let sigiled = capture_program_output(
+        "FN (WRAP s :Str) -> :(LIST OF Str) = ([s])\n\
+         PRINT (WRAP \"hi\")",
+    );
+    assert_eq!(bare, sigiled, "the bare and sigiled spellings run alike");
+}
+
+/// The admission is constructor-independent: the flip is a part-kind rewrite, so whatever the
+/// parens hold reaches the type language exactly as a `:(…)` body would. The inner `->` sits in the
+/// nested run, so the statement's own key still has six parts.
+#[test]
+fn a_bare_parenthesized_return_type_takes_any_constructor() {
+    use super::capture_program_output;
+    assert_eq!(
+        capture_program_output(
+            "FN (LOOKUP) -> (MAP Str -> Number) = ({\"a\": 1})\n\
+             PRINT (LOOKUP)",
+        ),
+        b"{\"a\": 1}\n",
+    );
+}
+
+/// The body's value is checked against the bare-spelled return type like any other: a `Str` body
+/// under `-> (LIST OF Str)` is a `<return>` mismatch.
+#[test]
+fn a_bare_parenthesized_return_type_is_checked() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("FN (BAD s :Str) -> (LIST OF Str) = (s)");
+    let error = test_run.run_one_err(test_run.parse_one("BAD \"x\""));
+    match &error.kind {
+        KErrorKind::TypeMismatch { arg, expected, got } => {
+            assert_eq!(arg, "<return>");
+            assert_eq!(expected, ":(LIST OF Str)");
+            assert_eq!(got, "Str");
+        }
+        _ => panic!("expected TypeMismatch on <return>, got {error}"),
+    }
+}
+
+/// The combined `LET <name> = FN …` spelling masks its own return slot (index 6), so both channels
+/// the one statement installs work under the bare annotation.
+#[test]
+fn the_combined_form_admits_the_bare_parenthesized_return_type() {
+    use super::capture_program_output;
+    assert_eq!(
+        capture_program_output(
+            "LET w = FN (WRAP s :Str) -> (LIST OF Str) = ([s])\n\
+             PRINT (WRAP \"hi\")\n\
+             PRINT (w {s = \"yo\"})",
+        ),
+        b"[hi]\n[yo]\n",
+    );
+}
+
+/// A closure factory: the returned function is itself typed, and the bare spelling declares that
+/// type without a sigil. The returned closure is checked against the declared function type and is
+/// callable through the value the factory returns.
+#[test]
+fn a_closure_factory_declares_its_returned_function_type_bare() {
+    use super::capture_program_output;
+    assert_eq!(
+        capture_program_output(
+            "FN (ADDER n :Number) -> (FN :{x :Number} -> Number) = \
+             (FN :{x :Number} -> Number = (x + n))\n\
+             LET add2 = (ADDER 2)\n\
+             PRINT (add2 {x = 3})",
+        ),
+        b"5\n",
+    );
+}
+
+/// …and a factory whose returned closure violates the declared function type is a `<return>`
+/// mismatch, exactly as under the sigiled spelling.
+#[test]
+fn a_closure_factory_checks_the_returned_function_type() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(
+        "FN (LIAR n :Number) -> (FN :{x :Number} -> Number) = \
+         (FN :{x :Number} -> Str = (\"nope\"))",
+    );
+    let error = test_run.run_one_err(test_run.parse_one("LIAR 1"));
+    assert!(
+        matches!(&error.kind, KErrorKind::TypeMismatch { arg, .. } if arg == "<return>"),
+        "expected a <return> mismatch on the returned closure, got {error}",
+    );
+}

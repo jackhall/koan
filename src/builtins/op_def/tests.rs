@@ -521,3 +521,68 @@ fn a_union_carrier_slot_admits_every_operand_and_result_spelling() {
         "a `:{{…}}` result type elaborates and the call lands a record",
     );
 }
+
+/// What a program prints, for the parity assertions that compare two spellings by their output.
+fn printed(source: &str) -> Vec<u8> {
+    let program = program_storage();
+    let region = run_root_storage();
+    let (mut test_run, captured) = TestRun::with_buf(&program, &region);
+    test_run.run(source);
+    captured.borrow().clone()
+}
+
+/// `OP`'s operand slot rides the same carrier seam as `FN`'s return slot, so it admits the bare
+/// parenthesized spelling at parity: the declaration registers and a two-operand run dispatches.
+#[test]
+fn a_bare_parenthesized_operand_registers_and_dispatches() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("OP #(++) OVER (LIST OF Str) = (left)");
+    let result = test_run.run_one(test_run.parse_one("[\"a\"] ++ [\"b\"]"));
+    assert!(
+        matches!(result, KObject::List(items, _) if items.elements().len() == 1),
+        "the bare-operand declaration dispatches its own body",
+    );
+}
+
+/// The two-mask surfaces: an operand *and* a result slot, each spelled bare. A heterogeneous
+/// binary operator only holds inside a `PAIRWISE` group, so the declaration is read through the
+/// group's `USING` window — the same route its sigiled twin takes.
+#[test]
+fn a_bare_operand_and_result_pair_declares_and_dispatches() {
+    let bare = printed(
+        "GROUP cmp PAIRWISE FOLD #(BOTH) LEFT = (\n\
+        \x20 (OP #(BOTH) OVER Bool = (left))\n\
+        \x20 (OP #(EQL) OVER (LIST OF Str) -> Bool = (true)))\n\
+         USING cmp SCOPE (PRINT ([\"a\"] EQL [\"b\"]))",
+    );
+    assert_eq!(bare, b"true\n");
+    let sigiled = printed(
+        "GROUP cmp PAIRWISE FOLD #(BOTH) LEFT = (\n\
+        \x20 (OP #(BOTH) OVER Bool = (left))\n\
+        \x20 (OP #(EQL) OVER :(LIST OF Str) -> Bool = (true)))\n\
+         USING cmp SCOPE (PRINT ([\"a\"] EQL [\"b\"]))",
+    );
+    assert_eq!(bare, sigiled, "the bare and sigiled spellings run alike");
+}
+
+/// The missing-result diagnostic is rendered from the raw parts, which the bare and sigiled operand
+/// spellings share as slots — so the reserved shape reaches the same targeted message either way.
+#[test]
+fn the_missing_result_diagnostic_covers_both_operand_spellings() {
+    for source in [
+        "UNARY OP #(~) OVER (LIST OF Str) = (operands)",
+        "UNARY OP #(~) OVER :(LIST OF Str) = (operands)",
+    ] {
+        let program = program_storage();
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&program, &region);
+        let error = test_run.run_one_err(test_run.parse_one(source));
+        assert!(
+            matches!(&error.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("must declare its result type")),
+            "expected the missing-result diagnostic for `{source}`, got {error}",
+        );
+    }
+}

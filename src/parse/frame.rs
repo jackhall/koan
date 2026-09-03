@@ -8,6 +8,7 @@
 
 use crate::machine::KError;
 use crate::machine::core::ProgramBrand;
+use crate::machine::model::admit_bare_type_slots;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::labels::KeywordSymbol;
 use crate::source::{self, Span, Spanned};
@@ -91,7 +92,7 @@ impl<'a> BracketFrame<'a> {
         let file = source::current();
         match self {
             BracketFrame::Expression {
-                parts,
+                mut parts,
                 head: None,
                 span_start,
                 ..
@@ -100,6 +101,7 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
+                admit_bare_type_slots(&mut parts);
                 let expr = brand.build_expression_from_iter(parts, Some(span), file);
                 Ok(Spanned::at(
                     ExpressionPart::Expression(brand.alloc_node(expr)),
@@ -107,7 +109,7 @@ impl<'a> BracketFrame<'a> {
                 ))
             }
             BracketFrame::Expression {
-                parts,
+                mut parts,
                 head: Some(head),
                 span_start,
                 sigil_cursor,
@@ -116,6 +118,7 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
+                admit_bare_type_slots(&mut parts);
                 let expr = brand.build_expression_from_iter(parts, Some(body_span), file);
                 let sc =
                     sigil_cursor.expect("sigil-headed Expression frame must carry sigil_cursor");
@@ -142,7 +145,7 @@ impl<'a> BracketFrame<'a> {
             }
             // `#(...)`: the body keeps the paren span, the captured part covers the sigil too.
             BracketFrame::Quote {
-                parts,
+                mut parts,
                 span_start,
                 sigil_cursor,
             } => {
@@ -150,6 +153,7 @@ impl<'a> BracketFrame<'a> {
                     start: span_start,
                     end,
                 };
+                admit_bare_type_slots(&mut parts);
                 let expr = brand.build_expression_from_iter(parts, Some(body_span), file);
                 let outer_span = Span {
                     start: sigil_cursor,

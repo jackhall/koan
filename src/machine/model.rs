@@ -46,6 +46,7 @@ pub(crate) use ast::{
     ProgramNode, WorkingExpression, WorkingPart, classify_dispatch_shape,
 };
 pub(crate) use binder::MACHINE_BINDERS;
+pub(crate) use binder::admit_bare_type_slots;
 pub(crate) use binder::announce_type_members;
 pub(crate) use binder::signature::{SignaturePosition, SignatureScan};
 pub use binder::{BindKind, BinderBucketFn, BinderNameFn, BinderSurface};
