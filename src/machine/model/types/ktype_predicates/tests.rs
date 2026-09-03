@@ -1042,6 +1042,120 @@ fn union_honors_memoized_list_element_type() {
     assert!(!without_list.accepts_carried(Carried::Object(list_value), &registries));
 }
 
+// --- Type cells in aggregate slots ----------------------------------------------
+
+/// The stored types the type-cell tests below classify: a builtin, a container type, a
+/// signature, a nominal member and a union — one of every shape a `Held::Type` cell can hold.
+fn stored_type_cells(types: &TypeRegistry) -> [KType; 5] {
+    [
+        KType::NUMBER,
+        types.list(KType::NUMBER),
+        KType::EMPTY_SIGNATURE,
+        newtype_member("Wrapper", KType::NUMBER, types),
+        types.union_of(&[KType::NUMBER, KType::STR]),
+    ]
+}
+
+/// `matches_held`'s `Type` arm delegates to `matches_type`, so an aggregate cell holding a
+/// first-class type and a bare type in the type channel answer the channel question once —
+/// for every (slot, stored type) pair, union spellings included.
+#[test]
+fn held_type_cell_and_bare_type_classify_alike() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let slots = [
+        KType::ANY,
+        KType::NUMBER,
+        types.list(KType::NUMBER),
+        KType::of_kind(KKind::ProperType),
+        KType::of_kind(KKind::AnyType),
+        KType::of_kind(KKind::Signature),
+        KType::EMPTY_SIGNATURE,
+        newtype_member("Wrapper", KType::NUMBER, types),
+        types.union_of(&[KType::NUMBER, KType::STR]),
+        types.union_of(&[KType::NUMBER, KType::of_kind(KKind::ProperType)]),
+    ];
+    for slot in slots {
+        for stored in stored_type_cells(types) {
+            assert_eq!(
+                slot.matches_held(&Held::Type(stored), &registries),
+                slot.matches_type(stored, types),
+                "classifiers disagree: slot `{}` vs stored type `{}`",
+                slot.name(&registries),
+                stored.name(&registries),
+            );
+        }
+    }
+}
+
+/// A value slot is a value slot: a concrete type admits no cell holding *itself* as a type
+/// value. This is the leak that let `([Number])` fill a `:(LIST OF Number)` element slot and
+/// stamp the carrier `List<Number>`.
+#[test]
+fn concrete_slot_refuses_its_own_type_cell() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    for stored in stored_type_cells(types) {
+        assert!(
+            !stored.matches_held(&Held::Type(stored), &registries),
+            "`{}` is a value slot and admits no type cell, its own included",
+            stored.name(&registries),
+        );
+    }
+}
+
+/// A signature slot is a constraint on a *module*, which reaches it on the Object channel —
+/// so a cell holding the signature's own type value does not fill it either.
+#[test]
+fn signature_slot_refuses_its_own_type_value_cell() {
+    let registries = RunRegistries::new();
+    assert!(!KType::EMPTY_SIGNATURE.matches_held(&Held::Type(KType::EMPTY_SIGNATURE), &registries));
+}
+
+/// The fix narrows no type-accepting slot: `Any` takes every cell, and an `OfKind` slot takes
+/// a stored type whose `kind_of` it subsumes — with the signature wall intact, so the proper
+/// tier still refuses a signature.
+#[test]
+fn kind_slot_admits_subsumed_type_cell() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let proper = KType::of_kind(KKind::ProperType);
+    let any_type = KType::of_kind(KKind::AnyType);
+    for stored in stored_type_cells(types) {
+        assert!(
+            KType::ANY.matches_held(&Held::Type(stored), &registries),
+            "`Any` admits every cell"
+        );
+        assert!(any_type.matches_held(&Held::Type(stored), &registries));
+    }
+    assert!(proper.matches_held(&Held::Type(KType::NUMBER), &registries));
+    assert!(proper.matches_held(&Held::Type(types.list(KType::NUMBER)), &registries));
+    assert!(
+        !proper.matches_held(&Held::Type(KType::EMPTY_SIGNATURE), &registries),
+        "the signature wall: the proper tier is the non-signature tier"
+    );
+    assert!(
+        KType::of_kind(KKind::Signature)
+            .matches_held(&Held::Type(KType::EMPTY_SIGNATURE), &registries)
+    );
+}
+
+/// A union inherits its members' admission of type cells: one with a type-accepting member
+/// takes a stored type that member takes, while a union of concrete members takes none.
+#[test]
+fn union_slot_with_kind_member_admits_type_cell() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let with_kind = types.union_of(&[KType::NUMBER, KType::of_kind(KKind::ProperType)]);
+    let concrete_only = types.union_of(&[KType::NUMBER, KType::STR]);
+    assert!(with_kind.matches_held(&Held::Type(KType::NUMBER), &registries));
+    assert!(
+        !with_kind.matches_held(&Held::Type(KType::EMPTY_SIGNATURE), &registries),
+        "a `ProperType` member does not reach across the signature wall"
+    );
+    assert!(!concrete_only.matches_held(&Held::Type(KType::NUMBER), &registries));
+}
+
 /// Specificity: each member refines its union (AC3); a union refines `Any` and a superset
 /// union; a union is not more specific than a bare member nor than an equal union.
 #[test]
@@ -1763,4 +1877,3 @@ fn carrier_union_validation_rejects_code_and_overlapping_members() {
         );
     }
 }
-

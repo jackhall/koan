@@ -2,8 +2,8 @@
 # root-loc is the absolute subtree LOC, tracked for context only
 # managed by `tools/modgraph score|regen --baseline`; newest first, capped to 5 entries
 # date       short-sha   score coupling nesting    size root-loc
+  2026-09-03 921a8902+ 8644.05  3427.77 2045.65 3170.63    29603
   2026-09-03 9bc07a81+ 8648.53  3428.60 2045.97 3173.96    29607
   2026-09-03 48bfd03f+ 8648.29  3428.60 2045.97 3173.72    29607
   2026-09-03 e7d6d78e+ 8645.00  3428.60 2045.97 3170.44    29607
   2026-09-03 40045bc9+ 8645.00  3428.60 2045.97 3170.44    29607
-  2026-09-03 e54f41ba+ 8637.77  3428.60 2045.97 3163.21    29607

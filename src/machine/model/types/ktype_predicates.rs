@@ -488,18 +488,15 @@ impl KType {
 
     /// True iff a runtime `KObject` value satisfies this declared type.
     /// Aggregate-cell satisfaction: an `Object` cell defers to [`matches_value`]; a `Type`
-    /// cell (a first-class type stored in a list/dict/record) satisfies a type-accepting
-    /// slot — `Any`, an `OfKind` kind that subsumes the type's `kind_of`, or an exact type
-    /// identity.
+    /// cell (a first-class type stored in a list/dict/record) defers to [`matches_type`], so a
+    /// stored type and a bare one in the type channel answer the channel question once. A
+    /// concrete or signature slot therefore admits no type cell — only a type-accepting slot
+    /// (`Any`, a subsuming `OfKind`, or a union with such a member) does.
     pub fn matches_held(self, cell: &Held<'_>, registries: &RunRegistries) -> bool {
         let types = &registries.types;
         match cell {
             Held::Object(o) => self.matches_value(o, registries),
-            Held::Type(t) => types.with_node(self, |node| match node {
-                TypeNode::Any => true,
-                TypeNode::OfKind(k) => k.admits(t.kind_of(types)),
-                _ => self == *t,
-            }),
+            Held::Type(t) => self.matches_type(*t, types),
             // An aggregate cell holds a value or a resolved type; none of the bind seam's raw
             // carriers ever becomes one, so no slot classifies them.
             Held::UnresolvedType(_) | Held::Name(_) | Held::RecordType(_) => false,
@@ -605,10 +602,11 @@ impl KType {
     }
 
     /// True iff a first-class type `t` (flowing in the type channel) satisfies this declared
-    /// slot — the type-channel analog of [`matches_value`]. An `OfKind` slot is satisfied when its
-    /// kind subsumes `t.kind_of()` (so `OfKind(ProperType)` admits any proper type, including a
-    /// nominal, while the signature wall keeps `ProperType` from admitting a signature); `Any` by
-    /// anything; a signature *value* slot by structural identity. A signature slot admits no
+    /// slot — the type-channel analog of [`matches_value`], and equally the classifier for a type
+    /// stored in an aggregate cell ([`matches_held`] delegates its `Type` arm here). An `OfKind`
+    /// slot is satisfied when its kind subsumes `t.kind_of()` (so `OfKind(ProperType)` admits any
+    /// proper type, including a nominal, while the signature wall keeps `ProperType` from admitting
+    /// a signature); `Any` by anything. A signature slot admits no
     /// first-class type here — it is a constraint on a module, and a module surfaces on the
     /// Object channel, matched by [`matches_value`]. Other concrete slots compare against the
     /// `OfKind(ProperType)` dispatch identity a non-signature type carrier reports, so they admit

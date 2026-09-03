@@ -54,6 +54,53 @@ fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
     assert!(runtime.edge_result_error(edge).is_err());
 }
 
+/// A list holding the *type* `Number` is not a list of numbers: a concrete element slot is a
+/// value slot, so the return boundary refuses the list instead of stamping it `List<Number>`
+/// and leaving every later dispatch to trust the stamp.
+#[test]
+fn fn_return_list_of_type_values_rejected_by_value_element_slot() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run("FN (SNEAK) -> :(LIST OF Number) = ([Number])");
+    let id = test_run.dispatch_in_scope(
+        crate::machine::model::WorkingExpression::from_ast(
+            scope.brand(),
+            test_run.parse_one("SNEAK"),
+        ),
+        scope,
+    );
+    let runtime = &mut test_run.runtime;
+    let edge = runtime.install_edge_for_test(id, scope);
+    runtime.execute().expect("scheduler runs to completion");
+    let error = runtime
+        .edge_result_error(edge)
+        .expect_err("a stored type value does not fill a `:Number` element slot");
+    assert!(
+        matches!(&error.kind, KErrorKind::TypeMismatch { arg, .. } if arg == "<return>"),
+        "expected the return boundary to refuse the list, got {error}"
+    );
+}
+
+/// A type-accepting element slot still admits type cells: bare `Type` names the kind top, so a
+/// list of stored types satisfies `:(LIST OF Type)` and the boundary coarsens the memoized
+/// carrier to the declared one.
+#[test]
+fn fn_returning_list_of_type_accepts_stored_types() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("FN (KINDS) -> :(LIST OF Type) = ([Number Str])");
+    let result = test_run.run_one(test_run.parse_one("KINDS"));
+    assert_eq!(
+        result.ktype(),
+        test_run
+            .types()
+            .list(KType::of_kind(crate::machine::model::KKind::AnyType))
+    );
+}
+
 /// Empty container through an annotated return boundary: the vacuous `matches_value`
 /// passes and the declared element type is stamped.
 #[test]
