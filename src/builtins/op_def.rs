@@ -50,7 +50,9 @@ use crate::machine::{Body, CarrierWitness, KError, KErrorKind, Scope};
 use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
-use super::fn_def::return_type::{ReturnTypeState, TypeSlotThunk, classify_return_type};
+use super::fn_def::return_type::{
+    ReturnTypeState, TypeSlotThunk, classify_return_type, type_carrier_union,
+};
 use super::resolve_or_await::{expect_type_terminal, resolve_at_wake};
 use super::{arg, kw, sig};
 use crate::machine::model::RunRegistries;
@@ -231,7 +233,6 @@ fn build<'a>(
         ctx.scope.brand(),
         &SLOTS.operand,
         OPERAND_SLOT,
-        ctx.registries,
     ));
     let operand_state = crate::try_action!(classify_return_type(
         operand_raw,
@@ -247,7 +248,6 @@ fn build<'a>(
             ctx.scope.brand(),
             &SLOTS.return_type,
             RESULT_SLOT,
-            ctx.registries,
         ));
         Some(crate::try_action!(classify_return_type(
             raw,
@@ -689,57 +689,6 @@ fn body_unary_combined<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     build(ctx, OpKind::Unary, Some(name))
 }
 
-/// `UNARY OP #(<sym>) OVER Operand = (<body>)` — the result segment is mandatory: a unary body
-/// consumes a whole list of operands, so its result type is not its operand type and there is
-/// nothing to default it to. This overload exists only to say so; without it the shape is a bare
-/// dispatch miss.
-fn body_unary_missing_result<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let symbol = crate::try_action!(symbol_from_slot(
-        ctx.args,
-        "OP",
-        &SLOTS.symbol,
-        &ctx.registries.labels
-    ));
-    let sym = ctx.registries.labels.display(symbol.symbol());
-    Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-        "`UNARY OP #({sym})` must declare its result type: \
-         `UNARY OP #({sym}) OVER <Operand> -> <Result> = (…)`",
-    )))))
-}
-
-/// The combined twin of [`body_unary_missing_result`], naming the flat spelling in its suggestion.
-fn body_unary_missing_result_combined<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    let symbol = crate::try_action!(symbol_from_slot(
-        ctx.args,
-        "OP",
-        &SLOTS.symbol,
-        &ctx.registries.labels
-    ));
-    let sym = ctx.registries.labels.display(symbol.symbol());
-    let name = match crate::builtins::fn_def::combined_bound_name(ctx.args) {
-        Ok(name) => crate::machine::model::render_label(name.symbol(), ctx.registries),
-        Err(_) => "op".to_string(),
-    };
-    Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-        "`UNARY OP #({sym})` must declare its result type: \
-         `LET {name} = UNARY OP #({sym}) OVER <Operand> -> <Result> = (…)`",
-    )))))
-}
-
-/// The carrier union an operand / result slot takes, spelling the whole dimension once so the
-/// operand × result matrix is one registration per surface rather than a cartesian product. Every
-/// member is captured raw: a bare `Type` token (`OVER Number`, `OVER Elt`), a sigiled form (`OVER
-/// :Number`, `OVER :(LIST OF Elt)`) and a record (`-> :{v :Number}`) all reach the body verbatim,
-/// so it resolves or sub-dispatches them against its own scope rather than a name the surrounding
-/// one may not bind. Mirrors how `fn_def` spells its return slot.
-fn type_carrier_union(registries: &RunRegistries) -> KType {
-    registries.types.union_of(&[
-        KType::TYPE_NAME_TOKEN,
-        KType::SIGILED_TYPE_EXPR,
-        KType::RECORD_TYPE,
-    ])
-}
-
 /// The combined statement form of a declaration surface: `LET <name> =` prefixed to its element
 /// list. Every surface below is built once and registered under both spellings, so the two can
 /// never drift apart. Full-bucket-key matching keeps the combined keys disjoint from plain `LET`
@@ -797,18 +746,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ]
     };
-    let unary_missing_result = |operand: KType| {
-        vec![
-            kw(registries, "UNARY"),
-            kw(registries, "OP"),
-            arg(registries, &SLOTS.symbol, KType::KEXPRESSION),
-            kw(registries, "OVER"),
-            arg(registries, &SLOTS.operand, operand),
-            kw(registries, "="),
-            arg(registries, &SLOTS.body, KType::KEXPRESSION),
-        ]
-    };
-
     let carrier = type_carrier_union(registries);
     register_builtin(
         scope,
@@ -821,20 +758,6 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         scope,
         combined(registries, binary(carrier)),
         body_binary_combined,
-        registries,
-        gate,
-    );
-    register_builtin(
-        scope,
-        sig(KType::ANY, unary_missing_result(carrier)),
-        body_unary_missing_result,
-        registries,
-        gate,
-    );
-    register_builtin(
-        scope,
-        combined(registries, unary_missing_result(carrier)),
-        body_unary_missing_result_combined,
         registries,
         gate,
     );

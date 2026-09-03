@@ -191,16 +191,16 @@ fn body_pairwise_right<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
     use crate::builtins::register_builtin;
 
-    // `FOLD <LEFT|RIGHT>` and `PAIRWISE FOLD #(<combiner>) <LEFT|RIGHT>`, each over the two name
-    // carriers: an `Identifier` name binds the group's module value, a Type-token name takes the
-    // respelling diagnostic MODULE's second overload produces (a group is a module, and a module is
-    // a value).
-    let fold = |name_kt: KType, direction: &'static str| {
+    // `FOLD <LEFT|RIGHT>` and `PAIRWISE FOLD #(<combiner>) <LEFT|RIGHT>`. A group is a module and a
+    // module is a value, so the name slot is an `Identifier`; a Type-token name registers nothing
+    // and takes the respelling diagnostic the dispatch-miss diagnosis table renders
+    // (`machine::model::miss_diagnostics`), the same one `MODULE` takes.
+    let fold = |direction: &'static str| {
         sig(
             KType::EMPTY_SIGNATURE,
             vec![
                 kw(registries, "GROUP"),
-                arg(registries, &SLOTS.name, name_kt),
+                arg(registries, &SLOTS.name, KType::IDENTIFIER),
                 kw(registries, "FOLD"),
                 kw(registries, direction),
                 kw(registries, "="),
@@ -208,12 +208,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
-    let pairwise = |name_kt: KType, direction: &'static str| {
+    let pairwise = |direction: &'static str| {
         sig(
             KType::EMPTY_SIGNATURE,
             vec![
                 kw(registries, "GROUP"),
-                arg(registries, &SLOTS.name, name_kt),
+                arg(registries, &SLOTS.name, KType::IDENTIFIER),
                 kw(registries, "PAIRWISE"),
                 kw(registries, "FOLD"),
                 arg(registries, &SLOTS.combiner, KType::KEXPRESSION),
@@ -232,36 +232,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         ),
         ("RIGHT", body_fold_right, body_pairwise_right),
     ] {
-        // The identifier-named overloads bind a group module value-side (like MODULE); the
-        // type-named overloads carry no binder.
-        register_builtin(
-            scope,
-            fold(KType::IDENTIFIER, direction),
-            fold_body,
-            registries,
-            gate,
-        );
-        register_builtin(
-            scope,
-            pairwise(KType::IDENTIFIER, direction),
-            pairwise_body,
-            registries,
-            gate,
-        );
-        register_builtin(
-            scope,
-            fold(KType::TYPE_NAME_TOKEN, direction),
-            super::module_def::body_type_named,
-            registries,
-            gate,
-        );
-        register_builtin(
-            scope,
-            pairwise(KType::TYPE_NAME_TOKEN, direction),
-            super::module_def::body_type_named,
-            registries,
-            gate,
-        );
+        register_builtin(scope, fold(direction), fold_body, registries, gate);
+        register_builtin(scope, pairwise(direction), pairwise_body, registries, gate);
     }
 }
 

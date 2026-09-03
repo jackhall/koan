@@ -21,6 +21,21 @@ use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{StaticName, ValueSymbol};
 
+/// The carrier union a deferral type slot takes, spelling the whole dimension once so the operand ×
+/// result matrix is one registration per surface rather than a cartesian product. Every member is
+/// captured raw: a bare `Type` token (`-> Number`, `OVER Elt`), a sigiled form (`-> :(LIST OF Str)`,
+/// `OVER :Number`) and a record (`-> :{v :Number}`) all reach the body verbatim, so it resolves or
+/// sub-dispatches them against its own scope rather than a name the surrounding one may not bind.
+/// One constructor for both surfaces — `FN`'s return slot and `OP`'s operand / result slots — since
+/// [`TypeSlotThunk::from_slot`] is the single read behind them and its arms *are* these members.
+pub(crate) fn type_carrier_union(registries: &RunRegistries) -> KType {
+    registries.types.union_of(&[
+        KType::TYPE_NAME_TOKEN,
+        KType::SIGILED_TYPE_EXPR,
+        KType::RECORD_TYPE,
+    ])
+}
+
 /// The normalized read of a deferral slot: whatever carrier member of the slot's union claimed the
 /// part, reduced to the two shapes classification cares about. The slot captures raw rather than
 /// sub-dispatching in the outer scope because the return's content may reference a parameter
@@ -63,14 +78,12 @@ pub(crate) enum ReturnTypeCapture<'a> {
 pub(crate) fn extract_return_type_raw<'a>(
     args: BoundArgs<'a, '_>,
     brand: RegionBrand<'a>,
-    registries: &RunRegistries,
 ) -> Result<TypeSlotThunk<'a>, KError> {
     TypeSlotThunk::from_slot(
         args,
         brand,
         &super::SLOTS.return_type,
         "FN return-type slot",
-        registries,
     )
 }
 
@@ -80,28 +93,18 @@ impl<'a> TypeSlotThunk<'a> {
     /// a resolved cell, since every member is part-kind-exact and captures raw.
     ///
     /// `slot` names the args field; `label` names the surface in the shape errors. Shared by `FN`'s
-    /// return slot and `OP`'s operand / result slots — the value-name arm is reachable only from a
-    /// union that lists `IDENTIFIER`, which is `FN`'s alone.
+    /// return slot and `OP`'s operand / result slots, which take the same
+    /// [`type_carrier_union`] — so the arms here are exactly that union's members. A value-named
+    /// slot (`-> er`) is no member of it: the shape never binds, and its targeted message comes
+    /// from the dispatch-miss diagnosis table.
     pub(crate) fn from_slot(
         args: BoundArgs<'a, '_>,
         brand: RegionBrand<'a>,
         slot: &StaticName<ValueSymbol>,
         label: &str,
-        registries: &RunRegistries,
     ) -> Result<TypeSlotThunk<'a>, KError> {
-        match args.name(slot) {
-            Some(BinderSymbol::Type(te)) => return Ok(TypeSlotThunk::UnresolvedName(te)),
-            // A return slot names a *type*, and an Identifier names a value. The mistake is a
-            // common one: a module-valued parameter is a value token, so the type it denotes is
-            // spelled `:(TYPE OF er)`.
-            Some(BinderSymbol::Value(name)) => {
-                let name = crate::machine::model::render_label(name.symbol(), registries);
-                return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "{label} names a type, but `{name}` is a value. For the type of a value — a \
-                     module-valued parameter, say — write `-> :(TYPE OF {name})`"
-                ))));
-            }
-            None => {}
+        if let Some(BinderSymbol::Type(te)) = args.name(slot) {
+            return Ok(TypeSlotThunk::UnresolvedName(te));
         }
         if let Some(KObject::KExpression(e)) = args.object(slot) {
             // A sigil capture hands over its *inner* expression, which dispatches on its own.

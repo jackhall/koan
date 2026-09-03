@@ -191,6 +191,26 @@ pub fn is_type_name(tok: &str) -> bool {
     chars.any(|c| c.is_ascii_lowercase())
 }
 
+/// Suggest a value-classified rewrite of a Type-classified binder name: `IntOrd` → `int_ord`. Each
+/// interior uppercase letter opens a new word (see
+/// [design/typing/tokens.md](../../../design/typing/tokens.md)). Beside [`is_type_name`] because it
+/// is that classifier read backwards — the respelling every diagnostic offers when a value binds
+/// under a Type token.
+pub fn snake_case_identifier(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 2);
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// The universal hole token `_`: a pure-symbol token, so [`is_keyword_token`] classifies it
 /// keyword-class and it needs no lexer arm of its own. Declared once for the whole run because two
 /// unrelated surfaces read the same token — `MATCH` / `TRY`'s catch-all arm tag, and a `CLOSE OVER`

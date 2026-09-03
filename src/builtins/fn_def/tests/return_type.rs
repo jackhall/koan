@@ -508,8 +508,9 @@ fn fn_record_return_type_is_captured_and_enforced() {
     );
 }
 
-/// The union's `IDENTIFIER` member carries the diagnose-only arm that used to be its own overload:
-/// a lowercase return name is still met with the pointed `TYPE OF` suggestion, not a dispatch miss.
+/// A lowercase return name is met with the pointed `TYPE OF` suggestion, not a dispatch miss. The
+/// name is a parameter's, so it is unbound in the defining scope and the miss surfaces as
+/// `UnboundName` — the arm the diagnosis table is probed from before the bare unbound-name error.
 #[test]
 fn fn_value_named_return_stays_pointed() {
     let program = program_storage();
@@ -537,5 +538,23 @@ fn fn_value_named_return_stays_pointed() {
             if msg.contains("names a type, but `elem` is a value")
                 && msg.contains("-> :(TYPE OF elem)")),
         "expected the pointed value-named-return error, got {err}",
+    );
+}
+
+/// The same mistake with the name **bound** in the defining scope takes the other terminal arm: it
+/// resolves, then no overload admits a resolved value in a type slot, so the miss is `Unmatched`.
+/// Both arms probe the diagnosis table, so the two spellings of the mistake read identically.
+#[test]
+fn a_bound_value_named_return_stays_pointed_too() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run("LET elem = 3");
+    let error = test_run.run_one_err(test_run.parse_one("FN (DOUBLE n :Number) -> elem = (n)"));
+    assert!(
+        matches!(&error.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("names a type, but `elem` is a value")
+                && msg.contains("-> :(TYPE OF elem)")),
+        "expected the pointed value-named-return error, got {error}",
     );
 }

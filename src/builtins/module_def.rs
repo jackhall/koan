@@ -150,41 +150,20 @@ pub(super) fn unsealed_announcement_error(
     )
 }
 
-/// The Type-token-named overload (`MODULE IntOrd = …`, `GROUP VecOps FOLD LEFT = …`): a module is a
-/// value, so its name belongs in the value namespace. It always errors, so it installs nothing.
-pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
-    use crate::machine::require_bare_type_name;
-    use crate::machine::{KError, KErrorKind};
-
-    let name = crate::try_action!(require_bare_type_name(ctx.args, &SLOTS.name));
-    let name = crate::machine::model::render_label(name.symbol(), ctx.registries);
-    Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-        "module `{name}` is named with a Type token, but a module is a value — the Type-token \
-         namespace names what can type a field. Name it snake_case, e.g. `{suggestion}`",
-        suggestion = super::let_binding::snake_case_identifier(&name),
-    )))))
-}
-
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
-    let module_sig = |name_kt: KType| {
-        sig(
-            KType::EMPTY_SIGNATURE,
-            vec![
-                kw(registries, "MODULE"),
-                arg(registries, &SLOTS.name, name_kt),
-                kw(registries, "="),
-                arg(registries, &SLOTS.body, KType::KEXPRESSION),
-            ],
-        )
-    };
-    crate::builtins::register_builtin(scope, module_sig(KType::IDENTIFIER), body, registries, gate);
-    crate::builtins::register_builtin(
-        scope,
-        module_sig(KType::TYPE_NAME_TOKEN),
-        body_type_named,
-        registries,
-        gate,
+    // A module is a value, so its name binds under a value-classified identifier. A Type-token name
+    // is a mistake with no reading of its own, so it registers nothing here: the dispatch-miss
+    // diagnosis table names it (`machine::model::miss_diagnostics`).
+    let module_sig = sig(
+        KType::EMPTY_SIGNATURE,
+        vec![
+            kw(registries, "MODULE"),
+            arg(registries, &SLOTS.name, KType::IDENTIFIER),
+            kw(registries, "="),
+            arg(registries, &SLOTS.body, KType::KEXPRESSION),
+        ],
     );
+    crate::builtins::register_builtin(scope, module_sig, body, registries, gate);
 }
 
 #[cfg(test)]

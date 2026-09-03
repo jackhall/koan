@@ -52,11 +52,7 @@ pub(crate) fn build_fn_like<'a>(
     }
     let signature_expr =
         crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.signature));
-    let return_type_raw = crate::try_action!(extract_return_type_raw(
-        ctx.args,
-        ctx.scope.brand(),
-        ctx.registries
-    ));
+    let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args, ctx.scope.brand()));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.body));
     let param_names = signature::collect_param_names_from_signature(&signature_expr, ctx.scratch);
     let mut elaborator = Elaborator::new(ctx.scope).with_chain(ctx.chain.clone());
@@ -150,22 +146,6 @@ pub fn body_let_combined<'a>(
     )
 }
 
-/// `LET <Name> = FN …` — a Type-classified binder over a function. A function is a value, so it
-/// binds under a value-classified identifier; without this overload the shape is a bare dispatch
-/// miss that says nothing about the actual mistake.
-pub fn body_let_combined_type_named<'a>(
-    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
-) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, require_bare_type_name};
-    let name = crate::try_action!(require_bare_type_name(ctx.args, &SLOTS.name));
-    let name = crate::machine::model::render_label(name.symbol(), ctx.registries);
-    Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-        "LET binder `{name}` is Type-classified but the bound value is a function (a value); \
-         rebind under a value-classified identifier instead (snake_case, e.g. `{suggestion}`)",
-        suggestion = crate::builtins::let_binding::snake_case_identifier(&name),
-    )))))
-}
-
 /// Anonymous-FN body: `FN :{<record schema>} -> ReturnType = (<body>)`.
 ///
 /// The record-schema sigil `:{…}` resolves to a record-type `KType` before this
@@ -217,11 +197,7 @@ pub fn body_record_schema<'a>(
             schema_kt.display_name(ctx.registries),
         )))));
     };
-    let return_type_raw = crate::try_action!(extract_return_type_raw(
-        ctx.args,
-        ctx.scope.brand(),
-        ctx.registries
-    ));
+    let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args, ctx.scope.brand()));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "FN", &SLOTS.body));
     let return_type_state = crate::try_action!(classify_return_type(
         return_type_raw,
@@ -270,11 +246,10 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     //
     // One keyworded overload covers the whole return-type carrier dimension: the slot is a union
     // of the raw-capture members the return position admits — a bare `Type` token (`-> Number`,
-    // `-> MyAlias`), a `:(…)` / dotted form (`-> er.Carrier`, `-> :(Set WITH {…})`), a `:{…}`
-    // record (`-> :{v :Number}`), and a bare identifier, which exists only to diagnose. Every
-    // member captures raw, because a return type may name an FN parameter unbound in the defining
-    // scope and must survive verbatim to the dispatch boundary. A second overload (below) carries
-    // the anonymous `:{…}` record-schema signature.
+    // `-> MyAlias`), a `:(…)` / dotted form (`-> er.Carrier`, `-> :(Set WITH {…})`), and a `:{…}`
+    // record (`-> :{v :Number}`). Every member captures raw, because a return type may name an FN
+    // parameter unbound in the defining scope and must survive verbatim to the dispatch boundary. A
+    // second overload (below) carries the anonymous `:{…}` record-schema signature.
     //
     // The keyworded overloads share a bucket key the spec table lists, so a named `FN` installs a
     // pending-overload *bucket* entry and a forward sibling reference parks on it. FN's spec-table
@@ -289,15 +264,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // the signature operand as a parenthesized expression, and a `:{…}` record part is not one, so
     // the extractor returns `None`. An anonymous `FN :{…}` therefore claims no bucket and stays
     // legal in a value position.
-    // The return-carrier union, shared by every FN surface below. Listing `IDENTIFIER` folds in the
-    // value-named diagnostic: without a member for it the shape would fall through every FN
-    // overload and report "no matching function", which says nothing about the actual mistake.
-    let return_union = registries.types.union_of(&[
-        KType::TYPE_NAME_TOKEN,
-        KType::SIGILED_TYPE_EXPR,
-        KType::RECORD_TYPE,
-        KType::IDENTIFIER,
-    ]);
+    // The return-carrier union, shared by every FN surface below and with `OP`'s operand / result
+    // slots. A value-named return (`-> er`) is no member of it: the shape is a mistake, and its
+    // targeted message comes from the dispatch-miss diagnosis table rather than from an
+    // always-erroring overload sitting in this bucket.
+    let return_union = return_type::type_carrier_union(registries);
     let keyworded_sig = || {
         sig(
             KType::ANY,
@@ -339,17 +310,24 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // bucket. Full-bucket-key matching keeps `[LET, Slot, =, FN, Slot, ->, Slot, =, Slot]` disjoint
     // from plain `LET` and bare `FN`, so no overload of either is shadowed. The return slot takes
     // the same carrier union as the bare form, so both spellings admit the same return shapes.
-    let combined_sig = |name: KType, signature: KType, return_type: KType| {
+    //
+    // There is deliberately no combined overload for the anonymous `FN :{…}` signature. Its
+    // `ProperType` signature slot would make the bucket's pick undecidable until that operand
+    // sub-dispatched, and the re-resolve after an eager-subs round re-reads the statement's own
+    // `name` token — which by then names this very node's placeholder, a self-cycle. The anonymous
+    // form is not a binder anyway, so its flat spelling reports a plain dispatch miss and the
+    // parenthesized value bind `LET f = (FN :{…} -> <Return> = (…))` stays the spelling.
+    let combined_sig = || {
         sig(
             KType::ANY,
             vec![
                 kw(registries, "LET"),
-                arg(registries, &SLOTS.name, name),
+                arg(registries, &SLOTS.name, KType::IDENTIFIER),
                 kw(registries, "="),
                 kw(registries, "FN"),
-                arg(registries, &SLOTS.signature, signature),
+                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
                 kw(registries, "->"),
-                arg(registries, &SLOTS.return_type, return_type),
+                arg(registries, &SLOTS.return_type, return_union),
                 kw(registries, "="),
                 arg(registries, &SLOTS.body, KType::KEXPRESSION),
             ],
@@ -358,29 +336,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     use crate::builtins::register_builtin;
     register_builtin(scope, keyworded_sig(), body, registries, gate);
     register_builtin(scope, record_sig(), body_record_schema, registries, gate);
-    register_builtin(
-        scope,
-        combined_sig(KType::IDENTIFIER, KType::KEXPRESSION, return_union),
-        body_let_combined,
-        registries,
-        gate,
-    );
-    // A diagnostic overload — it always errors, so it installs nothing: a function is a value, and
-    // this names the shape that binds one under a Type-classified name.
-    //
-    // There is deliberately no combined overload for the anonymous `FN :{…}` signature. Its
-    // `ProperType` signature slot would make the bucket's pick undecidable until that operand
-    // sub-dispatched, and the re-resolve after an eager-subs round re-reads the statement's own
-    // `name` token — which by then names this very node's placeholder, a self-cycle. The anonymous
-    // form is not a binder anyway, so its flat spelling reports a plain dispatch miss and the
-    // parenthesized value bind `LET f = (FN :{…} -> <Return> = (…))` stays the spelling.
-    register_builtin(
-        scope,
-        combined_sig(KType::TYPE_NAME_TOKEN, KType::KEXPRESSION, return_union),
-        body_let_combined_type_named,
-        registries,
-        gate,
-    );
+    register_builtin(scope, combined_sig(), body_let_combined, registries, gate);
 }
 
 #[cfg(test)]

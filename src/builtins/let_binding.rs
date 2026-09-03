@@ -8,7 +8,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 use crate::machine::model::Carried;
 use crate::machine::model::RunRegistries;
-use crate::machine::model::{BindKind, BinderSymbol, display_label};
+use crate::machine::model::{BindKind, BinderSymbol, display_label, snake_case_identifier};
 
 // This builtin's slot spellings, minted once and read back by symbol.
 crate::slots! { SLOTS { name, value } }
@@ -189,24 +189,6 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         )))
         .with_effect(ctx.scratch, write)
     }
-}
-
-/// Suggest a value-classified rewrite of a Type-classified binder name for the module guard:
-/// `IntOrd` → `int_ord`. Each interior uppercase letter opens a new word (see
-/// design/typing/tokens.md for the two token classes).
-pub(crate) fn snake_case_identifier(name: &str) -> String {
-    let mut out = String::with_capacity(name.len() + 2);
-    for (i, ch) in name.chars().enumerate() {
-        if ch.is_ascii_uppercase() {
-            if i > 0 {
-                out.push('_');
-            }
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push(ch);
-        }
-    }
-    out
 }
 
 /// A Type-classified rewrite of a value-classified binder name for the partition-guard

@@ -106,6 +106,7 @@ digraph {
     "koan::machine::model::labels" [label="koan::machine::model::labels"];
     "koan::machine::model::labels::sealed" [label="koan::machine::model::labels::sealed"];
     "koan::machine::model::lazy_slots" [label="koan::machine::model::lazy_slots"];
+    "koan::machine::model::miss_diagnostics" [label="koan::machine::model::miss_diagnostics"];
     "koan::machine::model::operators" [label="koan::machine::model::operators"];
     "koan::machine::model::registries" [label="koan::machine::model::registries"];
     "koan::machine::model::types" [label="koan::machine::model::types"];
@@ -250,6 +251,7 @@ digraph {
     "koan::machine::model" -> "koan::machine::model::key_spec" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::labels" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::lazy_slots" [label="owns", style="solid"];
+    "koan::machine::model" -> "koan::machine::model::miss_diagnostics" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::operators" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::registries" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::types" [label="owns", style="solid"];
@@ -808,6 +810,10 @@ digraph {
     "koan::machine::model::lazy_slots" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::lazy_slots" -> "koan::machine::model::key_spec" [label="uses", style="dashed"];
     "koan::machine::model::lazy_slots" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::miss_diagnostics" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::model::miss_diagnostics" -> "koan::machine::model::key_spec" [label="uses", style="dashed"];
+    "koan::machine::model::miss_diagnostics" -> "koan::machine::model::labels" [label="uses", style="dashed"];
+    "koan::machine::model::miss_diagnostics" -> "koan::machine::model::registries" [label="uses", style="dashed"];
     "koan::machine::model::operators" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::operators" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::operators" -> "koan::machine::model::types" [label="uses", style="dashed"];

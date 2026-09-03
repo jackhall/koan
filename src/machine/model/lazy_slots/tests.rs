@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use super::{LAZY_SLOT_SPECS, LazyKinds, LazySlotSpec};
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::{program_storage, run_root_storage};
-use crate::machine::model::key_spec::{key_matches_untyped, render_key};
+use crate::machine::model::key_spec::{key_matches_untyped, key_specs_agree, render_key};
 use crate::machine::model::{KType, SignatureElement, TypeNode, TypeRegistry, UntypedKey};
 use crate::parse::parse;
 
@@ -70,6 +70,14 @@ fn live_lazy_slots() -> Vec<(UntypedKey, BTreeMap<usize, LazyKinds>)> {
     live
 }
 
+/// True iff the dispatch-miss diagnosis table reserves this spec key — the shape registers nothing,
+/// so no live bucket can vouch for its lazy-slot entry.
+fn reserves(key: &[crate::machine::model::key_spec::KeyElementSpec]) -> bool {
+    crate::machine::model::miss_diagnostics::MISS_DIAGNOSTICS
+        .iter()
+        .any(|entry| entry.reserved && key_specs_agree(entry.key, key))
+}
+
 /// The entry `key` matches, or `None`.
 fn spec_for(key: &UntypedKey) -> Option<&'static LazySlotSpec> {
     LAZY_SLOT_SPECS
@@ -101,13 +109,18 @@ fn every_lazy_builtin_bucket_has_a_matching_spec_entry() {
 
 /// The other direction: no orphan entries. A table key naming no live lazy bucket — a builtin
 /// renamed, re-shaped, or dropped — fails here.
+///
+/// A key the dispatch-miss diagnosis table **reserves** justifies its entry without a registration:
+/// nothing registers there by design, and the entry is what keeps the body slot raw so the statement
+/// reaches the miss the diagnosis reads instead of dying on an eagerly evaluated body first.
 #[test]
 fn every_spec_entry_names_a_live_lazy_bucket() {
     let live = live_lazy_slots();
     for spec in LAZY_SLOT_SPECS {
         assert!(
             live.iter()
-                .any(|(key, _)| key_matches_untyped(spec.key, key)),
+                .any(|(key, _)| key_matches_untyped(spec.key, key))
+                || reserves(spec.key),
             "spec key {:?} names no live bucket with lazy slots",
             render_key(spec.key)
         );

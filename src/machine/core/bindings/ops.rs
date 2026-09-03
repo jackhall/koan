@@ -117,10 +117,13 @@ impl<'a> WriteOp<'a> {
                 scope.assert_open(&seal.key);
                 // A user overload may not join a builtin's bucket — builtins are immutable and
                 // unshadowable. The root registers its own at `BUILTIN`, so only a non-`BUILTIN`
-                // index is gated.
-                if builtin_shadow_guard
-                    && index != BindingIndex::BUILTIN
-                    && scope.shadows_builtin_function(&seal.key)
+                // index is gated. A key the dispatch-miss diagnosis table *reserves* is refused the
+                // same way and without the door's own opt-out: nothing registers there precisely so
+                // the shape stays diagnosable, and a user form claiming it would turn a genuine
+                // typed miss under its own bucket into that shape's targeted message.
+                if index != BindingIndex::BUILTIN
+                    && ((builtin_shadow_guard && scope.shadows_builtin_function(&seal.key))
+                        || crate::machine::model::key_is_reserved(&seal.key))
                 {
                     return Err(KError::new(KErrorKind::Rebind {
                         name: render_untyped_key(&seal.key, registries),

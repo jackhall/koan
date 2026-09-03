@@ -7,27 +7,35 @@ sigiled twin, which fails at definition today.
 **sigiled** form `-> :(FN :{x :Number} -> Number)` elaborates and runs — a closure
 factory can declare and return a typed function (see the closure example in
 [tutorial/04-functions.md](../../tutorial/04-functions.md)). The **bare** form,
-parenthesized without the `:` sigil, fails at definition time: `FN`'s keyworded
-overloads admit the return slot only as a bare type token (`-> Number`), a
-sigiled type expression (`-> :(…)`), or an identifier (a diagnose-only overload)
-— see the signatures in [`fn_def.rs`](../../src/builtins/fn_def.rs). A bare
-`(LIST OF Str)` is a `KExpression` part, so no overload matches, resolution
-defers, and the submit path stages *every* parenthesized part as an ordinary
-sub-dispatch (`install_eager_only` in
-[`keyworded.rs`](../../src/machine/execute/decide/keyworded.rs)). The
-parameter list — meaningful only as a binder pattern — is then evaluated as a
-call, and the definition dies with
-`dispatch failed for SINGLETON s Str: no matching function`.
+parenthesized without the `:` sigil, fails at definition time: the return slot's
+carrier union in [`fn_def.rs`](../../src/builtins/fn_def.rs) admits only
+raw-captured part kinds — a bare type token (`-> Number`), a sigiled type
+expression (`-> :(…)`), a record type (`-> :{…}`), an identifier — and a bare
+`(LIST OF Str)` is an ordinary `Expression` part with no raw-capture stamp, so
+it evaluates eagerly to a resolved `ProperType` no union member admits and the
+definition dies with
+`dispatch failed for FN KExpression -> ProperType = KExpression: no matching function`.
 
 The gap is constructor-independent: `-> (FN :{y :Number} -> Number)`,
 `-> (LIST OF Str)`, and `-> (MAP Str -> Number)` all fail identically, while each
 sigiled counterpart runs. The bare form parallels how every other return type is
 written (`-> Number`, not `-> :Number`), so it is the natural thing to reach for
 and a likely papercut. `OP`'s operand and return slots ride the same carrier
-seam (`extract_type_slot_raw` in
-[`return_type.rs`](../../src/builtins/fn_def/return_type.rs)) and exhibit the
-same fall-through: `OP #(++) OVER (LIST OF Str) = (…)` stages its body eagerly
-and fails with `unbound name 'left'`.
+seam (`TypeSlotThunk::from_slot` in
+[`return_type.rs`](../../src/builtins/fn_def/return_type.rs)) and fail the same
+way: `OP #(++) OVER (LIST OF Str) = (…)` misses every `OP` overload.
+
+Separately, the builtin registry carries eight diagnose-only registrations —
+[`op_def.rs`](../../src/builtins/op_def.rs)'s two missing-result `UNARY OP … = …`
+keys, and the type-named diagnostic overloads of
+[`fn_def.rs`](../../src/builtins/fn_def.rs),
+[`module_def.rs`](../../src/builtins/module_def.rs) and
+[`group_def.rs`](../../src/builtins/group_def.rs), plus the diagnose-only
+`IDENTIFIER` member of `FN`'s return union — whose only job is rendering
+a targeted message on an inevitable miss. They clutter the success-path
+registry, and the two missing-result keys would each need spec-table masking of
+their own to keep their diagnostics at parity once the bare spelling is
+admitted.
 
 **Acceptance criteria.**
 
@@ -44,8 +52,18 @@ and fails with `unbound name 'left'`.
   registers and dispatches.
 - An anonymous record-schema function with a constructed return type —
   `FN :{s :Str} -> :(LIST OF Str) = (…)`, and its bare-parenthesized twin —
-  elaborates, runs, and return-checks like the keyworded form (today this
-  signature × return carrier combination falls through every `FN` overload).
+  elaborates, runs, and return-checks like the keyworded form (today the
+  bare-parenthesized twin falls through every `FN` overload).
+- The builtin registry contains no diagnose-only registrations or union
+  members: the missing-result `UNARY OP … = …` forms (bare and `LET`-combined),
+  the type-named `LET … = FN` / `MODULE` / `GROUP` shapes, and the value-named
+  `FN` return slot (`-> er`, the identifier bound or unbound) surface their
+  targeted messages from a dispatch-miss diagnosis table, with unchanged
+  message texts — and the missing-result diagnostic fires for the
+  bare-parenthesized operand spelling at parity with the sigiled one.
+- A user overload registration under a reserved diagnostic key (`UNARY OP _
+  OVER _ = _` or its `LET`-combined twin) is refused like any builtin-key
+  shadow.
 
 **Directions.**
 
@@ -59,33 +77,30 @@ and fails with `unbound name 'left'`.
   dispatch-side alternative — a `KEXPRESSION` type-slot overload — was
   rejected: it flips the slot's eager/lazy classification and grows the overload
   matrix per carrier combination.)
-- *How the overload-matrix holes are closed — decided.* Collapse the carrier
-  dimension with the shipped
-  [union carrier slots](../../design/typing/ktype/slots-and-signatures.md#union-carrier-slots).
-  On top of that machinery, this item rewrites
-  [`fn_def.rs`](../../src/builtins/fn_def.rs) to two overloads — the
-  binder-shaped keyworded form and the non-binder record form, each with a
-  return slot of `union_of(TYPE_NAME_TOKEN, SIGILED_TYPE_EXPR, RECORD_TYPE,
-  IDENTIFIER)` and one body branching on the carrier
-  (`extract_type_slot_raw` already branches on the first three's carriers;
-  the diagnose-only `IDENTIFIER` overload folds into an error arm, and the
-  `RECORD_TYPE` member keeps the record-typed return `-> :{…}` admitting —
-  today it rides the `of_kind` slot's shape admission, which the union
-  drops) — and replaces
-  [`op_def.rs`](../../src/builtins/op_def.rs)'s `for operand { for result { …
-  } }` registration loop with flat union-slot registrations. The signature
-  dimension stays two overloads because their signature slots and bodies
-  genuinely differ — `KExpression` versus `ProperType`, and the record form
-  routes to `body_record_schema`. (Enumerating the missing matrix cells as overloads was
-  rejected: the matrix re-leaks with every new carrier and the buckets keep
-  growing.)
+- *Where diagnose-only registrations live — decided.* A static dispatch-miss
+  diagnosis table beside the sibling spec tables in `machine/model`, probed in
+  the `Unmatched` arm of dispatch resolution
+  ([`keyworded.rs`](../../src/machine/execute/decide/keyworded.rs)): each entry
+  pairs a full untyped key spec with a render fn that confirms the mistake from
+  the raw parts, else the generic miss reason stands. The missing-result keys
+  unregister and become *reserved* — the overload shadow guard refuses user
+  registration under a reserved key, so the shape stays unshadowable and the
+  diagnosis stays sound — and their `LAZY_SLOT_SPECS` entries stay, so the
+  statement reaches the miss with raw slots instead of dying on an eagerly
+  evaluated body. The type-named diagnostic overloads migrate too, as does the
+  diagnose-only `IDENTIFIER` member of `FN`'s return union; those keys keep
+  success-path siblings. Because a value-named return whose identifier is
+  unbound (a parameter name, the common case) surfaces as `UnboundName` rather
+  than a dispatch miss, the table is probed from **both** terminal arms —
+  `Unmatched` and `UnboundName` — before either generic rendering.
 - *`OP`'s operand and return slots — decided.* The fix covers them in this
   item; they share the carrier seam and the overload-set gap with `FN`'s return
   slot.
 
 ## Dependencies
 
-**Requires:** none — the union carrier slots its overload-matrix collapse rests
-on are shipped.
+**Requires:** none — the
+[union carrier slots](../../design/typing/ktype/slots-and-signatures.md#union-carrier-slots)
+the return/operand slots ride are shipped.
 
 **Unblocks:** none.

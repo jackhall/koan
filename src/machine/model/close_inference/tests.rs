@@ -4,7 +4,9 @@
 use super::{DynamicNameForm, FORM_SPECS, FormRule, infer_close_captures};
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::{ProgramStorage, program_storage, run_root_storage};
-use crate::machine::model::key_spec::{KeyElementSpec, key_matches_untyped, render_key};
+use crate::machine::model::key_spec::{
+    KeyElementSpec, key_matches_untyped, key_specs_agree, render_key,
+};
 use crate::machine::model::{UntypedKey, render_label};
 
 // ---------- spec ⟺ registration ----------
@@ -26,16 +28,27 @@ fn live_keys() -> Vec<UntypedKey> {
 /// Recognition is only sound because a matched key can resolve to nothing but that builtin's
 /// overloads, so an entry naming no live bucket — a builtin renamed, re-shaped, or dropped — is a
 /// rule the walk would apply to user code.
+///
+/// A key the dispatch-miss diagnosis table **reserves** carries that soundness itself: nothing
+/// registers there by design and the write door refuses a user registration, so the shape is as
+/// unshadowable as a builtin bucket and the walk's reading of it is as fixed.
 #[test]
 fn every_form_spec_names_a_live_builtin_bucket() {
     let live = live_keys();
     for spec in FORM_SPECS {
         assert!(
-            live.iter().any(|key| key_matches_untyped(spec.key, key)),
+            live.iter().any(|key| key_matches_untyped(spec.key, key)) || reserves(spec.key),
             "form spec {:?} names no live builtin bucket",
             render_key(spec.key)
         );
     }
+}
+
+/// True iff the dispatch-miss diagnosis table reserves this key.
+fn reserves(key: &[KeyElementSpec]) -> bool {
+    crate::machine::model::miss_diagnostics::MISS_DIAGNOSTICS
+        .iter()
+        .any(|entry| entry.reserved && key_specs_agree(entry.key, key))
 }
 
 /// One rule per key: two entries matching the same run would make the walk's reading depend on

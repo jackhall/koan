@@ -1,16 +1,18 @@
 //! Bucket-key specs: the shared vocabulary the static builtin-form tables are written in.
 //!
-//! Both spec tables — [`BINDER_SPECS`](crate::machine::model::binder::BINDER_SPECS) and
-//! [`LAZY_SLOT_SPECS`](crate::machine::model::lazy_slots::LAZY_SLOT_SPECS) — recognize a form by
-//! its **full untyped bucket key**, every keyword pinned in position. That recognition is sound
-//! because builtin buckets are unshadowable: a node whose key matches a table entry can only ever
-//! resolve to that builtin's overloads. This module holds the one keyword group both tables spell
-//! their keys with and the one matcher both probe through, so a surface token's spelling and the
+//! Every spec table — [`BINDER_SPECS`](crate::machine::model::binder::BINDER_SPECS),
+//! [`LAZY_SLOT_SPECS`](crate::machine::model::lazy_slots::LAZY_SLOT_SPECS),
+//! [`FORM_SPECS`](crate::machine::model::close_inference) and
+//! [`MISS_DIAGNOSTICS`](crate::machine::model::miss_diagnostics::MISS_DIAGNOSTICS) — recognizes a
+//! form by its **full untyped bucket key**, every keyword pinned in position. That recognition is
+//! sound because builtin buckets are unshadowable: a node whose key matches a table entry can only
+//! ever resolve to that builtin's overloads, and a key the miss table *reserves* is refused to user
+//! registration for the same reason. This module holds the one keyword group they all spell their
+//! keys with and the one matcher they all probe through, so a surface token's spelling and the
 //! meaning of "this key matches" are each written once.
 
 use crate::machine::model::ast::{Part, PartClass};
 use crate::machine::model::labels::{KeywordSymbol, StaticName};
-#[cfg(test)]
 use crate::machine::model::{KeyElement, UntypedKey};
 use crate::source::Spanned;
 
@@ -109,9 +111,9 @@ impl KeyElementSpec {
         }
     }
 
-    /// Owned-key peer of [`Self::matches_part`], for the consistency tests that pin the spec tables
-    /// against the live registration keys.
-    #[cfg(test)]
+    /// Owned-key peer of [`Self::matches_part`], for the readers that compare a spec key against a
+    /// registration key rather than against a parts run — the reserved-key guard and the
+    /// consistency tests that pin the spec tables against the live registration keys.
     fn matches(&self, element: &KeyElement) -> bool {
         match (self, element) {
             (KeyElementSpec::Keyword(name), KeyElement::Keyword(symbol)) => {
@@ -133,14 +135,30 @@ pub fn key_matches_parts<'a, P: Part<'a>>(key: &[KeyElementSpec], parts: &[Spann
             .all(|(spec, part)| spec.matches_part(&part.value))
 }
 
-/// [`key_matches_parts`]'s owned-key peer, for the spec⟺registration consistency tests.
-#[cfg(test)]
+/// [`key_matches_parts`]'s owned-key peer, for the reserved-key guard and the spec⟺registration
+/// consistency tests.
 pub fn key_matches_untyped(key: &[KeyElementSpec], live: &UntypedKey) -> bool {
     key.len() == live.len()
         && key
             .iter()
             .zip(live.iter())
             .all(|(spec, element)| spec.matches(element))
+}
+
+/// True iff two spec keys spell the same run, for the consistency tests that pin one static table's
+/// keys against another's.
+#[cfg(test)]
+pub fn key_specs_agree(a: &[KeyElementSpec], b: &[KeyElementSpec]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b.iter())
+            .all(|(left, right)| match (left, right) {
+                (KeyElementSpec::Keyword(l), KeyElementSpec::Keyword(r)) => {
+                    l.symbol() == r.symbol()
+                }
+                (KeyElementSpec::Slot, KeyElementSpec::Slot) => true,
+                _ => false,
+            })
 }
 
 /// A spec key rendered for a failure message: keywords verbatim, slots as `_`.

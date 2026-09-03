@@ -4,6 +4,7 @@ pub(crate) mod close_inference;
 pub(crate) mod key_spec;
 pub(crate) mod labels;
 pub(crate) mod lazy_slots;
+pub(crate) mod miss_diagnostics;
 pub mod operators;
 pub(crate) mod registries;
 pub(crate) mod types;
@@ -13,7 +14,7 @@ pub(crate) mod values;
 pub use labels::symbols_minted;
 pub use labels::{
     BinderSymbol, ClassifiedSymbol, KeywordSymbol, LabelInterner, StaticName, Symbol, TypeSymbol,
-    ValueSymbol, WILDCARD, is_type_name, wrong_binder_class,
+    ValueSymbol, WILDCARD, is_type_name, snake_case_identifier, wrong_binder_class,
 };
 pub use operators::{
     FoldDirection, OperatorGroup, OperatorGroupFamily, ReductionMode, binary_key, unary_key,
@@ -52,6 +53,7 @@ pub(crate) use binder::{OpArity, op_declaration_arity};
 pub(crate) use binder::{StoredBinderKey, symbol_from_parts, symbol_from_quote_body};
 pub use close_inference::DynamicNameForm;
 pub(crate) use close_inference::infer_close_captures;
+pub(crate) use miss_diagnostics::{diagnose_miss, key_is_reserved};
 pub(crate) use types::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
     SealOutcome, SigSchema, TypeMemberMap, TypeResolution, constructor_param_names,

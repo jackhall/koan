@@ -5,7 +5,7 @@ use crate::machine::ProducerId;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::location_from_expr;
 use crate::machine::model::labels::BinderSymbol;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart};
+use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart, diagnose_miss};
 use crate::machine::{DispatchOutcome, KError, KErrorKind};
 use crate::source::Spanned;
 
@@ -79,6 +79,9 @@ fn resolve_and_invoke<'step>(
             })));
         }
         DispatchOutcome::Unmatched { quote_hint } => {
+            if let Some(diagnosed) = diagnose_miss(&expr, ctx.registries()) {
+                return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(diagnosed))));
+            }
             let named = splice_resolved_names(ctx, &expr, &bare_outcomes).unwrap_or(expr);
             return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: named.summarize(ctx.registries()),
@@ -87,6 +90,13 @@ fn resolve_and_invoke<'step>(
             })));
         }
         DispatchOutcome::UnboundName(name, role) => {
+            // A diagnosable shape speaks first: the name a mis-spelled slot holds is *why* nothing
+            // matched, and reporting it as merely unbound would bury the mistake. `-> er` is the
+            // standing case — a parameter name is unbound in the defining scope, so the shape
+            // reaches this arm rather than the miss above.
+            if let Some(diagnosed) = diagnose_miss(&expr, ctx.registries()) {
+                return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(diagnosed))));
+            }
             let spelling = crate::machine::model::render_label(name.symbol(), ctx.registries());
             // A slot that declared a role keeps the pointed noun its body used to render before the
             // lane owned the resolution; every other slot reports the bare unbound name.
