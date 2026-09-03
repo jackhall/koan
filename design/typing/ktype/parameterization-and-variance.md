@@ -241,7 +241,11 @@ annotation. The three boundaries are:
   [`check_declared_return`](../../../src/machine/execute/finalize.rs) runs
   the match predicate but returns no stamp, so a satisfying value passes through
   un-stamped (a passing value
-  already satisfies the declared type, at worst as a subtype).
+  already satisfies the declared type, at worst as a subtype). A call that entered
+  through an opaque view's coercion wrapper checks against the *underlying*
+  callable's side of the ascription barrier and then rewrites the result to the
+  view's types on the same lift-time rebuild
+  ([modules.md § VAL-slot reads carry the abstract member identity](../modules.md#val-slot-reads-carry-the-abstract-member-identity)).
 - **FN argument** — each parameterized-carrier argument slot (`List` / `Dict` /
   `ConstructorApply`) is checked with `matches_value` in
   [`KFunction::validate_call_args`](../../../src/machine/core/kfunction.rs) before the

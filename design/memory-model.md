@@ -534,8 +534,8 @@ That is the same no-outlives argument the folded sinks rest on. What leaves the 
 **reference**, re-anchored to the caller's `'a` under the handle's own live region borrow; the value
 itself is never erased. What each must still do is put its *own* bytes where its value
 lands: a `KFunction`'s signature element run and parameter schema
-([`ExpressionSignature::mint`](../src/machine/model/types/signature.rs)), a `Module`'s path and both
-member tables ([`Module::assemble`](../src/machine/model/values/module.rs)). Each takes a single
+([`ExpressionSignature::mint`](../src/machine/model/types/signature.rs)), a `Module`'s path and its
+member table ([`Module::assemble`](../src/machine/model/values/module.rs)). Each takes a single
 brand parameter for that re-home, so bumping the parts at one region and the value at another is
 unstateable.
 
@@ -741,10 +741,13 @@ party's death schedule reaches into another's subtree.
   covers no sibling region. Its group-record sibling asserts the other composed shape — hosted at
   the declaring region with no members — so both structural claims are checked as facts a
   composition produced rather than as prose.
-- [`functor_application_mints_distinct_abstract_types`](../src/builtins/ascribe/tests/functor.rs)
+- [`functor_application_mints_distinct_abstract_types`](../src/builtins/ascribe/tests/functor.rs),
+  [`a_returned_opaque_view_keeps_every_coerced_member_alive`](../src/builtins/ascribe/tests/views.rs)
   and [`a_returned_transparent_view_keeps_the_region_it_was_minted_in`](../src/builtins/ascribe/tests/ascription.rs)
-  are the escaping-module half of the slate: an opaque view's path and both member maps are read
-  back after the call region that bumped them is gone, and a transparent view — the one shape whose
+  are the escaping-module half of the slate: an opaque view's path, member map and coerced member
+  values — a re-tag sharing the source's payload substrate, a rebuilt list, and a coercion wrapper
+  born in the source module's region — are read back after the call region that bumped them is
+  gone, and a transparent view — the one shape whose
   residence and the scope it borrows are different regions — is read back after its minting frame
   dies. A release claim derived from the borrowed child scope would free the storage those reads
   walk, which only tree borrows observes.

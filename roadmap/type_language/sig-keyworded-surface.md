@@ -36,17 +36,16 @@ against.
 - *Declaration syntax — open.* Something shaped like the FN definition head
   (`SIG S = ((OP (PURE x :Number) -> :(Number AS Wrap)))`) so the bucket key
   derives the same way; alternatives welcome at design time.
-- *Coercion mechanism — decided.* Reuse `Body::CoercedDelegate` and the
-  `coerce_value` walker from
-  [applied-constructors-through-views.md](applied-constructors-through-views.md):
-  a declared keyworded member's replayed bucket entry wraps the sealed
-  function the same way a coerced VAL slot does.
+- *Coercion mechanism — decided.* Reuse the shipped barrier machinery — the
+  [`coerce_object_into`](../../src/machine/model/values/coerce.rs) walk and the
+  `Body::CoercedDelegate` eta-wrapper
+  ([design/typing/modules.md](../../design/typing/modules.md)): a declared
+  keyworded member's replayed bucket entry wraps the underlying function the
+  same way a coerced VAL slot does.
 
 ## Dependencies
 
-**Requires:**
-
-- [applied-constructors-through-views.md](applied-constructors-through-views.md) —
-  supplies the coercion walker and the delegate body the bucket entries wrap.
+**Requires:** none — the coercion walk and the delegate body it reuses have
+shipped.
 
 **Unblocks:** none tracked yet.

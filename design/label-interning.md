@@ -300,7 +300,7 @@ Every name-keyed table keys by this vocabulary, identity-hashed, so a lookup is 
 | `Bindings::operators` (probe → group) | `KeywordSymbol` |
 | `Bindings::functions` and the claim store's bucket channel | `&[KeyElement]`, a run of `Keyword(KeywordSymbol)` / `Slot` |
 | the SIG decl scope's `VAL`-slot collector | `ValueSymbol` |
-| a `Module`'s `type_members` / `slot_type_tags` | `TypeSymbol` / `ValueSymbol` |
+| a `Module`'s `type_members` | `TypeSymbol` |
 | a `SigSchema`'s `abstract_members` / `manifest_members` | `TypeSymbol` |
 | a `SigSchema`'s `value_slots` | `ValueSymbol` |
 | a `NodeSchema::TypeConstructor`'s variant `schema` | `TypeSymbol` |

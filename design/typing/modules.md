@@ -130,7 +130,9 @@ ordinary builtins in [`ascribe.rs`](../../src/builtins/ascribe.rs).
 
 A SIG-local abstract-type binding stays *named* end to end, so a slot read
 through an opaque view reports the abstract type rather than the underlying
-representation. Three sites cooperate.
+representation — on every slot shape and every read surface. Two sites cooperate:
+the declaration that keeps the member named, and the ascription that builds a view
+whose members already inhabit its own types.
 
 A `TYPE Carrier` declaration ([`type_decl.rs`](../../src/builtins/type_decl.rs)) binds
 the name-bearing `KType::AbstractType { source: <decl scope id>, name }`, so a
@@ -157,13 +159,70 @@ births the scope, because the mints need the newborn scope's id as their nonce a
 only the birthing door may mint the
 [`WriteGate`](../../src/machine/core/bindings/gate.rs) for an unpublished scope). What the seeded table does *not* hold — the source's
 representation type behind an abstract member — is unreachable through the view by
-construction rather than by masking. Ascription also builds a `slot_type_tags` map
-(VAL-slot name → per-call `AbstractType`) for each slot whose SIG-declared type is
-an abstract member sourced at the SIG's decl scope. Both maps are gathered into a
+construction rather than by masking. The map is gathered into a
 `ModuleDraft` and frozen into the view module at construction — a built module has
 nothing to write — and the per-application generativity nonce is the view scope's own id, which
-`Module::scope_id` reports back off the finished value. Transparent `:!` leaves the maps empty, so
-transparent reads stay concrete.
+`Module::scope_id` reports back off the finished value.
+
+**Members are born coerced.** The same door replays the source module's bindings
+into the view's child scope, and a member whose SIG-declared slot type substitutes
+*differently* under the view's mints than under the source module's own bindings is
+not replayed as the source's seal: it is rewritten into the view scope's region so
+that it inhabits the view's types
+([`Scope::seal_coerced_member`](../../src/machine/core/scope/reach.rs)). Coercing
+once at construction, rather than patching each read, is what makes every read
+surface agree by construction — ATTR, a `USING` window borrowing that very binding
+table, a dynamic read, and a functor's deferred return alike.
+
+The rewrite is the walk in
+[`coerce.rs`](../../src/machine/model/values/coerce.rs), which recurses on the
+SIG-**declared** slot type — never on the two substituted types in lockstep, since
+union interning canonicalizes member order and positional correspondence between two
+separate substitutions is therefore not stable. Its arms mirror
+`substitute_sig_members`, so the walk is finite for the same reason substitution is:
+
+- a position whose two substitutions **agree** returns the value untouched — the
+  whole of a concrete slot (`VAL compare :Number`), a manifest-typed slot
+  (`VAL x :Tag` after `LET Tag = Number`), and every sub-position naming no abstract
+  member;
+- an `AbstractType` or `ConstructorApply` position **re-tags**: the value's identity
+  handle is replaced with the view's substitution, sharing the payload substrate
+  (`KObject::wrapped_peel` collapses one layer, so the single-layer invariant holds);
+- a list, dict or record is **rebuilt** cell by cell against its declared element,
+  value or field type and re-stamped to the substituted container type. A declared
+  *dict key* type naming an abstract member re-stamps the dict's type only: a `KKey`
+  is a concrete scalar with no type identity to carry, so a key read back off a
+  coerced dict is a bare scalar;
+- a `KFunction` position takes the **eta-wrapper** below rather than recursing into
+  the value — a callable crosses the barrier per call, at its own boundary;
+- a `Union` picks the declared member whose source-side substitution the value
+  inhabits, and coerces by that member alone.
+
+A member the signature does not name has no declared slot type to coerce against, so
+width subtyping surfaces it exactly as the source bound it. Transparent `:!` binds
+every abstract member to the source's own concrete type, so the two substitutions of
+every slot agree, nothing is coerced, and transparent reads stay concrete. The two
+bindings a walk rewrites between ride as a `MemberCoercion`
+([`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)): each table is
+interned as the `Signature` handle whose manifest members *are* the table, which
+makes the carrier `Copy` and lifetime-free — what lets a coercion plan sit inside a
+[`Body`](../../src/machine/core/kfunction/body.rs) and inside a sealed return
+obligation, neither of which may name a region.
+
+**The function boundary.** A callable filling a slot whose declared `FN` type names
+an abstract member is wrapped rather than rewritten. The wrapper's signature is the
+underlying's with each declared parameter re-typed to the view's substitution, so
+dispatch and argument validation admit the reading side's types and a source-typed
+argument is a mismatch at the wrapper itself. Its `Body::CoercedDelegate` carries the
+underlying callable and the coercion plan: the invoke coerces each argument inward,
+runs the *underlying's* body, and installs a `ReturnContract::Coerced` whose
+obligation checks the result against the underlying's side of the barrier and then
+rewrites it to the view's at the lift boundary
+([`finalize.rs`](../../src/machine/execute/finalize.rs)'s rebuild disposition — the
+same single re-anchor an ordinary declared-return re-stamp takes). The wrapper is
+born at the underlying's **own captured scope**, so both callables live in one
+region: a callable's residence *is* its captured scope's region, the invariant every
+callable read depends on.
 
 **Satisfaction and `WITH`.** Satisfaction is a **signature-subtyping** check
 ([`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)). Every module carries a
@@ -204,18 +263,18 @@ already fixed — a manifest member, including one an earlier `WITH` folded — 
 when it equals the fixed type (leaving signature identity unchanged) and is a type error when
 it differs ([`type_ops/with.rs`](../../src/builtins/type_ops/with.rs)).
 
-ATTR's `access_module_member`
-([`attr.rs`](../../src/builtins/attr.rs)), on a value-side slot hit with a
-`slot_type_tags` entry, re-tags the read into a
+ATTR's `access_module_member` ([`attr.rs`](../../src/builtins/attr.rs)) reads a
+value-side member exactly as it is bound, and patches nothing: the view's scope
+already holds the coerced value. So `(int_ord_view.zero)` reads as the per-call
+abstract `Type` (opaque), not the underlying `Number` — a
 [`KObject::Wrapped`](../../src/machine/model/values/kobject.rs) carrier whose
-`type_id` is the per-call abstract identity — the same `Wrapped` variant NEWTYPE
-uses, distinguished by its `type_id`'s KType. So `(int_ord_view.zero)` reads as the
-abstract `Type` (opaque), not the underlying `Number`, and a functor body
-`(FN (GET_ZERO er :WithZero) -> er.Carrier = (er.zero))` whose return
-type is the per-call abstract member admits the slot read. The carrier and its
-`type_id` are allocated in the *module's* region (declaration-stable), so the
-`type_id` outlives any lift or deep-clone of the read value into a per-call functor
-region.
+`type_id` is that identity, the same `Wrapped` variant NEWTYPE uses and
+distinguished by its `type_id`'s KType — and a functor body
+`(FN (GET_ZERO er :WithZero) -> er.Carrier = (er.zero))` whose return type is the
+per-call abstract member admits the slot read. The coerced member lives in the view
+scope's own region (declaration-stable), whose composition retains the source
+module's region for the payload substrate a re-tag shares, so both outlive any lift
+or deep-clone of the read value into a per-call functor region.
 
 Opaque ascription is the type-abstraction primitive. It replaces the
 newtype-with-private-fields pattern that a trait system would need.
@@ -485,8 +544,16 @@ what the borrowed table *contains*, not by withholding a table: an opaque view's
 child scope holds only the view's own members (the per-call abstract mints and the
 signature's manifest members seeded at ascription, above), so an abstract member
 surfaces as its `AbstractType` identity and the hidden representation is absent
-from the window; a transparent view reuses its source's child scope, so its
-members read concretely. Because the registry rides the same façade, opening a module
+from the window. The value side needs no window-specific machinery for the same
+reason: the borrowed `data` table is the one the view was
+[born holding coerced values in](#val-slot-reads-carry-the-abstract-member-identity),
+so a bare-name read inside the block reports the same view-side type the qualified
+ATTR read reports, and a function slot called bare inside the block is the coercion
+wrapper. A transparent view reuses its source's child scope, so its members read
+concretely. The `functions` buckets are the exception: a signature cannot declare a
+keyworded member, so an opaque view replays the source module's dispatch surface
+verbatim and a keyworded call inside the window reaches the underlying function in
+the source's own types. Because the registry rides the same façade, opening a module
 that declares operators ([operators.md](../operators.md)) puts both their bodies
 and their chaining mode in scope: a run inside the block reduces by the module's
 own group.

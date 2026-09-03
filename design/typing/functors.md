@@ -347,12 +347,20 @@ reports a `ConstructorApply` `ktype()`, so wrapping a concrete value in
 value and infers one type argument from it, so constructing a value of a
 family declaring two or more parameters is a shape error naming the arity.
 The *type* surface has no such limit — a multi-parameter family applies by
-name like any other. Still future and tracked in
-[open-work.md](open-work.md): re-tagging an applied-constructor-typed VAL
-slot read through an opaque view, and cross-module application
-(`:(Number AS mo.Wrap)` over another module's constructor member, reached
-via ATTR-then-apply). A bare `:(Number AS Wrap)` in a signature body or
-against a root-scope-bound constructor is the path the test suite pins.
+name like any other.
+
+Cross-module application spells a constructor member with a dotted head:
+`:(Number AS mo.Wrap)` reaches `mo`'s `Wrap` member via ATTR-then-apply and
+applies *that* constructor — an opaque view's per-call mint, or the source
+constructor for a transparent view and an unascribed module. An
+applied-constructor-typed VAL slot read through an opaque view reports the
+same per-call application, because the view's members are born coerced
+([modules.md § VAL-slot reads carry the abstract member identity](modules.md#val-slot-reads-carry-the-abstract-member-identity)):
+`view.boxed` is an application of the view's own `Wrap`, so it satisfies
+`:(Number AS view.Wrap)` and is a dispatch miss against the source's
+`:(Number AS Wrapper)`. A functor's deferred return
+`-> :(Number AS er.Wrap)` elaborates per call against the argument module's
+own member on the same path.
 
 ## Type expressions and constraints
 

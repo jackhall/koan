@@ -512,13 +512,14 @@ verb through `scope.resolve_type_with_chain` first and branches on the resolved
 member's `kind`) rather than a registered builtin sharing the `[OfKind(ProperType), …]`
 signature bucket — a sibling primitive on that bucket would re-dispatch infinitely.
 
-The `Wrapped` carrier also backs **opaque VAL-slot re-tags**: an ATTR read of a
-value-side slot from an opaquely-ascribed module re-wraps the value with the
-per-call abstract identity the SIG names, so the read reports the abstract type
-rather than its representation. The two uses share the variant — distinguished by
-the `type_id` handle (a `SetMember` of a `Newtype`-kind member for construction, an
-`AbstractType` for the slot re-tag) — and the same collapse and ATTR fall-through
-rules apply to both. See
+The `Wrapped` carrier also backs **opaque VAL-slot identities**: an opaque
+ascription's coercion walk re-tags each member the SIG types by an abstract member
+through this same `wrapped_peel` collapse, so the view's scope is born holding
+values that report the abstract type rather than its representation and a slot read
+patches nothing. The two uses share the variant — distinguished by the `type_id`
+handle (a `SetMember` of a `Newtype`-kind member for construction, an
+`AbstractType` or a `ConstructorApply` over the view's per-call mint for a coerced
+slot) — and the same collapse and ATTR fall-through rules apply to both. See
 [modules.md § VAL-slot reads carry the abstract member identity](modules.md#val-slot-reads-carry-the-abstract-member-identity).
 
 ATTR over a `KObject::Wrapped` falls through to `inner` via

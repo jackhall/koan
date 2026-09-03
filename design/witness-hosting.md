@@ -237,7 +237,7 @@ where the `Copy` bound stands for the others. The two stores whose operand lives
 *born at their destination* instead, constructed and bumped in one act inside a `for<'b>` brand over
 the destination region ([`RegionHandle::bump_born_with`](../workgraph/src/witnessed/region.rs)),
 with only the resulting reference re-anchored on the way out. Each family re-homes its own bytes
-(a signature's element run and names, a module's path and member tables) at that same single brand,
+(a signature's element run and names, a module's path and member table) at that same single brand,
 so splitting a value from its parts across two regions is unstateable. The koan doors —
 [`Scope::alloc_child_under`](../src/machine/core/scope.rs) and its same-region siblings,
 [`KFunction::alloc_captured`](../src/machine/core/kfunction.rs),

@@ -441,8 +441,8 @@ metadata, the strings, the expression parts — the `KFunction` family, whose
 signature is a bumped run of elements, each a fixed-width symbol beside a type, and
 a parameter schema bumped alongside it by the one signature constructor
 ([`ExpressionSignature::mint`](../src/machine/model/types/signature.rs)) — and
-the `Module` family, whose path is a bumped `&str` and whose two member tables
-are build-once frozen bump-backed tables keyed by re-homed `&str`
+the `Module` family, whose path is a bumped `&str` and whose member table
+is a build-once frozen bump-backed table keyed by re-homed `&str`
 ([`Module::assemble`](../src/machine/model/values/module.rs)). A module is
 assembled complete: its construction gathers members into an owned
 `ModuleDraft` and interns the self-sig *before* the value exists, so the stored
@@ -468,7 +468,7 @@ proxy. A **table** is where that bound stops travelling with the bytes, because 
 buckets come from the same allocator's raw `allocator-api2` seam and the trait says
 nothing about destructors. Both table shapes therefore rest on a
 `const { assert!(!needs_drop::<…>()) }` over their entry types instead. A dict's key
-index and a module's two member tables freeze at construction through
+index and a module's member table freeze at construction through
 [`BumpAllocator::frozen_table`](../workgraph/src/witnessed/bump.rs), which carries
 that assert itself and allocates the buckets over the very allocator it places the
 header through — so the half of the argument no assert can check, that the buckets

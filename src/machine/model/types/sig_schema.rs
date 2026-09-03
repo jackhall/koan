@@ -361,12 +361,6 @@ impl MemberCoercion {
         }
     }
 
-    /// Whether the two tables bind every member identically, so every slot type substitutes to
-    /// itself and coercion is the identity. Decided on the interned handles, so it costs a compare.
-    pub fn is_identity(self) -> bool {
-        self.from == self.to
-    }
-
     /// Materialize the plan for a walk: the two tables read back out of their handles, once.
     pub fn tables(self, types: &TypeRegistry) -> CoercionTables {
         CoercionTables {

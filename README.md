@@ -226,7 +226,8 @@ src/
     │       ├── carried.rs         Carried — the scheduler's value currency (Object | Type)
     │       ├── kkey.rs            KKey — hashable scalar wrapper for dict keys
     │       ├── named_pairs.rs     shared (name, value) ordered-list helper
-    │       └── module.rs          Module — first-class module values and their sealed self-sig content
+    │       ├── module.rs          Module — first-class module values and their sealed self-sig content
+    │       └── coerce.rs          coerce_object_into — the ascription-barrier walk that rebuilds a value under a different binding of a signature's abstract members (an opaque view's members are born coerced)
     ├── core.rs            module surface for core/
     ├── core/
     │   ├── arena.rs       KoanRegion (= Region<KoanStorageProfile>), RegionBrand, FoldingBrand, KoanRegionExt — the Koan storage substrate and allocation veneer (children below)
