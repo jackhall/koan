@@ -55,8 +55,12 @@ so one crossing of the weaker door admits the value everywhere the stronger one 
   one. Only the slot classification is wrong; the representation is not.
 - *`Any` and `OfKind` arms — decided.* Unchanged. Both classifiers already agree there, and
   the acceptance criteria hold them fixed so the fix cannot narrow a type-accepting slot.
-- *Union arms — decided.* Unchanged. A union slot already refuses a type cell under both
-  classifiers, since each member refuses it.
+- *Union arms — decided.* Follow `matches_type`'s member delegation, which flips two
+  `matches_held` verdicts (both forced by the first acceptance criterion): a union with a
+  type-accepting member (e.g. `Number | ProperType`) admits a type cell a member admits,
+  and a union type value stored in a cell of its own union slot is refused instead of
+  sneaking through exact identity. A union of concrete members refuses a type cell as
+  before.
 
 ## Dependencies
 
