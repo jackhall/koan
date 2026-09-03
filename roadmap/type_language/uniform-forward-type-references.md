@@ -81,15 +81,20 @@ this item collapses.
   `tests/type_language_sigil.rs` before commit 473ba96d: FN's field-list walk
   built its elaborator without a lexical chain, so index gating never applied.
   That reached exactly one surface and contradicted the invariant.)
-- *Where the uniform diagnostic is raised — open.* Either every surface routes
-  its miss through `Scope::resolve_type_identifier`'s `Unbound` arm and the
-  field-list contexts become extra framing on one error, or `unknown_type_name`
-  becomes the single raiser and the bare-leaf paths adopt it. The choice decides
-  whether the field-list context noun (*record fields for `Ty`*) survives.
-- *Telling "declared later" from "never declared" — open.* The resolver gates
-  candidates by `idx < cutoff`, so it already knows the difference at the point
-  of the miss; whether it reports that as a distinct `KErrorKind` or as extra
-  wording on the existing one is unruled.
+- *Where the uniform diagnostic is raised — decided.* One raiser function
+  (`type_name_miss`, beside `unknown_type_name` in
+  [`resolver.rs`](../../src/machine/model/types/resolver.rs)) that every
+  surface's miss arm calls; the field-list context noun (*record fields for
+  `Ty`*) survives as optional framing on it. Never-declared misses unify into
+  the same wording family — `` unknown type name `X` `` plus the context
+  framing (the dispatch lane's role wording folds in); a context-free bare-leaf
+  miss keeps `UnboundName` for value-channel symmetry.
+- *Telling "declared later" from "never declared" — decided.* A distinct
+  `KErrorKind::ForwardReference { name, context, hint }` — named without a
+  type-specific noun so a future recursive-value-definition feature can reuse
+  it — classified by one unfiltered re-probe on the error path. Its display-only
+  `hint` (supplied by the type channel) suggests the `MODULE`-body
+  co-declaration for mutual recursion.
 
 ## Dependencies
 
