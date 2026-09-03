@@ -7,6 +7,7 @@ use crate::machine::model::{BinderSymbol, RunRegistries, Symbol};
 use crate::machine::model::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{SignaturePosition, SignatureScan};
+use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
 use crate::witnessed::{BumpAllocator, BumpVec};
 
@@ -34,11 +35,11 @@ pub(crate) fn collect_param_names_from_signature<'s>(
 }
 
 /// The diagnostic a binder position with no `:<Type>` annotation reports.
-fn missing_annotation(symbol: BinderSymbol, registries: &RunRegistries) -> String {
+fn missing_annotation(symbol: BinderSymbol, registries: &RunRegistries) -> KError {
     let name = crate::machine::model::render_label(symbol.symbol(), registries);
-    format!(
+    KError::new(KErrorKind::ShapeError(format!(
         "FN signature parameter `{name}` requires a `:<Type>` annotation (e.g. `{name} :Number`)",
-    )
+    )))
 }
 
 pub(crate) enum ParamListOutcome<'a> {
@@ -53,7 +54,10 @@ pub(crate) enum ParamListOutcome<'a> {
         /// `(slot_idx_in_signature_parts, sub_expr_to_dispatch)`.
         sub_dispatches: BumpVec<'a, (usize, KExpression<'a>)>,
     },
-    Err(String),
+    /// The whole error, not its message: a parameter slot's own diagnostic is raised where the
+    /// slot elaborates, so a kind raised there — a forward type reference above all — reaches the
+    /// caller as itself.
+    Err(KError),
 }
 
 /// Type-name resolution rides on [`elaborate_type_identifier`], which returns
@@ -90,7 +94,7 @@ pub(crate) fn parse_fn_param_list<'a>(
     // the `defer` that schedules them, so the scratch hosts it against an exact reservation.
     let mut sub_dispatches: BumpVec<'a, (usize, KExpression<'a>)> =
         BumpVec::with_capacity_in(parts.len(), scratch);
-    let mut first_err: Option<String> = None;
+    let mut first_err: Option<KError> = None;
     for position in SignatureScan::new(parts) {
         match position {
             SignaturePosition::Keyword(keyword) => {
@@ -115,13 +119,18 @@ pub(crate) fn parse_fn_param_list<'a>(
                                 awaited.extend(producers);
                             }
                             TypeResolution::Unbound(missing) if first_err.is_none() => {
-                                first_err = Some(format!(
-                                    "{} in FN signature for parameter `{}`",
-                                    crate::machine::model::unknown_type_name(missing, registries),
-                                    crate::machine::model::display_label(
-                                        symbol.symbol(),
-                                        registries
-                                    ),
+                                first_err = Some(crate::machine::model::type_name_miss(
+                                    elaborator.scope,
+                                    missing,
+                                    elaborator.chain.as_deref(),
+                                    Some(&format!(
+                                        "FN signature for parameter `{}`",
+                                        crate::machine::model::display_label(
+                                            symbol.symbol(),
+                                            registries
+                                        ),
+                                    )),
+                                    registries,
                                 ));
                             }
                             TypeResolution::Unbound(_) => {}
@@ -172,15 +181,15 @@ pub(crate) fn parse_fn_param_list<'a>(
                 return ParamListOutcome::Err(missing_annotation(symbol, registries));
             }
             SignaturePosition::Foreign(at) => {
-                return ParamListOutcome::Err(format!(
+                return ParamListOutcome::Err(KError::new(KErrorKind::ShapeError(format!(
                     "FN signature part `{}` is not a Keyword, Identifier, or `<name> :<Type>` pair",
                     parts[at].value.summary(&registries.labels),
-                ));
+                ))));
             }
         }
     }
-    if let Some(msg) = first_err {
-        return ParamListOutcome::Err(msg);
+    if let Some(error) = first_err {
+        return ParamListOutcome::Err(error);
     }
     if !awaited.is_empty() || !sub_dispatches.is_empty() {
         return ParamListOutcome::Pending {

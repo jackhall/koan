@@ -427,8 +427,8 @@ mod tests {
     }
 
     /// The `-> :T` slot is a kind expectation, so a bare user name auto-wraps and the dispatch
-    /// lane resolves it by scope walk. An unbound one keeps the not-a-known-type diagnostic: the
-    /// slot registers its form-and-role label, which the lane's raise renders.
+    /// lane resolves it by scope walk. A name declared nowhere renders the shared never-declared
+    /// wording, framed by the role the slot registered.
     #[test]
     fn match_unresolved_return_type_name_reports_not_a_known_type() {
         let program = program_storage();
@@ -438,15 +438,18 @@ mod tests {
             .run_one_err(test_run.parse_one("MATCH (42) -> :Bogus WITH (Number -> (PRINT \"x\"))"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
-                if msg == "MATCH return type `Bogus` is not a known type"),
+                if msg == "unknown type name `Bogus` in MATCH return type"),
             "expected the unresolved return-type message, got {err}",
         );
     }
 
-    /// AC6 parity: the flip changes no scheduling. A *forward* reference — a type declared after
-    /// the MATCH — stays a position error, exactly as it was when the body owned the resolution.
+    /// A type declared in a *later submission* is not a forward reference: nothing has claimed the
+    /// name yet when the MATCH runs, so the miss is the never-declared one. Declaring it afterwards
+    /// binds nothing retroactively — the statement above already failed. The forward-reference
+    /// reading needs both statements in one block, which
+    /// `tests/forward_reference_resolves.rs` walks across every type-expression surface.
     #[test]
-    fn match_return_type_forward_reference_stays_a_position_error() {
+    fn match_return_type_in_a_later_submission_is_never_declared() {
         let program = program_storage();
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&program, &region);
@@ -454,10 +457,9 @@ mod tests {
             .run_one_err(test_run.parse_one("MATCH (42) -> :Later WITH (Number -> (PRINT \"x\"))"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
-                if msg == "MATCH return type `Later` is not a known type"),
-            "expected the position error for a not-yet-declared type, got {err}",
+                if msg == "unknown type name `Later` in MATCH return type"),
+            "expected the never-declared message, got {err}",
         );
-        // Declaring it afterwards binds nothing retroactively — the statement above already failed.
         test_run.run("NEWTYPE Later = Number");
     }
 

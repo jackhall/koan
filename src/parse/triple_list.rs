@@ -9,6 +9,7 @@
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{FieldSlot, Part, part_summary};
 use crate::machine::model::labels::{BinderSymbol, TypeSymbol};
+use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
 
 /// Which token shapes are accepted as a field/parameter *name* by [`parse_pair_list`].
@@ -30,18 +31,24 @@ pub enum FieldNameKind {
 /// Generic over the part family so a parsed field list and a self-reference-threaded one walk the
 /// same code: both name positions read through [`FieldSlot`], which each family answers in the one
 /// shared vocabulary.
+///
+/// The error channel is a whole [`KError`], not a message: a slot's own diagnostic is raised where
+/// the slot is interpreted, and a kind raised there (a forward type reference, say) has to reach
+/// the execute layer as itself rather than flattened into a shape error on the way out. The
+/// walker's own name-shape errors are shape errors, built here.
 pub fn parse_pair_list<'a, P: Part<'a>, T>(
     parts: &'a [Spanned<P>],
     context: &str,
     name_kind: FieldNameKind,
     registries: &RunRegistries,
-    mut parse_slot: impl FnMut(&P, BinderSymbol) -> Result<T, String>,
-) -> Result<Vec<(BinderSymbol, T)>, String> {
+    mut parse_slot: impl FnMut(&P, BinderSymbol) -> Result<T, KError>,
+) -> Result<Vec<(BinderSymbol, T)>, KError> {
+    let shape = |message: String| KError::new(KErrorKind::ShapeError(message));
     if !parts.len().is_multiple_of(2) {
-        return Err(format!(
+        return Err(shape(format!(
             "{context} must be `<name> <slot>` pairs; got {} parts (not a multiple of 2)",
             parts.len(),
-        ));
+        )));
     }
     let mut out: Vec<(BinderSymbol, T)> = Vec::with_capacity(parts.len() / 2);
     let mut i = 0;
@@ -55,23 +62,23 @@ pub fn parse_pair_list<'a, P: Part<'a>, T>(
             }
             // A lowercase tag under the `Type` policy — tags must be capitalized type names.
             (_, FieldNameKind::Type) => {
-                return Err(format!(
+                return Err(shape(format!(
                     "{context} variant tag must be a capitalized type name, got {}",
                     part_summary(&parts[i].value, registries),
-                ));
+                )));
             }
             _ => {
-                return Err(format!(
+                return Err(shape(format!(
                     "{context} name must be a bare identifier, got {}",
                     part_summary(&parts[i].value, registries),
-                ));
+                )));
             }
         };
         if out.iter().any(|(n, _)| *n == name) {
-            return Err(format!(
+            return Err(shape(format!(
                 "duplicate name `{}` in {context}",
                 registries.labels.render(name.symbol()),
-            ));
+            )));
         }
         let slot = parse_slot(&parts[i + 1].value, name)?;
         out.push((name, slot));
@@ -156,7 +163,9 @@ mod tests {
             &registries,
             |p, _| match p {
                 ExpressionPart::Type(t) => Ok(labels.render(t.symbol())),
-                _ => Err("unexpected slot".to_string()),
+                _ => Err(KError::new(KErrorKind::ShapeError(
+                    "unexpected slot".to_string(),
+                ))),
             },
         )
         .expect("Type-token name accepted under IdentifierOrType");

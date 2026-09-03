@@ -207,8 +207,8 @@ fn fn_return_type_forward_user_bound_name_is_a_resolution_error() {
         Ok(()) => panic!("FN referencing the later-bound MyT should fail to resolve"),
     };
     assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("MyT")),
-        "expected ShapeError naming the forward type MyT, got {err}",
+        matches!(&err.kind, KErrorKind::ForwardReference { name, .. } if name == "MyT"),
+        "expected ForwardReference naming the forward type MyT, got {err}",
     );
 }
 

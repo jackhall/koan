@@ -21,6 +21,7 @@ use std::rc::Rc;
 use crate::machine::ProducerId;
 use crate::machine::core::bindings::{TypeWritePolicy, WriteOp};
 use crate::machine::core::{DeclarationSite, LexicalFrame, NameLookup, Scope};
+use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::RunRegistries;
 use crate::machine::model::labels::TypeSymbol;
 
@@ -37,7 +38,7 @@ mod tests;
 /// use `TypeResolution<KType>` now that `KType` is a `Copy` handle. `Park` carries the binder
 /// [`ProducerId`]s a still-finalizing referent waits on; `Unbound` the **name that missed** — the
 /// symbol the lookup already held, so the miss costs no rendering and the spelling is read back
-/// only where a diagnostic quotes it, through [`unknown_type_name`]. The payload-free
+/// only where a diagnostic quotes it, through [`type_name_miss`]. The payload-free
 /// arms let a layer lift `Done` through [`Self::and_then_done`] and forward the rest unchanged.
 #[derive(Debug)]
 pub enum TypeResolution<T> {
@@ -256,11 +257,69 @@ pub fn elaborate_type_identifier(
 /// The miss diagnostic a [`TypeResolution::Unbound`] renders to — the one wording every unbound
 /// arm shares, built where a diagnostic quotes the name and nowhere else. The spelling goes
 /// straight into the message's own buffer, so naming the miss costs that buffer alone.
-pub fn unknown_type_name(name: TypeSymbol, registries: &RunRegistries) -> String {
+fn unknown_type_name(name: TypeSymbol, registries: &RunRegistries) -> String {
     format!(
         "unknown type name `{}`",
         crate::machine::model::types::display_label(name.symbol(), registries)
     )
+}
+
+/// What a type-channel forward reference suggests instead: the two spellings that make the
+/// referent visible. Display-only framing on [`KErrorKind::ForwardReference`], supplied here
+/// because the wording is type-specific while the kind is not.
+const TYPE_ORDER_HINT: &str =
+    "move the declaration earlier, or group mutually recursive types in a MODULE body";
+
+/// The one diagnostic a chain-gated type-name miss renders to, across every type-expression
+/// surface — a bare leaf annotation, a type-constructor operand, a record-type field, an `FN`
+/// parameter list, a `NEWTYPE` repr.
+///
+/// Every surface misses through the same gate, so the split the miss actually hides is decided
+/// once, here, by re-probing the name at two relaxations of the consumer's own position:
+///
+/// - **unfiltered** — no hit means the name is declared nowhere. A builtin cannot false-positive
+///   this read: builtins answer at every cutoff, so a gated miss has already excluded them.
+/// - **one statement forward** ([`LexicalFrame::including_own_statement`]) — a hit here means the
+///   binding the gate hid is the consumer's *own* statement's, so the reference is a cycle
+///   (`LET Ty = Ty`), not a position error. It reports as a never-declared miss would: the
+///   declared-later hint names a fix that shape does not have.
+///
+/// Anything else the unfiltered probe finds sits at a strictly later index — a forward reference,
+/// and [`KErrorKind::ForwardReference`]. Both probes run on the error path alone, where a message
+/// is being built anyway.
+///
+/// A never-declared miss keeps the surface's own framing: `context` names the position inside the
+/// consuming expression (*record fields for `Ty`*, *NEWTYPE repr*) and yields the
+/// `unknown type name` wording every contexted surface shares; a context-free miss is the bare
+/// [`KErrorKind::UnboundName`], symmetric with the value channel's unbound name.
+pub fn type_name_miss(
+    scope: &Scope<'_>,
+    name: TypeSymbol,
+    chain: Option<&LexicalFrame>,
+    context: Option<&str>,
+    registries: &RunRegistries,
+) -> KError {
+    let declared_by_own_statement = || {
+        chain.is_some_and(|chain| {
+            scope
+                .resolve_type_with_chain(name, Some(&LexicalFrame::including_own_statement(chain)))
+                .is_some()
+        })
+    };
+    if scope.resolve_type_with_chain(name, None).is_some() && !declared_by_own_statement() {
+        return KError::new(KErrorKind::ForwardReference {
+            name: render_label(name.symbol(), registries),
+            context: context.map(str::to_string),
+            hint: Some(TYPE_ORDER_HINT),
+        });
+    }
+    KError::new(match context {
+        Some(context) => KErrorKind::ShapeError(format!(
+            "{} in {context}",
+            unknown_type_name(name, registries)
+        )),
+        None => KErrorKind::UnboundName(render_label(name.symbol(), registries)),
+    })
 }
 
 /// Outcome of [`finalize_nominal_member`].

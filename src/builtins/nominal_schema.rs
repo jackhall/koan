@@ -16,7 +16,7 @@ use crate::machine::model::{
     parse_typed_field_list_via_elaborator,
 };
 use crate::machine::{Action, BodyCtx, FinishCtx};
-use crate::machine::{DeclarationSite, KError, KErrorKind, TraceFrame};
+use crate::machine::{DeclarationSite, KError, TraceFrame};
 use crate::machine::{FieldListDeferral, StepCarried};
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier and the `types` write that
@@ -76,7 +76,7 @@ pub(crate) fn nominal_schema_action<'a>(
             ctx.scratch,
             finalize(&ctx.finish_ctx(), name, &window, fields, site),
         ),
-        FieldListOutcome::Err(msg) => Action::done(Err(KError::new(KErrorKind::ShapeError(msg)))),
+        FieldListOutcome::Err(error) => Action::done(Err(error)),
         FieldListOutcome::Pending {
             awaited_producers,
             sub_dispatches,

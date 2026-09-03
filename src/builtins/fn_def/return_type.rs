@@ -1,7 +1,7 @@
 //! FN return-type pipeline: extraction → classification → carriage across the
 //! dep-finish boundary → resolution at finish time.
 
-use crate::builtins::resolve_or_await::{expect_type_terminal, resolve_at_wake, unbound_error};
+use crate::builtins::resolve_or_await::{expect_type_terminal, resolve_at_wake};
 use crate::machine::DepTerminal;
 use crate::machine::LexicalFrame;
 use crate::machine::ProducerId;
@@ -143,14 +143,17 @@ pub(crate) fn classify_return_type<'a>(
             }
             // Gated to the FN's lexical position — a return type naming a later type is a
             // position error, like any other forward reference.
-            match scope.resolve_type_identifier(te, chain, registries) {
+            match scope.resolve_type_identifier(te, chain.clone(), registries) {
                 TypeResolution::Done(kt) => Ok(ReturnTypeState::Done(kt)),
                 TypeResolution::Park(producers) => Ok(ReturnTypeState::Pending { te, producers }),
                 // `resolve_type_identifier` already tries the builtin fallback internally, so an
                 // `Unbound` here is neither a type binder nor a builtin — a hard miss.
-                TypeResolution::Unbound(name) => Err(unbound_error(
-                    label,
-                    &crate::machine::model::unknown_type_name(name, registries),
+                TypeResolution::Unbound(name) => Err(crate::machine::model::type_name_miss(
+                    scope,
+                    name,
+                    chain.as_deref(),
+                    Some(label),
+                    registries,
                 )),
             }
         }
@@ -180,12 +183,14 @@ pub(super) fn resolve_capture_at_finish<'a>(
 ) -> Result<ReturnType<'a>, KError> {
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
-        ReturnTypeCapture::Unresolved(te) => {
-            resolve_at_wake(scope, "FN return-type slot", registries, |s, registries| {
-                s.resolve_type_identifier(te, None, registries)
-            })
-            .map(ReturnType::Resolved)
-        }
+        ReturnTypeCapture::Unresolved(te) => resolve_at_wake(
+            scope,
+            "FN return-type slot",
+            None,
+            registries,
+            |s, registries| s.resolve_type_identifier(te, None, registries),
+        )
+        .map(ReturnType::Resolved),
         ReturnTypeCapture::Deferred(d) => Ok(ReturnType::Deferred(d)),
         ReturnTypeCapture::ReturnTypeExpr => {
             // The resolved return type is owned content, cloned out of the sub-dispatch's terminal,

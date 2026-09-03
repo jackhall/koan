@@ -58,9 +58,18 @@ fn unbound_leaf_names_unknown_type() {
     ) {
         TypeResolution::Unbound(missing) => {
             assert_eq!(missing, type_name("NopeType", types.registries()));
+            // A name declared nowhere renders the never-declared wording, framed by whatever
+            // context the missing surface supplies.
             assert!(
-                crate::machine::model::unknown_type_name(missing, types.registries())
-                    .contains("unknown type name `NopeType`")
+                super::type_name_miss(
+                    scope,
+                    missing,
+                    None,
+                    Some("a test slot"),
+                    types.registries()
+                )
+                .to_string()
+                .contains("unknown type name `NopeType` in a test slot")
             );
         }
         other => panic!("expected Unbound, got {:?}", other),

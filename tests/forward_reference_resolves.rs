@@ -1,11 +1,13 @@
-//! Integration tests for the dispatch-time-placeholders feature under the index-gated
-//! resolution rule. Forward references at the same lexical level are no longer parked
-//! through to a later sibling: the strict `b.idx < c` visibility predicate hides
-//! later-sibling bindings from earlier consumers, and only nominal binders (STRUCT,
-//! named UNION, SIG, MODULE) carry the D7 carve-out that re-exposes them to
-//! siblings on the same block. This file pins both shapes — the value-style
-//! `UnboundName` surface for LET / FN forward references, and the nominal-binder
-//! continued-resolution path.
+//! Integration tests for forward references under the index-gated resolution rule. A binding at
+//! lexical index `i` is visible to a consumer at cutoff `c` iff `i < c`, so a later sibling is
+//! invisible and no surface parks through to it. Mutual recursion has one spelling — co-declaring
+//! the names in a `MODULE` body, whose announced window answers cross-order — and that is the only
+//! mechanism that reads a name across source order.
+//!
+//! Three shapes are pinned here: the value channel's `UnboundName` for a forward `LET` / `FN`
+//! reference, the type channel's `ForwardReference` across every type-expression surface
+//! (`forward_type_reference_is_uniform_across_surfaces` below), and the backward-reference
+//! companion for each, where the placeholder-and-park machinery does resolve.
 
 use std::rc::Rc;
 
@@ -221,21 +223,18 @@ fn backward_attr_lookup_resolves_after_struct_binding() {
     assert!(matches!(lookup_binding(scope, "v"), Some(KObject::Number(n)) if *n == 7.0));
 }
 
-/// LET-as-type-alias is value-style gated: `LET Ty = Un` followed by `LET Un = Number`
-/// hides `Un` from `Ty`'s consumer under the strict cutoff, so the elaborator surfaces
-/// `UnboundName` rather than resolving forward through the placeholder. (Type-side
-/// resolution applies the same gate as value-side; see `Scope::resolve_type_with_chain`.)
+/// LET-as-type-alias is gated exactly as the value side is: `LET Ty = Un` followed by
+/// `LET Un = Number` hides `Un` from `Ty`'s consumer under the strict cutoff, so the elaborator
+/// refuses rather than resolving forward through the placeholder. The refusal is the position
+/// error every type-expression surface reports — the name exists, one statement further down.
 #[test]
-fn forward_let_type_alias_is_unbound() {
+fn forward_let_type_alias_is_a_forward_reference() {
     use koan::machine::KErrorKind;
     let err = run_collecting_first_err("LET Ty = Un\nLET Un = Number")
-        .expect("forward LET type alias should surface UnboundName");
+        .expect("forward LET type alias should surface ForwardReference");
     assert!(
-        matches!(
-            &err.kind,
-            KErrorKind::UnboundName(_) | KErrorKind::DispatchFailed { .. }
-        ),
-        "expected UnboundName or DispatchFailed, got {err}",
+        matches!(&err.kind, KErrorKind::ForwardReference { name, .. } if name == "Un"),
+        "expected ForwardReference naming Un, got {err}",
     );
 }
 
@@ -368,5 +367,140 @@ fn self_referential_binding_is_unbound() {
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(name) if name == "x"),
         "expected UnboundName('x'), got {err}",
+    );
+}
+
+// ---------- one forward reference, every type-expression surface ----------
+
+/// The name each surface's program declares one statement below its consumer.
+fn forward_reference_name(source: &str) -> String {
+    use koan::machine::KErrorKind;
+    let err = run_collecting_first_err(source)
+        .unwrap_or_else(|| panic!("a forward type reference must error:\n{source}"));
+    match &err.kind {
+        KErrorKind::ForwardReference { name, .. } => name.clone(),
+        _ => panic!("expected ForwardReference, got {err}\nfor:\n{source}"),
+    }
+}
+
+/// The acceptance criterion: one program shape — a consumer naming a type declared on the next
+/// line — walked across every sigiled type surface, each answering with the same error kind. The
+/// two `NEWTYPE` reprs are the pair that used to speak with two voices, the lane's role-labeled
+/// render and the body's own; both reach this one kind now.
+#[test]
+fn forward_type_reference_is_uniform_across_surfaces() {
+    for (surface, source) in [
+        (
+            "bare leaf annotation",
+            "LET t = :Ordered\nNEWTYPE Ordered = Number",
+        ),
+        (
+            "LIST OF element",
+            "LET t = :(LIST OF Ordered)\nNEWTYPE Ordered = Number",
+        ),
+        (
+            "MAP value",
+            "LET t = :(MAP Str -> Ordered)\nNEWTYPE Ordered = Number",
+        ),
+        (
+            "record-type field",
+            "LET t = :{Ty :Ordered}\nNEWTYPE Ordered = Number",
+        ),
+        (
+            "FN parameter list",
+            "LET t = :(FN :{x :Ordered} -> Number)\nNEWTYPE Ordered = Number",
+        ),
+    ] {
+        assert_eq!(
+            forward_reference_name(source),
+            "Ordered",
+            "{surface} must name the late declaration",
+        );
+    }
+    for (surface, source) in [
+        (
+            "NEWTYPE record repr",
+            "NEWTYPE Box = :{v :Later}\nNEWTYPE Later = Number",
+        ),
+        (
+            "NEWTYPE bare-leaf repr",
+            "NEWTYPE Box = Later\nNEWTYPE Later = Number",
+        ),
+    ] {
+        assert_eq!(
+            forward_reference_name(source),
+            "Later",
+            "{surface} must name the late declaration",
+        );
+    }
+}
+
+/// The contexted surfaces frame the position with the slot the writer wrote, so one kind still
+/// points at one place. `NEWTYPE Box = Later` is the row that proves the two-voice split closed:
+/// its render is the lane's role noun, not the body's separate wording.
+#[test]
+fn forward_reference_renders_its_surface_context() {
+    for (source, expected) in [
+        (
+            "LET t = :{Ty :Ordered}\nNEWTYPE Ordered = Number",
+            "`Ordered` is used in record fields for `Ty` before being declared",
+        ),
+        (
+            "NEWTYPE Box = :{v :Later}\nNEWTYPE Later = Number",
+            "`Later` is used in NEWTYPE record repr for `v` before being declared",
+        ),
+        (
+            "NEWTYPE Box = Later\nNEWTYPE Later = Number",
+            "`Later` is used in NEWTYPE repr before being declared",
+        ),
+        (
+            "LET t = :Ordered\nNEWTYPE Ordered = Number",
+            "`Ordered` is used before being declared",
+        ),
+    ] {
+        let err = run_collecting_first_err(source).expect("a forward type reference must error");
+        let rendered = format!("{err}");
+        assert!(
+            rendered.starts_with(expected),
+            "expected a render opening `{expected}`, got {rendered}",
+        );
+        assert!(
+            rendered.contains("group mutually recursive types in a MODULE body"),
+            "the fix hint names the co-declaration spelling, got {rendered}",
+        );
+    }
+}
+
+/// The split the diagnostic exists to draw: a name declared nowhere is *not* a position error. A
+/// contexted surface renders the unified never-declared wording; a context-free one keeps
+/// `UnboundName`, symmetric with the value channel.
+#[test]
+fn a_never_declared_type_name_is_not_a_forward_reference() {
+    use koan::machine::KErrorKind;
+    let contexted =
+        run_collecting_first_err("LET t = :{Ty :Nope}").expect("an unknown field type must error");
+    assert!(
+        matches!(&contexted.kind, KErrorKind::ShapeError(msg)
+            if msg == "unknown type name `Nope` in record fields for `Ty`"),
+        "expected the never-declared render, got {contexted}",
+    );
+    let bare = run_collecting_first_err("LET t = :Nope").expect("an unknown leaf type must error");
+    assert!(
+        matches!(&bare.kind, KErrorKind::UnboundName(name) if name == "Nope"),
+        "expected UnboundName, got {bare}",
+    );
+}
+
+/// A self-reference is neither: `LET Ty = Ty` names the binding its own statement declares, so the
+/// declared-later hint would name a fix it does not have. The classifier separates the two by
+/// re-probing one statement forward — the same-statement claim answers there, a later sibling's
+/// does not.
+#[test]
+fn a_self_referential_type_alias_is_not_a_forward_reference() {
+    use koan::machine::KErrorKind;
+    let err = run_collecting_first_err("LET Ty = Ty").expect("a self-reference must error");
+    assert!(
+        matches!(&err.kind, KErrorKind::UnboundName(name) if name == "Ty"),
+        "expected UnboundName for a self-reference, got {err}",
     );
 }

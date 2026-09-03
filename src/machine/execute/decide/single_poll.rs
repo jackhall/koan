@@ -11,6 +11,7 @@ use crate::machine::model::Carried;
 use crate::machine::model::FieldParts;
 use crate::machine::model::key_spec::KEYWORDS;
 use crate::machine::model::labels::{TypeSymbol, ValueSymbol};
+use crate::machine::model::type_name_miss;
 use crate::machine::model::{ExpressionPart, ProgramNode, WorkingExpression, WorkingPart};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
@@ -58,9 +59,13 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         TypeChannel::Done(kt) => {
             Outcome::Done(Ok(StepCarried::born(s.resident(Carried::Type(kt)))))
         }
-        TypeChannel::Unbound(missing) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
-            crate::machine::model::render_label(missing.symbol(), ctx.registries()),
-        )))),
+        TypeChannel::Unbound(missing) => Outcome::Done(Err(type_name_miss(
+            s,
+            missing,
+            ctx.chain_deref(),
+            None,
+            ctx.registries(),
+        ))),
         // The binder's terminal is not the type carrier (a finalize-combine returns its own
         // value), so the wake re-resolves the leaf against the now-sealed registry rather than
         // lifting that value.
@@ -258,9 +263,13 @@ pub(super) fn type_call<'step>(
             );
         }
         None => {
-            return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
-                crate::machine::model::render_label(head_t.symbol(), ctx.registries()),
-            ))));
+            return Outcome::Done(Err(type_name_miss(
+                scope,
+                head_t,
+                chain,
+                None,
+                ctx.registries(),
+            )));
         }
     };
     apply_callable(ctx, ResolvedCallable::Constructor { identity }, &expr)

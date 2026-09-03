@@ -450,9 +450,7 @@ pub(crate) fn defer<'a>(
                     fctx.scratch,
                 ) {
                     ParamListOutcome::Done(es) => es,
-                    ParamListOutcome::Err(msg) => {
-                        return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))));
-                    }
+                    ParamListOutcome::Err(error) => return Action::done(Err(error)),
                     ParamListOutcome::Pending { .. } => {
                         return Action::done(Err(KError::new(KErrorKind::ShapeError(
                             "FN signature elaboration still pending after dep-finish wake"

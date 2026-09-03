@@ -132,13 +132,10 @@ fn rewalk_fields<'step, 'f>(
         registries,
     ) {
         FieldListOutcome::Done(fields) => Ok(fields),
-        FieldListOutcome::Err(msg) => {
-            let error = KError::new(KErrorKind::ShapeError(msg));
-            Err(match error_frame {
-                Some(frame) => error.with_frame(frame),
-                None => error,
-            })
-        }
+        FieldListOutcome::Err(error) => Err(match error_frame {
+            Some(frame) => error.with_frame(frame),
+            None => error,
+        }),
         FieldListOutcome::Pending { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
             "{}: forward type reference still unresolved after dep-finish wake",
             context.list
@@ -366,7 +363,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
             let kt = view.types().record(Record::from_pairs(pairs));
             Outcome::Done(Ok(view.step_ctx().type_carried(kt)))
         }
-        FieldListOutcome::Err(msg) => Outcome::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
+        FieldListOutcome::Err(error) => Outcome::Done(Err(error)),
         FieldListOutcome::Pending {
             awaited_producers,
             sub_dispatches,

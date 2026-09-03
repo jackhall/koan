@@ -915,6 +915,7 @@ digraph {
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::sig_schema" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::signature" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::model::types::typed_field_list" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::labels" [label="uses", style="dashed"];
@@ -1003,6 +1004,7 @@ digraph {
     "koan::parse::tokens" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::parse::tokens" -> "koan::parse::operators" [label="uses", style="dashed"];
     "koan::parse::tokens" -> "koan::source" [label="uses", style="dashed"];
+    "koan::parse::triple_list" -> "koan::machine" [label="uses", style="dashed"];
     "koan::parse::triple_list" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::parse::triple_list" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::parse::triple_list" -> "koan::machine::model::labels" [label="uses", style="dashed"];

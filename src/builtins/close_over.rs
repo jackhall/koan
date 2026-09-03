@@ -481,7 +481,18 @@ fn resolve_type_capture<'a>(
                 park(parked, producer);
             }
         }
-        TypeResolution::Unbound(missing) => return Err(unbound(missing, registries)),
+        // A capture naming a type declared further down the block is the same position error the
+        // type-expression surfaces report, so it speaks through the same raiser; a never-declared
+        // capture keeps the bare unbound name both channels share.
+        TypeResolution::Unbound(missing) => {
+            return Err(crate::machine::model::type_name_miss(
+                scope,
+                missing,
+                chain.map(std::rc::Rc::as_ref),
+                None,
+                registries,
+            ));
+        }
     }
     Ok(())
 }

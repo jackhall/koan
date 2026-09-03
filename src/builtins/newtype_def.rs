@@ -152,6 +152,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         resolve_or_await(
             ctx.scope,
             "NEWTYPE repr",
+            chain.clone(),
             move |scope, _registries| {
                 classify_name_lookup(scope.resolve_type_with_chain(te, chain.as_deref()), te)
             },
@@ -576,7 +577,8 @@ mod tests {
     }
 
     /// The repr slot is an ordinary kind expectation the dispatch lane resolves into, so the miss
-    /// is raised there — and stays pointed, because the slot registers the role the raise renders.
+    /// is raised there — through the shared type-name raiser, which frames the never-declared
+    /// wording with the role the slot registered.
     #[test]
     fn unknown_repr_names_the_slot_role() {
         let program = program_storage();
@@ -585,8 +587,8 @@ mod tests {
         let err = test_run.run_one_err(test_run.parse_one("NEWTYPE Boxed = Nope"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
-                if msg == "NEWTYPE repr `Nope` is not a known type"),
-            "expected the role-labeled unknown-type message, got {err}",
+                if msg == "unknown type name `Nope` in NEWTYPE repr"),
+            "expected the role-framed unknown-type message, got {err}",
         );
     }
 

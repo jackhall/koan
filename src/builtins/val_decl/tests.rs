@@ -232,7 +232,7 @@ fn unknown_slot_type_names_the_slot_role() {
     let err = test_run.run_one_err(test_run.parse_one("SIG Ordered = ((VAL zero :Nope))"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
-            if msg.contains("VAL slot type `Nope` is not a known type")),
-        "expected the role-labeled unknown-type message, got {err}",
+            if msg.contains("unknown type name `Nope` in VAL slot type")),
+        "expected the role-framed unknown-type message, got {err}",
     );
 }

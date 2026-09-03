@@ -189,7 +189,7 @@ fn resolve_capture<'a>(
     let kt = match capture {
         TypeCapture::Done(kt) => kt,
         TypeCapture::AtWake(te) => {
-            resolve_at_wake(fctx.scope, label, fctx.registries, |s, registries| {
+            resolve_at_wake(fctx.scope, label, None, fctx.registries, |s, registries| {
                 s.resolve_type_identifier(te, None, registries)
             })
         }?,

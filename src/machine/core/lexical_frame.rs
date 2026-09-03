@@ -45,6 +45,19 @@ impl LexicalFrame {
         })
     }
 
+    /// The same chain with every position advanced one statement, so a binding the strict
+    /// `i < c` gate hides *because it is the consumer's own statement that declares it* becomes
+    /// visible, while a later sibling's stays hidden. That is the one probe separating a
+    /// self-reference (`LET Ty = Ty`) from a genuine forward reference, and a diagnostic is the
+    /// only caller: it runs on the error path, over a chain as deep as the lexical nesting.
+    pub fn including_own_statement(frame: &LexicalFrame) -> Rc<Self> {
+        LexicalFrame::push(
+            frame.parent.as_deref().map(Self::including_own_statement),
+            frame.scope_id,
+            frame.index + 1,
+        )
+    }
+
     /// First frame's `index` whose `scope_id` matches, walking head-first. `None`
     /// (no frame mentions that scope) reads as "scope complete, every entry visible".
     pub fn index_for(&self, scope_id: ScopeId) -> Option<usize> {

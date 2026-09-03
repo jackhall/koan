@@ -72,9 +72,7 @@ pub(crate) fn build_fn_like<'a>(
         ctx.scratch,
     ) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
-        ParamListOutcome::Err(msg) => {
-            return Action::done(Err(KError::new(KErrorKind::ShapeError(msg))));
-        }
+        ParamListOutcome::Err(error) => return Action::done(Err(error)),
         ParamListOutcome::Pending {
             awaited_producers,
             sub_dispatches,

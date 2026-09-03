@@ -8,6 +8,7 @@ use super::registry::TypeRegistry;
 use super::resolver::{Elaborator, TypeResolution, elaborate_type_identifier};
 use crate::machine::ProducerId;
 use crate::machine::Scope;
+use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::Record;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::ast::{
@@ -67,7 +68,10 @@ pub enum FieldListOutcome<'a> {
         awaited_producers: Vec<ProducerId>,
         sub_dispatches: Vec<WorkingExpression<'a>>,
     },
-    Err(String),
+    /// The whole error, not its message: a field's own miss diagnostic is raised where the field
+    /// is elaborated, and its kind — a forward type reference above all — has to reach the execute
+    /// layer as itself rather than flattened into a shape error on the way out.
+    Err(KError),
 }
 
 /// Walk-order feed of resolved sub-dispatch carriers for the dep-finish re-walk: the
@@ -161,6 +165,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
         list: context_list,
         member: context_member,
     } = context;
+    let shape = |message: String| KError::new(KErrorKind::ShapeError(message));
     let parsed = parse_pair_list(parts, context_list, name_kind, registries, |part, name| {
         // Every field types a value, so each field type must be a proper type; a bare
         // constructor of kind `* -> *` standing unapplied is a kind error. Applied to each
@@ -173,7 +178,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
             format_args!("the type of {context_member} `{}`", rendered()),
             registries,
         ) {
-            Some(message) => Err(message),
+            Some(message) => Err(shape(message)),
             None => Ok(kt),
         };
         match part.field_slot() {
@@ -185,10 +190,16 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     // parking producer in one pass.
                     Ok(KType::ANY)
                 }
-                TypeResolution::Unbound(missing) => Err(format!(
-                    "{} in {context_list} for `{}`",
-                    super::unknown_type_name(missing, registries),
-                    rendered()
+                // Every field-list surface — a record type, an `FN` parameter list, a `NEWTYPE`
+                // record repr, a `UNION` schema — reports its miss through the shared raiser, so a
+                // field naming a type declared further down the block reads as the position error
+                // it is rather than as an unknown name.
+                TypeResolution::Unbound(missing) => Err(super::type_name_miss(
+                    elaborator.scope,
+                    missing,
+                    elaborator.chain.as_deref(),
+                    Some(&format!("{context_list} for `{}`", rendered())),
+                    registries,
                 )),
             },
             // A co-declared sibling `rewrite_threaded_self_refs` already sealed in. The cell is a
@@ -201,25 +212,27 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     .scope
                     .read_spliced(&cell, |carried| match carried {
                         Carried::Type(kt) => checked(kt),
-                        other => Err(format!(
+                        other => Err(shape(format!(
                             "{context_list} type for `{}` resolved to non-type value `{}`",
                             rendered(),
                             other.summary(registries),
-                        )),
+                        ))),
                     })
             }
             // A sigil body whose co-declared references are already threaded dispatches as it
             // stands — the rewrite that produced it did what this arm's `Ast` peer does below.
             FieldSlot::ThreadedSigil(body) => match results.as_mut().and_then(|feed| feed.pop()) {
                 Some(Carried::Type(kt)) => checked(kt),
-                Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => Err(format!(
-                    "{context_list} type for `{}` resolved to non-type value `{}`",
-                    rendered(),
-                    other.summary(registries),
-                )),
-                None if results.is_some() => Err(format!(
+                Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => {
+                    Err(shape(format!(
+                        "{context_list} type for `{}` resolved to non-type value `{}`",
+                        rendered(),
+                        other.summary(registries),
+                    )))
+                }
+                None if results.is_some() => Err(shape(format!(
                     "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
-                )),
+                ))),
                 None => {
                     sub_dispatches.push(*body);
                     Ok(KType::ANY)
@@ -237,7 +250,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     registries,
                 ) {
                     FieldListOutcome::Done(pairs) => Ok(types.record(Record::from_pairs(pairs))),
-                    FieldListOutcome::Err(msg) => Err(msg),
+                    FieldListOutcome::Err(error) => Err(error),
                     FieldListOutcome::Pending {
                         awaited_producers,
                         sub_dispatches: inner_subs,
@@ -260,11 +273,11 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     && let Some(view) = elaborator.window().filter(|v| v.binds(*head))
                 {
                     let index = view.variant_index(*head, tag.symbol()).ok_or_else(|| {
-                        format!(
+                        shape(format!(
                             "{context_list}: `{}` is not a variant of `{}`",
                             registries.labels.render(tag.symbol()),
                             registries.labels.render(head.symbol()),
-                        )
+                        ))
                     })?;
                     return Ok(match view.sealed_member(index) {
                         Some(kt) => kt,
@@ -276,15 +289,15 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     // resolved to a value-by-expression.
                     Some(Carried::Type(kt)) => checked(kt),
                     Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => {
-                        Err(format!(
+                        Err(shape(format!(
                             "{context_list} type for `{}` resolved to non-type value `{}`",
                             rendered(),
                             other.summary(registries),
-                        ))
+                        )))
                     }
-                    None if results.is_some() => Err(format!(
+                    None if results.is_some() => Err(shape(format!(
                         "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
-                    )),
+                    ))),
                     // The body dispatches directly — the sigil wrapper's own handler does no more
                     // than hand its body to the dispatch entry.
                     None => {
@@ -312,7 +325,7 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     registries,
                 ) {
                     FieldListOutcome::Done(pairs) => Ok(types.record(Record::from_pairs(pairs))),
-                    FieldListOutcome::Err(msg) => Err(msg),
+                    FieldListOutcome::Err(error) => Err(error),
                     FieldListOutcome::Pending {
                         awaited_producers,
                         sub_dispatches: inner_subs,
@@ -323,11 +336,11 @@ fn walk_field_list<'a, 'f, P: Part<'a>>(
                     }
                 }
             }
-            FieldSlot::Name(_) | FieldSlot::Other => Err(format!(
+            FieldSlot::Name(_) | FieldSlot::Other => Err(shape(format!(
                 "{context_list} type for `{}` must be a type name token, got {}",
                 rendered(),
                 part_summary(part, registries)
-            )),
+            ))),
         }
     });
     match parsed {

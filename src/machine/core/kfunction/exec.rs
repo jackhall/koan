@@ -216,9 +216,9 @@ pub fn run_user_fn<'ast>(
                                 // return slot naming a value — a module included) a diagnostic
                                 // instead of a silently unconstrained return.
                                 TypeResolution::Unbound(name) => {
-                                    Err(KError::new(KErrorKind::ShapeError(
-                                        crate::machine::model::unknown_type_name(name, registries),
-                                    )))
+                                    Err(crate::machine::model::type_name_miss(
+                                        child, name, None, None, registries,
+                                    ))
                                 }
                             };
                         resolved

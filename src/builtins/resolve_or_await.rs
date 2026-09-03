@@ -9,18 +9,17 @@
 //! precisely because waiting there would deadlock the group the two names share; the token reaches
 //! the body raw instead, and the body waits on the sibling's claim edge through `deps_on`.
 
+use std::rc::Rc;
+
+use crate::machine::LexicalFrame;
 use crate::machine::execute::deps_on;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::TypeResolution;
+use crate::machine::model::type_name_miss;
 use crate::machine::model::{Carried, KType};
 use crate::machine::{Action, AwaitContinue, DepPlacement, DepTerminal, FinishCtx, SubDispatch};
 use crate::machine::{KError, KErrorKind, NameLookup, Scope};
 use crate::scheduler::Deps;
-
-/// `{slot}: {detail}` — the unbound / hard-miss shape.
-pub(crate) fn unbound_error(slot: &str, detail: &str) -> KError {
-    KError::new(KErrorKind::ShapeError(format!("{slot}: {detail}")))
-}
 
 /// Every parked producer is terminal by the dep-finish invariant, so a second park after wake is
 /// a protocol error, not a longer wait.
@@ -49,20 +48,22 @@ pub(crate) fn classify_name_lookup(
 }
 
 /// Re-run `resolve` after the parked binders finished. `Done` yields the type; `Park` is the
-/// protocol error; `Unbound` is a hard miss.
+/// protocol error; `Unbound` is a hard miss, classified against `chain` — the same lexical
+/// position `resolve` gates its own lookup at, so the miss separates a forward reference from a
+/// name declared nowhere.
 pub(crate) fn resolve_at_wake<'a>(
     scope: &Scope<'a>,
     slot: &str,
+    chain: Option<&LexicalFrame>,
     registries: &RunRegistries,
     resolve: impl Fn(&Scope<'a>, &RunRegistries) -> TypeResolution<KType>,
 ) -> Result<KType, KError> {
     match resolve(scope, registries) {
         TypeResolution::Done(kt) => Ok(kt),
         TypeResolution::Park(_) => Err(parked_after_wake_error(slot)),
-        TypeResolution::Unbound(name) => Err(unbound_error(
-            slot,
-            &crate::machine::model::unknown_type_name(name, registries),
-        )),
+        TypeResolution::Unbound(name) => {
+            Err(type_name_miss(scope, name, chain, Some(slot), registries))
+        }
     }
 }
 
@@ -73,6 +74,7 @@ pub(crate) fn resolve_at_wake<'a>(
 pub(crate) fn resolve_or_await<'a>(
     scope: &'a Scope<'a>,
     slot: &'static str,
+    chain: Option<Rc<LexicalFrame>>,
     resolve: impl Fn(&Scope<'a>, &RunRegistries) -> TypeResolution<KType> + 'a,
     on_resolved: impl for<'r> FnOnce(&FinishCtx<'a, 'r>, KType) -> Action<'a> + 'a,
     registries: &RunRegistries,
@@ -84,15 +86,23 @@ pub(crate) fn resolve_or_await<'a>(
         TypeResolution::Done(kt) => on_resolved(&FinishCtx::for_scope(scope, registries), kt),
         TypeResolution::Park(sources) => {
             let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
-                let kt =
-                    crate::try_action!(resolve_at_wake(fctx.scope, slot, fctx.registries, resolve));
+                let kt = crate::try_action!(resolve_at_wake(
+                    fctx.scope,
+                    slot,
+                    chain.as_deref(),
+                    fctx.registries,
+                    resolve
+                ));
                 on_resolved(fctx, kt)
             });
             Action::await_deps(deps_on(sources), finish)
         }
-        TypeResolution::Unbound(name) => Action::done(Err(unbound_error(
-            slot,
-            &crate::machine::model::unknown_type_name(name, registries),
+        TypeResolution::Unbound(name) => Action::done(Err(type_name_miss(
+            scope,
+            name,
+            chain.as_deref(),
+            Some(slot),
+            registries,
         ))),
     }
 }

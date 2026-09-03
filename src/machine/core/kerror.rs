@@ -62,6 +62,17 @@ pub enum KErrorKind {
         expr: String,
         suggest_flat: bool,
     },
+    /// A name resolved to a declaration lexically later than its consumer — a position error, not
+    /// an unknown name: the declaration exists, but declarations are read in source order.
+    /// `context` names the position within the consuming expression (e.g. "record fields for
+    /// `Ty`"). `hint` is a Display-only fix suggestion supplied by the raising channel (like
+    /// [`NestedBinder`](KErrorKind::NestedBinder)'s `suggest_flat`); the type channel suggests the
+    /// MODULE-body co-declaration that makes mutual recursion legal.
+    ForwardReference {
+        name: String,
+        context: Option<String>,
+        hint: Option<&'static str>,
+    },
     /// A builtin's structural assumption about an argument's shape didn't hold.
     ShapeError(String),
     ParseError {
@@ -306,6 +317,7 @@ pub(crate) struct ErrorKinds {
     pub duplicate_declaration: StaticName<TypeSymbol>,
     pub duplicate_overload: StaticName<TypeSymbol>,
     pub dynamic_names_under_inferred_close: StaticName<TypeSymbol>,
+    pub forward_reference: StaticName<TypeSymbol>,
     pub missing_arg: StaticName<TypeSymbol>,
     pub nested_binder: StaticName<TypeSymbol>,
     pub parse_error: StaticName<TypeSymbol>,
@@ -330,6 +342,7 @@ pub(crate) static KIND: ErrorKinds = ErrorKinds {
         TypeSymbol,
         "DynamicNamesUnderInferredClose"
     ),
+    forward_reference: crate::static_name!(TypeSymbol, "ForwardReference"),
     missing_arg: crate::static_name!(TypeSymbol, "MissingArg"),
     nested_binder: crate::static_name!(TypeSymbol, "NestedBinder"),
     parse_error: crate::static_name!(TypeSymbol, "ParseError"),
@@ -344,7 +357,7 @@ pub(crate) static KIND: ErrorKinds = ErrorKinds {
 
 impl ErrorKinds {
     /// Every kind name, in the order the `KError` union declares its members.
-    pub(crate) fn all(&'static self) -> [&'static StaticName<TypeSymbol>; 16] {
+    pub(crate) fn all(&'static self) -> [&'static StaticName<TypeSymbol>; 17] {
         [
             &self.ambiguous_dispatch,
             &self.arity_mismatch,
@@ -352,6 +365,7 @@ impl ErrorKinds {
             &self.duplicate_declaration,
             &self.duplicate_overload,
             &self.dynamic_names_under_inferred_close,
+            &self.forward_reference,
             &self.missing_arg,
             &self.nested_binder,
             &self.parse_error,
@@ -477,6 +491,10 @@ impl KErrorKind {
                     &FIELD.form,
                     KObject::KString(brand.allocator().text(form.surface())),
                 )],
+            ),
+            KErrorKind::ForwardReference { name, .. } => (
+                &KIND.forward_reference,
+                vec![(&FIELD.name, KObject::KString(brand.allocator().text(name)))],
             ),
             KErrorKind::ShapeError(msg) => (
                 &KIND.shape_error,
@@ -650,6 +668,21 @@ impl fmt::Display for KErrorKind {
                     )?;
                 }
                 Ok(())
+            }
+            KErrorKind::ForwardReference {
+                name,
+                context,
+                hint,
+            } => {
+                write!(f, "`{name}` is used")?;
+                if let Some(context) = context {
+                    write!(f, " in {context}")?;
+                }
+                f.write_str(" before being declared")?;
+                match hint {
+                    Some(hint) => write!(f, " — {hint}"),
+                    None => Ok(()),
+                }
             }
             KErrorKind::ShapeError(reason) => write!(f, "shape error: {reason}"),
             KErrorKind::ParseError {

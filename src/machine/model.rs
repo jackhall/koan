@@ -59,7 +59,7 @@ pub(crate) use types::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
     SealOutcome, SigSchema, TypeMemberMap, TypeResolution, constructor_param_names,
     declarator_window, elaborate_type_identifier, finalize_nominal_member, pair_list_names,
-    parse_typed_field_list_via_elaborator, rewrite_window_refs, seal_writes, unknown_type_name,
+    parse_typed_field_list_via_elaborator, rewrite_window_refs, seal_writes, type_name_miss,
     unsaturated_constructor_message,
 };
 /// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.

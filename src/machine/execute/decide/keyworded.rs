@@ -5,7 +5,9 @@ use crate::machine::ProducerId;
 use crate::machine::core::OpenedFunction;
 use crate::machine::core::location_from_expr;
 use crate::machine::model::labels::BinderSymbol;
-use crate::machine::model::{ExpressionPart, WorkingExpression, WorkingPart, diagnose_miss};
+use crate::machine::model::{
+    ExpressionPart, WorkingExpression, WorkingPart, diagnose_miss, type_name_miss,
+};
 use crate::machine::{DispatchOutcome, KError, KErrorKind};
 use crate::source::Spanned;
 
@@ -90,6 +92,23 @@ fn resolve_and_invoke<'step>(
             })));
         }
         DispatchOutcome::UnboundName(name, role) => {
+            // A type-name slot renders through the shared raiser, so this lane and the bodies it
+            // dispatches into answer one type-name miss the same way. The classification runs
+            // *before* the shape diagnosis: a name declared later in the block is the true cause,
+            // and a shape diagnosis over the same expression would mask the position error behind
+            // a guess at what the writer meant.
+            let type_miss = match name {
+                BinderSymbol::Type(t) => {
+                    Some(type_name_miss(scope, t, chain, role, ctx.registries()))
+                }
+                BinderSymbol::Value(_) => None,
+            };
+            if let Some(error) = type_miss
+                .as_ref()
+                .filter(|e| matches!(e.kind, KErrorKind::ForwardReference { .. }))
+            {
+                return Outcome::Done(Err(error.clone()));
+            }
             // A diagnosable shape speaks first: the name a mis-spelled slot holds is *why* nothing
             // matched, and reporting it as merely unbound would bury the mistake. `-> er` is the
             // standing case — a parameter name is unbound in the defining scope, so the shape
@@ -97,15 +116,14 @@ fn resolve_and_invoke<'step>(
             if let Some(diagnosed) = diagnose_miss(&expr, ctx.registries()) {
                 return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(diagnosed))));
             }
-            let spelling = crate::machine::model::render_label(name.symbol(), ctx.registries());
-            // A slot that declared a role keeps the pointed noun its body used to render before the
-            // lane owned the resolution; every other slot reports the bare unbound name.
-            return Outcome::Done(Err(KError::new(match role {
-                Some(role) => {
-                    KErrorKind::ShapeError(format!("{role} `{spelling}` is not a known type"))
-                }
-                None => KErrorKind::UnboundName(spelling),
-            })));
+            // A never-declared type name renders the raiser's own wording, framed by the slot's
+            // role when it declared one; a value name reports the bare unbound name.
+            return Outcome::Done(Err(match type_miss {
+                Some(error) => error,
+                None => KError::new(KErrorKind::UnboundName(
+                    crate::machine::model::render_label(name.symbol(), ctx.registries()),
+                )),
+            }));
         }
         DispatchOutcome::ParkOnProducers(sources) => {
             return park_on_claims(&sources, expr, ctx);
