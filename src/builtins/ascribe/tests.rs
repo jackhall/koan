@@ -10,9 +10,12 @@
 //!   signature-subtyping relation.
 //! - [`views`] — reads through an opaque view: every VAL member at the view's own per-call types,
 //!   on every slot shape, with the barrier holding in both directions.
+//! - [`nested`] — a signature nested inside a slot type: substitution, satisfaction and
+//!   canonicalization through it, and the nested module born as a coerced view of itself.
 
 mod ascription;
 mod cross_sig;
 mod functor;
+mod nested;
 mod self_sig;
 mod views;

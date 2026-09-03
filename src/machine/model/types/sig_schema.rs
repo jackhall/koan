@@ -449,6 +449,22 @@ impl CoercionTables {
         substitute_sig_members(declared, self.plan.sig_id, &self.to, types)
     }
 
+    /// These tables with `nested`'s own abstract-member names removed from both sides — what the
+    /// coercion walk carries when it descends into a nested signature, since a nested binder
+    /// shadows the enclosing one by name exactly as [`substitute_sig_members`] has it.
+    ///
+    /// A fresh [`MemberCoercion`] rather than a filtered view, so the narrowed plan rides on into
+    /// the nested view's own `ViewMembers` and into any `Body::CoercedDelegate` built beneath it.
+    pub fn shadowed_by(&self, nested: &SigSchema, types: &TypeRegistry) -> CoercionTables {
+        MemberCoercion::new(
+            self.plan.sig_id,
+            &unshadowed(&self.from, nested),
+            &unshadowed(&self.to, nested),
+            types,
+        )
+        .tables(types)
+    }
+
     /// The `from`-side substitution — the type the value being coerced currently inhabits, which a
     /// union arm tests a value against to pick its declared member.
     pub fn substitute_from(&self, declared: KType, types: &TypeRegistry) -> KType {

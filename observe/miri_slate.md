@@ -616,10 +616,18 @@ points at. `Scope::coerce_delivered` claims the pin for all three, so the source
 view region's union bundle; `a_returned_opaque_view_keeps_every_coerced_member_alive` reads each
 shape back (and calls through the wrapper) after the minting frame is gone.
 
+A **nested-signature slot** adds a fourth leaf: its member is rebuilt as an opaque view *of itself*
+([coerce.rs](../src/machine/model/values/coerce.rs)) — a whole scope and module, with a binding
+table, a type table, a re-homed path and a self-sig, all bumped into the **source** module's region
+from inside the coercion fold's closure and only pointed at from the outer view's.
+`a_returned_view_keeps_its_nested_member_alive` walks that storage — the nested type table, the path
+bytes, the coerced member and the width extra — after the minting frame is gone.
+
 - `functor_application_is_generative`
 - `a_returned_transparent_view_keeps_the_region_it_was_minted_in`
 - `functor_application_mints_distinct_abstract_types`
 - `a_returned_opaque_view_keeps_every_coerced_member_alive`
+- `a_returned_view_keeps_its_nested_member_alive`
 
 **Record escape seam — cost-driven copy vs pin** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
 — two distinct seams relocate a top-level `Record` out of a dying producer, each pinned here. The
@@ -688,9 +696,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-03: 1098s — 33 tests, 0 leaks, 0 UB
 - 2026-09-03: 1140s — 32 tests, 0 leaks, 0 UB
 - 2026-09-02: 1127s — 31 tests, 0 leaks, 0 UB
 - 2026-09-01: 1068s — 31 tests, 0 leaks, 0 UB
 - 2026-09-01: 918s — 29 tests, 0 leaks, 0 UB
-- 2026-08-31: 1098s — 27 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

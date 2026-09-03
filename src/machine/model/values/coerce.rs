@@ -17,20 +17,20 @@
 
 use std::collections::HashMap;
 
-use crate::machine::core::{Body, KFunction, SubstrateDoor};
+use crate::machine::core::{Body, KFunction, Scope, SubstrateDoor, ViewMembers};
 use crate::machine::model::labels::Symbol;
 use crate::machine::model::registries::RunRegistries;
 use crate::machine::model::types::{
-    Argument, CoercionTables, KType, ReturnType, SignatureElement, TypeNode,
+    Argument, CoercionTables, KType, ReturnType, SigSchema, SignatureElement, TypeNode,
 };
 
-use super::{Held, KKey, KObject};
+use super::{Held, KKey, KObject, Module, ModuleDraft};
 
 /// Rewrite `value` — currently inhabiting `tables`' `from` substitution of `declared` — so it
 /// inhabits the `to` substitution, building whatever has to be rebuilt at `door`.
 ///
 /// Arms mirror `substitute_sig_members`, so the walk is finite for the same reason that
-/// substitution is: a sealed `SetMember` and a `Signature` are leaves there and pass through here.
+/// substitution is: a sealed `SetMember` is a leaf there and passes through here.
 ///
 /// - A position whose two substitutions agree returns the value untouched — the fast path covering
 ///   a concrete slot, a manifest-only slot, and every sub-position naming no abstract member.
@@ -43,6 +43,8 @@ use super::{Held, KKey, KObject};
 ///   into the value: a callable is coerced at its own boundary, per call.
 /// - A **`Union`** position picks the declared member whose `from` substitution the value
 ///   inhabits and coerces by that member alone.
+/// - A **`Signature`** position is the nested-module shape: the member is rebuilt as an opaque view
+///   of itself whose own members read at the outer view's types ([`coerce_module`]).
 pub fn coerce_object_into<'b>(
     value: &KObject<'b>,
     declared: KType,
@@ -115,6 +117,10 @@ pub fn coerce_object_into<'b>(
             KObject::KFunction(underlying) => {
                 KObject::KFunction(coerce_function(underlying, declared, tables, registries))
             }
+            _ => value.deep_clone(),
+        },
+        TypeNode::Signature { schema, .. } => match value {
+            KObject::Module(m) => KObject::Module(coerce_module(m, &schema, tables, registries)),
             _ => value.deep_clone(),
         },
         TypeNode::Union { members } => {
@@ -209,4 +215,73 @@ fn coerce_function<'b>(
         },
         registries,
     )
+}
+
+/// The **module boundary**: a member filling a slot whose declared type is a nested `Signature` is
+/// rebuilt as an opaque view *of itself*, so its own members read at the outer view's types rather
+/// than at the source's representation. `nested` is the declared slot's schema, whose members and
+/// slots name the *enclosing* signature's abstract members — the references the outer plan binds.
+///
+/// The view is born at the source module's **own child scope**, both as the new scope's parent and
+/// as the table it replays: it lives in the same region the source does, exactly as
+/// [`coerce_function`]'s wrapper lives in its underlying's, and the enclosing coercion's pin keeps
+/// that region for the product's life. Reusing [`Scope::alloc_module_view`] is what makes the
+/// nested members *born* coerced, on the same terms the outer view's own members are.
+///
+/// Width rides through: the replay installs every member of the source, and only the slots the
+/// nested schema names — and whose two substitutions differ — are born coerced.
+fn coerce_module<'b>(
+    m: &'b Module<'b>,
+    nested: &SigSchema,
+    tables: &CoercionTables,
+    registries: &RunRegistries,
+) -> &'b Module<'b> {
+    let types = &registries.types;
+    // A nested signature's own abstract members shadow the enclosing binder's by name, so the
+    // descent carries the narrowed plan — the same subtraction `substitute_sig_members` makes.
+    let narrowed;
+    let tables = if nested.abstract_members.is_empty() {
+        tables
+    } else {
+        narrowed = tables.shadowed_by(nested, types);
+        &narrowed
+    };
+
+    // The view's type members: the source module's own, with every member the nested signature
+    // fixes overridden by its `to` substitution. Nothing is minted here — a nested view's abstract
+    // identities *are* the outer view's mints, arriving through the substitution — so the plan
+    // closure ignores its nonce.
+    let mut view_types: HashMap<crate::machine::model::labels::TypeSymbol, KType> =
+        m.type_members.iter().map(|(n, kt)| (*n, *kt)).collect();
+    for (name, kt) in &nested.manifest_members {
+        view_types.insert(*name, tables.substitute_to(*kt, types));
+    }
+    let coerced_slots = nested
+        .value_slots
+        .iter()
+        .filter(|(_, declared)| tables.coerces(**declared, types))
+        .map(|(name, declared)| (*name, *declared))
+        .collect();
+
+    let view_members = ViewMembers {
+        types: view_types.into_iter().collect(),
+        coerced_slots,
+        coercion: tables.coercion(),
+    };
+    let source = m.child_scope();
+    let scope = Scope::alloc_module_view(source, source, registries, |_nonce| view_members)
+        .expect("a module's own tables replay into a newborn view scope without colliding");
+    // Nothing binds into the scope past the replay, so its reach-set seals here, before the module
+    // captures it — the same close the outer view's construction makes.
+    scope.close();
+
+    let mut draft = ModuleDraft::empty();
+    for (name, kt) in scope.bindings().iter_types() {
+        draft.type_members.insert(name, kt);
+    }
+    // The raw derivation is exact here: the scope is born holding coerced member values, so the
+    // ktype read off each member already reports the outer view's identity — no slot needs
+    // re-expressing against the declared types, and none can be claimed the module does not hold.
+    let self_sig = SigSchema::raw_self_sig(scope, &draft);
+    Module::alloc_at_child_scope(m.path, scope, draft, types.signature(self_sig))
 }
