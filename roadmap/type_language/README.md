@@ -72,4 +72,23 @@ not the fix.
   written as a `LET` ascription refuses it too. Which of the two rules is the intended one is
   the open question; whichever it is, the two arms should share it rather than each carry a
   copy.
+- **A nested signature's own abstract member reads at the source's representation.** A signature
+  standing in another's slot type participates in substitution, and a nested binder shadows the
+  enclosing one **by name** — every projected SIG canonicalizes its binders to
+  `ScopeId::SENTINEL`, so `source` cannot tell an inner binder from an outer one
+  ([design/typing/modules.md](../../design/typing/modules.md)). A member the nested signature
+  declares abstract is therefore named by nothing the enclosing signature can bind, so
+  [`coerce_module`](../../src/machine/model/values/coerce.rs) has no substitution to apply and
+  mints nothing of its own: `VAL subs :(LIST OF Shadowing)`, where `Shadowing` declares its own
+  `TYPE Elt`, surfaces each element's `Elt` at whatever concrete type the source module bound —
+  the one position an opaque view does not hide a representation. Minting a fresh identity there
+  would be a second, nested opaque ascription, with its own generativity and its own barrier;
+  whether a nested binder deserves one is the unruled question.
+- **A module-typed member is reachable only inside a container.** `VAL sub :Inner` does not
+  elaborate: `VAL`'s type slot is `KKind::ProperType` and a signature is `KKind::Signature`, so a
+  SIG can declare a list, dict or record of modules but not a bare module member. ML's module
+  system admits a submodule specification directly (`module Sub : sig … end`), and koan's own
+  functor surface already passes modules as values, so the restriction is a slot-kind accident
+  rather than a decision. Admitting a signature in a `VAL` slot needs a rule for what
+  `KKind::ProperType` means once a module inhabits a value position.
 
