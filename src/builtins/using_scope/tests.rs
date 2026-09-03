@@ -6,7 +6,10 @@
 //!
 //! - [`type_members`] — the window's type channel: a module's type members named in type
 //!   positions inside the block, and block-local type declarations over them.
+//! - [`opaque_view`] — a window over an opaque view: every bare-name member read reports the same
+//!   view-side type the ATTR read reports.
 
+mod opaque_view;
 mod type_members;
 
 use crate::builtins::test_support::TestRun;

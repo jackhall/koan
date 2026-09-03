@@ -8,8 +8,11 @@
 //!   application.
 //! - [`self_sig`] — the self-sig a module / view carries, and satisfaction through the
 //!   signature-subtyping relation.
+//! - [`views`] — reads through an opaque view: every VAL member at the view's own per-call types,
+//!   on every slot shape, with the barrier holding in both directions.
 
 mod ascription;
 mod cross_sig;
 mod functor;
 mod self_sig;
+mod views;

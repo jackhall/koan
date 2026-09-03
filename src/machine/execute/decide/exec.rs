@@ -156,9 +156,17 @@ fn enter_user_fn<'step>(
         } => {
             let types = view.types();
             let declared_return = declared_fn_return(declared, types);
-            let expected = coercion
-                .tables(types)
-                .substitute_from(declared_return, types);
+            let outward = coercion.tables(types);
+            // A return position naming no abstract member crosses no barrier: the wrapper's own
+            // declared return already *is* the underlying's, so the ordinary `Function` contract
+            // checks the right type and nothing has to be rewritten on the way out.
+            let coerced_return = outward.coerces(declared_return, types).then(|| {
+                (
+                    declared_return,
+                    outward.substitute_from(declared_return, types),
+                    coercion,
+                )
+            });
             let inward = coerce_arguments_inward(
                 view,
                 wrapper,
@@ -166,26 +174,20 @@ fn enter_user_fn<'step>(
                 &coercion.flipped().tables(types),
                 &named_carriers,
             );
-            (
-                underlying,
-                Some((declared_return, expected, coercion)),
-                Some(inward),
-            )
+            (underlying, coerced_return, Some(inward))
         }
         _ => (wrapper, None, None),
     };
-    // One borrow run for the frame bind, whichever lane filled it.
-    let call_carriers: BumpVec<'step, &DeliveredCarried> = match &inward {
-        Some(coerced) => {
-            let mut run = BumpVec::with_capacity_in(coerced.len(), view.scratch());
-            run.extend(coerced.iter());
-            run
-        }
-        None => {
-            let mut run = BumpVec::with_capacity_in(named_carriers.len(), view.scratch());
-            run.extend(named_carriers.iter().copied());
-            run
-        }
+    // The frame bind takes a run of borrows. An ordinary call hands it `named_carriers` as it
+    // stands; only the delegate lane, which owns its coerced envelopes, needs a second run naming
+    // them — so no call pays for a copy it does not use.
+    let mut coerced_carriers: BumpVec<'step, &DeliveredCarried> = BumpVec::new_in(view.scratch());
+    if let Some(coerced) = &inward {
+        coerced_carriers.extend(coerced.iter());
+    }
+    let call_carriers: &[&DeliveredCarried] = match inward.is_some() {
+        true => &coerced_carriers,
+        false => &named_carriers,
     };
     // Chained off the closure's captured (definition) scope, so a closure's captured per-call frame
     // survives the hop while the caller's cart does not.
@@ -204,7 +206,7 @@ fn enter_user_fn<'step>(
     let site = working_expr.source_ref();
     match run_user_fn(
         function,
-        &call_carriers,
+        call_carriers,
         &exec_frame,
         in_chain,
         view.registries(),
@@ -391,10 +393,13 @@ fn coerce_arguments_inward<'step>(
             .iter()
             .zip(named_carriers.iter())
             .map(|((name, _), carrier)| {
-                match declared_params
-                    .get(name.symbol())
-                    .filter(|declared_param| inward.coerces(**declared_param, types))
-                {
+                // The value channel only: a type-denoting parameter delivers an owned `KType`
+                // handle, which has no value identity to rewrite.
+                let on_value_channel =
+                    carrier.open(|live| matches!(live, crate::machine::model::Carried::Object(_)));
+                match declared_params.get(name.symbol()).filter(|declared_param| {
+                    on_value_channel && inward.coerces(**declared_param, types)
+                }) {
                     Some(declared_param) => view.current_scope().coerce_delivered(
                         carrier,
                         *declared_param,

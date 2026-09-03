@@ -599,17 +599,27 @@ the destination's arena, whose composition retains it for the consumer region's 
 because tree borrows catches a regression in the retention discipline that would dangle an escaped
 closure / module past its per-call frame's drop. The closure shape rides the `KFunction`
 captured-scope group above; the tests below pin the **module** shape — a functor-minted module
-surviving the run that built it, an **opaque-ascription view** whose path and both member maps are
-read back out of the dead call region that bumped them, and a **transparent-ascription view**, the
+surviving the run that built it, an **opaque-ascription view** whose path, member map and coerced
+member values are read back out of the dead call region that bumped them, and a
+**transparent-ascription view**, the
 one value shape whose residence and the scope it borrows are different regions (the view is re-tagged
 into the ascribing call's own region while its child scope stays where the source module put it). A borrow leaf is never
 rebuilt, so a relocation carrying one out of a dying frame must keep the region it *lives* in, not the
 one it borrows; a release claim derived from the child scope frees the storage the returned value
 points at, which only tree borrows observes — a normal build reads the freed bytes back intact.
 
+An opaque view's members are **born coerced** ([ascribe.rs](../src/builtins/ascribe.rs)), which adds
+three borrow leaves the pin has to keep across that same frame death: a re-tagged member sharing the
+source's payload substrate, a rebuilt list whose cells hold borrows into it, and a function slot's
+coercion wrapper — a callable born in the *source* module's region that the view's region only
+points at. `Scope::coerce_delivered` claims the pin for all three, so the source region rides in the
+view region's union bundle; `a_returned_opaque_view_keeps_every_coerced_member_alive` reads each
+shape back (and calls through the wrapper) after the minting frame is gone.
+
 - `functor_application_is_generative`
 - `a_returned_transparent_view_keeps_the_region_it_was_minted_in`
 - `functor_application_mints_distinct_abstract_types`
+- `a_returned_opaque_view_keeps_every_coerced_member_alive`
 
 **Record escape seam — cost-driven copy vs pin** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
 — two distinct seams relocate a top-level `Record` out of a dying producer, each pinned here. The
