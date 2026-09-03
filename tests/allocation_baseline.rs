@@ -82,12 +82,12 @@ fn allocations_for(source: &str, path: &str) -> u64 {
 
 /// What the `seam-force-pin` verification build is allowed over the two recursion-driven shapes'
 /// bounds. Forcing that verb takes every record escape the cost-driven chooser declines to pin,
-/// and pinning them all costs ~2.6k allocations across either body. It is added at the assertion
-/// rather than folded into a bound so `BOUND` stays the production figure — the one
-/// `tools/alloc_audit.py` scrapes and holds to its own tightness rule. `seam-force-copy` needs
-/// nothing: it lands within a dozen allocations of the chooser.
+/// and pinning them all costs 2_727 allocations across either body; the allowance sits a little
+/// over that. It is added at the assertion rather than folded into a bound so `BOUND` stays the
+/// production figure — the one `tools/alloc_audit.py` scrapes and holds to its own tightness rule.
+/// `seam-force-copy` needs nothing: it lands within a dozen allocations of the chooser.
 const FORCED_PIN_ALLOWANCE: u64 = if cfg!(feature = "seam-force-pin") {
-    2_600
+    2_800
 } else {
     0
 };
@@ -103,7 +103,7 @@ const FORCED_PIN_ALLOWANCE: u64 = if cfg!(feature = "seam-force-pin") {
 /// that a seeding change of any real size fails it rather than being absorbed.
 #[test]
 fn the_empty_program_stays_within_its_startup_bound() {
-    const BOUND: u64 = 1_092;
+    const BOUND: u64 = 870;
     let delta = allocations_for(
         include_str!("../audit/shapes/empty.koan"),
         "audit/shapes/empty.koan",
@@ -134,7 +134,7 @@ fn the_empty_program_stays_within_its_startup_bound() {
 /// [`FORCED_PIN_ALLOWANCE`] on top.
 #[test]
 fn the_wide_shape_stays_within_its_per_step_bound() {
-    const BOUND: u64 = 22_670;
+    const BOUND: u64 = 22_220;
     let delta = allocations_for(
         include_str!("../audit/shapes/wide_n100.koan"),
         "audit/shapes/wide_n100.koan",
@@ -161,7 +161,7 @@ fn the_wide_shape_stays_within_its_per_step_bound() {
 /// doc gives.
 #[test]
 fn the_deep_shape_stays_within_its_per_frame_bound() {
-    const BOUND: u64 = 23_280;
+    const BOUND: u64 = 22_830;
     let delta = allocations_for(
         include_str!("../audit/shapes/deep_n100.koan"),
         "audit/shapes/deep_n100.koan",
@@ -193,12 +193,12 @@ fn the_deep_shape_stays_within_its_per_frame_bound() {
 ///
 /// The bound has to clear the **forced** builds too, and `seam-force-copy` consolidates every
 /// callable escape — including the crossings the cost-driven chooser declines — which costs a
-/// handful of transient buffers per copied environment (2611 against the cost-driven build's
-/// 2605). It is headroom for a verification build, not for the production path: that stayed at
+/// handful of transient buffers per copied environment (2068 against the cost-driven build's
+/// 2062). It is headroom for a verification build, not for the production path: that stayed at
 /// parity when the consolidation landed, and a per-name regression there is still 450 away.
 #[test]
 fn the_declare_shape_stays_within_its_per_name_bound() {
-    const BOUND: u64 = 2_616;
+    const BOUND: u64 = 2_120;
     let marginal = allocations_for(
         include_str!("../audit/shapes/declare_n100.koan"),
         "audit/shapes/declare_n100.koan",

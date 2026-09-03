@@ -5,8 +5,8 @@
 # managed by tools/alloc_audit.py --baseline; newest first, capped to 5 sweeps
 #                        empty   wide_n10  wide_n100 deep_n10  deep_n100 declare_n10 declare_n100
 # date       short-sha alloc sym alloc sym alloc sym alloc sym alloc sym  alloc  sym  alloc   sym
+  2026-09-02 de1c20c2+   851 254  3795 551 22155 551  3844 552 22769 552   1309  409   3371  1489
   2026-09-02 4b1ab4de+   851 254  3795 551 22155 551  3844 552 22769 552   1309  409   3371  1489
   2026-09-02 ee7ea66b+   851 254  3795 551 22155 551  3844 552 22769 552   1309  409   3371  1489
   2026-09-02 6ed4dd46+   851 254  3795 551 22155 551  3844 552 22769 552   1309  409   3371  1489
   2026-09-02 2de96984+   913 289  3859 586 22219 586  3908 587 22833 587   1371  444   3433  1524
-  2026-09-02 9301dd8d+   913 289  3859 586 22219 586  3908 587 22833 587   1371  444   3433  1524
