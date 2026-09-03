@@ -260,9 +260,9 @@ registration that builds its type. `CATCH` reads the tags back through `result`'
 the tag a `Result` value is built under is the tag its registration declared. A name chosen at
 runtime takes `declared`: a `KError` variant's name is picked by the variant in hand rather than
 fixed at a source site. The builtin type vocabulary is fixed in source like the tags —
-[builtin_names.rs](../src/machine/model/types/builtin_names.rs) declares the eleven spellings as
+[builtin_names.rs](../src/machine/model/types/builtin_names.rs) declares the twelve spellings as
 `StaticName<TypeSymbol>`s beside the handle each lowers to, and that one table is what both root
-registration and `KType::from_symbol` read, so a builtin type name is matched by eleven symbol
+registration and `KType::from_symbol` read, so a builtin type name is matched by twelve symbol
 compares and never classified from text.
 
 A **caught error's field names** are fixed in source too, and they are the case where the group is

@@ -26,9 +26,8 @@ fn lookup_bool_key<'run>(d: &DictSubstrate<'run>, key: bool) -> Option<&'run KOb
     d.entry(&KKey::Bool(key)).and_then(|h| h.as_object())
 }
 
-/// Unlike the empty-list / empty-dict rule, bare `{}` is the empty record (the top of
-/// the record lattice), which is well-typed on its own — so binding it through an untyped
-/// `LET` succeeds rather than tripping the empty-container rule.
+/// Bare `{}` is the empty record (the top of the record lattice), not an empty dict — there is
+/// no surface spelling for the latter — so an untyped `LET` binds a `Record`, not a `Dict`.
 #[test]
 fn let_binds_an_empty_record_literal() {
     let program = program_storage();

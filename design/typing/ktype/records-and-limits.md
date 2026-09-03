@@ -26,8 +26,9 @@ y :Str} -> Bool)` equals `:(FN :{y :Str, x :Number} -> Bool)`. Function
 admission compares the two records under width-drop subtyping (see
 [Variance](parameterization-and-variance.md#variance)): a value that requires a parameter the slot doesn't
 declare is a non-match, while extra *slot* parameters the value doesn't declare
-are fine — they arrive unbound under call-by-name. `KType::join` reuses the
-record join for both arms.
+are fine — they arrive unbound under call-by-name. `TypeRegistry::join` and its dual `meet`
+share one name-keyed pointwise combinator over that record, each passing the other down for the
+contravariant parameter position.
 
 The shape has three defining properties:
 

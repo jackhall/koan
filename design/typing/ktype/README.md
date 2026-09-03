@@ -92,7 +92,8 @@ concrete `KObject` has a `TypeNode` variant:
 - `Union { members: Vec<KType> }` — an **untagged structural disjunction**, the type `:(A | B)`.
   Not a member reference: it composes any member types, canonicalized by
   [`TypeRegistry::union_of`](../../../src/machine/model/types/registry.rs) —
-  flattened, deduplicated, and collapsed to the lone member when only one survives
+  flattened, deduplicated, stripped of `Never` members (the identity element: `:(Never | Number)`
+  is `:Number`), and collapsed to the lone member when only one survives
   (`:(A | A)` is `:A`). Identity is order-blind: the digest sorts its member
   handles, so `:(A | B)` equals `:(B | A)`. A union admits any value one of its members admits, and
   each member is strictly more specific than the union
@@ -164,7 +165,13 @@ concrete `KObject` has a `TypeNode` variant:
   sugar; renders as `:(ctor {Name = Type, …})` in diagnostics, which re-parses. See
   [functors.md § Higher-kinded type slots](../functors.md#higher-kinded-type-slots)
   for the surface form and per-call generativity.
-- `Any` — the no-op fast-path.
+- `Any` — the no-op fast-path, and the top of the type lattice.
+- `Never` — the uninhabited bottom: admitted by no value, more specific than every other type,
+  and the identity element of join and of union canonicalization. Spellable as the builtin name
+  `Never`, where it declares a slot nothing fills. It is what makes
+  [`TypeRegistry::meet`](../../../src/machine/model/types/registry.rs) — the greatest lower
+  bound, dual of `join` — total, and what an empty container carries as its element type. See
+  [The lattice bottom](parameterization-and-variance.md#the-lattice-bottom).
 
 [`KType::matches_value`](../../../src/machine/model/types/ktype_predicates.rs) plus
 [`KObject::ktype`](../../../src/machine/model/values/kobject.rs) close the loop on runtime

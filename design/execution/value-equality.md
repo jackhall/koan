@@ -68,8 +68,9 @@ to unequal without descending. This buys two properties: ascription-invariance
 (a value stays equal to itself across a coarsening boundary) and empty-container
 distinction (`[] :(LIST OF Number)` is not equal to `[] :(LIST OF Str)`).
 
-The relation is **deliberately intransitive**. A freshly-stamped empty list
-relates to both `[] :(LIST OF Number)` and `[] :(LIST OF Str)` through `Any`,
+The relation is **deliberately intransitive**. An unascribed empty list — element
+type `Never`, the lattice bottom — relates to both `[] :(LIST OF Number)` and
+`[] :(LIST OF Str)`,
 yet those two outer lists are unequal to each other. Transitivity is traded away
 on purpose for the two properties above; equality here is never a hash or key
 relation, so no map contract is at stake.

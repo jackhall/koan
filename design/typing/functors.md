@@ -76,7 +76,8 @@ record's order-blind equality. Admissibility is the ordinary function-subtyping 
 [`function_compat`](../../src/machine/model/types/ktype_predicates.rs) — contravariant params
 with width-drop, covariant return (see
 [ktype/parameterization-and-variance.md § Variance](ktype/parameterization-and-variance.md#variance))
-— and `KType::join` joins two same-shape functions to a shared `KFunction`.
+— and `TypeRegistry::join` joins two same-shape functions to a shared `KFunction`, joining
+their returns and *meeting* their contravariant parameters.
 
 A module-returning function is therefore admissible wherever a same-shape `:(FN …)` slot
 matches, and joins with plain functions: there is no type-level partition between "returns a

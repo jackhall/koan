@@ -137,7 +137,7 @@ USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (width drop: a unar
 ```
 
 **Element-type inference for literals** is the join of element types via
-[`KType::join_iter`](../../../src/machine/model/types/ktype_resolution.rs), computed
+[`TypeRegistry::join_iter`](../../../src/machine/model/types/registry.rs), computed
 **once at construction** and memoized on the value's carrier: `[1, 2, 3]` →
 `List<Number>`, `[1, "x"]` → `List<Any>`. `KObject::List` and `KObject::Dict`
 each carry their element types directly (`List(&ListSubstrate, KType)` — a
@@ -148,18 +148,32 @@ interned `Dict<key, value>` handle), so
 type in O(1) rather than re-walking the contents on every call. Values are
 immutable after construction, so the join is sound to compute exactly once. Functions project
 their declared signature (`KObject::KFunction(f)` → `KFunction { params, ret }`,
-the parameter record read off `f.signature`'s named slots). `KType::join` joins
-two same-shape `KFunction`s name-keyed, coarsening a
-mismatched parameter-name set to `Any`.
+the parameter record read off `f.signature`'s named slots). `TypeRegistry::join` joins
+two same-shape `KFunction`s name-keyed — returns join, and parameters **meet**, because the
+parameter position is contravariant and only their greatest lower bound is admitted by both
+operands — coarsening a mismatched parameter-name set to `Any`.
 
-**Empty containers carry no element type to infer**, so an unstamped empty `[]`
-/ `{}` (element type memoized as `Any`, never stamped by an annotation) is an
-**error** at an untyped resolution boundary — an untyped value-route `LET`, a
-bare top-level expression result. The producing boundary must annotate the value
-(e.g. a typed FN return) or use a non-empty literal. A *stamped* empty container
-(an `FN -> :(LIST OF Number) = ([])` whose carrier is re-tagged to element `Number`)
-is fine; a heterogeneous non-empty literal (`[2, "hello"]` → `List<Any>`) is
-unaffected — it carries information and is legal where `:(LIST OF Any)` is declared.
+### The lattice bottom
+
+`Never` is the uninhabited bottom of the type lattice: admitted by no value, more specific
+than every other type, and the identity element of both join and union canonicalization
+(`:(Never | Number)` is `:Number`). It is spellable as a builtin type name, where `:Never`
+declares a slot nothing fills. Its dual to `Any` makes the lattice complete, so
+[`TypeRegistry::meet`](../../../src/machine/model/types/registry.rs) — the greatest lower
+bound — is **total**: containers meet pointwise, records meet by field union (record values
+are width-superset subtypes), unions distribute, functions meet by joining their parameters
+and meeting their return, and a pair with no common refinement meets at `Never`.
+
+**An empty container carries the bottom element type.** The join over no elements is the
+join's identity, so `[]` memoizes `List<Never>` and an empty dict `Dict<Never, Never>`.
+Element covariance then admits an empty container into *every* typed container slot with
+nothing left to infer: `LET empty = []` binds, a bare top-level `[]` resolves, `TYPE OF []`
+reports `:(LIST OF Never)`, and `[]` fills a `:(LIST OF Number)` parameter. (At the surface,
+`{}` is the empty *record*, the top of the record lattice — an empty dict has no literal
+spelling.) A *stamped* empty container (an `FN -> :(LIST OF Number) = ([])` whose carrier is
+re-tagged to element `Number`) reports the stamped type; a heterogeneous non-empty literal
+(`[2, "hello"]` → `List<Any>`) still carries `Any` and is legal only where `:(LIST OF Any)`
+is declared.
 
 ### Runtime type-parameter carriers
 

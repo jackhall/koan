@@ -59,6 +59,33 @@ of it. The `Module` surface keyword lowers to it, so "any module" slots (`USING`
 are signature-typed like every other module slot — the module/signature story has no
 kind-wildcard exception.
 
+## Joining two signatures
+
+Two signature types have a least upper bound under the width/depth relation above, so a
+container of modules with differing self-sigs memoizes their least common interface rather
+than `Any` — a list of modules that each satisfy `Ordered` fills a `:(LIST OF Ordered)` slot
+([`join_schemas`](../../src/machine/model/types/sig_schema.rs), the `Signature` arm of
+`TypeRegistry::join`).
+
+- **Width intersects.** A member only one operand names is dropped: the bound may promise
+  only what both operands supply. Two signatures sharing no members join to the empty
+  signature — the module-lattice top `:Module` — never to `Any`.
+- **Depth reconciles per member.** Two equal manifest bindings survive manifest. Anything
+  else at a matching kind — two differing manifests, a manifest against an abstract, two
+  abstracts — demotes to an *abstract* member at that kind, the strongest requirement both
+  bindings still satisfy. A kind disagreement (one side first-order, or two constructors over
+  different parameter names) has no common requirement, so the member drops.
+- **Value slots join pointwise, through the demoted members first.** A slot typed by one
+  operand's binding of a demoted member and the other's rejoins as a reference to that
+  member, rather than coarsening. The generalization is variance-aware: a function slot's
+  return joins covariantly while its parameters *meet*, so widening a parameter never claims
+  a satisfying module accepts arguments neither operand does.
+
+A joined schema carries the canonical `ScopeId::SENTINEL` binder every projected SIG carries
+and mints nonce-free abstract members, and the schema digest ignores `sig_id` — so a joined
+signature is content-identical to the equivalent written `SIG` declaration and interns to the
+same handle.
+
 ## Content-addressed type identity
 
 Type identity is a wide content-hash digest, computed eagerly bottom-up when the type is

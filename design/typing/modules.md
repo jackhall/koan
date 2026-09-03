@@ -342,8 +342,7 @@ form. Applied to a module it yields that module's **principal signature**
 (`KType::Signature { schema: <m's self-sig> }`), which is how a
 module reaches a slot, a return, or a `LET` type alias. Its `value` slot is
 `KType::Any`, which admits both channels, so a *type* argument reaches the body and
-is refused there with a diagnostic rather than falling through dispatch as a miss;
-an empty, unstamped container is refused too (no knowable element type). The result
+is refused there with a diagnostic rather than falling through dispatch as a miss. The result
 is built at the fold brand from the argument's own carrier, so the type it produces
 borrows exactly the region the value lives in — a module minted in a function's
 per-call region included.

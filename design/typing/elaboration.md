@@ -131,7 +131,7 @@ cross-link this section rather than restating its slice.
   `ExpressionPart::resolve_for` lowers a bare `Type` token against the
   builtin table via
   [`KType::from_symbol`](../../src/machine/model/types/ktype_resolution.rs)
-  (eleven symbol compares against the declared builtin names, re-run per call). A hit lowers to a
+  (twelve symbol compares against the declared builtin names, re-run per call). A hit lowers to a
   resolved `KType` handle in the value channel's `Type` arm; a miss — a user-bound leaf — defers
   to the [`Carried::UnresolvedType`](../../src/machine/model/values/carried.rs) carrier over the
   token's `TypeSymbol`, which
@@ -473,7 +473,7 @@ of the table above.
 Elaboration carries no cache tier. Bind-time builtin lowering
 ([`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) →
 [`KType::from_symbol`](../../src/machine/model/types/ktype_resolution.rs))
-re-runs the eleven-entry builtin scan per call — eleven symbol compares against the
+re-runs the twelve-entry builtin scan per call — twelve symbol compares against the
 [declared builtin names](../../src/machine/model/types/builtin_names.rs), with no hashing and
 no allocation, so a shared table would be added back only if profiling shows it hot. Scope-bound resolution
 is the same: interning in the [`TypeRegistry`](../../src/machine/model/types.rs)

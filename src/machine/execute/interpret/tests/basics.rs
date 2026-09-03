@@ -149,13 +149,11 @@ fn let_binds_stamped_empty_list_from_typed_fn_return() {
     }
 }
 
-/// A bare `[]` through an untyped `LET` has no element type to infer and was never
-/// stamped upstream, so the empty-container rule rejects it.
+/// A bare `[]` carries the bottom element type, so an untyped `LET` has nothing left to infer:
+/// the binding lands and the name resolves, and a bare `[]` root resolves on its own too.
 #[test]
 fn let_binds_an_empty_list_literal() {
     use crate::machine::execute::interpret_with_writer;
-    // The empty literal carries the bottom element type, so there is nothing left to infer: the
-    // binding lands and the name resolves, and a bare `[]` root resolves on its own too.
     interpret_with_writer("LET xs = []\nPRINT xs\n[]\n", Box::new(std::io::sink()))
         .expect("an empty container binds and resolves");
 }

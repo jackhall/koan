@@ -73,14 +73,17 @@ Braces are also used for *records* — `{field = value}` with an `=` instead of 
 [call functions by name](04-functions.md); they're a distinct form from
 dictionaries, covered in those chapters.
 
-### Empty collections need a type
+### Empty collections fit anywhere
 
-An empty list or dictionary can't infer its element type on its own, so a bare
-`[]` or `{}` is only valid where a type is already expected — for example as an
-argument to a function whose parameter is typed. A standalone `[]`, or
-`LET xs = []`, is an error. Once you've met [functions](04-functions.md) and
-[type ascription](#naming-types) below, you can give an empty collection a type
-through the position it appears in.
+An empty list has no elements to infer an element type from, so it takes `Never` —
+the type no value ever has. That is what makes `[]` fit *any* list: `LET xs = []`
+binds, a standalone `[]` is fine, and `[]` can be passed to a function whose
+parameter is typed `:(LIST OF Number)`, because a list of nothing is a list of
+numbers as far as the type is concerned. Once you've met
+[functions](04-functions.md) and [type ascription](#naming-types) below, you can
+still pin an empty collection to a specific type through the position it appears
+in. (Braces are different: a bare `{}` is the empty *record*, not an empty
+dictionary.)
 
 ## Comparing values with `==` and `!=`
 

@@ -17,9 +17,10 @@ shape-only — its element types aren't known until it evaluates. An *evaluated*
 container (`Future(List/Dict)`) is admitted only when its memoized carried element
 type *satisfies* the slot (`KType::satisfied_by`: exact match or covariant
 refinement) — a pure type-level comparison against the value's `ktype()`, with no
-element walk. A `List<Number>` value fills `:(LIST OF Any)`; a `List<Any>` value (the
-join an empty or heterogeneous literal memoizes) fills `:(LIST OF Any)` but not
-`:(LIST OF Number)`. A container whose carried type doesn't satisfy a slot is a
+element walk. A `List<Number>` value fills `:(LIST OF Any)`; a `List<Any>` value (the join a
+heterogeneous literal memoizes) fills `:(LIST OF Any)` but not `:(LIST OF Number)`; a
+`List<Never>` value (the join an *empty* literal memoizes) fills every list slot, the bottom
+element type being more specific than any other. A container whose carried type doesn't satisfy a slot is a
 *non-match*: dispatch falls through to outer scopes and, finding nothing, surfaces
 `DispatchFailed` rather than committing to a slot that would fail at the bind
 boundary.

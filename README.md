@@ -211,8 +211,8 @@ src/
     │   │   ├── registry.rs        TypeRegistry — the run-frame-owned interning graph and verdict cache
     │   │   ├── record.rs          Record<V> — ordered BinderSymbol-keyed map over a Vec<(BinderSymbol, V)>, identity on the key's symbol bits, backing record-type schemas and FN parameter identity
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
-    │   │   ├── ktype_resolution.rs   builtin type-name elaboration (from_symbol, eleven symbol compares against builtin_names)
-    │   │   ├── builtin_names.rs   the eleven builtin type names as StaticName<TypeSymbol>s, each beside the KType it lowers to
+    │   │   ├── ktype_resolution.rs   builtin type-name elaboration (from_symbol, twelve symbol compares against builtin_names)
+    │   │   ├── builtin_names.rs   the twelve builtin type names as StaticName<TypeSymbol>s, each beside the KType it lowers to
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking (no cache tier; interning already makes a re-elaborated form yield the same handle)
     │   │   ├── recursive_group_window.rs   RecursiveGroupWindow — the pre-seal group window and the SCC seal that interns its members
     │   │   ├── sig_schema.rs      SigSchema + sig_subtype — a signature type's owned schema and the subtyping relation
