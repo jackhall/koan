@@ -145,17 +145,6 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
         let value = rhs
             .as_object()
             .expect("value-route LET RHS is the Object arm");
-        // An empty container has no element type to infer. The check reads the source value; a
-        // deep-clone into the region preserves the unstamped shape, so it settles here before the
-        // fused bind installs anything.
-        if value.is_unstamped_empty_container() {
-            let name = display_label(binder.symbol(), ctx.registries);
-            return done_err(KError::new(KErrorKind::ShapeError(format!(
-                "empty container bound to `{name}` has no element type to infer; \
-                 annotate the value's type (e.g. via a typed FN return) or use a \
-                 non-empty literal",
-            ))));
-        }
         // Fused mint + copy + seal. A delivered RHS carrier derives the copy's stored reach in copied
         // mode — the deep-clone lands in this scope's own region, so a residence-only host is dropped
         // (`adopted_reach_of`, the same split the parameter and MATCH `it` binds apply) — and copies

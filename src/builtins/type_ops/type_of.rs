@@ -32,13 +32,6 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
         }
         None => return Action::done(Err(KError::new(KErrorKind::MissingArg("value".into())))),
     };
-    if value.is_unstamped_empty_container() {
-        return Action::done(Err(KError::new(KErrorKind::ShapeError(
-            "`TYPE OF` an empty, unstamped container: its element type is unknowable — ascribe \
-             the container first"
-                .into(),
-        ))));
-    }
     // The type a value reports for itself is owned data — a module's self-sig included — so it
     // seals with an empty reach and allocates into this step's own region.
     Action::done(Ok(ctx.ctx.type_carried(value.ktype())))

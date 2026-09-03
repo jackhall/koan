@@ -198,17 +198,17 @@ fn type_of_a_type_errors() {
     );
 }
 
-/// An empty container carries no stamped element type, so it has no knowable type to report.
+/// An empty container reports the bottom element type — the join over no elements — which is
+/// exactly what makes it fill every typed container slot. (`{}` is an empty *record* literal at
+/// the surface; the empty-dict carrier is pinned value-side in the `kobject` tests.)
 #[test]
-fn type_of_unstamped_empty_container_errors() {
+fn type_of_empty_list_is_a_bottom_element_type() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
-    let err = test_run.run_one_err(test_run.parse_one("TYPE OF []"));
-    assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("unknowable")),
-        "expected an unknowable-element-type ShapeError, got {err}",
-    );
+    let list = test_run.run_one_type(test_run.parse_one("TYPE OF []"));
+    assert_eq!(list, test_run.types().list(KType::NEVER));
+    assert_eq!(list.name(test_run.registries()), ":(LIST OF Never)");
 }
 
 /// Two unascribed modules with identical interfaces report equal `TYPE OF` types — identity is

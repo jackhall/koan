@@ -272,13 +272,11 @@ fn join_of_unrelated_types_is_any() {
     );
 }
 
+/// The identity element, not the top: an empty container carries the bottom element type.
 #[test]
-fn join_iter_over_nothing_is_any() {
+fn join_iter_over_nothing_is_never() {
     let registry = TypeRegistry::new();
-    assert_eq!(
-        registry.join_iter(Vec::new()),
-        registry.intern(TypeNode::Any)
-    );
+    assert_eq!(registry.join_iter(Vec::new()), KType::NEVER);
 }
 
 /// A function type over the named parameters, for the variance tests below.

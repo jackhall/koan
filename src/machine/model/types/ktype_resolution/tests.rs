@@ -83,11 +83,11 @@ fn join_lists_recurses_on_element() {
 }
 
 #[test]
-fn join_iter_empty_is_any() {
+fn join_iter_empty_is_never() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     let v: Vec<KType> = vec![];
-    assert_eq!(types.join_iter(v), KType::ANY);
+    assert_eq!(types.join_iter(v), KType::NEVER);
 }
 
 #[test]

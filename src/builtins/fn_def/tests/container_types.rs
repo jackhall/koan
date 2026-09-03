@@ -66,6 +66,20 @@ fn fn_return_empty_list_stamps_declared_element_type() {
     assert_eq!(result.ktype(), test_run.types().list(KType::NUMBER));
 }
 
+/// An empty literal carries the bottom element type, which is more specific than every element
+/// type under covariance — so it fills a precisely typed list slot with nothing to infer, both
+/// bound and inline.
+#[test]
+fn fn_with_typed_list_param_accepts_an_empty_list() {
+    let bytes = capture_program_output(
+        "FN (COUNT xs :(LIST OF Number)) -> Number = (0)\n\
+         LET empty = []\n\
+         PRINT (COUNT empty)\n\
+         PRINT (COUNT [])",
+    );
+    assert_eq!(bytes, b"0\n0\n");
+}
+
 #[test]
 fn fn_with_typed_list_param_accepts_matching_list() {
     let bytes = capture_program_output(

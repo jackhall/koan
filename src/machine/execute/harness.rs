@@ -200,25 +200,11 @@ impl<'run> KoanRuntime<'run> {
         self.execute()?;
         // Seal the run root's reach-set; it is run-global and never reopens.
         root.close();
-        // A bare top-level expression is an untyped resolution boundary: an unstamped empty `[]` /
-        // `{}` reaching it has no element type to infer, so reject rather than silently resolving
-        // to `List<Any>` / `Dict<Any, Any>`.
+        // `execute` drains to quiescence and rules only on deadlock, so a root that resolved to an
+        // error surfaces it here — read each root's verdict, keeping nothing from inside the open.
         for &edge in roots {
-            // Copy the verdict out from inside the open — the carrier never escapes.
-            let is_unannotated_empty = match self.sched.read_edge_result_with(edge, |value| {
-                value
-                    .as_object()
-                    .is_some_and(|o| o.is_unstamped_empty_container())
-            }) {
-                Err(e) => return Err(e.clone()),
-                Ok(flag) => flag,
-            };
-            if is_unannotated_empty {
-                return Err(KError::new(KErrorKind::ShapeError(
-                    "bare empty container has no element type to infer; annotate its \
-                     type (e.g. via a typed FN return) or use a non-empty literal"
-                        .to_string(),
-                )));
+            if let Err(error) = self.sched.read_edge_result_with(edge, |_| ()) {
+                return Err(error.clone());
             }
         }
         Ok(())

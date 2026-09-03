@@ -520,11 +520,13 @@ impl TypeRegistry {
         }
     }
 
-    /// Reduce an iterator of types to their least upper bound. Empty iterator → `Any`.
+    /// Reduce an iterator of types to their least upper bound. Empty iterator → `Never`, the
+    /// join's identity element: an empty container carries the bottom element type, which every
+    /// typed element slot admits, and which absorbs the first element joined against it.
     pub fn join_iter<I: IntoIterator<Item = KType>>(&self, iter: I) -> KType {
         iter.into_iter()
             .reduce(|a, b| self.join(a, b))
-            .unwrap_or_else(|| self.intern(TypeNode::Any))
+            .unwrap_or(KType::NEVER)
     }
 
     /// Name-keyed pointwise combination of two parameter records under `combine`. `Some(built)`

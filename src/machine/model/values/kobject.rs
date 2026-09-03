@@ -429,27 +429,6 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// True iff this is an empty container carrying no usable element-type information —
-    /// an empty `List` whose memoized element type is `Any`, or an empty `Dict` whose
-    /// key and value types are both `Any`. Reaching an *untyped* resolution boundary
-    /// (untyped `LET` binding, bare top-level expression result) with this shape is an
-    /// error (see [ktype/parameterization-and-variance.md § Runtime type-parameter carriers](../../../../design/typing/ktype/parameterization-and-variance.md#runtime-type-parameter-carriers)).
-    ///
-    /// A stamped empty container is not flagged (its carrier carries a non-`Any`
-    /// element type), nor is a non-empty heterogeneous literal `List<Any>` (it carries
-    /// information and is legal where `:(LIST OF Any)` is declared).
-    pub fn is_unstamped_empty_container(&self) -> bool {
-        match self {
-            KObject::List(substrate, list_type) => {
-                substrate.is_empty() && *list_type == KType::LIST_OF_ANY
-            }
-            KObject::Dict(substrate, dict_type) => {
-                substrate.is_empty() && *dict_type == KType::DICT_ANY_ANY
-            }
-            _ => false,
-        }
-    }
-
     /// This value's owned leaf form, or `None` if it is not one — the **shallow scalar** test and the
     /// rebuild in a single verb, so no caller can pair the predicate with a rebuild that disagrees
     /// with it.

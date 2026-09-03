@@ -60,12 +60,12 @@ fn ktype_of_mixed_list_is_list_any() {
 }
 
 #[test]
-fn ktype_of_empty_list_is_list_any() {
+fn ktype_of_empty_list_is_list_never() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
     let l: KObject<'_> = KObject::list(door, vec![], types);
-    assert_eq!(l.ktype(), types.list(KType::ANY));
+    assert_eq!(l.ktype(), types.list(KType::NEVER));
 }
 
 #[test]
@@ -91,13 +91,13 @@ fn ktype_of_dict_string_number() {
 }
 
 #[test]
-fn ktype_of_empty_dict_is_dict_any_any() {
+fn ktype_of_empty_dict_is_dict_never_never() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
     let map: HashMap<KKey, KObject<'_>> = HashMap::new();
     let d: KObject<'_> = KObject::dict(door, map, types);
-    assert_eq!(d.ktype(), types.dict(KType::ANY, KType::ANY));
+    assert_eq!(d.ktype(), types.dict(KType::NEVER, KType::NEVER));
 }
 
 #[test]
@@ -252,23 +252,33 @@ fn stamp_type_coarsens_list_carrier() {
     assert_eq!(stamped.ktype(), list_any);
 }
 
+/// The bottom element type is what makes an empty container fill every typed container slot —
+/// element covariance over `Never`. A stamped empty container re-tags as usual, and a
+/// heterogeneous literal still joins to `Any`, which does not fill a `Number` slot.
 #[test]
-fn unstamped_empty_container_detection() {
-    use std::collections::HashMap;
+fn an_empty_container_fills_every_typed_container_slot() {
     let registries = RunRegistries::new();
     let types = &registries.types;
     container_door!(_storage, door);
-    assert!(KObject::list(door, vec![], types).is_unstamped_empty_container());
+    let empty = KObject::list(door, vec![], types);
+    assert!(
+        types
+            .list(KType::NUMBER)
+            .satisfied_by(empty.ktype(), &registries)
+    );
     let stamped = KObject::list(door, vec![], types).stamp_type(types.list(KType::NUMBER), types);
-    assert!(!stamped.is_unstamped_empty_container());
+    assert_eq!(stamped.ktype(), types.list(KType::NUMBER));
     let hetero = KObject::list(
         door,
         vec![KObject::Number(1.0), KObject::KString("x")],
         types,
     );
-    assert!(!hetero.is_unstamped_empty_container());
-    let map: HashMap<KKey, KObject<'_>> = HashMap::new();
-    assert!(KObject::dict(door, map, types).is_unstamped_empty_container());
+    assert_eq!(hetero.ktype(), types.list(KType::ANY));
+    assert!(
+        !types
+            .list(KType::NUMBER)
+            .satisfied_by(hetero.ktype(), &registries)
+    );
 }
 
 /// `Wrapped.ktype()` reports a copy of the member-handle identity the dispatcher reads for
