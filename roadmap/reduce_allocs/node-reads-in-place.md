@@ -18,10 +18,9 @@ list, a field record — where an in-place read would answer:
   calls `intern` directly). Its higher-kinded arm feeds the node's own
   `param_names` into the mint, so that field still has to outlive the read — the
   clone of the *whole* node is what covers both today.
-- `signature_schema` in the same file, and `member_table` in
-  [sig_schema.rs](../../src/machine/model/types/sig_schema.rs), clone a
-  `SigSchema` out of a `TypeNode::Signature` because the substitution walk that
-  consumes it interns as it recurses.
+- `signature_schema` in the same file clones a `SigSchema` out of a
+  `TypeNode::Signature` — three maps — twice per ascription, because the
+  satisfaction check and the view build that consume it intern as they go.
 - `WITH`'s schema read in
   [type_ops/with.rs](../../src/builtins/type_ops/with.rs) clones a
   `TypeNode::Signature` to reach the schema
@@ -43,7 +42,9 @@ attribution is per-site rather than per-row.
   a different reason it must own.
 - A reader that needs one field of a node past the read copies that field, not
   the node.
-- `intern_union_members` takes one borrow and one hash lookup on the miss path.
+- `intern_union_members` takes one borrow and one probe on the hit path, and
+  builds its node only on a miss — through the same door `intern` takes, so
+  there is one insert-if-absent path rather than two.
 - The `cargo test --lib` node-count assertions in
   [registry/tests.rs](../../src/machine/model/types/registry/tests.rs) are
   unchanged: the sweep moves allocations, not interned content.
@@ -51,15 +52,24 @@ attribution is per-site rather than per-row.
 **Directions.**
 
 - *Scope — decided.* The sweep is the sites above plus any the same grep for
-  `types.node(` in production code turns up; test-side `node(...)` clones are out
-  of scope.
-- *`view_type_members`' `param_names` — open.* Options: copy the names into a
-  `SmallVec` inside the read and mint outside it; or hand the mint a closure that
-  runs under the read, now that interning under one is legal. The second keeps
-  the copy off the path entirely.
-- *Union probe — open.* Options: a single `entry`-style lookup on the persistent
-  map; or hoisting the digest probe into `intern` itself so every interning door
-  shares one path.
+  `types.node(` in production code turns up — around thirty sites across a dozen
+  files; test-side `node(...)` clones are out of scope, and `node` stays public
+  for them (`tests/` integration tests read through it).
+- *`view_type_members`' `param_names` — decided.* The mint runs under the read.
+  A copy of the names is inherent to minting rather than to the read:
+  `RelativeSchema::TypeConstructor` and the minted `TypeNode::AbstractType` each
+  own a `Vec<TypeSymbol>`, so the clone sits at the mint and only the whole-node
+  clone goes away.
+- *Union probe — decided.* The digest probe hoists into a lazy-node door
+  `intern` shares, rather than an `entry`-style lookup: `imbl`'s
+  `Entry::or_insert_with` copy-on-writes the lookup path on the *hit* path, and
+  the COW-free `Entry::Vacant` form re-descends after inserting, so both are
+  dearer than one borrow around `contains_key` + `insert` over an identity-hashed
+  digest.
+- *`member_table` — decided.* It keeps its clone. `CoercionTables` is returned to
+  its caller and carries both tables across the whole coercion walk, so the
+  ownership is structural, not an intern workaround; it already reads through
+  `with_node` and copies the one field.
 
 ## Dependencies
 

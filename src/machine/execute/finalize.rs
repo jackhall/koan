@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::machine::core::{FoldingBrand, FrameStorage, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::{Carried, KType, TypeNode};
+use crate::machine::model::{Carried, KType};
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
 
 use super::harness::Host;
@@ -85,8 +85,7 @@ impl NodeFinalize for Host<'_> {
             Carried::Object(object) => {
                 // Only a substrate carrier carries a re-stampable type tag, and a declared
                 // union return keeps its runtime type for union-elimination dispatch.
-                let restamp = object.embeds_substrate()
-                    && !matches!(types.node(declared), TypeNode::Union { .. });
+                let restamp = object.embeds_substrate() && !types.is_union(declared);
                 if !declared.matches_value(object, registries) {
                     Disposition::Mismatch(object.ktype().name(registries))
                 } else if restamp || coercion.is_some() {

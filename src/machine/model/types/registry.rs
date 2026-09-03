@@ -170,10 +170,24 @@ impl TypeRegistry {
     /// Reachable from inside a [`with_node`](Self::with_node) closure: that read borrows the cell
     /// only long enough to take its snapshot, so the write borrow here is uncontended.
     pub fn intern(&self, node: TypeNode) -> KType {
-        let digest = type_digest::node_digest(&node);
+        self.intern_digested(type_digest::node_digest(&node), || node)
+    }
+
+    /// Insert the node `build` produces under `digest` if the digest is not already present, and
+    /// hand back the digest as a handle — the one insert-if-absent path, which every interning door
+    /// takes.
+    ///
+    /// One borrow around one probe: a hit — the steady state, since a repeated spelling of a type
+    /// names an already-interned node — never calls `build`, so a caller that can compute its
+    /// digest without materializing the node ([`intern_union_members`](Self::intern_union_members))
+    /// pays for neither. The table's `entry` API would fold the probe and the insert into one
+    /// lookup, but its occupied arm copies the whole lookup path out of the shared structure, which
+    /// is exactly the hit path; a digest hashes by identity, so the second lookup here costs a
+    /// descent and no hashing at all.
+    fn intern_digested(&self, digest: TypeDigest, build: impl FnOnce() -> TypeNode) -> KType {
         let mut nodes = self.nodes.borrow_mut();
         if !nodes.contains_key(&digest) {
-            nodes.insert(digest, node);
+            nodes.insert(digest, build());
         }
         KType::from_digest(digest)
     }
@@ -367,18 +381,9 @@ impl TypeRegistry {
     /// wide enough to have spilled is moved, not reallocated.
     fn intern_union_members(&self, flat: MemberList) -> KType {
         let digest = type_digest::union_digest(&flat);
-        // The probe's shared borrow ends with the statement that takes it, before the write below.
-        let present = self.nodes.borrow().contains_key(&digest);
-        if !present {
-            let mut nodes = self.nodes.borrow_mut();
-            nodes.insert(
-                digest,
-                TypeNode::Union {
-                    members: flat.into_vec(),
-                },
-            );
-        }
-        KType::from_digest(digest)
+        self.intern_digested(digest, || TypeNode::Union {
+            members: flat.into_vec(),
+        })
     }
 
     /// Least-upper-bound of two types. `[1, 2]` → `List<Number>`, `[1, "x"]` → `List<Any>`;
@@ -399,51 +404,52 @@ impl TypeRegistry {
         if b == KType::NEVER {
             return a;
         }
-        match (self.node(a), self.node(b)) {
-            (TypeNode::List { element: x }, TypeNode::List { element: y }) => {
-                let element = self.join(x, y);
-                self.list(element)
-            }
-            (
-                TypeNode::Dict {
-                    key: xk, value: xv, ..
-                },
-                TypeNode::Dict {
-                    key: yk, value: yv, ..
-                },
-            ) => {
-                let key = self.join(xk, yk);
-                let value = self.join(xv, yv);
-                self.dict(key, value)
-            }
-            (
-                TypeNode::KFunction {
-                    params: xp,
-                    ret: xr,
-                    ..
-                },
-                TypeNode::KFunction {
-                    params: yp,
-                    ret: yr,
-                    ..
-                },
-            ) => match self.param_record_pointwise(&xp, &yp, |s, x, y| s.meet(x, y)) {
-                Some(params) => {
-                    let ret = self.join(xr, yr);
-                    self.function_type(params, ret)
+        self.with_node(a, |na| {
+            self.with_node(b, |nb| match (na, nb) {
+                (TypeNode::List { element: x }, TypeNode::List { element: y }) => {
+                    let element = self.join(*x, *y);
+                    self.list(element)
                 }
-                None => self.intern(TypeNode::Any),
-            },
-            // Two interfaces bound at their least common interface, not at `Any`: width
-            // intersection with a per-member depth reconciliation ([`join_schemas`]). Disjoint
-            // operands land on the empty schema — the module-lattice top `:Module` — by digest.
-            // `self.node` cloned both schemas out, so the table borrow is closed before
-            // `signature` interns.
-            (TypeNode::Signature { schema: xs, .. }, TypeNode::Signature { schema: ys, .. }) => {
-                self.signature(join_schemas(&xs, &ys, self))
-            }
-            _ => self.intern(TypeNode::Any),
-        }
+                (
+                    TypeNode::Dict {
+                        key: xk, value: xv, ..
+                    },
+                    TypeNode::Dict {
+                        key: yk, value: yv, ..
+                    },
+                ) => {
+                    let key = self.join(*xk, *yk);
+                    let value = self.join(*xv, *yv);
+                    self.dict(key, value)
+                }
+                (
+                    TypeNode::KFunction {
+                        params: xp,
+                        ret: xr,
+                        ..
+                    },
+                    TypeNode::KFunction {
+                        params: yp,
+                        ret: yr,
+                        ..
+                    },
+                ) => match self.param_record_pointwise(xp, yp, |s, x, y| s.meet(x, y)) {
+                    Some(params) => {
+                        let ret = self.join(*xr, *yr);
+                        self.function_type(params, ret)
+                    }
+                    None => self.intern(TypeNode::Any),
+                },
+                // Two interfaces bound at their least common interface, not at `Any`: width
+                // intersection with a per-member depth reconciliation ([`join_schemas`]). Disjoint
+                // operands land on the empty schema — the module-lattice top `:Module` — by digest.
+                (
+                    TypeNode::Signature { schema: xs, .. },
+                    TypeNode::Signature { schema: ys, .. },
+                ) => self.signature(join_schemas(xs, ys, self)),
+                _ => self.intern(TypeNode::Any),
+            })
+        })
     }
 
     /// Greatest-lower-bound of two types — the dual of [`join`](Self::join), and total: a pair
@@ -465,65 +471,67 @@ impl TypeRegistry {
         if a == KType::NEVER || b == KType::NEVER {
             return KType::NEVER;
         }
-        match (self.node(a), self.node(b)) {
-            // A union meets by distribution: a value in both operands is in some member of the
-            // union and in the other side, so the meet is the union of the per-member meets.
-            // Members that meet at `Never` contribute nothing, and `union_of` drops them.
-            (TypeNode::Union { members }, _) => {
-                let met: Vec<KType> = members.iter().map(|m| self.meet(*m, b)).collect();
-                self.union_of(&met)
-            }
-            (_, TypeNode::Union { members }) => {
-                let met: Vec<KType> = members.iter().map(|m| self.meet(a, *m)).collect();
-                self.union_of(&met)
-            }
-            (TypeNode::List { element: x }, TypeNode::List { element: y }) => {
-                let element = self.meet(x, y);
-                self.list(element)
-            }
-            (TypeNode::Dict { key: xk, value: xv }, TypeNode::Dict { key: yk, value: yv }) => {
-                let key = self.meet(xk, yk);
-                let value = self.meet(xv, yv);
-                self.dict(key, value)
-            }
-            // Record values are width-superset subtypes, so the greatest lower bound keeps every
-            // field of either operand — shared names meeting pointwise.
-            (TypeNode::Record { fields: xf }, TypeNode::Record { fields: yf }) => {
-                let mut merged: Record<KType> = xf
-                    .iter()
-                    .map(|(name, x)| match yf.get(name.symbol()) {
-                        Some(y) => (name, self.meet(*x, *y)),
-                        None => (name, *x),
-                    })
-                    .collect();
-                for (name, y) in yf.iter() {
-                    if xf.get(name.symbol()).is_none() {
-                        merged.insert(name, *y);
+        self.with_node(a, |na| {
+            self.with_node(b, |nb| match (na, nb) {
+                // A union meets by distribution: a value in both operands is in some member of the
+                // union and in the other side, so the meet is the union of the per-member meets.
+                // Members that meet at `Never` contribute nothing, and `union_of` drops them.
+                (TypeNode::Union { members }, _) => {
+                    let met: Vec<KType> = members.iter().map(|m| self.meet(*m, b)).collect();
+                    self.union_of(&met)
+                }
+                (_, TypeNode::Union { members }) => {
+                    let met: Vec<KType> = members.iter().map(|m| self.meet(a, *m)).collect();
+                    self.union_of(&met)
+                }
+                (TypeNode::List { element: x }, TypeNode::List { element: y }) => {
+                    let element = self.meet(*x, *y);
+                    self.list(element)
+                }
+                (TypeNode::Dict { key: xk, value: xv }, TypeNode::Dict { key: yk, value: yv }) => {
+                    let key = self.meet(*xk, *yk);
+                    let value = self.meet(*xv, *yv);
+                    self.dict(key, value)
+                }
+                // Record values are width-superset subtypes, so the greatest lower bound keeps
+                // every field of either operand — shared names meeting pointwise.
+                (TypeNode::Record { fields: xf }, TypeNode::Record { fields: yf }) => {
+                    let mut merged: Record<KType> = xf
+                        .iter()
+                        .map(|(name, x)| match yf.get(name.symbol()) {
+                            Some(y) => (name, self.meet(*x, *y)),
+                            None => (name, *x),
+                        })
+                        .collect();
+                    for (name, y) in yf.iter() {
+                        if xf.get(name.symbol()).is_none() {
+                            merged.insert(name, *y);
+                        }
                     }
+                    self.record(merged)
                 }
-                self.record(merged)
-            }
-            // Dual of the join arm: parameters are contravariant, so they join here, and the
-            // return meets. Differing key sets have no common function shape below them.
-            (
-                TypeNode::KFunction {
-                    params: xp,
-                    ret: xr,
+                // Dual of the join arm: parameters are contravariant, so they join here, and the
+                // return meets. Differing key sets have no common function shape below them.
+                (
+                    TypeNode::KFunction {
+                        params: xp,
+                        ret: xr,
+                    },
+                    TypeNode::KFunction {
+                        params: yp,
+                        ret: yr,
+                    },
+                ) => match self.param_record_pointwise(xp, yp, |s, x, y| s.join(x, y)) {
+                    Some(params) => {
+                        let ret = self.meet(*xr, *yr);
+                        self.function_type(params, ret)
+                    }
+                    None => KType::NEVER,
                 },
-                TypeNode::KFunction {
-                    params: yp,
-                    ret: yr,
-                },
-            ) => match self.param_record_pointwise(&xp, &yp, |s, x, y| s.join(x, y)) {
-                Some(params) => {
-                    let ret = self.meet(xr, yr);
-                    self.function_type(params, ret)
-                }
-                None => KType::NEVER,
-            },
-            // No structural rule relates the two shapes, so nothing inhabits both.
-            _ => KType::NEVER,
-        }
+                // No structural rule relates the two shapes, so nothing inhabits both.
+                _ => KType::NEVER,
+            })
+        })
     }
 
     /// Reduce an iterator of types to their least upper bound. Empty iterator → `Never`, the

@@ -198,13 +198,13 @@ fn check_newtype_repr<'a>(
     let types = &registries.types;
     // A sealed member's schema is already absolute — every sibling reference in it is the
     // sibling's own handle — so the repr is a direct node read.
-    let repr = match types.node(identity) {
+    let repr = types.with_node(identity, |node| match node {
         TypeNode::SetMember {
             schema: NodeSchema::NewType(repr),
             ..
-        } => repr,
+        } => *repr,
         _ => unreachable!("newtype construct ran on a non-NewType member"),
-    };
+    });
     if !repr.matches_value(value, registries) {
         return Err(KError::new(KErrorKind::TypeMismatch {
             arg: "value".to_string(),
@@ -466,16 +466,15 @@ fn finish_witnessed<'step>(
             let identity: KType = constructor;
             // An identity wrapper takes exactly one type parameter; its name keys the applied
             // arg in the built `ConstructorApply`.
-            let param_name = match view.types().node(constructor) {
+            let param_name = view.types().with_node(constructor, |node| match node {
                 TypeNode::SetMember {
                     schema: NodeSchema::TypeConstructor { param_names, .. },
                     ..
-                } => param_names
+                } => *param_names
                     .first()
-                    .cloned()
                     .expect("an identity-wrapper family declares one type parameter"),
                 _ => unreachable!("a ConstructorApply ctor is a TypeConstructor-kind member"),
-            };
+            });
             // The parameter name interned where the constructor was declared, so the applied
             // argument's label is the symbol it already carries.
             let param_symbol = BinderSymbol::Type(param_name);

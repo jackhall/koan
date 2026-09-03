@@ -484,8 +484,11 @@ fn member_table_handle(members: &TypeMemberMap, types: &TypeRegistry) -> KType {
     })
 }
 
-/// Read a member table back out of the handle [`member_table_handle`] interned it into. The table
-/// is cloned because the walk carries it across the whole recursion, outliving the read.
+/// Read a member table back out of the handle [`member_table_handle`] interned it into.
+///
+/// The one field is copied out, not the node: the table has to **own** it because
+/// [`CoercionTables`] hands it to a caller and carries it across the whole coercion walk, outliving
+/// any read.
 fn member_table(handle: KType, types: &TypeRegistry) -> TypeMemberMap {
     types.with_node(handle, |node| match node {
         TypeNode::Signature { schema, .. } => schema.manifest_members.clone(),

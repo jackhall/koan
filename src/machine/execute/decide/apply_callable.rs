@@ -171,30 +171,26 @@ fn apply_constructor<'step>(
             fields,
         );
     }
-    // A SIG's abstract constructor slot names a kind; it has no representation to build values
-    // over. Its first-order sibling carries no parameters and falls to the generic mismatch.
-    if let TypeNode::AbstractType {
-        name, param_names, ..
-    } = ctx.types().node(identity)
-        && !param_names.is_empty()
-    {
-        let name = render_label(name.symbol(), ctx.registries());
-        return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-            "`{name}` is an abstract constructor slot declared by TYPE; only a \
+    // The head's node decides every remaining arm, so it is read once and in place: a `SetMember`
+    // carries a whole schema, and the construction dispatch below needs only its shape.
+    ctx.types().with_node(identity, |node| match node {
+        // A SIG's abstract constructor slot names a kind; it has no representation to build values
+        // over. Its first-order sibling carries no parameters and falls to the generic mismatch.
+        TypeNode::AbstractType {
+            name, param_names, ..
+        } if !param_names.is_empty() => {
+            let name = render_label(name.symbol(), ctx.registries());
+            Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "`{name}` is an abstract constructor slot declared by TYPE; only a \
                  NEWTYPE-declared constructor can construct values"
-        )))));
-    }
-    let TypeNode::SetMember { schema, name, .. } = ctx.types().node(identity) else {
-        return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "verb".to_string(),
-            expected: "constructible Type".to_string(),
-            got: identity.name(ctx.registries()),
-        })));
-    };
-    match schema {
+            )))))
+        }
         // A record-literal body builds per-field; any other trailing expression is wrapped as a
         // single positional value.
-        NodeSchema::NewType(_) => match expr.parts.get(1..) {
+        TypeNode::SetMember {
+            schema: NodeSchema::NewType(_),
+            ..
+        } => match expr.parts.get(1..) {
             Some(
                 [
                     Spanned {
@@ -217,7 +213,11 @@ fn apply_constructor<'step>(
         },
         // An identity wrapper wraps one value and infers one type argument from it, so value
         // construction is an arity-1 surface; a wider family applies by name only.
-        NodeSchema::TypeConstructor { param_names, .. } if param_names.len() > 1 => {
+        TypeNode::SetMember {
+            schema: NodeSchema::TypeConstructor { param_names, .. },
+            name,
+            ..
+        } if param_names.len() > 1 => {
             Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`{}` takes {} type parameters; constructing values of a multi-parameter \
                  family is not yet supported",
@@ -225,14 +225,22 @@ fn apply_constructor<'step>(
                 param_names.len(),
             )))))
         }
-        NodeSchema::TypeConstructor { .. } => match extract_call_body(expr, ctx.registries()) {
+        TypeNode::SetMember {
+            schema: NodeSchema::TypeConstructor { .. },
+            ..
+        } => match extract_call_body(expr, ctx.registries()) {
             Ok(CallBody::Positional(parts)) => {
                 constructors::dispatch_construct_apply(brand, identity, parts, ctx.scratch())
             }
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY, ctx.registries()),
             Err(e) => Outcome::Done(Err(e)),
         },
-    }
+        _ => Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
+            arg: "verb".to_string(),
+            expected: "constructible Type".to_string(),
+            got: identity.name(ctx.registries()),
+        }))),
+    })
 }
 
 /// One supplied type argument on its way to [`build_applied_type`]: the name's bare symbol bits as

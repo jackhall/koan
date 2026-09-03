@@ -42,10 +42,6 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             _ => return done_err(KError::new(KErrorKind::MissingArg("sig".to_string()))),
         },
     };
-    let schema = match ctx.types().node(sig_handle) {
-        TypeNode::Signature { schema, .. } => schema,
-        _ => return done_err(mismatch(sig_handle.name(ctx.registries))),
-    };
     let bindings = match ctx.args.object(&super::SLOTS.bindings) {
         Some(KObject::Record(substrate, _types)) => substrate,
         _ => {
@@ -54,75 +50,87 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             )));
         }
     };
-    // Every pin must name a known slot and hold a type. A slot already fixed — a manifest
-    // member, which is also what an earlier WITH's fold left behind — admits only an equal
-    // re-pin, which normalizes away (never folded), so `S WITH {Tag = Number}` and
-    // `(S WITH {A = Number}) WITH {A = Number}` keep their source's signature identity; an
-    // unequal re-pin is a type error.
-    // The pins are read by the fold below and never leave the step, so they stage on the step
-    // scratch. One binding field contributes at most one pin — an equal re-pin of a manifest
-    // member normalizes away and pushes nothing — so the field count is an upper bound, which is
-    // what taking the capacity up front needs to rule out a regrow.
-    let mut pins: BumpVec<'a, (TypeSymbol, KType)> =
-        BumpVec::with_capacity_in(bindings.len(), ctx.scratch);
-    for (symbol, value) in bindings.fields() {
-        // A pin arrives as a raw record-field symbol, which carries no evidence of its token
-        // class. The schema's member maps are keyed by classified `TypeSymbol`s and admit a
-        // probe by bare symbol bits, so a hit hands back the classification the declaration
-        // witnessed — no text resolve, no re-derivation. A pin that is not a Type token was
-        // never declared as a member, so it misses both maps and falls to the no-such-slot
-        // error, the same disposition an unknown Type name gets. Only that error path — and
-        // the two below it — resolves the pin's text.
-        let manifest = schema.manifest_members.get_key_value(&symbol);
-        let slot = match manifest.or_else(|| schema.abstract_members.get_key_value(&symbol)) {
-            Some((slot, _)) => *slot,
-            None => {
-                return done_err(KError::new(KErrorKind::ShapeError(format!(
-                    "{} has no abstract type slot `{}`",
-                    sig_handle.display_name(ctx.registries),
-                    display_label(symbol, ctx.registries),
-                ))));
-            }
+    // The schema is read in place and the whole pin validation runs under the read, down to the
+    // fold that consumes it: reading the sig's node borrows the table only long enough to snapshot
+    // it, so `fold_pins`' interning below is legal here and nothing has to own a schema.
+    let folded = ctx.types().with_node(sig_handle, |node| {
+        let TypeNode::Signature { schema, .. } = node else {
+            return Err(mismatch(sig_handle.name(ctx.registries)));
         };
-        let pin_type = match value {
-            Held::Type(kt) => *kt,
-            Held::Object(other) => {
-                return done_err(KError::new(KErrorKind::ShapeError(format!(
-                    "WITH binding `{}` value must be a type, got `{}`",
-                    display_label(symbol, ctx.registries),
-                    other.ktype().display_name(ctx.registries),
-                ))));
-            }
-            Held::UnresolvedType(ti) => {
-                return done_err(KError::new(KErrorKind::UnboundName(render_label(
-                    ti.symbol(),
-                    ctx.registries,
-                ))));
-            }
-            // A pin value arrives as a bound cell from the record's own slots, never as a raw
-            // part capture.
-            Held::Name(_) | Held::RecordType(_) => {
-                unreachable!("a WITH pin value is never a raw part capture")
-            }
-        };
-        match manifest {
-            // An equal re-pin of a fixed member normalizes away: not an error, and not a pin.
-            Some((_, fixed)) if pin_type == *fixed => {}
-            Some((_, fixed)) => {
-                return done_err(KError::new(KErrorKind::ShapeError(format!(
-                    "`{}.{}` is a manifest type member fixed to `{}`; \
+        // Every pin must name a known slot and hold a type. A slot already fixed — a manifest
+        // member, which is also what an earlier WITH's fold left behind — admits only an equal
+        // re-pin, which normalizes away (never folded), so `S WITH {Tag = Number}` and
+        // `(S WITH {A = Number}) WITH {A = Number}` keep their source's signature identity; an
+        // unequal re-pin is a type error.
+        // The pins are read by the fold below and never leave the step, so they stage on the step
+        // scratch. One binding field contributes at most one pin — an equal re-pin of a manifest
+        // member normalizes away and pushes nothing — so the field count is an upper bound, which is
+        // what taking the capacity up front needs to rule out a regrow.
+        let mut pins: BumpVec<'a, (TypeSymbol, KType)> =
+            BumpVec::with_capacity_in(bindings.len(), ctx.scratch);
+        for (symbol, value) in bindings.fields() {
+            // A pin arrives as a raw record-field symbol, which carries no evidence of its token
+            // class. The schema's member maps are keyed by classified `TypeSymbol`s and admit a
+            // probe by bare symbol bits, so a hit hands back the classification the declaration
+            // witnessed — no text resolve, no re-derivation. A pin that is not a Type token was
+            // never declared as a member, so it misses both maps and falls to the no-such-slot
+            // error, the same disposition an unknown Type name gets. Only that error path — and
+            // the two below it — resolves the pin's text.
+            let manifest = schema.manifest_members.get_key_value(&symbol);
+            let slot = match manifest.or_else(|| schema.abstract_members.get_key_value(&symbol)) {
+                Some((slot, _)) => *slot,
+                None => {
+                    return Err(KError::new(KErrorKind::ShapeError(format!(
+                        "{} has no abstract type slot `{}`",
+                        sig_handle.display_name(ctx.registries),
+                        display_label(symbol, ctx.registries),
+                    ))));
+                }
+            };
+            let pin_type = match value {
+                Held::Type(kt) => *kt,
+                Held::Object(other) => {
+                    return Err(KError::new(KErrorKind::ShapeError(format!(
+                        "WITH binding `{}` value must be a type, got `{}`",
+                        display_label(symbol, ctx.registries),
+                        other.ktype().display_name(ctx.registries),
+                    ))));
+                }
+                Held::UnresolvedType(ti) => {
+                    return Err(KError::new(KErrorKind::UnboundName(render_label(
+                        ti.symbol(),
+                        ctx.registries,
+                    ))));
+                }
+                // A pin value arrives as a bound cell from the record's own slots, never as a raw
+                // part capture.
+                Held::Name(_) | Held::RecordType(_) => {
+                    unreachable!("a WITH pin value is never a raw part capture")
+                }
+            };
+            match manifest {
+                // An equal re-pin of a fixed member normalizes away: not an error, and not a pin.
+                Some((_, fixed)) if pin_type == *fixed => {}
+                Some((_, fixed)) => {
+                    return Err(KError::new(KErrorKind::ShapeError(format!(
+                        "`{}.{}` is a manifest type member fixed to `{}`; \
                      WITH cannot re-pin it to `{}`",
-                    sig_handle.display_name(ctx.registries),
-                    display_label(symbol, ctx.registries),
-                    fixed.display_name(ctx.registries),
-                    pin_type.display_name(ctx.registries),
-                ))));
+                        sig_handle.display_name(ctx.registries),
+                        display_label(symbol, ctx.registries),
+                        fixed.display_name(ctx.registries),
+                        pin_type.display_name(ctx.registries),
+                    ))));
+                }
+                None => pins.push((slot, pin_type)),
             }
-            None => pins.push((slot, pin_type)),
         }
-    }
 
-    let folded = schema.fold_pins(&pins, ctx.types());
+        Ok(schema.fold_pins(&pins, ctx.types()))
+    });
+    let folded = match folded {
+        Ok(folded) => folded,
+        Err(e) => return done_err(e),
+    };
     Action::done(Ok(ctx.ctx.type_carried(ctx.types().signature(folded))))
 }
 
