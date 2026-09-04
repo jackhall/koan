@@ -93,9 +93,9 @@ impl<'a> Module<'a> {
     /// stands behind this door: every reference the value holds is a plain `&'a` the borrow checker
     /// already checked against the lifetime the destination brand borrows its region for.
     ///
-    /// A module re-tagging a *foreign* child scope has no route here: it is built at a fold brand
-    /// instead ([`Scope::store_transparent_view`](crate::machine::core::Scope)), where the borrow it
-    /// re-tags is the fold's own operand view.
+    /// Every module takes this door, ascription views included: a view is built over a scope of its
+    /// own — allocated under the ascribing frame and filled with the members its signature declares
+    /// — rather than over the source module's, so no module ever re-tags a foreign child scope.
     pub fn alloc_at_child_scope(
         path: &str,
         child_scope: &'a Scope<'a>,

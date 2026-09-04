@@ -15,13 +15,12 @@ use crate::machine::core::kfunction::{KFunction, KFunctionFamily};
 use crate::machine::core::ref_carriers::BindingsReferenceFamily;
 use crate::machine::core::{
     FoldingBrand, FrameCoverage, FrameReach, FrameStorage, KoanRegion, KoanRegionExt,
-    KoanStorageProfile, ModuleRefFamily, RegionBrand, ScopeRefFamily, product_reaches_region,
+    KoanStorageProfile, ModuleRefFamily, RegionBrand, product_reaches_region,
 };
 use crate::machine::model::KeywordSymbol;
 use crate::machine::model::{
-    Carried, CarriedFamily, KObject, KType, Module, ModuleDraft, OperatorGroup,
-    OperatorGroupFamily, ReductionMode, RegionEscape, coerce_object_into, copy_or_pin,
-    relocate_object_into,
+    Carried, CarriedFamily, KObject, KType, Module, OperatorGroup, OperatorGroupFamily,
+    ReductionMode, RegionEscape, coerce_object_into, copy_or_pin, relocate_object_into,
 };
 use crate::machine::{
     CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, KError, SplicedCell,
@@ -827,45 +826,6 @@ impl<'a> Scope<'a> {
         self.mint_retained(&[delivered.coverage()]);
         let window = self.alloc_child_transparent(bindings);
         Some(window.alloc_child_under())
-    }
-
-    /// The transparent-ascription store: a fresh `Module` tagged `name`, re-tagging a *foreign*
-    /// source module's child scope, whose region is not this scope's own. The re-tagged `Module` is
-    /// **built inside the fold** over that child scope as its operand view, so its borrow is the
-    /// merge's own — which is what lets the composition, rather than a runtime walk, evidence the
-    /// foreign region. A module is assembled complete, so `self_sig` derives the view's self-sig
-    /// from the operand view inside the fold and the module is born carrying it; taking the scope at
-    /// the fold's own brand lifetime is what keeps the derivation from smuggling a borrow out.
-    ///
-    /// Both the `Module` and the `KObject::Module` wrapping it are allocated at the same fold brand
-    /// into this scope's region — including the `name` bytes and the (empty) member tables
-    /// [`Module::assemble`](crate::machine::model::Module) bumps there — and the composed reach
-    /// names the source child's region, the one claim covering both, minted and retained here in one
-    /// act.
-    pub(crate) fn store_transparent_view(
-        &self,
-        name: String,
-        source_child: &'a Scope<'a>,
-        self_sig: impl for<'b> FnOnce(&'b Scope<'b>) -> KType,
-    ) -> SealedValue<'a> {
-        let source = source_child.deliver_resident::<ScopeRefFamily>(source_child);
-        source
-            .merge_into::<RegionHandleFamily<KoanStorageProfile>, CarriedFamily, KoanStorageProfile>(
-                self.dest_operand(),
-                |scope_view, _handle, placement| {
-                    let door = FoldingBrand::in_fold_closure(placement);
-                    let sig = self_sig(scope_view);
-                    let module = door.alloc_module_folded(Module::assemble(
-                        *door,
-                        &name,
-                        scope_view,
-                        ModuleDraft::empty(),
-                        sig,
-                    ));
-                    Carried::Object(door.alloc_object_folded(KObject::Module(module)))
-                },
-            )
-            .rest_into(self.brand().handle())
     }
 }
 

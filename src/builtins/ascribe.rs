@@ -6,6 +6,14 @@
 //! members at the right kind and over the same parameter names, value slots covariantly
 //! compatible). Each view is born carrying its own self-sig, derived from the members its
 //! construction gathered before the view module exists.
+//!
+//! Both operators build the same thing: a scope of the view's own, holding exactly the members the
+//! signature declares. They differ only in what the signature's abstract members are seeded at —
+//! per-call mints for `:|`, the source's own bindings for `:!` — and everything else, pruning
+//! included, follows from that one choice. Width subtyping is what admits a module that binds more
+//! than it declares; it is not a property of the view the match produces.
+
+use std::borrow::Cow;
 
 use crate::machine::StepCarried;
 use crate::machine::WriteGate;
@@ -33,6 +41,38 @@ crate::slots! { SLOTS { m, s } }
 /// witnessed [`Action::done(Ok)`](Action::Done) carrier ([`Scope::store_module_object`] merges the
 /// resident module reference into that region, composing its reach).
 pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
+    ascribe(ctx, Transparency::Opaque)
+}
+
+/// `<m:Module> :! <s:Signature>` — transparent ascription. The same view construction the opaque
+/// operator performs, seeded with the *source's* own bindings for the signature's abstract members
+/// rather than per-call mints: the barrier's two sides coincide, so nothing coerces and every
+/// declared member replays verbatim at the concrete types the source binds. Width is still pruned —
+/// the view surfaces exactly what the signature declares.
+pub fn body_transparent<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> crate::machine::Action<'a> {
+    ascribe(ctx, Transparency::Transparent)
+}
+
+/// Which types a view's abstract members are seeded at — the one axis the two ascription operators
+/// differ on, everything downstream of the seeding being shared.
+#[derive(Clone, Copy)]
+enum Transparency {
+    /// A fresh per-call mint per abstract member: the source's representation is hidden.
+    Opaque,
+    /// The source's own binding per abstract member: `view.Carrier` reads through to `Number`.
+    Transparent,
+}
+
+/// Build an ascription view of `m` at signature `s`: check satisfaction, allocate the view scope
+/// and replay into it the members the signature declares — at the types `mode` seeds its abstract
+/// members with — then derive the view's self-sig and return the view module as the Object-arm
+/// value.
+fn ascribe<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+    mode: Transparency,
+) -> crate::machine::Action<'a> {
     use crate::machine::Action;
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.registries));
@@ -48,8 +88,8 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
         let source_members = source_member_bindings(m, s_schema, ctx.types());
         let sig_id = s_schema.sig_id.unwrap_or(ScopeId::SENTINEL);
 
-        // Allocate the view scope, replay the source module's members into it — each SIG-declared
-        // member whose slot type substitutes differently under the view's mints born *coerced* —
+        // Allocate the view scope, replay into it the members the signature declares — each one
+        // whose slot type substitutes differently under the view's own bindings born *coerced* —
         // and seed its `types` table with the view's own type members, all in one door: the scope
         // is unreachable until the whole install has landed, which is what lets the writes happen
         // at construction time rather than riding a step outcome. The seeded table is what a
@@ -62,11 +102,14 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
             ctx.registries,
             // The nonce every per-call mint carries is the newborn view scope's id, handed in by
             // the door before the scope is published (`Module::scope_id` reports the same id once
-            // the module is built). Abstract and manifest members are disjoint by `SigSchema`
-            // construction — a SIG member is one or the other — so the strict inserts cannot
-            // collide.
+            // the module is built); the transparent seeding mints nothing and ignores it. Abstract
+            // and manifest members are disjoint by `SigSchema` construction — a SIG member is one
+            // or the other — so the strict inserts cannot collide.
             |nonce| {
-                let types = view_type_members(s_schema, nonce, ctx.registries);
+                let types = match mode {
+                    Transparency::Opaque => view_type_members(s_schema, nonce, ctx.registries),
+                    Transparency::Transparent => source_type_members(s_schema, &source_members),
+                };
                 view_members(s_schema, sig_id, &source_members, types, ctx.registries)
             },
         ) {
@@ -87,17 +130,25 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
             draft.type_members.insert(name, kt);
         }
 
-        // The view's self-sig is derived from the draft the mints just filled, then the module is
-        // born carrying it.
+        // The view's self-sig is derived from the draft the seeding just filled, then the module
+        // is born carrying it.
         let self_sig = view_self_sig(new_scope, &draft, s_schema, ctx.registries);
+        // A transparent view is spelled into its own path: the source's representation reads
+        // through it, so the label is what tells the two apart where a module is rendered.
+        let path: Cow<'_, str> = match mode {
+            Transparency::Opaque => Cow::Borrowed(m.path),
+            Transparency::Transparent => {
+                Cow::Owned(format!("{} :! {}", m.path, s.name(ctx.registries)))
+            }
+        };
         let new_module: &'a Module<'a> =
-            Module::alloc_at_child_scope(m.path, new_scope, draft, self_sig);
+            Module::alloc_at_child_scope(&path, new_scope, draft, self_sig);
 
         // The view surfaces as the Object-arm module value; a LET around it binds that value like
         // any other. The store door merges the resident module reference — enveloped at
         // `new_scope`'s own home, held directly here rather than recovered by walking the built
         // value — into this scope's region, so the composition mints and retains the module's
-        // reach. The opaque view's `new_scope` is a same-region child of this frame, so that reach
+        // reach. A view's `new_scope` is a same-region child of this frame, so that reach
         // is this scope's own region: the module genuinely borrows into its home. Lifting the seal
         // upgrades the description's members `Weak → Rc` for the terminal the step delivers onward.
         let sealed = ctx.scope.store_module_object(new_module);
@@ -107,43 +158,24 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::mach
     })
 }
 
-/// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
-/// own child scope and returns the retagged view as the Object-arm module value — built at the fold
-/// brand of [`Scope::store_transparent_view`], whose composition pins the (foreign) source module's
-/// child-scope region the view borrows.
-pub fn body_transparent<'a>(
-    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
-) -> crate::machine::Action<'a> {
-    use crate::machine::Action;
-
-    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.registries));
-    with_signature_schema(s, ctx.types(), |s_schema, s_digest| {
-        if let Err(e) = check_satisfies(m, s_schema, s_digest, s, ctx.registries) {
-            return Action::done(Err(e));
-        }
-        // Rendered after the check, and for the view's own path rather than for a diagnostic: the
-        // path is part of the value this builds.
-        let s_name = s.name(ctx.registries);
-        // A transparent view re-tags the source module's child scope directly (`m.child_scope()`),
-        // foreign to this frame. The store door merges that scope as its source operand, so the
-        // re-tagged Module and its Object-arm wrapper are both built at one fold brand in this scope's
-        // region over that operand view — their borrow of the foreign region is the fold's own, and the
-        // composition mints it as the value's reach and retains it here. The view's self-sig is sealed
-        // inside the fold, on the resident module (SIG-declared value slots read the source's concrete
-        // types after substitution). Reusing the foreign source's child scope, the view borrows nothing
-        // into this home frame, so no home member is named and the dying home frame frees at its own
-        // finalize, once the delivery walk has adopted the terminal onward. Lifting the seal upgrades
-        // the description's members `Weak → Rc` for
-        // the terminal the step delivers onward.
-        let sealed = ctx.scope.store_transparent_view(
-            format!("{} :! {}", m.path, s_name),
-            m.child_scope(),
-            |scope_view| view_self_sig(scope_view, &ModuleDraft::empty(), s_schema, ctx.registries),
-        );
-        Action::done(Ok(StepCarried::born_delivered(
-            ctx.scope.lift_resident(sealed),
-        )))
-    })
+/// The type members a transparent view's scope is seeded with: every abstract member of the
+/// ascribed signature at the source's own binding for it, plus every manifest member at its fixed
+/// `KType`. Seeding the source's bindings is what makes the view transparent — `view.Carrier` and
+/// the source's `Carrier` are one type — and it collapses the coercion plan to the identity, so
+/// every declared member replays verbatim.
+///
+/// `source_members` is total over the signature's abstract members: satisfaction admitted this
+/// module, and a module's own type bindings are all manifest in its self-sig.
+fn source_type_members(
+    signature: &SigSchema,
+    source_members: &TypeMemberMap,
+) -> Vec<(TypeSymbol, KType)> {
+    signature
+        .abstract_members
+        .keys()
+        .filter_map(|name| source_members.get(name).map(|kt| (*name, *kt)))
+        .chain(signature.manifest_members.iter().map(|(n, kt)| (*n, *kt)))
+        .collect()
 }
 
 /// The type members an opaque view's scope is seeded with: a per-call mint for every abstract

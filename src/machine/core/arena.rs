@@ -21,7 +21,7 @@ use super::kfunction::KFunction;
 use super::scope::Scope;
 use crate::machine::model::KType;
 use crate::machine::model::{
-    Carried, CarriedFamily, ContainerSubstrate, Held, KObject, Module, ProgramExpression, Scalar,
+    Carried, CarriedFamily, ContainerSubstrate, Held, KObject, ProgramExpression, Scalar,
 };
 use crate::witnessed::reattachable;
 use crate::witnessed::{
@@ -316,24 +316,6 @@ impl<'a> FoldingBrand<'a> {
     /// own, so a value resident somewhere else cannot be written here.
     pub(crate) fn alloc_object_folded(self, o: KObject<'a>) -> &'a KObject<'a> {
         self.placement.allocator().value(o)
-    }
-
-    /// Store a [`Module`] built at this fold's own brand — the door the module store folds
-    /// ([`Scope::store_module_object`](crate::machine::core::Scope)) re-tag a view through. Sound by
-    /// the same rank-2 fold-brand argument as [`Self::alloc_object_folded`]: the module is typed at
-    /// the brand lifetime, so its child-scope borrow is the fold's own operand view and an
-    /// ambient-lifetime capture is a compile error at this signature. That discharges the same
-    /// residence obligation the co-located born door
-    /// ([`Module::alloc_at_child_scope`](crate::machine::model::Module)) discharges at its own brand —
-    /// a folded module's child scope is reached through the fold's operands, whose regions the
-    /// enclosing composition names.
-    ///
-    /// The store is the placement's own bump, exactly as [`Self::alloc_object_folded`]'s is: a
-    /// `Module` is `Copy`, its path and member tables already bumped at this same brand by
-    /// [`Module::assemble`](crate::machine::model::Module), so region death frees the whole value as
-    /// a chunk and runs no per-slot glue.
-    pub(crate) fn alloc_module_folded(self, m: Module<'a>) -> &'a Module<'a> {
-        self.placement.allocator().value(m)
     }
 
     /// Store a [`KFunction`] built at this fold's own brand — the door

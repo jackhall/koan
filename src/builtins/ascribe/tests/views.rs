@@ -517,9 +517,11 @@ fn a_returned_opaque_view_keeps_every_coerced_member_alive() {
 
 // ---------- Regressions ----------
 
-/// **AC 4.** A member the signature does not name is *absent* from the view. Width subtyping is a
-/// property of the matching relation — `id_monad` satisfies `Monad` while binding more than it
-/// declares — never of the view the match produces.
+/// **AC 4, both ascription modes.** A member the signature does not name is *absent* from the
+/// view — opaque or transparent. Width subtyping is a property of the matching relation —
+/// `id_monad` satisfies `Monad` while binding more than it declares — never of the view the match
+/// produces. Transparency is about the *types* a declared member reads at, not about how much of
+/// the source shows through.
 #[test]
 fn a_member_the_signature_omits_is_absent_from_the_view() {
     let program = program_storage();
@@ -527,11 +529,14 @@ fn a_member_the_signature_omits_is_absent_from_the_view() {
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(monad_program());
     test_run.run("LET view = (id_monad :| Monad)");
-    let error = test_run.run_one_err(test_run.parse_one("view.hidden"));
-    assert!(
-        error.to_string().contains("no member `hidden`"),
-        "an undeclared member must not be reachable through the view, got {error}",
-    );
+    test_run.run("LET tview = (id_monad :! Monad)");
+    for view in ["view", "tview"] {
+        let error = test_run.run_one_err(test_run.parse_one(&format!("{view}.hidden")));
+        assert!(
+            error.to_string().contains("no member `hidden`"),
+            "an undeclared member must not be reachable through `{view}`, got {error}",
+        );
+    }
     // The source is untouched: pruning shapes the view, not the module it was taken of.
     let hidden = test_run.run_one(test_run.parse_one("id_monad.hidden"));
     assert!(
