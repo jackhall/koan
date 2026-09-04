@@ -708,8 +708,13 @@ fn access_field<'a>(
 /// A value-side hit reads the member exactly as it is bound. An opaque view's members are already
 /// the view's: its scope is born holding values coerced to the per-call abstract identities the SIG
 /// named (so `(int_ord.zero)` reads as the view's nonced `AbstractType` for `Type`, not the
-/// underlying `Number`), so this read patches nothing. Transparent `:!` reuses the source's child
-/// scope, so transparent reads stay concrete for the same reason.
+/// underlying `Number`), so this read patches nothing. A transparent view's scope is born the same
+/// way, seeded with the source's own bindings for the signature's abstract members — so nothing
+/// coerced and transparent reads stay concrete, by the same one rule.
+///
+/// Either view holds only the members its signature declares, so a name the signature omits is a
+/// missing member here rather than a fall-through to the source: the lookup is module-own and the
+/// view's table is its own.
 fn access_module_member<'a>(
     m: &'a Module<'a>,
     field: &FieldName<'_>,
@@ -1167,9 +1172,9 @@ mod tests {
         );
     }
 
-    /// A transparent (`:!`) view reuses the source module's own child scope, so nothing is coerced
-    /// and the slot read stays concrete: `int_ord_view.zero` reads as the underlying `Number`, not
-    /// the abstract `Type`.
+    /// A transparent (`:!`) view seeds its scope with the source module's own bindings for the
+    /// signature's abstract members, so nothing is coerced and the slot read stays concrete:
+    /// `int_ord_view.zero` reads as the underlying `Number`, not the abstract `Type`.
     #[test]
     fn transparent_view_slot_read_stays_concrete() {
         let program = program_storage();

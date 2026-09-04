@@ -49,15 +49,15 @@ use crate::machine::model::TypeSymbol;
 #[derive(Default)]
 pub struct ModuleDraft {
     /// Member name → type: a mirror of the child scope's type bindings, for a plain `MODULE` and an
-    /// opaque view alike (the ascription seeds the view scope with the per-call abstract mints and
-    /// the signature's manifest members, then reads them straight back out). A transparent view
-    /// reuses its source's child scope and leaves this map empty, reading types through that scope.
+    /// ascription view alike (the ascription seeds the view scope with the signature's type
+    /// interface — per-call abstract mints for `:|`, the source's own bindings for `:!`, plus the
+    /// manifest members either way — then reads them straight back out).
     pub type_members: HashMap<TypeSymbol, KType>,
 }
 
 impl ModuleDraft {
-    /// A draft with no members — a bare module's, and a transparent view's (which reads its members
-    /// through the source's child scope rather than a map of its own).
+    /// A draft with no members — where a construction fills the map itself, having read the
+    /// finished child scope back out.
     pub fn empty() -> ModuleDraft {
         ModuleDraft::default()
     }

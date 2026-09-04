@@ -426,7 +426,10 @@ mod tests {
     }
 
     /// The parenthesized parameter list is gone: `(x :Number)` is a parenthesized group, not a
-    /// type expression, so no `FN` overload takes it.
+    /// type expression, so the function-type overload's `ProperType` slot never sees it. The group
+    /// is captured raw by the bucket's lazy-slot entry and reaches the co-bucket SIG-member
+    /// declarator instead ([`crate::builtins::fn_def`]), which refuses it outside a SIG body —
+    /// either way the form does not elaborate to a function type.
     #[test]
     fn fn_with_parenthesized_parameter_list_no_longer_elaborates() {
         let program = program_storage();

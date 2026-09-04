@@ -46,6 +46,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Callable copy tuning](foundation/callable-copy-tuning.md)
 - [Constructing circular values](foundation/circular-value-construction.md)
 - [A flattened dispatch registration pins its defining frame](foundation/flattened-registration-pins-its-frame.md)
+- [A module's retention answer is conservative](foundation/module-retention-answer.md)
 - [Module scope consolidation](foundation/module-scope-consolidation.md)
 - [Yielding iterators](foundation/yielding-iterators.md)
 - [Files and imports](libraries/files-and-imports.md)
@@ -57,6 +58,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)
-- [SIG keyworded surface](type_language/sig-keyworded-surface.md)
+- [Expression shapes are their own kind of function](type_language/expression-shapes.md)
 - [Region evacuation at frame death](untyped_arena/region-evacuation.md)
 

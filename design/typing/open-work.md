@@ -31,12 +31,6 @@ Future work on the type and module system. Each entry points at a
 
 ## Cross-cutting
 
-- [SIG keyworded surface](../../roadmap/type_language/sig-keyworded-surface.md)
-  — letting a signature declare a module's keyworded (dispatch-bucket) members,
-  so the abstraction barrier governs them too. An opaque view replays those
-  buckets verbatim today, so a keyworded call inside a `USING` window crosses in
-  the source module's types while the same function read as a VAL slot is
-  coerced ([modules.md](modules.md)).
 - [Standard library](../../roadmap/libraries/standard-library.md) — collections built
   as functors — module-returning FNs — over their element/key types. Parks the
   **applicative functor semantics** open question: the decided seam is the

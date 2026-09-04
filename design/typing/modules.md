@@ -53,7 +53,7 @@ token-class rule that distinguishes `MODULE` (keyword: ≥2 uppercase, no lowerc
 from `Ordered` (Type token) and `int_ord` (Identifier) is described in
 [tokens.md](tokens.md).
 
-SIG bodies accept three declarators, split by what a satisfying module must
+SIG bodies accept four declarators, split by what a satisfying module must
 supply:
 
 - `TYPE <TypeName>` declares an **abstract** type member — a witness-less slot
@@ -69,22 +69,32 @@ supply:
 - `(VAL <name> :<TypeExpr>)` declares a value slot: the canonical surface for
   naming an operation the signature requires, with the slot's declared type
   recorded explicitly rather than inferred from an example value.
+- `(FN (<head>) -> <Return>)` — a bodyless `FN` head — declares a **keyworded
+  member**: an entry in the module's dispatch buckets, the half of a module's
+  callable surface `VAL` cannot name. See
+  [Keyworded members](#keyworded-members) below.
 
-A SIG body's declarators write two separate channels. The decl scope's `types` map records
+A SIG body's declarators write three separate channels. The decl scope's `types` map records
 each `TYPE <Name>` abstract member and each `LET <Name> = <Type>` manifest member under its
 Type-token name — genuine type bindings. Each `VAL <name> :<Type>` value slot instead records
 its declared type into a **slot collector** on the decl scope
 ([`Scope::sig_slot`](../../src/machine/core/scope.rs) / `sig_value_slots`), keyed by the slot's
-value name — a schema in progress, off the binding map. At SIG finish both channels project once
+value name — a schema in progress, off the binding map. Each bodyless `FN` head records its
+`(params) -> ret` type into the slot collector's twin, a **keyworded collector**
+(`Scope::write_sig_keyworded` / `sig_keyworded_members`) keyed by the head's untyped bucket key.
+At SIG finish all three channels project once
 into the signature's stored [`SigSchema`](../../src/machine/model/types/sig_schema.rs): the
-`types` map splits by representation into abstract vs manifest members, and the slot collector
-supplies `value_slots`. Because value slots never enter `types`, the token-class partition needs
+`types` map splits by representation into abstract vs manifest members, the slot collector
+supplies `value_slots`, and the keyworded collector supplies `keyworded`. Because neither
+collector enters `types`, the token-class partition needs
 no exemption ([elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)) and
 a SIG body's `Bindings` is an ordinary `Bindings::new()`.
 
-`VAL` and `TYPE` are meaningful only inside a SIG body; outside it the
-declarator is unbound. The lowercase-name `(LET name = <value>)` form is
-rejected inside SIG bodies with a diagnostic directing to `VAL`. The implementation lives at
+`VAL`, `TYPE` and the bodyless `FN` head are meaningful only inside a SIG body; outside it the
+declarator is unbound and a bodyless head is an error naming the definition spelling. The
+lowercase-name `(LET name = <value>)` form is
+rejected inside SIG bodies with a diagnostic directing to `VAL`, and a bare `FN` *with* a body
+there is rejected with one directing to the bodyless head. The implementation lives at
 [`val_decl.rs`](../../src/builtins/val_decl.rs); ascription
 ([`ascribe.rs`](../../src/builtins/ascribe.rs)) checks a module against a signature
 through the **signature-subtyping relation**
@@ -109,6 +119,16 @@ hides the representation: outside the ascription, `int_ord_abstract.Carrier` is
 **not** the same type as `Number`, even though that's its underlying
 definition. Type checking forbids passing an `int_ord_abstract.Carrier` value to
 anything expecting a `Number` — the abstraction barrier is enforced.
+
+**An ascription view is a narrowing, on both operators.** A view surfaces exactly
+the members its signature declares — type members, value slots and keyworded
+members — and nothing else, ML-style: a source member the signature omits is
+absent from the view, not merely untyped by it. Width subtyping is a property of
+the **matching relation** — a module that binds more than the signature names
+still satisfies it — never of the view the match produces. Transparency is about
+the *types* a declared member reads at, not about how much of the source shows
+through, so `:!` prunes exactly as `:|` does. Pruning shapes the view alone: the
+source module still binds everything it always did.
 
 Opaque ascription is **generative**: each application mints a fresh
 `KType::AbstractType { source: view.scope_id(), name }` per declared abstract
@@ -200,10 +220,14 @@ separate substitutions is therefore not stable. Its arms mirror
 - a nested `Signature` position takes the **module boundary** below — the member is a
   module, and it is rebuilt as a view of itself.
 
-A member the signature does not name has no declared slot type to coerce against, so
-width subtyping surfaces it exactly as the source bound it. Transparent `:!` binds
-every abstract member to the source's own concrete type, so the two substitutions of
-every slot agree, nothing is coerced, and transparent reads stay concrete. The two
+A member the signature does not name is not replayed at all — it has no declared slot
+type to coerce against and no place in the view. Transparent `:!` runs this same
+construction, seeding each abstract member with the source's **own binding** for it
+rather than a mint: the two substitutions of every slot then agree, so the coercion
+plan is the identity, nothing is coerced, every declared member replays verbatim, and
+transparent reads stay concrete. Transparency is therefore a property of the seeding,
+not a second code path — `body_opaque` and `body_transparent` are the same function at
+two seedings. The two
 bindings a walk rewrites between ride as a `MemberCoercion`
 ([`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)): each table is
 interned as the `Signature` handle whose manifest members *are* the table, which
@@ -231,11 +255,14 @@ callable read depends on.
 filling such a slot is itself a module, and it is rebuilt as an opaque view **of itself**
 through the same [`Scope::alloc_module_view`](../../src/machine/core/scope/registry.rs)
 door the outer view took, carrying the outer coercion plan
-([`coerce_module`](../../src/machine/model/values/coerce.rs)). Its type members are the
-source module's, with every member the nested signature fixes overridden by the outer
-view's substitution, and its value slots are born coerced by the replay — so the nested
+([`coerce_module`](../../src/machine/model/values/coerce.rs)). Its plan is built through the
+same `ViewMembers::of_schema` builder the outer boundary uses, so the two cannot drift: the
+nested view surfaces exactly what the nested signature declares — an abstract member at the
+source module's own binding, a manifest member at the outer view's substitution, its value
+slots and keyworded members born coerced by the replay — so the nested
 member reports the outer view's `Elt` mint rather than the source's representation, on the
-same terms every other slot shape does, and width rides through unchanged. Nothing is
+same terms every other slot shape does, and it narrows exactly as the outer view does.
+Nothing is
 minted at the nested boundary: a nested view's abstract identities *are* the outer view's
 mints, arriving through the substitution. The view is born at the source module's own child
 scope, so it lives in the source's region exactly as a function wrapper lives in its
@@ -267,8 +294,10 @@ reachable only nested inside a container.
 **Satisfaction and `WITH`.** Satisfaction is a **signature-subtyping** check
 ([`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)). Every module carries a
 principal **self-sig** — a [`SigSchema`](../../src/machine/model/types/sig_schema.rs) of its
-abstract members (always none — `TYPE` is SIG-body-only), manifest type members, and
-value-slot types — derived from the members construction gathered, interned *before* the module
+abstract members (always none — `TYPE` is SIG-body-only), manifest type members,
+value-slot types, and its **keyworded surface** (every dispatch bucket the body registered, each
+overload named by the `(params) -> ret` type its callable reports) — derived from the members
+construction gathered, interned *before* the module
 value exists, and carried on it immutably (`SigSchema::raw_self_sig` is the whole derivation for a
 bare construction). A signature *is* a
 `SigSchema` (`WITH` pins are already folded into it at intern time). Ascription (`check_satisfies`,
@@ -281,8 +310,11 @@ parameter-name *set* equals the slot's — see
 [functors.md § Higher-kinded type slots](functors.md#higher-kinded-type-slots)), and each value slot
 covariantly compatible — the module's member type must be `satisfied_by`-admissible for the
 slot's declared type, after the slot's references to `Super`'s abstract members are substituted
-with `Sub`'s bindings for them. Each ascription view is born carrying a self-sig recording those
-substituted slot types, so a view structurally satisfies its own signature. The result is
+with `Sub`'s bindings for them — and each keyworded member satisfied by a most-specific overload
+under the same key ([Keyworded members](#keyworded-members) below). Each ascription view is born
+carrying a self-sig recording those
+substituted slot and keyworded types, so a view structurally satisfies its own signature. The
+result is
 memoized in the type registry under `Relation::SigSatisfies`, keyed on the two schema content
 digests (a pure cache — types are immutable).
 
@@ -318,6 +350,82 @@ or deep-clone of the read value into a per-call functor region.
 
 Opaque ascription is the type-abstraction primitive. It replaces the
 newtype-with-private-fields pattern that a trait system would need.
+
+### Keyworded members
+
+A module's callable surface has two halves. A `LET pure = FN (PURE x :Number) …`
+binds `pure` in `data` *and* registers `PURE` in the module's dispatch buckets; a
+bare `FN (PURE x :Number) …` registers only the bucket. `VAL pure :(FN …)` names the
+value half. The **bodyless `FN` head** names the other:
+
+```
+SIG Box = ((TYPE Elt) (VAL zero :Elt) (FN (PURE x :Elt) -> Elt))
+```
+
+The head is the definition form's head with the `= (<body>)` dropped, and it parses
+through the definition form's own path
+([`fn_def.rs`](../../src/builtins/fn_def.rs)), so a declaration and the definition
+that satisfies it derive their bucket key and slot types from one implementation.
+Because it takes no body, its bucket key `[FN, Slot, ->, Slot]` is shorter than every
+definition spelling and the two never compete; the key *is* shared with the
+function-type expression `FN :{…} -> <Ret>`
+([`parameterized_types.rs`](../../src/builtins/parameterized_types.rs)), and the
+signature slot tells them apart — a `(…)` head is captured raw by the bucket's
+lazy-slot entry and reaches the declarator, a `:{…}` record type resolves and reaches
+the type form. A head with no fixed token has no bucket to declare, and a return type
+naming a parameter (`-> er.Carrier`) is a per-call elaboration a declaration has no
+call to run; both are refused at the declaration rather than at an ascription later.
+
+**An overload's identity** is its untyped bucket key plus an interned `KFunction`
+type — a record of *named* argument types and a return type. Parameter names are
+interface, exactly as in a `VAL` FN slot; slot order within the key is presentation.
+Several declarations may share one key, and the key's overloads are a *set*, held in a
+canonical order so two signatures declaring the same overloads intern to one type. An
+exact duplicate is a `Rebind`; a same-key declaration at a different type joins the
+set.
+
+The keyworded channel is signature content: it feeds the schema's content digest, is
+rendered after the value slots in a signature's name
+(`SIG (zero: Elt, (PURE x :Elt) -> Elt)`), rides `TYPE OF`, folds through `WITH` pins
+like any other declared type (two overloads that collapse to one under a pin become
+one), and intersects in a signature join — per shared key, overloads pair by
+parameter-name set, and one with no unique partner drops.
+
+**Satisfaction mirrors dispatch resolution.** For each declared overload,
+`sig_subtype` finds the module overloads under the same key that *satisfy* it — the
+same covariant `KFunction` rule a value slot's function type is checked by — and takes
+the most specific of them. Three failures are named at the head that wanted them: no
+bucket under the key (`MissingKeyworded`), a bucket whose overloads all fail
+(`KeywordedMismatch`), and an incomparable tie among satisfiers
+(`AmbiguousKeyworded`) — the keyworded reading of a dispatch ambiguity, raised at the
+ascription rather than at the call.
+
+"Most specific" is **the same code dispatch uses**, not a second lattice. The per-slot
+fold behind `ExpressionSignature::specificity_vs` — the ranking dispatch applies to
+co-bucket call shapes — is extracted as `specificity_over`, and both callers route
+through it: `specificity_vs` pairs two live signatures' argument slots positionally,
+`fn_type_specificity` pairs two declared function types' parameters *by name*
+([`signature.rs`](../../src/machine/model/types/signature.rs)). Returns are excluded,
+because dispatch never selects on them. A test pins the agreement directly: the
+type-level verdict equals `specificity_vs` on the live signatures.
+
+**A view publishes the selection.** The ascription replay installs, per declared
+overload, the one source overload that satisfies it — wrapped by the same
+`coerce_function` eta-wrapper a `VAL` FN slot takes where the coercion tables say the
+declared type crosses the barrier, and as the source's own seal where it does not. So
+a keyworded call through an opaque view coerces exactly as the value-lane read of the
+same function does: results carry the view's types, a source-typed argument is a
+mismatch at the wrapper. Selection and satisfaction run
+`select_keyworded_satisfier` ([`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)),
+one implementation, so the member the check admitted is the member the view installs.
+A module overload no declared member selects is **not** installed: under a signature
+declaring `(PICK x :Number)`, a module's `(PICK x :Any)` is unreachable through the
+view. Two declared overloads may legitimately select one source overload; the pair
+they publish under dedupes them.
+
+A keyworded member is reached by dispatch, so it is called through a
+`USING <view> SCOPE` window rather than by qualified name — see
+[Block-scoped opening](#block-scoped-opening-using--scope).
 
 ### Module bodies announce their type declarations
 
@@ -589,11 +697,14 @@ reason: the borrowed `data` table is the one the view was
 [born holding coerced values in](#val-slot-reads-carry-the-abstract-member-identity),
 so a bare-name read inside the block reports the same view-side type the qualified
 ATTR read reports, and a function slot called bare inside the block is the coercion
-wrapper. A transparent view reuses its source's child scope, so its members read
-concretely. The `functions` buckets are the exception: a signature cannot declare a
-keyworded member, so an opaque view replays the source module's dispatch surface
-verbatim and a keyworded call inside the window reaches the underlying function in
-the source's own types. Because the registry rides the same façade, opening a module
+wrapper. A transparent view's scope is seeded with the source's own bindings, so its
+members read concretely. The `functions` buckets follow the same rule rather than
+standing outside it: a view's buckets hold exactly the
+[keyworded members](#keyworded-members) its signature declares, each at the overload
+the source satisfies it with and wrapped where that overload crosses the barrier — so
+a keyworded call inside the window reports the view's types, an undeclared key is not
+in the window at all (the call walks out to the enclosing scope), and the two lanes of
+one function agree. Because the registry rides the same façade, opening a module
 that declares operators ([operators.md](../operators.md)) puts both their bodies
 and their chaining mode in scope: a run inside the block reduces by the module's
 own group.

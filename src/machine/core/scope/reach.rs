@@ -744,7 +744,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Seal a resident `Module` value into this scope — the Object-arm module bind
-    /// ([`Scope::seal_module`]) and an opaque ascription view. `module` lives in its own child
+    /// ([`Scope::seal_module`]) and either ascription view. `module` lives in its own child
     /// scope's region — [`Module::alloc_at_child_scope`](crate::machine::model::Module) derives the
     /// destination from that scope, and the module carries it
     /// ([`Module::child_scope`](crate::machine::model::Module::child_scope)), so the door reads the
@@ -756,8 +756,8 @@ impl<'a> Scope<'a> {
     /// That claim is exact. A `KObject::Module`'s only region borrow is its child scope, and every
     /// member value the module surfaces lives inside that child's own bindings; the child's region
     /// owns the union bundle for everything those members reach, so naming it pins the whole member
-    /// closure. A co-located module (`MODULE`, opaque `:|`) names a region this scope's chain
-    /// already holds — the library's self rule strips it from the retained bundle.
+    /// closure. A co-located module (`MODULE`, and either ascription view) names a region this
+    /// scope's chain already holds — the library's self rule strips it from the retained bundle.
     ///
     /// Infallible, and check-free: the wrapping `KObject::Module` is built at the fold brand from
     /// the merge's own operand view, so an ambient-lifetime capture is a compile error at the

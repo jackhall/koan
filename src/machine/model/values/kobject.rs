@@ -619,11 +619,12 @@ fn object_cell_reach<'a>(
         // destination is derived from that scope at `KFunction::alloc_captured`, so it cannot be
         // otherwise — and naming that scope therefore names its residence too.
         KObject::KFunction(f) => CellReach::Seed(scope_coverage(f.captured_scope().region_owner())),
-        // A `Module` carries no such invariant: a transparent-ascription view re-tags a foreign
-        // module into the viewing scope's own region, so its residence and its child scope's region
-        // differ, and the residence is not recoverable from the value. The seed therefore names the
-        // child scope — the module door of the design — *and* the door's holder, which pins wherever
-        // the cell was read from.
+        // A `Module` lives in its child scope's region for the same reason — the module door
+        // derives its destination from that scope — but the scope itself may hold member seals
+        // borrowing *another* region: an ascription view replays the source module's own seals into
+        // a scope of its own. That second borrow is not recoverable from the value, so the seed
+        // names the child scope — the module door of the design — *and* the door's holder, which
+        // pins wherever the cell was read from.
         KObject::Module(m) => {
             let mut declared = scope_coverage(m.child_scope().region_owner());
             declared.absorb(door.holder());
@@ -885,9 +886,9 @@ fn copy_held_into<'b>(cell: &Held<'b>, dest: SubstrateDoor<'b, '_>) -> Held<'b> 
 ///
 /// - A **borrow leaf** — a `KFunction`, a `Module` — is never rebuilt: a copying relocation carries
 ///   its reference verbatim, so it still borrows wherever it lives, which is `home`. That is the
-///   answer regardless of which scope it borrows: a transparent-ascription view re-tags a foreign
-///   module into the viewing scope's own region, so a module's residence and its child scope's
-///   region genuinely differ, and only residence decides whether the reference survives a release.
+///   answer regardless of which further regions it reaches: a module's members may be seals
+///   borrowing another region — an ascription view replays the source module's own — while only
+///   residence decides whether the reference survives a release.
 ///   Answering structurally rather than by reading residence is exact wherever a leaf is resident in
 ///   its own carrier's home, and conservatively retains where it is not — a carrier deep-cloned into
 ///   a binding scope while its leaf stays where it was. Retaining more can never dangle.
@@ -914,9 +915,10 @@ pub(crate) fn retains_home(value: &KObject<'_>, home: &KoanRegion) -> bool {
         // release the producer: the rebuilt product captures the copy, so the source region it
         // came from answers `false` here.
         KObject::KFunction(function) => std::ptr::eq(function.captured_scope().region(), home),
-        // A module stays conservative: a transparent-ascription view re-tags a foreign module into
-        // the viewing scope's own region, so residence is not recoverable from the value and
-        // retaining more can never dangle. The consolidation lever is the callable case.
+        // A module stays conservative: its child scope may hold member seals borrowing a region
+        // other than the one the module lives in — an ascription view's replayed seals still name
+        // the source module's — and that reach is not recoverable from the value, so retaining more
+        // can never dangle. The consolidation lever is the callable case.
         KObject::Module(_) => true,
         KObject::Record(substrate, _) => substrate.reach().pins_region(home),
         KObject::List(substrate, _) => substrate.reach().pins_region(home),

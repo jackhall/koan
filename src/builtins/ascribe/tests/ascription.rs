@@ -381,6 +381,49 @@ fn opaque_view_scope_holds_exactly_the_views_type_members() {
     }
 }
 
+/// **AC 4, the type channel under `:!`.** A transparent view's scope is seeded the same way, from
+/// the signature's members alone — each abstract one at the *source's* own binding rather than a
+/// mint. So transparency and narrowing are independent: `Elem` reads through to `Number`, while the
+/// source's `Hidden` is as absent here as it is from an opaque view, and naming it in type position
+/// through the view is a missing-member error.
+#[test]
+fn transparent_view_scope_holds_exactly_the_signatures_type_members() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "SIG Boxed = ((TYPE Elem) (LET Tag = Str) (VAL zero :Elem) (VAL label :Tag))\n\
+         MODULE int_ord = ((LET Elem = Number) (LET Tag = Str) (LET Hidden = Bool) \
+                           (LET zero = 0) (LET label = \"n\"))\n\
+         LET clear = (int_ord :! Boxed)",
+    );
+    let view = lookup_module(scope, "clear", test_run.registries());
+    let mut seeded: Vec<(String, KType)> = view
+        .child_scope()
+        .bindings()
+        .iter_types()
+        .into_iter()
+        .map(|(n, kt)| (render_label(n.symbol(), test_run.registries()), kt))
+        .collect();
+    seeded.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        seeded,
+        vec![
+            ("Elem".to_string(), KType::NUMBER),
+            ("Tag".to_string(), KType::STR)
+        ],
+        "the transparent view holds the signature's members at the source's own types, and not \
+         the source's `Hidden`",
+    );
+
+    let error = test_run.run_one_err(test_run.parse_one(":(clear.Hidden)"));
+    assert!(
+        error.to_string().contains("no member `Hidden`"),
+        "an undeclared type member must not be nameable through the view, got {error}",
+    );
+}
+
 /// Two ascriptions of one module seed *distinct* mints into their two view scopes — the generativity
 /// the nonce buys, read on the channel the `USING` window uses rather than through the mirror.
 #[test]

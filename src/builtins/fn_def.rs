@@ -387,6 +387,13 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
     // the two never compete — the shorter key simply is not the longer one. The body guards the
     // rest: outside a SIG body this form errors and points at the definition spelling, and inside
     // one the definition spellings error and point back here.
+    //
+    // The bucket *is* shared with the function-**type** expression `FN :{…} -> <Ret>`
+    // ([`crate::builtins::parameterized_types`]), which registers under the same key. The two are
+    // told apart by the signature slot alone: the bucket's lazy-slot entry
+    // ([`crate::machine::model::lazy_slots`]) captures only a `(…)` group raw, so a head reaches
+    // this `KEXPRESSION` slot unevaluated while a `:{…}` record type resolves and reaches the
+    // type form's `ProperType` slot.
     let declaration_sig = || {
         sig(
             KType::ANY,
