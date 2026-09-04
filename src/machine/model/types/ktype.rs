@@ -22,7 +22,7 @@ use super::kkind::KKind;
 use super::node::TypeNode;
 use super::record::Record;
 use super::registry::TypeRegistry;
-use super::sig_schema::SigSchema;
+use super::sig_schema::{SigSchema, render_keyworded_head, sorted_keyworded};
 use super::type_digest::{TypeDigest, empty_schema_digest};
 use smallvec::SmallVec;
 
@@ -93,7 +93,7 @@ impl KType {
     pub const DICT_ANY_ANY: KType = KType(TypeDigest(0xf9b9d64d_aa69edda_e7a59f82_4e0f5015));
     /// The empty signature — top of the module lattice, the type `:Module` lowers to. It
     /// constrains nothing, so every module value satisfies it.
-    pub const EMPTY_SIGNATURE: KType = KType(TypeDigest(0x1660d74d_20447364_cde2f1b9_3ed245f6));
+    pub const EMPTY_SIGNATURE: KType = KType(TypeDigest(0x55ecc11f_39d3a140_69bc313b_aa2d1ed2));
 
     /// The type-accepting slot admitting `kind` — one of the pre-seeded `OfKind` handles.
     pub const fn of_kind(kind: KKind) -> KType {
@@ -402,6 +402,19 @@ fn write_sig_schema(
         }
         write!(f, "{}: ", display_label(*name, registries))?;
         kt.write_name(f, registries)?;
+    }
+    // Keyworded members follow the named ones, each as the head shape declaring it. They are keyed
+    // by a call shape rather than a name, so they sort by the schema's canonical key order rather
+    // than by member text.
+    let mut written = members.len();
+    for (key, overloads) in sorted_keyworded(schema) {
+        for overload in overloads {
+            if written > 0 {
+                f.write_str(", ")?;
+            }
+            f.write_str(&render_keyworded_head(key, *overload, registries))?;
+            written += 1;
+        }
     }
     f.write_str(")")
 }

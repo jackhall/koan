@@ -32,8 +32,11 @@ use crate::machine::model::KeyElement;
 use crate::machine::model::KeywordSymbol;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{
-    BinderSymbol, Carried, KObject, KType, ReductionMode, TypeSymbol, ValueSymbol, render_label,
+    BinderSymbol, Carried, KObject, KType, ReductionMode, TypeSymbol, ValueSymbol,
+    render_keyworded_head, render_label,
 };
+use allocator_api2::vec::Vec as AllocVec;
+use std::mem::ManuallyDrop;
 
 /// What an ascription decides about a view's members once the newborn view scope's id — the
 /// generativity nonce every per-call mint folds in — is known. Handed to
@@ -335,6 +338,53 @@ impl<'a> Scope<'a> {
             }));
         }
         slots.borrow_mut().insert(name, ktype);
+        Ok(())
+    }
+
+    /// Record a SIG keyworded member: append `fn_type` to `key`'s overload set in the nearest
+    /// enclosing SIG decl scope's keyworded collector — [`Self::write_sig_slot`]'s twin for
+    /// the dispatch-bucket half of the interface. A second declaration of the *same* key at the
+    /// *same* type is a `Rebind`, the keyworded reading of the duplicate-slot rule; a same-key
+    /// declaration at a different type is an overload and joins the set. Like a value slot, a
+    /// keyworded member is a schema entry rather than a binding: it takes no [`BindingIndex`],
+    /// claims no dispatch bucket, and touches no binding map.
+    ///
+    /// The key run is bumped into the SIG scope's own region on first use, so the collector's own
+    /// storage stays region-hosted and a probe against a caller's owned key needs no copy.
+    pub(crate) fn write_sig_keyworded(
+        &self,
+        key: &[KeyElement],
+        fn_type: crate::machine::model::KType,
+        registries: &RunRegistries,
+    ) -> Result<(), KError> {
+        let outside_sig = || {
+            KError::new(KErrorKind::ShapeError(
+                "keyworded member outside a SIG body reached the member door".to_string(),
+            ))
+        };
+        let target = self.nearest_opaque().ok_or_else(outside_sig)?;
+        let ScopeKind::Sig { keyworded, .. } = &target.kind else {
+            return Err(outside_sig());
+        };
+        target.assert_open(key);
+        if let Some(overloads) = keyworded.borrow().get(key)
+            && overloads.contains(&fn_type)
+        {
+            return Err(KError::new(KErrorKind::Rebind {
+                name: render_keyworded_head(key, fn_type, registries),
+            }));
+        }
+        let mut table = keyworded.borrow_mut();
+        if let Some(overloads) = table.get_mut(key) {
+            overloads.push(fn_type);
+            return Ok(());
+        }
+        // First declaration under this key: the run is bumped once, here, and every later overload
+        // under it probes against the stored run without materializing a key of its own.
+        let stored = target.brand().allocator().slice(key);
+        let mut overloads = ManuallyDrop::new(AllocVec::new_in(target.brand().allocator()));
+        overloads.push(fn_type);
+        table.insert(stored, overloads);
         Ok(())
     }
 

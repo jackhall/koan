@@ -11,7 +11,7 @@ use crate::machine::model::{Argument, BinderSymbol, KType, SignatureElement, Sym
 use crate::machine::{KError, KErrorKind, Scope};
 use crate::witnessed::BumpVec;
 
-use super::{arg, kw, sig};
+use super::{arg, arg_labeled, kw, sig};
 
 use crate::machine::BoundArgs;
 use crate::machine::model::RunRegistries;
@@ -36,34 +36,75 @@ pub(crate) fn build_fn_like<'a>(
     use finalize::defer;
     use return_type::extract_return_type_raw;
 
-    // The combined form binds a value name, and a SIG body declares members with `VAL` rather than
-    // binding them. Guarded here, ahead of any deferral, so the synchronous and dep-finish paths
-    // are covered once. A bare `FN` names no value binding, so it is unaffected.
-    if let FnKind::Function {
-        bound_name: Some(name),
-    } = kind
-        && ctx.scope.is_in_sig_body()
-    {
-        let name = crate::machine::model::render_label(name.symbol(), ctx.registries);
-        return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
-            "inside a SIG body, value slots must use VAL — write `(VAL {name}: <Type>)` \
+    // Which FN surfaces a SIG body admits. A SIG declares members rather than defining them, so a
+    // definition of either spelling is refused there and pointed at its declarator: the combined
+    // form at `VAL`, the bare form at the bodyless head. The declaration is the mirror — it records
+    // into a signature under construction, so outside one it has nothing to record into. Guarded
+    // here, ahead of any deferral, so the synchronous and dep-finish paths are covered once.
+    let in_sig_body = ctx.scope.is_in_sig_body();
+    match kind {
+        FnKind::Function {
+            bound_name: Some(name),
+        } if in_sig_body => {
+            let name = crate::machine::model::render_label(name.symbol(), ctx.registries);
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "inside a SIG body, value slots must use VAL — write `(VAL {name}: <Type>)` \
                  instead of binding a function",
-        )))));
+            )))));
+        }
+        FnKind::Function { bound_name: None } if in_sig_body => {
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(
+                "inside a SIG body, a keyworded member is declared rather than defined — drop \
+                 the `= (<body>)` and write `(FN (<head>) -> <Return>)`"
+                    .to_string(),
+            ))));
+        }
+        FnKind::Declaration if !in_sig_body => {
+            return Action::done(Err(KError::new(KErrorKind::ShapeError(
+                "a bodyless FN head declares a SIG member and is only valid inside a SIG body — \
+                 write `FN (<head>) -> <Return> = (<body>)` to define a function"
+                    .to_string(),
+            ))));
+        }
+        _ => {}
     }
     let signature_expr =
         crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.signature));
-    let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args, ctx.scope.brand()));
-    let body_expr = crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.body));
-    let param_names = signature::collect_param_names_from_signature(&signature_expr, ctx.scratch);
+    // A declaration has no body slot to read; the empty expression stands in for one, and the
+    // declaration leg of the finalize never looks at it.
+    let body_expr = match kind {
+        FnKind::Declaration => crate::machine::model::KExpression::new(ctx.scope.brand(), &[]),
+        _ => crate::try_action!(require_kexpression(ctx.args, builtin, &SLOTS.body)),
+    };
     let mut elaborator = Elaborator::new(ctx.scope).with_chain(ctx.chain.clone());
-    let return_type_state = crate::try_action!(classify_return_type(
-        return_type_raw,
-        &param_names,
-        ctx.scope,
-        ctx.chain.clone(),
-        "FN return-type slot",
-        ctx.registries,
-    ));
+    // A definition's return slot captures raw, because it may name a parameter and has to survive
+    // verbatim to the per-call boundary. A declaration's cannot: there is no call to elaborate it
+    // at, so its slot is an ordinary kind expectation the lane resolves against the SIG body's own
+    // scope — which is what lets `-> Carrier` read the signature's abstract member.
+    let return_type_state = match kind {
+        FnKind::Declaration => match ctx.args.ktype(&SLOTS.return_type) {
+            Some(ret) => return_type::ReturnTypeState::Done(ret),
+            None => {
+                return Action::done(Err(KError::new(KErrorKind::MissingArg(
+                    "return_type".to_string(),
+                ))));
+            }
+        },
+        _ => {
+            let return_type_raw =
+                crate::try_action!(extract_return_type_raw(ctx.args, ctx.scope.brand()));
+            let param_names =
+                signature::collect_param_names_from_signature(&signature_expr, ctx.scratch);
+            crate::try_action!(classify_return_type(
+                return_type_raw,
+                &param_names,
+                ctx.scope,
+                ctx.chain.clone(),
+                "FN return-type slot",
+                ctx.registries,
+            ))
+        }
+    };
     let params = match signature::parse_fn_param_list(
         &signature_expr,
         &mut elaborator,
@@ -118,6 +159,16 @@ pub(crate) fn build_fn_like<'a>(
 /// [`body_record_schema`].
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Action<'a> {
     build_fn_like(ctx, "FN", FnKind::Function { bound_name: None })
+}
+
+/// `FN (<head>) -> <Return>` — the bodyless head, SIG-body-only, which declares a keyworded
+/// (dispatch-bucket) member of the signature under construction rather than defining a function.
+/// Same head shape and same parse path as the definition form, so the bucket key and the slot types
+/// derive identically for a declaration and the definition that satisfies it.
+pub fn body_sig_declaration<'a>(
+    ctx: &crate::machine::BodyCtx<'_, 'a, '_>,
+) -> crate::machine::Action<'a> {
+    build_fn_like(ctx, "FN", FnKind::Declaration)
 }
 
 /// The `name` slot of a combined `LET <name> = …` statement, as the symbol the parse minted —
@@ -331,8 +382,39 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             ],
         )
     };
+    // The SIG-body declaration form: `FN (<head>) -> <Return>`, with no `=` / body slots. Full
+    // bucket-key matching keeps `[FN, Slot, ->, Slot]` disjoint from every definition spelling, so
+    // the two never compete — the shorter key simply is not the longer one. The body guards the
+    // rest: outside a SIG body this form errors and points at the definition spelling, and inside
+    // one the definition spellings error and point back here.
+    let declaration_sig = || {
+        sig(
+            KType::ANY,
+            vec![
+                kw(registries, "FN"),
+                arg(registries, &SLOTS.signature, KType::KEXPRESSION),
+                kw(registries, "->"),
+                // An ordinary kind expectation, not the definition form's raw-carrier union: a
+                // declared member's return resolves once, where it is written. `AnyType` admits
+                // every type value, a signature return included.
+                arg_labeled(
+                    registries,
+                    &SLOTS.return_type,
+                    KType::of_kind(KKind::AnyType),
+                    "SIG keyworded member return type",
+                ),
+            ],
+        )
+    };
     use crate::builtins::register_builtin;
     register_builtin(scope, keyworded_sig(), body, registries, gate);
+    register_builtin(
+        scope,
+        declaration_sig(),
+        body_sig_declaration,
+        registries,
+        gate,
+    );
     register_builtin(scope, record_sig(), body_record_schema, registries, gate);
     register_builtin(scope, combined_sig(), body_let_combined, registries, gate);
 }

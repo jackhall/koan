@@ -900,12 +900,14 @@ digraph {
     "koan::machine::model::types::sig_schema" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::machine::model::types::node" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
+    "koan::machine::model::types::sig_schema" -> "koan::machine::model::types::signature" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
+    "koan::machine::model::types::signature" -> "koan::machine::model::types::node" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::labels" [label="uses", style="dashed"];

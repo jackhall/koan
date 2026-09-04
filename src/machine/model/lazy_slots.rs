@@ -250,6 +250,16 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
         ],
         slots: &[(1, CODE), (3, TYPE_EXPR.with(RECORD_TYPE)), (5, CODE)],
     },
+    // FN <signature> -> <return type> — the key the SIG-body keyworded declarator shares with the
+    // function-*type* expression `FN :{…} -> <Ret>`. Only the head captures raw: a `(<head>)` run is
+    // the declarator's own operand and must reach it unevaluated, while a `:{…}` parameter record is
+    // untouched by `CODE` and resolves for the type form as it always has. The return slot stages on
+    // both surfaces — the type form needs a resolved type, and a declared member's return is a
+    // proper type by the same rule.
+    LazySlotSpec {
+        key: &[Kw(&KEYWORDS.fn_), Slot, Kw(&KEYWORDS.arrow), Slot],
+        slots: &[(1, CODE)],
+    },
     // LET <name> = FN <signature> -> <return type> = <body>
     LazySlotSpec {
         key: &[

@@ -33,8 +33,8 @@ use super::ktype::KType;
 use super::node::{NodeSchema, TypeNode};
 use super::record::Record;
 use super::registry::TypeRegistry;
-use super::sig_schema::SigSchema;
-use super::signature::DeferredReturnSurface;
+use super::sig_schema::{SigSchema, sorted_keyworded};
+use super::signature::{DeferredReturnSurface, KeyElement};
 use smallvec::SmallVec;
 
 /// A `KType`'s content identity: the low 128 bits of a BLAKE3 hash of its content.
@@ -381,6 +381,25 @@ pub(crate) fn schema_content_digest(schema: &SigSchema, types: &TypeRegistry) ->
         schema,
         types,
     );
+
+    // Keyworded members: each key's element sequence, then its overload set. Keys feed in the
+    // schema's canonical order and overloads in theirs, so the map's hash order never reaches the
+    // digest. A key element is a keyword's symbol or the slot marker.
+    let keyworded = sorted_keyworded(schema);
+    h.count(keyworded.len());
+    for (key, overloads) in keyworded {
+        h.count(key.len());
+        for element in key {
+            match element {
+                KeyElement::Keyword(symbol) => h.byte(1).symbol(symbol.symbol()),
+                KeyElement::Slot => h.byte(0),
+            };
+        }
+        h.count(overloads.len());
+        for overload in overloads {
+            h.digest(canonical_type_digest(*overload, schema, types));
+        }
+    }
     h.finish()
 }
 
@@ -395,6 +414,7 @@ pub(crate) fn empty_schema_digest() -> TypeDigest {
     h.count(0); // abstract_members
     h.count(0); // manifest_members (feed_named_types header)
     h.count(0); // value_slots (feed_named_types header)
+    h.count(0); // keyworded members
     h.finish()
 }
 

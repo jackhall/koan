@@ -47,6 +47,10 @@ type FinalizedFn<'a> = (
 ///   value name; the two writes describe one `KFunction` at one `BindingIndex`.
 /// - `Anonymous` — a record-schema binder (`FN :{…}`) has no keyword, so it
 ///   registers nothing; the value it evaluates to is its only handle.
+/// - `Declaration` — a SIG body's bodyless `FN (<head>) -> <Return>`, which builds no callable at
+///   all: it records the head's bucket key and `(params) -> ret` type as a keyworded member of the
+///   signature under construction. It rides this path so a declaration and a definition derive
+///   their key and slot types through one parse.
 ///
 /// `bound_name` is the symbol the `name` slot captured — the one the parse minted — so the kind
 /// carries no borrow and stays `Copy`.
@@ -56,6 +60,7 @@ pub(crate) enum FnKind {
         bound_name: Option<crate::machine::model::ValueSymbol>,
     },
     Anonymous,
+    Declaration,
 }
 
 /// Local mirror of [`ParamListOutcome`] minus the structural-error variant
@@ -288,6 +293,10 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     check_distinct_parameter_names(elements, registries)?;
     check_value_type_kinds(elements, &return_type, registries)?;
 
+    if let FnKind::Declaration = kind {
+        return finalize_declaration(scope, elements, return_type, registries);
+    }
+
     // First Keyword keys the data table. Dispatch is by full signature via
     // `Bindings::functions`; `Bindings::data` is for discoverability /
     // shadow-by-name, neither of which has a single right answer for a
@@ -316,7 +325,8 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // land, so nothing between here and there needs a buffer of its own.
     let mut overload_write: Option<WriteOp<'a>> = None;
     let bound_name = match kind {
-        FnKind::Anonymous => None,
+        // A declaration never reaches here: it returns above, before any callable is built.
+        FnKind::Anonymous | FnKind::Declaration => None,
         FnKind::Function { bound_name } => {
             if !has_dispatch_keyword {
                 return Err(KError::new(KErrorKind::ShapeError(
@@ -348,6 +358,59 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         sealed: cell.duplicate(),
     });
     Ok((cell.unseal(), [overload_write, value_write]))
+}
+
+/// The [`FnKind::Declaration`] leg of [`finalize_fn_with_kind`]: record the head as a keyworded
+/// member of the SIG under construction. No callable is built — a declaration has no body — so the
+/// step's own carrier is the declared `(params) -> ret` type, uniform with what a `VAL` slot hands
+/// back.
+///
+/// Two shapes are rejected here rather than at the ascription that would meet them. A head with no
+/// fixed token has no bucket to declare (the same rule a definition's registration applies), and a
+/// return type that names a parameter (`-> er.Carrier`) is a *per-call* elaboration: a declaration
+/// has no call to elaborate it at, so the member would have no type. Everything else — the
+/// proper-type checks over parameters and return — already ran on the shared path above.
+fn finalize_declaration<'a>(
+    scope: &'a Scope<'a>,
+    elements: &[SignatureElement],
+    return_type: ReturnType<'a>,
+    registries: &RunRegistries,
+) -> Result<FinalizedFn<'a>, KError> {
+    if !elements
+        .iter()
+        .any(|e| matches!(e, SignatureElement::Keyword(_)))
+    {
+        return Err(KError::new(KErrorKind::ShapeError(
+            "a SIG keyworded member must contain at least one Keyword (a fixed token to \
+             dispatch on) — write `(VAL <name>: <FnType>)` to declare a function value member"
+                .to_string(),
+        )));
+    }
+    let ReturnType::Resolved(ret) = return_type else {
+        return Err(KError::new(KErrorKind::ShapeError(format!(
+            "the return type of a SIG keyworded member must be a type, but `{}` names a \
+             parameter and resolves per call — a declaration has no call to resolve it at",
+            return_type.name(registries),
+        ))));
+    };
+    let params =
+        crate::machine::model::Record::from_pairs(elements.iter().filter_map(
+            |element| match element {
+                SignatureElement::Argument(argument) => Some((argument.name, argument.ktype)),
+                SignatureElement::Keyword(_) => None,
+            },
+        ));
+    let fn_type = registries.types.function_type(params, ret);
+    Ok((
+        scope.resident(Carried::Type(fn_type)),
+        [
+            Some(WriteOp::SigKeyworded {
+                key: crate::machine::model::untyped_key_of(elements),
+                fn_type,
+            }),
+            None,
+        ],
+    ))
 }
 
 /// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed

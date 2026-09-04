@@ -13,6 +13,7 @@ use crate::machine::core::RegionBrand;
 use crate::machine::model::ast::{ExpressionPart, KExpression, WorkingPart};
 
 use super::ktype::{KType, display_label};
+use super::node::TypeNode;
 use super::registry::TypeRegistry;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner, TypeSymbol};
@@ -21,10 +22,13 @@ use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, LabelInterner, 
 /// `Copy` and lifetime-free, so a key run is the same type whether it sits in a `Vec` a caller
 /// hands around or in a slice bumped into a region — one type, one derived `Hash`, and equality is
 /// a tag plus a `u128` compare with no text to walk.
-#[derive(Eq, PartialEq, Clone, Copy, Hash, Debug)]
+/// `Ord` is the canonical order a schema's keyworded members sort by — a slot before any keyword,
+/// keywords by their symbol's digest bits. Arbitrary as an order over call shapes, stable across
+/// runs, and never an interner index, which is all a canonical sort needs.
+#[derive(Eq, PartialEq, Clone, Copy, Hash, Debug, PartialOrd, Ord)]
 pub enum KeyElement {
-    Keyword(KeywordSymbol),
     Slot,
+    Keyword(KeywordSymbol),
 }
 
 /// Bucket key produced by both `ExpressionSignature::untyped_key` and
@@ -207,6 +211,72 @@ pub enum Specificity {
     StrictlyLess,
     Equal,
     Incomparable,
+}
+
+/// **The specificity lattice**: fold a sequence of per-position `(left, right)` type pairs into the
+/// verdict for the whole shape. One position where the left type refines the right pulls toward
+/// `StrictlyMore`, one where the right refines the left toward `StrictlyLess`, both together are
+/// `Incomparable`, and neither is `Equal`.
+///
+/// The one implementation of the rule. [`ExpressionSignature::specificity_vs`] feeds it the
+/// argument slots of two co-bucket call shapes, positionally; [`fn_type_specificity`] feeds it two
+/// declared function types' parameters, by name. Pairing differs because the two carriers key their
+/// positions differently; the ranking must not, which is why it lives here rather than in either
+/// caller.
+pub fn specificity_over(
+    pairs: impl Iterator<Item = (KType, KType)>,
+    registries: &RunRegistries,
+) -> Specificity {
+    let mut any_more = false;
+    let mut any_less = false;
+    for (left, right) in pairs {
+        if left.is_more_specific_than(right, registries) {
+            any_more = true;
+        } else if right.is_more_specific_than(left, registries) {
+            any_less = true;
+        }
+    }
+    match (any_more, any_less) {
+        (true, false) => Specificity::StrictlyMore,
+        (false, true) => Specificity::StrictlyLess,
+        (false, false) => Specificity::Equal,
+        (true, true) => Specificity::Incomparable,
+    }
+}
+
+/// [`ExpressionSignature::specificity_vs`] over two `KFunction` **types** — the verdict the
+/// signature-satisfaction check ranks a keyworded member's candidate overloads by, computed from
+/// the declared types alone with no live callable in hand.
+///
+/// Parameters pair **by name**, over the names both types carry: names are a function type's own
+/// keys, and a candidate's names are a subset of the declared member's by the time satisfaction
+/// asks. A name only one side declares constrains nothing and contributes no position, exactly as a
+/// fixed-token position contributes none to `specificity_vs`. Return types are excluded, because
+/// dispatch never selects on them.
+///
+/// Anything that is not a pair of function types is `Incomparable` — no position compares, so
+/// neither dominates.
+pub fn fn_type_specificity(left: KType, right: KType, registries: &RunRegistries) -> Specificity {
+    let types = &registries.types;
+    // Owns: the pairs are folded after both node reads close, so they cannot borrow either node.
+    let pairs: Option<Vec<(KType, KType)>> = types.with_node(left, |left_node| {
+        types.with_node(right, |right_node| match (left_node, right_node) {
+            (TypeNode::KFunction { params: lp, .. }, TypeNode::KFunction { params: rp, .. }) => {
+                Some(
+                    lp.iter()
+                        .filter_map(|(name, lt)| rp.get(name.symbol()).map(|rt| (*lt, *rt)))
+                        .collect(),
+                )
+            }
+            _ => None,
+        })
+    });
+    match pairs {
+        // A shape with no argument slot compares `Equal` — the same verdict `specificity_vs`
+        // reaches for two all-keyword call shapes, which is what an empty fold means.
+        Some(pairs) => specificity_over(pairs.into_iter(), registries),
+        None => Specificity::Incomparable,
+    }
 }
 
 /// A callable's call shape at rest: a bumped run of elements plus a `return_type`. Every field is
@@ -484,23 +554,18 @@ impl<'a> ExpressionSignature<'a> {
         other: &ExpressionSignature<'a>,
         registries: &RunRegistries,
     ) -> Specificity {
-        let mut any_more = false;
-        let mut any_less = false;
-        for (a, b) in self.elements().iter().zip(other.elements().iter()) {
-            if let (SignatureElement::Argument(aa), SignatureElement::Argument(bb)) = (a, b) {
-                if aa.ktype.is_more_specific_than(bb.ktype, registries) {
-                    any_more = true;
-                } else if bb.ktype.is_more_specific_than(aa.ktype, registries) {
-                    any_less = true;
-                }
-            }
-        }
-        match (any_more, any_less) {
-            (true, false) => Specificity::StrictlyMore,
-            (false, true) => Specificity::StrictlyLess,
-            (false, false) => Specificity::Equal,
-            (true, true) => Specificity::Incomparable,
-        }
+        specificity_over(
+            self.elements()
+                .iter()
+                .zip(other.elements().iter())
+                .filter_map(|(a, b)| match (a, b) {
+                    (SignatureElement::Argument(aa), SignatureElement::Argument(bb)) => {
+                        Some((aa.ktype, bb.ktype))
+                    }
+                    _ => None,
+                }),
+            registries,
+        )
     }
 
     /// Pairwise specificity tournament across co-bucket signatures. Returns `Some(i)` iff

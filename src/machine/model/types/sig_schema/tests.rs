@@ -83,6 +83,7 @@ fn schema(
             .into_iter()
             .map(|(n, k)| (value_name(n, registries), k))
             .collect(),
+        keyworded: KeywordedMembers::default(),
     }
 }
 
@@ -1251,6 +1252,306 @@ fn join_meets_an_ungeneralizable_function_parameter() {
     assert_eq!(
         joined.value_slots.get(&value_name("apply", &registries)),
         Some(&fn_type(vec![("x", KType::NEVER)], KType::BOOL, types))
+    );
+    assert_upper_bound(&a, &b, &joined, &registries);
+}
+
+// --- keyworded members ----------------------------------------------------------------
+
+/// A bucket key spelled out: `_` is an argument slot, anything else a fixed token.
+fn key(spelling: &[&str]) -> UntypedKey {
+    spelling
+        .iter()
+        .map(|part| match *part {
+            "_" => KeyElement::Slot,
+            token => crate::builtins::test_support::key_keyword(token),
+        })
+        .collect()
+}
+
+/// [`schema`] with a keyworded member table, each entry stored in canonical overload order the way
+/// every production projection stores one.
+fn keyworded_schema(
+    sig_id: Option<ScopeId>,
+    abstract_members: Vec<(&str, KType)>,
+    value_slots: Vec<(&str, KType)>,
+    keyworded: Vec<(UntypedKey, Vec<KType>)>,
+    registries: &RunRegistries,
+) -> SigSchema {
+    let mut built = schema(sig_id, abstract_members, vec![], value_slots, registries);
+    built.keyworded = keyworded
+        .into_iter()
+        .map(|(k, overloads)| (k, canonical_overloads(overloads)))
+        .collect();
+    built
+}
+
+#[test]
+fn keyworded_members_are_part_of_signature_identity() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let bare = keyworded_schema(None, vec![], vec![], vec![], &registries);
+    let with_member = keyworded_schema(
+        None,
+        vec![],
+        vec![],
+        vec![(
+            key(&["PURE", "_"]),
+            vec![fn_type(vec![("x", KType::NUMBER)], KType::NUMBER, types)],
+        )],
+        &registries,
+    );
+    assert_ne!(types.signature(bare), types.signature(with_member.clone()));
+    // Content addressing: an independently built equal schema is the same interned type.
+    let rebuilt = keyworded_schema(
+        None,
+        vec![],
+        vec![],
+        vec![(
+            key(&["PURE", "_"]),
+            vec![fn_type(vec![("x", KType::NUMBER)], KType::NUMBER, types)],
+        )],
+        &registries,
+    );
+    assert_eq!(types.signature(with_member), types.signature(rebuilt));
+}
+
+#[test]
+fn a_declared_overload_differing_only_in_return_is_a_distinct_interface() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let of = |ret| {
+        types.signature(keyworded_schema(
+            None,
+            vec![],
+            vec![],
+            vec![(
+                key(&["PURE", "_"]),
+                vec![fn_type(vec![("x", KType::NUMBER)], ret, types)],
+            )],
+            &registries,
+        ))
+    };
+    assert_ne!(of(KType::NUMBER), of(KType::STR));
+}
+
+#[test]
+fn pinning_an_abstract_member_folds_through_a_keyworded_overload() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let carrier = sig_abstract(SUP_ID, "Carrier", &registries);
+    let declared = keyworded_schema(
+        Some(SUP_ID),
+        vec![("Carrier", carrier)],
+        vec![],
+        vec![(
+            key(&["PURE", "_"]),
+            vec![fn_type(vec![("x", carrier)], carrier, types)],
+        )],
+        &registries,
+    );
+    let pinned = declared.fold_pins(&[(type_name("Carrier", &registries), KType::NUMBER)], types);
+    assert_eq!(
+        pinned.keyworded.get(&key(&["PURE", "_"])),
+        Some(&vec![fn_type(
+            vec![("x", KType::NUMBER)],
+            KType::NUMBER,
+            types
+        )])
+    );
+}
+
+#[test]
+fn a_pin_that_collapses_two_overloads_leaves_one() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let carrier = sig_abstract(SUP_ID, "Carrier", &registries);
+    let declared = keyworded_schema(
+        Some(SUP_ID),
+        vec![("Carrier", carrier)],
+        vec![],
+        vec![(
+            key(&["PURE", "_"]),
+            vec![
+                fn_type(vec![("x", carrier)], carrier, types),
+                fn_type(vec![("x", KType::NUMBER)], KType::NUMBER, types),
+            ],
+        )],
+        &registries,
+    );
+    let pinned = declared.fold_pins(&[(type_name("Carrier", &registries), KType::NUMBER)], types);
+    assert_eq!(
+        pinned.keyworded.get(&key(&["PURE", "_"])).map(Vec::len),
+        Some(1),
+        "two overloads that became identical under the pin are one overload",
+    );
+}
+
+#[test]
+fn a_missing_bucket_and_an_unsatisfied_one_read_apart() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let declared = fn_type(vec![("x", KType::NUMBER)], KType::NUMBER, types);
+    let sup = keyworded_schema(
+        None,
+        vec![],
+        vec![],
+        vec![(key(&["PURE", "_"]), vec![declared])],
+        &registries,
+    );
+    let empty = keyworded_schema(None, vec![], vec![], vec![], &registries);
+    assert!(matches!(
+        check(&empty, &sup, &registries),
+        Err(SigSubtypeFailure::MissingKeyworded { .. })
+    ));
+    let wrong = keyworded_schema(
+        None,
+        vec![],
+        vec![],
+        vec![(
+            key(&["PURE", "_"]),
+            vec![fn_type(vec![("x", KType::NUMBER)], KType::STR, types)],
+        )],
+        &registries,
+    );
+    assert!(matches!(
+        check(&wrong, &sup, &registries),
+        Err(SigSubtypeFailure::KeywordedMismatch { .. })
+    ));
+}
+
+#[test]
+fn satisfaction_picks_the_most_specific_overload_and_rejects_a_tie() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let sup = keyworded_schema(
+        None,
+        vec![],
+        vec![],
+        vec![(
+            key(&["PURE", "_", "_"]),
+            vec![fn_type(
+                vec![("x", KType::NUMBER), ("y", KType::NUMBER)],
+                KType::NUMBER,
+                types,
+            )],
+        )],
+        &registries,
+    );
+    let ordered = keyworded_schema(
+        None,
+        vec![],
+        vec![],
+        vec![(
+            key(&["PURE", "_", "_"]),
+            vec![
+                fn_type(
+                    vec![("x", KType::ANY), ("y", KType::ANY)],
+                    KType::NUMBER,
+                    types,
+                ),
+                fn_type(
+                    vec![("x", KType::NUMBER), ("y", KType::NUMBER)],
+                    KType::NUMBER,
+                    types,
+                ),
+            ],
+        )],
+        &registries,
+    );
+    assert!(check(&ordered, &sup, &registries).is_ok());
+    let tied = keyworded_schema(
+        None,
+        vec![],
+        vec![],
+        vec![(
+            key(&["PURE", "_", "_"]),
+            vec![
+                fn_type(
+                    vec![("x", KType::ANY), ("y", KType::NUMBER)],
+                    KType::NUMBER,
+                    types,
+                ),
+                fn_type(
+                    vec![("x", KType::NUMBER), ("y", KType::ANY)],
+                    KType::NUMBER,
+                    types,
+                ),
+            ],
+        )],
+        &registries,
+    );
+    assert!(matches!(
+        check(&tied, &sup, &registries),
+        Err(SigSubtypeFailure::AmbiguousKeyworded { .. })
+    ));
+}
+
+#[test]
+fn a_declared_overload_reads_through_the_subs_binding_of_an_abstract_member() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let carrier = sig_abstract(SUP_ID, "Carrier", &registries);
+    let sup = keyworded_schema(
+        Some(SUP_ID),
+        vec![("Carrier", carrier)],
+        vec![],
+        vec![(
+            key(&["PURE", "_"]),
+            vec![fn_type(vec![("x", carrier)], carrier, types)],
+        )],
+        &registries,
+    );
+    let mut sub = keyworded_schema(
+        None,
+        vec![],
+        vec![],
+        vec![(
+            key(&["PURE", "_"]),
+            vec![fn_type(vec![("x", KType::NUMBER)], KType::NUMBER, types)],
+        )],
+        &registries,
+    );
+    sub.manifest_members
+        .insert(type_name("Carrier", &registries), KType::NUMBER);
+    assert!(check(&sub, &sup, &registries).is_ok());
+    sub.manifest_members
+        .insert(type_name("Carrier", &registries), KType::STR);
+    assert!(matches!(
+        check(&sub, &sup, &registries),
+        Err(SigSubtypeFailure::KeywordedMismatch { .. })
+    ));
+}
+
+#[test]
+fn the_join_keeps_a_shared_key_and_drops_a_one_sided_one() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let of = |slot_type, extra: bool| {
+        let mut entries = vec![(
+            key(&["PURE", "_"]),
+            vec![fn_type(vec![("x", slot_type)], slot_type, types)],
+        )];
+        if extra {
+            entries.push((key(&["RESET"]), vec![fn_type(vec![], KType::NULL, types)]));
+        }
+        keyworded_schema(None, vec![], vec![], entries, &registries)
+    };
+    let a = of(KType::NUMBER, true);
+    let b = of(KType::STR, false);
+    let joined = join_schemas(&a, &b, types);
+    assert!(
+        !joined.keyworded.contains_key(&key(&["RESET"])),
+        "a key only one operand names drops",
+    );
+    assert_eq!(
+        joined.keyworded.get(&key(&["PURE", "_"])),
+        Some(&vec![fn_type(
+            vec![("x", KType::NEVER)],
+            types.join(KType::NUMBER, KType::STR),
+            types
+        )]),
+        "the shared key's overload joins covariantly and meets its parameter",
     );
     assert_upper_bound(&a, &b, &joined, &registries);
 }

@@ -29,7 +29,7 @@ pub use types::{
     DeferredReturnSurface, DispatchToken, DispatchTokenElement, ExpressionSignature, KKind, KType,
     KeyElement, NodeSchema, Parseable, PendingMember, Record, RecursiveGroupWindow, RelativeSchema,
     ReturnType, SealedAnnounced, SealedGroup, SignatureDraft, SignatureElement, TypeNode,
-    UntypedKey, WindowView, is_keyword_token,
+    UntypedKey, WindowView, fn_type_specificity, is_keyword_token, render_keyworded_head,
 };
 pub use types::{
     CaptureShape, CaptureShapes, capture_footprint, capture_shape_of, carrier_union_error,

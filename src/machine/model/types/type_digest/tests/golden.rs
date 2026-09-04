@@ -10,6 +10,7 @@
 //! component under the per-SCC member-identity recipe, so its presentation is byte-identical
 //! there. The one exception is called out at its own fixture.
 
+use crate::machine::model::types::sig_schema::KeywordedMembers;
 use std::collections::HashMap;
 
 use super::super::{TypeDigest, empty_schema_digest, schema_content_digest};
@@ -188,6 +189,7 @@ fn mixed_schema(types: &TypeRegistry, wrap_params: Vec<&str>) -> SigSchema {
         .collect(),
         manifest_members: TypeMemberMap::default(),
         value_slots: HashMap::default(),
+        keyworded: KeywordedMembers::default(),
     }
 }
 
@@ -310,12 +312,12 @@ fn empty_signature_digests_are_pinned() {
     assert_pinned(
         "empty schema content",
         empty_schema_digest(),
-        0xca37d6c1_0e957006_5c08a0d2_ad8b02f8,
+        0x52566807_c53f61b3_e9635215_bd621432,
     );
     assert_handle_pinned(
         "empty signature",
         types.signature(SigSchema::empty()),
-        0x1660d74d_20447364_cde2f1b9_3ed245f6,
+        0x55ecc11f_39d3a140_69bc313b_aa2d1ed2,
     );
 }
 
@@ -459,16 +461,16 @@ fn schema_abstract_member_digests_are_pinned() {
     assert_pinned(
         "schema with higher-kinded Wrap",
         schema_content_digest(&mixed_schema(types, vec!["Inner", "Outer"]), types),
-        0xa840be7d_0e0e19e2_4b6cca13_32304af0,
+        0xabcf11f0_f5b340f9_c855712d_f61abd44,
     );
     assert_pinned(
         "schema with Wrap's parameters reordered",
         schema_content_digest(&mixed_schema(types, vec!["Outer", "Inner"]), types),
-        0xa840be7d_0e0e19e2_4b6cca13_32304af0,
+        0xabcf11f0_f5b340f9_c855712d_f61abd44,
     );
     assert_pinned(
         "schema with first-order Wrap",
         schema_content_digest(&mixed_schema(types, Vec::new()), types),
-        0x76aa2294_c71a336a_eb294e3b_bd0abfc9,
+        0x97f9fa18_ecac105c_fc74e68c_cac3fea3,
     );
 }

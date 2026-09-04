@@ -5,8 +5,10 @@ use std::rc::{Rc, Weak};
 use crate::machine::DeliveredOperatorGroup;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::{AnnouncedData, AnnouncedWindow};
-use crate::machine::model::{IdentityBuildHasher, KType, TypeSymbol, ValueSymbol};
-use crate::witnessed::{And, RegionHandle, SealedExtern};
+use crate::machine::model::{
+    IdentityBuildHasher, KType, KeyElement, TypeSymbol, UntypedKey, ValueSymbol,
+};
+use crate::witnessed::{And, BumpAllocator, RegionHandle, SealedExtern};
 
 use super::arena::{FrameStorage, KoanRegion, RegionBrand};
 use super::bindings::{Bindings, bump_table};
@@ -116,6 +118,17 @@ impl<'a> ScopeBindings<'a> {
 ///
 /// Neither `Clone` nor `Debug`: `Sig`'s slot collector is a live `RefCell` that must not be
 /// silently duplicated, and nothing prints a kind.
+/// A SIG decl scope's keyworded-member collector: bumped bucket key run → the overloads declared
+/// under it. The [`ScopeKind::Sig`] twin of the VAL slot collector.
+pub(crate) type SigKeywordedTable<'a> = BumpBackedMap<'a, &'a [KeyElement], SigOverloads<'a>>;
+
+/// One key's declared overload types, in a vec whose buffer is bump-backed like every other
+/// scope-hosted allocation. `ManuallyDrop` for the reason a dispatch bucket carries it: a `KType` is
+/// a `Copy` handle with no glue, and the buffer is bump memory the region releases whole, so running
+/// the vec's destructor would be pure waste — and suppressing it is what keeps the collector storable
+/// in a bump-backed table.
+pub(crate) type SigOverloads<'a> = ManuallyDrop<allocator_api2::vec::Vec<KType, BumpAllocator<'a>>>;
+
 pub enum ScopeKind<'a> {
     Root,
     Anonymous,
@@ -136,6 +149,17 @@ pub enum ScopeKind<'a> {
     Sig {
         name: TypeSymbol,
         slots: RefCell<ManuallyDrop<BumpBackedMap<'a, ValueSymbol, KType, IdentityBuildHasher>>>,
+        /// The keyworded-member collector, the slot collector's twin for the dispatch-bucket half
+        /// of the interface: a bodyless `FN (<head>) -> <Return>` records its bucket key → the
+        /// declared overload's `(params) -> ret` type here. One key holds several overloads, so the
+        /// value is a run rather than a single type. Keyed on a bumped `&'a [KeyElement]` for the
+        /// same reason [`Bindings`](crate::machine::core::bindings::Bindings)' `functions` table is
+        /// — a `KeyElement` is `Copy` and lifetime-free, so a probe needs no owned key.
+        ///
+        /// Bump-backed and `ManuallyDrop`-wrapped like `slots`, and for the same reason: neither the
+        /// key run nor the overload run owns anything the region does not release whole, so the
+        /// suppressed destructors had nothing to do and this variant still contributes no drop glue.
+        keyworded: RefCell<ManuallyDrop<SigKeywordedTable<'a>>>,
     },
     /// A MODULE body (also the per-ascription view minted by `:|`). `group` is `Some` for a `GROUP`
     /// body — a group *is* a module — naming the one [`OperatorGroup`] record its member `OP`
@@ -300,6 +324,7 @@ impl<'a> Scope<'a> {
             ScopeKind::Sig {
                 name,
                 slots: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),
+                keyworded: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),
             },
         )
     }
@@ -721,6 +746,21 @@ impl<'a> Scope<'a> {
                 .borrow()
                 .iter()
                 .map(|(name, kt)| (*name, *kt))
+                .collect(),
+            ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::Module { .. } => Vec::new(),
+        }
+    }
+
+    /// Snapshot of every `(bucket key, declared overload types)` pair — the keyworded half of the
+    /// schema projection's read, and [`Self::sig_value_slots`]' twin. The bumped key run is copied
+    /// into an owned [`UntypedKey`] here, at the one boundary where the collector's content leaves
+    /// the region. Empty for any scope that is not a SIG decl_scope.
+    pub(crate) fn sig_keyworded_members(&self) -> Vec<(UntypedKey, Vec<KType>)> {
+        match &self.kind {
+            ScopeKind::Sig { keyworded, .. } => keyworded
+                .borrow()
+                .iter()
+                .map(|(key, overloads)| (key.to_vec(), overloads.to_vec()))
                 .collect(),
             ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::Module { .. } => Vec::new(),
         }

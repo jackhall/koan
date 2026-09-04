@@ -26,6 +26,7 @@ mod param_type;
 mod record_types;
 mod region_liveness;
 mod return_type;
+mod sig_declaration;
 mod tail_region_turnover;
 
 use crate::builtins::test_support::TestRun;

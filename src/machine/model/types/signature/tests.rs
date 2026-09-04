@@ -413,3 +413,65 @@ fn a_dispatch_token_renders_its_keywords_and_slot_types() {
         "fn(TAKE :Number :Any)",
     );
 }
+
+/// The two specificity doors agree: ranking two co-bucket overloads by their live call shapes and
+/// ranking them by their `(params) -> ret` types reach the same verdict, which is what lets the
+/// signature-satisfaction check select an overload the way dispatch would.
+#[test]
+fn fn_type_specificity_agrees_with_the_live_signature_verdict() {
+    let registries = RunRegistries::new();
+    let program = program_storage();
+    let brand = program.brand().region();
+    let labels = &registries.labels;
+    let shape = |x: KType, y: KType| {
+        ExpressionSignature::mint(
+            brand,
+            ReturnType::Resolved(KType::ANY),
+            &[
+                SignatureElement::keyword("PURE", labels),
+                SignatureElement::Argument(Argument::new(
+                    crate::machine::model::BinderSymbol::classify("x").expect("value token"),
+                    x,
+                )),
+                SignatureElement::Argument(Argument::new(
+                    crate::machine::model::BinderSymbol::classify("y").expect("value token"),
+                    y,
+                )),
+            ],
+        )
+    };
+    let as_type = |signature: &ExpressionSignature<'_>| {
+        registries.types.function_type(
+            crate::machine::model::Record::from_slice(signature.params()),
+            KType::ANY,
+        )
+    };
+    let cases = [
+        (KType::NUMBER, KType::NUMBER, KType::ANY, KType::ANY),
+        (KType::ANY, KType::ANY, KType::NUMBER, KType::NUMBER),
+        (KType::NUMBER, KType::NUMBER, KType::NUMBER, KType::NUMBER),
+        (KType::NUMBER, KType::ANY, KType::ANY, KType::NUMBER),
+    ];
+    for (ax, ay, bx, by) in cases {
+        let a = shape(ax, ay);
+        let b = shape(bx, by);
+        assert_eq!(
+            fn_type_specificity(as_type(&a), as_type(&b), &registries),
+            a.specificity_vs(&b, &registries),
+        );
+    }
+}
+
+/// A shape with no argument slot has nothing to rank on, so two of them are `Equal` — the same
+/// verdict `specificity_vs` reaches for two all-keyword call shapes.
+#[test]
+fn fn_type_specificity_of_two_slotless_shapes_is_equal() {
+    let registries = RunRegistries::new();
+    let empty = registries
+        .types
+        .function_type(crate::machine::model::Record::new(), KType::NULL);
+    assert_eq!(
+        fn_type_specificity(empty, empty, &registries),
+        Specificity::Equal
+    );
+}

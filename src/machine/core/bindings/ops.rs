@@ -25,8 +25,8 @@ use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{
-    KType, KeywordSymbol, LabelInterner, RunRegistries, TypeSymbol, ValueSymbol, render_label,
-    render_untyped_key,
+    KType, KeywordSymbol, LabelInterner, RunRegistries, TypeSymbol, UntypedKey, ValueSymbol,
+    render_label, render_untyped_key,
 };
 
 /// How a [`WriteOp::Type`] meets an existing `types[name]`: `Insert` is strict insert-if-absent (a
@@ -86,6 +86,11 @@ pub(crate) enum WriteOp<'a> {
     /// A `VAL` slot into the nearest enclosing SIG decl scope's slot collector. A slot is a schema
     /// entry, not a binding — it takes no [`BindingIndex`] and touches no binding map.
     SigSlot { name: ValueSymbol, kt: KType },
+    /// A keyworded member into the nearest enclosing SIG decl scope's keyworded collector — the
+    /// bodyless `FN` declarator's write, and [`WriteOp::SigSlot`]'s twin. `fn_type` is the declared
+    /// overload's `(params) -> ret` type; a same-key declaration at a different type joins the
+    /// key's overload set rather than replacing it.
+    SigKeyworded { key: UntypedKey, fn_type: KType },
 }
 
 impl<'a> WriteOp<'a> {
@@ -162,6 +167,9 @@ impl<'a> WriteOp<'a> {
                 Ok(())
             }
             WriteOp::SigSlot { name, kt } => scope.write_sig_slot(name, kt, registries),
+            WriteOp::SigKeyworded { key, fn_type } => {
+                scope.write_sig_keyworded(&key, fn_type, registries)
+            }
         }
     }
 }

@@ -9,6 +9,7 @@ use crate::machine::model::Record;
 use crate::machine::model::Scalar;
 use crate::machine::model::TypeMemberMap;
 use crate::machine::model::ast::{ExpressionPart, WorkingPart};
+use crate::machine::model::types::sig_schema::KeywordedMembers;
 use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 
 /// Mint the zero-dep fold door a `Tagged`/`Wrapped` test value needs, over a fresh root region, as
@@ -659,6 +660,7 @@ fn is_more_specific_for_pinned_signature_bound() {
         value_slots: [(value_name("a", &registries), KType::NUMBER)]
             .into_iter()
             .collect(),
+        keyworded: KeywordedMembers::default(),
     };
     let hashed_schema = SigSchema {
         sig_id: Some(crate::machine::core::ScopeId::SENTINEL),
@@ -667,6 +669,7 @@ fn is_more_specific_for_pinned_signature_bound() {
         value_slots: [(value_name("b", &registries), KType::NUMBER)]
             .into_iter()
             .collect(),
+        keyworded: KeywordedMembers::default(),
     };
 
     let type_sym = type_name("Type", &registries);

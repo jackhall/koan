@@ -43,8 +43,8 @@ pub use resolver::{
     finalize_nominal_member, seal_writes, type_name_miss,
 };
 pub use sig_schema::{
-    CoercionTables, MemberCoercion, SigSchema, TypeMemberMap, constructor_param_names, sig_subtype,
-    substitute_sig_members, unsaturated_constructor_message,
+    CoercionTables, MemberCoercion, SigSchema, TypeMemberMap, constructor_param_names,
+    render_keyworded_head, sig_subtype, substitute_sig_members, unsaturated_constructor_message,
 };
 #[allow(unused_imports)]
 pub use signature::Specificity;
@@ -52,7 +52,7 @@ pub use signature::most_specific_ktype;
 pub use signature::{
     Argument, DeferredReturn, DeferredReturnSurface, DispatchToken, DispatchTokenElement,
     ExpressionSignature, KeyElement, ReturnType, SignatureDraft, SignatureElement, UntypedKey,
-    is_keyword_token,
+    fn_type_specificity, is_keyword_token,
 };
 pub(crate) use signature::{render_untyped_key, summarize_dispatch, untyped_key_of};
 pub(crate) use type_digest::{TypeDigest, empty_schema_digest};
