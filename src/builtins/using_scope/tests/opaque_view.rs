@@ -5,7 +5,8 @@
 //! ([`Scope::open_module_window`](crate::machine::Scope)), so this needs no machinery of its own —
 //! the view's scope is born holding coerced member values, and the block reads that same table.
 //! These pin that equivalence for a first-order slot, an applied-constructor slot, and a
-//! function-typed slot called inside the block.
+//! function-typed slot called inside the block — and, on the keyworded channel, that the window
+//! surfaces only the dispatch buckets the view's signature declares.
 
 use crate::builtins::test_support::TestRun;
 use crate::machine::KErrorKind;
@@ -111,5 +112,35 @@ fn window_over_a_transparent_view_stays_concrete() {
         matches!(result, KObject::Number(n) if *n == 1.0),
         "a transparent window's read stays at the source's applied type, got {}",
         result.summary(test_run.registries()),
+    );
+}
+
+/// The **keyworded channel** the window borrows is the view's own, and a view surfaces only the
+/// buckets its signature declares. So a call whose key the signature omits is not shadowed by the
+/// module inside the window — it walks on out to the enclosing scope's overload, while the same
+/// window over the *source* module resolves the module's.
+#[test]
+fn a_window_over_a_view_surfaces_only_the_declared_buckets() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    test_run.run(
+        "SIG Tagged = ((VAL tag :Number))\n\
+         MODULE tagged_m = ((LET tag = 1) (FN (HIDE x :Number) -> Number = (1)))\n\
+         LET view = (tagged_m :| Tagged)\n\
+         FN (HIDE x :Number) -> Number = (99)",
+    );
+
+    let outer = test_run.run_one(test_run.parse_one("USING view SCOPE (HIDE 5)"));
+    assert!(
+        matches!(outer, KObject::Number(n) if *n == 99.0),
+        "an undeclared bucket is absent from the view, so the window shadows nothing, got {}",
+        outer.summary(test_run.registries()),
+    );
+    let inner = test_run.run_one(test_run.parse_one("USING tagged_m SCOPE (HIDE 5)"));
+    assert!(
+        matches!(inner, KObject::Number(n) if *n == 1.0),
+        "the source module's own window still shadows the enclosing overload, got {}",
+        inner.summary(test_run.registries()),
     );
 }

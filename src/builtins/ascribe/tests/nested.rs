@@ -375,16 +375,18 @@ fn a_returned_view_keeps_its_nested_member_alive() {
     );
     // The path is re-homed into the nested view's own region; reading it walks that storage.
     assert!(!inner.path.is_empty());
-    // The member the nested replay coerced, and the width extra it replayed verbatim — both read
-    // out of the nested scope's binding table.
+    // The member the nested replay coerced, read out of the nested scope's own binding table.
     let one = inner
         .child_scope()
         .lookup("one")
         .expect("the nested view carries its `one` member");
     assert_eq!(one.ktype(), elt);
-    let extra = inner
+    // A name the nested signature never declared is not in that table; the nested view's parent
+    // *is* the source module's child scope, so the walk falls through into the source's own
+    // storage — the far end of the region the pin has to keep, reached from the returned value.
+    let source_side = inner
         .child_scope()
         .lookup("extra")
-        .expect("the nested view replays the source's width");
-    assert!(matches!(extra, KObject::Number(n) if *n == 42.0));
+        .expect("the nested view's parent chain reaches the source module's bindings");
+    assert!(matches!(source_side, KObject::Number(n) if *n == 42.0));
 }

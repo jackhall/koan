@@ -602,8 +602,9 @@ captured-scope group above; the tests below pin the **module** shape — a funct
 surviving the run that built it, an **opaque-ascription view** whose path, member map and coerced
 member values are read back out of the dead call region that bumped them, and a
 **transparent-ascription view**, the
-one value shape whose residence and the scope it borrows are different regions (the view is re-tagged
-into the ascribing call's own region while its child scope stays where the source module put it). A borrow leaf is never
+one value shape whose residence and the storage its members reach are different regions (the view's
+scope is allocated under the ascribing call while the seals it replayed keep borrowing the source
+module's region). A borrow leaf is never
 rebuilt, so a relocation carrying one out of a dying frame must keep the region it *lives* in, not the
 one it borrows; a release claim derived from the child scope frees the storage the returned value
 points at, which only tree borrows observes — a normal build reads the freed bytes back intact.
@@ -621,13 +622,21 @@ A **nested-signature slot** adds a fourth leaf: its member is rebuilt as an opaq
 table, a type table, a re-homed path and a self-sig, all bumped into the **source** module's region
 from inside the coercion fold's closure and only pointed at from the outer view's.
 `a_returned_view_keeps_its_nested_member_alive` walks that storage — the nested type table, the path
-bytes, the coerced member and the width extra — after the minting frame is gone.
+bytes, the coerced member, and the source binding its parent chain falls through to — after the
+minting frame is gone.
+
+A view's **keyworded members** put the wrapper leaf on the dispatch lane as well: a declared bucket
+member that coerces is installed as the same `coerce_function` callable, born in the source module's
+region and sealed into the view scope's bucket. `a_returned_views_keyworded_member_stays_callable`
+dispatches into it through a `USING` window after the minting frame is gone, so the pin is exercised
+from the resolution path rather than from a by-name read.
 
 - `functor_application_is_generative`
 - `a_returned_transparent_view_keeps_the_region_it_was_minted_in`
 - `functor_application_mints_distinct_abstract_types`
 - `a_returned_opaque_view_keeps_every_coerced_member_alive`
 - `a_returned_view_keeps_its_nested_member_alive`
+- `a_returned_views_keyworded_member_stays_callable`
 
 **Record escape seam — cost-driven copy vs pin** ([src/machine/execute/lift.rs](../src/machine/execute/lift.rs))
 — two distinct seams relocate a top-level `Record` out of a dying producer, each pinned here. The

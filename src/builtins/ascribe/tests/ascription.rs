@@ -297,9 +297,10 @@ fn abstract_member_bound_to_any_type_accepted() {
     );
 }
 
-/// A transparent view minted **inside a per-call frame** and returned from it. The re-tagged
-/// `Module` is allocated into the call's own region while the source module's child scope stays in
-/// the run root, so a view's residence and the scope it borrows are genuinely different regions.
+/// A transparent view minted **inside a per-call frame** and returned from it. The view's scope is
+/// allocated under the ascribing frame, so the `Module` lives in the call's own region while the
+/// member seals it replayed still borrow the source module's — a view's residence and the storage
+/// its members reach are genuinely different regions.
 /// The return crosses a relocation seam that carries the
 /// module reference verbatim (a borrow leaf is never rebuilt), so a claim that the call's region is
 /// released would free the very storage the returned value points at. Reading the view's member back
