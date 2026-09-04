@@ -1191,8 +1191,7 @@ pub fn sig_subtype(
             match select_keyworded_satisfier(
                 *declared,
                 candidates,
-                &sub_member_map,
-                sup.sig_id,
+                sup.sig_id.map(|id| (&sub_member_map, id)),
                 registries,
             ) {
                 Ok(_) => {}
@@ -1224,25 +1223,30 @@ pub fn sig_subtype(
 /// is the member the view installs.
 ///
 /// Two steps, mirroring dispatch: keep the candidates that **satisfy** the declared overload (the
-/// covariant `KFunction` rule value slots use, read through `sub_members` so a declared type
-/// referencing `sig_id`'s abstract members is compared against `sub`'s bindings for them), then rank
-/// the survivors by [`fn_type_specificity`] and take the one strictly more specific than every peer.
-/// A lone satisfier wins with no ranking.
+/// covariant `KFunction` rule value slots use), then rank the survivors by [`fn_type_specificity`]
+/// and take the one strictly more specific than every peer. A lone satisfier wins with no ranking.
+///
+/// `substitution` is how a declared type that references a binder's abstract members is read: the
+/// subtyping check passes the binder and `sub`'s bindings for its members, so the comparison runs
+/// against what the candidate side actually holds. A caller whose `declared` is already substituted
+/// into the candidates' own world — the ascription replay, which substitutes through the coercion
+/// plan's `from` side first — passes `None` and gets the plain structural rule.
 ///
 /// `Err` carries the satisfier indices: empty means nothing satisfied, two or more means an
 /// incomparable tie. Both are errors at the ascription, with the caller deciding the diagnostic.
 pub fn select_keyworded_satisfier(
     declared: KType,
     candidates: &[KType],
-    sub_members: &TypeMemberMap,
-    sig_id: Option<ScopeId>,
+    substitution: Option<(&TypeMemberMap, ScopeId)>,
     registries: &RunRegistries,
 ) -> Result<usize, Vec<usize>> {
     let satisfiers: Vec<usize> = candidates
         .iter()
         .enumerate()
-        .filter(|(_, candidate)| match sig_id {
-            Some(id) => slot_satisfied_by(declared, **candidate, sub_members, id, registries),
+        .filter(|(_, candidate)| match substitution {
+            Some((members, id)) => {
+                slot_satisfied_by(declared, **candidate, members, id, registries)
+            }
             None => declared.satisfied_by(**candidate, registries),
         })
         .map(|(index, _)| index)

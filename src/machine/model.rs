@@ -57,7 +57,8 @@ pub(crate) use close_inference::infer_close_captures;
 pub(crate) use miss_diagnostics::{diagnose_miss, key_is_reserved};
 /// Re-exported for the ascription builtin; `TypeDigest` also for the recursive-type test units.
 pub(crate) use types::{
-    CoercionTables, MemberCoercion, TypeDigest, sig_subtype, substitute_sig_members,
+    CoercionTables, KeywordedMembers, MemberCoercion, TypeDigest, canonical_overloads,
+    select_keyworded_satisfier, sig_subtype, substitute_sig_members,
 };
 pub(crate) use types::{
     Elaborator, FieldListContext, FieldListOutcome, FieldNameKind, FieldParts, ResultFeed,
@@ -67,6 +68,7 @@ pub(crate) use types::{
     unsaturated_constructor_message,
 };
 pub(crate) use values::{
-    CarriedFamily, Module, ModuleDraft, NamedPairs, RegionEscape, coerce_object_into, copy_or_pin,
-    copy_or_pin_callable, object_copy_cost, relocate_object_into, retains_home,
+    CarriedFamily, Module, ModuleDraft, NamedPairs, RegionEscape, coerce_function_cell,
+    coerce_object_into, copy_or_pin, copy_or_pin_callable, object_copy_cost, relocate_object_into,
+    retains_home,
 };

@@ -43,8 +43,10 @@ pub use resolver::{
     finalize_nominal_member, seal_writes, type_name_miss,
 };
 pub use sig_schema::{
-    CoercionTables, MemberCoercion, SigSchema, TypeMemberMap, constructor_param_names,
-    render_keyworded_head, sig_subtype, substitute_sig_members, unsaturated_constructor_message,
+    CoercionTables, KeywordedMembers, MemberCoercion, SigSchema, TypeMemberMap,
+    canonical_overloads, constructor_param_names, render_keyworded_head,
+    select_keyworded_satisfier, sig_subtype, substitute_sig_members,
+    unsaturated_constructor_message,
 };
 #[allow(unused_imports)]
 pub use signature::Specificity;

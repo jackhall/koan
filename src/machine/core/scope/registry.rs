@@ -33,7 +33,7 @@ use crate::machine::model::KeywordSymbol;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::{
     BinderSymbol, Carried, KObject, KType, ReductionMode, TypeSymbol, ValueSymbol,
-    render_keyworded_head, render_label,
+    coerce_function_cell, render_keyworded_head, render_label, select_keyworded_satisfier,
 };
 use allocator_api2::vec::Vec as AllocVec;
 use std::mem::ManuallyDrop;
@@ -47,14 +47,51 @@ pub(crate) struct ViewMembers {
     /// The view's own type members, seeded into its `types` table: a per-call mint per abstract
     /// member of the ascribed signature, plus each manifest member at its fixed type.
     pub(crate) types: Vec<(TypeSymbol, KType)>,
+    /// Every value slot the signature declares — the replay's membership filter. A source member
+    /// this does not name is absent from the view, which is what makes an ascription a narrowing:
+    /// width lives in the *matching* relation, never in the view the match produces.
+    pub(crate) declared_values:
+        std::collections::HashSet<ValueSymbol, crate::machine::model::IdentityBuildHasher>,
     /// SIG value-slot name → the slot's **declared** type, for every member whose value has to be
     /// rewritten as the replay installs it. The declared type is the coercion walk's root; a slot
-    /// whose two substitutions agree is absent, and its member replays verbatim.
+    /// whose two substitutions agree is absent, and its member replays verbatim. A subset of
+    /// `declared_values`.
     pub(crate) coerced_slots:
         std::collections::HashMap<ValueSymbol, KType, crate::machine::model::IdentityBuildHasher>,
+    /// The signature's declared keyworded members, by bucket key — the replay's dispatch-surface
+    /// plan. A key absent here is absent from the view; a key present publishes one entry per
+    /// declared overload, at the overload the source's bucket satisfies it with.
+    pub(crate) keyworded: crate::machine::model::KeywordedMembers,
     /// The two member bindings every coerced slot is rewritten between — the source module's, and
     /// the view's own mints.
     pub(crate) coercion: crate::machine::model::MemberCoercion,
+}
+
+impl ViewMembers {
+    /// The plan a signature dictates, given the view's own type members and the member coercion
+    /// they induce. Both ascription boundaries build through here — the outer view
+    /// ([`crate::builtins::ascribe`]) and a nested signature slot's own view — so the two cannot
+    /// drift on what a view surfaces or on which members are born coerced.
+    pub(crate) fn of_schema(
+        schema: &crate::machine::model::SigSchema,
+        types: Vec<(TypeSymbol, KType)>,
+        coercion: crate::machine::model::MemberCoercion,
+        registries: &RunRegistries,
+    ) -> ViewMembers {
+        let tables = coercion.tables(&registries.types);
+        ViewMembers {
+            types,
+            declared_values: schema.value_slots.keys().copied().collect(),
+            coerced_slots: schema
+                .value_slots
+                .iter()
+                .filter(|(_, declared)| tables.coerces(**declared, &registries.types))
+                .map(|(name, declared)| (*name, *declared))
+                .collect(),
+            keyworded: schema.keyworded.clone(),
+            coercion,
+        }
+    }
 }
 
 impl<'a> Scope<'a> {
@@ -460,19 +497,26 @@ impl<'a> Scope<'a> {
         .apply(self, registries, gate)
     }
 
-    /// Allocate an ascription view's scope under `outer`, replay `source`'s bindings into it —
-    /// value entries and dispatch buckets both, so the view preserves the source module's keyworded
-    /// surface as-is — and seed the view's own type members, all from the [`ViewMembers`] `plan`
-    /// decides once the newborn scope's id (the generativity nonce a per-call abstract mint folds
+    /// Allocate an ascription view's scope under `outer`, fill it from `source` with exactly the
+    /// members the [`ViewMembers`] `plan` declares, and seed the view's own type members — all
+    /// decided once the newborn scope's id (the generativity nonce a per-call abstract mint folds
     /// in) is known. The seeded `types` table *is* the view's type interface: what the table does
     /// not hold — the source's representation types behind an abstract member — is unreachable
     /// through the view by construction.
     ///
-    /// A member the plan names is **born coerced**: the replayed entry is not the source's seal but
-    /// a value rewritten into this scope's region so it inhabits the view's types
-    /// ([`Scope::seal_coerced_member`]). Every other member — and every non-SIG member — replays as
-    /// pure seal duplication. Coercing here rather than at each read is what makes ATTR, a `USING`
-    /// window over this same table, a dynamic read, and a functor's deferred return agree by
+    /// **The view is a narrowing.** A source member the plan does not name is absent from all three
+    /// channels: an undeclared value binding is dropped by the replay, an undeclared dispatch
+    /// bucket is never installed, and a declared bucket publishes only the overloads its declared
+    /// members select. Width subtyping is a property of the matching relation — a module with extra
+    /// members still satisfies — never of the view the match produces.
+    ///
+    /// A member the plan names is **born coerced** where the coercion tables say its declared type
+    /// crosses the barrier: the installed entry is not the source's seal but a value rewritten into
+    /// this scope's region so it inhabits the view's types ([`Scope::seal_coerced_member`] for a
+    /// value slot, a [`coerce_function_cell`](crate::machine::model::coerce_function_cell) wrapper
+    /// for a keyworded member). Every other member replays as pure seal duplication. Coercing here
+    /// rather than at each read is what makes ATTR, a `USING` window over this same table, a
+    /// dynamic read, a dispatched keyworded call, and a functor's deferred return agree by
     /// construction.
     ///
     /// Born-inside-the-door like [`Self::alloc_group_child`]: the view scope is returned only once
@@ -491,13 +535,19 @@ impl<'a> Scope<'a> {
             source.bindings(),
             registries,
             &mut WriteGate::for_unpublished_scope(),
-            |name, sealed| match members.coerced_slots.get(&name) {
-                Some(declared) => {
-                    view.seal_coerced_member(source, sealed, *declared, &tables, registries)
+            |name, sealed| {
+                if !members.declared_values.contains(&name) {
+                    return None;
                 }
-                None => sealed,
+                Some(match members.coerced_slots.get(&name) {
+                    Some(declared) => {
+                        view.seal_coerced_member(source, sealed, *declared, &tables, registries)
+                    }
+                    None => sealed,
+                })
             },
         )?;
+        view.install_keyworded_surface(source, &members, &tables, registries)?;
         // A view's type member is installed by the ascription, not by a declaration statement
         // running in the view scope, so it takes the born-with-the-scope site.
         for (name, ktype) in members.types {
@@ -510,6 +560,81 @@ impl<'a> Scope<'a> {
             )?;
         }
         Ok(view)
+    }
+
+    /// Publish the view's dispatch surface: for each keyworded member the plan declares, the
+    /// overload `source`'s bucket satisfies it with, installed at the types the view reads it at.
+    ///
+    /// The selection is [`select_keyworded_satisfier`] — the same resolution the satisfaction check
+    /// ran, over the declared type substituted into the *source's* vocabulary, so a member the
+    /// check admitted is a member this finds. It genuinely re-runs here rather than riding along
+    /// from the check: satisfaction is memoized per (module, signature) content pair, so the
+    /// verdict that admitted this module may have been reached for another value entirely.
+    ///
+    /// A declared overload whose type crosses the barrier publishes a wrapper — bound against its
+    /// own substituted signature, so dispatch and argument validation admit the view's types, and
+    /// coercing in and out per call — and one that does not publishes the source's seal verbatim.
+    /// Either way the entry rests **here**, which pins the underlying's region for the view's life.
+    /// Two declared overloads may legitimately select one source overload; the pair they install
+    /// under is what dedupes them, so the bucket takes each distinct published shape once.
+    fn install_keyworded_surface(
+        &'a self,
+        source: &'a Scope<'a>,
+        members: &ViewMembers,
+        tables: &crate::machine::model::CoercionTables,
+        registries: &RunRegistries,
+    ) -> Result<(), KError> {
+        let types = &registries.types;
+        for (key, entries) in source.bindings().iter_function_entries() {
+            let Some(declared_overloads) = members.keyworded.get(&key) else {
+                continue;
+            };
+            // The probe form: each candidate's `(params) -> ret` type read under a confined
+            // re-anchor, with only the `Copy` handle leaving the open.
+            let candidates: Vec<KType> = entries
+                .iter()
+                .map(|(_, sealed)| source.read_function(sealed, |function| function.value_ktype()))
+                .collect();
+            let mut published: Vec<(usize, Option<KType>)> = Vec::new();
+            for declared in declared_overloads {
+                let source_side = tables.substitute_from(*declared, types);
+                let Ok(pick) =
+                    select_keyworded_satisfier(source_side, &candidates, None, registries)
+                else {
+                    // Satisfaction decided this before the view was allocated, over the same
+                    // candidates and the same relation, so a gap here is a construction bug rather
+                    // than a program error — and a silent one, since the member would simply be
+                    // missing from the view.
+                    debug_assert!(
+                        false,
+                        "a satisfied signature selects an overload per member"
+                    );
+                    continue;
+                };
+                let wrapped = tables
+                    .coerces(*declared, types)
+                    .then(|| tables.substitute_to(*declared, types));
+                if published.contains(&(pick, wrapped)) {
+                    continue;
+                }
+                published.push((pick, wrapped));
+                let (index, sealed) = &entries[pick];
+                let cell = match wrapped {
+                    Some(_) => {
+                        let underlying = source.open_function(sealed).value();
+                        coerce_function_cell(underlying, *declared, tables, registries)
+                    }
+                    None => source.lift_resident(sealed.duplicate()),
+                };
+                self.register_function_direct(
+                    &cell,
+                    *index,
+                    registries,
+                    &mut WriteGate::for_unpublished_scope(),
+                )?;
+            }
+        }
+        Ok(())
     }
 
     /// Allocate the `GROUP` binder's group record and child scope, and pre-register the member

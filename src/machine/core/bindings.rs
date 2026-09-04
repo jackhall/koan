@@ -185,18 +185,6 @@ pub(crate) struct FunctionBucketEntry<'a> {
     pub(crate) sealed: SealedFunction<'a>,
 }
 
-impl<'a> FunctionBucketEntry<'a> {
-    /// A bit-copy of the entry, for the bulk-install snapshot — like [`DataEntry::duplicate`]. The
-    /// bumped run copies as the borrow it is; only the seal needs a verb.
-    fn duplicate(&self) -> Self {
-        FunctionBucketEntry {
-            index: self.index,
-            token: self.token,
-            sealed: self.sealed.duplicate(),
-        }
-    }
-}
-
 /// One operator-registry entry: its lexical [`BindingIndex`], the dormant
 /// [`SealedOperatorGroup`] carrier of the group record the probe key resolves to, and the plain
 /// data the upsert decides identity on — all of it computed at seal time
@@ -1135,83 +1123,79 @@ impl<'a> Bindings<'a> {
         Ok(())
     }
 
-    /// Replay another `Bindings`'s `data` entries through [`Self::write_value`] on self, and
-    /// its `functions` entries by direct duplication — a view of a module preserves the
-    /// module's keyworded dispatch surface as-is (keyword → keyword), it does not re-derive it from
-    /// the value bindings. There is nothing to filter: the source's maps hold committed bindings
-    /// only, and its claims live in a store this never reads. That is the point — a claim names an
-    /// edge of the source's own scheduler run, so a copied one would hand the target a park on a
-    /// node that will never wake it, and keeping claims out of the maps makes that unrepresentable
-    /// rather than filtered. The `types` table is not replayed: a view's type interface is its own, seeded by
+    /// Replay another `Bindings`'s `data` entries through [`Self::write_value`] on self. The
+    /// source's claims are not replayed: a claim names an edge of the source's own scheduler run,
+    /// so a copied one would hand the target a park on a node that will never wake it, and keeping
+    /// claims out of the maps makes that unrepresentable rather than filtered. The `types` table is
+    /// not replayed either — a view's type interface is its own, seeded by
     /// [`Scope::alloc_module_view`](crate::machine::core::Scope) from the ascribed signature rather
-    /// than inherited from the source. Snapshots the source maps and releases the source `Ref`
+    /// than inherited from the source. Snapshots the source map and releases the source `Ref`
     /// before the replay so re-entrant ascription cannot deadlock.
     ///
-    /// `install` is the per-value-member hook the replay writes through. It is the identity for a
-    /// plain duplication and, for an opaque view, the door that rewrites a SIG-declared member
-    /// across the ascription barrier so the view's scope is **born holding coerced values** — the
-    /// reason every read surface over that table (ATTR, a `USING` window, a dynamic read) reports
-    /// the view's types without patching the read.
+    /// `install` is the per-value-member hook the replay writes through, and it decides membership:
+    /// `None` drops the member, which is how an ascription view surfaces only the value slots its
+    /// signature declares. A `Some` is the identity for a plain duplication and, for an opaque
+    /// view, the door that rewrites a SIG-declared member across the ascription barrier so the
+    /// view's scope is **born holding coerced values** — the reason every read surface over that
+    /// table (ATTR, a `USING` window, a dynamic read) reports the view's types without patching the
+    /// read.
+    ///
+    /// The dispatch buckets are the caller's own lane: an ascription selects, per declared
+    /// keyworded member, which source overload the view publishes and at which types
+    /// ([`Scope::alloc_module_view`](crate::machine::core::Scope)), so there is no
+    /// whole-bucket duplication for this door to perform.
     pub(crate) fn bulk_install_from(
         &self,
         src: &Bindings<'a>,
         registries: &RunRegistries,
         gate: &mut WriteGate,
-        mut install: impl FnMut(ValueSymbol, SealedValue<'a>) -> SealedValue<'a>,
+        mut install: impl FnMut(ValueSymbol, SealedValue<'a>) -> Option<SealedValue<'a>>,
     ) -> Result<(), KError> {
         // Duplicate each entry into the snapshot: each seal is a bit-copy naming the source's own
         // minted description, so the replayed entry replays that same claim. The reached regions
         // stay owned by the *source* scope's region union — the replay target's own region must
-        // already outlive it (a bulk install is same-run re-entrant ascription). The snapshot's
-        // keys are `Copy` borrows into the source's region and outlive the `Ref` they were read
-        // under, so nothing is cloned to release the borrow. The `data` keys are `Copy` digests
-        // and borrow nothing at all.
-        let (data, functions) = {
+        // already outlive it (a bulk install is same-run re-entrant ascription). The `data` keys
+        // are `Copy` digests and borrow nothing at all, so nothing is cloned to release the borrow.
+        let data: Vec<(ValueSymbol, DataEntry)> = {
             let tables = src.tables.borrow();
-            let data: Vec<(ValueSymbol, DataEntry)> = tables
+            tables
                 .data
                 .iter()
                 .map(|(k, entry)| (*k, entry.duplicate()))
-                .collect();
-            let functions: Vec<(&[KeyElement], Vec<FunctionBucketEntry<'a>>)> = tables
-                .functions
-                .iter()
-                .filter_map(|(key, bucket)| {
-                    let sealed: Vec<FunctionBucketEntry<'a>> =
-                        bucket.iter().map(FunctionBucketEntry::duplicate).collect();
-                    (!sealed.is_empty()).then_some((*key, sealed))
-                })
-                .collect();
-            (data, functions)
+                .collect()
         };
         for (name, entry) in data {
-            let sealed = install(name, entry.sealed);
-            self.write_value(name, entry.index, sealed, registries, gate)?;
-        }
-        let mut tables = self.tables.borrow_mut();
-        for (key, slots) in functions {
-            // The key is re-homed into *this* table's region. It buys no independence from the
-            // source region and is not trying to: everything else a replayed entry carries — the
-            // sealed carrier, the dispatch token — stays a borrow into the source, which is sound
-            // for the reason stated at the snapshot above, and is why re-homing the key is symmetry
-            // rather than a guard. The relation is held by **retention, not by `'a`**: `'a` covers both
-            // regions and orders neither, but the view module escaping
-            // [`Scope::alloc_module_view`](crate::machine::core::Scope) composes the source
-            // module's reach into its own region, so the source is pinned for as long as the view
-            // is reachable at all. A read of the source's bytes past its death is therefore
-            // unrepresentable rather than merely unobserved.
-            match tables.functions.get_mut(key) {
-                Some(bucket) => bucket.extend(slots),
-                None => {
-                    let mut bucket = bump_bucket(self.brand);
-                    bucket.extend(slots);
-                    tables
-                        .functions
-                        .insert(self.brand.allocator().slice(key), bucket);
-                }
+            if let Some(sealed) = install(name, entry.sealed) {
+                self.write_value(name, entry.index, sealed, registries, gate)?;
             }
         }
         Ok(())
+    }
+
+    /// Snapshot every dispatch bucket with each overload's [`BindingIndex`] beside its seal — the
+    /// ascription replay's read, which re-registers a chosen overload at the lexical position the
+    /// source published it at. [`Self::iter_functions`]'s index-carrying twin; the visibility a
+    /// bucket entry gates on is the source's, so a view's window sees its members exactly where
+    /// the source's own body did.
+    ///
+    /// Each seal is a bit-copy and the keys are owned runs, so the `tables` borrow is released
+    /// before the caller opens anything — which it must be, since re-anchoring a callable to read
+    /// its type re-enters the source's own doors.
+    pub(crate) fn iter_function_entries(
+        &self,
+    ) -> Vec<(UntypedKey, Vec<(BindingIndex, SealedFunction<'a>)>)> {
+        self.tables
+            .borrow()
+            .functions
+            .iter()
+            .filter_map(|(key, bucket)| {
+                let entries: Vec<(BindingIndex, SealedFunction<'a>)> = bucket
+                    .iter()
+                    .map(|entry| (entry.index, entry.sealed.duplicate()))
+                    .collect();
+                (!entries.is_empty()).then(|| (key.to_vec(), entries))
+            })
+            .collect()
     }
 
     /// The `data` write path: commit `name` → `sealed` as a bind-once value binding. Probes for a

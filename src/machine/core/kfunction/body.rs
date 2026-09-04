@@ -151,10 +151,8 @@ pub enum Body<'a> {
     /// delegates to it, and coerces the result **outward** to the view's types.
     ///
     /// `underlying` is a plain borrow, not a sealed carrier: the wrapper is born at the
-    /// underlying's own captured scope
-    /// ([`KFunction::alloc_captured_resident`](crate::machine::core::KFunction::alloc_captured_resident)),
-    /// so both callables live in that one region and the reference is the same same-region borrow
-    /// `KFunction::captured` already is.
+    /// underlying's own captured scope, so both callables live in that one region and the reference
+    /// is the same same-region borrow `KFunction::captured` already is.
     ///
     /// `declared` is the SIG-declared FN slot type, in the signature's own vocabulary — the type
     /// the coercion walk recurses on, per parameter and for the return. `coercion` binds the

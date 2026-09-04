@@ -15,6 +15,7 @@ mod named_pairs;
 mod rehomed;
 
 pub use carried::{Carried, CarriedFamily, Held};
+pub(crate) use coerce::coerce_function_cell;
 pub use coerce::coerce_object_into;
 pub use container_substrate::{ContainerSubstrate, PartedCell};
 pub(crate) use container_substrate::{

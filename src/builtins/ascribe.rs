@@ -13,8 +13,8 @@ use crate::machine::core::ViewMembers;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
-    KKind, MemberCoercion, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeNode, sig_subtype,
-    substitute_sig_members,
+    KKind, MemberCoercion, RecursiveGroupWindow, RelativeSchema, SigSchema, TypeNode,
+    canonical_overloads, sig_subtype, substitute_sig_members,
 };
 use crate::machine::model::{KObject, Module, ModuleDraft};
 use crate::machine::model::{TypeMemberMap, TypeSymbol, ValueSymbol};
@@ -217,14 +217,15 @@ fn source_member_bindings(
     })
 }
 
-/// The view's members, decided once its scope id is known: the seeded type members, the two member
-/// bindings a coerced read is rewritten between, and the SIG value slots whose members have to be
-/// rewritten at all.
+/// The view's members, decided once its scope id is known: the seeded type members and the two
+/// member bindings a coerced read is rewritten between, handed to
+/// [`ViewMembers::of_schema`](crate::machine::core::ViewMembers) to derive what the view surfaces
+/// and which of it is born coerced.
 ///
-/// A slot is coerced exactly when its declared type substitutes differently under the two bindings
-/// — so a concrete slot (`VAL size :Number`), a manifest-typed slot, and every slot naming no
-/// abstract member replay as the source's own seal. `view_types` is [`view_type_members`]'s output,
-/// consumed here and handed on as the plan's own field.
+/// A member is coerced exactly when its declared type substitutes differently under the two
+/// bindings — so a concrete slot (`VAL size :Number`), a manifest-typed slot, and every slot or
+/// head naming no abstract member installs the source's own seal. `view_types` is
+/// [`view_type_members`]'s output, consumed here and handed on as the plan's own field.
 fn view_members(
     signature: &SigSchema,
     sig_id: ScopeId,
@@ -232,7 +233,6 @@ fn view_members(
     view_types: Vec<(TypeSymbol, KType)>,
     registries: &RunRegistries,
 ) -> ViewMembers {
-    let types = &registries.types;
     // Only the abstract members are substitution points: a manifest member is a concrete type a
     // slot names directly, never a reference the walk rewrites.
     let view_members: TypeMemberMap = view_types
@@ -240,28 +240,22 @@ fn view_members(
         .filter(|(name, _)| signature.abstract_members.contains_key(name))
         .copied()
         .collect();
-    let coercion = MemberCoercion::new(sig_id, source_members, &view_members, types);
-    let tables = coercion.tables(types);
-    let coerced_slots = signature
-        .value_slots
-        .iter()
-        .filter(|(_, declared)| tables.coerces(**declared, types))
-        .map(|(name, declared)| (*name, *declared))
-        .collect();
-    ViewMembers {
-        types: view_types,
-        coerced_slots,
-        coercion,
-    }
+    let coercion = MemberCoercion::new(sig_id, source_members, &view_members, &registries.types);
+    ViewMembers::of_schema(signature, view_types, coercion, registries)
 }
 
 /// Intern an ascription view's self-sig, from the child scope it is being built over and the
 /// members its construction gathered. The raw derivation captures the view's members; each
-/// SIG-declared value slot is then re-expressed in the view's own type members — the SIG's
-/// abstract-member references substituted by the view's bindings for them (an opaque view's
-/// per-call abstract mints, a transparent view's concrete source types). Without this a slot
-/// typed against an abstract member would read concrete off the underlying value and the view
-/// would not structurally satisfy its own signature.
+/// SIG-declared value slot and keyworded member is then re-expressed in the view's own type
+/// members — the SIG's abstract-member references substituted by the view's bindings for them (an
+/// opaque view's per-call abstract mints, a transparent view's concrete source types). Without this
+/// a member typed against an abstract member would read concrete off the underlying value and the
+/// view would not structurally satisfy its own signature.
+///
+/// The re-expression is what the view *publishes*, and it is deliberately the declared shape rather
+/// than the installed one: a bucket entry replayed verbatim may be more general than the member it
+/// was selected for, and reporting that generality would widen the view's interface past what the
+/// ascription promised.
 fn view_self_sig(
     child_scope: &Scope<'_>,
     draft: &ModuleDraft,
@@ -283,6 +277,15 @@ fn view_self_sig(
             *slot_name,
             substitute_sig_members(*declared, sig_id, &member_map, types),
         );
+    }
+    for (key, declared_overloads) in &signature.keyworded {
+        let substituted = declared_overloads
+            .iter()
+            .map(|declared| substitute_sig_members(*declared, sig_id, &member_map, types))
+            .collect();
+        view_sig
+            .keyworded
+            .insert(key.clone(), canonical_overloads(substituted));
     }
     types.signature(view_sig)
 }

@@ -158,10 +158,11 @@ fn the_coerced_list_inhabits_its_own_element_type() {
     );
 }
 
-/// Width rides through the nested coercion: a member the nested signature does not name is still
-/// present on the nested view, at its source type.
+/// **AC 4.** The nested boundary narrows on the same terms the outer one does: a member the nested
+/// signature does not name is absent from the nested view, even though the source element binds it
+/// (which is what let the element satisfy the nested signature in the first place).
 #[test]
-fn width_survives_the_nested_coercion() {
+fn the_nested_view_drops_a_member_its_signature_omits() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
@@ -174,9 +175,8 @@ fn width_survives_the_nested_coercion() {
         .get(&value_name("extra", test_run.registries()))
         .copied();
     assert_eq!(
-        extra,
-        Some(KType::NUMBER),
-        "a member the nested signature does not name rides verbatim under the value's width",
+        extra, None,
+        "a member the nested signature does not name is pruned from the nested view",
     );
 }
 

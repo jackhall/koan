@@ -158,6 +158,20 @@ fn coerce_held_into<'b>(
     }
 }
 
+/// [`coerce_function_cell`]'s product rested at the wrapper's own home and read back there — the
+/// value-lane form, for a `KObject::KFunction` leaf the enclosing coercion carries verbatim.
+fn coerce_function<'b>(
+    underlying: &'b KFunction<'b>,
+    declared: KType,
+    tables: &CoercionTables,
+    registries: &RunRegistries,
+) -> &'b KFunction<'b> {
+    let home = underlying.captured_scope();
+    let cell = coerce_function_cell(underlying, declared, tables, registries);
+    let sealed = cell.rest_into(home.brand().handle());
+    home.open_function(&sealed).value()
+}
+
 /// The **function boundary**: a callable filling a slot whose declared FN type names an abstract
 /// member is wrapped rather than rewritten. The wrapper binds against its own — `to`-substituted —
 /// signature, so dispatch and the call's argument validation admit the reading side's types; its
@@ -167,15 +181,18 @@ fn coerce_held_into<'b>(
 /// The wrapper is born at `underlying`'s **own captured scope**, so it lives in the same region the
 /// underlying does — the invariant every callable read depends on
 /// ([`retains_home`](super::retains_home) decides a callable's residence by its captured scope's
-/// region, and a cell's reach seeds that same scope). The enclosing coercion's product is a
-/// `KObject::KFunction` leaf riding that borrow verbatim, exactly as a copying relocation carries
-/// one.
-fn coerce_function<'b>(
+/// region, and a cell's reach seeds that same scope).
+///
+/// The birth envelope is handed back rather than rested, because the two boundaries need it at
+/// different homes: a VAL slot's wrapper rests where it was born ([`coerce_function`]), while an
+/// opaque view's keyworded member rests in the *view* scope, whose bucket entry then pins the
+/// underlying's region for the view's life.
+pub(crate) fn coerce_function_cell<'b>(
     underlying: &'b KFunction<'b>,
     declared: KType,
     tables: &CoercionTables,
     registries: &RunRegistries,
-) -> &'b KFunction<'b> {
+) -> crate::machine::core::DeliveredFunction {
     let types = &registries.types;
     let declared_params = types.with_node(declared, |node| match node {
         TypeNode::KFunction { params, .. } => params.clone(),
@@ -204,7 +221,7 @@ fn coerce_function<'b>(
         TypeNode::KFunction { ret, .. } => *ret,
         _ => unreachable!("the FN arm is entered only for a declared `KFunction` position"),
     });
-    KFunction::alloc_captured_resident(
+    KFunction::alloc_captured(
         underlying.captured_scope(),
         ReturnType::Resolved(tables.substitute_to(declared_return, types)),
         &elements,
@@ -228,8 +245,9 @@ fn coerce_function<'b>(
 /// that region for the product's life. Reusing [`Scope::alloc_module_view`] is what makes the
 /// nested members *born* coerced, on the same terms the outer view's own members are.
 ///
-/// Width rides through: the replay installs every member of the source, and only the slots the
-/// nested schema names — and whose two substitutions differ — are born coerced.
+/// The nested view is a narrowing on the same terms the outer one is: it surfaces exactly what
+/// `nested` declares — type members, value slots, keyworded members — and of those, only the ones
+/// whose two substitutions differ are born coerced.
 fn coerce_module<'b>(
     m: &'b Module<'b>,
     nested: &SigSchema,
@@ -247,27 +265,27 @@ fn coerce_module<'b>(
         &narrowed
     };
 
-    // The view's type members: the source module's own, with every member the nested signature
-    // fixes overridden by its `to` substitution. Nothing is minted here — a nested view's abstract
-    // identities *are* the outer view's mints, arriving through the substitution — so the plan
-    // closure ignores its nonce.
-    let mut view_types: HashMap<crate::machine::model::labels::TypeSymbol, KType> =
-        m.type_members.iter().map(|(n, kt)| (*n, *kt)).collect();
+    // The view's type members: exactly the ones the nested signature declares. A manifest member
+    // reads at its `to` substitution; an abstract member reads at the source module's own binding
+    // for it, which is where the nested binder's identity lives — the enclosing plan does not
+    // rewrite it, since a nested binder shadows by name. Nothing is minted — a nested view's
+    // *enclosing* abstract identities are the outer view's mints, arriving through the
+    // substitution — so the plan closure ignores its nonce.
+    let mut view_types: HashMap<crate::machine::model::labels::TypeSymbol, KType> = nested
+        .abstract_members
+        .keys()
+        .filter_map(|name| m.type_members.get(name).map(|kt| (*name, *kt)))
+        .collect();
     for (name, kt) in &nested.manifest_members {
         view_types.insert(*name, tables.substitute_to(*kt, types));
     }
-    let coerced_slots = nested
-        .value_slots
-        .iter()
-        .filter(|(_, declared)| tables.coerces(**declared, types))
-        .map(|(name, declared)| (*name, *declared))
-        .collect();
 
-    let view_members = ViewMembers {
-        types: view_types.into_iter().collect(),
-        coerced_slots,
-        coercion: tables.coercion(),
-    };
+    let view_members = ViewMembers::of_schema(
+        nested,
+        view_types.into_iter().collect(),
+        tables.coercion(),
+        registries,
+    );
     let source = m.child_scope();
     let scope = Scope::alloc_module_view(source, source, registries, |_nonce| view_members)
         .expect("a module's own tables replay into a newborn view scope without colliding");

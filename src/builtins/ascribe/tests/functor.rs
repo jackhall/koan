@@ -451,9 +451,12 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     let mut test_run = TestRun::silent(&program, &region);
     let scope = test_run.scope;
     // Plain `LET` plus `LET = FN` so the re-bind walk hits both the `data` replay
-    // and the `functions` bucket replay.
+    // and the `functions` bucket replay — and the signature declares all three surfaces,
+    // since a view holds only what its signature names.
     test_run.run(
-        "SIG Ordered = (VAL compare :Number)\n\
+        "SIG Ordered = ((VAL compare :Number) \
+         (VAL helper :(FN :{x :Number} -> Number)) \
+         (FN (HELP x :Number) -> Number))\n\
          MODULE int_ord = ((LET compare = 7) (LET helper = FN (HELP x :Number) -> Number = (x)))\n\
          LET held = (int_ord :| Ordered)",
     );

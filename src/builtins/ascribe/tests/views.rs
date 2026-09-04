@@ -517,19 +517,26 @@ fn a_returned_opaque_view_keeps_every_coerced_member_alive() {
 
 // ---------- Regressions ----------
 
-/// A member the signature does not name has no declared slot type to coerce against, so width
-/// subtyping surfaces it exactly as the source bound it.
+/// **AC 4.** A member the signature does not name is *absent* from the view. Width subtyping is a
+/// property of the matching relation — `id_monad` satisfies `Monad` while binding more than it
+/// declares — never of the view the match produces.
 #[test]
-fn non_signature_member_reads_unchanged() {
+fn a_member_the_signature_omits_is_absent_from_the_view() {
     let program = program_storage();
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&program, &region);
     test_run.run(monad_program());
     test_run.run("LET view = (id_monad :| Monad)");
-    let hidden = test_run.run_one(test_run.parse_one("view.hidden"));
+    let error = test_run.run_one_err(test_run.parse_one("view.hidden"));
+    assert!(
+        error.to_string().contains("no member `hidden`"),
+        "an undeclared member must not be reachable through the view, got {error}",
+    );
+    // The source is untouched: pruning shapes the view, not the module it was taken of.
+    let hidden = test_run.run_one(test_run.parse_one("id_monad.hidden"));
     assert!(
         matches!(hidden, KObject::Number(n) if *n == 42.0),
-        "a non-SIG member replays verbatim",
+        "the source module still binds the member the view drops",
     );
 }
 

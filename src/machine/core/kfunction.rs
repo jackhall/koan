@@ -194,26 +194,6 @@ impl<'a> KFunction<'a> {
             )
     }
 
-    /// [`Self::alloc_captured`] handed back as the **resident borrow** rather than the birth
-    /// envelope — the door for a callable built beside the value that names it, where the consumer
-    /// holds a plain `&'a KFunction<'a>` (an opaque view's coercion wrapper, whose
-    /// [`Body::CoercedDelegate`] the enclosing coercion stores inside a `KObject::KFunction` leaf).
-    ///
-    /// A resident value rests for free — the library's self rule strips its own region from what is
-    /// retained — so the re-open adds no coverage the birth did not already compose, and `captured`
-    /// is both the callable's home and the scope whose region the borrow is valid in.
-    pub(crate) fn alloc_captured_resident(
-        captured: &'a Scope<'a>,
-        return_type: ReturnType<'a>,
-        elements: &[SignatureElement],
-        body: Body<'a>,
-        registries: &RunRegistries,
-    ) -> &'a KFunction<'a> {
-        let cell = Self::alloc_captured(captured, return_type, elements, body, registries);
-        let sealed = cell.rest_into(captured.brand().handle());
-        captured.open_function(&sealed).value()
-    }
-
     /// Test door for [`Self::alloc_captured`] over a bundled [`SignatureDraft`]. A fixture spells its
     /// signature as a draft — the same `vec![]`-of-elements shape builtin registration uses — so the
     /// unbundling happens once here rather than at every call.
