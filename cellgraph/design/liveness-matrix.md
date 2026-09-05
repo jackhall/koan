@@ -39,6 +39,13 @@ over the generations of live occupants, not a property of the matrix's shape.
 **The hold graph must be acyclic for anything to reclaim, and the substrate
 does not enforce that.** A ring — A holds B, B holds A — keeps both columns
 nonzero forever, so a ring leaks rather than dangles: the failure is safe.
+A locality merge below dissolves a ring it happens to meet — the source's hold
+on its own target becomes a self-hold, which has no representation, and a
+target left with no holder is reclaimed on the spot — so a ring whose members
+die one at a time with nothing outside holding them is freed rather than
+retained. That is a coincidence of the merges' triggers, not a collection
+strategy: a ring an outside hold keeps above those triggers survives intact,
+and the detector names the survivors.
 Preventing rings is the embedder's crossing discipline (koan's is the
 anti-ring crossing rule of
 [destination-homed-construction.md](../../design/destination-homed-construction.md));
@@ -106,8 +113,9 @@ either way. A cell leaves the slab when it is dead and no birth hold names
 it — and only the pin row freezes into a seal: birth holds exist for
 execution, so a cell's own birth row releases at its death unconditionally,
 and a dead cell no descendant names has no birth presence left to convert.
-What it does on the way out is what its pin column decides: reclamation when
-nothing reaches its storage, a seal when something does. Storage that reaches
+What it does on the way out is what its pin column and its naming set decide:
+reclamation when nothing reaches its storage, one of the two merges below when
+exactly one thing does, and a seal otherwise. Storage that reaches
 the parent chain does so through pin bits (transitive coverage puts those
 regions in the row directly).
 
@@ -136,7 +144,8 @@ bitmask over slab slots plus a sparse set of sealed ids:
 ## The seal transition
 
 When cell N dies with a nonzero column, three bounded maintenance steps convert
-every representation of "N" from slab bit to sealed id `S_N`:
+every representation of "N" from slab bit to sealed id `S_N`, and a fourth
+folds in what the new record turns out to hold alone:
 
 1. **Holders convert.** Column N names the live cells holding N. Each clears
    bit N from its own row, adds `S_N` to its sealed-hold set, and rewrites its
@@ -152,6 +161,14 @@ every representation of "N" from slab bit to sealed id `S_N`:
    unregisters at reclamation. One word rewritten per namer, never a storage
    scan.
 3. **Storage detaches; the slot recycles** under a fresh generation.
+4. **Count-1 holds absorb.** Every sealed region in the new record's
+   aggregate whose holder count is 1 is held by this record and nothing else,
+   so it folds in — seal-time absorption below. The candidate set is a
+   worklist rather than one pass: a fold transfers ids the record did not name
+   before, and drops a duplicated hold's count, either of which can newly
+   qualify a region. The step runs after every seal, including a
+   seal-into-namer, because a count can have dropped to 1 at any point since
+   the holder's own seal.
 
 The per-value masks *inside* N's own storage are not rewritten — they become
 dead bytes. Nothing may read them, and the sealed tier's accessor makes that
@@ -325,7 +342,13 @@ copy remains the lever there.
   naming slot N are rewritten to nothing — the cross-region hold becomes a
   structural self-hold, which has no bits. That rewrite is the same bounded
   scan seal step 1 performs, and the trigger means M is the only cell
-  scanned. No sealed id, no index entry, no accessor indirection: reads stay
+  scanned. M is any *slab occupant*, live or dead-resident: "live holder"
+  names the slab tier as opposed to the sealed one, and a dead cell a
+  descendant's birth row still names keeps a maintained row, so absorbing into
+  it only brings forward the fold its own disposal would perform. The and-not
+  is also what dissolves a two-cell ring the merge meets: N's hold on its own
+  holder M lands nowhere. No sealed id, no index entry, no accessor
+  indirection: reads stay
   on the precise per-value-mask path, and future seal transitions maintain
   the absorbed masks automatically because the chunks are M's storage now.
   Retention is identical to sealing — a count-1 sealed region lives exactly
@@ -348,7 +371,13 @@ copy remains the lever there.
   chooses per loop between a persistent cart that never turns over (growing
   data), per-hop turnover with destination-homed rebuilds (replaced data),
   and the consolidation copy when accreted dead bytes cross a threshold
-  ([retention pricing](../roadmap/retention-pricing.md)).
+  ([retention pricing](../roadmap/retention-pricing.md)). That price is why
+  this merge, alone of the three, is **refusable**: `release` carries the
+  embedder's choice, recorded on the slot and read when the slot actually
+  disposes — later than the release, for a cell a descendant's birth row still
+  names. A refusal falls through to the plain seal. The two sealed-tier merges
+  retain exactly what a plain seal retains, so there is nothing there to price
+  and no refusal to offer.
 
 - **Seal-time absorption flattens ownership chains.** At P's seal, a sealed
   region S in P's hold set with holder count 1 is held by P alone — and mask
@@ -357,20 +386,27 @@ copy remains the lever there.
   aggregate into P's, splice S's storage chunks onto P's (pointer-stable),
   repoint S's reverse-naming-index entries. The candidate test is bitwise
   and bounded by P's own hold set — `count(S) == 1` per sealed entry (the
-  live tier's analogue of the trigger is death-time absorption above). When
+  live tier's analogue of the trigger is death-time absorption above). The
+  candidates are a worklist, not one pass: folding S in transfers the ids S
+  held onto P, where a count of 1 qualifies them in turn, and a hold P and S
+  both had duplicates rather than transfers, dropping that region's count by
+  one. Where S's aggregate names P itself — S held its own holder — the fold
+  drops the hold instead of recording it, and if that was P's last holder the
+  record is reclaimed on the spot: a sealed ring dissolves through the merge
+  that met it. When
   call trees follow a single-consumer shape, chains collapse into flat
   records — one count, one folded aggregate, one storage bundle — and
   releasing one is a depth-one cascade; a program whose retained regions are
   genuinely shared absorbs nothing and keeps the full graph. For absorbed
   chains the uniquely-held slice of the pricing model is read directly off
   the merged record; the shared residue still poses the cross-decision
-  double-billing question above. Generalizing absorption to regions held
-  only within a group sealing together (a dying call subtree) is open under
-  [Absorption](../roadmap/absorption.md) — delimiting the group is design
-  work — and would carry a second payoff: holds
-  internal to a group sealed as one record never manifest as
-  sealed-naming-live edges at all; only the group's boundary reach survives
-  the seal.
+  double-billing question above. The merge is per region: one held only
+  *within a group* that seals together — a dying call subtree — carries a
+  count above 1 at each individual seal, so it stays its own record.
+  Generalizing to the group is unsettled, delimiting one being the design
+  work, and it would carry a second payoff: holds internal to a group sealed
+  as one record never manifest as sealed-naming-live edges at all; only the
+  group's boundary reach would survive the seal.
 
 - **Seal-into-namer covers the downward direction.** When N dies with a zero
   column and a singleton naming set {Q}, the sealed Q is provably N's only
@@ -380,7 +416,12 @@ copy remains the lever there.
   (registering Q under any slab bits new to it), and the slots N's row named
   trade bit N for Q in their naming sets. The work is the seal transition's
   own steps minus the record creation, and the test reads two structures the
-  transition already holds: the column and the naming set.
+  transition already holds: the column and the naming set. No stored mask
+  needs rewriting either: a stored mask naming a slot implies a pin hold on
+  it, and this cell's column is empty by the trigger. Where N's own row named
+  Q — N held the record that names it — the fold drops that hold, and a Q
+  left with no holder is reclaimed on the spot, which is how the last cell of
+  a ring frees the rest of it.
   Together with seal-time absorption this covers both ends of an ownership
   chain; both remain sealed-tier-only merges, per the discipline line above.
 
@@ -395,8 +436,9 @@ stored without its mask passing through the mint OR, and a sealed region's
 contents cannot be read except through the accessor that derives aggregate
 reach — and the encapsulated core is tested exhaustively (property tests over
 hold/seal/retire interleavings, plus the Miri slate) rather than audited by
-convention. The one failure that is *not* dangerous is the ring: a hold
-cycle leaks, and the debug ring detector names it.
+convention. The one failure that is *not* dangerous is the ring: a hold cycle
+leaks unless a merge dissolves it, and the debug ring detector names the ones
+that survive.
 
 ## Layout
 
@@ -412,7 +454,13 @@ across rows, one bit per occupied slot. Chunk-aligned rows keep that stride
 cache-friendly.
 
 Per sealed region: one hybrid aggregate mask, one holder count, one memoized
-closure mask at most. Per slab slot: one sparse reverse-naming set. A
+closure mask at most, and its storage — which is a *bundle* of regions, not
+one. Every merge splices the absorbed chunks in whole rather than copying
+them, so a region is the bump it writes into plus the bumps of everything
+folded into it; the chunks keep their addresses, which is the same pointer
+stability a detached seal already relies on. Nothing is ever allocated into an
+absorbed bump again, so a long chain keeps each link's chunk headroom rather
+than compacting it. Per slab slot: one sparse reverse-naming set. A
 per-cell holder count maintained as derived data — derived *from* attributed
 transitions, never a free-standing count — is a measurable later
 optimization; it is an implementation detail invisible to the interface
@@ -420,7 +468,6 @@ either way.
 
 ## Open work
 
-- [Absorption](../roadmap/absorption.md) — the three merges.
 - [Retention pricing](../roadmap/retention-pricing.md) — closure pricing and
   the pressure model.
 

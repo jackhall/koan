@@ -37,8 +37,6 @@ versus turnover has no number to decide with.
 
 ## Dependencies
 
-**Requires:**
-
-- [Absorption](absorption.md)
+**Requires:** none — the merges it prices are in the substrate.
 
 **Unblocks:** none tracked — the substrate's terminal item.

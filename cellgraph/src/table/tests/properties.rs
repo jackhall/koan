@@ -285,7 +285,7 @@ proptest! {
 /// The generated corpus reaches every locality merge, rather than only being able to.
 ///
 /// An interleaving invariant test is only worth what its runs cover: without this, a merge that
-/// never fired would look exactly like a merge that always held. Miri skips the assertion — eight
+/// never fired would look exactly like a merge that always held. Miri skips the assertion — four
 /// cases is what a slate run affords, and that is too few to reach all three shapes reliably.
 #[test]
 fn each_merge_fires_across_generated_interleavings() {

@@ -491,7 +491,7 @@ fn absorb_work_for(resident: usize) -> u64 {
 }
 
 #[test]
-fn absorption_is_bounded_by_the_hold_set_not_the_storage() {
+fn absorption_costs_the_same_whatever_the_region_stores() {
     // The bundle takes the bump whole, so a region with ten thousand resident values folds in for
     // what one with sixteen costs — the same atomicity the seal transition has.
     assert_eq!(absorb_work_for(SMALL), absorb_work_for(LARGE));

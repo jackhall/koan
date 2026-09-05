@@ -26,16 +26,17 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
 - [src/handle.rs](src/handle.rs) — cell identity: slot plus generation, and
   the stale-handle refusal.
 - [src/table.rs](src/table.rs) — the slab, the `create` / `enter` / `release`
-  verbs, the step context's doors, the seal transition, and the cascade that
-  retires cells and records.
+  verbs, the step context's doors, the seal transition, the three locality
+  merges a dying cell can take instead, and the cascade that retires cells and
+  records.
 - [src/matrix.rs](src/matrix.rs) — bit storage for the birth and pin
   relations, and the executing row.
 - [src/mask.rs](src/mask.rs) — reach as a hybrid mask: slab bits plus a
   sparse sealed-id set.
 - [src/sealed.rs](src/sealed.rs) — the sealed tier: ids, sparse sets, frozen
   aggregates, holder counts, detached storage.
-- [src/region.rs](src/region.rs) — the per-cell bump and the write surface a
-  build closure receives.
+- [src/region.rs](src/region.rs) — the per-cell bundle of bumps, the splice a
+  locality merge performs, and the write surface a build closure receives.
 - [src/carrier.rs](src/carrier.rs) — the two carrier states a value with
   reach passes through.
 - [src/reattach.rs](src/reattach.rs) — the reattachable contract and the

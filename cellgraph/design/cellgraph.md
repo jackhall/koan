@@ -75,10 +75,19 @@ how an embedder gives one unit of work two regions with different lifetimes.
   back named by sealed id, with reach derived from the record's aggregate —
   so there is no second door out of sealed storage. A cell cannot be entered
   while it is already executing.
-- **`release(handle)`** declares death: the embedder promises never to enter
-  the cell again. The slot leaves the slab once no descendant's birth row
-  names the cell: reclaimed if nothing reaches its storage, sealed if
-  something does.
+- **`release(handle, absorption)`** declares death: the embedder promises
+  never to enter the cell again. The slot leaves the slab once no descendant's
+  birth row names the cell: reclaimed if nothing reaches its storage, folded
+  into the one thing that reaches it if there is exactly one, and sealed
+  otherwise. `absorption` is the embedder's say over the first of those folds,
+  the only one that retains more than a plain seal would
+  ([liveness-matrix.md § Locality tactics](liveness-matrix.md#locality-tactics));
+  it is recorded on the slot and read when the slot actually leaves.
+- **`is_empty()`** asks whether the table holds nothing at all — every slot
+  free, no record left in the sealed tier. After a program's last release it
+  is the end-of-program alarm: a non-empty table means either a release was
+  forgotten or a ring no merge dissolved survives, and the debug ring detector
+  names the records on it.
 
 The substrate never runs a cell, never chooses an order, and never inspects a
 continuation. It names no thread model and no async runtime: it is a
@@ -110,9 +119,12 @@ Each absence is a design statement, not a gap:
 - **No acyclicity of references.** Cells may reference each other freely.
   The *hold* graph must be acyclic for a cell ever to reclaim, but the
   substrate does not enforce it: a ring keeps both cells alive forever, which
-  leaks rather than dangles. Preventing rings is the embedder's crossing
-  discipline; the substrate ships a debug-mode ring detector, not a mint-time
-  check.
+  leaks rather than dangles. A locality merge dissolves a ring it happens to
+  meet — the hold on its own target has no representation — so a ring nothing
+  outside holds is freed as its cells die; that is a coincidence of the
+  merges' triggers, not collection. Preventing rings is the embedder's
+  crossing discipline; the substrate ships a debug-mode ring detector, not a
+  mint-time check, and `is_empty` is the alarm for the ones that survive.
 - **No terminality, and therefore no error type.** Death is declared, not
   inferred, and carries no result. "Finished forever, with this value" — and
   the `Result` split between a witnessed value and a bare owned error — is a
@@ -126,7 +138,6 @@ Each absence is a design statement, not a gap:
 
 The remaining slices are indexed in [the roadmap](../roadmap/README.md):
 
-- [Absorption](../roadmap/absorption.md)
 - [Retention pricing](../roadmap/retention-pricing.md)
 - [Rebuilding workgraph over cellgraph](../../workgraph/roadmap/adopt-cellgraph.md)
   — the first embedder's adoption.
