@@ -1,6 +1,6 @@
 [workspace]
-members = ["workgraph"]
-default-members = [".", "workgraph"]
+members = ["workgraph", "cellgraph"]
+default-members = [".", "workgraph", "cellgraph"]
 resolver = "2"
 
 [package]

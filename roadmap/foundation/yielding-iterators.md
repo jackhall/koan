@@ -51,7 +51,7 @@ more than once before dying.
 - *Dormant-slot matrix habitat — open.* A dormant slot's frame is
   live-but-not-executing; the liveness matrix names no habitat for any
   installed-but-unrun frame
-  ([liveness-matrix.md](../../workgraph/design/liveness-matrix.md)) — the
+  ([liveness-matrix.md](../../cellgraph/design/liveness-matrix.md)) — the
   gap predates this item and needs one answer covering both.
 - *Buffered channels — deferred.* A policy layer over dormant producers (a
   buffer is a window policy; per-message release is whole-region death of

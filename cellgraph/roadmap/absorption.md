@@ -1,0 +1,50 @@
+# Absorption
+
+**Problem.** Every cell that dies uniquely held mints a count-1 sealed record,
+and every chain of single-consumer producers becomes a chain of such records:
+one id, one index entry, one accessor indirection each. The three merges of
+[liveness-matrix.md § Locality tactics](../design/liveness-matrix.md#locality-tactics)
+— death-time absorption into a unique live holder, seal-time absorption of a
+count-1 sealed region into its sealing holder, and seal-into-namer for a
+row-zero cell with a single sealed namer — are unimplemented, so the
+degenerate cases the model is designed around stay rare rather than common.
+
+**Acceptance criteria.**
+
+- A cell released with `row == bit(M)` and an empty naming set splices its
+  chunks onto M's region, ORs its column into M's through the standard mint,
+  rewrites M's stored masks naming the dead slot to nothing, and mints no
+  sealed record; reads of the absorbed values stay on the per-value-mask
+  path.
+- At a cell's seal, each count-1 sealed region in its hold set is absorbed:
+  aggregates OR, chunks splice, reverse-naming entries repoint, and the
+  absorbed id is released.
+- A cell released with a zero row and a singleton naming set seals into that
+  namer instead of minting a record.
+- Absorption of already-sealed storage into a live region never happens; a
+  test constructs the shape and observes a seal instead.
+- Death-time absorption is refusable per release by the embedder, so a
+  priced choice can decline it; the default accepts.
+- The property test of the sealed tier extends to interleavings that trigger
+  each merge, and the mask-validity assertion still holds.
+
+**Directions.**
+
+- *Refusal signal — open.* A flag on `release`, or a table-wide policy hook.
+  Recommended: a flag on `release`; the decision is per cell and the
+  embedder already has the cell's handle in hand.
+- *Group sealing — open.* Delimiting a dying subtree that seals as one
+  record is design work; the item ships the three merges without it and
+  records the group case as open in the design doc if it is not resolved
+  here.
+
+## Dependencies
+
+**Requires:**
+
+- [The cell substrate](cell-substrate.md)
+
+**Unblocks:**
+
+- [Retention pricing](retention-pricing.md) — the priced choice decides when
+  to absorb.

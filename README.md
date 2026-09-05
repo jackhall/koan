@@ -314,3 +314,5 @@ across the two trees and `doclinks` gates the pair as one dependency graph, but
 each tree derives its own "Next items" list. The boundary between them —
 what is library, what is Koan — is
 [design/scheduler-library.md](design/scheduler-library.md).
+Beneath the scheduler, the [cellgraph/](cellgraph/README.md) cell substrate is a
+third tree, design and roadmap only until its first slice ships.

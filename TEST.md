@@ -91,8 +91,9 @@ only). It is still exercised under Miri: [`src/tests.rs`](src/tests.rs) installs
 it as the lib-test binary's global allocator, so every slate test allocates
 through it. The slate covers the safe koan code that drives the substrate's
 retypes, and
-`workgraph`'s own slate ([workgraph/observe/miri_slate.md](workgraph/observe/miri_slate.md))
-covers the library in isolation.
+each embedded crate's own slate covers that library in isolation:
+[workgraph/observe/miri_slate.md](workgraph/observe/miri_slate.md) and
+[cellgraph/observe/miri_slate.md](cellgraph/observe/miri_slate.md).
 
 The model the slate signs off on is documented in
 [design/memory-model.md](design/memory-model.md#verification).

@@ -18,8 +18,9 @@ Docs describing the embedded scheduler library *as a library* — rather
 than the boundary Koan meets it at — live in the crate's own tree,
 [workgraph/design/](../workgraph/README.md): the witnessed memory
 substrate, the reach representation, the DAG scheduler's own graph
-shape, the `cellgraph` cell substrate beneath it, and sectioned reach
-evidence. The Koan-side docs below own Koan's *instantiation* of that
+shape, and sectioned reach evidence; the `cellgraph` cell substrate
+beneath the scheduler has a tree of its own,
+[cellgraph/design/](../cellgraph/README.md). The Koan-side docs below own Koan's *instantiation* of that
 machinery, not the machinery itself.
 
 ## Doc index

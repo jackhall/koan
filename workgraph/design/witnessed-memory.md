@@ -14,7 +14,7 @@ handful of audited lifetime retypes no caller can reach.
 [reach.md](reach.md) owns the reach representation — what a carrier's witness
 *names* and who owns the pins that keep it alive. This doc owns the carrier
 construction and access mechanics that representation slots under.
-[cellgraph.md](cellgraph.md) states the cell contract the substrate backs, and
+[cellgraph.md](../../cellgraph/design/cellgraph.md) states the cell contract the substrate backs, and
 [scheduler-library.md](../../design/scheduler-library.md) states the boundary an
 embedder meets it at.
 

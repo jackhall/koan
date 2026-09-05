@@ -34,14 +34,6 @@ crate reads as a standalone library rather than as one of koan's internals.
     two-band work queue, the drain protocol (the embedder's step callback and
     its `StepVerdict`), alias splicing, and delivery at finalize with the
     unconditional slot reclaim behind it.
-  - [liveness-matrix.md](design/liveness-matrix.md) — aspirational: frame
-    liveness as attributed bit matrices over a frame pool — handle-based
-    anchors, reach as a slot bitmask, and recycling gated on a zero row —
-    in place of reference-counted holds.
-  - [cellgraph.md](design/cellgraph.md) — the computation-cell substrate
-    beneath the DAG layer (working name `cellgraph`): cells with a
-    continuation, a memory anchor, and inter-cell values; no acyclicity, no
-    terminality, long-lived cells.
   - [sectioned-reach.md](design/sectioned-reach.md) — reach evidence stored at
     sub-value granularity: the interned description side table and
     run-partitioned container storage.
@@ -50,6 +42,10 @@ crate reads as a standalone library rather than as one of koan's internals.
   koan sits on.
 - [observe/miri_slate.md](observe/miri_slate.md) — the Miri audit slate's
   run log.
+
+The cell substrate beneath the DAG layer has its own tree,
+[cellgraph/](../cellgraph/README.md): the cell contract and the liveness
+matrix that decides when a cell is reclaimed.
 
 Docs that state the *boundary* between the library and its embedder stay on
 koan's side, because they describe the division rather than the library:

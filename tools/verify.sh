@@ -27,12 +27,13 @@
 # re-runs the suite under `--features seam-force-copy` and `--features seam-force-pin`
 # to prove the cost-driven copy-vs-pin choice is semantically invisible.
 #
-# Two slates, picked by change scope. When every changed path is under
-# `workgraph/`, the change is library-side and koan's adoption of the new surface
-# is a separate work item, so the library slate runs and koan's compile state is
-# reported rather than gated — that is what lets a workgraph-only commit land
-# ahead of its koan adoption. Any koan-side change selects the full slate, where
-# koan compiling is a gate as usual.
+# Three slates, picked by change scope. When every changed path is under one
+# embedded crate — `workgraph/` or `cellgraph/` — the change is library-side and
+# the adoption of the new surface above it is a separate work item, so that
+# crate's slate runs and everything above it is reported rather than gated — that
+# is what lets a library-only commit land ahead of its adoption. A change that
+# touches koan, or that spans both embedded crates, selects the full slate, where
+# every crate compiling is a gate as usual.
 
 set -euo pipefail
 
@@ -105,10 +106,12 @@ compact() {
 # slate: with nothing changed there is no library-side commit to unblock.
 CHANGED="$(git diff --name-only HEAD; git ls-files --others --exclude-standard)"
 WORKGRAPH_ONLY=1
+CELLGRAPH_ONLY=1
 while IFS= read -r path; do
     case "$path" in
-        workgraph/*) ;;
-        *) WORKGRAPH_ONLY=0 ;;
+        workgraph/*) CELLGRAPH_ONLY=0 ;;
+        cellgraph/*) WORKGRAPH_ONLY=0 ;;
+        *) WORKGRAPH_ONLY=0; CELLGRAPH_ONLY=0 ;;
     esac
 done <<<"$CHANGED"
 
@@ -147,6 +150,50 @@ if [ "$WORKGRAPH_ONLY" = 1 ]; then
         errors="$(grep -c '^error' <<<"$OUT")"
         ok koan "does NOT compile — $errors errors of adoption debt owed by a koan-side item" \
             "koan does NOT compile — $errors errors of adoption debt"
+    fi
+
+    summary
+    exit 0
+fi
+
+if [ "$CELLGRAPH_ONLY" = 1 ]; then
+    SCOPE="cellgraph only"
+    printf 'Change scope: cellgraph only — running the cell-substrate slate.\n\n'
+
+    # Unit tests and doctests in one pass, as in the workgraph branch — the
+    # `compile_fail` guards on the carrier surface are doctests. The crate has no
+    # feature flags: everything it compiles, it compiles here.
+    run tests 'tests FAILED' cargo test -p cellgraph --quiet
+    ok tests "ok ($(passed) passed, unit + doctests)" 'tests ok'
+
+    if OUT="$(cargo clippy -p cellgraph --all-targets -- -D warnings 2>&1)"; then
+        ok clippy clean 'clippy clean'
+    else
+        cargo clippy -p cellgraph --fix --allow-dirty --allow-staged \
+            --all-targets >/dev/null 2>&1 || true
+        run clippy 'clippy: issues remain after --fix' \
+            cargo clippy -p cellgraph --all-targets -- -D warnings
+        ok clippy 'clean after --fix (working tree modified)' 'clippy clean after --fix'
+    fi
+
+    run doclinks 'doclinks FAILED' python3 tools/doclinks.py check --gates-only
+    ok doclinks '4 gates clean' 'doclinks ok'
+
+    # Informational, never gating: nothing above cellgraph depends on it yet, so
+    # both are expected to compile untouched. A failure here is a workspace-level
+    # break (a manifest or lockfile slip), not adoption debt.
+    if OUT="$(cargo check -p workgraph --all-targets 2>&1)"; then
+        ok workgraph 'compiles' 'workgraph compiles'
+    else
+        errors="$(grep -c '^error' <<<"$OUT")"
+        ok workgraph "does NOT compile — $errors errors" "workgraph does NOT compile — $errors errors"
+    fi
+
+    if OUT="$(cargo check -p koan --all-targets 2>&1)"; then
+        ok koan 'compiles' 'koan compiles'
+    else
+        errors="$(grep -c '^error' <<<"$OUT")"
+        ok koan "does NOT compile — $errors errors" "koan does NOT compile — $errors errors"
     fi
 
     summary

@@ -39,6 +39,20 @@ failed test, UB, leak, or a run count that doesn't equal the slate list** — th
 no-match filter (the classic "everything filtered out" footgun) into a loud error instead of a
 silent green. Read that one line; do not re-inspect the raw log unless triaging a specific failure.
 
+## Embedded crates: their own slates, run directly
+
+`tools/miri.py` drives koan's own slate only. The embedded crates each own a separate lib test
+binary and a separate slate log, so a change scoped to one of them runs `cargo` directly with the
+crate as the target — `-p <crate> --lib` — and reads that crate's log:
+
+```
+MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib   # workgraph/observe/miri_slate.md
+MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p cellgraph --lib   # cellgraph/observe/miri_slate.md
+```
+
+Everything below about registering a test before the run, keeping the slate list current, and
+appending the duration entry applies per-crate to that crate's own log.
+
 ## Keeping the slate in sync
 
 Add a test to the slate when a new unsafe site lands — a transmute, raw-pointer round-trip, interior-mutation pattern under a live shared borrow, or a cycle shape that storage-side reasoning can't rule out. Slate tests are minimal-shape mirrors of the unsafe operation, not end-to-end feature tests; they fail when Miri reports UB or a leak, not on values.
