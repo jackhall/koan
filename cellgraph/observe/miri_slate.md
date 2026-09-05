@@ -17,7 +17,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-10 tests, grouped by the unsafe site each pins down. Names below are the exact
+12 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -69,6 +69,17 @@ storages go with them.
 - `table::tests::sealing::a_reach_that_names_two_sealed_regions_merges_their_ids_in_order`
 - `table::tests::sealing::reclaiming_a_records_last_holder_cascades_through_its_aggregate`
 
+**Absorbed storage** ([src/region.rs](../src/region.rs), [src/table.rs](../src/table.rs)) — a
+region is a bundle of bumps, and a locality merge moves a whole `Bump` into another region's
+bundle while borrows minted before the merge stay live. The same pointer stability the seal
+transition relies on has to hold across a move in the other direction, and in both roles: the
+first test moves the *source* bump — a continuation reads a `&u32` out of storage whose cell was
+absorbed into the reading cell's own region — and the second grows the *target*, splicing a bump
+into a sealed record a live continuation already borrows into.
+
+- `table::tests::absorption::a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing`
+- `table::tests::absorption::a_cell_with_a_single_sealed_namer_seals_into_it`
+
 ## Adding tests to the slate
 
 Add a test to the slate when a new unsafe site lands — a transmute,
@@ -88,9 +99,9 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-05: 99.61s — 39 tests, 0 leaks, 0 UB
 - 2026-09-05: 49.13s — 25 tests, 0 leaks, 0 UB
 - 2026-09-05: 70.27s — 24 tests, 0 leaks, 0 UB
 - 2026-09-05: 92.83s — 24 tests, 0 leaks, 0 UB
 - 2026-09-05: 65.19s — 17 tests, 0 leaks, 0 UB
-- 2026-09-05: 1.22s — 9 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

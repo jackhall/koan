@@ -1,3 +1,4 @@
+mod absorption;
 mod properties;
 mod sealing;
 mod values;
@@ -36,7 +37,7 @@ fn the_slab_refuses_past_its_cap_and_reuses_a_freed_slot() {
     let cells: Vec<Handle> = (0..4).map(|_| table.create(None, None).unwrap()).collect();
     assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
 
-    table.release(cells[1]).unwrap();
+    table.release(cells[1], Absorption::IntoHolder).unwrap();
     let reused = table.create(None, None).unwrap();
     assert_eq!(reused.slot(), cells[1].slot());
     assert_eq!(reused.generation(), cells[1].generation() + 1);
@@ -47,7 +48,7 @@ fn the_slab_refuses_past_its_cap_and_reuses_a_freed_slot() {
 fn every_verb_rejects_a_stale_handle() {
     let mut table: CellTable<Owned> = CellTable::new(1);
     let first = table.create(None, None).unwrap();
-    table.release(first).unwrap();
+    table.release(first, Absorption::IntoHolder).unwrap();
     let second = table.create(None, None).unwrap();
 
     assert_eq!(second.slot(), first.slot());
@@ -57,7 +58,7 @@ fn every_verb_rejects_a_stale_handle() {
         Err(EnterError::Stale(StaleHandle(first)))
     );
     assert_eq!(
-        table.release(first),
+        table.release(first, Absorption::IntoHolder),
         Err(ReleaseError::Stale(StaleHandle(first)))
     );
     assert_eq!(
@@ -80,18 +81,18 @@ fn a_birth_row_contains_the_parent_chain_and_outlives_the_middle_cell() {
     assert!(table.birth.test(c.slot(), b.slot()));
     assert!(table.birth.test(c.slot(), a.slot()));
 
-    table.release(b).unwrap();
+    table.release(b, Absorption::IntoHolder).unwrap();
     assert!(!table.is_live(b));
     assert_eq!(table.slots[b.slot() as usize].state, SlotState::Dead);
     assert!(table.birth.test(c.slot(), a.slot()));
     assert!(table.is_live(a));
 
-    table.release(c).unwrap();
+    table.release(c, Absorption::IntoHolder).unwrap();
     assert_eq!(table.slots[c.slot() as usize].state, SlotState::Free);
     assert_eq!(table.slots[b.slot() as usize].state, SlotState::Free);
     assert!(table.is_live(a));
 
-    table.release(a).unwrap();
+    table.release(a, Absorption::IntoHolder).unwrap();
     assert_eq!(table.free.len(), 4);
 }
 
@@ -149,7 +150,10 @@ fn a_cell_is_entered_by_one_step_at_a_time() {
 
     table.begin(cell).unwrap();
     assert_eq!(table.begin(cell), Err(EnterError::AlreadyExecuting));
-    assert_eq!(table.release(cell), Err(ReleaseError::Executing));
+    assert_eq!(
+        table.release(cell, Absorption::IntoHolder),
+        Err(ReleaseError::Executing)
+    );
 
     table.executing.clear(cell.slot());
     assert!(table.enter(cell, |_| ()).is_ok());
@@ -179,6 +183,6 @@ fn reclaiming_a_slot_drops_the_continuation_it_held() {
     let cell = table.create(None, Some(Rc::clone(&anchor))).unwrap();
     assert_eq!(Rc::strong_count(&anchor), 2);
 
-    table.release(cell).unwrap();
+    table.release(cell, Absorption::IntoHolder).unwrap();
     assert_eq!(Rc::strong_count(&anchor), 1);
 }

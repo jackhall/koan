@@ -9,8 +9,8 @@ use super::{Borrowed, Number, Owned};
 /// Two resident-value counts far enough apart that a transition proportional to storage could not
 /// produce the same work for both. The Miri run takes the smaller pair — the shapes are what it
 /// checks, and the native run already covers the breadth.
-const SMALL: usize = 16;
-const LARGE: usize = if cfg!(miri) { 512 } else { 10_000 };
+pub(super) const SMALL: usize = 16;
+pub(super) const LARGE: usize = if cfg!(miri) { 512 } else { 10_000 };
 
 /// Seal a held cell holding `resident` values, and report the maintenance the transition performed.
 fn seal_work_for(resident: usize) -> u64 {
@@ -31,7 +31,7 @@ fn seal_work_for(resident: usize) -> u64 {
         .unwrap();
 
     let before = table.seal_work;
-    table.release(producer).unwrap();
+    table.release(producer, Absorption::Refused).unwrap();
     assert_eq!(table.sealed.len(), 1);
     table.seal_work - before
 }
@@ -53,7 +53,7 @@ fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
         .enter(holder, |context| context.hold(held))
         .unwrap()
         .unwrap();
-    table.release(held).unwrap();
+    table.release(held, Absorption::Refused).unwrap();
 
     assert!(!table.is_live(held));
     assert_eq!(
@@ -94,7 +94,7 @@ fn a_continuation_reads_back_with_reach_derived_through_the_sealed_tier() {
         .unwrap();
     assert!(table.holds(consumer, producer));
 
-    table.release(producer).unwrap();
+    table.release(producer, Absorption::Refused).unwrap();
     let id = table.sealed.ids().next().unwrap();
     assert!(table.sealed_holds[consumer.slot() as usize].contains(id));
 
@@ -135,8 +135,8 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
         })
         .unwrap();
 
-    table.release(first).unwrap();
-    table.release(second).unwrap();
+    table.release(first, Absorption::Refused).unwrap();
+    table.release(second, Absorption::Refused).unwrap();
     let mut minted: Vec<SealedId> = table.sealed.ids().collect();
     minted.sort();
     assert_eq!(minted.len(), 2);
@@ -167,20 +167,25 @@ fn reclaiming_a_records_last_holder_cascades_through_its_aggregate() {
         .enter(middle, |context| context.hold(base))
         .unwrap()
         .unwrap();
+    // The top cell holds the base as well, so the base's record keeps two holders and the middle's
+    // seal has no count-1 region to absorb: what this test is about is the cascade, not a merge.
     table
-        .enter(top, |context| context.hold(middle))
+        .enter(top, |context| {
+            context.hold(middle).unwrap();
+            context.hold(base)
+        })
         .unwrap()
         .unwrap();
 
-    table.release(base).unwrap();
+    table.release(base, Absorption::Refused).unwrap();
     assert_eq!(table.sealed.len(), 1);
     // The middle cell's hold on the base is a sealed id by now, so its own aggregate carries it.
-    table.release(middle).unwrap();
+    table.release(middle, Absorption::Refused).unwrap();
     assert_eq!(table.sealed.len(), 2);
 
     // One release retires both: the outer count reaches zero, and releasing its aggregate takes
     // the inner count with it.
-    table.release(top).unwrap();
+    table.release(top, Absorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(table.free.len(), 4);
 }
@@ -198,13 +203,13 @@ fn a_record_survives_every_holder_but_the_last() {
             .unwrap()
             .unwrap();
     }
-    table.release(held).unwrap();
+    table.release(held, Absorption::IntoHolder).unwrap();
     let id = table.sealed.ids().next().unwrap();
     assert_eq!(table.sealed.get(id).unwrap().holders, 2);
 
-    table.release(first).unwrap();
+    table.release(first, Absorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.get(id).unwrap().holders, 1);
-    table.release(second).unwrap();
+    table.release(second, Absorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(table.free.len(), 4);
 }
@@ -217,11 +222,11 @@ fn a_cell_that_only_a_birth_row_names_waits_in_the_slab_rather_than_sealing() {
 
     // Birth holds are the one relation with no sealed half: a descendant that can still walk to
     // its parent keeps the parent in place, so nothing seals here.
-    table.release(parent).unwrap();
+    table.release(parent, Absorption::IntoHolder).unwrap();
     assert_eq!(super::state_of(&table, parent), SlotState::Dead);
     assert_eq!(table.sealed.len(), 0);
 
-    table.release(child).unwrap();
+    table.release(child, Absorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(table.free.len(), 4);
 }

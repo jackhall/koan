@@ -64,8 +64,26 @@ impl Mask {
         self.words[slot as usize / 64] |= 1u64 << (slot % 64);
     }
 
-    pub(crate) fn add_sealed(&mut self, id: SealedId) {
-        self.sealed.insert(id);
+    /// Add a sealed id, reporting whether it was absent. A merge reads the answer: an id already
+    /// in the target's set is a hold the source's copy of duplicates rather than adds.
+    pub(crate) fn add_sealed(&mut self, id: SealedId) -> bool {
+        self.sealed.insert(id)
+    }
+
+    /// Clear one slab bit, reporting whether it was set — how a merge strikes the dead cell's own
+    /// name out of a mask that named it.
+    pub(crate) fn remove_slot(&mut self, slot: u32) -> bool {
+        if !self.names(slot) {
+            return false;
+        }
+        self.words[slot as usize / 64] &= !(1u64 << (slot % 64));
+        true
+    }
+
+    /// Drop one sealed id, reporting whether it was there — how a seal-time merge strikes the
+    /// absorbed record's id out of the aggregate that named it.
+    pub(crate) fn remove_sealed(&mut self, id: SealedId) -> bool {
+        self.sealed.remove(id)
     }
 
     /// Trade a slab bit for a sealed id — the seal transition's rewrite, applied to one stored
@@ -87,6 +105,14 @@ impl Mask {
             *word |= *source;
         }
         self.sealed.union_with(&other.sealed);
+    }
+
+    /// Fold only `other`'s slab half in. A merge folds the sparse half id by id instead, since it
+    /// needs each insert's answer to tell a transferred hold from a duplicated one.
+    pub(crate) fn union_slab_with(&mut self, other: &Mask) {
+        for (word, source) in self.words.iter_mut().zip(other.words.iter()) {
+            *word |= *source;
+        }
     }
 
     /// Whether the value's borrows reach the live cell in `slot`.

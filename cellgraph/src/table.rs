@@ -42,6 +42,24 @@ pub enum ReleaseError {
     Executing,
 }
 
+/// Whether a dying cell's storage may fold into a unique live holder rather than mint a record of
+/// its own — the embedder's per-release say over death-time absorption
+/// ([liveness-matrix.md § Locality tactics](../design/liveness-matrix.md#locality-tactics)).
+///
+/// The choice is recorded on the slot at the release and consulted when the slot *disposes*, which
+/// may be later: a dead cell a descendant's birth row still names waits in the slab first. Only
+/// this merge is refusable — the two sealed-tier merges retain exactly what a plain seal retains,
+/// so there is nothing to price.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Absorption {
+    /// Fold into the unique holder when there is one. What an embedder with no price to weigh
+    /// passes, and what a fresh slot starts at.
+    IntoHolder,
+    /// Seal instead, even where a merge was available. A priced choice declines when the holder's
+    /// region would outlive the storage by too much.
+    Refused,
+}
+
 /// A node of the hold graph, as the ring detector reports it. The graph spans both tiers: a live
 /// cell holds cells and sealed regions, and a sealed region's frozen aggregate holds both in turn.
 #[cfg(debug_assertions)]
@@ -81,6 +99,9 @@ struct Stored<C: Reattachable> {
 struct Slot<C: Reattachable> {
     generation: u32,
     state: SlotState,
+    /// What the release of this cell said about death-time absorption. Read at the slot's
+    /// disposal, which is why it rests here rather than travelling with the call.
+    absorption: Absorption,
     continuation: Option<Stored<C>>,
     /// Minted at the cell's first allocation, so a cell that never allocates costs no chunk. Freed
     /// whole at reclamation, and detached unmoved at a seal — which is what makes a cell's death
@@ -114,6 +135,22 @@ pub struct CellTable<C: Reattachable> {
     /// bounded-transition test asserts is independent of a region's resident value count.
     #[cfg(test)]
     seal_work: u64,
+    /// How many times each locality merge has fired — what the generated-interleaving test reads
+    /// to check that its runs reach all three, rather than hoping they do.
+    #[cfg(test)]
+    merges: Merges,
+}
+
+/// A tally of the three locality merges.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) struct Merges {
+    /// Death-time absorption of a uniquely held cell into its holder.
+    pub(crate) into_cell: u64,
+    /// Seal-time absorption of a count-1 sealed region into its sealing holder.
+    pub(crate) at_seal: u64,
+    /// A column-zero cell sealing into its single sealed namer.
+    pub(crate) into_namer: u64,
 }
 
 impl<C: Reattachable> CellTable<C> {
@@ -125,6 +162,7 @@ impl<C: Reattachable> CellTable<C> {
             .map(|_| Slot {
                 generation: 0,
                 state: SlotState::Free,
+                absorption: Absorption::IntoHolder,
                 continuation: None,
                 region: None,
             })
@@ -142,6 +180,8 @@ impl<C: Reattachable> CellTable<C> {
             cap,
             #[cfg(test)]
             seal_work: 0,
+            #[cfg(test)]
+            merges: Merges::default(),
         }
     }
 
@@ -218,17 +258,32 @@ impl<C: Reattachable> CellTable<C> {
     ///
     /// The cell's own birth row releases wholesale — birth holds exist for execution, and the cell
     /// will not execute again. What happens to the slot then is
-    /// [`dispose`](CellTable::dispose)'s call: reclaimed if nothing reaches it, sealed if
-    /// something does, and left resident only while a descendant's birth row still names it.
-    pub fn release(&mut self, handle: Handle) -> Result<(), ReleaseError> {
+    /// [`dispose`](CellTable::dispose)'s call: reclaimed if nothing reaches it, absorbed into a
+    /// unique holder if `absorption` allows and one is there, sealed if something else reaches it,
+    /// and left resident only while a descendant's birth row still names it.
+    ///
+    /// `absorption` is the embedder's say over that merge, recorded on the slot and applied
+    /// whenever the slot actually disposes.
+    pub fn release(&mut self, handle: Handle, absorption: Absorption) -> Result<(), ReleaseError> {
         let slot = self.live_slot(handle).map_err(ReleaseError::Stale)?;
         if self.executing.test(slot) {
             return Err(ReleaseError::Executing);
         }
         self.birth.clear_row(slot);
-        self.slots[slot as usize].state = SlotState::Dead;
+        let cell = &mut self.slots[slot as usize];
+        cell.state = SlotState::Dead;
+        cell.absorption = absorption;
         self.settle();
         Ok(())
+    }
+
+    /// Whether the table holds nothing at all: every slab slot free, and no sealed region left.
+    ///
+    /// The embedder's end-of-program alarm. After the last release, a non-empty table means either
+    /// a release was forgotten — a slot is still occupied — or a ring no merge dissolved survives
+    /// in the tier, and [`debug_ring_from_sealed`](CellTable::debug_ring_from_sealed) names it.
+    pub fn is_empty(&self) -> bool {
+        self.occupied().next().is_none() && self.sealed.is_empty()
     }
 
     /// Whether the handle names a cell that is still live — false for a slot that is free, holds a
@@ -276,18 +331,230 @@ impl<C: Reattachable> CellTable<C> {
         !self.executing.test(slot) && !self.birth.held_by_any(self.occupied(), slot)
     }
 
-    /// Take a disposable dead cell out of the slab, by the only two exits it has: reclamation when
-    /// nothing reaches its storage, and a seal when something does.
+    /// Take a disposable dead cell out of the slab, by the four exits it has: reclamation when
+    /// nothing reaches its storage, absorption into a unique slab holder, a seal into a single
+    /// sealed namer, and the plain seal everything else takes
+    /// ([liveness-matrix.md § Locality tactics](../design/liveness-matrix.md#locality-tactics)).
+    ///
+    /// The two merges are the degenerate shapes the model is designed around — a chain of
+    /// single-consumer producers — and each one is a record the tier never mints. A refused
+    /// release falls through to the plain seal.
     fn dispose(&mut self, slot: u32) {
         let holders: Vec<u32> = self
             .occupied()
             .filter(|other| self.pins.test(*other, slot))
             .collect();
         let namers = std::mem::take(&mut self.naming[slot as usize]);
-        if holders.is_empty() && namers.is_empty() {
-            self.reclaim(slot);
-        } else {
-            self.seal(slot, &holders, &namers);
+        let refused = self.slots[slot as usize].absorption == Absorption::Refused;
+        match (holders.as_slice(), namers.len()) {
+            ([], 0) => self.reclaim(slot),
+            ([into], 0) if !refused => self.absorb_into_cell(slot, *into),
+            ([], 1) => {
+                let namer = namers.iter().next().expect("the set holds one id");
+                self.seal_into_namer(slot, namer);
+            }
+            _ => self.seal(slot, &holders, &namers),
+        }
+    }
+
+    /// Merge 1: fold a dying cell's storage and holds into the one slab occupant that holds it,
+    /// minting no record at all.
+    ///
+    /// The target is any occupant, live or dead-resident: "live holder" in the design means the
+    /// slab tier as opposed to the sealed one, and a dead-resident cell's row is still a maintained
+    /// row. Its holds become the target's — the slab half through the standard mint, whose and-not
+    /// is what makes a hold the dead cell had *on its own holder* land nowhere, dissolving a
+    /// two-cell ring rather than sealing it.
+    ///
+    /// Reads of the absorbed values stay on the per-value-mask path: the chunks are now the
+    /// target's own storage, which its stored mask already names, so no id enters the picture.
+    fn absorb_into_cell(&mut self, dead: u32, into: u32) {
+        let holds = Mask::with_words(
+            self.pins.row_words(dead),
+            std::mem::take(&mut self.sealed_holds[dead as usize]),
+        );
+        // The target's hold on the dead cell is structural from here on: the storage is its own.
+        self.pins.clear(into, dead);
+        if let Some(stored) = &mut self.slots[into as usize].continuation {
+            stored.reach.remove_slot(dead);
+        }
+        self.pins.mint(into, &holds);
+
+        // The sparse half moves holder without changing count, except where the target already
+        // held the same region: there the dead cell's hold simply vanishes.
+        let mut dups = SealedSet::new();
+        for id in holds.sealed().iter() {
+            if !self.sealed_holds[into as usize].insert(id) {
+                dups.insert(id);
+            }
+        }
+        let storage = self.slots[dead as usize].region.take();
+        Region::splice(&mut self.slots[into as usize].region, storage);
+
+        self.pins.clear_row(dead);
+        self.recycle(dead);
+        self.release_sealed_holds(&dups);
+        debug_assert!(
+            !self.pins.test(into, into),
+            "a cell absorbed a hold on itself"
+        );
+        #[cfg(test)]
+        {
+            self.seal_work += 1 + dups.len() as u64;
+            self.merges.into_cell += 1;
+        }
+    }
+
+    /// Merge 3: a cell nothing in the slab holds, named by exactly one sealed aggregate, folds
+    /// into that record instead of minting one beside it.
+    ///
+    /// No stored mask needs rewriting: a stored mask naming a slot implies a pin hold on it, and
+    /// this cell's slab column is empty by the precondition.
+    fn seal_into_namer(&mut self, dead: u32, namer: SealedId) {
+        let holds = Mask::with_words(
+            self.pins.row_words(dead),
+            std::mem::take(&mut self.sealed_holds[dead as usize]),
+        );
+        let storage = self.slots[dead as usize].region.take();
+        // The namer's hold on the dead cell is structural; the slots its row named trade the dead
+        // cell's bit for the record's own name inside the fold.
+        self.sealed
+            .get_mut(namer)
+            .expect("the namer came out of the reverse index")
+            .aggregate
+            .remove_slot(dead);
+        let (_, dups) = self.fold_into_record(namer, holds, storage);
+
+        self.pins.clear_row(dead);
+        self.recycle(dead);
+        self.release_sealed_holds(&dups);
+        #[cfg(test)]
+        {
+            self.seal_work += 1 + dups.len() as u64;
+            self.merges.into_namer += 1;
+        }
+        // The dead cell may have been the namer's last holder — a ring whose final cell just died.
+        if self
+            .sealed
+            .get(namer)
+            .is_some_and(|record| record.holders == 0)
+        {
+            self.reclaim_record(namer);
+            return;
+        }
+        self.absorb_singletons(namer);
+    }
+
+    /// Fold a hold set and a region into an existing record: the shared body of merges 2 and 3.
+    ///
+    /// Returns the sealed ids that *transferred* (absent from the target's aggregate, so the hold
+    /// changed owner without changing count) and the ones that *duplicated* (already there, so one
+    /// hold on each vanishes). The caller releases the duplicates, since the borrow of the record
+    /// has to end first, and then checks whether the target still has a holder: a source that held
+    /// its own target contributes a self-hold, which has no representation and drops the count.
+    fn fold_into_record(
+        &mut self,
+        target: SealedId,
+        holds: Mask,
+        storage: Option<Region>,
+    ) -> (Vec<SealedId>, SealedSet) {
+        let cap = self.cap;
+        let record = self
+            .sealed
+            .get_mut(target)
+            .expect("the merge target is in the tier");
+        let newly_named: Vec<u32> = holds
+            .slab_slots(cap)
+            .filter(|slot| !record.aggregate.names(*slot))
+            .collect();
+        record.aggregate.union_slab_with(&holds);
+
+        let mut transferred = Vec::new();
+        let mut duplicated = SealedSet::new();
+        for id in holds.sealed().iter() {
+            if id == target {
+                // The source held its own target. The hold becomes a self-hold, which no aggregate
+                // can express, so it simply goes.
+                record.holders -= 1;
+                continue;
+            }
+            if record.aggregate.add_sealed(id) {
+                transferred.push(id);
+            } else {
+                duplicated.insert(id);
+            }
+        }
+        Region::splice(&mut record.storage, storage);
+        debug_assert!(
+            !record.aggregate.names_sealed(target),
+            "a record's aggregate names itself"
+        );
+
+        // The slots the fold newly reached register the target, so the next seal of one of them
+        // finds it.
+        for slot in newly_named {
+            self.naming[slot as usize].insert(target);
+        }
+        (transferred, duplicated)
+    }
+
+    /// Merge 2: absorb every count-1 sealed region the record `target` holds, to a fixpoint.
+    ///
+    /// A count of 1 on a record the target names means the target *is* that holder, so the region
+    /// is reachable through this record and nothing else — exactly the chain of single-consumer
+    /// producers the tier would otherwise keep as a chain of records. The candidate set is a
+    /// worklist rather than one pass: a fold transfers ids the target did not hold before, and
+    /// drops a duplicate's count, either of which can newly qualify.
+    fn absorb_singletons(&mut self, target: SealedId) {
+        let Some(record) = self.sealed.get(target) else {
+            return;
+        };
+        let mut pending: Vec<SealedId> = record.aggregate.sealed().iter().collect();
+        while let Some(source) = pending.pop() {
+            if source == target {
+                continue;
+            }
+            match self.sealed.get(source) {
+                Some(record) if record.holders == 1 => {}
+                _ => continue,
+            }
+            let absorbed = self
+                .sealed
+                .remove(source)
+                .expect("the record was just read");
+            let named: Vec<u32> = absorbed.aggregate.slab_slots(self.cap).collect();
+            for slot in &named {
+                self.naming[*slot as usize].remove(source);
+            }
+            self.sealed
+                .get_mut(target)
+                .expect("the target is in the tier")
+                .aggregate
+                .remove_sealed(source);
+            #[cfg(test)]
+            let sealed_width = absorbed.aggregate.sealed().len() as u64;
+            let (transferred, duplicated) =
+                self.fold_into_record(target, absorbed.aggregate, absorbed.storage);
+            // Each duplicate had at least two holders — the target and the absorbed record — so
+            // none of these counts reaches zero, and the target survives the call.
+            self.release_sealed_holds(&duplicated);
+            #[cfg(test)]
+            {
+                self.seal_work += 1 + named.len() as u64 + sealed_width;
+                self.merges.at_seal += 1;
+            }
+
+            if self
+                .sealed
+                .get(target)
+                .is_some_and(|record| record.holders == 0)
+            {
+                // The absorbed record held its own holder, and was its last: the ring dissolves.
+                self.reclaim_record(target);
+                return;
+            }
+            pending.extend(transferred);
+            pending.extend(duplicated.iter());
         }
     }
 
@@ -314,6 +581,7 @@ impl<C: Reattachable> CellTable<C> {
     fn recycle(&mut self, slot: u32) {
         let cell = &mut self.slots[slot as usize];
         cell.state = SlotState::Free;
+        cell.absorption = Absorption::IntoHolder;
         cell.continuation = None;
         cell.region = None;
         cell.generation = cell.generation.wrapping_add(1);
@@ -385,6 +653,9 @@ impl<C: Reattachable> CellTable<C> {
         );
         self.pins.clear_row(slot);
         self.recycle(slot);
+        // 4. Every count-1 region the new record holds folds into it: a chain of single-consumer
+        //    producers collapses to the one record at its head rather than one record per link.
+        self.absorb_singletons(id);
     }
 
     /// Drop one hold on each of `released`, reclaiming every record whose count reaches zero and
@@ -399,13 +670,30 @@ impl<C: Reattachable> CellTable<C> {
             if record.holders > 0 {
                 continue;
             }
-            let record = self.sealed.remove(id).expect("the record was just read");
-            for slot in record.aggregate.slab_slots(self.cap) {
-                self.naming[slot as usize].remove(id);
-            }
-            pending.extend(record.aggregate.sealed().iter());
-            // The record's storage drops here: nothing reaches these chunks any more.
+            pending.extend(self.retire_record(id).iter());
         }
+    }
+
+    /// Retire a record whose count has reached zero: out of the tier, out of the reverse naming
+    /// index, and its storage dropped. Hands back the holds its aggregate named, which the caller
+    /// releases in turn.
+    fn retire_record(&mut self, id: SealedId) -> SealedSet {
+        let Some(record) = self.sealed.remove(id) else {
+            return SealedSet::new();
+        };
+        let named: Vec<u32> = record.aggregate.slab_slots(self.cap).collect();
+        for slot in named {
+            self.naming[slot as usize].remove(id);
+        }
+        // The record's storage drops here: nothing reaches these chunks any more.
+        record.aggregate.sealed().clone()
+    }
+
+    /// Reclaim a record nothing holds any more — the zero-count exit, reached directly when a
+    /// merge dissolves the last hold on its own target rather than through a holder's release.
+    fn reclaim_record(&mut self, id: SealedId) {
+        let released = self.retire_record(id);
+        self.release_sealed_holds(&released);
     }
 
     /// The mint: fold a value's reach into the hold set of the region that now stores it, minus

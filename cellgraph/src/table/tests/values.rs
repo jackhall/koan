@@ -70,14 +70,14 @@ fn a_held_cell_leaves_the_slab_at_its_death_and_its_record_goes_with_its_holder(
     assert!(table.holds(holder, held));
 
     // The slot comes straight back: retention lives in the sealed tier, never in the slab.
-    table.release(held).unwrap();
+    table.release(held, Absorption::Refused).unwrap();
     assert_eq!(state_of(&table, held), SlotState::Free);
     assert_eq!(table.sealed.len(), 1);
     let id = table.sealed.ids().next().unwrap();
     assert!(table.sealed_holds[holder.slot() as usize].contains(id));
     assert!(!table.holds(holder, held));
 
-    table.release(holder).unwrap();
+    table.release(holder, Absorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(table.free.len(), 4);
 }
@@ -127,7 +127,7 @@ fn a_bare_hold_on_a_dead_cell_refuses() {
     let mut table: CellTable<Owned> = CellTable::new(4);
     let holder = table.create(None, None).unwrap();
     let other = table.create(None, None).unwrap();
-    table.release(other).unwrap();
+    table.release(other, Absorption::IntoHolder).unwrap();
 
     let refusal = table.enter(holder, |context| context.hold(other)).unwrap();
     assert_eq!(refusal, Err(StaleHandle(other)));
@@ -135,10 +135,14 @@ fn a_bare_hold_on_a_dead_cell_refuses() {
 }
 
 #[test]
-fn a_ring_is_reported_and_leaks_rather_than_dangles() {
+fn a_ring_an_outside_holder_keeps_from_every_merge_is_reported_and_leaks() {
     let mut table: CellTable<Owned> = CellTable::new(4);
     let first = table.create(None, None).unwrap();
     let second = table.create(None, None).unwrap();
+    // A bystander holding both sides keeps each count above the one a merge needs, so this ring
+    // survives to the tier. A ring with no outside holder dissolves instead — see
+    // `absorption::a_two_cell_ring_dissolves_when_one_side_dies`.
+    let bystander = table.create(None, None).unwrap();
 
     table
         .enter(first, |context| context.hold(second))
@@ -148,6 +152,13 @@ fn a_ring_is_reported_and_leaks_rather_than_dangles() {
         .enter(second, |context| context.hold(first))
         .unwrap()
         .unwrap();
+    table
+        .enter(bystander, |context| {
+            context.hold(first).unwrap();
+            context.hold(second)
+        })
+        .unwrap()
+        .unwrap();
 
     let ring = table
         .debug_ring_from(first)
@@ -155,10 +166,11 @@ fn a_ring_is_reported_and_leaks_rather_than_dangles() {
     assert_eq!(ring.len(), 2);
     assert!(ring.contains(&HoldNode::Cell(first)) && ring.contains(&HoldNode::Cell(second)));
 
-    // Both deaths are declared, and the ring moves into the sealed tier intact: each record holds
+    // Every death is declared, and the ring moves into the sealed tier intact: each record holds
     // the other, so neither count ever reaches zero. A ring is a leak, never a dangle.
-    table.release(first).unwrap();
-    table.release(second).unwrap();
+    table.release(first, Absorption::IntoHolder).unwrap();
+    table.release(second, Absorption::IntoHolder).unwrap();
+    table.release(bystander, Absorption::IntoHolder).unwrap();
     assert_eq!(table.free.len(), 4);
     assert_eq!(table.sealed.len(), 2);
 

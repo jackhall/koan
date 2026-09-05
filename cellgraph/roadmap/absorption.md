@@ -30,9 +30,17 @@ degenerate cases the model is designed around stay rare rather than common.
 
 **Directions.**
 
-- *Refusal signal — open.* A flag on `release`, or a table-wide policy hook.
-  Recommended: a flag on `release`; the decision is per cell and the
-  embedder already has the cell's handle in hand.
+- *Refusal signal — decided.* An enum parameter on `release`:
+  `Absorption::IntoHolder` (the default an embedder passes when it has no
+  price to weigh) or `Absorption::Refused`. The choice is recorded on the
+  slot and applied when the slot disposes, which may be later than the
+  release. The two sealed-tier merges are not refusable: they retain exactly
+  what a plain seal retains.
+- *Rings — decided.* A merge whose source holds its target runs anyway; the
+  hold becomes a self-hold and vanishes, and a record left with no holders is
+  reclaimed on the spot. A ring whose cells die one at a time with no outside
+  holder is freed rather than leaked; rings that survive still leak and the
+  debug detector still names them.
 - *Group sealing — open.* Delimiting a dying subtree that seals as one
   record is design work; the item ships the three merges without it and
   records the group case as open in the design doc if it is not resolved

@@ -143,6 +143,10 @@ impl SealedTier {
         self.records.remove(&id)
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
     #[cfg(test)]
     pub(crate) fn ids(&self) -> impl Iterator<Item = SealedId> + '_ {
         self.records.keys().copied()

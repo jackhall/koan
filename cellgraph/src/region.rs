@@ -10,28 +10,65 @@
 //! Nothing stored in a region is ever dropped — a bump releases its chunks whole — which is why
 //! every family a region hosts is [`DropFree`](crate::DropFree). The write surface is
 //! [`Writer`], a `Copy` handle a step receives inside a build closure's brand and cannot widen.
+//!
+//! A region is a **bundle** of bumps: the one it writes into, plus the bumps of every region
+//! absorbed into it. Absorption is how a merge splices storage
+//! ([liveness-matrix.md § Locality tactics](../design/liveness-matrix.md#locality-tactics)) —
+//! a `Bump` moves without moving a chunk byte, so the pointer stability a detached seal already
+//! relies on carries a borrow across the merge unchanged.
 
 use bumpalo::Bump;
 
-/// One cell's storage. Minted lazily at the cell's first allocation, so a cell that never
-/// allocates costs no chunk.
+/// One cell's storage: the bump it writes into, plus the bumps it has absorbed. Minted lazily at
+/// the cell's first allocation, so a cell that never allocates costs no chunk.
 pub(crate) struct Region {
     bump: Bump,
+    /// Bumps merged in from regions this one absorbed. Read-only from here on — nothing is ever
+    /// allocated into an absorbed bump again — but their chunks stay at their addresses, which is
+    /// what the borrows minted before the merge still name.
+    absorbed: Vec<Bump>,
 }
 
 impl Region {
     pub(crate) fn new() -> Self {
-        Region { bump: Bump::new() }
+        Region {
+            bump: Bump::new(),
+            absorbed: Vec::new(),
+        }
     }
 
     pub(crate) fn writer(&self) -> Writer<'_> {
         Writer(&self.bump)
     }
 
+    /// Take `other`'s chunks into this bundle. The bumps move; the chunks do not.
+    fn absorb(&mut self, other: Region) {
+        self.absorbed.extend(other.absorbed);
+        self.absorbed.push(other.bump);
+    }
+
+    /// Splice one optional region into another — the storage half of every merge. A source with no
+    /// region contributes nothing; a target with none takes the source whole.
+    pub(crate) fn splice(into: &mut Option<Region>, from: Option<Region>) {
+        let Some(from) = from else {
+            return;
+        };
+        match into {
+            Some(target) => target.absorb(from),
+            None => *into = Some(from),
+        }
+    }
+
     /// Bytes the chunks occupy, whether or not a value still uses them — a bump never reclaims
-    /// within a chunk, so this is what the region costs while anything holds it.
+    /// within a chunk, so this is what the region costs while anything holds it. Absorbed bumps
+    /// count: the bundle is answerable for every chunk it took in.
     pub(crate) fn allocated_bytes(&self) -> usize {
         self.bump.allocated_bytes()
+            + self
+                .absorbed
+                .iter()
+                .map(Bump::allocated_bytes)
+                .sum::<usize>()
     }
 }
 
