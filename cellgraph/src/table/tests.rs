@@ -1,4 +1,5 @@
 mod absorption;
+mod pricing;
 mod properties;
 mod sealing;
 mod values;

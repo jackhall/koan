@@ -14,7 +14,10 @@
 //!   a record that survives a wound-down run a ring by arithmetic, with no ring walk in the loop;
 //! - the live tier never grows across a release, so storage that has sealed never re-enters it;
 //! - a record that survives a wound-down run was named by two hold sets at some point — the
-//!   universal the hand-written ring-dissolution tests are three instances of.
+//!   universal the hand-written ring-dissolution tests are three instances of;
+//! - every memoized closure still equals the walk that would recompute it, and no memo exists
+//!   unless a price query put it there — the never-invalidated memo carried across every
+//!   interleaving, and the substrate's own paths pricing nothing.
 
 use proptest::prelude::*;
 
@@ -34,9 +37,12 @@ enum Verb {
     Keep { cell: usize, over: usize },
     Read { cell: usize },
     Release { cell: usize, refuse: bool },
+    Price { index: usize },
 }
 
-fn verb() -> impl Strategy<Value = Verb> {
+/// The verbs that change the table. What the merge-coverage test draws from: a read-only verb
+/// reaches no merge, so mixing one in would only thin the corpus that has to reach all three.
+fn state_verb() -> impl Strategy<Value = Verb> {
     prop_oneof![
         proptest::option::of(0..8usize).prop_map(|parent| Verb::Create { parent }),
         (0..8usize, 0..8usize).prop_map(|(holder, held)| Verb::Hold { holder, held }),
@@ -47,7 +53,26 @@ fn verb() -> impl Strategy<Value = Verb> {
     ]
 }
 
-fn check_invariants(table: &CellTable<Borrowed>) {
+/// Those plus the price query, which the invariant sweep needs interleaved among them to catch a
+/// memo taken against a table that then kept moving.
+fn verb() -> impl Strategy<Value = Verb> {
+    prop_oneof![
+        6 => state_verb(),
+        1 => (0..8usize).prop_map(|index| Verb::Price { index }),
+    ]
+}
+
+/// The tier's ids in id order, since a walk's answers must not depend on hash iteration order.
+fn sorted_ids(table: &CellTable<Borrowed>) -> Vec<SealedId> {
+    let mut ids: Vec<SealedId> = table.sealed.ids().collect();
+    ids.sort();
+    ids
+}
+
+/// `priced` says whether a price query has run in this case yet — the substrate's own paths are
+/// supposed to write no memo, so a memo before the first `Price` verb is one a mint or a release
+/// left behind.
+fn check_invariants(table: &CellTable<Borrowed>, priced: bool) {
     let occupied: Vec<u32> = (0..CAP)
         .filter(|slot| table.slots[*slot as usize].state != SlotState::Free)
         .collect();
@@ -165,6 +190,49 @@ fn check_invariants(table: &CellTable<Borrowed>) {
             }
         }
     }
+
+    // The occupancy signal is a maintained total, not a scan, so it has to agree with one.
+    let scanned: usize = records
+        .iter()
+        .map(|id| table.sealed.get(*id).unwrap().retained_bytes())
+        .sum();
+    let occupancy = table.occupancy();
+    assert_eq!(
+        occupancy.retained_bytes, scanned,
+        "the tier's running byte total drifted from what its records retain"
+    );
+    assert_eq!(occupancy.records, records.len());
+    assert_eq!(occupancy.occupied as usize, occupied.len());
+    assert_eq!(occupancy.cap, CAP);
+
+    for id in &records {
+        let record = table.sealed.get(*id).unwrap();
+        let Some(memo) = record.closure.get() else {
+            continue;
+        };
+        assert!(
+            priced,
+            "record {id:?} carries a memo no price query asked for"
+        );
+        // Recomputed from scratch, consulting no memo at all: a closure memoized as frozen still
+        // names no live cell, spans the same records, and prices at the same bytes. Nothing inside
+        // a frozen closure changes, and this is the check that says so for every interleaving.
+        let fresh = table.reached_from(Node::Sealed(*id), false);
+        assert!(
+            fresh.cells.is_empty(),
+            "the memoized closure of {id:?} has since named a live cell"
+        );
+        let mut walked = fresh.records.clone();
+        walked.sort();
+        let mut memoized = memo.records.clone();
+        memoized.sort();
+        assert_eq!(walked, memoized, "the memoized closure of {id:?} drifted");
+        assert_eq!(
+            table.bytes_of(&fresh),
+            memo.bytes,
+            "the memoized bytes of {id:?} drifted"
+        );
+    }
 }
 
 /// Drive one generated run to its end — every verb, then a wind-down that releases everything —
@@ -173,6 +241,8 @@ fn check_invariants(table: &CellTable<Borrowed>) {
 fn run(verbs: &[Verb]) -> Merges {
     let mut table: CellTable<Borrowed> = CellTable::new(CAP);
     let mut minted: Vec<Handle> = Vec::new();
+    // No price query has run yet, so no record may carry a memo.
+    let mut priced = false;
 
     for step in verbs {
         match *step {
@@ -265,8 +335,38 @@ fn run(verbs: &[Verb]) -> Merges {
                     );
                 }
             }
+            // Pricing is read-only: it changes no hold, and the invariant sweep after every step
+            // is what says so. What it does write is a memo, and the sweep re-derives every one.
+            Verb::Price { index } => {
+                let ids = sorted_ids(&table);
+                if !ids.is_empty() {
+                    priced = true;
+                    let id = ids[index % ids.len()];
+                    let whole = table.closure(id).expect("the id came out of the tier");
+                    // One candidate shares its closure with nobody, so its slice is the whole of it.
+                    assert_eq!(table.unique_closures(&[id]), vec![Some(whole)]);
+
+                    let slices = table.unique_closures(&ids);
+                    let mut total = 0;
+                    for (id, slice) in ids.iter().zip(&slices) {
+                        let slice = slice.expect("every id came out of the tier");
+                        let whole = table.closure(*id).expect("the id came out of the tier");
+                        assert!(
+                            slice.bytes <= whole.bytes,
+                            "the unique slice of {id:?} outprices its whole closure"
+                        );
+                        assert_eq!(slice.frozen, whole.frozen);
+                        total += slice.bytes;
+                    }
+                    // The slices partition part of one graph, so together they cannot outprice it.
+                    assert!(
+                        total <= table.occupancy().retained_bytes + live_bytes(&table, CAP),
+                        "the unique slices together outprice both tiers"
+                    );
+                }
+            }
         }
-        check_invariants(&table);
+        check_invariants(&table, priced);
     }
 
     // Winding the run down: once every cell's death is declared, the cascade returns every slot,
@@ -274,7 +374,7 @@ fn run(verbs: &[Verb]) -> Merges {
     for handle in &minted {
         let _ = table.release(*handle, Absorption::IntoHolder);
     }
-    check_invariants(&table);
+    check_invariants(&table, priced);
     for slot in 0..CAP {
         assert_eq!(table.slots[slot as usize].state, SlotState::Free);
     }
@@ -322,7 +422,7 @@ fn each_merge_fires_across_generated_interleavings() {
     use proptest::test_runner::TestRunner;
 
     let cases = if cfg!(miri) { 4 } else { 256 };
-    let strategy = proptest::collection::vec(verb(), 1..40);
+    let strategy = proptest::collection::vec(state_verb(), 1..40);
     let mut runner = TestRunner::deterministic();
     let mut total = Merges::default();
 

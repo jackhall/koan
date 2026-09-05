@@ -13,7 +13,7 @@ use crate::mask::Mask;
 use crate::matrix::{BitRow, Matrix};
 use crate::reattach::{DropFree, Erased, Reattachable};
 use crate::region::{Region, Writer};
-use crate::sealed::{SealedId, SealedRecord, SealedSet, SealedTier};
+use crate::sealed::{Memo, SealedId, SealedRecord, SealedSet, SealedTier};
 
 /// Refusals from [`CellTable::create`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,6 +60,47 @@ pub enum Absorption {
     Refused,
 }
 
+/// What a hold on one sealed region keeps alive: its aggregate's transitive closure over the hold
+/// graph, priced in chunk bytes.
+///
+/// The closure spans both tiers. A live cell a reached aggregate names is retention in waiting —
+/// it will seal, or seal into its namer, when it dies — so its region is priced too, and the
+/// closure only settles once it names no live cell.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Closure {
+    /// Chunk bytes of every region the closure spans, the priced region's own included. A region
+    /// two branches of the closure both reach is counted once.
+    pub bytes: usize,
+    /// Whether the closure names no live cell, so `bytes` can never change again.
+    pub frozen: bool,
+}
+
+/// How much a live cell had absorbed at one instant, taken by [`CellTable::mark`] and read back by
+/// [`CellTable::absorbed_since`].
+///
+/// Stamped with the cell it was taken against, so it cannot be read against another one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Mark {
+    handle: Handle,
+    absorbed: usize,
+}
+
+/// Occupancy of both tiers at one instant — the input an embedder ramps a copy-versus-hold
+/// threshold over. The substrate ships the numbers and no threshold: whether the ramp is linear or
+/// a watermark step is the embedder's call
+/// ([liveness-matrix.md § Bounding the two tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Occupancy {
+    /// Slab slots occupied — live cells and dead-but-resident ones alike.
+    pub occupied: u32,
+    /// The slab's fixed cap.
+    pub cap: u32,
+    /// Records in the sealed tier, which has no cap of its own.
+    pub records: usize,
+    /// Chunk bytes those records retain between them.
+    pub retained_bytes: usize,
+}
+
 /// A node of the hold graph, as the ring detector reports it. The graph spans both tiers: a live
 /// cell holds cells and sealed regions, and a sealed region's frozen aggregate holds both in turn.
 #[cfg(debug_assertions)]
@@ -71,11 +112,17 @@ pub enum HoldNode {
 
 /// The same node keyed by slab slot rather than handle, so a walk can visit it before deciding
 /// which generation to report.
-#[cfg(debug_assertions)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Node {
     Cell(u32),
     Sealed(SealedId),
+}
+
+/// The nodes one walk of the hold graph visited, split by tier. A walk with no cells is a frozen
+/// closure: nothing in it will ever seal, merge, or retire again.
+struct Reached {
+    cells: Vec<u32>,
+    records: Vec<SealedId>,
 }
 
 /// What a slab slot currently holds. `Dead` is the resident state: the embedder declared the
@@ -484,11 +531,11 @@ impl<C: Reattachable> CellTable<C> {
                 duplicated.insert(id);
             }
         }
-        Region::splice(&mut record.storage, storage);
         debug_assert!(
             !record.aggregate.names_sealed(target),
             "a record's aggregate names itself"
         );
+        self.sealed.splice_storage(target, storage);
 
         // The slots the fold newly reached register the target, so the next seal of one of them
         // finds it.
@@ -651,6 +698,7 @@ impl<C: Reattachable> CellTable<C> {
                 holders: count,
                 #[cfg(test)]
                 peak_holders: count,
+                closure: std::cell::OnceCell::new(),
             },
         );
         self.pins.clear_row(slot);
@@ -745,6 +793,245 @@ impl<C: Reattachable> CellTable<C> {
         self.sealed.get(id).map(SealedRecord::retained_bytes)
     }
 
+    /// What a hold on the sealed region `id` keeps alive, or `None` if nothing holds it any more.
+    ///
+    /// The walk spans both tiers, so a live cell the closure names is priced at its region and
+    /// walked through in turn. The answer is [`frozen`](Closure::frozen) once no live cell is left
+    /// in it, and a frozen answer is memoized on the record and reused forever — nothing inside a
+    /// frozen closure can change, which is the argument the memo field carries.
+    ///
+    /// **Read-only.** Nothing in the substrate consults this, and it changes no hold.
+    pub fn closure(&self, id: SealedId) -> Option<Closure> {
+        if let Some(memo) = self.sealed.get(id)?.closure.get() {
+            return Some(Closure {
+                bytes: memo.bytes,
+                frozen: true,
+            });
+        }
+        let reached = self.reached_from_record(id)?;
+        Some(Closure {
+            bytes: self.bytes_of(&reached),
+            frozen: reached.cells.is_empty(),
+        })
+    }
+
+    /// The slice of each candidate's closure that no *other* candidate reaches — the marginal price
+    /// of releasing one hold, with the part it shares with another candidate billed to neither.
+    ///
+    /// One answer per input position, `None` where the id is no longer in the tier; a repeated id
+    /// gets the same answer at every position naming it. A single candidate prices exactly as
+    /// [`closure`](CellTable::closure) does.
+    ///
+    /// Uniqueness is **relative to the candidate set**. A holder outside the set that also reaches
+    /// a node is not discounted, so a candidate lying inside another candidate's closure is shared
+    /// throughout and prices at zero — the honest marginal price of releasing both.
+    ///
+    /// **Read-only**, on the same terms as [`closure`](CellTable::closure).
+    pub fn unique_closures(&self, candidates: &[SealedId]) -> Vec<Option<Closure>> {
+        let mut seen = SealedSet::new();
+        let mut walks: Vec<(SealedId, Reached)> = Vec::new();
+        for id in candidates {
+            if seen.insert(*id)
+                && let Some(reached) = self.reached_from_record(*id)
+            {
+                walks.push((*id, reached));
+            }
+        }
+
+        // How many candidates' closures each node lies in. A count of one is what makes it unique.
+        let mut cell_count = vec![0u32; self.cap as usize];
+        let mut record_count: std::collections::HashMap<SealedId, u32> =
+            std::collections::HashMap::new();
+        for (_, reached) in &walks {
+            for slot in &reached.cells {
+                cell_count[*slot as usize] += 1;
+            }
+            for id in &reached.records {
+                *record_count.entry(*id).or_insert(0) += 1;
+            }
+        }
+
+        let priced: Vec<(SealedId, Closure)> = walks
+            .iter()
+            .map(|(id, reached)| {
+                let cells: usize = reached
+                    .cells
+                    .iter()
+                    .filter(|slot| cell_count[**slot as usize] == 1)
+                    .map(|slot| self.cell_bytes(*slot))
+                    .sum();
+                let records: usize = reached
+                    .records
+                    .iter()
+                    .filter(|inner| record_count[*inner] == 1)
+                    .map(|inner| self.record_bytes(*inner))
+                    .sum();
+                (
+                    *id,
+                    Closure {
+                        bytes: cells + records,
+                        // The whole closure's, not the slice's: a live cell anywhere in it can
+                        // still redraw the partition.
+                        frozen: reached.cells.is_empty(),
+                    },
+                )
+            })
+            .collect();
+
+        candidates
+            .iter()
+            .map(|id| {
+                priced
+                    .iter()
+                    .find(|(priced, _)| priced == id)
+                    .map(|(_, closure)| *closure)
+            })
+            .collect()
+    }
+
+    /// Chunk bytes a live cell's region bundle occupies, absorbed bumps included. `0` for a cell
+    /// that never allocated.
+    pub fn region_bytes(&self, handle: Handle) -> Result<usize, StaleHandle> {
+        let slot = self.live_slot(handle)?;
+        Ok(self.cell_bytes(slot))
+    }
+
+    /// Snapshot how much the cell has absorbed so far, to read a later total against.
+    pub fn mark(&self, handle: Handle) -> Result<Mark, StaleHandle> {
+        let slot = self.live_slot(handle)?;
+        Ok(Mark {
+            handle,
+            absorbed: self.absorbed_bytes(slot),
+        })
+    }
+
+    /// Chunk bytes the marked cell has taken in from other regions since the mark — a loop cart's
+    /// accretion, without a scan.
+    ///
+    /// This counts what death-time absorption merged in, which is the proxy the design names for a
+    /// cart's dead bytes. It is not a count of bytes that are actually dead: an absorbed region may
+    /// still hold the value the cart carries, and a value the cart allocated and then replaced is
+    /// invisible here. `Err` once the marked cell has died.
+    pub fn absorbed_since(&self, mark: Mark) -> Result<usize, StaleHandle> {
+        let slot = self.live_slot(mark.handle)?;
+        // A live cell's bundle only ever takes storage in, so the counter never runs backwards.
+        Ok(self.absorbed_bytes(slot) - mark.absorbed)
+    }
+
+    /// How full both tiers are right now. The slab is bounded by its cap and the sealed tier by
+    /// nothing, so an embedder ramps its copy-versus-hold threshold on these two numbers together.
+    pub fn occupancy(&self) -> Occupancy {
+        Occupancy {
+            occupied: self.cap - self.free.len() as u32,
+            cap: self.cap,
+            records: self.sealed.len(),
+            retained_bytes: self.sealed.retained_bytes(),
+        }
+    }
+
+    /// Chunk bytes of the region in one slab slot, `0` where the slot never allocated.
+    fn cell_bytes(&self, slot: u32) -> usize {
+        self.slots[slot as usize]
+            .region
+            .as_ref()
+            .map_or(0, Region::allocated_bytes)
+    }
+
+    fn absorbed_bytes(&self, slot: u32) -> usize {
+        self.slots[slot as usize]
+            .region
+            .as_ref()
+            .map_or(0, Region::absorbed_bytes)
+    }
+
+    /// Chunk bytes a record retains, `0` for an id no longer in the tier.
+    fn record_bytes(&self, id: SealedId) -> usize {
+        self.sealed.get(id).map_or(0, SealedRecord::retained_bytes)
+    }
+
+    fn bytes_of(&self, reached: &Reached) -> usize {
+        reached
+            .cells
+            .iter()
+            .map(|slot| self.cell_bytes(*slot))
+            .sum::<usize>()
+            + reached
+                .records
+                .iter()
+                .map(|id| self.record_bytes(*id))
+                .sum::<usize>()
+    }
+
+    /// Walk from a record and memoize the result when it comes back frozen. `None` for an id no
+    /// longer in the tier.
+    fn reached_from_record(&self, id: SealedId) -> Option<Reached> {
+        let record = self.sealed.get(id)?;
+        if let Some(memo) = record.closure.get() {
+            return Some(Reached {
+                cells: Vec::new(),
+                records: memo.records.clone(),
+            });
+        }
+        let reached = self.reached_from(Node::Sealed(id), true);
+        if reached.cells.is_empty() {
+            let _ = record.closure.set(Memo {
+                records: reached.records.clone(),
+                bytes: self.bytes_of(&reached),
+            });
+        }
+        Some(reached)
+    }
+
+    /// Every node of the hold graph reachable from `start`, `start` itself included, over both
+    /// tiers. A ring terminates on the seen sets rather than looping.
+    ///
+    /// A record that already carries a memo *is* its own frozen closure, so with `use_memos` the
+    /// walk folds the memo's record set in instead of descending. The set is merged, never summed:
+    /// two branches of one closure may share a sub-tier, and adding two memoized totals would bill
+    /// the shared part twice. `use_memos` is false only where a test recomputes a memo from
+    /// scratch to check it against what was recorded.
+    fn reached_from(&self, start: Node, use_memos: bool) -> Reached {
+        let mut seen_cells = BitRow::new(self.cap);
+        let mut seen_records = SealedSet::new();
+        let mut reached = Reached {
+            cells: Vec::new(),
+            records: Vec::new(),
+        };
+        let mut stack = vec![start];
+        while let Some(node) = stack.pop() {
+            match node {
+                Node::Cell(slot) => {
+                    if seen_cells.test(slot) {
+                        continue;
+                    }
+                    seen_cells.set(slot);
+                    reached.cells.push(slot);
+                    stack.extend(self.holds_of(node));
+                }
+                Node::Sealed(id) => {
+                    if !seen_records.insert(id) {
+                        continue;
+                    }
+                    reached.records.push(id);
+                    let memo = use_memos
+                        .then(|| self.sealed.get(id).and_then(|record| record.closure.get()))
+                        .flatten();
+                    match memo {
+                        Some(memo) => {
+                            for inner in &memo.records {
+                                if seen_records.insert(*inner) {
+                                    reached.records.push(*inner);
+                                }
+                            }
+                        }
+                        None => stack.extend(self.holds_of(node)),
+                    }
+                }
+            }
+        }
+        reached
+    }
+
     /// Walk the hold graph from `start` and report a cycle if one is reachable — the fail-safe
     /// diagnostic for a ring, which keeps everything on it alive forever rather than dangling.
     ///
@@ -782,7 +1069,6 @@ impl<C: Reattachable> CellTable<C> {
 
     /// What one node of the hold graph holds: for a cell, its two hold-set halves; for a sealed
     /// region, the two halves of its frozen aggregate.
-    #[cfg(debug_assertions)]
     fn holds_of(&self, node: Node) -> Vec<Node> {
         match node {
             Node::Cell(slot) => self

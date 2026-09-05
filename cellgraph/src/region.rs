@@ -27,6 +27,11 @@ pub(crate) struct Region {
     /// allocated into an absorbed bump again — but their chunks stay at their addresses, which is
     /// what the borrows minted before the merge still name.
     absorbed: Vec<Bump>,
+    /// Chunk bytes this bundle has taken in from other regions, over its whole life. Monotone: a
+    /// bundle never gives storage back, so the difference between two readings is what it absorbed
+    /// between them — the accretion a loop cart is priced on
+    /// ([liveness-matrix.md § Locality tactics](../design/liveness-matrix.md#locality-tactics)).
+    absorbed_bytes: usize,
 }
 
 impl Region {
@@ -34,6 +39,7 @@ impl Region {
         Region {
             bump: Bump::new(),
             absorbed: Vec::new(),
+            absorbed_bytes: 0,
         }
     }
 
@@ -43,6 +49,7 @@ impl Region {
 
     /// Take `other`'s chunks into this bundle. The bumps move; the chunks do not.
     fn absorb(&mut self, other: Region) {
+        self.absorbed_bytes += other.allocated_bytes();
         self.absorbed.extend(other.absorbed);
         self.absorbed.push(other.bump);
     }
@@ -50,12 +57,17 @@ impl Region {
     /// Splice one optional region into another — the storage half of every merge. A source with no
     /// region contributes nothing; a target with none takes the source whole.
     pub(crate) fn splice(into: &mut Option<Region>, from: Option<Region>) {
-        let Some(from) = from else {
+        let Some(mut from) = from else {
             return;
         };
         match into {
             Some(target) => target.absorb(from),
-            None => *into = Some(from),
+            // A target with no region of its own takes the source whole, so every byte of the
+            // bundle it ends up with is storage that came in from elsewhere.
+            None => {
+                from.absorbed_bytes = from.allocated_bytes();
+                *into = Some(from);
+            }
         }
     }
 
@@ -69,6 +81,13 @@ impl Region {
                 .iter()
                 .map(Bump::allocated_bytes)
                 .sum::<usize>()
+    }
+
+    /// Of those bytes, the ones that arrived by absorbing another region. Never decreases, so an
+    /// embedder reads a cart's accretion as the difference against an earlier reading rather than
+    /// by scanning what the chunks still hold.
+    pub(crate) fn absorbed_bytes(&self) -> usize {
+        self.absorbed_bytes
     }
 }
 

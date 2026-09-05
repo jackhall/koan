@@ -28,4 +28,7 @@ pub use region::Writer;
 pub use sealed::{SealedId, SealedSet};
 #[cfg(debug_assertions)]
 pub use table::HoldNode;
-pub use table::{Absorption, CellTable, CreateError, EnterError, ReleaseError, StepContext};
+pub use table::{
+    Absorption, CellTable, Closure, CreateError, EnterError, Mark, Occupancy, ReleaseError,
+    StepContext,
+};

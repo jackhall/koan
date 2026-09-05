@@ -72,7 +72,6 @@ impl Matrix {
     }
 
     /// The cells `holder` names, in slot order — the hold graph's outgoing edges from one cell.
-    #[cfg(debug_assertions)]
     pub(crate) fn held_by(&self, holder: u32, cap: u32) -> impl Iterator<Item = u32> + '_ {
         (0..cap).filter(move |held| self.test(holder, *held))
     }
