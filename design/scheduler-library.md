@@ -3,8 +3,9 @@
 Koan's runtime substrate — the deferred-work scheduler, the region memory
 system, and the witnessed carrier machinery — is a self-contained library
 stack with no dependency on Koan's language semantics. It ships as two
-workspace crates: `cellgraph` *(working name — [cellgraph.md](../cellgraph/design/cellgraph.md))*,
-the computation-cell substrate (witnessed memory plus a cell table:
+workspace crates: `cellgraph`
+*(working name — [cellgraph.md](../cellgraph/design/cellgraph.md))*, the
+computation-cell substrate (witnessed memory plus a cell table:
 continuations, memory anchors, inter-cell values — no acyclicity, no
 terminality), and `workgraph`, the DAG scheduler layered on it (dep edges,
 wake/notify, the drain protocol, terminal delivery, splicing). The

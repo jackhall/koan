@@ -15,16 +15,17 @@ Cell *storage* is pointer-stable (chunked regions), so ownership of a
 region's storage can leave the slab without a byte moving — sealing depends on
 this.
 
-Liveness over the slab is a bit matrix over pool slots. Bit (N, M) means
-*cell M keeps cell N alive*. The diagonal bit (N, N) means *something is
-currently executing in cell N* — `enter` sets it for the duration of a step
-instead of holding a clone. In the row-major layout, cell N's liveness
-is one contiguous row: **a cell whose row goes to zero is reclaimed on the
-spot.** There is no other gate — no count arithmetic, no census of structural
-self-holds (a cell's internal references to its own storage have no bits),
-no drop-ordering discipline in the embedder's loop.
+Liveness over the slab is a bit matrix over pool slots. Bit (M, N) means
+*cell M keeps cell N alive*, so a cell's **row** is its own hold set and a
+cell's **column** is the set of cells holding it. The diagonal bit (M, M)
+means *something is currently executing in cell M* — `enter` sets it for the
+duration of a step instead of holding a clone. Cell N's liveness is its
+column: **a cell whose column goes to zero is reclaimed on the spot.** There
+is no other gate — no count arithmetic, no census of structural self-holds (a
+cell's internal references to its own storage have no bits), no drop-ordering
+discipline in the embedder's loop.
 
-A cell that dies with a *nonzero* pin row does not linger in the slab: it
+A cell that dies with a *nonzero* pin column does not linger in the slab: it
 **seals** into the second tier, and its slot recycles. The one hold that keeps
 a dead cell in place is a birth hold — the relation with no sealed form to
 convert into, below — and it keeps it only until the last descendant naming it
@@ -36,7 +37,7 @@ order, so any ordering argument over the hold graph is a dynamic invariant
 over the generations of live occupants, not a property of the matrix's shape.
 
 **The hold graph must be acyclic for anything to reclaim, and the substrate
-does not enforce that.** A ring — A holds B, B holds A — keeps both rows
+does not enforce that.** A ring — A holds B, B holds A — keeps both columns
 nonzero forever, so a ring leaks rather than dangles: the failure is safe.
 Preventing rings is the embedder's crossing discipline (koan's is the
 anti-ring crossing rule of
@@ -48,13 +49,13 @@ reachability check.
 
 A sealed region is dead — nothing will ever execute in it, nothing will ever
 be minted into it — and it survives only because other regions still reach
-its storage. Only death with a nonzero row seals, and sealing is permanent: a
+its storage. Only death with a nonzero column seals, and sealing is permanent: a
 live-but-not-executing cell (one created and never entered, or entered and
 awaiting re-entry) stays in the slab.
 
 The tier is **atomic**: per-value reach tracking stops at its boundary. A
-sealed region's reach is a single aggregate — its pin column, *frozen* at
-death instead of cleared. Monotone holds make that column exactly the union
+sealed region's reach is a single aggregate — its pin row, *frozen* at
+death instead of cleared. Monotone holds make that row exactly the union
 of every mask ever minted into the region, so the seal consults no storage
 and scans no values: the aggregate is a word copy out of the matrix. The
 region's storage chunks detach from the slot unmoved, the slot recycles under
@@ -64,19 +65,19 @@ monotone space — never reused, so the tier needs no generations.
 Three consequences:
 
 - **A pin out of a sealed region is unrepresentable.** The tier has no
-  columns; the frozen aggregate is the only outgoing edge set, and it only
+  rows; the frozen aggregate is the only outgoing edge set, and it only
   shrinks. Sealedness is enforced by what the structure cannot express, not
   by audit.
 - **Sealed liveness is a holder count.** Reclamation of a sealed region is
   its count reaching zero. The count is decremented only in batch, at a
   holder's own death or reclamation, from the holder's hold set — the
   matrix's no-per-reason-release discipline, kept.
-- **The hold graph is unchanged.** Freezing a column adds no edges: the graph
+- **The hold graph is unchanged.** Freezing a row adds no edges: the graph
   over live ∪ sealed is the same graph, so retirement cascades still
   terminate wherever it was acyclic.
 
 The aggregate must be a *hold*, not advisory metadata: if it were not, a slab
-cell named only by frozen aggregates could hit row-zero and recycle, and a
+cell named only by frozen aggregates could hit column-zero and recycle, and a
 later copy-out would mint a dangling bit. As a hold, the accounting is
 uniform across tiers.
 
@@ -101,14 +102,14 @@ bits are written once and are immutable; pin bits are monotone-growing. It
 also leaves the birth side free to take a sparser shape than a matrix — a
 parent handle per cell with a derived chain-holder count is one such shape,
 and the invariant that a birth row contains its parent's row is checkable
-either way. A cell leaves the slab when it is dead and no birth hold names it —
-and only the pin column freezes into a seal: birth holds exist for execution, so
-a cell's own birth row releases at its death unconditionally, and a dead cell no
-descendant names has no birth presence left to convert. What it does on the way
-out is what its pin row decides: reclamation when nothing reaches its storage, a
-seal when something does. Storage that reaches the parent chain
-does so through pin bits (transitive coverage puts those regions in the
-column directly).
+either way. A cell leaves the slab when it is dead and no birth hold names
+it — and only the pin row freezes into a seal: birth holds exist for
+execution, so a cell's own birth row releases at its death unconditionally,
+and a dead cell no descendant names has no birth presence left to convert.
+What it does on the way out is what its pin column decides: reclamation when
+nothing reaches its storage, a seal when something does. Storage that reaches
+the parent chain does so through pin bits (transitive coverage puts those
+regions in the row directly).
 
 ## Reach as a hybrid mask
 
@@ -119,13 +120,13 @@ bitmask over slab slots plus a sparse set of sealed ids:
   collections is a bitwise OR of slab words and an idempotent union of sealed
   sets; deduplication is free.
 - **Mint is a retention, literally.** Storing a value into cell M's region
-  performs `column[M] |= mask` for the slab part and folds the sealed part
+  performs `row[M] |= mask` for the slab part and folds the sealed part
   into M's sealed-hold set. The destination's hold set *is* the retained
   reach.
 - **The self rule is an AND-NOT.** A region must not hold itself alive
   (bit (M, M) is the executing flag, and a self-hold would be an
   unreclaimable cycle), so the mint masks off the destination's own bit:
-  `column[M] |= mask & !bit(M)`.
+  `row[M] |= mask & !bit(M)`.
 - **Eternal storage contributes nothing.** Storage that outlives every cell
   owns no slot and no sealed id.
 - **Reach is never folded.** Antichain minimization pays for itself only
@@ -134,18 +135,18 @@ bitmask over slab slots plus a sparse set of sealed ids:
 
 ## The seal transition
 
-When cell N dies with a nonzero row, three bounded maintenance steps convert
+When cell N dies with a nonzero column, three bounded maintenance steps convert
 every representation of "N" from slab bit to sealed id `S_N`:
 
-1. **Holders convert.** Row N names the live cells holding N. Each clears
-   column bit N, adds `S_N` to its sealed-hold set, and rewrites its *stored*
-   per-value masks that name slot N (slab bit → `S_N`). Row N bounds who is
-   scanned; the slab cap bounds the whole rewrite. Slab bits in live-region
-   masks are therefore never stale — the rewrite is eager, and the mint OR
-   stays untouched by any check.
+1. **Holders convert.** Column N names the live cells holding N. Each clears
+   bit N from its own row, adds `S_N` to its sealed-hold set, and rewrites its
+   *stored* per-value masks that name slot N (slab bit → `S_N`). Column N
+   bounds who is scanned; the slab cap bounds the whole rewrite. Slab bits in
+   live-region masks are therefore never stale — the rewrite is eager, and the
+   mint OR stays untouched by any check.
 2. **Frozen aggregates convert.** Each sealed region whose aggregate names
-   slot N transfers bit N → `S_N`, and its contribution moves from row N to
-   `S_N`'s count. The **reverse naming index** — per slab slot, the sparse
+   slot N transfers bit N → `S_N`, and its contribution moves from column N
+   to `S_N`'s count. The **reverse naming index** — per slab slot, the sparse
    set of sealed regions whose aggregate names it — locates them: a region
    registers under each slab bit of its aggregate when it seals, and
    unregisters at reclamation. One word rewritten per namer, never a storage
@@ -174,20 +175,20 @@ derives `{S_A} ∪ aggregate(A)` at the accessor.
 The model is sound on a chain of invariants that must hold together:
 
 1. **Monotone holds.** A hold set only grows during its owner's life, and
-   freezes at seal. The sole releases are wholesale: the column clear when a
-   live cell reclaims at row-zero, and the aggregate release when a sealed
+   freezes at seal. The sole releases are wholesale: the row clear when a
+   live cell reclaims at column-zero, and the aggregate release when a sealed
    region's count reaches zero. There is no mid-life, per-reason release,
    which is what makes bit-setting idempotence safe: overlapping reasons for
    the same entry can never desynchronize, because nothing clears a single
    entry.
 2. **Mask validity.** Every bit and id of a *readable* mask is covered by
-   some live column or frozen aggregate; a value's mask is always covered by
+   some live row or frozen aggregate; a value's mask is always covered by
    its host region's hold set (the mint OR establishes this); and a value
    only moves between regions while its current host is live — sealed hosts
    release values only through the accessor, which re-derives reach.
-3. **Retirement cascade.** A live cell reclaiming at row-zero clears its
-   column and releases its sealed-hold set; the cleared entries name exactly
-   the rows and counts worth re-checking. A sealed region reclaiming at
+3. **Retirement cascade.** A live cell reclaiming at column-zero clears its
+   row and releases its sealed-hold set; the cleared entries name exactly the
+   columns and counts worth re-checking. A sealed region reclaiming at
    count-zero releases its aggregate the same way. Acyclicity of the hold
    graph terminates every cascade.
 4. **Fresh generations, monotone ids.** A reclaimed slot's next occupant
@@ -200,8 +201,8 @@ Slab slots are reused, so a mask stored beside a value looks like it could
 dangle. The argument closes tier by tier, with no per-bit version stamp:
 
 - **Slab bits in live regions** are rewritten eagerly at the seal transition
-  (row N names every live holder; invariant 2's covering clause puts every
-  readable bit-N mask inside a row-N cell), and a slot recycles only after
+  (column N names every live holder; invariant 2's covering clause puts every
+  readable bit-N mask inside a column-N cell), and a slot recycles only after
   its seal or reclamation completes — so a readable slab bit always names the
   live occupant.
 - **Sealed ids never dangle** — aggregates and sealed-hold sets are holds, a
@@ -214,7 +215,7 @@ live in must be covered by a hold.** There are exactly three habitats.
 
 - **Region-resident values** — covered by the host's hold set via the mint
   OR. By construction. A cell created and never entered is a live host like
-  any other: its continuation's captures rest in its region under its column.
+  any other: its continuation's captures rest in its region under its row.
 - **Step transients** — covered by the executing cell's diagonal bit for the
   duration of the step. By construction. Values read out of a sealed region
   are step transients.
@@ -265,7 +266,7 @@ buys the O(1) seal — and it is relieved rather than prevented:
   up front: an empty aggregate means nothing to do, and each entry names a
   region the copy would free the claim on.
 - **Cell discipline bounds the common case.** A short-lived cell freezes a
-  small column; the pathology is a long-lived cell that held much and then
+  small row; the pathology is a long-lived cell that held much and then
   sealed — measurable as aggregate-attributable occupancy.
 - **Pre-seal narrowing is rejected.** Recomputing a tighter aggregate from
   actually-reachable values at seal time is exactly the storage scan
@@ -284,7 +285,7 @@ That refinement, and the pressure model that consumes these prices, are
 
 ## Locality tactics
 
-These tactics keep the degenerate cases — row-zero reclamation, empty
+These tactics keep the degenerate cases — column-zero reclamation, empty
 aggregates, flat sealed records — common. All are heuristics: they exploit
 shapes most programs exhibit most of the time, and none is a guarantee. One
 line disciplines the absorptions among them: **an absorption is legal exactly
@@ -302,7 +303,7 @@ copy remains the lever there.
   composes with the self rule: a caller-resident reference delivered back to
   its own region contributes the caller's own bit, which `mask & !bit(C)`
   erases at the mint. A per-call cell whose result crosses under the rule
-  therefore delivers with no retained reach and reclaims at row-zero without
+  therefore delivers with no retained reach and reclaims at column-zero without
   sealing. This holds only where the rule is enforced and only for cells no
   reference escapes downward from — closures over locals and stored handles
   still seal, by design. Whether the rule applies at every adopt or only at
@@ -313,14 +314,14 @@ copy remains the lever there.
   value built directly into another live cell's region — the step context's
   placement into a cell by handle — never exists in the producer's region,
   so a tail hop that rebuilds its carried arguments into the successor's cart
-  leaves the retiring cell with a zero row: no copy, no pin, no seal. The
+  leaves the retiring cell with a zero column: no copy, no pin, no seal. The
   operands are read as step transients under the retiring cell's diagonal
   bit.
 
 - **Death-time absorption ties a dying cell to its unique live holder.**
-  When N dies with `row(N) == bit(M)` and an empty naming set, N never
-  seals: its chunks splice onto M's region, its frozen column ORs into
-  `column[M]` through the standard `& !bit(M)` mint, and M's stored masks
+  When N dies with `column(N) == bit(M)` and an empty naming set, N never
+  seals: its chunks splice onto M's region, its frozen row ORs into
+  `row[M]` through the standard `& !bit(M)` mint, and M's stored masks
   naming slot N are rewritten to nothing — the cross-region hold becomes a
   structural self-hold, which has no bits. That rewrite is the same bounded
   scan seal step 1 performs, and the trigger means M is the only cell
@@ -371,15 +372,15 @@ copy remains the lever there.
   sealed-naming-live edges at all; only the group's boundary reach survives
   the seal.
 
-- **Seal-into-namer covers the downward direction.** When N dies with row
-  zero and a singleton naming set {Q}, the sealed Q is provably N's only
+- **Seal-into-namer covers the downward direction.** When N dies with a zero
+  column and a singleton naming set {Q}, the sealed Q is provably N's only
   namer — the same mask-validity-plus-aggregates-are-holds argument as
   above, pointed the other way — so N seals *into* Q rather than minting a
-  record: N's chunks splice onto Q's, N's frozen column ORs into Q's
-  aggregate (registering Q under any slab bits new to it), and the rows N's
-  column named trade bit N for Q in their naming sets. The work is the seal
-  transition's own steps minus the record creation, and the test reads two
-  structures the transition already holds: the row and the naming set.
+  record: N's chunks splice onto Q's, N's frozen row ORs into Q's aggregate
+  (registering Q under any slab bits new to it), and the slots N's row named
+  trade bit N for Q in their naming sets. The work is the seal transition's
+  own steps minus the record creation, and the test reads two structures the
+  transition already holds: the column and the naming set.
   Together with seal-time absorption this covers both ends of an ownership
   chain; both remain sealed-tier-only merges, per the discipline line above.
 
@@ -399,14 +400,23 @@ cycle leaks, and the debug ring detector names it.
 
 ## Layout
 
-Row-major, so the liveness check is a contiguous row scan; the column clear
-at reclamation and the freeze at seal stride, and the first cut accepts that
-(chunk-aligned rows keep the stride cache-friendly). Per sealed region: one
-hybrid aggregate mask, one holder count, one memoized closure mask at most.
-Per slab slot: one sparse reverse-naming set. A per-row holder count
-maintained as derived data — derived *from* attributed transitions, never a
-free-standing count — is a measurable later optimization; it is an
-implementation detail invisible to the interface either way.
+Row-major by holder: one contiguous run of words per slot, naming the set
+that slot keeps alive. That is the axis each relation's *write* wants, which
+is what decides the orientation. Both compound writes are whole-row ORs — the
+birth derivation ORs a parent's row into its child's, the pin mint ORs a
+reach mask into a destination's — the row clear at reclamation zeroes a run,
+and the freeze at seal copies one out. Every one of them is a word-wise pass
+over contiguous memory that reads no value. The reclaim query pays for it:
+"does anything still hold this cell" has no row of its own, so it scans
+across rows, one bit per occupied slot. Chunk-aligned rows keep that stride
+cache-friendly.
+
+Per sealed region: one hybrid aggregate mask, one holder count, one memoized
+closure mask at most. Per slab slot: one sparse reverse-naming set. A
+per-cell holder count maintained as derived data — derived *from* attributed
+transitions, never a free-standing count — is a measurable later
+optimization; it is an implementation detail invisible to the interface
+either way.
 
 ## Open work
 

@@ -29,7 +29,7 @@ exist, and koan sits on the one the design has moved off.
 - The embedder can give a node a storage-only companion cell — a cart that
   outlives the node's per-step body cells — through the consumer API, and a
   koan loop that accumulates into one runs with per-hop body cells dying at
-  row zero.
+  column zero.
 - Admission is `workgraph`'s: a create refused at the slab cap is handled by
   the drain, never surfaced to the embedder as a hard error.
 - `workgraph`'s witnessed module, `PinsRegion`, pin bundles, the `Delivered`

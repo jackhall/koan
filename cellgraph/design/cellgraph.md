@@ -28,10 +28,10 @@ compile-enforced: the lower crate names no type from the higher one.
   stores and hands back under `enter`, re-anchored at the step lifetime, and
   never calls. It rests beside the reach of whatever it captured, minted into
   its own cell's holds when it is stored — a cell holds what its continuation
-  reads — which makes it the one stored mask the seal transition rewrites, and
-  the read that hands it back the sealed tier's accessor. A step may store a
-  successor before its scope ends. A cell
-  with no continuation is **storage-only**, and is the substrate's answer to
+  reads — which makes it the one stored mask the seal transition rewrites,
+  and the read that hands it back the sealed tier's accessor. A step may
+  store a successor before its scope ends. A cell with no continuation is
+  **storage-only**, and is the substrate's answer to
   "a region that outlives its step but is never executed in": a cart a loop
   accumulates into, a mailbox a scheduler parks values in.
 - **Holds**, in two relations. *Birth holds* fix the cell's parent chain at
@@ -65,12 +65,16 @@ how an embedder gives one unit of work two regions with different lifetimes.
 - **`create(parent?)`** hands back a handle, or refuses when the slab is at
   its cap. What to do on refusal is admission policy, and the embedder's.
 - **`enter(handle, step)`** sets the cell's executing bit for the scope of
-  `step`, hands the continuation out re-anchored at the step lifetime, and
-  supplies a step context. Within it a step can allocate into its own
-  region; allocate into any other live cell by handle (the destination-homed
-  placement); mint a value, or a bare hold on another cell, into a cell; read
-  out of a sealed region with derived reach; and store a successor
-  continuation. A cell cannot be entered while it is already executing.
+  `step` and supplies a step context. Within it a step can take the cell's
+  continuation, re-anchored at the step lifetime and paired with the reach
+  its captures read; allocate into its own region; allocate into any other
+  live cell by handle (the destination-homed placement); mint a bare hold on
+  another cell; read a carrier it built; and store a successor continuation,
+  over captures or over nothing. That continuation read *is* the sealed
+  tier's accessor — a capture whose region sealed since it was stored comes
+  back named by sealed id, with reach derived from the record's aggregate —
+  so there is no second door out of sealed storage. A cell cannot be entered
+  while it is already executing.
 - **`release(handle)`** declares death: the embedder promises never to enter
   the cell again. The slot leaves the slab once no descendant's birth row
   names the cell: reclaimed if nothing reaches its storage, sealed if
@@ -91,10 +95,10 @@ built from the verbs above:
 
 - **Push.** While the producer executes, the value is minted into the
   consumer's region — or built there outright by destination-homed
-  placement — and the consumer's column takes its mask. The producer can then
-  die at row zero.
+  placement — and the consumer's row takes its mask. The producer can then
+  die at column zero.
 - **Pull.** The consumer mints a bare hold on the producer cell. The producer
-  dies with a nonzero row and seals, and the consumer later reads through the
+  dies with a nonzero column and seals, and the consumer later reads through the
   sealed accessor inside its own step.
 
 Which shape an edge takes is the embedder's choice, per edge.

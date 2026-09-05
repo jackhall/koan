@@ -6,9 +6,11 @@ A substrate of computation **cells**: each one an identity, a bump region of
 safely allocated memory, an optional erased continuation, and the holds that
 keep other cells alive on its behalf. Liveness is an attributed bit matrix
 over a bounded slab plus an atomic sealed tier, so a cell is reclaimed the
-instant nothing names it and never lingers behind a count. The substrate
-makes no acyclicity promise, has no notion of a cell finishing, and never
-decides when a cell runs — a scheduler is something an embedder builds on top.
+instant no bit names it — no count gates a slab slot, and the sealed tier's
+holder count is released only wholesale, at a holder's own death. The
+substrate makes no acyclicity promise, has no notion of a cell finishing, and
+never decides when a cell runs — a scheduler is something an embedder builds
+on top.
 
 The crate names no type from its embedders: the dependency direction is
 `koan` → `workgraph` → `cellgraph`, and each arrow is compile-enforced.

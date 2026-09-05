@@ -2,7 +2,7 @@
 //! both relations, and the ring detector.
 
 use super::super::*;
-use super::{Number, Owned, state_of};
+use super::{Borrowed, Number, Owned, state_of};
 
 #[test]
 fn a_value_allocated_in_the_executing_cell_reaches_only_that_cell() {
@@ -80,6 +80,46 @@ fn a_held_cell_leaves_the_slab_at_its_death_and_its_record_goes_with_its_holder(
     table.release(holder).unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(table.free.len(), 4);
+}
+
+/// Chunks enough to spill a fresh `Bump` past the one it starts with, so the growth the borrow
+/// survives is a real chunk allocation rather than a bump of the same block's cursor.
+const GROWTH: usize = if cfg!(miri) { 256 } else { 4096 };
+
+#[test]
+fn a_reattached_borrow_survives_the_live_region_it_names_growing_under_it() {
+    let mut table: CellTable<Borrowed> = CellTable::new(4);
+    let keeper = table.create(None, None).unwrap();
+    let host = table.create(None, None).unwrap();
+
+    // The continuation borrows into a cell that stays live, so nothing detaches: the referent is
+    // chunks the host still owns, and the host keeps allocating into them.
+    table
+        .enter(keeper, |context| {
+            let value = context
+                .alloc_into::<Number, Number>(host, &[], |writer, _| writer.value(41))
+                .unwrap();
+            context.store_successor_capturing(&[&value], |_writer, views| views[0]);
+        })
+        .unwrap();
+
+    let read = table
+        .enter(keeper, |context| {
+            let opened = context.continuation().unwrap();
+            let borrow = opened.value();
+            // Every allocation takes the host's region through `&mut`, which is the retag the
+            // reattached borrow has to survive — the chunk it names is its own allocation, reached
+            // through the bump rather than inside it.
+            for value in 0..GROWTH {
+                context
+                    .alloc_into::<Number, Number>(host, &[], |writer, _| writer.value(value as u32))
+                    .unwrap();
+            }
+            *borrow
+        })
+        .unwrap();
+
+    assert_eq!(read, 41);
 }
 
 #[test]

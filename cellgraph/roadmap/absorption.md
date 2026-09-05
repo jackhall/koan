@@ -6,20 +6,20 @@ one id, one index entry, one accessor indirection each. The three merges of
 [liveness-matrix.md § Locality tactics](../design/liveness-matrix.md#locality-tactics)
 — death-time absorption into a unique live holder, seal-time absorption of a
 count-1 sealed region into its sealing holder, and seal-into-namer for a
-row-zero cell with a single sealed namer — are unimplemented, so the
+column-zero cell with a single sealed namer — are unimplemented, so the
 degenerate cases the model is designed around stay rare rather than common.
 
 **Acceptance criteria.**
 
-- A cell released with `row == bit(M)` and an empty naming set splices its
-  chunks onto M's region, ORs its column into M's through the standard mint,
+- A cell released with `column == bit(M)` and an empty naming set splices
+  its chunks onto M's region, ORs its row into M's through the standard mint,
   rewrites M's stored masks naming the dead slot to nothing, and mints no
   sealed record; reads of the absorbed values stay on the per-value-mask
   path.
 - At a cell's seal, each count-1 sealed region in its hold set is absorbed:
   aggregates OR, chunks splice, reverse-naming entries repoint, and the
   absorbed id is released.
-- A cell released with a zero row and a singleton naming set seals into that
+- A cell released with a zero column and a singleton naming set seals into that
   namer instead of minting a record.
 - Absorption of already-sealed storage into a live region never happens; a
   test constructs the shape and observes a seal instead.

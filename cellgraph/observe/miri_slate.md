@@ -17,7 +17,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-9 tests, grouped by the unsafe site each pins down. Names below are the exact
+10 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -45,11 +45,15 @@ hands it back at a shorter one, so a bumped value's borrow survives a round trip
 lifetime-free slot; the placement test is the load-bearing one, since its operand view is a real
 `&u32` into *another* cell's chunks that the built value keeps. The third is the region's own
 teardown: a reclaimed slot drops its `Bump`, and the process-exit leak detector is what confirms
-the chunks go with it rather than outliving the slab.
+the chunks go with it rather than outliving the slab. The fourth covers the case where nothing
+detaches at all: a reattached borrow names a cell that is still live, and that cell keeps
+allocating through `&mut` under it, so what Miri checks is that the retag a region takes at every
+allocation leaves an already-issued chunk borrow alone.
 
 - `table::tests::values::a_value_allocated_in_the_executing_cell_reaches_only_that_cell`
 - `table::tests::values::placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach`
 - `table::tests::values::a_held_cell_leaves_the_slab_at_its_death_and_its_record_goes_with_its_holder`
+- `table::tests::values::a_reattached_borrow_survives_the_live_region_it_names_growing_under_it`
 
 **The sealed tier's detached storage** ([src/sealed.rs](../src/sealed.rs), [src/table.rs](../src/table.rs))
 — the same `retype` primitive again, at the one door whose referents may no longer live in the slab
@@ -84,6 +88,7 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-05: 49.13s — 25 tests, 0 leaks, 0 UB
 - 2026-09-05: 70.27s — 24 tests, 0 leaks, 0 UB
 - 2026-09-05: 92.83s — 24 tests, 0 leaks, 0 UB
 - 2026-09-05: 65.19s — 17 tests, 0 leaks, 0 UB

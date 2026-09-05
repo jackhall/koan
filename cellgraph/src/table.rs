@@ -336,7 +336,7 @@ impl<C: Reattachable> CellTable<C> {
     /// ([liveness-matrix.md § The seal transition](../design/liveness-matrix.md#the-seal-transition)).
     ///
     /// The work is bounded by `holders`, `namers`, and the aggregate's width — never by what the
-    /// region stores. Nothing here reads a region byte: monotone holds make the frozen column
+    /// region stores. Nothing here reads a region byte: monotone holds make the frozen row
     /// exactly the union of every reach ever minted in, so the aggregate is a word copy.
     fn seal(&mut self, slot: u32, holders: &[u32], namers: &SealedSet) {
         let id = self.sealed.mint_id();

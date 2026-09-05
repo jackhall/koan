@@ -1,7 +1,8 @@
 # workgraph roadmap
 
 Open work on the library stack: the `cellgraph` computation-cell substrate
-(working name — [cellgraph/design/cellgraph.md](../../cellgraph/design/cellgraph.md)) and the
+(working name —
+[cellgraph/design/cellgraph.md](../../cellgraph/design/cellgraph.md)) and the
 `workgraph` DAG scheduler above it, whose public surface is memory-safe by
 construction. The items here land the consumer API and move the boundary
 incrementally; each is sized for one PR. Koan's own roadmap is

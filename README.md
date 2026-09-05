@@ -308,11 +308,10 @@ items — and derives a "Next items" list, everything with no still-open prerequ
 those cross-links (`tools/doclinks.py sync-next`).
 
 The [workgraph/](workgraph/README.md) crate — the scheduler and region-memory
-library Koan embeds — carries its own design and roadmap trees, so it reads as a
-standalone library rather than as one of Koan's internals. Work items cross-link
-across the two trees and `doclinks` gates the pair as one dependency graph, but
-each tree derives its own "Next items" list. The boundary between them —
-what is library, what is Koan — is
+library Koan embeds — and the [cellgraph/](cellgraph/README.md) cell substrate
+beneath it each carry their own design and roadmap trees, so they read as
+standalone libraries rather than as Koan's internals. Work items cross-link
+across all three trees and `doclinks` gates them as one dependency graph, but
+each tree derives its own "Next items" list. The boundary between the stack and
+Koan — what is library, what is Koan — is
 [design/scheduler-library.md](design/scheduler-library.md).
-Beneath the scheduler, the [cellgraph/](cellgraph/README.md) cell substrate is a
-third tree, design and roadmap only until its first slice ships.

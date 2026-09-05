@@ -21,6 +21,7 @@
 # Outputs (override paths via env vars):
 #   - DOT graph from cargo-modules → observe/modules.dot   (`KOAN_DOT`)
 #   - llvm-cov lcov report          → observe/coverage.lcov (`KOAN_LCOV`)
+#     (workspace-wide: koan plus both embedded crates)
 #
 # Not run here (too heavy for the per-commit hook, run on demand / in CI):
 # `tools/seam_equivalence.sh` — the record-escape-seam equivalence battery, which
@@ -102,8 +103,9 @@ compact() {
 }
 
 # Every path differing from HEAD — staged, unstaged, and untracked. A clean tree
-# yields one empty line, which fails the `workgraph/` case and so selects the full
-# slate: with nothing changed there is no library-side commit to unblock.
+# yields one empty line, which matches neither crate's case and so selects the
+# full slate: with nothing changed there is no library-side commit to unblock.
+# A change spanning both crates clears both flags for the same reason.
 CHANGED="$(git diff --name-only HEAD; git ls-files --others --exclude-standard)"
 WORKGRAPH_ONLY=1
 CELLGRAPH_ONLY=1
@@ -200,7 +202,10 @@ if [ "$CELLGRAPH_ONLY" = 1 ]; then
     exit 0
 fi
 
-run tests 'tests FAILED' cargo llvm-cov --quiet --lcov --output-path "$LCOV"
+# `--workspace`, so the reading covers all three crates rather than the root one:
+# the embedded crates are koan's own code, and a slate that scored only `src/`
+# would let a whole crate ship with no coverage signal at all.
+run tests 'tests FAILED' cargo llvm-cov --quiet --workspace --lcov --output-path "$LCOV"
 ok tests "ok ($(passed) passed → $LCOV)" 'tests ok'
 
 # llvm-cov does not run doctests (instrumented doctests are nightly-only), so the

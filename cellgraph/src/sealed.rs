@@ -1,5 +1,5 @@
 //! The second tier: regions whose cell died while something still reached their storage. A sealed
-//! region has no slab slot, no column, and no generation — only a frozen aggregate, a holder
+//! region has no slab slot, no matrix row, and no generation — only a frozen aggregate, a holder
 //! count, and the chunks its cell detached. See
 //! [design/liveness-matrix.md](../design/liveness-matrix.md) § The sealed tier.
 //!

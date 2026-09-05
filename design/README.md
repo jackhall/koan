@@ -20,8 +20,8 @@ than the boundary Koan meets it at — live in the crate's own tree,
 substrate, the reach representation, the DAG scheduler's own graph
 shape, and sectioned reach evidence; the `cellgraph` cell substrate
 beneath the scheduler has a tree of its own,
-[cellgraph/design/](../cellgraph/README.md). The Koan-side docs below own Koan's *instantiation* of that
-machinery, not the machinery itself.
+[cellgraph/design/](../cellgraph/README.md). The Koan-side docs below own
+Koan's *instantiation* of that machinery, not the machinery itself.
 
 ## Doc index
 
