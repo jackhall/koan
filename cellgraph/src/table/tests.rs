@@ -25,6 +25,19 @@ impl DropFree for Number {}
 
 const ANCHOR: u32 = 7;
 
+/// Bytes the slab tier holds, across every occupied cell's region bundle.
+///
+/// A release may move these bytes between live cells (a merge into a holder), out to a record (a
+/// seal), or nowhere at all (a reclaim) — so the total is non-increasing across one. An increase
+/// would mean storage flowed back out of the sealed tier, which no path may do.
+fn live_bytes<C: Reattachable>(table: &CellTable<C>, cap: u32) -> usize {
+    (0..cap)
+        .filter(|slot| table.slots[*slot as usize].state != SlotState::Free)
+        .filter_map(|slot| table.slots[slot as usize].region.as_ref())
+        .map(Region::allocated_bytes)
+        .sum()
+}
+
 /// What a slot currently holds, by handle — the state assertions read the slab directly, since
 /// residence is not observable through the public verbs.
 fn state_of<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> SlotState {

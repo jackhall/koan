@@ -11,12 +11,15 @@
 //!   reverse naming index is exactly the transpose of the aggregates;
 //! - every bit and id of a stored mask is covered by a live cell or a live record — mask validity;
 //! - no hold set names its own owner, and every present record has a holder — which together make
-//!   a record that survives a wound-down run a ring by arithmetic, with no ring walk in the loop.
+//!   a record that survives a wound-down run a ring by arithmetic, with no ring walk in the loop;
+//! - the live tier never grows across a release, so storage that has sealed never re-enters it;
+//! - a record that survives a wound-down run was named by two hold sets at some point — the
+//!   universal the hand-written ring-dissolution tests are three instances of.
 
 use proptest::prelude::*;
 
 use super::super::*;
-use super::{Borrowed, Number};
+use super::{Borrowed, Number, live_bytes};
 
 const CAP: u32 = 6;
 
@@ -71,6 +74,14 @@ fn check_invariants(table: &CellTable<Borrowed>) {
             SlotState::Live => {}
         }
     }
+
+    // Quiescence spans both tiers: the slab being clear is only half of it, and a table that
+    // reports itself empty while a record survives would hide exactly the ring this test hunts.
+    assert_eq!(
+        table.is_empty(),
+        occupied.is_empty() && table.sealed.is_empty(),
+        "is_empty disagrees with the two tiers it summarizes"
+    );
 
     let records: Vec<SealedId> = table.sealed.ids().collect();
     for id in &records {
@@ -244,7 +255,14 @@ fn run(verbs: &[Verb]) -> Merges {
                     Absorption::IntoHolder
                 };
                 if let Some(cell) = minted.get(cell).copied() {
+                    let before = live_bytes(&table, CAP);
                     let _ = table.release(cell, absorption);
+                    // A merge moves bytes between live cells and a seal moves them out, but nothing
+                    // moves them back in: storage that has sealed never re-enters the live tier.
+                    assert!(
+                        live_bytes(&table, CAP) <= before,
+                        "a release grew the live tier, so sealed storage re-entered it"
+                    );
                 }
             }
         }
@@ -260,6 +278,17 @@ fn run(verbs: &[Verb]) -> Merges {
     for slot in 0..CAP {
         assert_eq!(table.slots[slot as usize].state, SlotState::Free);
     }
+    // Every surviving record is a ring by the invariants above; this says which rings can survive.
+    // A region no more than one hold set ever named is one a merge reaches — its sole holder either
+    // absorbs it, seals and folds it in, or drops the last hold — so a survivor was shared once.
+    for id in table.sealed.ids() {
+        let record = table.sealed.get(id).unwrap();
+        assert!(
+            record.peak_holders >= 2,
+            "record {id:?} survived the wind-down having never had a second holder"
+        );
+    }
+    assert_eq!(table.is_empty(), table.sealed.is_empty());
     table.merges
 }
 

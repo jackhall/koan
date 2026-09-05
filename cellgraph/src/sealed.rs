@@ -93,6 +93,11 @@ pub(crate) struct SealedRecord {
     /// How many hold sets name this region — live cells' sealed halves plus other records'
     /// aggregates. Decremented only in batch, when a holder dies or reclaims.
     pub(crate) holders: u32,
+    /// The most holders this record has ever had. Test-only, and the tell a wound-down run reads:
+    /// a region no more than one hold set ever named is one the merges reach, so a survivor of a
+    /// full wind-down must have been shared at some point.
+    #[cfg(test)]
+    pub(crate) peak_holders: u32,
 }
 
 impl SealedRecord {

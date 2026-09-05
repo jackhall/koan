@@ -649,6 +649,8 @@ impl<C: Reattachable> CellTable<C> {
                 aggregate,
                 storage,
                 holders: count,
+                #[cfg(test)]
+                peak_holders: count,
             },
         );
         self.pins.clear_row(slot);
@@ -709,6 +711,10 @@ impl<C: Reattachable> CellTable<C> {
                 && let Some(record) = self.sealed.get_mut(id)
             {
                 record.holders += 1;
+                #[cfg(test)]
+                {
+                    record.peak_holders = record.peak_holders.max(record.holders);
+                }
             }
         }
     }

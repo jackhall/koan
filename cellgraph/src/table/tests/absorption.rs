@@ -6,9 +6,10 @@
 //! Each merge is a record the tier never mints, so what these tests read is an absence: no id, no
 //! index entry, no accessor indirection — and the storage still there, in the bundle that took it.
 
+use proptest::prelude::*;
+
 use super::super::*;
-use super::sealing::{LARGE, SMALL};
-use super::{Borrowed, Number, Owned, state_of};
+use super::{Borrowed, Number, Owned, live_bytes, state_of};
 
 /// Bytes a cell's region bundle occupies, or zero for a cell that never allocated.
 fn region_bytes<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> usize {
@@ -393,13 +394,20 @@ fn a_count_one_record_held_by_a_live_cell_stays_sealed() {
     let id = only_record(&table);
     assert_eq!(table.sealed.get(id).unwrap().holders, 2);
     let holder_bytes = region_bytes(&table, holder);
+    let record_bytes = table.sealed.get(id).unwrap().retained_bytes();
+    let slab_bytes = live_bytes(&table, 4);
+    assert!(record_bytes > 0);
 
     table.release(extra, Absorption::IntoHolder).unwrap();
 
     // A count of one is not by itself a merge: storage that has already sealed never re-enters the
-    // live tier, so the record waits for the cascade instead of folding into the live cell.
+    // live tier, so the record waits for the cascade instead of folding into the live cell. The
+    // provenance is read from the two tiers' byte totals rather than tracked through the release —
+    // the record keeps every byte it had, and the whole slab tier is no larger than it was.
     assert_eq!(table.sealed.get(id).unwrap().holders, 1);
+    assert_eq!(table.sealed.get(id).unwrap().retained_bytes(), record_bytes);
     assert_eq!(region_bytes(&table, holder), holder_bytes);
+    assert!(live_bytes(&table, 4) <= slab_bytes);
 
     table.release(holder, Absorption::IntoHolder).unwrap();
     assert!(table.is_empty());
@@ -466,35 +474,89 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
     assert!(names_record);
 }
 
-/// Absorb a uniquely held cell holding `resident` values, and report the maintenance it performed.
-fn absorb_work_for(resident: usize) -> u64 {
-    let mut table: CellTable<Owned> = CellTable::new(4);
-    let holder = table.create(None, None).unwrap();
+/// Absorb a uniquely held producer into its consumer, and report the maintenance the merge
+/// performed.
+///
+/// The producer holds `reached` live cells, `shared` sealed regions the consumer already holds,
+/// and `alone` sealed regions only it holds — so the hold set varies in both halves and in whether
+/// each sealed id transfers or duplicates, while `resident` varies what the region stores.
+fn absorb_work_for(resident: usize, reached: u32, shared: u32, alone: u32) -> u64 {
+    let mut table: CellTable<Owned> = CellTable::new(2 + reached + shared + alone);
+    let consumer = table.create(None, None).unwrap();
     let producer = table.create(None, None).unwrap();
+    let mut make = |count| {
+        (0..count)
+            .map(|_| table.create(None, None).unwrap())
+            .collect()
+    };
+    let reached_cells: Vec<Handle> = make(reached);
+    let shared_cells: Vec<Handle> = make(shared);
+    let alone_cells: Vec<Handle> = make(alone);
 
     table
         .enter(producer, |context| {
             for value in 0..resident {
                 context.alloc::<Number>(|writer| writer.value(value as u32));
             }
+            for cell in reached_cells
+                .iter()
+                .chain(&shared_cells)
+                .chain(&alone_cells)
+            {
+                context.hold(*cell).unwrap();
+            }
         })
         .unwrap();
     table
-        .enter(holder, |context| context.hold(producer))
-        .unwrap()
+        .enter(consumer, |context| {
+            context.hold(producer).unwrap();
+            for cell in &shared_cells {
+                context.hold(*cell).unwrap();
+            }
+        })
         .unwrap();
+    // Refused, so each becomes a record rather than absorbing into the producer first.
+    for cell in shared_cells.iter().chain(&alone_cells) {
+        table.release(*cell, Absorption::Refused).unwrap();
+    }
 
     let before = table.seal_work;
     table.release(producer, Absorption::IntoHolder).unwrap();
-    assert_eq!(table.sealed.len(), 0);
+    assert_eq!(table.sealed.len(), (shared + alone) as usize);
     table.seal_work - before
 }
 
-#[test]
-fn absorption_costs_the_same_whatever_the_region_stores() {
-    // The bundle takes the bump whole, so a region with ten thousand resident values folds in for
-    // what one with sixteen costs — the same atomicity the seal transition has.
-    assert_eq!(absorb_work_for(SMALL), absorb_work_for(LARGE));
+/// A resident count large enough that work proportional to storage could not match the lean run's.
+fn heavy() -> std::ops::Range<usize> {
+    if cfg!(miri) { 64..128 } else { 1_600..2_000 }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: if cfg!(miri) { 4 } else { 64 },
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
+    /// The merge's cost is the hold set's shape and nothing else.
+    ///
+    /// Two assertions, and the second is what the first alone could not say: a shape whose hold
+    /// sets are singletons makes any flat cost look storage-independent, so the closed form over a
+    /// *generated* hold set is what separates "independent of the region" from "constant".
+    #[test]
+    fn absorption_costs_the_hold_set_and_not_the_storage(
+        reached in 0..3u32,
+        shared in 0..3u32,
+        alone in 0..3u32,
+        lean in 0..8usize,
+        laden in heavy(),
+    ) {
+        let cost = absorb_work_for(lean, reached, shared, alone);
+        prop_assert_eq!(cost, absorb_work_for(laden, reached, shared, alone));
+        // The merge itself, plus one release per sealed id the consumer already held. A slab bit
+        // costs nothing beyond the word OR, and a transferred id changes holder, not count.
+        prop_assert_eq!(cost, 1 + u64::from(shared));
+    }
 }
 
 #[test]

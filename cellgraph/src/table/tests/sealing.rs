@@ -9,8 +9,8 @@ use super::{Borrowed, Number, Owned};
 /// Two resident-value counts far enough apart that a transition proportional to storage could not
 /// produce the same work for both. The Miri run takes the smaller pair — the shapes are what it
 /// checks, and the native run already covers the breadth.
-pub(super) const SMALL: usize = 16;
-pub(super) const LARGE: usize = if cfg!(miri) { 512 } else { 10_000 };
+const SMALL: usize = 16;
+const LARGE: usize = if cfg!(miri) { 512 } else { 10_000 };
 
 /// Seal a held cell holding `resident` values, and report the maintenance the transition performed.
 fn seal_work_for(resident: usize) -> u64 {
