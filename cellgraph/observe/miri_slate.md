@@ -17,15 +17,27 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-0 tests. The crate carries no `unsafe` yet. Names below are the exact test
-identifiers; pass them after `--` in the Miri command, or run the whole lib
+3 tests, grouped by the unsafe site each pins down. Names below are the exact
+test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
 ```
 MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p cellgraph --lib
 ```
 
-_(empty)_
+**`retype` primitive — `Erased<T>`** ([src/reattach.rs](../src/reattach.rs)) — the single audited
+lifetime-retype, a `transmute_copy` behind a `ManuallyDrop` (the one site `transmute`'s
+associated-type size proof can't cover). It is reached only through `Erased::reattach`, and the only
+caller of that is `StepContext::continuation`, which shortens the stored `'static` form to the step
+brand. The tests store a family value in a cell's continuation slot, take it back out inside `enter`,
+and read through it; the borrowing family is the load-bearing one, since its erased form holds a real
+reference across the store. The third is a leak check on the erased slot's drop glue: a slot's
+reclamation must run the held family's `Drop`, which Miri's process-exit leak detector is what
+verifies.
+
+- `table::tests::the_continuation_comes_back_re_anchored_at_the_step_brand`
+- `table::tests::a_step_stores_the_successor_the_next_step_receives`
+- `table::tests::reclaiming_a_slot_drops_the_continuation_it_held`
 
 ## Adding tests to the slate
 
@@ -46,4 +58,5 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-05: 1.22s — 9 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

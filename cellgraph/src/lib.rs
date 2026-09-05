@@ -10,3 +10,12 @@
 //! [design/liveness-matrix.md](../design/liveness-matrix.md).
 
 #![deny(unsafe_op_in_unsafe_fn)]
+
+mod handle;
+mod matrix;
+pub mod reattach;
+mod table;
+
+pub use handle::{Handle, StaleHandle};
+pub use reattach::{Erased, Reattachable};
+pub use table::{CellTable, CreateError, EnterError, ReleaseError, StepContext};
