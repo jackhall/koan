@@ -11,11 +11,17 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod carrier;
 mod handle;
+mod mask;
 mod matrix;
 pub mod reattach;
+mod region;
 mod table;
 
+pub use carrier::{Opened, Sealed};
 pub use handle::{Handle, StaleHandle};
-pub use reattach::{Erased, Reattachable};
+pub use mask::Mask;
+pub use reattach::{DropFree, Erased, Reattachable};
+pub use region::Writer;
 pub use table::{CellTable, CreateError, EnterError, ReleaseError, StepContext};

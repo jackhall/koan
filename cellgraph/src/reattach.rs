@@ -22,6 +22,16 @@ pub unsafe trait Reattachable {
     type At<'r>: 'r;
 }
 
+/// A family whose live form runs no destructor, so it may rest in a cell's region.
+///
+/// A bump releases its chunks whole and never walks a value, so anything written into a region
+/// must have no drop glue — a `String` stored there would leak its heap buffer. The marker is what
+/// the value doors take as their bound; the alloc site additionally asserts
+/// `!needs_drop::<T::At<'static>>()`, so a wrong `impl` is a compile error at the door rather than
+/// a silent leak. A continuation family carries no such bound: a continuation rests in the cell's
+/// own slot, not in a region, and its glue runs when the slot reclaims.
+pub trait DropFree {}
+
 /// Generate `unsafe impl Reattachable` for layout-invariant families. Each `Family => At<'r>` pair
 /// expands to the trait impl; write the associated-type body with a literal `'r`
 /// (`Continuation => Step<'r>`, `Owned => String`).
@@ -83,20 +93,51 @@ impl<T: Reattachable> Erased<T> {
         Erased { inner: value }
     }
 
+    /// Hold a family value born at some shorter `'r`, forgetting that lifetime for storage.
+    ///
+    /// The **signature is safe**: forgetting a lifetime cannot fabricate one. Nothing may be read
+    /// out of the erased form without a [`reattach`](Erased::reattach), whose own contract is what
+    /// carries the obligation that the value's referents are still alive at the lifetime it comes
+    /// back at.
+    pub fn erase(value: T::At<'_>) -> Self {
+        // SAFETY: lifetime-only retype for storage of a single-lifetime family (the `Reattachable`
+        // layout-invariance contract); the erased value is stored, never used, until a re-anchor.
+        Erased {
+            inner: unsafe { retype::<T::At<'_>, T::At<'static>>(value) },
+        }
+    }
+
     /// Re-anchor the held value at a caller-chosen `'r`.
     ///
     /// # Safety
     ///
-    /// `'r` must be a lifetime the value's referents outlive. Every value reaching [`store`] is
-    /// already at `'static`, so any `'r` satisfies that for a **covariant** family; a family that
-    /// is invariant in its lifetime (`Cell<&'r u32>`, say) additionally requires that nothing
-    /// borrowed for `'r` is written into the re-anchored value and then read back at `'static`.
-    /// The step brand `'b` this crate reattaches at is unnameable outside its own `enter` scope,
-    /// which is what discharges that second condition.
+    /// `'r` must be a lifetime the value's referents outlive. A value that arrived through
+    /// [`store`] is at `'static`, so any `'r` satisfies that; a value that arrived through
+    /// [`erase`] came from some `'x`, and the caller must know `'x: 'r` — this crate's callers know
+    /// it because the referents are region storage the table keeps alive for the whole step the
+    /// `'r` brand belongs to. A family that is **invariant** in its lifetime (`Cell<&'r u32>`, say)
+    /// additionally requires that nothing borrowed for `'r` is written into the re-anchored value
+    /// and then read back at a longer lifetime; the step brand this crate reattaches at is
+    /// unnameable outside its own `enter` scope, which is what discharges that second condition.
     ///
     /// [`store`]: Erased::store
+    /// [`erase`]: Erased::erase
     pub unsafe fn reattach<'r>(self) -> T::At<'r> {
         // SAFETY: see the method contract; lifetime-only retype of a single-lifetime family.
         unsafe { retype::<T::At<'static>, T::At<'r>>(self.inner) }
     }
 }
+
+/// A family whose erased form is `Copy` makes its holder `Copy` too: the erased value names bytes
+/// it does not own, so duplicating the holder duplicates no ownership. This is what lets a carrier
+/// be read without being consumed.
+impl<T: Reattachable> Clone for Erased<T>
+where
+    T::At<'static>: Copy,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: Reattachable> Copy for Erased<T> where T::At<'static>: Copy {}

@@ -17,7 +17,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-3 tests, grouped by the unsafe site each pins down. Names below are the exact
+6 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -39,6 +39,19 @@ verifies.
 - `table::tests::a_step_stores_the_successor_the_next_step_receives`
 - `table::tests::reclaiming_a_slot_drops_the_continuation_it_held`
 
+**Region storage and the operand re-anchor** ([src/region.rs](../src/region.rs),
+[src/table.rs](../src/table.rs)) — the same `retype` primitive, reached at the two doors a value
+with reach uses. `Erased::erase` forgets a region borrow at the alloc site and `Erased::reattach`
+hands it back at a shorter one, so a bumped value's borrow survives a round trip through a
+lifetime-free slot; the placement test is the load-bearing one, since its operand view is a real
+`&u32` into *another* cell's chunks that the built value keeps. The third is the region's own
+teardown: a reclaimed slot drops its `Bump`, and the process-exit leak detector is what confirms
+the chunks go with it rather than outliving the slab.
+
+- `table::tests::values::a_value_allocated_in_the_executing_cell_reaches_only_that_cell`
+- `table::tests::values::placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach`
+- `table::tests::values::a_held_cell_stays_resident_until_its_last_holder_reclaims`
+
 ## Adding tests to the slate
 
 Add a test to the slate when a new unsafe site lands — a transmute,
@@ -58,5 +71,6 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-05: 65.19s — 17 tests, 0 leaks, 0 UB
 - 2026-09-05: 1.22s — 9 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

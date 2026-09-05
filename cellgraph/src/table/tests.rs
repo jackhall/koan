@@ -1,3 +1,6 @@
+mod properties;
+mod values;
+
 use super::*;
 use std::rc::Rc;
 
@@ -13,7 +16,18 @@ crate::reattachable!(Borrowed => &'r u32);
 struct Counted;
 crate::reattachable!(Counted => Rc<()>);
 
+/// A value family: a borrow into region storage, so a carrier's reach is a real cross-cell edge.
+struct Number;
+crate::reattachable!(Number => &'r u32);
+impl DropFree for Number {}
+
 const ANCHOR: u32 = 7;
+
+/// What a slot currently holds, by handle — the state assertions read the slab directly, since
+/// residence is not observable through the public verbs.
+fn state_of<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> SlotState {
+    table.slots[handle.slot() as usize].state
+}
 
 #[test]
 fn the_slab_refuses_past_its_cap_and_reuses_a_freed_slot() {

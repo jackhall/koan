@@ -1,13 +1,17 @@
-//! The cell table: a slab capped at construction, the birth relation over its slots, the executing
-//! flag, and the `create` / `enter` / `release` verbs. See
-//! [design/cellgraph.md](../design/cellgraph.md) § Verbs.
+//! The cell table: a slab capped at construction, the two hold relations over its slots, the
+//! executing flag, the per-cell regions, and the `create` / `enter` / `release` verbs. See
+//! [design/cellgraph.md](../design/cellgraph.md) § Verbs and
+//! [design/liveness-matrix.md](../design/liveness-matrix.md) § The model.
 
 #[cfg(test)]
 mod tests;
 
+use crate::carrier::{Opened, Sealed};
 use crate::handle::{Handle, StaleHandle};
+use crate::mask::Mask;
 use crate::matrix::{BitRow, Matrix};
-use crate::reattach::{Erased, Reattachable};
+use crate::reattach::{DropFree, Erased, Reattachable};
+use crate::region::{Region, Writer};
 
 /// Refusals from [`CellTable::create`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -49,6 +53,9 @@ struct Slot<C: Reattachable> {
     generation: u32,
     state: SlotState,
     continuation: Option<Erased<C>>,
+    /// Minted at the cell's first allocation, so a cell that never allocates costs no chunk. Freed
+    /// whole at reclamation, which is what makes a cell's death O(1) in its resident values.
+    region: Option<Region>,
 }
 
 /// A capped slab of cells over the relations that decide when a slot may be reused.
@@ -59,7 +66,12 @@ pub struct CellTable<C: Reattachable> {
     slots: Box<[Slot<C>]>,
     free: Vec<u32>,
     birth: Matrix,
+    /// The pin relation: row M is the set of cells whose region storage M's own resident values
+    /// read. Written only by [`CellTable::mint`], which is the mint OR of
+    /// [liveness-matrix.md § Reach as a hybrid mask](../design/liveness-matrix.md#reach-as-a-hybrid-mask).
+    pins: Matrix,
     executing: BitRow,
+    cap: u32,
 }
 
 impl<C: Reattachable> CellTable<C> {
@@ -71,6 +83,7 @@ impl<C: Reattachable> CellTable<C> {
                 generation: 0,
                 state: SlotState::Free,
                 continuation: None,
+                region: None,
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
@@ -78,7 +91,9 @@ impl<C: Reattachable> CellTable<C> {
             slots,
             free: (0..cap).rev().collect(),
             birth: Matrix::new(cap),
+            pins: Matrix::new(cap),
             executing: BitRow::new(cap),
+            cap,
         }
     }
 
@@ -102,7 +117,7 @@ impl<C: Reattachable> CellTable<C> {
         cell.continuation = continuation.map(Erased::store);
         let generation = cell.generation;
         if let Some(parent_slot) = parent_slot {
-            self.birth.row_or_assign(slot, parent_slot);
+            self.birth.inherit_row(slot, parent_slot);
             self.birth.set(slot, parent_slot);
         }
         Ok(Handle::new(slot, generation))
@@ -189,13 +204,21 @@ impl<C: Reattachable> CellTable<C> {
         Ok(())
     }
 
-    /// A dead cell's slot is reusable once its executing flag is clear and no live cell's birth
-    /// row names it.
+    /// A dead cell's slot is reusable once its executing flag is clear and no *occupied* slot names
+    /// it in either relation.
+    ///
+    /// A dead-but-resident cell counts as a holder: its hold set releases at reclamation, not at
+    /// its declared death, so its holds outlive it exactly as long as it does. That is what makes
+    /// a ring a leak rather than a dangle — two cells naming each other stay resident through every
+    /// pass of the fixpoint below — and it is the only reason the cascade is a fixpoint at all: a
+    /// reclaim clears a row, which is what can bring another cell's holder set to zero.
     fn reclaimable(&self, slot: u32) -> bool {
-        !self.executing.test(slot)
-            && !(0..self.slots.len() as u32).any(|other| {
-                self.slots[other as usize].state == SlotState::Live && self.birth.test(other, slot)
-            })
+        if self.executing.test(slot) {
+            return false;
+        }
+        let occupied =
+            || (0..self.cap).filter(|other| self.slots[*other as usize].state != SlotState::Free);
+        !self.birth.held_by_any(occupied(), slot) && !self.pins.held_by_any(occupied(), slot)
     }
 
     /// Reclaim every dead cell whose rows have gone clear, repeating until none does — one death
@@ -218,11 +241,75 @@ impl<C: Reattachable> CellTable<C> {
     /// Return a dead cell's slot to the free list under a fresh generation, so every handle minted
     /// for the departing occupant is stale from here on.
     fn reclaim(&mut self, slot: u32) {
+        // The hold set releases wholesale here, not at the declared death: holds are monotone for
+        // the cell's whole life, and the cleared entries name exactly the cells worth re-checking.
+        self.pins.clear_row(slot);
         let cell = &mut self.slots[slot as usize];
         cell.state = SlotState::Free;
         cell.continuation = None;
+        cell.region = None;
         cell.generation = cell.generation.wrapping_add(1);
         self.free.push(slot);
+    }
+
+    /// The mint: fold a value's reach into the hold set of the cell whose region now stores it,
+    /// minus that cell's own bit. **The only write into the pin relation.** Private to the table,
+    /// so every path that puts a value in a region passes through here.
+    fn mint(&mut self, into: u32, reach: &Mask) {
+        self.pins.mint(into, reach);
+    }
+
+    /// Walk the hold graph from `start` and report a cycle if one is reachable — the fail-safe
+    /// diagnostic for a ring, which keeps both cells alive forever rather than dangling.
+    ///
+    /// Debug builds only, and **not consulted on any mint or release path**: preventing rings is
+    /// the embedder's crossing discipline, not a mint-time reachability check.
+    #[cfg(debug_assertions)]
+    pub fn debug_ring_from(&self, start: Handle) -> Option<Vec<Handle>> {
+        let mut path = Vec::new();
+        let mut on_path = vec![false; self.cap as usize];
+        let mut settled = vec![false; self.cap as usize];
+        self.walk_for_ring(start.slot(), &mut path, &mut on_path, &mut settled)
+            .map(|cycle| {
+                cycle
+                    .into_iter()
+                    .map(|slot| Handle::new(slot, self.slots[slot as usize].generation))
+                    .collect()
+            })
+    }
+
+    #[cfg(debug_assertions)]
+    fn walk_for_ring(
+        &self,
+        slot: u32,
+        path: &mut Vec<u32>,
+        on_path: &mut [bool],
+        settled: &mut [bool],
+    ) -> Option<Vec<u32>> {
+        if on_path[slot as usize] {
+            let entry = path.iter().position(|step| *step == slot).unwrap_or(0);
+            return Some(path[entry..].to_vec());
+        }
+        if settled[slot as usize] {
+            return None;
+        }
+        on_path[slot as usize] = true;
+        path.push(slot);
+        for held in self.pins.held_by(slot, self.cap).collect::<Vec<_>>() {
+            if let Some(cycle) = self.walk_for_ring(held, path, on_path, settled) {
+                return Some(cycle);
+            }
+        }
+        path.pop();
+        on_path[slot as usize] = false;
+        settled[slot as usize] = true;
+        None
+    }
+
+    /// Whether `holder` holds `held` in the pin relation.
+    #[cfg(test)]
+    fn holds(&self, holder: Handle, held: Handle) -> bool {
+        self.pins.test(holder.slot(), held.slot())
     }
 }
 
@@ -257,6 +344,149 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
     pub fn store_successor(&mut self, continuation: C::At<'static>) {
         self.table.slots[self.handle.slot() as usize].continuation =
             Some(Erased::store(continuation));
+    }
+
+    /// Build a value in the executing cell's own region.
+    ///
+    /// `build` receives the region's write surface at a brand it cannot widen, so the value it
+    /// returns borrows region-derived or owned data and nothing else — an ambient `&'x` has no
+    /// outlives relation to a universally quantified `'r`. The value's reach is therefore exactly
+    /// the executing cell, and the mint's self rule makes storing it a hold on nothing.
+    ///
+    /// ```
+    /// use cellgraph::{CellTable, DropFree, reattachable};
+    /// struct Work;
+    /// reattachable!(Work => String);
+    /// struct Number;
+    /// reattachable!(Number => &'r u32);
+    /// impl DropFree for Number {}
+    ///
+    /// let mut table: CellTable<Work> = CellTable::new(2);
+    /// let cell = table.create(None, None).unwrap();
+    /// let read = table
+    ///     .enter(cell, |context| {
+    ///         let value = context.alloc::<Number>(|writer| writer.value(41));
+    ///         assert!(value.reach().names(cell.slot()));
+    ///         *context.read(&value).value()
+    ///     })
+    ///     .unwrap();
+    /// assert_eq!(read, 41);
+    /// ```
+    ///
+    /// A carrier cannot leave the step that built it: its home brand is the step's own, and
+    /// `enter`'s result type is chosen outside the call, so it cannot name that brand.
+    ///
+    /// ```compile_fail
+    /// use cellgraph::{CellTable, DropFree, Sealed, reattachable};
+    /// struct Work;
+    /// reattachable!(Work => String);
+    /// struct Number;
+    /// reattachable!(Number => &'r u32);
+    /// impl DropFree for Number {}
+    ///
+    /// let mut table: CellTable<Work> = CellTable::new(2);
+    /// let cell = table.create(None, None).unwrap();
+    /// let escaped: Sealed<'_, Number> = table
+    ///     .enter(cell, |context| context.alloc::<Number>(|writer| writer.value(41)))
+    ///     .unwrap();
+    /// ```
+    pub fn alloc<T>(&mut self, build: impl for<'r> FnOnce(Writer<'r>) -> T::At<'r>) -> Sealed<'b, T>
+    where
+        T: Reattachable + DropFree,
+    {
+        let slot = self.handle.slot();
+        let reach = Mask::empty(self.table.cap);
+        self.mint_and_build(slot, reach, build)
+    }
+
+    /// Destination-homed placement: build a value **in `dest`'s region**, embedding the views of
+    /// `operands`, and fold every operand's reach into `dest`'s hold set.
+    ///
+    /// This is the push shape of [design/cellgraph.md § Passing values between
+    /// cells](../design/cellgraph.md#passing-values-between-cells): the producer builds straight
+    /// into the consumer, the consumer's row takes the reach, and the producer can then die.
+    /// Operands share one family `V` and arrive as carriers, never as values beside a mask.
+    pub fn alloc_into<T, V>(
+        &mut self,
+        dest: Handle,
+        operands: &[&Sealed<'b, V>],
+        build: impl for<'r> FnOnce(Writer<'r>, &[V::At<'r>]) -> T::At<'r>,
+    ) -> Result<Sealed<'b, T>, StaleHandle>
+    where
+        T: Reattachable + DropFree,
+        V: Reattachable + DropFree,
+        Erased<V>: Copy,
+    {
+        let dest_slot = self.table.live_slot(dest)?;
+        let mut reach = Mask::empty(self.table.cap);
+        for operand in operands {
+            reach.union_with(operand.reach());
+        }
+        let erased: Vec<_> = operands.iter().map(|operand| operand.erased()).collect();
+        Ok(self.mint_and_build(dest_slot, reach, move |writer| {
+            // SAFETY: each operand is a carrier branded to this step, so its referents are region
+            // storage in cells its reach names. No cell can die inside a step — `release` needs the
+            // table, which `enter` holds exclusively for the whole call — and the mint below has
+            // already folded that reach into the destination's hold set, so the storage outlives
+            // both `'r` and the destination. `'r` is the region borrow, strictly inside the step
+            // brand, and the `for<'r>` quantifier keeps a view from escaping the build.
+            let views: Vec<_> = erased
+                .into_iter()
+                .map(|operand| unsafe { operand.reattach() })
+                .collect();
+            build(writer, &views)
+        }))
+    }
+
+    /// Mint a bare hold on another live cell — the pull shape's first half: the executing cell
+    /// takes a hold with no value crossing, so the held cell seals rather than reclaims when it
+    /// dies, and this cell can read out of it later.
+    pub fn hold(&mut self, other: Handle) -> Result<(), StaleHandle> {
+        let other_slot = self.table.live_slot(other)?;
+        let reach = Mask::single(self.table.cap, other_slot);
+        self.table.mint(self.handle.slot(), &reach);
+        Ok(())
+    }
+
+    /// Read a carrier out at the reading borrow. The door hangs on the context, so a value with
+    /// reach is only ever live inside an `enter` scope.
+    pub fn read<'s, T>(&'s self, carrier: &'s Sealed<'b, T>) -> Opened<'s, T>
+    where
+        T: Reattachable + DropFree,
+        Erased<T>: Copy,
+    {
+        // SAFETY: `carrier` is branded to this step and its referents are region storage in the
+        // cells its reach names; nothing dies inside a step, so they are live for all of `'s`,
+        // which the `&'s self` borrow bounds inside the step brand. The re-anchor shortens.
+        let value: T::At<'s> = unsafe { carrier.erased().reattach::<'s>() };
+        Opened::new(value, carrier.reach())
+    }
+
+    /// The one path from a built value into a region: fold `reach` into the destination's hold
+    /// set, write the value, and hand back the carrier that pairs it with its own reach — the
+    /// destination's bit plus everything the operands reached.
+    fn mint_and_build<T>(
+        &mut self,
+        dest_slot: u32,
+        reach: Mask,
+        build: impl for<'r> FnOnce(Writer<'r>) -> T::At<'r>,
+    ) -> Sealed<'b, T>
+    where
+        T: Reattachable + DropFree,
+    {
+        // A bump releases its chunks whole and never walks a value, so a family with drop glue
+        // would leak whatever it owns. `DropFree` declares the absence; this is the check.
+        const { assert!(!std::mem::needs_drop::<T::At<'static>>()) };
+        self.table.mint(dest_slot, &reach);
+        let value = {
+            let region = self.table.slots[dest_slot as usize]
+                .region
+                .get_or_insert_with(Region::new);
+            Erased::<T>::erase(build(region.writer()))
+        };
+        let mut reach = reach;
+        reach.add(dest_slot);
+        Sealed::new(value, reach)
     }
 }
 
