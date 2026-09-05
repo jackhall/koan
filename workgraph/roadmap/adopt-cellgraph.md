@@ -57,10 +57,7 @@ exist, and koan sits on the one the design has moved off.
 
 ## Dependencies
 
-**Requires:**
-
-- [The cell substrate](../../cellgraph/roadmap/cell-substrate.md) — the pull
-  shape and the loop-cart shape both need seals.
+**Requires:** none — the substrate it rebuilds over has shipped.
 
 **Unblocks:**
 

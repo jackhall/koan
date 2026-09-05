@@ -15,9 +15,32 @@ The crate names no type from its embedders: the dependency direction is
 [workgraph](../workgraph/README.md) is the first embedder, and
 [koan](../README.md) sits above that.
 
-The crate is being written off to one side: this tree currently holds its
-design and roadmap, and the code lands slice by slice per the roadmap before
-`workgraph` is rebuilt over it.
+The crate is written off to one side of `workgraph`, which is rebuilt over it
+by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
+
+## Source layout
+
+- [src/lib.rs](src/lib.rs) — the module wiring and the public surface.
+- [src/handle.rs](src/handle.rs) — cell identity: slot plus generation, and
+  the stale-handle refusal.
+- [src/table.rs](src/table.rs) — the slab, the `create` / `enter` / `release`
+  verbs, the step context's doors, the seal transition, and the cascade that
+  retires cells and records.
+- [src/matrix.rs](src/matrix.rs) — bit storage for the birth and pin
+  relations, and the executing row.
+- [src/mask.rs](src/mask.rs) — reach as a hybrid mask: slab bits plus a
+  sparse sealed-id set.
+- [src/sealed.rs](src/sealed.rs) — the sealed tier: ids, sparse sets, frozen
+  aggregates, holder counts, detached storage.
+- [src/region.rs](src/region.rs) — the per-cell bump and the write surface a
+  build closure receives.
+- [src/carrier.rs](src/carrier.rs) — the two carrier states a value with
+  reach passes through.
+- [src/reattach.rs](src/reattach.rs) — the reattachable contract and the
+  single lifetime-retype the crate is built on.
+
+Memory-safety sign-off for the retype seam is
+[observe/miri_slate.md](observe/miri_slate.md).
 
 ## Doc tree
 

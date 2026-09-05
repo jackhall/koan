@@ -1,16 +1,20 @@
 //! The liveness-matrix invariants, over random interleavings of the verbs. The hand-written tests
-//! pin shapes; this one pins that no order of `create` / `hold` / `alloc_into` / `release` can
-//! break the two conditions the whole model rests on
+//! pin shapes; this one pins that no order of `create` / `hold` / `alloc_into` / `keep` / `read` /
+//! `release` can break the conditions the whole model rests on
 //! ([liveness-matrix.md § Invariants](../../../design/liveness-matrix.md#invariants)):
 //!
-//! - a reclaimed slot is named by no occupied cell's row, in either relation;
-//! - a cell resident after its declared death is named by at least one occupied cell's row —
-//!   otherwise the reclaim gate missed it, and the slab leaks a slot.
+//! - a recycled slot is named by nothing — no occupant's row in either relation, and no frozen
+//!   aggregate;
+//! - a cell resident after its declared death is named by an occupant's birth row, the one
+//!   relation with no sealed half to convert into;
+//! - every sealed record's holder count equals the number of hold sets that name it, and the
+//!   reverse naming index is exactly the transpose of the aggregates;
+//! - every bit and id of a stored mask is covered by a live cell or a live record — mask validity.
 
 use proptest::prelude::*;
 
 use super::super::*;
-use super::{Number, Owned};
+use super::{Borrowed, Number};
 
 const CAP: u32 = 6;
 
@@ -22,6 +26,8 @@ enum Verb {
     Create { parent: Option<usize> },
     Hold { holder: usize, held: usize },
     Place { producer: usize, consumer: usize },
+    Keep { cell: usize, over: usize },
+    Read { cell: usize },
     Release { cell: usize },
 }
 
@@ -30,33 +36,106 @@ fn verb() -> impl Strategy<Value = Verb> {
         proptest::option::of(0..8usize).prop_map(|parent| Verb::Create { parent }),
         (0..8usize, 0..8usize).prop_map(|(holder, held)| Verb::Hold { holder, held }),
         (0..8usize, 0..8usize).prop_map(|(producer, consumer)| Verb::Place { producer, consumer }),
+        (0..8usize, 0..8usize).prop_map(|(cell, over)| Verb::Keep { cell, over }),
+        (0..8usize).prop_map(|cell| Verb::Read { cell }),
         (0..8usize).prop_map(|cell| Verb::Release { cell }),
     ]
 }
 
-/// Every slot the slab currently considers reusable must be named by nothing occupied, and every
-/// slot still resident after its death must be named by something occupied.
-fn check_invariants(table: &CellTable<Owned>) {
+fn check_invariants(table: &CellTable<Borrowed>) {
     let occupied: Vec<u32> = (0..CAP)
         .filter(|slot| table.slots[*slot as usize].state != SlotState::Free)
         .collect();
+
     for slot in 0..CAP {
-        let named = table.birth.held_by_any(occupied.iter().copied(), slot)
-            || table.pins.held_by_any(occupied.iter().copied(), slot);
+        let by_birth = table.birth.held_by_any(occupied.iter().copied(), slot);
+        let by_pins = table.pins.held_by_any(occupied.iter().copied(), slot);
+        let by_aggregate = !table.naming[slot as usize].is_empty();
         match table.slots[slot as usize].state {
             SlotState::Free => {
                 assert!(
-                    !named,
-                    "slot {slot} is free but an occupied row still names it"
-                )
-            }
-            SlotState::Dead => {
+                    !by_birth && !by_pins && !by_aggregate,
+                    "slot {slot} is free but something still names it"
+                );
                 assert!(
-                    named,
-                    "slot {slot} is resident but no occupied row names it"
-                )
+                    table.sealed_holds[slot as usize].is_empty(),
+                    "slot {slot} is free but kept a sealed hold"
+                );
             }
+            SlotState::Dead => assert!(
+                by_birth,
+                "slot {slot} is resident but no birth row names it, so it should have left the slab"
+            ),
             SlotState::Live => {}
+        }
+    }
+
+    let records: Vec<SealedId> = table.sealed.ids().collect();
+    for id in &records {
+        let record = table.sealed.get(*id).unwrap();
+        let from_cells = occupied
+            .iter()
+            .filter(|slot| table.sealed_holds[**slot as usize].contains(*id))
+            .count();
+        let from_records = records
+            .iter()
+            .filter(|other| *other != id)
+            .filter(|other| {
+                table
+                    .sealed
+                    .get(**other)
+                    .unwrap()
+                    .aggregate
+                    .names_sealed(*id)
+            })
+            .count();
+        assert_eq!(
+            record.holders as usize,
+            from_cells + from_records,
+            "record {id:?} counts holders that do not name it, or misses ones that do"
+        );
+        for named in record.aggregate.slab_slots(CAP) {
+            assert!(
+                table.naming[named as usize].contains(*id),
+                "record {id:?} names slot {named} without registering in the naming index"
+            );
+        }
+        for named in record.aggregate.sealed().iter() {
+            assert!(
+                records.contains(&named),
+                "record {id:?} names a retired record"
+            );
+        }
+    }
+
+    for slot in 0..CAP {
+        for id in table.naming[slot as usize].iter() {
+            let record = table
+                .sealed
+                .get(id)
+                .expect("the naming index names a live record");
+            assert!(
+                record.aggregate.names(slot),
+                "the naming index claims record {id:?} names slot {slot}"
+            );
+        }
+        for id in table.sealed_holds[slot as usize].iter() {
+            assert!(records.contains(&id), "slot {slot} holds a retired record");
+        }
+        // Mask validity: every bit and id of the cell's one stored mask is covered.
+        if let Some(stored) = &table.slots[slot as usize].continuation {
+            for named in stored.reach.slab_slots(CAP) {
+                assert!(
+                    table.slots[named as usize].state != SlotState::Free,
+                    "slot {slot} stores a mask naming the recycled slot {named}"
+                );
+            }
+            for named in stored.reach.sealed().iter() {
+                assert!(
+                    records.contains(&named),
+                    "slot {slot} stores a mask naming a retired record"
+                );
+            }
         }
     }
 }
@@ -73,10 +152,10 @@ proptest! {
     })]
 
     #[test]
-    fn no_interleaving_reclaims_a_named_cell_or_strands_an_unnamed_one(
+    fn no_interleaving_strands_a_slot_or_desynchronizes_the_two_tiers(
         verbs in proptest::collection::vec(verb(), 1..40)
     ) {
-        let mut table: CellTable<Owned> = CellTable::new(CAP);
+        let mut table: CellTable<Borrowed> = CellTable::new(CAP);
         let mut minted: Vec<Handle> = Vec::new();
 
         for step in verbs {
@@ -110,6 +189,50 @@ proptest! {
                         });
                     }
                 }
+                // A continuation kept over a value homed elsewhere is the one stored mask a cell
+                // owns, and the only thing the seal transition has to rewrite.
+                Verb::Keep { cell, over } => {
+                    if let (Some(cell), Some(over)) =
+                        (minted.get(cell).copied(), minted.get(over).copied())
+                        && table.is_live(cell)
+                    {
+                        let _ = table.enter(cell, |context| {
+                            if let Ok(value) = context
+                                .alloc_into::<Number, Number>(over, &[], |w, _| w.value(1))
+                            {
+                                context.store_successor_capturing(&[&value], |_w, views| views[0]);
+                            }
+                        });
+                    }
+                }
+                // Reading the kept continuation back is where a stale mask would surface: the
+                // reach that comes out is derived through whatever the tier has since done to it.
+                Verb::Read { cell } => {
+                    if let Some(cell) = minted.get(cell).copied()
+                        && table.is_live(cell)
+                    {
+                        let reach = table
+                            .enter(cell, |context| {
+                                context.continuation().map(|opened| opened.reach().clone())
+                            })
+                            .unwrap();
+                        if let Some(reach) = reach {
+                            for named in reach.slab_slots(CAP) {
+                                prop_assert!(
+                                    table.slots[named as usize].state != SlotState::Free,
+                                    "a read handed back a mask naming the recycled slot {}",
+                                    named
+                                );
+                            }
+                            for named in reach.sealed().iter() {
+                                prop_assert!(
+                                    table.sealed.get(named).is_some(),
+                                    "a read handed back a mask naming a retired record"
+                                );
+                            }
+                        }
+                    }
+                }
                 Verb::Release { cell } => {
                     if let Some(cell) = minted.get(cell).copied() {
                         let _ = table.release(cell);
@@ -120,10 +243,13 @@ proptest! {
         }
 
         // Winding the run down: once every cell's death is declared, the cascade returns every
-        // slot the run did not tie into a ring.
+        // slot, and the tier retains only what a ring tied together.
         for handle in &minted {
             let _ = table.release(*handle);
         }
         check_invariants(&table);
+        for slot in 0..CAP {
+            prop_assert_eq!(table.slots[slot as usize].state, SlotState::Free);
+        }
     }
 }

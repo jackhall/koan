@@ -17,7 +17,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-6 tests, grouped by the unsafe site each pins down. Names below are the exact
+9 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -27,13 +27,12 @@ MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p cellgraph --lib
 
 **`retype` primitive — `Erased<T>`** ([src/reattach.rs](../src/reattach.rs)) — the single audited
 lifetime-retype, a `transmute_copy` behind a `ManuallyDrop` (the one site `transmute`'s
-associated-type size proof can't cover). It is reached only through `Erased::reattach`, and the only
-caller of that is `StepContext::continuation`, which shortens the stored `'static` form to the step
-brand. The tests store a family value in a cell's continuation slot, take it back out inside `enter`,
-and read through it; the borrowing family is the load-bearing one, since its erased form holds a real
-reference across the store. The third is a leak check on the erased slot's drop glue: a slot's
-reclamation must run the held family's `Drop`, which Miri's process-exit leak detector is what
-verifies.
+associated-type size proof can't cover). It is reached through the two doors on `Erased`, and every
+call site shortens a stored form to a lifetime the referents outlive. The tests store a family value
+in a cell's continuation slot, take it back out inside `enter`, and read through it; the borrowing
+family is the load-bearing one, since its erased form holds a real reference across the store. The
+third is a leak check on the erased slot's drop glue: a slot's reclamation must run the held
+family's `Drop`, which Miri's process-exit leak detector is what verifies.
 
 - `table::tests::the_continuation_comes_back_re_anchored_at_the_step_brand`
 - `table::tests::a_step_stores_the_successor_the_next_step_receives`
@@ -50,7 +49,21 @@ the chunks go with it rather than outliving the slab.
 
 - `table::tests::values::a_value_allocated_in_the_executing_cell_reaches_only_that_cell`
 - `table::tests::values::placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach`
-- `table::tests::values::a_held_cell_stays_resident_until_its_last_holder_reclaims`
+- `table::tests::values::a_held_cell_leaves_the_slab_at_its_death_and_its_record_goes_with_its_holder`
+
+**The sealed tier's detached storage** ([src/sealed.rs](../src/sealed.rs), [src/table.rs](../src/table.rs))
+— the same `retype` primitive again, at the one door whose referents may no longer live in the slab
+at all. A sealed region's chunks move out of their slot into a record, and a continuation stored
+before the seal keeps borrows straight into them; the accessor re-anchors that value at the next
+step's brand, so what Miri checks here is that a `Bump` moving into a record moves no chunk byte and
+that the pre-seal borrows stay valid across the move. The first test is the load-bearing one — it
+reads a `&u32` out of storage whose cell recycled several steps earlier. The third is the tier's
+teardown: the cascade drops two records at once, and the process-exit leak detector confirms both
+storages go with them.
+
+- `table::tests::sealing::a_continuation_reads_back_with_reach_derived_through_the_sealed_tier`
+- `table::tests::sealing::a_reach_that_names_two_sealed_regions_merges_their_ids_in_order`
+- `table::tests::sealing::reclaiming_a_records_last_holder_cascades_through_its_aggregate`
 
 ## Adding tests to the slate
 
@@ -71,6 +84,8 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-05: 70.27s — 24 tests, 0 leaks, 0 UB
+- 2026-09-05: 92.83s — 24 tests, 0 leaks, 0 UB
 - 2026-09-05: 65.19s — 17 tests, 0 leaks, 0 UB
 - 2026-09-05: 1.22s — 9 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

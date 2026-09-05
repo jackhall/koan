@@ -26,7 +26,11 @@ compile-enforced: the lower crate names no type from the higher one.
   byte moving, which is what the sealed tier and absorption rely on.
 - **Continuation**, optional. An erased, reattachable one-shot the substrate
   stores and hands back under `enter`, re-anchored at the step lifetime, and
-  never calls. A step may store a successor before its scope ends. A cell
+  never calls. It rests beside the reach of whatever it captured, minted into
+  its own cell's holds when it is stored — a cell holds what its continuation
+  reads — which makes it the one stored mask the seal transition rewrites, and
+  the read that hands it back the sealed tier's accessor. A step may store a
+  successor before its scope ends. A cell
   with no continuation is **storage-only**, and is the substrate's answer to
   "a region that outlives its step but is never executed in": a cart a loop
   accumulates into, a mailbox a scheduler parks values in.
@@ -34,8 +38,10 @@ compile-enforced: the lower crate names no type from the higher one.
   creation: a cell names at most one parent, and its birth row is the
   parent's row plus the parent's bit, derived by the substrate so transitive
   closure is by construction. *Pin holds* accrue as values with reach are
-  minted into the region. Both are monotone for the cell's life and release
-  wholesale at its death.
+  minted into the region. Both are monotone for the cell's life, and both
+  release wholesale rather than per reason: the birth row at the cell's
+  declared death, the pin row when its slot leaves the slab — by clearing if
+  the cell reclaims, by freezing into an aggregate if it seals.
 
 ## The contract: two embedder types
 
@@ -66,8 +72,9 @@ how an embedder gives one unit of work two regions with different lifetimes.
   out of a sealed region with derived reach; and store a successor
   continuation. A cell cannot be entered while it is already executing.
 - **`release(handle)`** declares death: the embedder promises never to enter
-  the cell again. The substrate reclaims the slot if the cell's rows are
-  zero, and seals it otherwise.
+  the cell again. The slot leaves the slab once no descendant's birth row
+  names the cell: reclaimed if nothing reaches its storage, sealed if
+  something does.
 
 The substrate never runs a cell, never chooses an order, and never inspects a
 continuation. It names no thread model and no async runtime: it is a
@@ -113,11 +120,8 @@ Each absence is a design statement, not a gap:
 
 ## Open work
 
-The crate has no code yet. The slices that build it are indexed in
-[the roadmap](../roadmap/README.md):
+The remaining slices are indexed in [the roadmap](../roadmap/README.md):
 
-- [The cell substrate](../roadmap/cell-substrate.md) — the crate, the cell
-  table, the witnessed core over masks, and the sealed tier.
 - [Absorption](../roadmap/absorption.md)
 - [Retention pricing](../roadmap/retention-pricing.md)
 - [Rebuilding workgraph over cellgraph](../../workgraph/roadmap/adopt-cellgraph.md)

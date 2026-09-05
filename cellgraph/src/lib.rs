@@ -17,6 +17,7 @@ mod mask;
 mod matrix;
 pub mod reattach;
 mod region;
+mod sealed;
 mod table;
 
 pub use carrier::{Opened, Sealed};
@@ -24,4 +25,7 @@ pub use handle::{Handle, StaleHandle};
 pub use mask::Mask;
 pub use reattach::{DropFree, Erased, Reattachable};
 pub use region::Writer;
+pub use sealed::{SealedId, SealedSet};
+#[cfg(debug_assertions)]
+pub use table::HoldNode;
 pub use table::{CellTable, CreateError, EnterError, ReleaseError, StepContext};

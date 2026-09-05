@@ -1,4 +1,5 @@
 mod properties;
+mod sealing;
 mod values;
 
 use super::*;
@@ -113,7 +114,7 @@ fn the_continuation_comes_back_re_anchored_at_the_step_brand() {
     let cell = table.create(None, Some(&ANCHOR)).unwrap();
 
     let read = table
-        .enter(cell, |context| *context.continuation().unwrap())
+        .enter(cell, |context| *context.continuation().unwrap().value())
         .unwrap();
     assert_eq!(read, 7);
 
@@ -133,7 +134,11 @@ fn a_step_stores_the_successor_the_next_step_receives() {
             context.store_successor(String::from("second"));
         })
         .unwrap();
-    let next = table.enter(cell, |context| context.continuation()).unwrap();
+    let next = table
+        .enter(cell, |context| {
+            context.continuation().map(|opened| opened.into_value())
+        })
+        .unwrap();
     assert_eq!(next.as_deref(), Some("second"));
 }
 

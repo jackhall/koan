@@ -40,9 +40,7 @@ degenerate cases the model is designed around stay rare rather than common.
 
 ## Dependencies
 
-**Requires:**
-
-- [The cell substrate](cell-substrate.md)
+**Requires:** none — the cell substrate it extends has shipped.
 
 **Unblocks:**
 

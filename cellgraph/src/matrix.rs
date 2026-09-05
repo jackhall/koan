@@ -35,9 +35,21 @@ impl Matrix {
         self.bits[index] |= bit;
     }
 
+    pub(crate) fn clear(&mut self, holder: u32, held: u32) {
+        let (index, bit) = self.place(holder, held);
+        self.bits[index] &= !bit;
+    }
+
     pub(crate) fn test(&self, holder: u32, held: u32) -> bool {
         let (index, bit) = self.place(holder, held);
         self.bits[index] & bit != 0
+    }
+
+    /// A cell's whole hold set as words — the copy-out the seal transition freezes into an
+    /// aggregate. Contiguity is why the freeze consults no storage and scans no values.
+    pub(crate) fn row_words(&self, holder: u32) -> &[u64] {
+        let start = holder as usize * self.words_per_row;
+        &self.bits[start..start + self.words_per_row]
     }
 
     /// Fold a reach mask into `holder`'s hold set, minus `holder`'s own bit — the mint OR, and the

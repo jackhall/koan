@@ -78,13 +78,18 @@ where
 
 /// The in-use carrier: the value re-anchored at the reading borrow `'r`, still bundled with its
 /// reach. The borrow checker keeps it inside `'r`, so it cannot outlive the step that read it.
-pub struct Opened<'r, T: Reattachable + DropFree> {
+///
+/// The reach is **owned**, not borrowed from the table: a read out of the sealed tier derives a
+/// fresh mask — the region's id plus its frozen aggregate — that exists nowhere in the table to
+/// borrow from. Bounded only by [`Reattachable`], since a continuation comes back through this
+/// state too and rests in its cell's slot rather than a region, where drop glue is fine.
+pub struct Opened<'r, T: Reattachable> {
     value: T::At<'r>,
-    reach: &'r Mask,
+    reach: Mask,
 }
 
-impl<'r, T: Reattachable + DropFree> Opened<'r, T> {
-    pub(crate) fn new(value: T::At<'r>, reach: &'r Mask) -> Self {
+impl<'r, T: Reattachable> Opened<'r, T> {
+    pub(crate) fn new(value: T::At<'r>, reach: Mask) -> Self {
         Opened { value, reach }
     }
 
@@ -102,7 +107,10 @@ impl<'r, T: Reattachable + DropFree> Opened<'r, T> {
         self.value
     }
 
-    pub fn reach(&self) -> &'r Mask {
-        self.reach
+    /// What the value's borrows reach, derived through the sealed tier if the stored mask named
+    /// one — over-approximate but covering, since a resident value's true reach is a subset of its
+    /// region's holds.
+    pub fn reach(&self) -> &Mask {
+        &self.reach
     }
 }

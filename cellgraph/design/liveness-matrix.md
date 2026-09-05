@@ -24,11 +24,14 @@ spot.** There is no other gate — no count arithmetic, no census of structural
 self-holds (a cell's internal references to its own storage have no bits),
 no drop-ordering discipline in the embedder's loop.
 
-A cell that dies with a *nonzero* row does not linger in the slab: it
-**seals** into the second tier, and its slot recycles. The slab therefore
-holds live cells only, the embedder's admission control bounds the live
-population, and the matrix is square at the slab cap — it never grows with
-program retention. Slot reuse means slot index does not encode creation
+A cell that dies with a *nonzero* pin row does not linger in the slab: it
+**seals** into the second tier, and its slot recycles. The one hold that keeps
+a dead cell in place is a birth hold — the relation with no sealed form to
+convert into, below — and it keeps it only until the last descendant naming it
+dies in turn. The slab therefore holds live cells and the dead ones a
+descendant's birth row still names, the embedder's admission control bounds
+the live population, and the matrix is square at the slab cap — it never grows
+with program retention. Slot reuse means slot index does not encode creation
 order, so any ordering argument over the hold graph is a dynamic invariant
 over the generations of live occupants, not a property of the matrix's shape.
 
@@ -98,9 +101,12 @@ bits are written once and are immutable; pin bits are monotone-growing. It
 also leaves the birth side free to take a sparser shape than a matrix — a
 parent handle per cell with a derived chain-holder count is one such shape,
 and the invariant that a birth row contains its parent's row is checkable
-either way. A cell is reclaimable when it is dead in *both* relations — and
-only the pin column freezes into a seal: birth holds exist for execution, so
-they release at death unconditionally. Storage that reaches the parent chain
+either way. A cell leaves the slab when it is dead and no birth hold names it —
+and only the pin column freezes into a seal: birth holds exist for execution, so
+a cell's own birth row releases at its death unconditionally, and a dead cell no
+descendant names has no birth presence left to convert. What it does on the way
+out is what its pin row decides: reclamation when nothing reaches its storage, a
+seal when something does. Storage that reaches the parent chain
 does so through pin bits (transitive coverage puts those regions in the
 column directly).
 
@@ -404,12 +410,6 @@ implementation detail invisible to the interface either way.
 
 ## Open work
 
-None of this is implemented. The slices that ship it, in order:
-
-- [The cell substrate](../roadmap/cell-substrate.md) — the crate; slab,
-  handles, `enter`, birth holds; the pin matrix, the mint OR, row-zero
-  reclaim, the ring detector; the seal transition, hybrid masks, the
-  accessor.
 - [Absorption](../roadmap/absorption.md) — the three merges.
 - [Retention pricing](../roadmap/retention-pricing.md) — closure pricing and
   the pressure model.

@@ -27,6 +27,12 @@ impl Region {
     pub(crate) fn writer(&self) -> Writer<'_> {
         Writer(&self.bump)
     }
+
+    /// Bytes the chunks occupy, whether or not a value still uses them — a bump never reclaims
+    /// within a chunk, so this is what the region costs while anything holds it.
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.bump.allocated_bytes()
+    }
 }
 
 /// The write surface into a region's bytes, handed to a build closure at the closure's own brand.

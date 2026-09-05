@@ -58,7 +58,7 @@ fn placing_a_value_into_another_cell_mints_that_cell_a_hold_on_its_reach() {
 }
 
 #[test]
-fn a_held_cell_stays_resident_until_its_last_holder_reclaims() {
+fn a_held_cell_leaves_the_slab_at_its_death_and_its_record_goes_with_its_holder() {
     let mut table: CellTable<Owned> = CellTable::new(4);
     let holder = table.create(None, None).unwrap();
     let held = table.create(None, None).unwrap();
@@ -69,12 +69,16 @@ fn a_held_cell_stays_resident_until_its_last_holder_reclaims() {
         .unwrap();
     assert!(table.holds(holder, held));
 
+    // The slot comes straight back: retention lives in the sealed tier, never in the slab.
     table.release(held).unwrap();
-    assert_eq!(state_of(&table, held), SlotState::Dead);
+    assert_eq!(state_of(&table, held), SlotState::Free);
+    assert_eq!(table.sealed.len(), 1);
+    let id = table.sealed.ids().next().unwrap();
+    assert!(table.sealed_holds[holder.slot() as usize].contains(id));
+    assert!(!table.holds(holder, held));
 
     table.release(holder).unwrap();
-    assert_eq!(state_of(&table, holder), SlotState::Free);
-    assert_eq!(state_of(&table, held), SlotState::Free);
+    assert_eq!(table.sealed.len(), 0);
     assert_eq!(table.free.len(), 4);
 }
 
@@ -109,15 +113,24 @@ fn a_ring_is_reported_and_leaks_rather_than_dangles() {
         .debug_ring_from(first)
         .expect("the hold graph has a cycle");
     assert_eq!(ring.len(), 2);
-    assert!(ring.contains(&first) && ring.contains(&second));
+    assert!(ring.contains(&HoldNode::Cell(first)) && ring.contains(&HoldNode::Cell(second)));
 
-    // Both deaths are declared and neither slot comes back: a ring is a leak, never a dangle.
+    // Both deaths are declared, and the ring moves into the sealed tier intact: each record holds
+    // the other, so neither count ever reaches zero. A ring is a leak, never a dangle.
     table.release(first).unwrap();
     table.release(second).unwrap();
-    assert_eq!(state_of(&table, first), SlotState::Dead);
-    assert_eq!(state_of(&table, second), SlotState::Dead);
-    // The two ringed slots never come back; only the two the run never took are free.
-    assert_eq!(table.free.len(), 2);
+    assert_eq!(table.free.len(), 4);
+    assert_eq!(table.sealed.len(), 2);
+
+    let sealed_ring = table
+        .debug_ring_from_sealed(table.sealed.ids().next().unwrap())
+        .expect("the ring survives the seal");
+    assert_eq!(sealed_ring.len(), 2);
+    assert!(
+        sealed_ring
+            .iter()
+            .all(|node| matches!(node, HoldNode::Sealed(_)))
+    );
 }
 
 #[test]
