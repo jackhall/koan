@@ -54,6 +54,12 @@ exist, and koan sits on the one the design has moved off.
   applies, pull otherwise; or pull everywhere first and add push as an
   optimization. Recommended: push where the crossing rule applies, since
   that is the shape that keeps per-call cells out of the sealed tier.
+- *Pressure model — open.* The substrate prices retention and reports
+  occupancy of both tiers, and ships no threshold: the copy-versus-hold ramp
+  — linear on occupancy, or a step at fixed watermarks — is chosen here, over
+  the substrate's occupancy signal
+  ([liveness-matrix.md § Bounding the two tiers](../../cellgraph/design/liveness-matrix.md#bounding-the-two-tiers)),
+  from this embedder's own measurements.
 
 ## Dependencies
 

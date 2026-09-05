@@ -28,3 +28,10 @@ as surprises, not scheduled.
   internal holds entirely — only the group's boundary reach would survive the
   seal. Delimiting the group is the design work, and nothing in the substrate
   expresses one today.
+- **Pricing against outside holders.** The unique-slice query of retention
+  pricing bills a node to a candidate unless *another candidate's* closure
+  also reaches it; a hold from outside the candidate set — a live cell, or a
+  record the embedder is not weighing — is not discounted, so a release the
+  query prices as freeing a sub-tier may free nothing. The precise answer is
+  which nodes the candidate dominates in the hold graph, a computation the
+  substrate does not have and the first embedder has not yet needed.

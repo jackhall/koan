@@ -32,8 +32,17 @@ versus turnover has no number to decide with.
 - *Where the choice is made — decided.* In the embedder. The substrate
   prices; the crossing rule, the cart shape, and the consolidation trigger
   are embedder policy over those prices.
-- *Pressure model — open.* A linear ramp on occupancy versus a step function
-  at fixed watermarks. Left to the first embedder's measurements.
+- *Pressure model — decided.* The substrate ships the occupancy numbers and
+  no threshold; ramp versus watermark is the embedder's choice over them
+  ([adopt-cellgraph.md](../../workgraph/roadmap/adopt-cellgraph.md)).
+- *Closure extent — decided.* A closure spans both tiers: a live cell a
+  reached aggregate names is retention in waiting, so its region and its own
+  holds are priced, and the closure is frozen only once it names no live
+  cell. The frozen closure — record set and bytes — is memoized exactly,
+  since nothing inside a frozen closure can change.
+- *Outside holders — deferred.* Uniqueness is relative to the candidate set;
+  discounting holds from outside it is
+  [unplanned work](README.md#unplanned-work).
 
 ## Dependencies
 
