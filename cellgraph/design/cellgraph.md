@@ -88,6 +88,16 @@ how an embedder gives one unit of work two regions with different lifetimes.
   is the end-of-program alarm: a non-empty table means either a release was
   forgotten or a ring no merge dissolved survives, and the debug ring detector
   names the records on it.
+- **The price queries** — `closure` and `unique_closures` over the sealed
+  tier, `region_bytes` / `mark` / `absorbed_since` over a live cell, and
+  `occupancy` over both — report what retention costs: what a hold on a sealed
+  region keeps alive, the slice of that only one of several candidates reaches,
+  what a loop cart has accreted since a mark, and how full the two tiers are
+  ([liveness-matrix.md § Bounding the two
+  tiers](liveness-matrix.md#bounding-the-two-tiers)). All are read-only: none
+  changes a hold, and no path inside the substrate consults one. The substrate
+  ships the numbers and no threshold; the copy-versus-hold rule over them is
+  the embedder's.
 
 The substrate never runs a cell, never chooses an order, and never inspects a
 continuation. It names no thread model and no async runtime: it is a
@@ -138,6 +148,5 @@ Each absence is a design statement, not a gap:
 
 The remaining slices are indexed in [the roadmap](../roadmap/README.md):
 
-- [Retention pricing](../roadmap/retention-pricing.md)
 - [Rebuilding workgraph over cellgraph](../../workgraph/roadmap/adopt-cellgraph.md)
   — the first embedder's adoption.

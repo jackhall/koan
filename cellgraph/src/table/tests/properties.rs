@@ -69,10 +69,10 @@ fn sorted_ids(table: &CellTable<Borrowed>) -> Vec<SealedId> {
     ids
 }
 
-/// `priced` says whether a price query has run in this case yet — the substrate's own paths are
-/// supposed to write no memo, so a memo before the first `Price` verb is one a mint or a release
-/// left behind.
-fn check_invariants(table: &CellTable<Borrowed>, priced: bool) {
+/// `memoized` carries the ids that already held a memo before this step, and is refreshed to the
+/// current set on the way out. Only a price query may write one, so unless the step just run was a
+/// `Price` verb, an id outside that set carrying a memo is one a mint or a release left behind.
+fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, priced: bool) {
     let occupied: Vec<u32> = (0..CAP)
         .filter(|slot| table.slots[*slot as usize].state != SlotState::Free)
         .collect();
@@ -205,13 +205,15 @@ fn check_invariants(table: &CellTable<Borrowed>, priced: bool) {
     assert_eq!(occupancy.occupied as usize, occupied.len());
     assert_eq!(occupancy.cap, CAP);
 
+    let mut now_memoized = Vec::new();
     for id in &records {
         let record = table.sealed.get(*id).unwrap();
         let Some(memo) = record.closure.get() else {
             continue;
         };
+        now_memoized.push(*id);
         assert!(
-            priced,
+            priced || memoized.contains(id),
             "record {id:?} carries a memo no price query asked for"
         );
         // Recomputed from scratch, consulting no memo at all: a closure memoized as frozen still
@@ -233,6 +235,7 @@ fn check_invariants(table: &CellTable<Borrowed>, priced: bool) {
             "the memoized bytes of {id:?} drifted"
         );
     }
+    *memoized = now_memoized;
 }
 
 /// Drive one generated run to its end — every verb, then a wind-down that releases everything —
@@ -241,8 +244,8 @@ fn check_invariants(table: &CellTable<Borrowed>, priced: bool) {
 fn run(verbs: &[Verb]) -> Merges {
     let mut table: CellTable<Borrowed> = CellTable::new(CAP);
     let mut minted: Vec<Handle> = Vec::new();
-    // No price query has run yet, so no record may carry a memo.
-    let mut priced = false;
+    // Nothing has been priced yet, so no record may carry a memo.
+    let mut memoized: Vec<SealedId> = Vec::new();
 
     for step in verbs {
         match *step {
@@ -340,7 +343,6 @@ fn run(verbs: &[Verb]) -> Merges {
             Verb::Price { index } => {
                 let ids = sorted_ids(&table);
                 if !ids.is_empty() {
-                    priced = true;
                     let id = ids[index % ids.len()];
                     let whole = table.closure(id).expect("the id came out of the tier");
                     // One candidate shares its closure with nobody, so its slice is the whole of it.
@@ -366,7 +368,7 @@ fn run(verbs: &[Verb]) -> Merges {
                 }
             }
         }
-        check_invariants(&table, priced);
+        check_invariants(&table, &mut memoized, matches!(*step, Verb::Price { .. }));
     }
 
     // Winding the run down: once every cell's death is declared, the cascade returns every slot,
@@ -374,7 +376,7 @@ fn run(verbs: &[Verb]) -> Merges {
     for handle in &minted {
         let _ = table.release(*handle, Absorption::IntoHolder);
     }
-    check_invariants(&table, priced);
+    check_invariants(&table, &mut memoized, false);
     for slot in 0..CAP {
         assert_eq!(table.slots[slot as usize].state, SlotState::Free);
     }

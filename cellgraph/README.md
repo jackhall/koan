@@ -27,8 +27,9 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
   the stale-handle refusal.
 - [src/table.rs](src/table.rs) — the slab, the `create` / `enter` / `release`
   verbs, the step context's doors, the seal transition, the three locality
-  merges a dying cell can take instead, and the cascade that retires cells and
-  records.
+  merges a dying cell can take instead, the cascade that retires cells and
+  records, and the read-only price queries an embedder weighs copy against
+  hold with.
 - [src/matrix.rs](src/matrix.rs) — bit storage for the birth and pin
   relations, and the executing row.
 - [src/mask.rs](src/mask.rs) — reach as a hybrid mask: slab bits plus a

@@ -289,16 +289,43 @@ buys the O(1) seal — and it is relieved rather than prevented:
   actually-reachable values at seal time is exactly the storage scan
   atomicity deletes.
 
-Pricing the copy-versus-pin choice gains a sealed term: the cost of holding
-sealed region S is the storage of its aggregate's *transitive closure*,
-computed by OR-folding aggregates — union dedups shared members within one
-decision for free, and a closure whose slab bits have all converted is frozen
-and only shrinks, so it memoizes without invalidation machinery. What the
-union cannot fix is double-billing *across* candidate decisions: releases
-whose closures share a sub-tier each claim the shared part, and the honest
-marginal price of releasing S is only the uniquely-held slice of its closure.
-That refinement, and the pressure model that consumes these prices, are
-[retention pricing](../roadmap/retention-pricing.md).
+Pricing the copy-versus-pin choice gains a sealed term, and the table answers
+it. The cost of holding sealed region S is the storage of its aggregate's
+*transitive closure*: `closure(id)` walks the hold graph from S and sums the
+chunk bytes of every region it reaches, S's own included, billing a region two
+branches both reach once. The walk spans **both** tiers — a live cell a reached
+aggregate names is retention in waiting, since it will seal, or seal into its
+namer, when it dies — so a closure is *frozen* exactly when it names no live
+cell, and its price cannot change again. Nothing inside a frozen closure moves:
+every node in it is named by a predecessor inside it, so none retires; a fold's
+target is either the record a seal just minted or a namer whose aggregate names
+a dying slab bit, and a frozen closure holds neither; and a record whose sole
+holder lies inside the closure is never an absorption source either. So a
+frozen closure — its record set and its byte total — is memoized on its record,
+written once and exact for the record's whole life, with no invalidation path
+to get wrong. A walk that meets a memoized record merges its record *set*
+rather than adding its byte total: two branches of one closure may share a
+sub-tier, and summing memos would bill the shared part twice.
+
+Double-billing *across* candidate decisions is the other half.
+`unique_closures(candidates)` prices each candidate at the slice of its closure
+no *other* candidate reaches, so a sub-tier two releases share is billed to
+neither and each answer is the honest marginal price of releasing that one
+hold. Uniqueness is relative to the candidate set: a holder from outside it is
+not discounted, which is why a candidate lying inside another candidate's
+closure prices at zero. Discounting outside holders is a dominator computation
+over the hold graph, and is [unplanned
+work](../roadmap/README.md#unplanned-work).
+
+The pressure model consumes these prices from above. `occupancy()` reports both
+tiers at one instant — slab slots occupied against the cap, records in the
+sealed tier, and the bytes those records retain, kept as a running total rather
+than scanned — and the substrate ships those numbers and no threshold: whether
+the copy-versus-hold ramp is linear on occupancy or a step at a watermark is
+the embedder's ([adopt-cellgraph.md](../../workgraph/roadmap/adopt-cellgraph.md)).
+Every one of these queries is read-only — none changes a hold, and no path
+inside the substrate consults one — so pricing is something the embedder asks
+for, never a cost the seal transition pays.
 
 ## Locality tactics
 
@@ -370,8 +397,11 @@ copy remains the lever there.
   is O(N) per hop for a *growing* accumulator. Neither is free; the embedder
   chooses per loop between a persistent cart that never turns over (growing
   data), per-hop turnover with destination-homed rebuilds (replaced data),
-  and the consolidation copy when accreted dead bytes cross a threshold
-  ([retention pricing](../roadmap/retention-pricing.md)). That price is why
+  and the consolidation copy when accreted dead bytes cross a threshold. That
+  accretion is measured rather than guessed: a region bundle counts the bytes
+  it takes in from other bundles, so a cart's growth since an earlier mark is a
+  subtraction and not a scan ([§ Bounding the two
+  tiers](#bounding-the-two-tiers)). That price is why
   this merge, alone of the three, is **refusable**: `release` carries the
   embedder's choice, recorded on the slot and read when the slot actually
   disposes — later than the release, for a cell a descendant's birth row still
@@ -454,13 +484,18 @@ across rows, one bit per occupied slot. Chunk-aligned rows keep that stride
 cache-friendly.
 
 Per sealed region: one hybrid aggregate mask, one holder count, one memoized
-closure mask at most, and its storage — which is a *bundle* of regions, not
-one. Every merge splices the absorbed chunks in whole rather than copying
-them, so a region is the bump it writes into plus the bumps of everything
+closure at most — the record set and byte total of a closure that has frozen,
+written once and exact from then on — and its storage, which is a *bundle* of
+regions, not one. Every merge splices the absorbed chunks in whole rather
+than copying them, so a region is the bump it writes into plus the bumps of
+everything
 folded into it; the chunks keep their addresses, which is the same pointer
 stability a detached seal already relies on. Nothing is ever allocated into an
 absorbed bump again, so a long chain keeps each link's chunk headroom rather
-than compacting it. Per slab slot: one sparse reverse-naming set. A
+than compacting it, and each bundle carries a monotone count of the bytes it
+took in that way. Per slab slot: one sparse reverse-naming set. Per tier: one
+running retained-byte total, maintained where storage enters or leaves the
+sealed tier rather than summed on demand. A
 per-cell holder count maintained as derived data — derived *from* attributed
 transitions, never a free-standing count — is a measurable later
 optimization; it is an implementation detail invisible to the interface
@@ -468,10 +503,7 @@ either way.
 
 ## Open work
 
-- [Retention pricing](../roadmap/retention-pricing.md) — closure pricing and
-  the pressure model.
-
-One koan-side primitive the model leans on is tracked there:
+One koan-side primitive the model leans on is tracked on koan's own roadmap:
 [Yielding iterators](../../roadmap/foundation/yielding-iterators.md) —
 producers that yield many values before dying, the surface family lazy
 admission belongs to.
