@@ -106,10 +106,11 @@ Root concerns:
   and the privilege boundary that keeps builtin and user errors
   disjoint.
 - [effects.md](effects.md) — the in-language monadic side-effects
-  design: a `Monad` signature in Koan, concrete effect modules
-  (`Random`, `IO`, `Time`) ascribing it, and the dispatch story for
-  bind/return. Tracked in
-  [roadmap/libraries/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md).
+  design: a `Monad` signature in Koan whose members quantify over the
+  element type, concrete effect modules (`Random`, `IO`, `Time`)
+  ascribing it, and the pure/effectful boundary it makes visible.
+  Tracked in
+  [roadmap/foundation/monadic-side-effects.md](../roadmap/foundation/monadic-side-effects.md).
 - [compilation.md](compilation.md) — the compilation model: build-time
   free execution to the stalled fixed point, residual code generation
   with the stalled DAG as the intermediate representation, the

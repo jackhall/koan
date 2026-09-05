@@ -68,7 +68,7 @@ ascription site, which is already in place.
 
 **Requires:**
 
-- [Generalize `Scope::out` into monadic side-effect capture](../libraries/monadic-side-effects.md)
+- [Monadic side effects](../foundation/monadic-side-effects.md)
   — generators thread randomness via the `Random` effect module rather than
   ambient entropy.
 

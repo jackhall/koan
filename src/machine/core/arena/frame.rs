@@ -129,7 +129,7 @@ impl FrameStorageExt for FrameStorage {
 ///
 /// Write errors are dropped: `PRINT` is a statement with no error channel, so there is nothing for a
 /// caller to do with one. This is a stopgap — see
-/// [monadic side effects](../../../../roadmap/libraries/monadic-side-effects.md), which replaces
+/// [monadic side effects](../../../../roadmap/foundation/monadic-side-effects.md), which replaces
 /// direct writer plumbing with an effect the language expresses.
 pub struct RunWriter(RefCell<Box<dyn std::io::Write>>);
 

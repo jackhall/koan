@@ -186,6 +186,47 @@ costs, and only blocks that contain an `EVAL` pay it. An `EVAL` used purely
 for its value pays the same barrier; uniformity is worth the occasional
 over-sequencing.
 
+## A splice opens its own declaration window
+
+The barrier sequences a block's *statements*. It does not by itself say which
+overloads a dispatch **nested inside a body** resolves against, and a body can run
+long after the statement that declared it. Two rules settle that, and both are the
+value-side reading of rules the type language already runs on
+([typing/elaboration.md](typing/elaboration.md)).
+
+- **A block's declarations are one window.** The top-level `FN`, `EXPR` and `OP`
+  declarations of a block are scanned parse-statically off its statement split —
+  the same boundary `GROUP` reads its operator members off and `MODULE` announces
+  its type members from — and the whole set is visible to every body in the block
+  regardless of order. Mutually recursive definitions therefore need no forward
+  declaration, exactly as a cycle of nominal types co-declared in a module body
+  needs none.
+- **Everything else is gated to the binder's position.** A dispatch inside a body
+  resolves against that body's own window plus enclosing-scope declarations bound
+  at positions before the body's binder — never against declarations that land
+  later. The gate is the *binder's* position, not the call's, so a function
+  declared before a barrier and called after it still resolves against the
+  pre-barrier table.
+
+A splice is not part of the enclosing window: its content is computed, so the
+parse-static scan cannot see it. Instead **the `EVAL` opens a window of its own**,
+scanned off the spliced AST's own top-level statement split and sealed when the
+splice finalizes. Declarations arriving in one splice are mutually recursive with
+each other and with nothing else.
+
+Together these make the barrier's visibility rule total rather than partial. A
+spliced declaration installs no parse-static claim, so nothing but position
+sequences it — and the barrier's edges run from later siblings to the barrier only,
+which leaves dispatches nested inside bodies unreached. The position gate supplies
+that sequencing: expressions before the barrier, and bodies declared before it
+whenever they run, never observe the splice; expressions after it always do, under
+every scheduler order.
+
+The cost is that a splice cannot retroactively supply an overload to an
+already-declared function, and cannot close a recursive cycle with a literal
+declaration in the enclosing body. Both halves of a mutually recursive pair share a
+window or neither does: written literally in one block, or arriving in one splice.
+
 ## Groups and spliced members
 
 An `EVAL` at the top level of a `GROUP` body whose splice declares an `OP` adds
@@ -240,3 +281,6 @@ The machinery this doc specifies beyond today's builtins is tracked in
   — the splice semantics and the block barrier.
 - [Group members may arrive by splice](../roadmap/metaprogramming/group-members-by-splice.md)
   — late member join for `GROUP`.
+- [Declaration windows gate dispatch resolution](../roadmap/metaprogramming/declaration-windows-gate-dispatch.md)
+  — the window scan and the binder-position gate that make a splice's visibility
+  independent of scheduler order.

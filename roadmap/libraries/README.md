@@ -1,9 +1,9 @@
 # Libraries
 
-Give Koan a multi-file source surface, an in-language effect/error story, and
-a canonical body of Koan code that exercises both. Each item is a piece of
-substrate the standard library needs to exist as Koan source rather than as
-Rust builtins.
+Give Koan a multi-file source surface and a canonical body of Koan code that
+exercises it — collections, combinators, and the standard effect modules,
+written as Koan source rather than as Rust builtins. Each item is a piece of
+substrate the standard library needs in order to exist.
 
 ## Next items
 

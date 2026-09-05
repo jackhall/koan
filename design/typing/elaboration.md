@@ -110,6 +110,14 @@ binder's cutoff (`classify_return_type` / `resolve_arm_return_contract` thread t
 chain for the return-type sites). A field or parameter naming a type declared
 later is a position error, the same rule the value language enforces.
 
+The gate is not type-side only. Dispatch resolution rides it too: a body's visible
+overload set is its own declaration window plus whatever an enclosing scope bound
+before the body's binder, so a declaration that arrives later — by splice — is
+outside it
+([metaprogramming.md § A splice opens its own declaration window](../metaprogramming.md#a-splice-opens-its-own-declaration-window)).
+One gate serves both channels, and a splice's contribution is visible strictly by
+lexical position rather than by scheduler order.
+
 A *deferred* return type — one that references a parameter, like a functor's
 `-> :(TYPE OF er)` — is the one definition-time site with no forward-reference question to
 gate. It resolves at **call time** against the per-call scope, where the

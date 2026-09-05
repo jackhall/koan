@@ -343,6 +343,7 @@ for test fixtures and builtin-registration paths.
   [stage 5](../../roadmap/predicate_typing/modular-implicits.md) layers
   implicit search.
 - **Monadic side-effect capture**
-  ([roadmap/monadic-side-effects.md](../../roadmap/libraries/monadic-side-effects.md)).
-  `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
-  randomness) need a uniform carrier that threads through the same node graph.
+  ([roadmap/foundation/monadic-side-effects.md](../../roadmap/foundation/monadic-side-effects.md)).
+  The run frame's `RunWriter` is one ad-hoc effect channel; further effects (IO,
+  time, randomness) need a uniform carrier that threads through the same node
+  graph.

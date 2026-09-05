@@ -11,7 +11,7 @@ Future work on the type and module system. Each entry points at a
   generators-as-required-signature-slots; compile-time axiom checking on
   ascription. Generators thread randomness via the monadic effect surface
   ([design/effects.md](../effects.md)), so this stage requires
-  [monadic-side-effects](../../roadmap/libraries/monadic-side-effects.md). Independent
+  [Monadic side effects](../../roadmap/foundation/monadic-side-effects.md). Independent
   of stage 5's implicit dispatch.
 - [Stage 5 — Modular implicits](../../roadmap/predicate_typing/modular-implicits.md)
   — implicit module parameters, lexical resolution, strict-on-ambiguity

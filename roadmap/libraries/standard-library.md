@@ -20,7 +20,7 @@ boilerplate by hand for every step.
 - The stdlib is a directory of `.koan` files that user code imports through
   the same surface every Koan project uses.
 - The standard effect modules (`Random`, `IO`, `Time` from
-  [monadic-side-effects](monadic-side-effects.md)) ship as stdlib entries
+  [monadic-side-effects](../foundation/monadic-side-effects.md)) ship as stdlib entries
   ascribing the in-language `Monad` signature.
 - A reader points to a directory of stdlib Koan code that exercises modules,
   signatures, functors, imports, and effects together as a worked example.
@@ -98,9 +98,5 @@ concrete type.
 
 - [Files and imports](files-and-imports.md) — the stdlib lives across
   multiple `.koan` files, so user code needs a way to load them.
-
-**Unblocks:**
-
-- [Generalize `Scope::out` into monadic side-effect capture](monadic-side-effects.md)
-  — the standard effect modules (`Random`, `IO`, `Time`) ship as stdlib
-  entries.
+- [Monadic side effects](../foundation/monadic-side-effects.md) — the `Monad`
+  signature the standard effect modules ascribe.

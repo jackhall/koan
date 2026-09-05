@@ -68,3 +68,5 @@ replacement semantics: splice in place, sequenced by a block barrier.
 
 - [Group members may arrive by splice](group-members-by-splice.md) — a spliced
   member `OP` presupposes splicing.
+- [Declaration windows gate dispatch resolution](declaration-windows-gate-dispatch.md) —
+  the position gate exists to sequence what a splice declares.
