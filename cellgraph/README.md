@@ -28,20 +28,30 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
 - [src/table.rs](src/table.rs) — the slab, the `create` / `enter` / `release`
   verbs, the step context's doors, the seal transition, the three locality
   merges a dying cell can take instead, the cascade that retires cells and
-  records, and the read-only price queries an embedder weighs copy against
-  hold with.
-- [src/matrix.rs](src/matrix.rs) — bit storage for the birth and pin
-  relations, and the executing row.
-- [src/mask.rs](src/mask.rs) — reach as a hybrid mask: slab bits plus a
-  sparse sealed-id set.
+  records, and the read-only price queries. The price queries are internal:
+  what retention costs is a number the substrate computes, not a door an
+  embedder opens, and it reaches the embedder through the crossing verdict of
+  [resident-carriers.md](roadmap/resident-carriers.md).
+- [src/matrix.rs](src/matrix.rs) — `Bits`, the crate's one row of bits and the
+  only place word-and-bit arithmetic is written, and the flat birth and pin
+  matrices built over it.
+- [src/mask.rs](src/mask.rs) — reach as a hybrid mask: a `Bits` row over slab
+  slots plus a sparse sealed-id set.
 - [src/sealed.rs](src/sealed.rs) — the sealed tier: ids, sparse sets, frozen
   aggregates, holder counts, detached storage.
 - [src/region.rs](src/region.rs) — the per-cell bundle of bumps, the splice a
   locality merge performs, and the write surface a build closure receives.
-- [src/carrier.rs](src/carrier.rs) — the two carrier states a value with
-  reach passes through.
+- [src/carrier.rs](src/carrier.rs) — the two carrier states a built value
+  passes through: sealed with its reach, and opened at a reading borrow.
 - [src/reattach.rs](src/reattach.rs) — the reattachable contract and the
   single lifetime-retype the crate is built on.
+- [tests/surface.rs](tests/surface.rs) — the public surface, named and
+  exercised from outside the crate. Everything an embedder may reach is used
+  here and nothing else is reachable to use, so an item that widens shows up
+  as an unused import and an item that goes missing as a compile error.
+  [tools/verify.sh](../tools/verify.sh) runs it under `--release` as well, since
+  a surface that changed shape with the build profile would compile for an
+  embedder in one profile and not the other.
 
 Memory-safety sign-off for the retype seam is
 [observe/miri_slate.md](observe/miri_slate.md).

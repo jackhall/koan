@@ -66,15 +66,17 @@ how an embedder gives one unit of work two regions with different lifetimes.
   its cap. What to do on refusal is admission policy, and the embedder's.
 - **`enter(handle, step)`** sets the cell's executing bit for the scope of
   `step` and supplies a step context. Within it a step can take the cell's
-  continuation, re-anchored at the step lifetime and paired with the reach
-  its captures read; allocate into its own region; allocate into any other
-  live cell by handle (the destination-homed placement); mint a bare hold on
-  another cell; read a carrier it built; and store a successor continuation,
-  over captures or over nothing. That continuation read *is* the sealed
-  tier's accessor — a capture whose region sealed since it was stored comes
-  back named by sealed id, with reach derived from the record's aggregate —
-  so there is no second door out of sealed storage. A cell cannot be entered
-  while it is already executing.
+  continuation, re-anchored at the step lifetime; allocate into its own
+  region; allocate into any other live cell by handle (the destination-homed
+  placement); mint a bare hold on another cell; read a carrier it built; and
+  store a successor continuation, over captures or over nothing. That
+  continuation read *is* the sealed tier's accessor — a capture whose region
+  sealed since it was stored comes back reading storage that record still
+  retains — so there is no second door out of sealed storage. What the value
+  reaches stays in the table: the reach a stored continuation was minted with
+  is the substrate's bookkeeping, rewritten in place by the seal transition,
+  and never handed back beside the value. A cell cannot be entered while it
+  is already executing.
 - **`release(handle, absorption)`** declares death: the embedder promises
   never to enter the cell again. The slot leaves the slab once no descendant's
   birth row names the cell: reclaimed if nothing reaches its storage, folded
@@ -85,19 +87,22 @@ how an embedder gives one unit of work two regions with different lifetimes.
   it is recorded on the slot and read when the slot actually leaves.
 - **`is_empty()`** asks whether the table holds nothing at all — every slot
   free, no record left in the sealed tier. After a program's last release it
-  is the end-of-program alarm: a non-empty table means either a release was
-  forgotten or a ring no merge dissolved survives, and the debug ring detector
-  names the records on it.
-- **The price queries** — `closure` and `unique_closures` over the sealed
-  tier, `region_bytes` / `mark` / `absorbed_since` over a live cell, and
-  `occupancy` over both — report what retention costs: what a hold on a sealed
-  region keeps alive, the slice of that only one of several candidates reaches,
-  what a loop cart has accreted since a mark, and how full the two tiers are
-  ([liveness-matrix.md § Bounding the two
-  tiers](liveness-matrix.md#bounding-the-two-tiers)). All are read-only: none
-  changes a hold, and no path inside the substrate consults one. The substrate
-  ships the numbers and no threshold; the copy-versus-hold rule over them is
-  the embedder's.
+  is the end-of-program alarm, and the only one the substrate ships: a
+  non-empty table means either a release was forgotten or a ring no merge
+  dissolved survives. Naming the nodes on such a ring is a walk of the hold
+  graph the crate's own tests carry, not a door on the table.
+
+There are no price verbs. The substrate computes what retention costs —
+`unique_closures` over the sealed tier, `region_bytes` / `mark` /
+`absorbed_since` over a live cell, `occupancy` over both — but every one of
+those queries is internal, along with the vocabulary they speak: the reach
+mask, the sealed id, the closure and occupancy answers name nothing an
+embedder can hold ([liveness-matrix.md § Bounding the two
+tiers](liveness-matrix.md#bounding-the-two-tiers)). A price returns to the
+embedder at exactly one place, the crossing verdict a placement consults per
+operand, and it returns as one answer for one decision. The substrate ships
+numbers and no threshold there; the copy-versus-hold rule over them is the
+embedder's.
 
 The substrate never runs a cell, never chooses an order, and never inspects a
 continuation. It names no thread model and no async runtime: it is a
@@ -133,8 +138,8 @@ Each absence is a design statement, not a gap:
   meet — the hold on its own target has no representation — so a ring nothing
   outside holds is freed as its cells die; that is a coincidence of the
   merges' triggers, not collection. Preventing rings is the embedder's
-  crossing discipline; the substrate ships a debug-mode ring detector, not a
-  mint-time check, and `is_empty` is the alarm for the ones that survive.
+  crossing discipline; the substrate ships no mint-time check and no ring
+  detector, and `is_empty` is the alarm for the ones that survive.
 - **No terminality, and therefore no error type.** Death is declared, not
   inferred, and carries no result. "Finished forever, with this value" — and
   the `Result` split between a witnessed value and a bare owned error — is a

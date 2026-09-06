@@ -102,6 +102,29 @@ compact() {
         <<<"$1"
 }
 
+# cellgraph's public surface must not depend on the build profile: a public item
+# behind a `debug_assertions` gate is an API that exists in one profile and not the
+# other, and an embedder that compiles in debug would break in release. Stated two
+# ways — sampled, by running the test that names every door again under `--release`
+# to catch a door the release build dropped; and directly, by reading the crate's
+# source for the gate itself. Only `debug_assert!` may gate on the profile, and it
+# expands to the gate rather than writing it.
+#
+# Both slates that build the crate call this. A change spanning cellgraph and koan
+# takes the full slate, and the surface it narrows is exactly as breakable there.
+cellgraph_surface() {
+    run surface-release 'surface test FAILED under --release' \
+        cargo test -p cellgraph --release --test surface --quiet
+    ok surface-release 'holds under --release' 'surface ok under --release'
+
+    OUT="$(grep -rn 'cfg(debug_assertions)' cellgraph/src || true)"
+    if [ -z "$OUT" ]; then
+        ok profile-free 'no cfg(debug_assertions) under cellgraph/src' 'surface profile-free'
+    else
+        fail profile-free 'cellgraph/src gates on debug_assertions' "$OUT"
+    fi
+}
+
 # Every path differing from HEAD — staged, unstaged, and untracked. A clean tree
 # yields one empty line, which matches neither crate's case and so selects the
 # full slate: with nothing changed there is no library-side commit to unblock.
@@ -168,24 +191,7 @@ if [ "$CELLGRAPH_ONLY" = 1 ]; then
     run tests 'tests FAILED' cargo test -p cellgraph --quiet
     ok tests "ok ($(passed) passed, unit + doctests)" 'tests ok'
 
-    # The surface must not depend on the build profile: a public item behind a
-    # `debug_assertions` gate is an API that exists in one profile and not the
-    # other, and an embedder that compiles in debug would break in release. The
-    # integration test names every door, so running it again under `--release` is
-    # what catches a door the release build dropped.
-    run surface-release 'surface test FAILED under --release' \
-        cargo test -p cellgraph --release --test surface --quiet
-    ok surface-release 'holds under --release' 'surface ok under --release'
-
-    # The same rule, stated directly rather than sampled: nothing under the crate's
-    # source gates on the profile at all. Only `debug_assert!` may, and it expands
-    # to the gate rather than writing it.
-    OUT="$(grep -rn 'cfg(debug_assertions)' cellgraph/src || true)"
-    if [ -z "$OUT" ]; then
-        ok profile-free 'no cfg(debug_assertions) under cellgraph/src' 'surface profile-free'
-    else
-        fail profile-free 'cellgraph/src gates on debug_assertions' "$OUT"
-    fi
+    cellgraph_surface
 
     if OUT="$(cargo clippy -p cellgraph --all-targets -- -D warnings 2>&1)"; then
         ok clippy clean 'clippy clean'
@@ -232,6 +238,8 @@ ok tests "ok ($(passed) passed → $LCOV)" 'tests ok'
 # Run them here: a `compile_fail` doctest that *starts* compiling is a test failure.
 run doctests 'doctests FAILED' cargo test --doc --quiet
 ok doctests "ok ($(passed) passed, compile_fail guards included)" 'doctests ok'
+
+cellgraph_surface
 
 if OUT="$(cargo clippy --all-targets -- -D warnings 2>&1)"; then
     ok clippy clean 'clippy clean'

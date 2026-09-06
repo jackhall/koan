@@ -44,13 +44,15 @@ on its own target becomes a self-hold, which has no representation, and a
 target left with no holder is reclaimed on the spot — so a ring whose members
 die one at a time with nothing outside holding them is freed rather than
 retained. That is a coincidence of the merges' triggers, not a collection
-strategy: a ring an outside hold keeps above those triggers survives intact,
-and the detector names the survivors.
+strategy: a ring an outside hold keeps above those triggers survives intact.
 Preventing rings is the embedder's crossing discipline (koan's is the
 anti-ring crossing rule of
 [destination-homed-construction.md](../../design/destination-homed-construction.md));
-the substrate ships a debug-mode ring detector, never a mint-time
-reachability check.
+the substrate ships no mint-time reachability check and no detector. What it
+ships is `is_empty()`, the end-of-program alarm: a table that is not empty
+after the last release either forgot a release or carries a ring. Naming the
+nodes on one is a walk of the hold graph, and the crate's own tests carry it
+— a diagnostic for the substrate's tests, not a door on the substrate.
 
 ## The sealed tier
 
@@ -167,25 +169,29 @@ folds in what the new record turns out to hold alone:
    worklist rather than one pass: a fold transfers ids the record did not name
    before, and drops a duplicated hold's count, either of which can newly
    qualify a region. The step runs after every seal, including a
-   seal-into-namer, because a count can have dropped to 1 at any point since
+   fold-into-namer, because a count can have dropped to 1 at any point since
    the holder's own seal.
 
 The per-value masks *inside* N's own storage are not rewritten — they become
 dead bytes. Nothing may read them, and the sealed tier's accessor makes that
-structural: a read out of a sealed region returns the value with reach
-*derived* as `{S_N} ∪ aggregate(N)` — over-approximate, but covering, since a
-resident value's true reach is a subset of the region's holds by mint-time
-coverage. The per-value mask is unreachable through the interface, which is
-what entitles the seal to skip the storage scan. **The accessor is reachable
-only inside an `enter` scope**: the read is a step transient of the executing
-cell, so the value it hands out is covered by that cell's diagonal bit until
-the step mints it somewhere or drops it.
+structural: what a read out of a sealed region hands back is the value alone,
+re-anchored at the reading borrow. The reach a resident value travels with is
+the substrate's own bookkeeping and stays in the table, so the dead per-value
+mask has no path out. Where a reach for such a value is *wanted* — to price
+what holding it costs — it is derived rather than read: `{S_N} ∪
+aggregate(N)`, over-approximate but covering, since a resident value's true
+reach is a subset of the region's holds by mint-time coverage. The derivation
+belongs at the door that consumes it, not at the read. **The accessor is
+reachable only inside an `enter` scope**: the read is a step transient of the
+executing cell, so the value it hands out is covered by that cell's diagonal
+bit until the step mints it somewhere or drops it.
 
 Both access paths stay clear of sealed bytes. A live-slab list whose elements
 borrow into sealed A composes its *own* maintained mask on shallow copy — the
 copy's mask carries `S_A`, the destination holds A, and the copied spine's
-borrows into A's unmoved storage stay valid. Extracting an element out of A
-derives `{S_A} ∪ aggregate(A)` at the accessor.
+borrows into A's unmoved storage stay valid. An element extracted out of A is
+covered by `{S_A} ∪ aggregate(A)`, whatever the dead per-value mask beside it
+in the storage says.
 
 ## Invariants
 
@@ -202,7 +208,8 @@ The model is sound on a chain of invariants that must hold together:
    some live row or frozen aggregate; a value's mask is always covered by
    its host region's hold set (the mint OR establishes this); and a value
    only moves between regions while its current host is live — sealed hosts
-   release values only through the accessor, which re-derives reach.
+   release values only through the accessor, which hands out no mask at all
+   and leaves the aggregate covering what comes out.
 3. **Retirement cascade.** A live cell reclaiming at column-zero clears its
    row and releases its sealed-hold set; the cleared entries name exactly the
    columns and counts worth re-checking. A sealed region reclaiming at
@@ -291,10 +298,10 @@ buys the O(1) seal — and it is relieved rather than prevented:
 
 Pricing the copy-versus-pin choice gains a sealed term, and the table answers
 it. The cost of holding sealed region S is the storage of its aggregate's
-*transitive closure*: `closure(id)` walks the hold graph from S and sums the
-chunk bytes of every region it reaches, S's own included, billing a region two
+*transitive closure*: a walk of the hold graph from S that sums the chunk
+bytes of every region it reaches, S's own included, billing a region two
 branches both reach once. The walk spans **both** tiers — a live cell a reached
-aggregate names is retention in waiting, since it will seal, or seal into its
+aggregate names is retention in waiting, since it will seal, or fold into its
 namer, when it dies — so a closure is *frozen* exactly when it names no live
 cell, and its price cannot change again. Nothing inside a frozen closure moves:
 every node in it is named by a predecessor inside it, so none retires; a fold's
@@ -307,25 +314,37 @@ to get wrong. A walk that meets a memoized record merges its record *set*
 rather than adding its byte total: two branches of one closure may share a
 sub-tier, and summing memos would bill the shared part twice.
 
-Double-billing *across* candidate decisions is the other half.
-`unique_closures(candidates)` prices each candidate at the slice of its closure
-no *other* candidate reaches, so a sub-tier two releases share is billed to
-neither and each answer is the honest marginal price of releasing that one
-hold. Uniqueness is relative to the candidate set: a holder from outside it is
-not discounted, which is why a candidate lying inside another candidate's
-closure prices at zero. Discounting outside holders is a dominator computation
-over the hold graph, and is [unplanned
+Double-billing *across* candidate decisions is the other half, and it is why
+one query answers both cases. `unique_closures(candidates)` prices each
+candidate at the slice of its closure no *other* candidate reaches, so a
+sub-tier two releases share is billed to neither and each answer is the honest
+marginal price of releasing that one hold; a lone candidate shares its closure
+with nobody, so its slice is the whole of it and the single-record price needs
+no query of its own. Uniqueness is relative to the candidate set: a holder from
+outside it is not discounted, which is why a candidate lying inside another
+candidate's closure prices at zero. Discounting outside holders is a dominator
+computation over the hold graph, and is [unplanned
 work](../roadmap/README.md#unplanned-work).
 
-The pressure model consumes these prices from above. `occupancy()` reports both
-tiers at one instant — slab slots occupied against the cap, records in the
-sealed tier, and the bytes those records retain, kept as a running total rather
-than scanned — and the substrate ships those numbers and no threshold: whether
-the copy-versus-hold ramp is linear on occupancy or a step at a watermark is
-the embedder's ([adopt-cellgraph.md](../../workgraph/roadmap/adopt-cellgraph.md)).
-Every one of these queries is read-only — none changes a hold, and no path
-inside the substrate consults one — so pricing is something the embedder asks
-for, never a cost the seal transition pays.
+The pressure model reads these prices beside a second number. `occupancy()`
+reports both tiers at one instant — slab slots occupied against the cap,
+records in the sealed tier, and the bytes those records retain, kept as a
+running total rather than scanned — and the substrate ships numbers and no
+threshold: whether the copy-versus-hold ramp is linear on occupancy or a step
+at a watermark is the embedder's
+([adopt-cellgraph.md](../../workgraph/roadmap/adopt-cellgraph.md)).
+
+**Every one of these queries is crate-private**, and so is the vocabulary they
+speak — the mask, the sealed id, the closure and occupancy answers. A price is
+worth something only at the moment a decision turns on it, and the id or mask
+it is asked about is not a thing an embedder can hold: an embedder that could
+name one could pair a reach with a value of its own choosing, which is the one
+forgery the carrier types exist to prevent. So the substrate hands out no
+price directly. It hands out one price, computed for the decision that turns
+on it, at the crossing verdict — the embedder closure the table consults when
+a placement chooses between copying an operand and pinning it. Every query is
+read-only: none changes a hold, and no path inside the substrate consults one,
+so pricing is never a cost the seal transition pays.
 
 ## Locality tactics
 
@@ -438,7 +457,7 @@ copy remains the lever there.
   as one record never manifest as sealed-naming-live edges at all; only the
   group's boundary reach would survive the seal.
 
-- **Seal-into-namer covers the downward direction.** When N dies with a zero
+- **Fold-into-namer covers the downward direction.** When N dies with a zero
   column and a singleton naming set {Q}, the sealed Q is provably N's only
   namer — the same mask-validity-plus-aggregates-are-holds argument as
   above, pointed the other way — so N seals *into* Q rather than minting a
@@ -463,12 +482,15 @@ deliberately, and it dictates the engineering posture: the matrix, the sealed
 tier, and every hold transition are encapsulated behind a narrow interface
 designed so that safe usage cannot skip a declaration — a value cannot be
 stored without its mask passing through the mint OR, and a sealed region's
-contents cannot be read except through the accessor that derives aggregate
-reach — and the encapsulated core is tested exhaustively (property tests over
-hold/seal/retire interleavings, plus the Miri slate) rather than audited by
-convention. The one failure that is *not* dangerous is the ring: a hold cycle
-leaks unless a merge dissolves it, and the debug ring detector names the ones
-that survive.
+contents cannot be read except through the accessor, which hands back no mask
+to re-pair — and the encapsulated core is tested exhaustively (property tests
+over hold/seal/retire interleavings, plus the Miri slate) rather than audited
+by convention. The surface is narrow in the literal sense too: what an embedder
+can name is fixed by an integration test that names all of it and is run under
+both build profiles, so neither a widening nor a profile-dependent door passes
+unnoticed. The one failure that is *not* dangerous is the ring: a hold cycle
+leaks unless a merge dissolves it, `is_empty()` reports that one survived, and
+the ring walk in the crate's tests names the nodes on it.
 
 ## Layout
 
@@ -502,6 +524,10 @@ optimization; it is an implementation detail invisible to the interface
 either way.
 
 ## Open work
+
+- [Resident carriers and the crossing price](../roadmap/resident-carriers.md)
+  — the crossing verdict, the one place a price and a derived reach reach the
+  embedder, and the door that consumes the price queries.
 
 One koan-side primitive the model leans on is tracked on koan's own roadmap:
 [Yielding iterators](../../roadmap/foundation/yielding-iterators.md) —

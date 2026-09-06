@@ -11,9 +11,9 @@ cells](../design/cellgraph.md#passing-values-between-cells) can complete; the
 one value that crosses steps is the continuation, through its own slot. The
 copy-versus-pin choice at a crossing has no price either: the embedder knows
 what a copy costs, the table knows what a pin retains, and no door lets the two
-meet. [surface-and-duplication.md](surface-and-duplication.md) makes every
-price query crate-private; this is where a price returns to the embedder, as
-one closure and nothing else.
+meet. Every price query is crate-private ([liveness-matrix.md § Bounding the
+two tiers](../design/liveness-matrix.md#bounding-the-two-tiers)); this is where
+a price returns to the embedder, as one closure and nothing else.
 
 **Acceptance criteria.**
 
@@ -76,10 +76,9 @@ one closure and nothing else.
 
 ## Dependencies
 
-**Requires:**
-
-- [Public surface and internal duplication](surface-and-duplication.md) —
-  the reach vocabulary is private before a door is added over it.
+**Requires:** none — the reach vocabulary the door is built over is already
+crate-private, and the price queries it consumes are in the crate awaiting a
+consumer.
 
 **Unblocks:**
 

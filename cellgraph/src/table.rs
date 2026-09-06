@@ -66,7 +66,7 @@ pub enum Absorption {
 /// graph, priced in chunk bytes.
 ///
 /// The closure spans both tiers. A live cell a reached aggregate names is retention in waiting —
-/// it will seal, or seal into its namer, when it dies — so its region is priced too, and the
+/// it will seal, or fold into its namer, when it dies — so its region is priced too, and the
 /// closure only settles once it names no live cell.
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

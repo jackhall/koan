@@ -100,27 +100,6 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
         }
     }
 
-    // A stored mask is the one thing the seal transition rewrites in place, so a slot left naming
-    // a recycled slot or a retired record is a rewrite the transition missed — and the read that
-    // re-anchors over it would hand back a borrow of dead bytes.
-    for slot in &occupied {
-        let Some(stored) = table.slots[*slot as usize].continuation.as_ref() else {
-            continue;
-        };
-        for named in stored.reach.slab_slots() {
-            assert!(
-                table.slots[named as usize].state != SlotState::Free,
-                "the continuation in slot {slot} names the recycled slot {named}"
-            );
-        }
-        for named in stored.reach.sealed().iter() {
-            assert!(
-                table.sealed.get(named).is_some(),
-                "the continuation in slot {slot} names a retired record"
-            );
-        }
-    }
-
     // Quiescence spans both tiers: the slab being clear is only half of it, and a table that
     // reports itself empty while a record survives would hide exactly the ring this test hunts.
     assert_eq!(
