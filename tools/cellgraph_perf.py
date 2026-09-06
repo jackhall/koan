@@ -23,9 +23,24 @@ analyst's own.
 
 Two of the four figures gate and two do not. `calls`, `allocations` and `bytes`
 are deterministic, which is checked rather than assumed: the sweep runs the binary
-twice and refuses to report if any of the three moved between runs. `nanos` is the
-minimum of those two runs and is never asserted — it is a trend reading on a
-machine that is also doing other things.
+several times and refuses to report if any of the three moved between runs.
+`nanos` never gates.
+
+A sweep compares against the SHA it reports on by **building that commit's harness
+and running it now**, alternating the two binaries so a machine that drifts through
+the sweep drifts through both equally, and keeping each row's fastest time. The
+recorded `nanos` is not comparable across sessions — this machine is also doing
+other things, and the same commit measured a week apart can differ by half again —
+so a reading taken beside the one it is judged against is the only honest time
+column. The gating figures compare against that rebuilt binary too, since it is
+what that commit actually costs rather than what was written down about it; a
+disagreement between the two says the record is stale and is reported as such.
+
+The baseline commit is checked out into a cached worktree under
+`target/perf-baselines/`, so the build is paid once per SHA. When the SHA is not in
+this repository — a record carried over from a branch that never landed — the sweep
+says so and falls back to the recorded figures, with the time column reading as the
+cross-session comparison it then is.
 
 Totals, not means: a per-call figure is `allocations / calls` on read, so the row
 keeps the exact count. The per-unit table is derived the same way
@@ -38,6 +53,7 @@ Debug profile, matching every other measurement in the repo.
     python3 tools/cellgraph_perf.py --record   # sweep and append this HEAD's rows to the record
     python3 tools/cellgraph_perf.py --gate     # also exit 1 if allocations or bytes rose
     python3 tools/cellgraph_perf.py --quiet    # a summary line, plus only the rows that moved
+    python3 tools/cellgraph_perf.py --trials 5 # fewer interleaved runs per binary
 """
 
 from __future__ import annotations
@@ -46,6 +62,8 @@ import argparse
 import csv
 import datetime
 import io
+import json
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -54,6 +72,17 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 RECORD = REPO / "cellgraph" / "observe" / "perf.csv"
 KEEP_SHAS = 3
+
+# Where a baseline commit is checked out and built. Under `target/`, which is already
+# ignored, and one worktree per SHA so the build is paid once. Each worktree keeps its
+# own `target/` rather than sharing the main one, so building a baseline never
+# invalidates the fingerprints of the build under test.
+BASELINES = REPO / "target" / "perf-baselines"
+
+# Runs of each binary per sweep. A run is milliseconds, so the figure buys robustness
+# almost free: the fastest of fifteen is a reading the machine's other work has not
+# touched, and two runs of one binary would already settle the deterministic columns.
+TRIALS = 15
 
 # The record's columns, in order. The first three stamp the sweep, the next four key
 # the row, and the last four are the reading.
@@ -81,36 +110,106 @@ Key = tuple[str, int, str]
 # --- measurement ------------------------------------------------------------
 
 
-def sweep(filter_: str | None = None) -> dict[Key, Reading]:
-    """Run the harness twice and return `{key: reading}`, keeping the faster time.
+def build(cwd: Path) -> Path:
+    """Build the harness in `cwd` and return the binary cargo wrote.
 
-    The two runs are what proves the gating figures are deterministic. The crate has
-    two `HashMap`s under `RandomState`, whose allocation pattern depends only on how
-    many entries go in — but a claim like that is worth checking on every sweep
-    rather than reasoning about once.
+    The path comes out of cargo's own JSON rather than being assembled from a target
+    directory, which is what lets a baseline worktree keep its build wherever its
+    configuration puts it.
     """
-    first, second = _run(filter_), _run(filter_)
-    drifted = [key for key in sorted(first.keys() | second.keys())
-               if _gating(first.get(key)) != _gating(second.get(key))]
+    run = subprocess.run(
+        ["cargo", "build", "-p", "cellgraph", "--features", "perf", "--bin", "perf",
+         "--message-format", "json-render-diagnostics"],
+        cwd=cwd, capture_output=True, text=True)
+    if run.returncode != 0:
+        print(run.stderr, file=sys.stderr, end="")
+        sys.exit(f"the harness failed to build in {_display(cwd)} "
+                 f"(exit {run.returncode})")
+    for line in run.stdout.splitlines():
+        message = json.loads(line)
+        if (message.get("reason") == "compiler-artifact"
+                and message.get("target", {}).get("name") == "perf"
+                and message.get("executable")):
+            return Path(message["executable"])
+    sys.exit("cargo built no executable for the harness")
+
+
+def baseline(sha: str) -> Path | None:
+    """The harness as `sha` built it, from a worktree cached under `target/`.
+
+    `None` when the commit is not in this repository, which a record outlives easily:
+    the rows are capped by recency and take no view on whether the branch they were
+    swept on ever landed.
+    """
+    if _git("rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}").returncode != 0:
+        return None
+    tree = BASELINES / sha
+    if not tree.exists():
+        BASELINES.mkdir(parents=True, exist_ok=True)
+        added = _git("worktree", "add", "--detach", "--quiet", str(tree), sha)
+        if added.returncode != 0:
+            print(added.stderr, file=sys.stderr, end="")
+            return None
+    return build(tree)
+
+
+def prune_baselines(keep: set[str]) -> None:
+    """Drop every cached worktree for a SHA the record no longer carries, so the cache
+    stays the size of the record rather than the size of the project's history."""
+    if not BASELINES.exists():
+        return
+    for tree in BASELINES.iterdir():
+        if tree.name not in keep:
+            _git("worktree", "remove", "--force", str(tree))
+            shutil.rmtree(tree, ignore_errors=True)
+
+
+def measure(binaries: dict[str, Path], filter_: str | None,
+            trials: int) -> dict[str, dict[Key, Reading]]:
+    """Run every binary `trials` times and return each one's readings.
+
+    The binaries alternate which goes first, so a machine that gets busier or cooler
+    over the sweep does it to both alike. Every row keeps its fastest time: noise on a
+    shared machine only ever adds, so the minimum is the reading with the least of it.
+    """
+    order = list(binaries)
+    runs: dict[str, list[dict[Key, Reading]]] = {tag: [] for tag in order}
+    for trial in range(trials):
+        for tag in (order if trial % 2 == 0 else order[::-1]):
+            runs[tag].append(_run(binaries[tag], filter_))
+    return {tag: _fold(tag, results) for tag, results in runs.items()}
+
+
+def _fold(tag: str, runs: list[dict[Key, Reading]]) -> dict[Key, Reading]:
+    """One binary's runs collapsed to one reading per row, fastest time kept.
+
+    The runs are also what proves the gating figures are deterministic. The crate has
+    two `HashMap`s under `RandomState`, whose allocation pattern depends only on how
+    many entries go in — but a claim like that is worth checking on every sweep rather
+    than reasoning about once.
+    """
+    first = runs[0]
+    keys = set().union(*(run.keys() for run in runs))
+    drifted = [key for key in sorted(keys)
+               if any(_gating(run.get(key)) != _gating(first.get(key))
+                      for run in runs)]
     if drifted:
-        print("non-deterministic: these rows differ between two runs of the harness",
+        print(f"non-deterministic: these rows differ between runs of the {tag} harness",
               file=sys.stderr)
         for key in drifted:
-            print(f"  {_name(key)}: {_gating(first.get(key))} then "
-                  f"{_gating(second.get(key))}", file=sys.stderr)
+            readings = sorted({_gating(run.get(key)) for run in runs}, key=str)
+            print(f"  {_name(key)}: {' then '.join(str(r) for r in readings)}",
+                  file=sys.stderr)
         sys.exit(1)
 
     return {key: Reading(reading.cap, reading.calls, reading.allocations,
-                         reading.bytes, min(reading.nanos, second[key].nanos))
+                         reading.bytes, min(run[key].nanos for run in runs))
             for key, reading in first.items()}
 
 
-def _run(filter_: str | None) -> dict[Key, Reading]:
+def _run(binary: Path, filter_: str | None) -> dict[Key, Reading]:
     """One run of the harness, parsed out of the CSV it writes to stdout."""
-    command = ["cargo", "run", "--quiet", "-p", "cellgraph",
-               "--features", "perf", "--bin", "perf"]
-    if filter_:
-        command += ["--", filter_]
+    command = [str(binary), filter_] if filter_ else [str(binary)]
     run = subprocess.run(command, cwd=REPO, capture_output=True, text=True)
     if run.returncode != 0:
         print(run.stderr, file=sys.stderr, end="")
@@ -337,13 +436,37 @@ def _plural(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
+def _basis(against: tuple[str, str], rebuilt: bool) -> str:
+    """How the comparison figures were come by — the sweep's own claim about how far
+    its time column can be trusted."""
+    return ("rebuilt and run beside this sweep" if rebuilt
+            else f"as its figures were recorded {against[0]}")
+
+
+def _report_drift(measured: dict[Key, Reading],
+                  recorded: dict[Key, Reading], against: tuple[str, str]) -> None:
+    """Say so when the baseline commit's harness does not reproduce what was written
+    down for it. The gating figures are deterministic, so a disagreement is about the
+    record — swept from a dirty tree, or under a different toolchain — and the rebuilt
+    reading is the one to believe."""
+    drifted = [key for key in sorted(measured.keys() & recorded.keys())
+               if _gating(measured[key]) != _gating(recorded[key])]
+    if not drifted:
+        return
+    print(f"stale record: {_plural(len(drifted), 'row')} recorded at {against[1]} "
+          f"differ from what that commit measures now", file=sys.stderr)
+    for key in drifted:
+        print(f"  {_name(key)}: recorded {_gating(recorded[key])}, "
+              f"measures {_gating(measured[key])}", file=sys.stderr)
+
+
 def _summary(rows: int, moved: int, risen: int,
-             against: tuple[str, str] | None) -> str:
+             against: tuple[str, str] | None, rebuilt: bool) -> str:
     """The one line a quiet sweep leads with. Every figure it names is either zero —
     nothing below it to read — or the row count of a table printed underneath."""
     if against is None:
         return f"cellgraph perf: {_plural(rows, 'row')} measured; no recorded sweep"
-    basis = f"vs {against[0]} {against[1]}"
+    basis = f"vs {against[1]} {_basis(against, rebuilt)}"
     movement = (f"{_plural(moved, 'row')} moved" if moved
                 else f"{_plural(rows, 'row')}, all at parity")
     return f"cellgraph perf: {movement} {basis}; {_plural(risen, 'row')} rose"
@@ -369,24 +492,45 @@ def main() -> int:
                         help=f"where the record lives (default: {_display(RECORD)})")
     parser.add_argument("--filter", default=None,
                         help="run only the benchmarks whose name contains this")
+    parser.add_argument("--trials", type=int, default=TRIALS,
+                        help=f"runs of each binary per sweep (default: {TRIALS})")
     args = parser.parse_args()
     args.record_path = args.record_path.resolve()
 
-    readings = sweep(args.filter)
     date, sha, dirty = _stamp()
     rows = read_record(args.record_path)
     # A recording sweep reports against the newest SHA it is not about to replace; a
     # read-only one reports against the newest on record, its own commit included.
     against = newest_sha(rows, exclude=sha if args.record else None)
-    recorded = readings_at(rows, against[1]) if against else {}
+    # Only the real record decides what the cache holds: a sweep pointed at a record of
+    # its own is asking a question, not redefining which baselines are worth keeping.
+    if args.record_path == RECORD:
+        prune_baselines({row["sha"] for row in rows})
 
-    moved, risen, lines = report(readings, recorded, args.quiet)
+    binaries = {"head": build(REPO)}
+    rebuilt = baseline(against[1]) if against else None
+    if rebuilt is not None:
+        binaries["baseline"] = rebuilt
+    measured = measure(binaries, args.filter, args.trials)
+    readings = measured["head"]
+
+    if rebuilt is not None:
+        comparison = measured["baseline"]
+        _report_drift(comparison, readings_at(rows, against[1]), against)
+    else:
+        comparison = readings_at(rows, against[1]) if against else {}
+        if against is not None:
+            print(f"{against[1]} is not in this repository — comparing against the "
+                  f"recorded figures, whose time column was read in another session",
+                  file=sys.stderr)
+
+    moved, risen, lines = report(readings, comparison, args.quiet)
     if args.quiet:
-        print(_summary(len(readings), moved, risen, against))
+        print(_summary(len(readings), moved, risen, against, rebuilt is not None))
     elif against is None:
         print(f"no recorded sweep to compare against ({_display(args.record_path)})")
     else:
-        print(f"against the rows recorded {against[0]} at {against[1]} "
+        print(f"against {against[1]}, {_basis(against, rebuilt is not None)} "
               f"({_display(args.record_path)})")
     for line in lines:
         print(line)
