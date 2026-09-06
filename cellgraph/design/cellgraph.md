@@ -184,7 +184,11 @@ placement.
 
 What the closure sees is both halves of the price and the occupancy the
 choice plays out against: the bytes a pin would *newly* keep alive, walked by
-the substrate across both tiers; the copy cost, which only the embedder can
+the substrate across both tiers — marginal against what the destination
+already holds *and* against what the earlier operands of this same placement
+have already pinned, so the first operand from a shared source carries the
+shared cost and the prices sum to what the placement retains; the copy cost,
+which only the embedder can
 know and which it passes beside the operand; the slab's occupancy against its
 cap, the sealed tier's record count and retained bytes, and the destination
 region's own size. The substrate ships those numbers and no threshold.

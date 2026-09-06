@@ -107,11 +107,12 @@ own structure rather than sharing one matrix:
   knows only parents.
 
 Keeping them separate lets each structure assert its own discipline: birth
-bits are written once and are immutable; pin bits are monotone-growing. It
-also leaves the birth side free to take a sparser shape than a matrix — a
-parent handle per cell with a derived chain-holder count is one such shape,
-and the invariant that a birth row contains its parent's row is checkable
-either way. A cell leaves the slab when it is dead and no birth hold names
+bits are written once and are immutable; pin bits are monotone-growing. The
+birth side is both a matrix and the sparser shape at once: the row answers
+"is this cell an ancestor" in O(1), which is what `redeem` asks, and each slot
+additionally records its **parent slot**, which is the axis a disposal walks.
+The invariant that a birth row contains its parent's row ties the two
+together. A cell leaves the slab when it is dead and no birth hold names
 it — and only the pin row freezes into a seal: birth holds exist for
 execution, so a cell's own birth row releases at its death unconditionally,
 and a dead cell no descendant names has no birth presence left to convert.
@@ -120,6 +121,20 @@ reclamation when nothing reaches its storage, one of the two merges below when
 exactly one thing does, and a seal otherwise. Storage that reaches
 the parent chain does so through pin bits (transitive coverage puts those
 regions in the row directly).
+
+A release clears the dying cell's own birth row, which is the only write that
+can bring another slot's birth-holder count to zero — birth bits are written
+at creation and released wholesale at death, and no disposal touches them. So
+the slots one release can free are exactly the released cell and the dead
+ancestors above it, and by row containment they are a *prefix* of the parent
+chain: a live ancestor, or one another branch still names, stops the walk and
+everything above it is still held. The cascade is therefore a walk up the
+parent links from the released cell, innermost first, with nothing scanning
+the slab and no list of dead slots kept anywhere. Order does change retention
+— a dead child pinning a dead parent that a live cell also pins reclaims
+first and lets the parent absorb into the live cell — but the mirror image
+favours the other order, so no fixed order dominates and the walk's own is
+taken.
 
 ## Reach as a hybrid mask
 
@@ -353,9 +368,20 @@ from the operand's reach with the destination itself, everything the
 destination's pin row names, and every record it already holds pre-marked as
 seen, so storage the destination is answerable for anyway is billed to
 nobody, and an operand homed in the destination — or in a cell it holds
-directly — prices at zero. The pruning is at *direct* holds and not at the
-destination's whole closure: a node reached only through a directly held node
-is still billed. The figure therefore only ever over-bills, which biases the
+directly — prices at zero. When every seed is already covered the walk is not
+built at all: the answer is zero after one containment test, which is the
+common case of placing a value into a cell that already holds its home.
+
+It is marginal within the placement, too. Each operand is priced against what
+the operands before it have already pinned, so a placement walks each distinct
+source once and the prices *sum* to what the placement newly retains, rather
+than billing a shared source once per operand. Operands are priced in the
+embedder's list order — the first operand from a shared source is the one
+shown the shared cost — since reach width is not price and the embedder
+already controls the list.
+
+The pruning is at *direct* holds and not at the destination's whole closure: a
+node reached only through a directly held node is still billed. The figure therefore only ever over-bills, which biases the
 answer toward copying and never toward a pin whose cost the embedder was not
 shown.
 
@@ -548,10 +574,11 @@ is what decides the orientation. Both compound writes are whole-row ORs — the
 birth derivation ORs a parent's row into its child's, the pin mint ORs a
 reach mask into a destination's — the row clear at reclamation zeroes a run,
 and the freeze at seal copies one out. Every one of them is a word-wise pass
-over contiguous memory that reads no value. The reclaim query pays for it:
-"does anything still hold this cell" has no row of its own, so it scans
-across rows, one bit per occupied slot. Chunk-aligned rows keep that stride
-cache-friendly.
+over contiguous memory that reads no value. The reclaim query asks the other
+axis — "does anything still hold this cell" is a column, and a column has no
+run of its own — so each matrix carries a **holder tally**, one count per
+column, bumped by every write that can set or clear a bit. The query is then
+one read, and a write pays only for the bits it *newly* sets.
 
 Per sealed region: one hybrid aggregate mask, one holder count, one memoized
 closure at most — the record set of a closure that has frozen, written once
@@ -576,11 +603,11 @@ the map are bounded by merges rather than by values — a departing cell
 contributes one entry however many values it kept, dropped when its target
 reclaims or retires. Per tier: one
 running retained-byte total, maintained where storage enters or leaves the
-sealed tier rather than summed on demand. A
-per-cell holder count maintained as derived data — derived *from* attributed
-transitions, never a free-standing count — is a measurable later
-optimization; it is an implementation detail invisible to the interface
-either way.
+sealed tier rather than summed on demand. The holder tallies above are derived
+data — derived *from* attributed transitions, never a free-standing count a
+caller could release against — and invisible to the interface: under test each
+tally is asserted against the column scan it stands in for, at every query that
+reads it.
 
 ## Open work
 

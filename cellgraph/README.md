@@ -63,6 +63,34 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
 Memory-safety sign-off for the retype seam is
 [observe/miri_slate.md](observe/miri_slate.md).
 
+## Measuring
+
+What a verb costs is measured per verb: the allocations one `create`, `enter`,
+`alloc_into` or `release` made, the bytes it asked for, and how long it took —
+each exclusive of the doors it ran inside it, so `enter` reports the step
+machinery and not the `alloc` within it.
+
+- [perf/](perf/) — the harness, a `[[bin]]` behind the `perf` cargo feature so
+  the library build, its tests, and the Miri slate never compile it.
+  [perf/shapes.rs](perf/shapes.rs) holds the shapes — a keep-and-redeem loop, a
+  push chain, a pull chain, a birth chain, a fan-out placement, and a shared
+  sub-tier wound down — and [perf/meter.rs](perf/meter.rs) the meter, which
+  subtracts a nested door's spend from its parent's frame. It counts through
+  [audit/counting_alloc.rs](../audit/counting_alloc.rs), the same delegating
+  allocator koan's own readings go through.
+- [tools/cellgraph_perf.py](../tools/cellgraph_perf.py) — the one command.
+  `python3 tools/cellgraph_perf.py` sweeps the set and prints a delta against
+  the newest recorded commit, which it rebuilds and runs beside HEAD so the
+  time column is a comparison taken in one sitting rather than a figure written
+  down in another. `--record` appends HEAD's readings, `--gate` exits non-zero
+  if allocations or bytes rose.
+- [observe/perf.csv](observe/perf.csv) — the record: a tidy dataframe, one row
+  per `(date, sha, dirty, benchmark, n, cap, verb)` carrying `calls`,
+  `allocations`, `bytes` and `nanos`, capped to the three most recently
+  recorded commits and read with `pandas.read_csv` and a pivot. Allocations and
+  bytes are deterministic and are what gates a change; `nanos` is there for the
+  trend and is never asserted, since the development machine is noisy.
+
 ## Doc tree
 
 - [design/](design/) — the substrate's design.

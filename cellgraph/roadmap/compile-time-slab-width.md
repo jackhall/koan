@@ -53,9 +53,8 @@ deep.
 
 ## Dependencies
 
-**Requires:**
-
-- [Performance measurement harness](performance-harness.md) — the
-  zero-allocation criteria are read off its trend log.
+**Requires:** none — the zero-allocation criteria are read off
+[tools/cellgraph_perf.py](../../tools/cellgraph_perf.py) against the record in
+[observe/perf.csv](../observe/perf.csv).
 
 **Unblocks:** none — leaf.

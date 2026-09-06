@@ -14,7 +14,7 @@ in this directory is on that graph, so nothing here bears on the score.
 
 | file | what it is | measured from |
 |---|---|---|
-| `counting_alloc.rs` | a `GlobalAlloc` that tallies allocations and delegates to an inner one | `src/main.rs`, `src/tests.rs`, `tests/allocation_baseline.rs` |
+| `counting_alloc.rs` | a `GlobalAlloc` that tallies allocations and bytes and delegates to an inner one | `src/main.rs`, `src/tests.rs`, `tests/allocation_baseline.rs`, `cellgraph/perf/main.rs` |
 | `reach_audit.rs` | the reach-tightness report: the over-pinning audit at the fold chokepoint | `src/machine/core/arena/step_allocator.rs` |
 | `shapes/*.koan` | the recorded programs the figures in [`observe/alloc.txt`](../observe/alloc.txt) are measured over | — |
 
@@ -45,12 +45,14 @@ the product are nameable, and `src/main.rs` prints its flags after a
 
 `counting_alloc.rs` wraps an allocator rather than replacing one, so a counted build and a
 shipped build allocate through the same `mimalloc` and a wall-clock reading off the counted
-build stays comparable. It keeps two tallies: a process-wide atomic, which is the
-whole-program number a binary's `main` can report, and a thread-local, which is what a test
+build stays comparable. It keeps two pairs of tallies: process-wide atomics, which are the
+whole-program numbers a binary's `main` can report, and thread-locals, which are what a test
 brackets one call with — the test harness runs tests concurrently, so a shared counter would
-fold every other test's traffic into the bracket.
+fold every other test's traffic into the bracket. Each pair is a count beside a byte total: the
+count says how many times the program asked, the bytes how much it asked for, which is what
+separates a growing buffer from a new one.
 
-Three targets `#[path]`-include the one file:
+Four targets `#[path]`-include the one file:
 
 - `src/main.rs`, under the `alloc-count` cargo feature. The binary wraps `mimalloc` (or the
   system allocator under Miri, which cannot call mimalloc's FFI) and prints
@@ -62,6 +64,9 @@ Three targets `#[path]`-include the one file:
   (`src/machine/execute/lift/tests.rs`) is its caller.
 - `tests/allocation_baseline.rs`, the regression test below. It needs no feature flag, which
   is what keeps `counting_alloc.rs` in the default verify slate.
+- `cellgraph/perf/main.rs`, the cell substrate's per-verb measurement harness, under that
+  crate's `perf` feature. It reads the process tallies, both counts and bytes, and brackets
+  each door call ([cellgraph/README.md § Measuring](../cellgraph/README.md#measuring)).
 
 ## The attribution profiler
 

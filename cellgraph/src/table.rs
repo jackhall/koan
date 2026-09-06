@@ -1023,14 +1023,15 @@ impl<C: Reattachable> CellTable<C> {
             }
         }
         // 3. The new record registers under every slab bit it names, so the next seal of one of
-        //    those slots finds it.
-        let registered: Vec<u32> = aggregate.slab_slots().collect();
-        for named in &registered {
-            self.naming[*named as usize].insert(id);
+        //    those slots finds it. The aggregate is a local and `naming` is a field, so the walk
+        //    down one writes the other with no copy of the bits in between.
+        for named in aggregate.slab_slots() {
+            self.naming[named as usize].insert(id);
         }
         #[cfg(test)]
         {
-            self.seal_work += (holders.len() + namers.len() + registered.len()) as u64;
+            self.seal_work +=
+                (holders.len() + namers.len()) as u64 + aggregate.slab_slots().count() as u64;
         }
 
         self.sealed.insert(

@@ -54,9 +54,8 @@ underneath it. The transients in [table.rs](../src/table.rs) today:
 
 ## Dependencies
 
-**Requires:**
-
-- [Performance measurement harness](performance-harness.md) — the
-  allocation-count criteria are read off its trend log.
+**Requires:** none — the allocation-count criteria are read off
+[tools/cellgraph_perf.py](../../tools/cellgraph_perf.py) against the record in
+[observe/perf.csv](../observe/perf.csv).
 
 **Unblocks:** none — leaf.
