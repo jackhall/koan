@@ -60,19 +60,40 @@ a price returns to the embedder, as one closure and nothing else.
 - *The verdict's inputs — decided.* Both sides. The embedder passes its copy
   cost as a plain number beside the operand; the table supplies what a pin
   retains and how full the tiers are.
-- *Where the closure lives — open.* A generic parameter on the table, or a
-  boxed closure. Recommended: boxed; one indirect call per priced operand
-  is nothing beside the walk that prices it, and it keeps every other
-  signature free of the parameter.
-- *Cart accretion — open.* `mark` / `absorbed_since` were handle queries the
-  embedder read a loop cart's growth off. Under the one-closure rule the
-  accreted bytes are either a field of the price at a crossing into the
-  cart, or the closure is consulted again at the cart's release. Decide with
-  adopt-cellgraph's cart criterion in hand.
-- *Step-1 cost — open.* Scan each holder's residents, or keep a per-slot
-  reverse index of residents naming it. Recommended: the scan; residents per
-  cell are a node's fan-in, and the index can follow if the bounded-transition
-  test shows growth.
+- *Where the closure lives — decided.* Boxed, taken by the table's
+  constructor; there is no verdict-free constructor. One indirect call per
+  priced operand is nothing beside the walk that prices it, and every other
+  signature stays free of the parameter.
+- *What a redeemed value reaches once its home sealed — decided.* The
+  record's id alone, not the id plus its aggregate. A hold on the record
+  keeps its aggregate alive transitively, so the id covers; it adds no
+  direct edges to the destination's row, so what the record reaches still
+  merges into it; and a mask naming only an id has no slab bit to go stale
+  when the value is kept again under the redeeming cell.
+- *What the pin price counts — decided.* What pinning the operand would
+  newly retain: the walk from the operand's reach with the destination, its
+  pin row, and its sealed-hold set already marked as seen, across both
+  tiers. An operand homed or directly held in the destination prices at
+  zero; a node held only through a directly held node is still billed, so
+  the figure only ever over-bills toward copying.
+- *Which holds entitle a redeem — decided.* The pin row and the birth row
+  both: each keeps the home in the slab with its storage intact, and the
+  parent chain is what koan's lexical lookup walks.
+- *Which placements consult the verdict — decided.* Both of them: the
+  destination-homed placement and the capturing successor store take the
+  same priced operands and hand the same pinned-or-copied views. Every
+  operand is consulted, including one whose pin price is zero.
+- *Loop shape and cart accretion — decided.* A loop is three cells: two
+  per-hop cells that alternate, and one longer-lived storage cell. A hop
+  builds the next hop's arguments into the next hop's cell and its results
+  into the storage cell, so the retiring hop dies at column zero and is
+  freed, never absorbed. The storage cell accretes only its own replaced
+  values, so the consolidation signal is its size, carried on the crossing
+  as the destination's bytes; there is no absorbed-bytes figure, and the
+  mark / absorbed-since queries go.
+- *Step-1 cost — decided.* Scan each holder's residents; residents per cell
+  are a node's fan-in. A per-slot reverse index can follow if the
+  bounded-transition test shows growth.
 
 ## Dependencies
 
