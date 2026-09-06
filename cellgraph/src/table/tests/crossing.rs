@@ -373,6 +373,16 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
         waiting = fresh;
     }
 
+    // The cart is kept into once per hop and its table did not grow: every accumulator reaches
+    // the cart and nothing else, so all of them intern to the entry the seed minted. This is what
+    // keeps the seal transition's bound — work per holder's resident entry — a bound on a run of
+    // any length rather than one that grows with it.
+    assert_eq!(
+        table.slots[cart.slot() as usize].residents.len(),
+        1,
+        "the cart took an entry per hop"
+    );
+
     // The cart's accumulator carries the whole run, and the argument waiting in the hop that
     // never ran is the one the last hop passed on.
     let total = table

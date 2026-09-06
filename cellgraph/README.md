@@ -28,10 +28,12 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
 - [src/table.rs](src/table.rs) — the slab, the `create` / `enter` / `release`
   verbs, the step context's doors, the seal transition, the three locality
   merges a dying cell can take instead, the cascade that retires cells and
-  records, and the read-only price queries. The price queries are internal:
-  what retention costs is a number the substrate computes, not a door an
-  embedder opens, and it reaches the embedder through the crossing verdict of
-  [resident-carriers.md](roadmap/resident-carriers.md).
+  records, the relocation map that forwards a resident through a merge, and
+  the read-only price queries. The price queries are internal: what retention
+  costs is a number the substrate computes, not a door an embedder opens, and
+  it reaches the embedder through the crossing verdict
+  ([cellgraph.md § The crossing
+  verdict](design/cellgraph.md#the-crossing-verdict)).
 - [src/matrix.rs](src/matrix.rs) — `Bits`, the crate's one row of bits and the
   only place word-and-bit arithmetic is written, and the flat birth and pin
   matrices built over it.
@@ -41,8 +43,13 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
   aggregates, holder counts, detached storage.
 - [src/region.rs](src/region.rs) — the per-cell bundle of bumps, the splice a
   locality merge performs, and the write surface a build closure receives.
-- [src/carrier.rs](src/carrier.rs) — the two carrier states a built value
-  passes through: sealed with its reach, and opened at a reading borrow.
+- [src/carrier.rs](src/carrier.rs) — the two carrier states that carry a
+  lifetime: sealed with its reach, in step, and opened at a reading borrow.
+- [src/resident.rs](src/resident.rs) — the third carrier state, at rest: a
+  value parked between steps with no lifetime of its own, the private key
+  naming its reach, and the per-cell resident table that reach lives in —
+  interned on content, so the table is bounded by the distinct reaches a cell
+  has been kept into rather than by how many times.
 - [src/reattach.rs](src/reattach.rs) — the reattachable contract and the
   single lifetime-retype the crate is built on.
 - [tests/surface.rs](tests/surface.rs) — the public surface, named and

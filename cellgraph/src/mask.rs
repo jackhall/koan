@@ -61,13 +61,6 @@ impl Mask {
         self.slab.set(slot);
     }
 
-    /// Empty the mask in place — how a resident entry the table no longer needs stops naming
-    /// anything without leaving its index.
-    pub(crate) fn clear(&mut self) {
-        self.slab.clear_all();
-        self.sealed = SealedSet::new();
-    }
-
     /// Add a sealed id, reporting whether it was absent. A merge reads the answer: an id already
     /// in the target's set is a hold the source's copy of duplicates rather than adds.
     pub(crate) fn add_sealed(&mut self, id: SealedId) -> bool {

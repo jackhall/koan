@@ -60,17 +60,15 @@ exist, and koan sits on the one the design has moved off.
   the substrate's occupancy signal
   ([liveness-matrix.md § Bounding the two tiers](../../cellgraph/design/liveness-matrix.md#bounding-the-two-tiers)),
   from this embedder's own measurements. The prices reach this layer only
-  through the crossing-verdict closure of
-  [resident-carriers.md](../../cellgraph/roadmap/resident-carriers.md); the
+  through the crossing-verdict closure the table is constructed with
+  ([cellgraph.md § The crossing
+  verdict](../../cellgraph/design/cellgraph.md#the-crossing-verdict)); the
   ramp is that closure's body.
 
 ## Dependencies
 
 **Requires:**
 
-- [Resident carriers and the crossing price](../../cellgraph/roadmap/resident-carriers.md)
-  — delivery by push or pull is that door, and the pressure model is its
-  closure.
 
 **Unblocks:**
 

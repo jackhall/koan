@@ -28,8 +28,12 @@ compile-enforced: the lower crate names no type from the higher one.
   stores and hands back under `enter`, re-anchored at the step lifetime, and
   never calls. It rests beside the reach of whatever it captured, minted into
   its own cell's holds when it is stored — a cell holds what its continuation
-  reads — which makes it the one stored mask the seal transition rewrites,
-  and the read that hands it back the sealed tier's accessor. A step may
+  reads — which makes it a resident like any other: its reach is interned into
+  the cell's resident table, rewritten by the seal transition exactly like
+  every other entry, and the read that hands it back the sealed tier's
+  accessor. Storing a successor repoints the cell at the entry the new reach
+  interns to; it overwrites none, so a cell that alternates between a few
+  continuation shapes costs one entry per shape. A step may
   store a successor before its scope ends. A cell with no continuation is
   **storage-only**, and is the substrate's answer to
   "a region that outlives its step but is never executed in": a cart a loop
@@ -53,8 +57,26 @@ compile-enforced: the lower crate names no type from the higher one.
   inside the continuation's captures, or as a value resident in the cell's
   region.
 - **Value** — what passes between cells. A one-lifetime reattachable family
-  carried witnessed: born in a region, carrying a reach mask, duplicated per
-  reader, read only under a hold.
+  carried witnessed: born in a region, duplicated per reader, read only under
+  a hold. It is held in exactly three states, and the type of each is what
+  says which:
+  - **At rest** — lifetime-free, opaque, and the only state an embedder may
+    keep across an `enter` scope. It carries no reach and no method: its
+    borrows rest as bytes in the region it was built into, and a private key
+    names the entry of its home cell's resident table where its mask lives.
+    That table interns on content, so two values reaching the same thing name
+    one entry and a cell kept into every step of a run holds one entry per
+    distinct reach rather than one per keep. Born only from an in-step
+    carrier, at the `keep` door.
+  - **In step** — branded to the step that built or redeemed it, and paired
+    with the reach the substrate composed for it. Handed back by the
+    placement doors and by `redeem`; it dies with the step.
+  - **Opened** — the value itself, at a reading borrow strictly inside the
+    step.
+
+  The pairing of a value with a reach is only ever one the substrate made:
+  the mask is crate-private in every state, so there is nothing an embedder
+  can hold that would let it hand a value a reach of its own choosing.
 
 There is no frame type. Per-cell embedder structure is composed from cells: a
 body cell and a storage-only cart cell, held together by ordinary holds, is
@@ -69,14 +91,31 @@ how an embedder gives one unit of work two regions with different lifetimes.
   continuation, re-anchored at the step lifetime; allocate into its own
   region; allocate into any other live cell by handle (the destination-homed
   placement); mint a bare hold on another cell; read a carrier it built; and
-  store a successor continuation, over captures or over nothing. That
+  store a successor continuation, over captures or over nothing. It can also
+  put a carrier it holds to rest — `keep`, which hands back the at-rest
+  form — and redeem one a previous step put to rest. That
   continuation read *is* the sealed tier's accessor — a capture whose region
   sealed since it was stored comes back reading storage that record still
   retains — so there is no second door out of sealed storage. What the value
-  reaches stays in the table: the reach a stored continuation was minted with
-  is the substrate's bookkeeping, rewritten in place by the seal transition,
-  and never handed back beside the value. A cell cannot be entered while it
+  reaches stays in the table: every reach a resident was minted with is the
+  substrate's bookkeeping, rewritten in place by the seal transition, and
+  never handed back beside the value. A cell cannot be entered while it
   is already executing.
+
+  **`redeem`** is the one door out of the at-rest state, and it refuses
+  rather than panics. The executing cell must be entitled to the storage the
+  value names: it is the home cell itself, its pin row or its birth row names
+  the home — both keep the home in the slab with its storage intact — or the
+  home has sealed into a record this cell holds. Anything else is `Unheld`,
+  and a home whose storage is gone entirely, reclaimed or retired with its
+  record, is `Gone`. Nothing could have read such a value, so nothing is lost
+  by refusing it. A value redeemed out of a record comes back reaching that
+  record's id alone: a hold on a record keeps its whole aggregate alive
+  transitively, so the id covers everything the value reads.
+
+  A placement over operands consults the **crossing verdict** once per
+  operand before it builds — the one closure the table was constructed with,
+  described under Passing values below.
 - **`release(handle, absorption)`** declares death: the embedder promises
   never to enter the cell again. The slot leaves the slab once no descendant's
   birth row names the cell: reclaimed if nothing reaches its storage, folded
@@ -92,12 +131,12 @@ how an embedder gives one unit of work two regions with different lifetimes.
   dissolved survives. Naming the nodes on such a ring is a walk of the hold
   graph the crate's own tests carry, not a door on the table.
 
-There are no price verbs. The substrate computes what retention costs —
-`unique_closures` over the sealed tier, `region_bytes` / `mark` /
-`absorbed_since` over a live cell, `occupancy` over both — but every one of
-those queries is internal, along with the vocabulary they speak: the reach
-mask, the sealed id, the closure and occupancy answers name nothing an
-embedder can hold ([liveness-matrix.md § Bounding the two
+There are no price verbs. The substrate computes what retention costs — the
+marginal price of pinning one operand into one destination, the closure a
+sealed record retains, the occupancy of both tiers — but every one of those
+queries is internal, along with the vocabulary they speak: the reach mask,
+the sealed id, the closure and occupancy answers name nothing an embedder can
+hold ([liveness-matrix.md § Bounding the two
 tiers](liveness-matrix.md#bounding-the-two-tiers)). A price returns to the
 embedder at exactly one place, the crossing verdict a placement consults per
 operand, and it returns as one answer for one decision. The substrate ships
@@ -115,17 +154,48 @@ There is no delivery protocol. A value is always resident in a live cell's
 region, transient inside an executing cell's step, or sealed with its region.
 Nothing else holds a value: there is no free-standing envelope with pins of
 its own. Crossing a step boundary therefore takes one of two shapes, both
-built from the verbs above:
+built from the verbs above, and both complete through `keep` on the producing
+side and `redeem` on the reading one:
 
 - **Push.** While the producer executes, the value is minted into the
   consumer's region — or built there outright by destination-homed
-  placement — and the consumer's row takes its mask. The producer can then
-  die at column zero.
+  placement — and the consumer's row takes its mask. The producer keeps the
+  carrier and hands the at-rest form to the embedder, which delivers it to
+  the consumer; the consumer redeems it in a later step of its own. The
+  producer can then die at column zero.
 - **Pull.** The consumer mints a bare hold on the producer cell. The producer
-  dies with a nonzero column and seals, and the consumer later reads through the
-  sealed accessor inside its own step.
+  dies with a nonzero column and seals, and the consumer redeems in its own
+  later step: the home resolves to the record, the consumer's hold on it is
+  the entitlement, and the value comes back reaching the record's id.
 
-Which shape an edge takes is the embedder's choice, per edge.
+Which shape an edge takes is the embedder's choice, per edge. Delivering the
+at-rest carrier is the embedder's job too — the substrate ships no queue and
+no mailbox, only the two doors.
+
+### The crossing verdict
+
+A placement over operands is where the copy-versus-pin choice is made, and
+the substrate does not make it. The table is constructed with one embedder
+closure, the **crossing verdict**, and consults it once per operand of every
+placement — the destination-homed placement and the capturing successor store
+alike, and for every operand, including one whose pin price is zero. There is
+no verdict-free constructor: a table that can place a value can price the
+placement.
+
+What the closure sees is both halves of the price and the occupancy the
+choice plays out against: the bytes a pin would *newly* keep alive, walked by
+the substrate across both tiers; the copy cost, which only the embedder can
+know and which it passes beside the operand; the slab's occupancy against its
+cap, the sealed tier's record count and retained bytes, and the destination
+region's own size. The substrate ships those numbers and no threshold.
+
+What the closure answers decides the shape the build closure receives. A
+pinned operand arrives at the destination's own region brand, so the build
+may embed the borrow itself — and the mint has already folded the operand's
+reach into the destination's holds. A copied operand arrives **severed**, at
+a brand with no outlives relation to the destination's region, and its reach
+is minted nowhere: embedding it is a compile error, so the only copy that
+typechecks is a deep one through the destination's writer.
 
 ## What is deliberately absent
 
@@ -151,9 +221,9 @@ Each absence is a design statement, not a gap:
 
 ## Open work
 
-The remaining slices are indexed in [the roadmap](../roadmap/README.md):
+The substrate's own slices are all built; what is left is its adoption, and
+the gaps nothing is scheduled against are recorded in
+[the roadmap](../roadmap/README.md).
 
-- [Resident carriers and the crossing price](../roadmap/resident-carriers.md)
-  — the at-rest carrier state, the redeem door, and the crossing verdict.
 - [Rebuilding workgraph over cellgraph](../../workgraph/roadmap/adopt-cellgraph.md)
   — the first embedder's adoption.

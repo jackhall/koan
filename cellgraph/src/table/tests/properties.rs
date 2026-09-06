@@ -387,8 +387,8 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Crossing) -> Verdict + 'static) -> Me
                     });
                 }
             }
-            // A continuation kept over a value homed elsewhere is the one stored mask a cell
-            // owns, and the only thing the seal transition has to rewrite.
+            // A continuation kept over a value homed elsewhere takes an entry of the cell's
+            // resident table, interned on its reach like any other keep.
             Verb::Continue { cell, over } => {
                 if let (Some(cell), Some(over)) =
                     (minted.get(cell).copied(), minted.get(over).copied())

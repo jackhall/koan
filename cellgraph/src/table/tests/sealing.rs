@@ -15,11 +15,17 @@ const LARGE: usize = if cfg!(miri) { 512 } else { 10_000 };
 /// Seal a held cell and report the maintenance the transition performed.
 ///
 /// The producer stores `stored` values in its region and puts `kept_by_producer` more of them to
-/// rest as residents; the holder puts `kept_by_holder` values of its own to rest. The three knobs
-/// are the three quantities the transition could plausibly be proportional to, and only one of
-/// them may be.
+/// rest as residents; the holder takes `kept_by_holder` **distinct** resident entries. The three
+/// knobs are the three quantities the transition could plausibly be proportional to, and only one
+/// of them may be.
+///
+/// The holder's entries have to be distinct because the table interns on content: a resident is
+/// one entry per reach, so counting keeps would count nothing. Each is built into the holder's
+/// region from a cell of its own, capturing a value that cell homes, so its reach names the holder
+/// and that one cell and matches no other.
 fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) -> u64 {
-    let mut table: CellTable<Owned> = CellTable::new(4, pin);
+    let cap = 4 + kept_by_holder as u32;
+    let mut table: CellTable<Owned> = CellTable::new(cap, pin);
     let holder = table.create(None, None).unwrap();
     let producer = table.create(None, None).unwrap();
 
@@ -34,14 +40,28 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
             }
         })
         .unwrap();
-    table
-        .enter(holder, |context| {
-            for value in 0..kept_by_holder {
-                let carrier = context.alloc::<Number>(|writer| writer.value(value as u32));
+
+    for value in 0..kept_by_holder {
+        let source = table.create(None, None).unwrap();
+        table
+            .enter(source, |context| {
+                let local = context.alloc::<Number>(|writer| writer.value(value as u32));
+                let carrier = context
+                    .alloc_into::<Number, Number>(holder, &[operand(&local)], |writer, views| {
+                        writer.value(*pinned(&views[0]))
+                    })
+                    .unwrap();
                 context.keep(carrier);
-            }
-            context.hold(producer)
-        })
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        table.slots[holder.slot() as usize].residents.len() as usize,
+        kept_by_holder
+    );
+
+    table
+        .enter(holder, |context| context.hold(producer))
         .unwrap()
         .unwrap();
 
@@ -59,7 +79,8 @@ fn the_seal_transition_is_bounded_by_the_holders_residents_not_the_storage() {
 
     // What the transition *is* proportional to: each holder's resident table, one entry at a
     // time, because the dying slot's bit has to become the record's id in every mask that names
-    // it. Four more entries in the one holder's table, four more units of work — exactly.
+    // it. Four more entries in the one holder's table, four more units of work — exactly. The
+    // count is entries, not keeps: interning is what keeps the two from diverging over a run.
     assert_eq!(
         seal_work_for(SMALL, 8, 0) - seal_work_for(SMALL, 4, 0),
         4,
@@ -68,7 +89,8 @@ fn the_seal_transition_is_bounded_by_the_holders_residents_not_the_storage() {
 
     // And not to the dying cell's own residents: those masks are dead bytes the moment the
     // storage they name is in the record, so the transition forwards one lineage entry for the
-    // whole table rather than touching an entry per value.
+    // whole table rather than touching an entry per value. The producer's keeps all share one
+    // reach and so one entry, which is the point twice over — the table did not grow either.
     assert_eq!(
         seal_work_for(SMALL, 4, SMALL),
         seal_work_for(SMALL, 4, LARGE)

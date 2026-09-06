@@ -1,7 +1,9 @@
 //! The cell table: a slab capped at construction, the two hold relations over its slots, the
-//! executing flag, the per-cell regions, the sealed tier a still-reached cell falls into, and the
-//! `create` / `enter` / `release` verbs. See
-//! [design/cellgraph.md](../design/cellgraph.md) § Verbs and
+//! executing flag, the per-cell regions and resident tables, the sealed tier a still-reached cell
+//! falls into, the relocation map that forwards a resident through a merge, and the
+//! `create` / `enter` / `release` verbs. The embedder's crossing verdict is taken here too, at
+//! construction, and consulted once per operand of every placement. See
+//! [design/cellgraph.md](../design/cellgraph.md) § Verbs and § The crossing verdict, and
 //! [design/liveness-matrix.md](../design/liveness-matrix.md) § The model.
 
 #[cfg(test)]
@@ -291,11 +293,13 @@ struct Slot<C: Reattachable> {
     /// The continuation at rest, erased. Its reach is one entry of `residents` — the continuation
     /// is a resident like any other, so the seal transition maintains one collection per cell.
     continuation: Option<Erased<C>>,
-    /// Which entry of `residents` holds the continuation's reach, once one has been stored over
-    /// captures. A continuation handed in at `'static` reaches nothing and takes no entry.
+    /// Which entry of `residents` holds the continuation's reach. A store repoints this at the
+    /// entry its reach interns to rather than writing the entry it named before, so a cell that
+    /// alternates between a few continuation shapes settles at one entry per shape.
     continuation_reach: Option<u32>,
-    /// The reach of every value kept in this cell's region — the one durable habitat of a mask on
-    /// the slab side, and what the seal transition's step 1 rewrites.
+    /// The reach of every value kept in this cell's region, interned on content — the one durable
+    /// habitat of a mask on the slab side, and what the seal transition's step 1 rewrites. One
+    /// entry per distinct reach is what bounds that rewrite.
     residents: Residents,
     /// The departed cells whose residents this one absorbed, each of them a key in the table's
     /// relocation map pointing here. Bounded by merges, never by values.
@@ -328,7 +332,7 @@ pub struct CellTable<C: Reattachable> {
     sealed: SealedTier,
     /// Where the residents of a cell that has left the slab went. A departed handle maps to the
     /// live cell whose table absorbed its masks, or to the record its storage sealed into; a cell
-    /// that never kept a resident leaves no entry. Rewritten at every merge and dropped at the
+    /// with an empty resident table leaves no entry. Rewritten at every merge and dropped at the
     /// target's reclamation, so the map is bounded by merges rather than by values.
     relocated: std::collections::HashMap<Handle, Location>,
     /// The embedder's crossing verdict, taken at construction. There is no verdict-free
@@ -555,7 +559,7 @@ impl<C: Reattachable> CellTable<C> {
     ///
     /// A handle whose slot still holds it names that slot directly, at base zero. Otherwise the
     /// cell has left the slab, and the relocation map answers — or does not, which means the cell
-    /// reclaimed or kept nothing.
+    /// reclaimed or left an empty table behind.
     fn locate(&self, home: Handle) -> Option<Location> {
         let cell = &self.slots[home.slot() as usize];
         if cell.state != SlotState::Free && cell.generation == home.generation() {
@@ -669,8 +673,9 @@ impl<C: Reattachable> CellTable<C> {
     /// bit `into` throughout, since that storage is the target's own bundle from here on.
     ///
     /// Every key minted under a handle the dead cell answered for is forwarded to the target's
-    /// table at its new base, so a resident survives any number of merges. A dead cell that kept
-    /// nothing forwards nothing and leaves no entry behind.
+    /// table at its new base, so a resident survives any number of merges. A dead cell with an
+    /// empty table forwards nothing and leaves no entry behind. The moved block is appended
+    /// without interning: its position at `base` is what forwards the keys minted under it.
     fn migrate_residents(&mut self, dead: u32, into: u32) {
         // The target's own residents lose the dead cell's bit: those chunks are its storage now.
         for mask in self.slots[into as usize].residents.iter_mut() {
@@ -682,7 +687,7 @@ impl<C: Reattachable> CellTable<C> {
         for mut mask in moved {
             mask.remove_slot(dead);
             mask.add(into);
-            self.slots[into as usize].residents.push(mask);
+            self.slots[into as usize].residents.append(mask);
         }
 
         let mut lineage = std::mem::take(&mut self.slots[dead as usize].lineage);
@@ -1464,15 +1469,13 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
 
     /// Store a continuation that captures nothing any region owns, so it reaches nothing.
     ///
-    /// A resident entry an earlier capturing store took stays where it is and is emptied: an index
-    /// is a name, so the entry is reused rather than retired.
+    /// The empty reach interns like any other, so the cell points at the entry naming nothing and
+    /// whatever entry an earlier store pointed at stays as it is: entries are content, and nothing
+    /// rewrites one because the value that minted it moved on.
     pub fn store_successor(&mut self, continuation: C::At<'static>) {
+        let cap = self.table.cap;
         let cell = &mut self.table.slots[self.handle.slot() as usize];
-        if let Some(index) = cell.continuation_reach
-            && let Some(mask) = cell.residents.get_mut(index)
-        {
-            mask.clear();
-        }
+        cell.continuation_reach = Some(cell.residents.intern(Mask::empty(cap)));
         cell.continuation = Some(Erased::store(continuation));
     }
 
@@ -1480,8 +1483,12 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
     ///
     /// The captures' reach is minted into this cell's hold set before the continuation rests in
     /// its slot: a cell holds what its own continuation reads, which is what keeps those regions
-    /// alive across the gap between this step and the next, and what makes the seal transition's
-    /// rewrite of this mask the only rewrite the transition owes.
+    /// alive across the gap between this step and the next.
+    ///
+    /// That reach is kept exactly as [`keep`](Self::keep) keeps one — interned into this cell's
+    /// resident table, with the continuation pointing at the entry it landed in. Storing over an
+    /// earlier continuation writes no entry, so a table entry is content that only the seal
+    /// transition's uniform rewrite ever changes.
     ///
     /// `build` also receives this cell's own write surface, since a continuation that captures
     /// anything usually needs somewhere to put the captures' spine; the self rule makes the
@@ -1509,14 +1516,7 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
         };
         reach.add(slot);
         let cell = &mut self.table.slots[slot as usize];
-        let index = match cell.continuation_reach {
-            Some(index) => {
-                cell.residents.set(index, reach);
-                index
-            }
-            None => cell.residents.push(reach),
-        };
-        cell.continuation_reach = Some(index);
+        cell.continuation_reach = Some(cell.residents.intern(reach));
         cell.continuation = Some(value);
     }
 
@@ -1625,7 +1625,7 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
     {
         let (value, reach, home) = carrier.into_parts();
         let cell = &mut self.table.slots[home as usize];
-        let index = cell.residents.push(reach);
+        let index = cell.residents.intern(reach);
         let key = ResidentKey {
             home: Handle::new(home, cell.generation),
             index,

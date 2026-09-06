@@ -583,20 +583,26 @@ fn a_redeemed_record_value_can_be_kept_again() {
 }
 
 #[test]
-fn the_continuation_is_one_entry_of_the_resident_table() {
+fn the_continuation_interns_its_reach_like_any_other_keep() {
     let mut table: CellTable<Borrowed> = CellTable::new(4, pin);
     let cell = table.create(None, None).unwrap();
     let over = table.create(None, None).unwrap();
 
-    table
-        .enter(cell, |context| {
-            let value = context
-                .alloc_into::<Number, Number>(over, &[], |writer, _| writer.value(41))
-                .unwrap();
-            context
-                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
-        })
-        .unwrap();
+    let capturing = |table: &mut CellTable<Borrowed>, value: u32| {
+        table
+            .enter(cell, |context| {
+                context.continuation();
+                let carrier = context
+                    .alloc_into::<Number, Number>(over, &[], |writer, _| writer.value(value))
+                    .unwrap();
+                context.store_successor_capturing(&[operand(&carrier)], |_writer, views| {
+                    pinned(&views[0])
+                });
+            })
+            .unwrap();
+    };
+
+    capturing(&mut table, 41);
     assert_eq!(
         table.slots[cell.slot() as usize].continuation_reach,
         Some(0)
@@ -606,8 +612,9 @@ fn the_continuation_is_one_entry_of_the_resident_table() {
     assert!(stored.names(over.slot()));
     assert!(stored.names(cell.slot()));
 
-    // A continuation that captures nothing reaches nothing: the entry is emptied where it stands,
-    // since an index is a name and retiring one would strand every key past it.
+    // A continuation that captures nothing reaches nothing, and the empty reach is a distinct
+    // shape: the cell repoints at an entry of its own rather than emptying the one it named, which
+    // is what makes an entry immutable content.
     table
         .enter(cell, |context| {
             context.continuation();
@@ -616,33 +623,74 @@ fn the_continuation_is_one_entry_of_the_resident_table() {
         .unwrap();
     assert_eq!(
         table.slots[cell.slot() as usize].continuation_reach,
-        Some(0)
+        Some(1)
     );
-    assert_eq!(table.slots[cell.slot() as usize].residents.len(), 1);
     let emptied = continuation_reach(&table, cell);
     assert!(emptied.slab_slots().next().is_none());
     assert!(emptied.sealed().is_empty());
 
-    // And the next capturing store writes that same entry rather than growing the table.
-    table
-        .enter(cell, |context| {
-            context.continuation();
-            let value = context
-                .alloc_into::<Number, Number>(over, &[], |writer, _| writer.value(7))
-                .unwrap();
-            context
-                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
-        })
-        .unwrap();
+    // And the capturing store comes back to the entry it minted the first time, because its reach
+    // is the same reach. Alternating for a whole run costs the two shapes and nothing more.
+    for value in 0..8 {
+        capturing(&mut table, value);
+        assert_eq!(
+            table.slots[cell.slot() as usize].continuation_reach,
+            Some(0)
+        );
+        table
+            .enter(cell, |context| {
+                context.continuation();
+                context.store_successor(&ANCHOR);
+            })
+            .unwrap();
+    }
     assert_eq!(
-        table.slots[cell.slot() as usize].continuation_reach,
-        Some(0)
+        table.slots[cell.slot() as usize].residents.len(),
+        2,
+        "a table holds one entry per distinct reach, not one per store"
     );
-    assert_eq!(table.slots[cell.slot() as usize].residents.len(), 1);
-    assert!(continuation_reach(&table, cell).names(over.slot()));
 
+    capturing(&mut table, 7);
     let read = table
         .enter(cell, |context| *context.continuation().unwrap().value())
         .unwrap();
     assert_eq!(read, 7);
+}
+
+#[test]
+fn keeping_the_same_reach_twice_takes_one_entry_and_both_keys_redeem() {
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
+    let cell = table.create(None, None).unwrap();
+
+    let kept = table
+        .enter(cell, |context| {
+            let mut kept = Vec::new();
+            for value in 0..16 {
+                let carrier = context.alloc::<Number>(|writer| writer.value(value));
+                kept.push(context.keep(carrier));
+            }
+            kept
+        })
+        .unwrap();
+
+    // Sixteen values, one reach: each is homed in the executing cell and reaches nothing else, so
+    // every keep interns to the entry the first one minted.
+    assert_eq!(
+        table.slots[cell.slot() as usize].residents.len(),
+        1,
+        "keeps of one shape share one entry"
+    );
+
+    // Sharing an entry is invisible at the door: every key still redeems, and to its own value.
+    let read = table
+        .enter(cell, |context| {
+            kept.into_iter()
+                .map(|resident| {
+                    let carrier = context.redeem(resident).expect("the home is executing");
+                    *context.read(&carrier).value()
+                })
+                .collect::<Vec<u32>>()
+        })
+        .unwrap();
+    assert_eq!(read, (0..16).collect::<Vec<u32>>());
 }

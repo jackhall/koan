@@ -7,7 +7,9 @@
 //! seal transition can rewrite it as the slab bit it names becomes a sealed id; the resident names
 //! that entry by a private key and nothing else. So an embedder cannot pair a value with a reach
 //! from outside — there is nothing pairable — and a mask a resident depends on cannot go stale,
-//! because it never left the table.
+//! because it never left the table. Two residents that reach the same thing name one entry: the
+//! table interns on content, so a cell kept into every step of a run holds one mask per distinct
+//! reach rather than one per keep.
 //!
 //! It carries no *live value* either, and that is what separates this state from the in-step one.
 //! A resident outlives the step that built it, so by the time one is redeemed its home's storage
@@ -104,33 +106,46 @@ pub(crate) struct ResidentKey {
 ///
 /// This is the **only** durable habitat of a mask on the slab side, so the seal transition's step 1
 /// rewrites exactly this collection per holder and the work is bounded by the holders' resident
-/// counts. Entries are never removed — an index is a name — so a table only grows, and a cell's
-/// whole table goes when its slot recycles.
+/// counts. Entries are **interned on content**, which is what bounds that count: a table holds one
+/// entry per *distinct* reach ever kept into the cell, not one per keep, so a cell kept into every
+/// step for a whole run settles at the handful of shapes its keeps take. Nothing is ever removed —
+/// an index is a name — and a cell's whole table goes when its slot recycles.
+///
+/// Interning is sound because an entry is immutable content: no door writes one by index, and the
+/// only rewrites are the uniform ones the seal transition and a merge apply to every entry alike,
+/// which carry equal masks to equal masks. The continuation is no exception — it interns its reach
+/// like any other keep and repoints, rather than owning an entry it overwrites.
 #[derive(Default)]
 pub(crate) struct Residents {
     masks: Vec<Mask>,
 }
 
 impl Residents {
-    /// Take a reach in, handing back the index that names it from here on.
-    pub(crate) fn push(&mut self, reach: Mask) -> u32 {
+    /// Take a reach in, handing back the index that names it from here on — the entry that already
+    /// holds an equal mask when there is one, so a cell kept into repeatedly with the same reach
+    /// takes one entry rather than one per keep.
+    ///
+    /// The scan is linear in the table, which interning is what keeps small: the cost is the
+    /// number of distinct reaches the cell has ever been kept into, and every hit is an entry the
+    /// table did not grow by.
+    pub(crate) fn intern(&mut self, reach: Mask) -> u32 {
+        match self.masks.iter().position(|mask| *mask == reach) {
+            Some(index) => index as u32,
+            None => self.append(reach),
+        }
+    }
+
+    /// Add an entry without consulting the existing ones — how a merge moves a departed cell's
+    /// table in, where the block's position is what forwards its keys and an intern hit would put
+    /// an entry at the wrong offset.
+    pub(crate) fn append(&mut self, reach: Mask) -> u32 {
         let index = self.masks.len() as u32;
         self.masks.push(reach);
         index
     }
 
-    /// Overwrite one entry — how a re-stored continuation replaces the reach of the one before it
-    /// rather than growing the table each step.
-    pub(crate) fn set(&mut self, index: u32, reach: Mask) {
-        self.masks[index as usize] = reach;
-    }
-
     pub(crate) fn get(&self, index: u32) -> Option<&Mask> {
         self.masks.get(index as usize)
-    }
-
-    pub(crate) fn get_mut(&mut self, index: u32) -> Option<&mut Mask> {
-        self.masks.get_mut(index as usize)
     }
 
     pub(crate) fn len(&self) -> u32 {
