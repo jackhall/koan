@@ -91,7 +91,7 @@ impl<'s> ScratchSet<'s> {
     /// the largest set it ever starts from.
     pub(crate) fn copy_of(mut ids: ScratchVec<'s, SealedId>, other: &IdSet<impl IdBuffer>) -> Self {
         debug_assert!(ids.is_empty(), "a set is built over an empty buffer");
-        ids.extend_from_slice_copy(other.as_slice());
+        ids.extend_from_slice(other.as_slice());
         IdSet { ids }
     }
 }

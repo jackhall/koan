@@ -6,12 +6,24 @@
 //! glue may go in it. The doors below assert that at compile time, the way the region doors assert
 //! [`DropFree`](crate::DropFree).
 
+use std::cell::Cell;
+
 use bumpalo::Bump;
 
 use crate::sealed::{IdBuffer, IdSet, ScratchSet};
 
-/// A growable transient, homed in the scratch region rather than on the heap.
-pub(crate) type ScratchVec<'s, T> = bumpalo::collections::Vec<'s, T>;
+/// A transient whose length is not known until it is built — a worklist a walk pushes onto — with
+/// its buffer in the scratch region rather than on the heap.
+///
+/// `allocator_api2`'s `Vec` over `&Bump` rather than `bumpalo::collections::Vec`: the former is a
+/// fork of std's, so a push, a pop and an `extend_from_slice` are the specialized, inlined shapes
+/// the rest of the crate is measured against, and it derefs to `[T]` so a slice-taking callee is
+/// reached unchanged. Same alias workgraph's `BumpVec` is, over the same two crates.
+///
+/// A door mints one only for a `T` with no drop glue, so nothing is lost by the reset that ends
+/// its life without running a destructor. Growth abandons the old buffer as dead region bytes, so
+/// a door with the final length to hand takes [`Scratch::run`] instead.
+pub(crate) type ScratchVec<'s, T> = allocator_api2::vec::Vec<T, &'s Bump>;
 
 /// One table's scratch bump, sized at construction and reset at every verb's entry.
 ///
@@ -19,6 +31,9 @@ pub(crate) type ScratchVec<'s, T> = bumpalo::collections::Vec<'s, T>;
 /// every path that moves it moves that one — there is no shape of this type worth conjuring.
 pub(crate) struct Scratch {
     bump: Bump,
+    /// Whether a door has handed anything out since the last reset. `Cell`, because the doors take
+    /// `&self` — a transient has to be able to coexist with the next one.
+    dirty: Cell<bool>,
 }
 
 impl Scratch {
@@ -32,41 +47,57 @@ impl Scratch {
     pub(crate) fn new() -> Self {
         Scratch {
             bump: Bump::with_capacity(Self::FIRST_CHUNK),
+            dirty: Cell::new(false),
         }
     }
 
     /// Drop every transient at once. Keeps the largest chunk, so a table is warm again from the
     /// next verb.
     ///
-    /// A region that is already empty is left alone. The equality holds only for a single chunk
-    /// with nothing handed out of it — two chunks make the total exceed what the current one has
-    /// left — and that is the state most verbs start in, since a bump gives the bytes back when a
-    /// transient dropped last is freed. So the common entry costs two loads rather than the chunk
-    /// walk and finger rewind.
+    /// A region no door has been through since the last reset is left alone, and that is the state
+    /// most verbs start in — a verb builds no transient at all unless it places or cascades. The
+    /// flag is what makes the common entry one load: the region's own occupancy figures would
+    /// answer the same question, but each of them walks the chunk list to do it.
     pub(crate) fn reset(&mut self) {
-        if self.bump.allocated_bytes() == self.bump.chunk_capacity() {
+        if !self.dirty.replace(false) {
             return;
         }
         self.bump.reset();
     }
 
+    /// Record that a door is about to hand something out, so the next verb's entry knows to clear
+    /// it. Conservative by one reset: a vector that is never pushed onto takes no bytes.
+    fn opening(&self) {
+        self.dirty.set(true);
+    }
+
+    /// A transient that grows — a worklist whose length the walk pushing onto it decides.
+    ///
+    /// The shape a door falls back to. Where the final length is known before the first element,
+    /// [`slice_with`](Self::slice_with) builds the same contents without a capacity to track, a
+    /// growth path to take, or a header to carry.
     pub(crate) fn vec<T>(&self) -> ScratchVec<'_, T> {
         const { assert!(!std::mem::needs_drop::<T>()) };
+        self.opening();
         ScratchVec::new_in(&self.bump)
     }
 
+    /// [`vec`](Self::vec) sized up front, for a worklist that starts from a run of known length and
+    /// grows from there. Growth strands the buffer it outgrew, so the capacity is what keeps the
+    /// common case — a walk that pushes nothing — down to one allocation.
     pub(crate) fn vec_with_capacity<T>(&self, capacity: usize) -> ScratchVec<'_, T> {
         const { assert!(!std::mem::needs_drop::<T>()) };
+        self.opening();
         ScratchVec::with_capacity_in(capacity, &self.bump)
     }
 
     /// A run of exactly `len` transients, filled in index order.
     ///
-    /// What a door builds when the count is known before the first element: no capacity to track,
-    /// no growth path to take, and no vector header to carry. A per-operand list is a run, not a
-    /// collection that might grow, and saying so is what keeps the placement path cheap.
+    /// What a door builds when the count is known before the first element. A per-operand list is a
+    /// run, not a collection that might grow, and saying so is what keeps the placement path cheap.
     pub(crate) fn slice_with<T>(&self, len: usize, fill: impl FnMut(usize) -> T) -> &mut [T] {
         const { assert!(!std::mem::needs_drop::<T>()) };
+        self.opening();
         self.bump.alloc_slice_fill_with(len, fill)
     }
 

@@ -46,20 +46,38 @@ fn dirtied() -> (CellTable<Owned>, Handle, Handle) {
     (table, producer, consumer)
 }
 
+/// Run `verb` against a region the verb before it left occupied, and check that the verb reset it.
+///
+/// The reading falling is the whole proof, and needs no figure to compare against: a bump hands
+/// bytes back only to the transient that took them last, so a verb's occupancy at its exit is never
+/// below its occupancy at its entry. Lower than what the verb inherited therefore means the entry
+/// cleared it — and a verb that builds transients of its own is held to the same statement as one
+/// that builds none, since its own bytes are counted on the low side.
+fn resets_at_its_entry(table: &mut CellTable<Owned>, verb: impl FnOnce(&mut CellTable<Owned>)) {
+    let inherited = table.scratch_at_rest().in_use();
+    verb(table);
+    assert!(
+        table.scratch_at_rest().in_use() < inherited,
+        "a verb carried its predecessor's {inherited} occupied bytes past its entry"
+    );
+}
+
 /// The reset sits at each verb's entry as its own statement, so each of the three is checked
 /// against a region the verb before it left occupied.
 #[test]
 fn a_create_clears_the_region_at_its_entry() {
     let (mut table, _, _) = dirtied();
-    table.create(None, None).unwrap();
-    assert_eq!(table.scratch_at_rest().in_use(), 0);
+    resets_at_its_entry(&mut table, |table| {
+        table.create(None, None).unwrap();
+    });
 }
 
 #[test]
 fn an_enter_clears_the_region_at_its_entry() {
     let (mut table, producer, _) = dirtied();
-    table.enter(producer, |_| ()).unwrap();
-    assert_eq!(table.scratch_at_rest().in_use(), 0);
+    resets_at_its_entry(&mut table, |table| {
+        table.enter(producer, |_| ()).unwrap();
+    });
 }
 
 #[test]
@@ -70,8 +88,12 @@ fn a_release_clears_the_region_at_its_entry() {
     table
         .enter(consumer, |context| context.hold(producer).unwrap())
         .unwrap();
-    table.release(producer, Absorption::Refused).unwrap();
-    assert_eq!(table.scratch_at_rest().in_use(), 0);
+    // That step reset the region on the way in, so the release would inherit an empty one. Dirty it
+    // again, which is also the state a release meets in a run that is doing anything.
+    place_over(&mut table, producer, consumer, WIDE);
+    resets_at_its_entry(&mut table, |table| {
+        table.release(producer, Absorption::Refused).unwrap();
+    });
 }
 
 /// A table warm from construction grows no chunk: the first round's transients fit the chunk the

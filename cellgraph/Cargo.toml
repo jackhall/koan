@@ -19,9 +19,14 @@ required-features = ["perf"]
 # destructor, which is exactly the region contract: every family a region hosts is `DropFree`, and
 # death is chunk deallocation. Moving a `Bump` moves no chunk byte, which is what lets a sealed
 # region's storage detach from its slot unmoved.
-# `collections` is the scratch region's half: a verb's transients are bump-backed vectors, so a
-# worklist or a view list costs no allocation on a table whose chunk already fits them.
-bumpalo = { version = "3.20.3", features = ["collections"] }
+# `allocator-api2` is the scratch region's half: it turns on `impl Allocator for &Bump`, which is
+# the seam a verb's growable worklist is built over, so the worklist costs no allocation on a table
+# whose chunk already fits it.
+bumpalo = { version = "3.20.3", features = ["allocator-api2"] }
+# The `Allocator` trait bumpalo's impl above satisfies, and the `Vec` that is generic over it —
+# std's is not, on stable. Same crate and same version workgraph's `BumpVec` names; the two aliases
+# collapse into one when cellgraph is adopted there.
+allocator-api2 = "0.2.21"
 
 [dev-dependencies]
 # Random create / place / hold / release interleavings for the liveness-matrix invariants; the

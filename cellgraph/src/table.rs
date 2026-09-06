@@ -694,14 +694,24 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Every departed handle whose residents `slot` answers for, plus `slot`'s own occupant if it
     /// kept anything. Taken off the slot: the caller is moving them somewhere else.
-    fn take_lineage<'s>(&mut self, slot: u32, scratch: &'s Scratch) -> ScratchVec<'s, Handle> {
-        let mut lineage = scratch.vec();
-        // Drained rather than taken: the slot keeps the capacity for its next occupant.
-        lineage.extend(self.slots[slot as usize].lineage.drain(..));
-        if !self.slots[slot as usize].residents.is_empty() {
-            lineage.push(self.occupant(slot));
-        }
-        lineage
+    ///
+    /// The occupant comes last when it comes at all, which is what lets a caller that has to treat
+    /// it differently from the inherited entries split the run rather than re-derive it.
+    fn take_lineage<'s>(&mut self, slot: u32, scratch: &'s Scratch) -> &'s mut [Handle] {
+        let occupant =
+            (!self.slots[slot as usize].residents.is_empty()).then(|| self.occupant(slot));
+        let kept = &mut self.slots[slot as usize].lineage;
+        let taken =
+            scratch.slice_with(
+                kept.len() + usize::from(occupant.is_some()),
+                |index| match kept.get(index) {
+                    Some(handle) => *handle,
+                    None => occupant.expect("only the occupant sits past the slot's own entries"),
+                },
+            );
+        // Cleared rather than taken: the slot keeps the capacity for its next occupant.
+        kept.clear();
+        taken
     }
 
     /// Point every handle of `lineage` at `target`, and record them on the target so its own
@@ -741,22 +751,30 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             self.reclaim(slot, scratch);
             return;
         }
-        let mut holders = scratch.vec_with_capacity(self.pins.holders(slot) as usize);
-        holders.extend(self.occupied().filter(|other| self.pins.test(*other, slot)));
-        #[cfg(test)]
-        debug_assert_eq!(
-            holders.len() as u32,
-            self.pins.holders(slot),
-            "the pin tally disagrees with a scan across the occupied rows"
-        );
+        // A run the tally sizes, filled off a scan: the count of occupied rows naming this slot is
+        // exactly what the pin tally holds, so the scan running short or long is the tally being
+        // wrong rather than the run being the wrong shape.
+        let holders = {
+            let mut naming_rows = self.occupied().filter(|other| self.pins.test(*other, slot));
+            let holders = scratch.slice_with(self.pins.holders(slot) as usize, |_| {
+                naming_rows
+                    .next()
+                    .expect("the pin tally outruns a scan across the occupied rows")
+            });
+            debug_assert!(
+                naming_rows.next().is_none(),
+                "a scan across the occupied rows outruns the pin tally"
+            );
+            holders
+        };
         let refused = self.slots[slot as usize].absorption == Absorption::Refused;
-        match (holders.as_slice(), namers.len()) {
+        match (&*holders, namers.len()) {
             ([into], 0) if !refused => self.absorb_into_cell(slot, *into, scratch),
             ([], 1) => {
                 let namer = namers.iter().next().expect("the set holds one id");
                 self.fold_into_namer(slot, namer, scratch);
             }
-            _ => self.seal(slot, &holders, &namers, scratch),
+            _ => self.seal(slot, holders, &namers, scratch),
         }
     }
 
@@ -816,6 +834,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             mask.remove_slot(dead);
         }
         let base = self.slots[into as usize].residents.len();
+        // Taken before the resident table is, so the run carries the departing occupant exactly
+        // when that table had something to move.
+        let lineage = self.take_lineage(dead, scratch);
         let moved = self.slots[dead as usize].residents.take();
         let kept_any = !moved.is_empty();
         for mut mask in moved {
@@ -824,10 +845,19 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             self.slots[into as usize].residents.append(mask);
         }
 
-        let mut lineage = scratch.vec();
-        // Drained rather than taken: the dead slot keeps the capacity for its next occupant.
-        lineage.extend(self.slots[dead as usize].lineage.drain(..));
-        for handle in &lineage {
+        // The departing occupant is the run's last entry and the only one landing at the moved
+        // block's own base; every other entry was minted under an earlier merge and moves by the
+        // block's offset.
+        let (departing, inherited) = match kept_any {
+            true => {
+                let (occupant, rest) = lineage
+                    .split_last()
+                    .expect("a kept resident table puts its occupant on the run");
+                (Some(*occupant), rest)
+            }
+            false => (None, &*lineage),
+        };
+        for handle in inherited {
             let Location::Slab { base: old, .. } = self
                 .relocated
                 .get(handle)
@@ -844,15 +874,11 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 },
             );
         }
-        if kept_any {
-            let departing = self.occupant(dead);
+        if let Some(departing) = departing {
             self.relocated
                 .insert(departing, Location::Slab { slot: into, base });
-            lineage.push(departing);
         }
-        self.slots[into as usize]
-            .lineage
-            .extend_from_slice(&lineage);
+        self.slots[into as usize].lineage.extend_from_slice(lineage);
     }
 
     /// Merge 3: a cell nothing in the slab holds, named by exactly one sealed aggregate, folds
@@ -872,7 +898,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             .remove_slot(dead);
         let (_, dups) = self.fold_into_record(namer, holds, storage, scratch);
         let lineage = self.take_lineage(dead, scratch);
-        self.relocate_to_record(&lineage, namer);
+        self.relocate_to_record(lineage, namer);
 
         self.vacate(dead, &dups, scratch);
         #[cfg(test)]
@@ -1150,7 +1176,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         // The cell's own resident masks are dead bytes from here on: the storage they named is in
         // the record, and a redeem under one of these keys derives its reach from the record's id.
         let lineage = self.take_lineage(slot, scratch);
-        self.relocate_to_record(&lineage, id);
+        self.relocate_to_record(lineage, id);
         // The dying cell's sealed half moved into the record above, so the exit releases nothing.
         self.vacate(slot, &[], scratch);
         // 4. Every count-1 region the new record holds folds into it: a chain of single-consumer
@@ -1162,7 +1188,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// cascading through the holds that record's own aggregate named.
     fn release_sealed_holds(&mut self, released: &[SealedId], scratch: &Scratch) {
         let mut pending = scratch.vec_with_capacity(released.len());
-        pending.extend_from_slice_copy(released);
+        pending.extend_from_slice(released);
         while let Some(id) = pending.pop() {
             let Some(record) = self.sealed.get_mut(id) else {
                 continue;
