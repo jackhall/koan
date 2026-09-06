@@ -50,9 +50,14 @@ runs per verb rather than per merge:
   per verb, from a debug build like every other measurement in the repo, with
   the count and bytes deterministic across runs.
 - One command sweeps the set and prints a delta against the newest recorded
-  row; with a record flag it appends a row to `cellgraph/observe/perf.txt`
-  rendered through [tools/trendlog.py](../../tools/trendlog.py), newest first
-  and capped to five entries.
+  commit; with a record flag it appends this commit's readings to
+  `cellgraph/observe/perf.csv`, a committed tidy dataframe — one row per
+  `(date, sha, dirty, benchmark, n, cap, verb)` carrying `calls`,
+  `allocations`, `bytes`, `nanos` — so a reading is analysed with
+  `pandas.read_csv` and a pivot rather than by eye. Re-recording at a commit
+  replaces that commit's rows, the file keeps the three most recently
+  recorded commits, and it is marked `-diff` in `.gitattributes` like the
+  coverage record.
 - `settle` visits only dead slots, `disposable` is O(1) against a maintained
   birth-holder count, `dispose` reaches `reclaim` without a column scan,
   `is_empty` is O(1) on the slab half, `holds_of` pushes onto the caller's
@@ -79,10 +84,12 @@ runs per verb rather than per merge:
 - *Which reading gates — decided.* Allocation count and bytes gate a change;
   wall time is reported for the trend and never asserted, since a
   low-memory development machine makes it noisy.
-- *Trend-log tracking — open.* Commit `observe/perf.txt` like
-  `observe/alloc.txt`, or gitignore it as a local record. Recommended: commit
-  it, so a reader learns what HEAD costs without re-measuring a base
-  revision.
+- *Record tracking — decided.* `observe/perf.csv` is committed, so a reader
+  learns what HEAD costs without re-measuring a base revision, and the
+  history is there to analyse.
+- *Record history — decided.* Three commits, not five: the dataframe is
+  there because reasoning about performance is varied, not for history, and
+  older rows remain in git.
 
 ## Dependencies
 

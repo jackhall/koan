@@ -4,6 +4,16 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+# The measurement harness: `cargo run -p cellgraph --features perf --bin perf`. Off by default so
+# the library build, its tests, and the Miri slate never compile it.
+perf = []
+
+[[bin]]
+name = "perf"
+path = "perf/main.rs"
+required-features = ["perf"]
+
 [dependencies]
 # The per-cell region's storage. A `Bump` allocates in pointer-stable chunks and never runs a
 # destructor, which is exactly the region contract: every family a region hosts is `DropFree`, and

@@ -2,19 +2,23 @@
 //!
 //! Lives outside `src/` because it is measurement scaffolding, not library code: the
 //! `unsafe impl` here is not a production site the Miri slate owes a group, and koan's
-//! shipped binary never compiles it. Three crates `#[path]`-include this one file —
+//! shipped binary never compiles it. Four targets `#[path]`-include this one file —
 //! the library's own test build (`src/tests.rs`), the binary under the `alloc-count`
-//! feature (`src/main.rs`), and the baseline regression test
-//! (`tests/allocation_baseline.rs`) — so there is one wrapper, not one per target.
+//! feature (`src/main.rs`), the baseline regression test
+//! (`tests/allocation_baseline.rs`), and the cellgraph measurement harness
+//! (`cellgraph/perf/main.rs`) — so there is one wrapper, not one per target.
 //!
-//! Two tallies, both bumped on the way through:
+//! Four tallies, all bumped on the way through, in two pairs:
 //!
-//! - [`allocations`] reads a process-wide atomic. This is the whole-program number: a
-//!   binary's `main` cannot read another thread's thread-local, so a per-thread tally
-//!   could not report a program run's total.
-//! - [`thread_allocations`] reads a thread-local. This is the bracketing number: the
-//!   test harness runs tests concurrently, so a bracket around one call has to be
-//!   insulated from every other test's traffic.
+//! - [`allocations`] and [`bytes`] read process-wide atomics. These are the
+//!   whole-program numbers: a binary's `main` cannot read another thread's
+//!   thread-local, so a per-thread tally could not report a program run's total.
+//! - [`thread_allocations`] and [`thread_bytes`] read thread-locals. These are the
+//!   bracketing numbers: the test harness runs tests concurrently, so a bracket around
+//!   one call has to be insulated from every other test's traffic.
+//!
+//! A count says how many times the program asked; the paired byte figure says how much
+//! it asked for, which is what separates a growing buffer from a new one.
 
 // Each including target uses a different part of this surface — the binary reads the
 // process tally, the tests read the thread one — so an unused reader is expected rather
@@ -26,9 +30,11 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static PROCESS_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+static PROCESS_BYTES: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     static THREAD_ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
+    static THREAD_BYTES: Cell<u64> = const { Cell::new(0) };
 }
 
 /// The number of heap allocations this process has made since it started.
@@ -41,17 +47,30 @@ pub fn thread_allocations() -> u64 {
     THREAD_ALLOCATIONS.with(Cell::get)
 }
 
+/// The number of bytes this process has asked the heap for since it started.
+pub fn bytes() -> u64 {
+    PROCESS_BYTES.load(Ordering::Relaxed)
+}
+
+/// The number of bytes the calling thread has asked the heap for since it started.
+pub fn thread_bytes() -> u64 {
+    THREAD_BYTES.with(Cell::get)
+}
+
 /// Delegating counter: forwards every request to `A`, tallying the ones that hand back
 /// fresh capacity. Wrapping rather than replacing is what keeps a counted build and a
 /// shipped build on the same allocator, so a wall-clock reading off the counted one is
 /// still comparable.
 pub struct Counting<A>(pub A);
 
-/// Bump both tallies. Allocates nothing itself — a `thread_local!` over a `Cell<u64>` needs
-/// no lazy heap init — so it cannot re-enter the allocator.
-fn tally() {
+/// Bump all four tallies by one request of `bytes` bytes. Allocates nothing itself — a
+/// `thread_local!` over a `Cell<u64>` needs no lazy heap init — so it cannot re-enter the
+/// allocator.
+fn tally(bytes: usize) {
     PROCESS_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+    PROCESS_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
     THREAD_ALLOCATIONS.with(|count| count.set(count.get() + 1));
+    THREAD_BYTES.with(|total| total.set(total.get() + bytes as u64));
 }
 
 // SAFETY: every method forwards to the inner allocator with the pointer and layout it was
@@ -59,7 +78,7 @@ fn tally() {
 // forward and touches no allocator state.
 unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        tally();
+        tally(layout.size());
         unsafe { self.0.alloc(layout) }
     }
 
@@ -68,12 +87,14 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Counting<A> {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        tally();
+        tally(layout.size());
         unsafe { self.0.alloc_zeroed(layout) }
     }
 
+    // A realloc's byte figure is `new_size`, the capacity handed back, matching what the
+    // count already measures: a request that yields fresh capacity.
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        tally();
+        tally(new_size);
         unsafe { self.0.realloc(pointer, layout, new_size) }
     }
 }
