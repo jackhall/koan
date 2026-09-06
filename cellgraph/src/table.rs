@@ -202,8 +202,10 @@ pub(crate) struct Merges {
 
 impl<C: Reattachable> CellTable<C> {
     /// A slab of `cap` cells. The cap is fixed here and the table never grows past it: every slab
-    /// relation is a fixed-width row over these slots. The sealed tier grows in its own id space
-    /// and takes no cap — retention is priced, not bounded.
+    /// relation is a fixed-width row over these slots. Each slab relation costs
+    /// `cap × ceil(cap / 64)` words — a dense matrix is quadratic in the cap by construction — and
+    /// the sealed tier grows in its own id space and takes no cap: retention is priced, not
+    /// bounded.
     pub fn new(cap: u32) -> Self {
         let slots = (0..cap)
             .map(|_| Slot {
@@ -398,7 +400,7 @@ impl<C: Reattachable> CellTable<C> {
             ([into], 0) if !refused => self.absorb_into_cell(slot, *into),
             ([], 1) => {
                 let namer = namers.iter().next().expect("the set holds one id");
-                self.seal_into_namer(slot, namer);
+                self.fold_into_namer(slot, namer);
             }
             _ => self.seal(slot, &holders, &namers),
         }
@@ -416,10 +418,7 @@ impl<C: Reattachable> CellTable<C> {
     /// Reads of the absorbed values stay on the per-value-mask path: the chunks are now the
     /// target's own storage, which its stored mask already names, so no id enters the picture.
     fn absorb_into_cell(&mut self, dead: u32, into: u32) {
-        let holds = Mask::from_parts(
-            self.pins.row(dead).to_owned(),
-            std::mem::take(&mut self.sealed_holds[dead as usize]),
-        );
+        let holds = self.take_holds(dead);
         // The target's hold on the dead cell is structural from here on: the storage is its own.
         self.pins.clear(into, dead);
         if let Some(stored) = &mut self.slots[into as usize].continuation {
@@ -438,9 +437,7 @@ impl<C: Reattachable> CellTable<C> {
         let storage = self.slots[dead as usize].region.take();
         Region::splice(&mut self.slots[into as usize].region, storage);
 
-        self.pins.clear_row(dead);
-        self.recycle(dead);
-        self.release_sealed_holds(&dups);
+        self.vacate(dead, &dups);
         debug_assert!(
             !self.pins.test(into, into),
             "a cell absorbed a hold on itself"
@@ -457,11 +454,8 @@ impl<C: Reattachable> CellTable<C> {
     ///
     /// No stored mask needs rewriting: a stored mask naming a slot implies a pin hold on it, and
     /// this cell's slab column is empty by the precondition.
-    fn seal_into_namer(&mut self, dead: u32, namer: SealedId) {
-        let holds = Mask::from_parts(
-            self.pins.row(dead).to_owned(),
-            std::mem::take(&mut self.sealed_holds[dead as usize]),
-        );
+    fn fold_into_namer(&mut self, dead: u32, namer: SealedId) {
+        let holds = self.take_holds(dead);
         let storage = self.slots[dead as usize].region.take();
         // The namer's hold on the dead cell is structural; the slots its row named trade the dead
         // cell's bit for the record's own name inside the fold.
@@ -472,9 +466,7 @@ impl<C: Reattachable> CellTable<C> {
             .remove_slot(dead);
         let (_, dups) = self.fold_into_record(namer, holds, storage);
 
-        self.pins.clear_row(dead);
-        self.recycle(dead);
-        self.release_sealed_holds(&dups);
+        self.vacate(dead, &dups);
         #[cfg(test)]
         {
             self.seal_work += 1 + dups.len() as u64;
@@ -521,6 +513,10 @@ impl<C: Reattachable> CellTable<C> {
             if id == target {
                 // The source held its own target. The hold becomes a self-hold, which no aggregate
                 // can express, so it simply goes.
+                debug_assert!(
+                    record.holders >= 1,
+                    "a record with no holder is still in the tier"
+                );
                 record.holders -= 1;
                 continue;
             }
@@ -639,10 +635,25 @@ impl<C: Reattachable> CellTable<C> {
     /// Releasing is only ever wholesale — there is no mid-life, per-reason release — which is what
     /// makes the mint's bit-setting idempotence safe.
     fn reclaim(&mut self, slot: u32) {
-        self.pins.clear_row(slot);
         let released = std::mem::take(&mut self.sealed_holds[slot as usize]);
+        self.vacate(slot, &released);
+    }
+
+    /// Freeze a dying cell's hold set, both halves: the slab row copied, the sparse half taken off
+    /// the slot so the ids it names change holder without changing count.
+    fn take_holds(&mut self, slot: u32) -> Mask {
+        Mask::from_parts(
+            self.pins.row(slot).to_owned(),
+            std::mem::take(&mut self.sealed_holds[slot as usize]),
+        )
+    }
+
+    /// The tail every exit from the slab shares: the row clears, the slot recycles under a fresh
+    /// generation, and one hold on each of `released` drops.
+    fn vacate(&mut self, slot: u32, released: &SealedSet) {
+        self.pins.clear_row(slot);
         self.recycle(slot);
-        self.release_sealed_holds(&released);
+        self.release_sealed_holds(released);
     }
 
     /// The seal transition: convert every representation of the dying cell from slab bit to sealed
@@ -656,10 +667,7 @@ impl<C: Reattachable> CellTable<C> {
         let id = self.sealed.mint_id();
         // The cell's hold set, both halves, frozen rather than cleared. Its sealed half moves from
         // the cell to the record, so the ids it names change holder without changing count.
-        let aggregate = Mask::from_parts(
-            self.pins.row(slot).to_owned(),
-            std::mem::take(&mut self.sealed_holds[slot as usize]),
-        );
+        let aggregate = self.take_holds(slot);
         let storage = self.slots[slot as usize].region.take();
         let count = (holders.len() + namers.len()) as u32;
 
@@ -700,8 +708,8 @@ impl<C: Reattachable> CellTable<C> {
                 closure: std::cell::OnceCell::new(),
             },
         );
-        self.pins.clear_row(slot);
-        self.recycle(slot);
+        // The dying cell's sealed half moved into the record above, so the exit releases nothing.
+        self.vacate(slot, &SealedSet::new());
         // 4. Every count-1 region the new record holds folds into it: a chain of single-consumer
         //    producers collapses to the one record at its head rather than one record per link.
         self.absorb_singletons(id);
@@ -715,6 +723,10 @@ impl<C: Reattachable> CellTable<C> {
             let Some(record) = self.sealed.get_mut(id) else {
                 continue;
             };
+            debug_assert!(
+                record.holders >= 1,
+                "a record with no holder is still in the tier"
+            );
             record.holders -= 1;
             if record.holders > 0 {
                 continue;
