@@ -391,11 +391,12 @@ pub struct CellTable<C: Reattachable, const W: usize = 1> {
     ///
     /// **Nothing but the three verbs reads this field.** The cascade takes `&mut self`, so a
     /// transient borrowing the field would conflict with it; a verb therefore takes the region
-    /// off the table for its whole length and passes it down as a parameter, leaving an empty
-    /// default bump parked here. A stray use during a verb would mint a chunk of its own, which
-    /// the warm-table test reads as capacity growth. The test-only walkers use it directly, and
-    /// run outside any verb.
-    scratch: Scratch,
+    /// off the table for its whole length and passes it down as a parameter.
+    ///
+    /// `None` is what it leaves behind, so the rule is a panic rather than a convention: a method
+    /// that reached for the region mid-verb would find nothing there instead of quietly minting a
+    /// second one. The test-only walkers reach for it directly, and run outside any verb.
+    scratch: Option<Scratch>,
     executing: Bits<W>,
     cap: u32,
     /// Units of maintenance the seal transitions of this table have performed — the quantity the
@@ -468,7 +469,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             sealed: SealedTier::new(),
             relocated: std::collections::HashMap::new(),
             verdict: Box::new(verdict),
-            scratch: Scratch::new(),
+            scratch: Some(Scratch::new()),
             executing: Bits::new(),
             cap,
             #[cfg(test)]
@@ -492,7 +493,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             Some(parent) => Some(self.live_slot(parent).map_err(CreateError::StaleParent)?),
             None => None,
         };
-        self.scratch.reset();
+        self.take_scratch().reset();
         let slot = self.free.pop().ok_or(CreateError::SlabFull)?;
         let cell = &mut self.slots[slot as usize];
         cell.state = SlotState::Live;
@@ -541,12 +542,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         // The scratch comes off the table for the whole step: the doors take `&mut self`, so a
         // transient borrowing the field could not coexist with them. The context's `Drop` hands it
         // back, so a panicking step loses no chunk.
-        let mut scratch = std::mem::take(&mut self.scratch);
+        let mut scratch = self.take_scratch_owned();
         scratch.reset();
         let mut context = StepContext {
             table: self,
             handle,
-            scratch,
+            scratch: Some(scratch),
         };
         Ok(step(&mut context))
     }
@@ -572,10 +573,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         cell.absorption = absorption;
         // A release runs its cascade outside any step, so the region is taken and reset here for
         // the same reason `enter` takes and resets it: a verb's transients start on empty ground.
-        let mut scratch = std::mem::take(&mut self.scratch);
+        let mut scratch = self.take_scratch_owned();
         scratch.reset();
         self.dispose_chain(slot, &scratch);
-        self.scratch = scratch;
+        self.scratch = Some(scratch);
         Ok(())
     }
 
@@ -613,6 +614,21 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             }
             _ => Err(StaleHandle(handle)),
         }
+    }
+
+    /// The scratch region, for a verb that resets it and builds nothing of its own.
+    fn take_scratch(&mut self) -> &mut Scratch {
+        self.scratch
+            .as_mut()
+            .expect("the scratch region is on the table outside a verb")
+    }
+
+    /// The scratch region, off the table for the length of a verb. What it leaves behind is
+    /// `None`, so any other reader of the field fails loudly rather than minting a second region.
+    fn take_scratch_owned(&mut self) -> Scratch {
+        self.scratch
+            .take()
+            .expect("the scratch region is on the table outside a verb")
     }
 
     /// Set the executing flag, or refuse. Paired with the clear in [`StepContext`]'s `Drop`, so
@@ -1414,7 +1430,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         let mut frontier = Bits::new();
         // The walkers run outside every verb, so they take the region off the field directly and
         // leave it to the next verb's reset.
-        let mut worklist = self.scratch.vec();
+        let mut worklist = self.scratch_at_rest().vec();
         match start {
             Node::Cell(slot) => {
                 frontier.set(slot);
@@ -1429,7 +1445,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             frontier,
             worklist,
             Bits::new(),
-            self.scratch.ids(),
+            self.scratch_at_rest().ids(),
             use_memos,
             |node| match node {
                 Node::Cell(slot) => reached.cells.push(slot),
@@ -1651,14 +1667,15 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         dest: u32,
         operands: &[Operand<'_, 'b, V, W>],
         scratch: &'s Scratch,
-    ) -> (Mask<W>, ScratchVec<'s, (Erased<V>, Verdict)>)
+    ) -> (Mask<W>, &'s [Verdict])
     where
         V: Reattachable + DropFree,
-        Erased<V>: Copy,
     {
         let mut reach = Mask::empty();
-        let mut crossed = scratch.vec_with_capacity(operands.len());
-        for operand in operands {
+        // The answers alone. The operands are still to hand where the views are built, so carrying
+        // their erased forms through here would be a second copy of a slice the caller already has.
+        let verdicts = scratch.slice_with(operands.len(), |index| {
+            let operand = &operands[index];
             let crossing = Crossing {
                 // Priced against what this placement has already pinned as well as what the
                 // destination held before it, so a second operand homed in the same source as the
@@ -1675,9 +1692,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             if verdict == Verdict::Pin {
                 reach.union_with(operand.carrier.reach());
             }
-            crossed.push((operand.carrier.erased(), verdict));
-        }
-        (reach, crossed)
+            verdict
+        });
+        (reach, verdicts)
     }
 
     /// The one path from a built value into a region: fold `reach` into the destination's hold
@@ -1710,6 +1727,16 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         Sealed::new(value, reach, dest_slot)
     }
 
+    /// The scratch region as the test-only walkers reach it: they run outside every verb, so the
+    /// region is on the table and their working state goes in it like a verb's would. Nothing
+    /// resets it until the next verb, which is why no walker is on a measured path.
+    #[cfg(test)]
+    fn scratch_at_rest(&self) -> &Scratch {
+        self.scratch
+            .as_ref()
+            .expect("a walker runs outside every verb")
+    }
+
     /// Whether `holder` holds `held` in the pin relation.
     #[cfg(test)]
     fn holds(&self, holder: Handle, held: Handle) -> bool {
@@ -1727,7 +1754,10 @@ pub struct StepContext<'b, C: Reattachable, const W: usize = 1> {
     handle: Handle,
     /// The table's scratch region, held here for the length of the step and handed back by `Drop`.
     /// A door splits this off the table borrow so a transient and a `&mut CellTable` coexist.
-    scratch: Scratch,
+    ///
+    /// An `Option` so the hand-back is a move out and not a swap against a fresh region: minting
+    /// one to leave behind would be the one allocation the step machinery does not need.
+    scratch: Option<Scratch>,
 }
 
 impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
@@ -1819,9 +1849,11 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
             handle,
             scratch,
         } = &mut *self;
-        let scratch = &*scratch;
+        let scratch = scratch
+            .as_ref()
+            .expect("a step holds the region for its whole length");
         let slot = handle.slot();
-        let (mut reach, crossed) = table.cross(slot, captures, scratch);
+        let (mut reach, verdicts) = table.cross(slot, captures, scratch);
         table.mint(slot, &reach);
         let value = {
             let region = table.slots[slot as usize]
@@ -1830,8 +1862,8 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
             // SAFETY: see `crossed_views`. The mint above has folded every pinned capture's reach
             // into this cell's hold set, so none of that storage can go away while the cell holds
             // it, and the views live only for the `build` call.
-            let views = unsafe { crossed_views(&crossed, scratch) };
-            Erased::<C>::erase(build(region.writer(), &views))
+            let views = unsafe { crossed_views(captures, verdicts, scratch) };
+            Erased::<C>::erase(build(region.writer(), views))
         };
         reach.add(slot);
         let cell = &mut table.slots[slot as usize];
@@ -1923,15 +1955,17 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
             handle: _,
             scratch,
         } = &mut *self;
-        let scratch = &*scratch;
+        let scratch = scratch
+            .as_ref()
+            .expect("a step holds the region for its whole length");
         let dest_slot = table.live_slot(dest)?;
-        let (reach, crossed) = table.cross(dest_slot, operands, scratch);
+        let (reach, verdicts) = table.cross(dest_slot, operands, scratch);
         Ok(table.mint_and_build(dest_slot, reach, move |writer| {
             // SAFETY: see `crossed_views`. `mint_and_build` has already folded every pinned
             // operand's reach into the destination's hold set before it calls this closure, so
             // that storage outlives both `'r` and the destination.
-            let views = unsafe { crossed_views(&crossed, scratch) };
-            build(writer, &views)
+            let views = unsafe { crossed_views(operands, verdicts, scratch) };
+            build(writer, views)
         }))
     }
 
@@ -2048,22 +2082,24 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
 /// `enter` holds it exclusively — and a pinned operand's reach has additionally been minted into
 /// the destination's hold set before this runs. The views live only for the build call, and the
 /// caller's `for<'r, 'v>` quantifier keeps one from escaping it.
-unsafe fn crossed_views<'r, 'v, 's, V>(
-    crossed: &[(Erased<V>, Verdict)],
+unsafe fn crossed_views<'r, 'v, 's, V, const W: usize>(
+    operands: &[Operand<'_, '_, V, W>],
+    verdicts: &[Verdict],
     scratch: &'s Scratch,
-) -> ScratchVec<'s, Crossed<'r, 'v, V>>
+) -> &'s [Crossed<'r, 'v, V>]
 where
-    V: Reattachable,
+    V: Reattachable + DropFree,
     Erased<V>: Copy,
 {
-    let mut views = scratch.vec_with_capacity(crossed.len());
-    views.extend(crossed.iter().map(|(erased, verdict)| match verdict {
-        // SAFETY: see the function contract.
-        Verdict::Pin => Crossed::Pinned(unsafe { erased.reattach::<'r>() }),
-        // SAFETY: see the function contract.
-        Verdict::Copy => Crossed::Copied(unsafe { erased.reattach::<'v>() }),
-    }));
-    views
+    scratch.slice_with(verdicts.len(), |index| {
+        let erased = operands[index].carrier.erased();
+        match verdicts[index] {
+            // SAFETY: see the function contract.
+            Verdict::Pin => Crossed::Pinned(unsafe { erased.reattach::<'r>() }),
+            // SAFETY: see the function contract.
+            Verdict::Copy => Crossed::Copied(unsafe { erased.reattach::<'v>() }),
+        }
+    })
 }
 
 impl<C: Reattachable, const W: usize> Drop for StepContext<'_, C, W> {
@@ -2071,6 +2107,6 @@ impl<C: Reattachable, const W: usize> Drop for StepContext<'_, C, W> {
         self.table.executing.clear(self.handle.slot());
         // Back on the table, chunk and all, so the next verb starts warm — and so a panicking step
         // hands it back exactly as an ordinary one does.
-        self.table.scratch = std::mem::take(&mut self.scratch);
+        self.table.scratch = self.scratch.take();
     }
 }

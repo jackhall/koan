@@ -504,7 +504,12 @@ fn pricing_mutates_no_hold() {
                 *table.pins.row(other.slot()),
                 table.sealed_holds[other.slot() as usize].clone(),
             );
-            let _ = table.pin_price(handle.slot(), &reach, &Mask::empty(), &table.scratch);
+            let _ = table.pin_price(
+                handle.slot(),
+                &reach,
+                &Mask::empty(),
+                table.scratch_at_rest(),
+            );
         }
     }
     for id in &ids {

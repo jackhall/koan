@@ -14,7 +14,9 @@ use crate::sealed::{IdBuffer, IdSet, ScratchSet};
 pub(crate) type ScratchVec<'s, T> = bumpalo::collections::Vec<'s, T>;
 
 /// One table's scratch bump, sized at construction and reset at every verb's entry.
-#[derive(Default)]
+///
+/// Deliberately not `Default`: a table has exactly one region, minted with its first chunk, and
+/// every path that moves it moves that one — there is no shape of this type worth conjuring.
 pub(crate) struct Scratch {
     bump: Bump,
 }
@@ -56,6 +58,16 @@ impl Scratch {
     pub(crate) fn vec_with_capacity<T>(&self, capacity: usize) -> ScratchVec<'_, T> {
         const { assert!(!std::mem::needs_drop::<T>()) };
         ScratchVec::with_capacity_in(capacity, &self.bump)
+    }
+
+    /// A run of exactly `len` transients, filled in index order.
+    ///
+    /// What a door builds when the count is known before the first element: no capacity to track,
+    /// no growth path to take, and no vector header to carry. A per-operand list is a run, not a
+    /// collection that might grow, and saying so is what keeps the placement path cheap.
+    pub(crate) fn slice_with<T>(&self, len: usize, fill: impl FnMut(usize) -> T) -> &mut [T] {
+        const { assert!(!std::mem::needs_drop::<T>()) };
+        self.bump.alloc_slice_fill_with(len, fill)
     }
 
     /// An empty sorted id set in scratch — what a walk with nothing already seen starts from.

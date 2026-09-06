@@ -40,7 +40,7 @@ fn dirtied() -> (CellTable<Owned>, Handle, Handle) {
     let consumer = table.create(None, None).unwrap();
     place_over(&mut table, producer, consumer, WIDE);
     assert!(
-        table.scratch.in_use() > 0,
+        table.scratch_at_rest().in_use() > 0,
         "a placement over {WIDE} operands left nothing in the region"
     );
     (table, producer, consumer)
@@ -52,14 +52,14 @@ fn dirtied() -> (CellTable<Owned>, Handle, Handle) {
 fn a_create_clears_the_region_at_its_entry() {
     let (mut table, _, _) = dirtied();
     table.create(None, None).unwrap();
-    assert_eq!(table.scratch.in_use(), 0);
+    assert_eq!(table.scratch_at_rest().in_use(), 0);
 }
 
 #[test]
 fn an_enter_clears_the_region_at_its_entry() {
     let (mut table, producer, _) = dirtied();
     table.enter(producer, |_| ()).unwrap();
-    assert_eq!(table.scratch.in_use(), 0);
+    assert_eq!(table.scratch_at_rest().in_use(), 0);
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn a_release_clears_the_region_at_its_entry() {
         .enter(consumer, |context| context.hold(producer).unwrap())
         .unwrap();
     table.release(producer, Absorption::Refused).unwrap();
-    assert_eq!(table.scratch.in_use(), 0);
+    assert_eq!(table.scratch_at_rest().in_use(), 0);
 }
 
 /// A table warm from construction grows no chunk: the first round's transients fit the chunk the
@@ -97,10 +97,10 @@ fn a_warm_scratch_grows_no_chunk_across_repeated_verbs() {
     };
 
     round(&mut table);
-    let warm = table.scratch.capacity();
+    let warm = table.scratch_at_rest().capacity();
     round(&mut table);
     assert_eq!(
-        table.scratch.capacity(),
+        table.scratch_at_rest().capacity(),
         warm,
         "a second round of the same verbs grew the region"
     );
