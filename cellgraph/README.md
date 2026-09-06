@@ -46,6 +46,13 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
   aggregates, holder counts, detached storage.
 - [src/region.rs](src/region.rs) — the per-cell bundle of bumps, the splice a
   locality merge performs, and the write surface a build closure receives.
+- [src/scratch.rs](src/scratch.rs) — the table's one scratch region: a bump
+  sized at construction, reset at the entry of every verb and never inside
+  one, and the doors every transient a verb builds is taken through — the
+  growable worklists a cascade nests, the exactly-sized runs a placement
+  builds per operand, and the views a build closure receives. Nothing with
+  drop glue may go in it, since a reset runs no destructor, and each door
+  asserts that at compile time.
 - [src/carrier.rs](src/carrier.rs) — the two carrier states that carry a
   lifetime: sealed with its reach, in step, and opened at a reading borrow.
 - [src/resident.rs](src/resident.rs) — the third carrier state, at rest: a
@@ -86,13 +93,22 @@ machinery and not the `alloc` within it.
   the newest recorded commit, which it rebuilds and runs beside HEAD so the
   time column is a comparison taken in one sitting rather than a figure written
   down in another. `--record` appends HEAD's readings, `--gate` exits non-zero
-  if allocations or bytes rose.
+  if allocations or bytes rose, and `--gate-time` exits non-zero if a row's
+  fastest trial sits more than 20 % above the rebuilt baseline's, counting only
+  rows whose baseline reads at least 20 µs. Both figures come from
+  `--calibrate`, which sweeps HEAD against a rebuild of HEAD — identical
+  source, so every row's movement is this machine's own floor — and prints the
+  spread the tolerance has to clear. That floor is wide enough to leave most
+  rows ungated, which is [wall-time-noise.md](roadmap/wall-time-noise.md).
 - [observe/perf.csv](observe/perf.csv) — the record: a tidy dataframe, one row
   per `(date, sha, dirty, benchmark, n, cap, verb)` carrying `calls`,
   `allocations`, `bytes` and `nanos`, capped to the three most recently
   recorded commits and read with `pandas.read_csv` and a pivot. Allocations and
-  bytes are deterministic and are what gates a change; `nanos` is there for the
-  trend and is never asserted, since the development machine is noisy.
+  bytes are deterministic and gate a change on their own; a recorded `nanos`
+  is there for the trend and is never asserted, since it was read in another
+  session on a machine doing other things — wall time is held to a bar only
+  under `--gate-time`, and only against a baseline rebuilt and run beside the
+  sweep.
 
 ## Doc tree
 

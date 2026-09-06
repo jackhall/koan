@@ -131,6 +131,18 @@ how an embedder gives one unit of work two regions with different lifetimes.
   dissolved survives. Naming the nodes on such a ring is a walk of the hold
   graph the crate's own tests carry, not a door on the table.
 
+Every verb runs over the table's **scratch region**: one bump per table, reset
+at the entry of `create`, `enter` and `release` and never inside one. Every
+transient a verb builds lives there — the worklists a disposal cascade nests,
+the runs a placement builds per operand, the views a build closure receives —
+so a transient lives exactly as long as the verb that built it, and a verb on a
+table whose region is already warm asks the allocator for nothing. The reset
+sits at a verb's entry rather than its exit because a `release` cascades
+outside any step: what the region has to be is empty when a verb starts, not
+when the one before it finished. A reset runs no destructor — a bump releases
+its chunks whole — so nothing with drop glue goes in the region, the same rule
+the cells' own regions keep.
+
 There are no price verbs. The substrate computes what retention costs — the
 marginal price of pinning one operand into one destination, the closure a
 sealed record retains, the occupancy of both tiers — but every one of those
@@ -199,7 +211,10 @@ may embed the borrow itself — and the mint has already folded the operand's
 reach into the destination's holds. A copied operand arrives **severed**, at
 a brand with no outlives relation to the destination's region, and its reach
 is minted nowhere: embedding it is a compile error, so the only copy that
-typechecks is a deep one through the destination's writer.
+typechecks is a deep one through the destination's writer. Both shapes reach
+the build closure out of the scratch region, and neither outlives the call:
+the brands they carry are quantified over the call, so a caller has nowhere to
+put a view it kept.
 
 ## What is deliberately absent
 
