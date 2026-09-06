@@ -132,3 +132,24 @@ fn a_warm_scratch_grows_no_chunk_across_repeated_verbs() {
         "a round outgrew the chunk the constructor sized"
     );
 }
+
+/// A step that panics still hands the region back, so the table it unwinds out of is usable and
+/// the next verb finds a region rather than the `None` the take left behind.
+///
+/// This is where the hand-back is observable. A `release` parks the region under the same kind of
+/// guard, but its cascade runs no embedder code, so the only panics reachable there are broken
+/// internal invariants — which a test cannot stage without pretending one is broken.
+#[test]
+fn a_panicking_step_hands_the_region_back() {
+    let (mut table, producer, _) = dirtied();
+    let gave_up = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        table.enter(producer, |_| panic!("the step gives up")).ok();
+    }));
+    assert!(
+        gave_up.is_err(),
+        "the step's panic did not reach the caller"
+    );
+    // Back on the table, and cleared by the entry of the step that then failed.
+    assert_eq!(table.scratch_at_rest().in_use(), 0);
+    table.create(None, None).unwrap();
+}

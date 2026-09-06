@@ -573,10 +573,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         cell.absorption = absorption;
         // A release runs its cascade outside any step, so the region is taken and reset here for
         // the same reason `enter` takes and resets it: a verb's transients start on empty ground.
-        let mut scratch = self.take_scratch_owned();
-        scratch.reset();
-        self.dispose_chain(slot, &scratch);
-        self.scratch = Some(scratch);
+        self.park()
+            .run(|table, scratch| table.dispose_chain(slot, scratch));
         Ok(())
     }
 
@@ -629,6 +627,16 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         self.scratch
             .take()
             .expect("the scratch region is on the table outside a verb")
+    }
+
+    /// The region off the table and reset, under a guard that hands it back however the verb ends.
+    fn park(&mut self) -> Parked<'_, C, W> {
+        let mut scratch = self.take_scratch_owned();
+        scratch.reset();
+        Parked {
+            table: self,
+            scratch: Some(scratch),
+        }
     }
 
     /// Set the executing flag, or refuse. Paired with the clear in [`StepContext`]'s `Drop`, so
@@ -753,7 +761,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         }
         // A run the tally sizes, filled off a scan: the count of occupied rows naming this slot is
         // exactly what the pin tally holds, so the scan running short or long is the tally being
-        // wrong rather than the run being the wrong shape.
+        // wrong rather than the run being the wrong shape. The short side holds in every profile
+        // — a run has to be filled, so there is no cheaper answer than the panic — and the long
+        // side is a debug assert, since a run already full has nowhere to put the surplus.
         let holders = {
             let mut naming_rows = self.occupied().filter(|other| self.pins.test(*other, slot));
             let holders = scratch.slice_with(self.pins.holders(slot) as usize, |_| {
@@ -2126,6 +2136,34 @@ where
             Verdict::Copy => Crossed::Copied(unsafe { erased.reattach::<'v>() }),
         }
     })
+}
+
+/// The region, off the table for the length of a verb that is not a step.
+///
+/// `enter` parks it on the [`StepContext`] it builds; a `release` cascades outside any step and
+/// parks it here for the same reason, and hands it back the same way. The take leaves `None`
+/// behind, so a hand-back written after the cascade would be the one thing a panic in it skips,
+/// and every later verb would then fail on the missing region rather than on the original fault.
+struct Parked<'t, C: Reattachable, const W: usize> {
+    table: &'t mut CellTable<C, W>,
+    scratch: Option<Scratch>,
+}
+
+impl<C: Reattachable, const W: usize> Parked<'_, C, W> {
+    /// Run one verb's body against the table and the region parked off it.
+    fn run(&mut self, body: impl FnOnce(&mut CellTable<C, W>, &Scratch)) {
+        let Parked { table, scratch } = self;
+        let scratch = scratch
+            .as_ref()
+            .expect("a verb holds the region for its whole length");
+        body(table, scratch);
+    }
+}
+
+impl<C: Reattachable, const W: usize> Drop for Parked<'_, C, W> {
+    fn drop(&mut self) {
+        self.table.scratch = self.scratch.take();
+    }
 }
 
 impl<C: Reattachable, const W: usize> Drop for StepContext<'_, C, W> {
