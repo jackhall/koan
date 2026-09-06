@@ -215,8 +215,9 @@ fn pull_chain(n: u32) {
     assert!(table.is_empty());
 }
 
-/// `settle` over a parent stack: a chain of `n` cells each born under the last, released
-/// innermost-first so every release walks a table where the dead are the slots already behind it.
+/// Dead ancestors waiting on a descendant: a chain of `n` cells each born under the last,
+/// released outermost-first so every one of them stays dead-resident under the leaf's birth row,
+/// and then the leaf — the single release that frees the whole chain in one walk up it.
 fn birth_chain(n: u32) {
     let mut table = table();
     let mut handles: Vec<Handle> = Vec::with_capacity(n as usize);
@@ -229,7 +230,9 @@ fn birth_chain(n: u32) {
         handles.push(child);
     }
 
-    for handle in handles.iter().rev() {
+    // Every release but the last leaves its cell dead-resident: the leaf is still live, and its
+    // birth row names the whole chain above it.
+    for handle in &handles {
         measure(Verb::Release, || {
             table.release(*handle, Absorption::IntoHolder)
         })

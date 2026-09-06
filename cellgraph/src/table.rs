@@ -287,6 +287,11 @@ enum Location {
 struct Slot<C: Reattachable> {
     generation: u32,
     state: SlotState,
+    /// The slot this cell was created under, and `None` for a root. The birth matrix answers
+    /// "is this cell an ancestor" in O(1) and the parent link answers "which cell is next up",
+    /// which is the axis a disposal cascade walks: the slots one release can free are a prefix of
+    /// this chain upward from the released cell.
+    parent: Option<u32>,
     /// What the release of this cell said about death-time absorption. Read at the slot's
     /// disposal, which is why it rests here rather than travelling with the call.
     absorption: Absorption,
@@ -380,6 +385,7 @@ impl<C: Reattachable> CellTable<C> {
             .map(|_| Slot {
                 generation: 0,
                 state: SlotState::Free,
+                parent: None,
                 absorption: Absorption::IntoHolder,
                 continuation: None,
                 continuation_reach: None,
@@ -425,6 +431,7 @@ impl<C: Reattachable> CellTable<C> {
         let slot = self.free.pop().ok_or(CreateError::SlabFull)?;
         let cell = &mut self.slots[slot as usize];
         cell.state = SlotState::Live;
+        cell.parent = parent_slot;
         // A continuation handed in from outside is at `'static`: it captures nothing any region
         // owns, so it reaches nothing and takes no resident entry.
         cell.continuation = continuation.map(Erased::store);
@@ -492,7 +499,7 @@ impl<C: Reattachable> CellTable<C> {
         let cell = &mut self.slots[slot as usize];
         cell.state = SlotState::Dead;
         cell.absorption = absorption;
-        self.settle();
+        self.dispose_chain(slot);
         Ok(())
     }
 
@@ -551,10 +558,13 @@ impl<C: Reattachable> CellTable<C> {
         (0..self.cap).filter(|slot| self.slots[*slot as usize].state != SlotState::Free)
     }
 
-    /// Whether a dead cell's slot may leave the slab now: nothing is executing in it, and no
-    /// occupant's birth row still names it. Birth holds are the one relation that keeps a dead
-    /// cell in place — a descendant that can still walk to it has not finished with it, and the
-    /// relation has no sealed half for the walk to follow.
+    /// Whether a dead cell's slot may leave the slab now: no occupant's birth row still names it.
+    /// Birth holds are the one relation that keeps a dead cell in place — a descendant that can
+    /// still walk to it has not finished with it, and the relation has no sealed half for the walk
+    /// to follow.
+    ///
+    /// Execution does not enter the question: `release` refuses an executing cell and `begin`
+    /// refuses a dead one, so a dead cell is never executing.
     fn disposable(&self, slot: u32) -> bool {
         // A free slot's birth row is cleared before the slot is recycled, so no free row names
         // anything and the count across every row is the count across the occupied ones.
@@ -565,7 +575,8 @@ impl<C: Reattachable> CellTable<C> {
             self.birth.held_by_any(self.occupied(), slot),
             "the birth tally disagrees with a scan across the occupied rows"
         );
-        !self.executing.test(slot) && held == 0
+        debug_assert!(!self.executing.test(slot), "a dead cell is executing");
+        held == 0
     }
 
     /// The handle of whatever occupies `slot` right now, at its current generation.
@@ -901,21 +912,26 @@ impl<C: Reattachable> CellTable<C> {
         }
     }
 
-    /// Dispose of every dead cell that has become disposable, repeating until none has — one
-    /// death can free a chain of cells that were each held only by the next, and a record's
-    /// reclamation can release the last hold on a slab slot in turn.
-    fn settle(&mut self) {
-        loop {
-            let mut progressed = false;
-            for slot in 0..self.cap {
-                if self.slots[slot as usize].state == SlotState::Dead && self.disposable(slot) {
-                    self.dispose(slot);
-                    progressed = true;
-                }
-            }
-            if !progressed {
+    /// Dispose of the just-released cell and then of every dead ancestor the release left with no
+    /// birth holder, innermost first — the whole cascade one death can set off, walked rather than
+    /// scanned for.
+    ///
+    /// The walk is complete because only `create` and `release` write the birth relation: no
+    /// disposal changes any slot's birth-holder count, so the only slots this release can bring to
+    /// zero are the ones its own row named, its ancestors. Each ancestor's row names everything
+    /// the row below it names ([liveness-matrix.md § Two relations](../design/liveness-matrix.md#two-relations-two-structures)),
+    /// so the dead ancestors this release zeroes are a prefix of the chain upward: a live
+    /// ancestor, or one another branch's row still names, stops the walk, and everything above it
+    /// is still held.
+    fn dispose_chain(&mut self, released: u32) {
+        let mut next = Some(released);
+        while let Some(slot) = next {
+            if self.slots[slot as usize].state != SlotState::Dead || !self.disposable(slot) {
                 return;
             }
+            // Read the link first: disposal recycles the slot, which clears it.
+            next = self.slots[slot as usize].parent;
+            self.dispose(slot);
         }
     }
 
@@ -924,6 +940,7 @@ impl<C: Reattachable> CellTable<C> {
     fn recycle(&mut self, slot: u32) {
         let cell = &mut self.slots[slot as usize];
         cell.state = SlotState::Free;
+        cell.parent = None;
         cell.absorption = Absorption::IntoHolder;
         cell.continuation = None;
         cell.continuation_reach = None;

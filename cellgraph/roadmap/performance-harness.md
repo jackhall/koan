@@ -12,15 +12,28 @@ runs per verb rather than per merge:
 
 - `settle` walks every slab slot on every `release` and repeats until a pass
   makes no progress, and `disposable` is a column scan over `occupied()` —
-  itself an O(cap) filter — for each dead slot per pass. Both are bookkeeping
-  the slab can maintain instead: a dead-slot worklist, and a per-slot count of
-  birth rows naming it (birth rows are written only at `create` and cleared
-  wholesale at `release`, so the count is exact).
+  itself an O(cap) filter — for each dead slot per pass. Neither scan is
+  needed. Birth rows are written only at `create` and cleared wholesale at
+  `release`, so a per-slot count of the rows naming it is exact, and no
+  disposal changes it — the repeat pass never finds anything. The slots a
+  release can free are exactly the released cell and the dead ancestors on its
+  parent chain whose count that release brings to zero, a prefix of the chain
+  by row containment, so the cascade is a walk up the chain from the released
+  cell with no list of dead slots kept anywhere. A dead cell is never
+  executing either, so the executing test in `disposable` is vacuous.
 - `dispose` scans the pin column the same way, including on the reclaim path
   where only "zero holders" is needed.
 - `is_empty` walks the slab when `free.len() == cap` answers in O(1).
-- `holds_of` allocates a `Vec` per visited node of every pricing walk; both
-  callers immediately extend a stack with it.
+- The pricing walk expands each visited cell's row into one stack entry per
+  bit and collects the cells it reaches into a vector, when the slab half of
+  the hold graph is rows and a walk over it is a row OR: `holds_of` allocates
+  a `Vec` per visited node to do the expansion, and `walk` materialises a
+  result that `pin_price` only sums. Only the sealed half is sparse enough to
+  want a worklist.
+- `cross` prices every operand of a placement against the destination's holds
+  as they were before the placement, so operands homed in one source cell each
+  walk that source's whole reach, and the prices shown to the verdict
+  over-count what they share.
 - `pin_price` copies the pin row, clones the sealed-hold set, and collects
   seeds before walking, even when the reach is already covered by the
   destination and the answer is zero — the common case of placing a value
@@ -42,8 +55,9 @@ runs per verb rather than per merge:
   (per-step value cost); a push chain of single-consumer producers built into
   their consumer and released (death-time absorption); a pull chain of holds
   read after the producer seals (seal transition and record retirement); a
-  deep birth chain created and released innermost-first (`settle` over a
-  parent stack); a fan-out placement over many operands (the pricing walk);
+  deep birth chain released outermost-first under a live leaf, then the leaf
+  (dead ancestors waiting on a descendant, and the chain walk that frees them
+  all at one release); a fan-out placement over many operands (the pricing walk);
   and a shared sub-tier held from two branches, wound down (sealed-tier
   cascade).
 - Each benchmark reports an allocation count, allocated bytes, and wall time
@@ -58,13 +72,18 @@ runs per verb rather than per merge:
   replaces that commit's rows, the file keeps the three most recently
   recorded commits, and it is marked `-diff` in `.gitattributes` like the
   coverage record.
-- `settle` visits only dead slots, `disposable` is O(1) against a maintained
-  birth-holder count, `dispose` reaches `reclaim` without a column scan,
-  `is_empty` is O(1) on the slab half, `holds_of` pushes onto the caller's
-  stack, `pin_price` returns zero without allocating when the reach is inside
-  what the destination already holds, `SealedSet::union_with` is a linear
-  merge, and the collect-then-iterate and clone-of-owned sites above are
-  direct loops and moves.
+- A release disposes the released cell and then walks up its parent chain,
+  disposing each dead ancestor the release left with no birth holder,
+  innermost first; nothing scans the slab and the table keeps no list of dead
+  slots. `disposable` is O(1) against a maintained birth-holder count,
+  `dispose` reaches `reclaim` without a column scan, `is_empty` is O(1) on
+  the slab half, the pricing walk keeps its slab-side frontier and seen set
+  as rows and pushes only sealed ids onto a worklist — no per-node vector,
+  and no collected cell list, since the cells reached are the seen row's
+  growth — `pin_price` sums as the walk visits and returns zero without
+  allocating when the reach is inside what the destination already holds,
+  `SealedSet::union_with` is a linear merge, and the collect-then-iterate and
+  clone-of-owned sites above are direct loops and moves.
 - The recorded row after those changes shows allocation count and bytes no
   higher than the row before on every benchmark and lower on the ones the
   changes target, and wall time no higher on any; the existing lib tests,
@@ -73,6 +92,27 @@ runs per verb rather than per merge:
 
 **Directions.**
 
+- *Disposal order — decided.* Innermost first, the order the chain walk
+  visits in. Slot order, which the scan gave, was an accident of recycling
+  and no test pins it. Order does change retention — a dead child pinning a
+  dead parent that a live cell also pins reclaims first and lets the parent
+  absorb into the live cell, where parent-first would seal the parent with
+  two holders — but the mirror image favours the other order, so no fixed
+  order dominates and the walk's own is taken.
+- *Birth chain — decided.* The birth matrix stays, for `redeem`'s O(1)
+  ancestry test; each slot additionally records its parent slot, which is
+  what the walk follows. This is the sparse birth shape
+  [liveness-matrix.md § Two relations](../design/liveness-matrix.md#two-relations-two-structures)
+  names, layered beside the matrix rather than replacing it.
+- *Pricing across operands — decided.* The reach of every operand pinned so
+  far is threaded into the seen sets the next operand is priced against, so a
+  placement walks each distinct source once and each price is the extra cost
+  of that verdict given the ones before it. The sum over the pinned operands
+  is exact; order decides only which operand is shown the shared part, and
+  the operands are priced in the embedder's list order — no reordering, since
+  reach width is not price and the embedder already controls the list. The
+  first operand from a shared source carries the shared cost, and the
+  placement doors say so.
 - *Harness shape — open.* (a) `criterion` as a dev-dependency under
   `cellgraph/benches/`; (b) a hand-rolled `#[test]`-style runner behind a
   feature, timing with `Instant` and counting through a delegating allocator
