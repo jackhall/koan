@@ -50,12 +50,11 @@ pub trait DropFree {}
 macro_rules! reattachable {
     ($($family:ty => $at:ty),+ $(,)?) => {$(
         // SAFETY: see the macro docs — `$family`'s `At<'r>` is layout-invariant in `'r`.
-        unsafe impl $crate::reattach::Reattachable for $family {
+        unsafe impl $crate::Reattachable for $family {
             type At<'r> = $at;
         }
     )+};
 }
-pub use reattachable;
 
 /// The single lifetime-retype primitive: move an `A` out as a `B`, where the caller guarantees `A`
 /// and `B` are one type up to a lifetime. Private to this module and reached only through the
@@ -80,8 +79,11 @@ unsafe fn retype<A, B>(value: A) -> B {
 }
 
 /// A one-lifetime family value held in its `'static` form, so it can rest in a lifetime-free slot.
-/// [`Erased::store`] puts one in; [`Erased::reattach`] takes it back out at a caller-chosen `'r`.
-/// The single home for the retype in this crate: nothing else names [`retype`].
+/// One door puts a value in, another takes it back out at a caller-chosen `'r`, and the crate's
+/// single lifetime-retype sits between them — nothing else names it.
+///
+/// The type is public only so an embedder can write the `Erased<V>: Copy` bound the capture doors
+/// take; nothing outside the crate constructs or opens one.
 pub struct Erased<T: Reattachable> {
     inner: T::At<'static>,
 }
@@ -89,7 +91,7 @@ pub struct Erased<T: Reattachable> {
 impl<T: Reattachable> Erased<T> {
     /// Hold a family value that is already at `'static`. Safe, and no retype happens: the value
     /// is stored in the form it arrives in.
-    pub fn store(value: T::At<'static>) -> Self {
+    pub(crate) fn store(value: T::At<'static>) -> Self {
         Erased { inner: value }
     }
 
@@ -99,7 +101,7 @@ impl<T: Reattachable> Erased<T> {
     /// out of the erased form without a [`reattach`](Erased::reattach), whose own contract is what
     /// carries the obligation that the value's referents are still alive at the lifetime it comes
     /// back at.
-    pub fn erase(value: T::At<'_>) -> Self {
+    pub(crate) fn erase(value: T::At<'_>) -> Self {
         // SAFETY: lifetime-only retype for storage of a single-lifetime family (the `Reattachable`
         // layout-invariance contract); the erased value is stored, never used, until a re-anchor.
         Erased {
@@ -122,7 +124,7 @@ impl<T: Reattachable> Erased<T> {
     ///
     /// [`store`]: Erased::store
     /// [`erase`]: Erased::erase
-    pub unsafe fn reattach<'r>(self) -> T::At<'r> {
+    pub(crate) unsafe fn reattach<'r>(self) -> T::At<'r> {
         // SAFETY: see the method contract; lifetime-only retype of a single-lifetime family.
         unsafe { retype::<T::At<'static>, T::At<'r>>(self.inner) }
     }

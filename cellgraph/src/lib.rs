@@ -8,6 +8,8 @@
 //! decides when a cell may be reclaimed, the mint OR that is the only write into it, and the
 //! sealed tier a still-held cell falls into on release, are
 //! [design/liveness-matrix.md](../design/liveness-matrix.md).
+//!
+//! The public surface is what `tests/surface.rs` exercises.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -15,20 +17,13 @@ mod carrier;
 mod handle;
 mod mask;
 mod matrix;
-pub mod reattach;
+mod reattach;
 mod region;
 mod sealed;
 mod table;
 
 pub use carrier::{Opened, Sealed};
 pub use handle::{Handle, StaleHandle};
-pub use mask::Mask;
 pub use reattach::{DropFree, Erased, Reattachable};
 pub use region::Writer;
-pub use sealed::{SealedId, SealedSet};
-#[cfg(debug_assertions)]
-pub use table::HoldNode;
-pub use table::{
-    Absorption, CellTable, Closure, CreateError, EnterError, Mark, Occupancy, ReleaseError,
-    StepContext,
-};
+pub use table::{Absorption, CellTable, CreateError, EnterError, ReleaseError, StepContext};

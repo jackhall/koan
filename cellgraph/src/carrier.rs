@@ -2,10 +2,11 @@
 //! rests in a region between reads, and [`Opened`], the in-use form a step reads it out at. See
 //! [design/cellgraph.md](../design/cellgraph.md) § The contract: two embedder types.
 //!
-//! **A value and its reach are never separable.** Both states bundle the value with the [`Mask`]
-//! describing what it reaches, every constructor here is crate-private, and `Mask` has no public
-//! constructor at all — so a caller cannot assemble a loose value-plus-mask pair to hand a mint,
-//! and cannot re-pair a value with a mask that is not its own.
+//! [`Sealed`] bundles the value with the mask describing what it reaches; [`Opened`] is the value
+//! alone at the reading borrow. **A value and its reach are never separable**: every constructor
+//! here is crate-private and the mask type is crate-private too, so a caller cannot assemble a
+//! loose value-plus-mask pair to hand a mint, and cannot re-pair a value with a mask that is not
+//! its own.
 //!
 //! `'home` is the **home brand**: the cell whose region stores this value is live, and its storage
 //! fixed-address, for all of `'home`. Every read rests on it, which is why none takes a proof of
@@ -40,9 +41,9 @@ impl<'home, T: Reattachable + DropFree> Sealed<'home, T> {
         }
     }
 
-    /// The value's reach — which cells' region storage its borrows read. Readable so an embedder
-    /// can ask what an edge costs; not constructible, so it cannot be forged.
-    pub fn reach(&self) -> &Mask {
+    /// The value's reach — which cells' region storage its borrows read. Crate-private, like the
+    /// mask itself: the only reach a value travels with is the one a door composed for it.
+    pub(crate) fn reach(&self) -> &Mask {
         &self.reach
     }
 
@@ -76,21 +77,20 @@ where
     }
 }
 
-/// The in-use carrier: the value re-anchored at the reading borrow `'r`, still bundled with its
-/// reach. The borrow checker keeps it inside `'r`, so it cannot outlive the step that read it.
+/// The in-use carrier: the value re-anchored at the reading borrow `'r`. The borrow checker keeps
+/// it inside `'r`, so it cannot outlive the step that read it.
 ///
-/// The reach is **owned**, not borrowed from the table: a read out of the sealed tier derives a
-/// fresh mask — the region's id plus its frozen aggregate — that exists nowhere in the table to
-/// borrow from. Bounded only by [`Reattachable`], since a continuation comes back through this
-/// state too and rests in its cell's slot rather than a region, where drop glue is fine.
+/// The reach stays behind in the table: it is the substrate's bookkeeping, and the borrow the
+/// reader gets is already bounded by the cell's life. Bounded only by [`Reattachable`], since a
+/// continuation comes back through this state too and rests in its cell's slot rather than a
+/// region, where drop glue is fine.
 pub struct Opened<'r, T: Reattachable> {
     value: T::At<'r>,
-    reach: Mask,
 }
 
 impl<'r, T: Reattachable> Opened<'r, T> {
-    pub(crate) fn new(value: T::At<'r>, reach: Mask) -> Self {
-        Opened { value, reach }
+    pub(crate) fn new(value: T::At<'r>) -> Self {
+        Opened { value }
     }
 
     /// The re-anchored value.
@@ -105,12 +105,5 @@ impl<'r, T: Reattachable> Opened<'r, T> {
     /// for a family whose live form is not `Copy`.
     pub fn into_value(self) -> T::At<'r> {
         self.value
-    }
-
-    /// What the value's borrows reach, derived through the sealed tier if the stored mask named
-    /// one — over-approximate but covering, since a resident value's true reach is a subset of its
-    /// region's holds.
-    pub fn reach(&self) -> &Mask {
-        &self.reach
     }
 }

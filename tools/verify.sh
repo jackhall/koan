@@ -168,6 +168,25 @@ if [ "$CELLGRAPH_ONLY" = 1 ]; then
     run tests 'tests FAILED' cargo test -p cellgraph --quiet
     ok tests "ok ($(passed) passed, unit + doctests)" 'tests ok'
 
+    # The surface must not depend on the build profile: a public item behind a
+    # `debug_assertions` gate is an API that exists in one profile and not the
+    # other, and an embedder that compiles in debug would break in release. The
+    # integration test names every door, so running it again under `--release` is
+    # what catches a door the release build dropped.
+    run surface-release 'surface test FAILED under --release' \
+        cargo test -p cellgraph --release --test surface --quiet
+    ok surface-release 'holds under --release' 'surface ok under --release'
+
+    # The same rule, stated directly rather than sampled: nothing under the crate's
+    # source gates on the profile at all. Only `debug_assert!` may, and it expands
+    # to the gate rather than writing it.
+    OUT="$(grep -rn 'cfg(debug_assertions)' cellgraph/src || true)"
+    if [ -z "$OUT" ]; then
+        ok profile-free 'no cfg(debug_assertions) under cellgraph/src' 'surface profile-free'
+    else
+        fail profile-free 'cellgraph/src gates on debug_assertions' "$OUT"
+    fi
+
     if OUT="$(cargo clippy -p cellgraph --all-targets -- -D warnings 2>&1)"; then
         ok clippy clean 'clippy clean'
     else

@@ -70,7 +70,7 @@ fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
 }
 
 #[test]
-fn a_continuation_reads_back_with_reach_derived_through_the_sealed_tier() {
+fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
     let mut table: CellTable<Borrowed> = CellTable::new(4);
     let consumer = table.create(None, None).unwrap();
     let producer = table.create(None, None).unwrap();
@@ -98,22 +98,28 @@ fn a_continuation_reads_back_with_reach_derived_through_the_sealed_tier() {
     let id = table.sealed.ids().next().unwrap();
     assert!(table.sealed_holds[consumer.slot() as usize].contains(id));
 
-    let (value, names_reached, names_record) = table
-        .enter(consumer, |context| {
-            let opened = context.continuation().unwrap();
-            (
-                *opened.value(),
-                opened.reach().names(reached.slot()),
-                opened.reach().names_sealed(id),
-            )
-        })
+    // The transition rewrote the consumer's stored mask in place: the dying slot's bit traded for
+    // the record's id, and what that region reached lives on in the record's frozen aggregate.
+    let stored = table.slots[consumer.slot() as usize]
+        .continuation
+        .as_ref()
         .unwrap();
+    assert!(stored.reach.names_sealed(id));
+    assert!(!stored.reach.names(producer.slot()));
+    assert!(
+        table
+            .sealed
+            .get(id)
+            .unwrap()
+            .aggregate
+            .names(reached.slot())
+    );
 
-    // The storage detached unmoved, so the borrow still reads it; the reach that comes back is the
-    // record's id plus its frozen aggregate, never the dead per-value mask inside the storage.
+    // The storage detached unmoved, so the borrow the re-anchor hands back still reads it.
+    let value = table
+        .enter(consumer, |context| *context.continuation().unwrap().value())
+        .unwrap();
     assert_eq!(value, 41);
-    assert!(names_record);
-    assert!(names_reached);
 }
 
 #[test]
@@ -141,19 +147,21 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
     minted.sort();
     assert_eq!(minted.len(), 2);
 
-    let (value, named) = table
-        .enter(consumer, |context| {
-            let opened = context.continuation().unwrap();
-            (
-                *opened.value(),
-                opened.reach().sealed().iter().collect::<Vec<_>>(),
-            )
-        })
-        .unwrap();
-
-    assert_eq!(value, 2);
+    let named: Vec<SealedId> = table.slots[consumer.slot() as usize]
+        .continuation
+        .as_ref()
+        .unwrap()
+        .reach
+        .sealed()
+        .iter()
+        .collect();
     // The sparse half unions by sorted merge, so the two ids arrive deduplicated and in id order.
     assert_eq!(named, minted);
+
+    let value = table
+        .enter(consumer, |context| *context.continuation().unwrap().value())
+        .unwrap();
+    assert_eq!(value, 2);
 }
 
 #[test]

@@ -51,14 +51,17 @@ impl Bits<Box<[u64]>> {
     }
 }
 
-impl<'a> Bits<&'a [u64]> {
+impl Bits<&[u64]> {
     /// Copy a view out into a row that owns its words — the seal transition's freeze.
     pub(crate) fn to_owned(&self) -> Bits<Box<[u64]>> {
         Bits {
             words: self.words.to_vec().into_boxed_slice(),
         }
     }
+}
 
+#[cfg(test)]
+impl<'a> Bits<&'a [u64]> {
     /// [`Bits::ones`] at the view's own lifetime, so the iterator outlives the view.
     pub(crate) fn into_ones(self) -> impl Iterator<Item = u32> + 'a {
         ones_of(self.words)
@@ -85,10 +88,6 @@ impl<W: AsRef<[u64]>> Bits<W> {
     pub(crate) fn test(&self, bit: u32) -> bool {
         let (index, mask) = self.place(bit);
         self.words.as_ref()[index] & mask != 0
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.words.as_ref().iter().all(|word| *word == 0)
     }
 
     /// The bits this row sets, in bit order.
@@ -207,6 +206,7 @@ impl Matrix {
     }
 
     /// The cells `holder` names, in slot order — the hold graph's outgoing edges from one cell.
+    #[cfg(test)]
     pub(crate) fn held_by(&self, holder: u32) -> impl Iterator<Item = u32> + '_ {
         self.row(holder).into_ones()
     }

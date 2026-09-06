@@ -30,4 +30,11 @@ impl Handle {
 /// whose death the embedder already declared. A stale handle is always an error and never a silent
 /// no-op, because it means a caller kept a name past a death it declared itself.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct StaleHandle(pub Handle);
+pub struct StaleHandle(pub(crate) Handle);
+
+impl StaleHandle {
+    /// The handle that went stale — the name the caller kept past a death it declared itself.
+    pub fn handle(self) -> Handle {
+        self.0
+    }
+}

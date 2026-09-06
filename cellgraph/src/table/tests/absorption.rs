@@ -98,25 +98,22 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
         consumer_bytes + producer_bytes
     );
 
-    let (value, names_consumer, names_producer, sealed_ids) = table
-        .enter(consumer, |context| {
-            let opened = context.continuation().unwrap();
-            (
-                *opened.value(),
-                opened.reach().names(consumer.slot()),
-                opened.reach().names(producer.slot()),
-                opened.reach().sealed().len(),
-            )
-        })
+    // The merge rewrote the consumer's stored mask: the dead cell's bit became the holder's, and
+    // nothing sealed, so the mask stays a plain slab row over live cells.
+    let stored = table.slots[consumer.slot() as usize]
+        .continuation
+        .as_ref()
         .unwrap();
+    assert!(stored.reach.names(consumer.slot()));
+    assert!(!stored.reach.names(producer.slot()));
+    assert_eq!(stored.reach.sealed().len(), 0);
 
     // The bump moved into the consumer's bundle without moving a chunk byte, so the borrow reads
-    // the same address — and the reach that comes back is a plain per-value mask over a live cell,
-    // never a derivation through the tier.
+    // the same address.
+    let value = table
+        .enter(consumer, |context| *context.continuation().unwrap().value())
+        .unwrap();
     assert_eq!(value, 41);
-    assert!(names_consumer);
-    assert!(!names_producer);
-    assert_eq!(sealed_ids, 0);
 }
 
 #[test]
@@ -188,14 +185,18 @@ fn a_refused_release_seals_as_before() {
     let id = only_record(&table);
     assert_eq!(table.sealed.get(id).unwrap().holders, 1);
 
-    let (value, names_record) = table
-        .enter(consumer, |context| {
-            let opened = context.continuation().unwrap();
-            (*opened.value(), opened.reach().names_sealed(id))
-        })
+    assert!(
+        table.slots[consumer.slot() as usize]
+            .continuation
+            .as_ref()
+            .unwrap()
+            .reach
+            .names_sealed(id)
+    );
+    let value = table
+        .enter(consumer, |context| *context.continuation().unwrap().value())
         .unwrap();
     assert_eq!(value, 41);
-    assert!(names_record);
 }
 
 #[test]
@@ -464,14 +465,18 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
     assert!(table.naming[reached.slot() as usize].contains(id));
 
     // The read still goes through the record, whose bundle grew a bump under the borrow.
-    let (value, names_record) = table
-        .enter(keeper, |context| {
-            let opened = context.continuation().unwrap();
-            (*opened.value(), opened.reach().names_sealed(id))
-        })
+    assert!(
+        table.slots[keeper.slot() as usize]
+            .continuation
+            .as_ref()
+            .unwrap()
+            .reach
+            .names_sealed(id)
+    );
+    let value = table
+        .enter(keeper, |context| *context.continuation().unwrap().value())
         .unwrap();
     assert_eq!(value, 41);
-    assert!(names_record);
 }
 
 /// Absorb a uniquely held producer into its consumer, and report the maintenance the merge

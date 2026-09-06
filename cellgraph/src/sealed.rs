@@ -8,6 +8,7 @@
 //! enforced by what this module cannot express — a record has no write path into its aggregate
 //! beyond the seal transition's own rewrite, so a pin *out of* a sealed region is unrepresentable.
 
+#[cfg(test)]
 use std::cell::OnceCell;
 use std::collections::HashMap;
 
@@ -17,7 +18,7 @@ use crate::region::Region;
 /// The name of one sealed region. Drawn in creation order from a space that never wraps and never
 /// reuses, so an id names the same region for the whole life of the table.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct SealedId(u64);
+pub(crate) struct SealedId(u64);
 
 /// A sparse set of sealed ids, kept sorted so union is a merge and membership a binary search.
 ///
@@ -25,7 +26,7 @@ pub struct SealedId(u64);
 /// only a *retained* region takes an id, so a sorted vector beats a hash set on both the union
 /// that reach composition performs and the iteration the cascade performs.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct SealedSet {
+pub(crate) struct SealedSet {
     ids: Vec<SealedId>,
 }
 
@@ -65,26 +66,28 @@ impl SealedSet {
     }
 
     /// Whether this set names the sealed region `id`.
-    pub fn contains(&self, id: SealedId) -> bool {
+    pub(crate) fn contains(&self, id: SealedId) -> bool {
         self.ids.binary_search(&id).is_ok()
     }
 
     /// The ids, in id order.
-    pub fn iter(&self) -> impl Iterator<Item = SealedId> + '_ {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = SealedId> + '_ {
         self.ids.iter().copied()
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
         self.ids.is_empty()
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.ids.len()
     }
 }
 
 /// A frozen closure: every record a hold on one record keeps alive, and the bytes they occupy
 /// between them. Recorded only for a closure that names no live cell, and exact from then on.
+#[cfg(test)]
 pub(crate) struct Memo {
     /// The records the closure spans, root included, in walk order.
     pub(crate) records: Vec<SealedId>,
@@ -129,6 +132,7 @@ pub(crate) struct SealedRecord {
     /// So the node set is fixed and the bytes are fixed, and the memo stays exact for the record's
     /// whole life ([liveness-matrix.md § Bounding the two
     /// tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
+    #[cfg(test)]
     pub(crate) closure: OnceCell<Memo>,
 }
 
@@ -199,6 +203,7 @@ impl SealedTier {
     }
 
     /// Bytes retained across the whole tier.
+    #[cfg(test)]
     pub(crate) fn retained_bytes(&self) -> usize {
         self.bytes
     }
@@ -212,6 +217,7 @@ impl SealedTier {
         self.records.keys().copied()
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.records.len()
     }

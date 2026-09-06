@@ -4,8 +4,8 @@
 //! [design/liveness-matrix.md](../design/liveness-matrix.md) § Reach as a hybrid mask.
 //!
 //! A mask is never handed to a caller beside a bare value: it exists only inside a
-//! [`Sealed`](crate::Sealed) or [`Opened`](crate::Opened) carrier, and every constructor here is
-//! crate-private, so the pairing of a value with its reach cannot be fabricated from outside.
+//! [`Sealed`](crate::Sealed) carrier or a stored continuation, and the type is crate-private, so
+//! the pairing of a value with its reach cannot be fabricated from outside.
 
 use crate::matrix::Bits;
 use crate::sealed::{SealedId, SealedSet};
@@ -16,17 +16,12 @@ use crate::sealed::{SealedId, SealedSet};
 /// Masks compose by `OR` and merge, so a value built from several operands names the union of
 /// their reaches with no deduplication step and no subsumption fold.
 ///
-/// **Every constructor is crate-private**, which is what makes a loose value-plus-mask pair
+/// **The type is crate-private**, which is what makes a loose value-plus-mask pair
 /// unrepresentable: a caller cannot mint a reach of its own choosing and hand it to a placement
 /// door beside a value, so the only reach a value ever travels with is the one a door composed
 /// for it.
-///
-/// ```compile_fail
-/// // No public constructor: a caller cannot fabricate a reach to pair with a value.
-/// let forged = cellgraph::Mask::empty(4);
-/// ```
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Mask {
+pub(crate) struct Mask {
     slab: Bits,
     sealed: SealedSet,
 }
@@ -100,26 +95,22 @@ impl Mask {
     }
 
     /// Whether the value's borrows reach the live cell in `slot`.
-    pub fn names(&self, slot: u32) -> bool {
+    pub(crate) fn names(&self, slot: u32) -> bool {
         self.slab.test(slot)
     }
 
     /// Whether the value's borrows reach the sealed region `id`.
-    pub fn names_sealed(&self, id: SealedId) -> bool {
+    pub(crate) fn names_sealed(&self, id: SealedId) -> bool {
         self.sealed.contains(id)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.slab.is_empty() && self.sealed.is_empty()
-    }
-
     /// The slab slots this mask names, in slot order.
-    pub fn slab_slots(&self) -> impl Iterator<Item = u32> + '_ {
+    pub(crate) fn slab_slots(&self) -> impl Iterator<Item = u32> + '_ {
         self.slab.ones()
     }
 
     /// The sealed half.
-    pub fn sealed(&self) -> &SealedSet {
+    pub(crate) fn sealed(&self) -> &SealedSet {
         &self.sealed
     }
 

@@ -86,6 +86,7 @@ impl Region {
     /// Of those bytes, the ones that arrived by absorbing another region. Never decreases, so an
     /// embedder reads a cart's accretion as the difference against an earlier reading rather than
     /// by scanning what the chunks still hold.
+    #[cfg(test)]
     pub(crate) fn absorbed_bytes(&self) -> usize {
         self.absorbed_bytes
     }

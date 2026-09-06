@@ -26,6 +26,12 @@ fn hold(table: &mut CellTable<Owned>, holder: Handle, held: Handle) {
         .unwrap();
 }
 
+/// What a hold on one record keeps alive. A single candidate's slice is its whole closure, so
+/// one-id pricing goes through the same door the marginal query does.
+fn closure(table: &CellTable<Owned>, id: SealedId) -> Option<Closure> {
+    table.unique_closures(&[id]).remove(0)
+}
+
 /// The record minted most recently — ids are monotone and never reused, so this is the one the
 /// release just before the call produced.
 fn newest(table: &CellTable<Owned>) -> SealedId {
@@ -73,7 +79,7 @@ fn a_closure_prices_everything_a_hold_on_the_record_reaches() {
     let mut table: CellTable<Owned> = CellTable::new(8);
     let (s_id, a_id, b_id) = sealed_chain(&mut table);
 
-    let whole = table.closure(s_id).unwrap();
+    let whole = closure(&table, s_id).unwrap();
     assert_eq!(
         whole.bytes,
         retained(&table, s_id) + retained(&table, a_id) + retained(&table, b_id)
@@ -81,7 +87,7 @@ fn a_closure_prices_everything_a_hold_on_the_record_reaches() {
     assert!(whole.frozen);
     // The tail of the chain reaches nothing, so it prices at its own storage and no more.
     assert_eq!(
-        table.closure(b_id).unwrap(),
+        closure(&table, b_id).unwrap(),
         Closure {
             bytes: retained(&table, b_id),
             frozen: true,
@@ -121,12 +127,12 @@ fn a_shared_sub_tier_is_billed_once_within_one_closure() {
     assert_eq!(table.sealed.len(), 4);
 
     // Price both arms first, so the walk from the head meets two memos that each contain `c`.
-    let arm_a = table.closure(a_id).unwrap();
-    let arm_b = table.closure(b_id).unwrap();
+    let arm_a = closure(&table, a_id).unwrap();
+    let arm_b = closure(&table, b_id).unwrap();
     assert!(arm_a.frozen && arm_b.frozen);
 
     // A memo is merged as a set, never added as a number: summing the arms would bill `c` twice.
-    let head = table.closure(s_id).unwrap();
+    let head = closure(&table, s_id).unwrap();
     assert_eq!(
         head.bytes,
         retained(&table, s_id)
@@ -155,7 +161,7 @@ fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
 
     // A live cell the aggregate names is retention in waiting: its region is priced, and the answer
     // cannot be memoized while the cell can still allocate.
-    let open = table.closure(s_id).unwrap();
+    let open = closure(&table, s_id).unwrap();
     assert!(!open.frozen);
     assert_eq!(open.bytes, retained(&table, s_id) + live_bytes);
     assert!(table.sealed.get(s_id).unwrap().closure.get().is_none());
@@ -164,7 +170,7 @@ fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
     table.release(live, Absorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 1);
 
-    let frozen = table.closure(s_id).unwrap();
+    let frozen = closure(&table, s_id).unwrap();
     assert!(frozen.frozen);
     // The bytes moved within the closure, so the total did not move at all.
     assert_eq!(frozen.bytes, open.bytes);
@@ -195,7 +201,7 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
     table.release(s, Absorption::Refused).unwrap();
     let s_id = newest(&table);
 
-    let priced = table.closure(s_id).unwrap();
+    let priced = closure(&table, s_id).unwrap();
     assert!(priced.frozen);
     assert_eq!(
         table
@@ -214,7 +220,7 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
     table.release(keep_s, Absorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.get(a_id).unwrap().holders, 2);
     assert_eq!(table.sealed.get(s_id).unwrap().holders, 1);
-    assert_eq!(table.closure(s_id).unwrap(), priced);
+    assert_eq!(closure(&table, s_id).unwrap(), priced);
 
     // And a walk that consults no memo at all agrees with what was recorded.
     let fresh = table.reached_from(Node::Sealed(s_id), false);
@@ -247,11 +253,11 @@ fn a_walk_that_reaches_a_memoized_record_merges_its_set() {
     table.release(a, Absorption::Refused).unwrap();
     let a_id = newest(&table);
     // The middle of the chain is frozen and priced first, so it carries a memo the head will meet.
-    assert!(table.closure(a_id).unwrap().frozen);
+    assert!(closure(&table, a_id).unwrap().frozen);
     table.release(s, Absorption::Refused).unwrap();
     let s_id = newest(&table);
 
-    let open = table.closure(s_id).unwrap();
+    let open = closure(&table, s_id).unwrap();
     assert!(!open.frozen);
     assert_eq!(
         open.bytes,
@@ -262,7 +268,7 @@ fn a_walk_that_reaches_a_memoized_record_merges_its_set() {
     );
 
     table.release(live, Absorption::IntoHolder).unwrap();
-    let frozen = table.closure(s_id).unwrap();
+    let frozen = closure(&table, s_id).unwrap();
     assert!(frozen.frozen);
     assert_eq!(frozen.bytes, open.bytes);
     assert_eq!(
@@ -331,20 +337,14 @@ fn unique_slices_do_not_double_bill_a_shared_sub_tier() {
     );
     // The shared record is in neither slice, but it is in each whole closure.
     assert_eq!(
-        table.closure(first_id).unwrap().bytes,
+        closure(&table, first_id).unwrap().bytes,
         slices[0].unwrap().bytes + retained(&table, c_id)
     );
 
-    // A lone candidate has nothing to share with, so its slice is its whole closure.
-    assert_eq!(
-        table.unique_closures(&[first_id]),
-        vec![table.closure(first_id)]
-    );
     // A repeated id is one candidate, answered the same way at every position naming it.
-    assert_eq!(
-        table.unique_closures(&[first_id, first_id]),
-        vec![table.closure(first_id), table.closure(first_id)]
-    );
+    let repeated = table.unique_closures(&[first_id, first_id]);
+    assert_eq!(repeated[0], repeated[1]);
+    assert_eq!(repeated[0], closure(&table, first_id));
 }
 
 #[test]
@@ -380,15 +380,15 @@ fn an_absent_id_prices_as_none() {
 
     table.release(gone, Absorption::Refused).unwrap();
     let gone_id = newest(&table);
-    assert!(table.closure(gone_id).is_some());
+    assert!(closure(&table, gone_id).is_some());
 
     // The last holder goes, the record retires, and the id prices as nothing rather than as zero.
     table.release(keeper, Absorption::IntoHolder).unwrap();
-    assert_eq!(table.closure(gone_id), None);
+    assert_eq!(closure(&table, gone_id), None);
     assert_eq!(table.sealed_retained_bytes(gone_id), None);
     let slices = table.unique_closures(&[gone_id, s_id]);
     assert_eq!(slices[0], None);
-    assert_eq!(slices[1], table.closure(s_id));
+    assert_eq!(slices[1], closure(&table, s_id));
 }
 
 #[test]
@@ -566,11 +566,11 @@ fn pricing_mutates_no_hold() {
         let _ = table.absorbed_since(mark).unwrap();
     }
     for id in &ids {
-        let _ = table.closure(*id).unwrap();
+        let _ = closure(&table, *id).unwrap();
     }
     let _ = table.unique_closures(&ids);
     let _ = table.occupancy();
-    assert!(table.closure(s_id).unwrap().frozen);
+    assert!(closure(&table, s_id).unwrap().frozen);
 
     // The memo is the only mark a price query leaves, and a memo is not a hold.
     for slot in 0..10 {

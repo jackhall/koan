@@ -13,7 +13,9 @@ use crate::mask::Mask;
 use crate::matrix::{Bits, Matrix};
 use crate::reattach::{DropFree, Erased, Reattachable};
 use crate::region::{Region, Writer};
-use crate::sealed::{Memo, SealedId, SealedRecord, SealedSet, SealedTier};
+#[cfg(test)]
+use crate::sealed::Memo;
+use crate::sealed::{SealedId, SealedRecord, SealedSet, SealedTier};
 
 /// Refusals from [`CellTable::create`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,8 +68,9 @@ pub enum Absorption {
 /// The closure spans both tiers. A live cell a reached aggregate names is retention in waiting —
 /// it will seal, or seal into its namer, when it dies — so its region is priced too, and the
 /// closure only settles once it names no live cell.
+#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Closure {
+pub(crate) struct Closure {
     /// Chunk bytes of every region the closure spans, the priced region's own included. A region
     /// two branches of the closure both reach is counted once.
     pub bytes: usize,
@@ -79,8 +82,9 @@ pub struct Closure {
 /// [`CellTable::absorbed_since`].
 ///
 /// Stamped with the cell it was taken against, so it cannot be read against another one.
+#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Mark {
+pub(crate) struct Mark {
     handle: Handle,
     absorbed: usize,
 }
@@ -89,8 +93,9 @@ pub struct Mark {
 /// threshold over. The substrate ships the numbers and no threshold: whether the ramp is linear or
 /// a watermark step is the embedder's call
 /// ([liveness-matrix.md § Bounding the two tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
+#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Occupancy {
+pub(crate) struct Occupancy {
     /// Slab slots occupied — live cells and dead-but-resident ones alike.
     pub occupied: u32,
     /// The slab's fixed cap.
@@ -101,17 +106,19 @@ pub struct Occupancy {
     pub retained_bytes: usize,
 }
 
-/// A node of the hold graph, as the ring detector reports it. The graph spans both tiers: a live
-/// cell holds cells and sealed regions, and a sealed region's frozen aggregate holds both in turn.
-#[cfg(debug_assertions)]
+/// A node of the hold graph, as the test-only ring walk reports it. The graph spans both tiers: a
+/// live cell holds cells and sealed regions, and a sealed region's frozen aggregate holds both in
+/// turn.
+#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum HoldNode {
+pub(crate) enum HoldNode {
     Cell(Handle),
     Sealed(SealedId),
 }
 
 /// The same node keyed by slab slot rather than handle, so a walk can visit it before deciding
 /// which generation to report.
+#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Node {
     Cell(u32),
@@ -120,6 +127,7 @@ enum Node {
 
 /// The nodes one walk of the hold graph visited, split by tier. A walk with no cells is a frozen
 /// closure: nothing in it will ever seal, merge, or retire again.
+#[cfg(test)]
 struct Reached {
     cells: Vec<u32>,
     records: Vec<SealedId>,
@@ -306,10 +314,10 @@ impl<C: Reattachable> CellTable<C> {
     /// Declare the cell's death: the embedder promises never to enter it again.
     ///
     /// The cell's own birth row releases wholesale — birth holds exist for execution, and the cell
-    /// will not execute again. What happens to the slot then is
-    /// [`dispose`](CellTable::dispose)'s call: reclaimed if nothing reaches it, absorbed into a
-    /// unique holder if `absorption` allows and one is there, sealed if something else reaches it,
-    /// and left resident only while a descendant's birth row still names it.
+    /// will not execute again. What happens to the slot then is the disposal's call: reclaimed if
+    /// nothing reaches it, absorbed into a unique holder if `absorption` allows and one is there,
+    /// sealed if something else reaches it, and left resident only while a descendant's birth row
+    /// still names it.
     ///
     /// `absorption` is the embedder's say over that merge, recorded on the slot and applied
     /// whenever the slot actually disposes.
@@ -328,9 +336,10 @@ impl<C: Reattachable> CellTable<C> {
 
     /// Whether the table holds nothing at all: every slab slot free, and no sealed region left.
     ///
-    /// The embedder's end-of-program alarm. After the last release, a non-empty table means either
-    /// a release was forgotten — a slot is still occupied — or a ring no merge dissolved survives
-    /// in the tier, and [`debug_ring_from_sealed`](CellTable::debug_ring_from_sealed) names it.
+    /// The embedder's end-of-program alarm, and the only one the substrate ships. After the last
+    /// release, a non-empty table means either a release was forgotten — a slot is still occupied
+    /// — or a ring no merge dissolved survives in the tier; the crate's test-only ring walk names
+    /// one.
     pub fn is_empty(&self) -> bool {
         self.occupied().next().is_none() && self.sealed.is_empty()
     }
@@ -705,6 +714,7 @@ impl<C: Reattachable> CellTable<C> {
                 holders: count,
                 #[cfg(test)]
                 peak_holders: count,
+                #[cfg(test)]
                 closure: std::cell::OnceCell::new(),
             },
         );
@@ -778,67 +788,36 @@ impl<C: Reattachable> CellTable<C> {
         }
     }
 
-    /// Derive the reach a stored mask reads back at: every sealed region it names contributes its
-    /// own id plus its frozen aggregate.
+    /// The price queries. Read-only, and crate-private until the resident-carrier crossing verdict
+    /// consumes them — the tests are their only caller today.
     ///
-    /// Over-approximate and covering. The per-value masks inside a sealed region are dead bytes
-    /// nothing may read, so the aggregate is what stands in for them — and a resident value's true
-    /// reach is a subset of its region's holds by mint-time coverage.
-    fn derive_reach(&self, stored: &Mask) -> Mask {
-        let mut derived = Mask::from_parts(stored.slab().clone(), SealedSet::new());
-        for id in stored.sealed().iter() {
-            derived.add_sealed(id);
-            if let Some(record) = self.sealed.get(id) {
-                derived.union_with(&record.aggregate);
-            }
-        }
-        derived
-    }
-
     /// Bytes the sealed region `id` still occupies, or `None` if nothing holds it any more.
     ///
     /// The slab is bounded by its cap; this tier is bounded only by what programs retain, so its
     /// occupancy is the number worth asking for
     /// ([liveness-matrix.md § Bounding the two tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
-    pub fn sealed_retained_bytes(&self, id: SealedId) -> Option<usize> {
+    #[cfg(test)]
+    pub(crate) fn sealed_retained_bytes(&self, id: SealedId) -> Option<usize> {
         self.sealed.get(id).map(SealedRecord::retained_bytes)
-    }
-
-    /// What a hold on the sealed region `id` keeps alive, or `None` if nothing holds it any more.
-    ///
-    /// The walk spans both tiers, so a live cell the closure names is priced at its region and
-    /// walked through in turn. The answer is [`frozen`](Closure::frozen) once no live cell is left
-    /// in it, and a frozen answer is memoized on the record and reused forever — nothing inside a
-    /// frozen closure can change, which is the argument the memo field carries.
-    ///
-    /// **Read-only.** Nothing in the substrate consults this, and it changes no hold.
-    pub fn closure(&self, id: SealedId) -> Option<Closure> {
-        if let Some(memo) = self.sealed.get(id)?.closure.get() {
-            return Some(Closure {
-                bytes: memo.bytes,
-                frozen: true,
-            });
-        }
-        let reached = self.reached_from_record(id)?;
-        Some(Closure {
-            bytes: self.bytes_of(&reached),
-            frozen: reached.cells.is_empty(),
-        })
     }
 
     /// The slice of each candidate's closure that no *other* candidate reaches — the marginal price
     /// of releasing one hold, with the part it shares with another candidate billed to neither.
     ///
+    /// The walk spans both tiers, so a live cell a closure names is priced at its region and
+    /// walked through in turn. An answer is [`frozen`](Closure::frozen) once no live cell is left
+    /// in the whole closure, and a frozen answer is memoized on the record and reused forever —
+    /// nothing inside a frozen closure can change, which is the argument the memo field carries.
+    ///
     /// One answer per input position, `None` where the id is no longer in the tier; a repeated id
-    /// gets the same answer at every position naming it. A single candidate prices exactly as
-    /// [`closure`](CellTable::closure) does.
+    /// gets the same answer at every position naming it. A single candidate's slice is its whole
+    /// closure.
     ///
     /// Uniqueness is **relative to the candidate set**. A holder outside the set that also reaches
     /// a node is not discounted, so a candidate lying inside another candidate's closure is shared
     /// throughout and prices at zero — the honest marginal price of releasing both.
-    ///
-    /// **Read-only**, on the same terms as [`closure`](CellTable::closure).
-    pub fn unique_closures(&self, candidates: &[SealedId]) -> Vec<Option<Closure>> {
+    #[cfg(test)]
+    pub(crate) fn unique_closures(&self, candidates: &[SealedId]) -> Vec<Option<Closure>> {
         let mut seen = SealedSet::new();
         let mut walks: Vec<(SealedId, Reached)> = Vec::new();
         for id in candidates {
@@ -902,13 +881,15 @@ impl<C: Reattachable> CellTable<C> {
 
     /// Chunk bytes a live cell's region bundle occupies, absorbed bumps included. `0` for a cell
     /// that never allocated.
-    pub fn region_bytes(&self, handle: Handle) -> Result<usize, StaleHandle> {
+    #[cfg(test)]
+    pub(crate) fn region_bytes(&self, handle: Handle) -> Result<usize, StaleHandle> {
         let slot = self.live_slot(handle)?;
         Ok(self.cell_bytes(slot))
     }
 
     /// Snapshot how much the cell has absorbed so far, to read a later total against.
-    pub fn mark(&self, handle: Handle) -> Result<Mark, StaleHandle> {
+    #[cfg(test)]
+    pub(crate) fn mark(&self, handle: Handle) -> Result<Mark, StaleHandle> {
         let slot = self.live_slot(handle)?;
         Ok(Mark {
             handle,
@@ -923,7 +904,8 @@ impl<C: Reattachable> CellTable<C> {
     /// cart's dead bytes. It is not a count of bytes that are actually dead: an absorbed region may
     /// still hold the value the cart carries, and a value the cart allocated and then replaced is
     /// invisible here. `Err` once the marked cell has died.
-    pub fn absorbed_since(&self, mark: Mark) -> Result<usize, StaleHandle> {
+    #[cfg(test)]
+    pub(crate) fn absorbed_since(&self, mark: Mark) -> Result<usize, StaleHandle> {
         let slot = self.live_slot(mark.handle)?;
         // A live cell's bundle only ever takes storage in, so the counter never runs backwards.
         Ok(self.absorbed_bytes(slot) - mark.absorbed)
@@ -931,7 +913,8 @@ impl<C: Reattachable> CellTable<C> {
 
     /// How full both tiers are right now. The slab is bounded by its cap and the sealed tier by
     /// nothing, so an embedder ramps its copy-versus-hold threshold on these two numbers together.
-    pub fn occupancy(&self) -> Occupancy {
+    #[cfg(test)]
+    pub(crate) fn occupancy(&self) -> Occupancy {
         Occupancy {
             occupied: self.cap - self.free.len() as u32,
             cap: self.cap,
@@ -941,6 +924,7 @@ impl<C: Reattachable> CellTable<C> {
     }
 
     /// Chunk bytes of the region in one slab slot, `0` where the slot never allocated.
+    #[cfg(test)]
     fn cell_bytes(&self, slot: u32) -> usize {
         self.slots[slot as usize]
             .region
@@ -948,6 +932,7 @@ impl<C: Reattachable> CellTable<C> {
             .map_or(0, Region::allocated_bytes)
     }
 
+    #[cfg(test)]
     fn absorbed_bytes(&self, slot: u32) -> usize {
         self.slots[slot as usize]
             .region
@@ -956,10 +941,12 @@ impl<C: Reattachable> CellTable<C> {
     }
 
     /// Chunk bytes a record retains, `0` for an id no longer in the tier.
+    #[cfg(test)]
     fn record_bytes(&self, id: SealedId) -> usize {
         self.sealed.get(id).map_or(0, SealedRecord::retained_bytes)
     }
 
+    #[cfg(test)]
     fn bytes_of(&self, reached: &Reached) -> usize {
         reached
             .cells
@@ -975,6 +962,7 @@ impl<C: Reattachable> CellTable<C> {
 
     /// Walk from a record and memoize the result when it comes back frozen. `None` for an id no
     /// longer in the tier.
+    #[cfg(test)]
     fn reached_from_record(&self, id: SealedId) -> Option<Reached> {
         let record = self.sealed.get(id)?;
         if let Some(memo) = record.closure.get() {
@@ -1001,6 +989,7 @@ impl<C: Reattachable> CellTable<C> {
     /// two branches of one closure may share a sub-tier, and adding two memoized totals would bill
     /// the shared part twice. `use_memos` is false only where a test recomputes a memo from
     /// scratch to check it against what was recorded.
+    #[cfg(test)]
     fn reached_from(&self, start: Node, use_memos: bool) -> Reached {
         let mut seen_cells = Bits::new(self.cap);
         let mut seen_records = SealedSet::new();
@@ -1046,12 +1035,12 @@ impl<C: Reattachable> CellTable<C> {
     /// Walk the hold graph from `start` and report a cycle if one is reachable — the fail-safe
     /// diagnostic for a ring, which keeps everything on it alive forever rather than dangling.
     ///
-    /// Debug builds only, and **not consulted on any mint or release path**: preventing rings is
-    /// the embedder's crossing discipline, not a mint-time reachability check. The walk spans both
+    /// Test-only, and **not consulted on any mint or release path**: preventing rings is the
+    /// embedder's crossing discipline, not a mint-time reachability check. The walk spans both
     /// tiers, since a ring among live cells becomes a ring among sealed records the moment they
     /// die.
-    #[cfg(debug_assertions)]
-    pub fn debug_ring_from(&self, start: Handle) -> Option<Vec<HoldNode>> {
+    #[cfg(test)]
+    pub(crate) fn debug_ring_from(&self, start: Handle) -> Option<Vec<HoldNode>> {
         let mut path = Vec::new();
         let mut settled = std::collections::HashSet::new();
         self.walk_for_ring(Node::Cell(start.slot()), &mut path, &mut settled)
@@ -1060,15 +1049,15 @@ impl<C: Reattachable> CellTable<C> {
 
     /// The same walk from a sealed region, for a ring that outlived the cells it started among:
     /// every hold on a sealed region is an id, and a stale handle can no longer reach it.
-    #[cfg(debug_assertions)]
-    pub fn debug_ring_from_sealed(&self, start: SealedId) -> Option<Vec<HoldNode>> {
+    #[cfg(test)]
+    pub(crate) fn debug_ring_from_sealed(&self, start: SealedId) -> Option<Vec<HoldNode>> {
         let mut path = Vec::new();
         let mut settled = std::collections::HashSet::new();
         self.walk_for_ring(Node::Sealed(start), &mut path, &mut settled)
             .map(|cycle| cycle.into_iter().map(|node| self.name(node)).collect())
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(test)]
     fn name(&self, node: Node) -> HoldNode {
         match node {
             Node::Cell(slot) => {
@@ -1080,6 +1069,7 @@ impl<C: Reattachable> CellTable<C> {
 
     /// What one node of the hold graph holds: for a cell, its two hold-set halves; for a sealed
     /// region, the two halves of its frozen aggregate.
+    #[cfg(test)]
     fn holds_of(&self, node: Node) -> Vec<Node> {
         match node {
             Node::Cell(slot) => self
@@ -1100,7 +1090,7 @@ impl<C: Reattachable> CellTable<C> {
         }
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(test)]
     fn walk_for_ring(
         &self,
         node: Node,
@@ -1147,14 +1137,12 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
         self.handle
     }
 
-    /// Take the cell's continuation, re-anchored at the step brand and paired with the reach its
-    /// captures read.
+    /// Take the cell's continuation, re-anchored at the step brand.
     ///
     /// **This is the sealed tier's accessor.** A continuation captured over values in cells that
-    /// have since sealed comes back with those regions named by id, and the reach is derived — the
-    /// id plus its frozen aggregate — rather than read off the dead per-value masks in the sealed
-    /// storage. The door hangs on the step context and nowhere else, so a value reaching sealed
-    /// storage is only ever live inside an `enter` scope.
+    /// have since sealed comes back reading storage those records still retain. The door hangs on
+    /// the step context and nowhere else, so a value reaching sealed storage is only ever live
+    /// inside an `enter` scope.
     ///
     /// The slot is left empty: a continuation is one-shot, and a step that wants the cell entered
     /// again stores a successor.
@@ -1175,7 +1163,6 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
         let stored = self.table.slots[self.handle.slot() as usize]
             .continuation
             .take()?;
-        let reach = self.table.derive_reach(&stored.reach);
         // SAFETY: the value's referents are region storage in the cells and sealed regions its
         // stored reach names, and that reach was minted into this cell's hold set when it was
         // stored — so every one of them is either a live cell or a held sealed record, whose
@@ -1183,7 +1170,7 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
         // the one executing), so its holds are too. `'b` is the enclosing `enter`'s table borrow,
         // unnameable by the step's return type, so nothing anchored at it escapes.
         let value = unsafe { stored.value.reattach::<'b>() };
-        Some(Opened::new(value, reach))
+        Some(Opened::new(value))
     }
 
     /// Store a continuation that captures nothing any region owns, so it reaches nothing.
@@ -1258,7 +1245,6 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
     /// let read = table
     ///     .enter(cell, |context| {
     ///         let value = context.alloc::<Number>(|writer| writer.value(41));
-    ///         assert!(value.reach().names(cell.slot()));
     ///         *context.read(&value).value()
     ///     })
     ///     .unwrap();
@@ -1351,7 +1337,7 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
         // regions its reach names; nothing dies inside a step, so they are live for all of `'s`,
         // which the `&'s self` borrow bounds inside the step brand. The re-anchor shortens.
         let value: T::At<'s> = unsafe { carrier.erased().reattach::<'s>() };
-        Opened::new(value, carrier.reach().clone())
+        Opened::new(value)
     }
 
     /// The one path from a built value into a region: fold `reach` into the destination's hold

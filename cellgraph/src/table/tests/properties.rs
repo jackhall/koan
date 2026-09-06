@@ -100,6 +100,27 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
         }
     }
 
+    // A stored mask is the one thing the seal transition rewrites in place, so a slot left naming
+    // a recycled slot or a retired record is a rewrite the transition missed — and the read that
+    // re-anchors over it would hand back a borrow of dead bytes.
+    for slot in &occupied {
+        let Some(stored) = table.slots[*slot as usize].continuation.as_ref() else {
+            continue;
+        };
+        for named in stored.reach.slab_slots() {
+            assert!(
+                table.slots[named as usize].state != SlotState::Free,
+                "the continuation in slot {slot} names the recycled slot {named}"
+            );
+        }
+        for named in stored.reach.sealed().iter() {
+            assert!(
+                table.sealed.get(named).is_some(),
+                "the continuation in slot {slot} names a retired record"
+            );
+        }
+    }
+
     // Quiescence spans both tiers: the slab being clear is only half of it, and a table that
     // reports itself empty while a record survives would hide exactly the ring this test hunts.
     assert_eq!(
@@ -292,31 +313,18 @@ fn run(verbs: &[Verb]) -> Merges {
                     });
                 }
             }
-            // Reading the kept continuation back is where a stale mask would surface: the reach
-            // that comes out is derived through whatever the tier has since done to it.
+            // Reading the kept continuation back is the re-anchor: the value comes out at the
+            // step brand over whatever the tier has since done to the regions it captured. The
+            // mask it was stored with stays in the slot, where the sweep checks it.
             Verb::Read { cell } => {
                 if let Some(cell) = minted.get(cell).copied()
                     && table.is_live(cell)
                 {
-                    let reach = table
+                    table
                         .enter(cell, |context| {
-                            context.continuation().map(|opened| opened.reach().clone())
+                            let _ = context.continuation().map(|opened| *opened.value());
                         })
                         .unwrap();
-                    if let Some(reach) = reach {
-                        for named in reach.slab_slots() {
-                            assert!(
-                                table.slots[named as usize].state != SlotState::Free,
-                                "a read handed back a mask naming the recycled slot {named}"
-                            );
-                        }
-                        for named in reach.sealed().iter() {
-                            assert!(
-                                table.sealed.get(named).is_some(),
-                                "a read handed back a mask naming a retired record"
-                            );
-                        }
-                    }
                 }
             }
             // Both dispositions are generated, so a run reaches the sealed shapes a merge would
@@ -343,16 +351,18 @@ fn run(verbs: &[Verb]) -> Merges {
             Verb::Price { index } => {
                 let ids = sorted_ids(&table);
                 if !ids.is_empty() {
-                    let id = ids[index % ids.len()];
-                    let whole = table.closure(id).expect("the id came out of the tier");
-                    // One candidate shares its closure with nobody, so its slice is the whole of it.
-                    assert_eq!(table.unique_closures(&[id]), vec![Some(whole)]);
-
+                    // The candidate the index picks is priced alone too, so a run reaches the
+                    // whole-closure answer as well as the shared partition.
+                    let alone = ids[index % ids.len()];
                     let slices = table.unique_closures(&ids);
                     let mut total = 0;
                     for (id, slice) in ids.iter().zip(&slices) {
                         let slice = slice.expect("every id came out of the tier");
-                        let whole = table.closure(*id).expect("the id came out of the tier");
+                        // One candidate shares its closure with nobody, so its slice is the whole.
+                        let whole = table
+                            .unique_closures(&[*id])
+                            .remove(0)
+                            .expect("the id came out of the tier");
                         assert!(
                             slice.bytes <= whole.bytes,
                             "the unique slice of {id:?} outprices its whole closure"
@@ -360,6 +370,10 @@ fn run(verbs: &[Verb]) -> Merges {
                         assert_eq!(slice.frozen, whole.frozen);
                         total += slice.bytes;
                     }
+                    assert!(
+                        table.unique_closures(&[alone]).remove(0).is_some(),
+                        "the id {alone:?} the sweep just walked priced as absent"
+                    );
                     // The slices partition part of one graph, so together they cannot outprice it.
                     assert!(
                         total <= table.occupancy().retained_bytes + live_bytes(&table, CAP),
