@@ -203,7 +203,7 @@ impl<const W: usize> Matrix<W> {
     /// mask](../design/liveness-matrix.md#reach-as-a-hybrid-mask)). The and-not is the self rule: a
     /// cell that held itself alive would never reach a zero hold count.
     pub(crate) fn mint(&mut self, holder: u32, reach: &Mask<W>) {
-        self.union_into(holder, *reach.slab());
+        self.union_into(holder, reach.slab());
         self.clear(holder, holder);
     }
 
@@ -225,7 +225,9 @@ impl<const W: usize> Matrix<W> {
     /// starts as its parent's, which is what makes transitive closure hold by construction.
     pub(crate) fn inherit_row(&mut self, dest: u32, source: u32) {
         debug_assert_ne!(dest, source, "a row does not inherit from itself");
-        self.union_into(dest, *self.row(source));
+        // Copied out first: both rows live in this matrix, so they cannot be borrowed at once.
+        let source = *self.row(source);
+        self.union_into(dest, &source);
     }
 
     /// OR a row in, counting a hold for every bit the union newly sets — the shared body of the
@@ -233,9 +235,9 @@ impl<const W: usize> Matrix<W> {
     /// through [`Matrix::set`], which is what lets [`Matrix::holders`] answer from a tally rather
     /// than a scan across rows.
     ///
-    /// The source arrives by value, which is `W` words, so the two rows are never borrowed from
-    /// the matrix at once.
-    fn union_into(&mut self, dest: u32, source: Bits<W>) {
+    /// The source is borrowed, so a mint folds a reach mask's row in without copying it; the birth
+    /// derivation, whose source is a row of this same matrix, copies at its own call site.
+    fn union_into(&mut self, dest: u32, source: &Bits<W>) {
         let Matrix { rows, holders } = self;
         let (chunk, row) = Self::at(dest);
         for (index, (word, source)) in rows[chunk][row]

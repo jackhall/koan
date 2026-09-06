@@ -290,12 +290,23 @@ that owns pins of its own is not a thing the substrate can express.
 
 ## Pool geometry
 
-The slab is fixed at its cap, so slab masks are fixed-width and the width
-question disappears; growth within the cap appends slots, and an old mask
-read at a wider width zero-extends — a zero bit means "no reach", which is
-always sound. The slab never compacts: renumbering live slots would rewrite
-every stored mask outside the seal transition's bounded scan. The sealed tier
-grows in its own id space and needs no geometry — sealed sets are sparse.
+The slab width is a constant of the table's *type*: a row of bits is `W`
+words held inline and names `64 · W` slots, one word — 64 cells — by default,
+and an embedder that wants a deeper slab instantiates a wider table. So every
+slab mask in a table is that one width and the width question disappears; a
+row is `Copy`, and building, copying, or comparing one touches no allocator.
+Both relations are inline arrays of those rows, `64 · W × W` words each —
+quadratic in the width by construction — held in the table's own bytes, so a
+table wide enough for that to matter is one the embedder boxes.
+
+The cap is a construction value at or below the width: `CellTable::new`
+refuses a cap above it, and admission is still refused at the cap, so a
+two-cell table over a 64-cell row is full at two. Growth within the cap
+appends slots, and a bit for a slot that has not been handed out reads zero —
+"no reach", which is always sound. The slab never compacts: renumbering live
+slots would rewrite every stored mask outside the seal transition's bounded
+scan. The sealed tier grows in its own id space and needs no geometry —
+sealed sets are sparse.
 
 ## Bounding the two tiers
 

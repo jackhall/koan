@@ -34,11 +34,14 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
   it reaches the embedder through the crossing verdict
   ([cellgraph.md § The crossing
   verdict](design/cellgraph.md#the-crossing-verdict)).
-- [src/matrix.rs](src/matrix.rs) — `Bits`, the crate's one row of bits and the
-  only place word-and-bit arithmetic is written, and the flat birth and pin
-  matrices built over it.
-- [src/mask.rs](src/mask.rs) — reach as a hybrid mask: a `Bits` row over slab
-  slots plus a sparse sealed-id set.
+- [src/matrix.rs](src/matrix.rs) — `Bits`, the crate's one row of bits: `W`
+  words held inline, `Copy`, and the only place word-and-bit arithmetic is
+  written outside the two loops that keep a matrix's tally in step with its
+  rows. The birth and pin matrices are inline arrays of those rows, so a table
+  carries both relations in its own bytes.
+- [src/mask.rs](src/mask.rs) — reach as a hybrid mask: an inline `Bits` row
+  over slab slots plus a sparse sealed-id set, so a reach naming no sealed
+  region is built, copied, and compared without touching the allocator.
 - [src/sealed.rs](src/sealed.rs) — the sealed tier: ids, sparse sets, frozen
   aggregates, holder counts, detached storage.
 - [src/region.rs](src/region.rs) — the per-cell bundle of bumps, the splice a
