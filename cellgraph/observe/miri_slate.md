@@ -17,7 +17,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-12 tests, grouped by the unsafe site each pins down. Names below are the exact
+18 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -65,7 +65,7 @@ reads a `&u32` out of storage whose cell recycled several steps earlier. The thi
 teardown: the cascade drops two records at once, and the process-exit leak detector confirms both
 storages go with them.
 
-- `table::tests::sealing::a_continuation_reads_back_with_reach_derived_through_the_sealed_tier`
+- `table::tests::sealing::a_stored_mask_trades_the_sealed_slot_for_its_id`
 - `table::tests::sealing::a_reach_that_names_two_sealed_regions_merges_their_ids_in_order`
 - `table::tests::sealing::reclaiming_a_records_last_holder_cascades_through_its_aggregate`
 
@@ -79,6 +79,27 @@ into a sealed record a live continuation already borrows into.
 
 - `table::tests::absorption::a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing`
 - `table::tests::absorption::a_cell_with_a_single_sealed_namer_seals_into_it`
+
+**The at-rest carrier and the crossing's two brands** ([src/resident.rs](../src/resident.rs),
+[src/table.rs](../src/table.rs)) — the same `retype` primitive at the doors a value crosses steps
+through. A value put to rest keeps its borrows while its home cell's storage moves under it — into
+a holder's region bundle, out to a sealed record, or both in turn — and the redeem door re-anchors
+it at a later step's brand, with the reach it hands back derived from wherever that storage ended
+up. The first three are the three exits a home takes, and the fourth chains two of them; what Miri
+checks across all four is that a borrow minted before any number of merges still names live chunks
+after them. The fifth is the load-bearing one for the park: a resident whose home has been
+reclaimed, and one whose record has retired, are moved into the door and refused, which is only a
+valid move because the value rests as bytes rather than as a reference. The sixth is the crossing's
+severing: a copied view is re-anchored at a brand unrelated to the destination's region and
+deep-copied through the writer, while a pinned one is embedded, so both re-anchors run in one
+build.
+
+- `table::tests::values::push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step`
+- `table::tests::values::pull_completes_after_the_producer_seals`
+- `table::tests::values::pull_completes_after_the_producer_is_absorbed_into_the_consumer`
+- `table::tests::values::a_resident_forwarded_through_two_merges_is_still_found`
+- `table::tests::values::redeem_refuses_once_the_storage_is_gone`
+- `table::tests::crossing::a_copied_view_is_readable_and_a_pinned_one_embeddable`
 
 ## Adding tests to the slate
 
@@ -99,9 +120,9 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-06: 99.00s — 66 tests, 0 leaks, 0 UB
 - 2026-09-05: 106.98s — 39 tests, 0 leaks, 0 UB
 - 2026-09-05: 99.61s — 39 tests, 0 leaks, 0 UB
 - 2026-09-05: 49.13s — 25 tests, 0 leaks, 0 UB
 - 2026-09-05: 70.27s — 24 tests, 0 leaks, 0 UB
-- 2026-09-05: 92.83s — 24 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

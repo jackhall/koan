@@ -134,6 +134,70 @@ pub struct Operand<'a, 'b, V: Reattachable + DropFree> {
 /// The build closure is quantified over both brands, so a `Copied` view has no outlives relation to
 /// the destination's region and embedding one is a compile error. A shallow copy is therefore
 /// unrepresentable, and the only copy that typechecks is a deep one through the writer.
+///
+/// Embedding the pinned view is what a pin buys, and it compiles:
+///
+/// ```
+/// use cellgraph::{CellTable, Crossed, DropFree, Operand, Verdict, reattachable};
+/// struct Work;
+/// reattachable!(Work => String);
+/// struct Number;
+/// reattachable!(Number => &'r u32);
+/// impl DropFree for Number {}
+///
+/// let mut table: CellTable<Work> = CellTable::new(2, |_| Verdict::Pin);
+/// let cell = table.create(None, None).unwrap();
+/// let other = table.create(None, None).unwrap();
+/// let read = table
+///     .enter(cell, |context| {
+///         let value = context.alloc::<Number>(|writer| writer.value(41));
+///         let placed = context
+///             .alloc_into::<Number, Number>(
+///                 other,
+///                 &[Operand { carrier: &value, copy_bytes: usize::MAX }],
+///                 |writer, views| match views[0] {
+///                     // The borrow itself, stored in the destination's region.
+///                     Crossed::Pinned(value) => value,
+///                     // A severed view can only be read and written again.
+///                     Crossed::Copied(value) => writer.value(*value),
+///                 },
+///             )
+///             .unwrap();
+///         *context.read(&placed).value()
+///     })
+///     .unwrap();
+/// assert_eq!(read, 41);
+/// ```
+///
+/// Handing a `Copied` view back as the built value does not:
+///
+/// ```compile_fail
+/// use cellgraph::{CellTable, Crossed, DropFree, Operand, Verdict, reattachable};
+/// struct Work;
+/// reattachable!(Work => String);
+/// struct Number;
+/// reattachable!(Number => &'r u32);
+/// impl DropFree for Number {}
+///
+/// let mut table: CellTable<Work> = CellTable::new(2, |_| Verdict::Copy);
+/// let cell = table.create(None, None).unwrap();
+/// let other = table.create(None, None).unwrap();
+/// table
+///     .enter(cell, |context| {
+///         let value = context.alloc::<Number>(|writer| writer.value(41));
+///         context
+///             .alloc_into::<Number, Number>(
+///                 other,
+///                 &[Operand { carrier: &value, copy_bytes: 0 }],
+///                 |_writer, views| match views[0] {
+///                     Crossed::Pinned(value) => value,
+///                     Crossed::Copied(value) => value,
+///                 },
+///             )
+///             .unwrap();
+///     })
+///     .unwrap();
+/// ```
 pub enum Crossed<'r, 'v, V: Reattachable> {
     Pinned(V::At<'r>),
     Copied(V::At<'v>),
@@ -1586,9 +1650,11 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
     {
         let table = &*self.table;
         let executing = self.handle.slot();
-        let (value, key) = resident.into_parts();
-        match table.locate(key.home) {
-            None => Err(RedeemError::Gone),
+        let key = resident.key();
+        // Decided before the value is touched: a resident rests as bytes precisely so that a
+        // refusal costs nothing, including when the storage those bytes name is gone.
+        let (reach, home) = match table.locate(key.home) {
+            None => return Err(RedeemError::Gone),
             Some(Location::Slab { slot, base }) => {
                 let entitled = slot == executing
                     || table.pins.test(executing, slot)
@@ -1601,7 +1667,7 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
                     .get(base + key.index)
                     .expect("a relocated key names an entry of the table it was forwarded to")
                     .clone();
-                Ok(Sealed::new(value, reach, slot))
+                (reach, slot)
             }
             Some(Location::Record(id)) => {
                 if !table.sealed_holds[executing as usize].contains(id) {
@@ -1609,10 +1675,15 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
                 }
                 // The record's id alone: a hold on it keeps its aggregate alive transitively, and
                 // a mask naming no slab bit has nothing that can go stale under a later `keep`.
-                let reach = Mask::single_sealed(table.cap, id);
-                Ok(Sealed::new(value, reach, executing))
+                (Mask::single_sealed(table.cap, id), executing)
             }
-        }
+        };
+        // SAFETY: the match above resolved the key's home to storage that is still there — a live
+        // slab slot this cell is the home of, holds, or descends from, or a record it holds — so
+        // the referents parked in those bytes are live for the whole step, which is the contract
+        // `take` asks for.
+        let value = unsafe { resident.take() };
+        Ok(Sealed::new(value, reach, home))
     }
 
     /// Read a carrier out at the reading borrow. The door hangs on the context, so a value with

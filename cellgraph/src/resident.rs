@@ -8,33 +8,71 @@
 //! that entry by a private key and nothing else. So an embedder cannot pair a value with a reach
 //! from outside — there is nothing pairable — and a mask a resident depends on cannot go stale,
 //! because it never left the table.
+//!
+//! It carries no *live value* either, and that is what separates this state from the in-step one.
+//! A resident outlives the step that built it, so by the time one is redeemed its home's storage
+//! may be gone — reclaimed, or retired with the record it sealed into. A reference into freed
+//! chunks is an invalid value the moment it is moved, whether or not anything reads through it, so
+//! the value rests here as **bytes**: parked at the `keep`, reconstituted only once the redeem
+//! door has established a claim on the storage it names.
+
+use std::mem::MaybeUninit;
 
 use crate::handle::Handle;
 use crate::mask::Mask;
 use crate::reattach::{DropFree, Erased, Reattachable};
 
-/// The at-rest carrier: a value erased to its lifetime-free form, plus the key naming its reach.
+/// The at-rest carrier: a value's bytes, parked, plus the key naming its reach.
 ///
 /// Opaque: it has no method at all. [`StepContext::redeem`] is the only door out, and it refuses
 /// unless the executing cell is entitled to the storage the reach names.
 ///
-/// `Copy` when the family's erased form is, for the same reason [`Sealed`] is: the erased value
+/// `Copy` when the family's erased form is, for the same reason [`Sealed`] is: the parked value
 /// names region bytes it does not own, and the key is two words.
 ///
 /// [`StepContext::redeem`]: crate::StepContext::redeem
 /// [`Sealed`]: crate::Sealed
 pub struct Resident<T: Reattachable + DropFree> {
-    value: Erased<T>,
+    /// The value parked. `MaybeUninit` is the whole point rather than an implementation detail: a
+    /// carrier at rest must be movable after its home's storage is gone, and a `T::At<'static>`
+    /// holding a reference into freed chunks is not. Parking asserts nothing about the referents,
+    /// so a resident whose home has been reclaimed is an ordinary value the door refuses.
+    ///
+    /// Nothing is lost by never reconstituting one: [`DropFree`] is what the value doors bound on,
+    /// and the assertion below is the check that the family really runs no destructor.
+    value: MaybeUninit<Erased<T>>,
     key: ResidentKey,
 }
 
 impl<T: Reattachable + DropFree> Resident<T> {
     pub(crate) fn new(value: Erased<T>, key: ResidentKey) -> Self {
-        Resident { value, key }
+        // A parked value is never dropped, so a family with drop glue would leak whatever it owns
+        // whenever a resident goes unredeemed. `DropFree` declares the absence; this is the check.
+        const { assert!(!std::mem::needs_drop::<T::At<'static>>()) };
+        Resident {
+            value: MaybeUninit::new(value),
+            key,
+        }
     }
 
-    pub(crate) fn into_parts(self) -> (Erased<T>, ResidentKey) {
-        (self.value, self.key)
+    /// Which entry of which cell's table holds this value's reach. Readable without disturbing the
+    /// parked value, which is what lets the redeem door decide before it reconstitutes anything.
+    pub(crate) fn key(&self) -> ResidentKey {
+        self.key
+    }
+
+    /// Reconstitute the parked value.
+    ///
+    /// # Safety
+    ///
+    /// The storage the value's referents name must still be there. The redeem door establishes
+    /// exactly that before it calls: the key's home resolves to a live slab slot or a present
+    /// record, and the executing cell holds it. A resident whose home resolves to neither must be
+    /// refused rather than opened — the bytes are still bytes, but the references in them are not.
+    pub(crate) unsafe fn take(self) -> Erased<T> {
+        // SAFETY: `new` is the only constructor and it always initializes; the caller's contract
+        // is what makes the referents in those bytes valid again.
+        unsafe { self.value.assume_init() }
     }
 }
 

@@ -2,7 +2,7 @@
 //! both relations, and the ring detector.
 
 use super::super::*;
-use super::{Borrowed, Number, Owned, operand, pin, pinned, state_of};
+use super::{ANCHOR, Borrowed, Number, Owned, continuation_reach, operand, pin, pinned, state_of};
 
 #[test]
 fn a_value_allocated_in_the_executing_cell_reaches_only_that_cell() {
@@ -205,4 +205,444 @@ fn an_acyclic_hold_graph_reports_no_ring() {
         .unwrap();
 
     assert!(table.debug_ring_from(first).is_none());
+}
+
+// The doors a value crosses steps through: `keep` puts a carrier down in its home cell's resident
+// table, and `redeem` takes it back up in a later step of a cell entitled to that storage. See
+// [design/cellgraph.md § Passing values between cells](../../../design/cellgraph.md).
+
+/// The one entry a cell's resident table holds, by the index a key names.
+fn resident_reach<C: Reattachable>(table: &CellTable<C>, slot: u32, index: u32) -> &Mask {
+    table.slots[slot as usize]
+        .residents
+        .get(index)
+        .expect("the entry the key names is in the table")
+}
+
+#[test]
+fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
+    let consumer = table.create(None, None).unwrap();
+    let producer = table.create(None, None).unwrap();
+
+    // The push shape: the producer builds straight into the consumer's region, so the value's home
+    // is the consumer and the producer's own column stays empty.
+    let kept = table
+        .enter(producer, |context| {
+            let placed = context
+                .alloc_into::<Number, Number>(consumer, &[], |writer, _| writer.value(41))
+                .unwrap();
+            context.keep(placed)
+        })
+        .unwrap();
+    assert_eq!(table.slots[consumer.slot() as usize].residents.len(), 1);
+    assert!(resident_reach(&table, consumer.slot(), 0).names(consumer.slot()));
+    assert!(table.relocated.is_empty());
+
+    // Nothing reaches the producer, so its death is a reclamation: the slot comes straight back
+    // and the map it never entered stays empty.
+    table.release(producer, Absorption::IntoHolder).unwrap();
+    assert_eq!(state_of(&table, producer), SlotState::Free);
+    assert!(table.relocated.is_empty());
+
+    let read = table
+        .enter(consumer, |context| {
+            let carrier = context
+                .redeem(kept)
+                .expect("the home redeems its own resident");
+            *context.read(&carrier).value()
+        })
+        .unwrap();
+    assert_eq!(read, 41);
+}
+
+#[test]
+fn pull_completes_after_the_producer_seals() {
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
+    let consumer = table.create(None, None).unwrap();
+    let producer = table.create(None, None).unwrap();
+
+    table
+        .enter(consumer, |context| context.hold(producer))
+        .unwrap()
+        .unwrap();
+    let kept = table
+        .enter(producer, |context| {
+            let value = context.alloc::<Number>(|writer| writer.value(41));
+            context.keep(value)
+        })
+        .unwrap();
+
+    // The pull shape: the producer dies still held, so its storage seals and the key it minted
+    // forwards to the record rather than stopping resolving.
+    table.release(producer, Absorption::Refused).unwrap();
+    let id = table.sealed.ids().next().unwrap();
+    assert_eq!(table.relocated.get(&producer), Some(&Location::Record(id)));
+    assert_eq!(table.sealed.get(id).unwrap().lineage, vec![producer]);
+
+    let read = table
+        .enter(consumer, |context| {
+            let carrier = context.redeem(kept).expect("the consumer holds the record");
+            // A value out of a record reaches the record's id and nothing in the slab: a hold on
+            // it keeps the whole aggregate alive transitively.
+            assert!(carrier.reach().names_sealed(id));
+            assert!(carrier.reach().slab_slots().next().is_none());
+            assert_eq!(carrier.reach().sealed().iter().count(), 1);
+            *context.read(&carrier).value()
+        })
+        .unwrap();
+    assert_eq!(read, 41);
+
+    // The record's last holder goes, so the record retires and takes its lineage with it.
+    table.release(consumer, Absorption::IntoHolder).unwrap();
+    assert_eq!(table.sealed.len(), 0);
+    assert!(table.relocated.is_empty());
+}
+
+#[test]
+fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
+    let consumer = table.create(None, None).unwrap();
+    let producer = table.create(None, None).unwrap();
+
+    table
+        .enter(consumer, |context| context.hold(producer))
+        .unwrap()
+        .unwrap();
+    let kept = table
+        .enter(producer, |context| {
+            let value = context.alloc::<Number>(|writer| writer.value(41));
+            context.keep(value)
+        })
+        .unwrap();
+
+    // The uniquely held producer folds into its holder rather than minting a record, and its
+    // resident masks move with the storage, re-homed at the consumer's bit.
+    table.release(producer, Absorption::IntoHolder).unwrap();
+    assert_eq!(table.sealed.len(), 0);
+    assert_eq!(
+        table.relocated.get(&producer),
+        Some(&Location::Slab {
+            slot: consumer.slot(),
+            base: 0,
+        })
+    );
+    let migrated = resident_reach(&table, consumer.slot(), 0);
+    assert!(migrated.names(consumer.slot()));
+    assert!(!migrated.names(producer.slot()));
+
+    // A second resident kept by the consumer itself lands past the migrated one, so the two keys
+    // name different entries and both redeem.
+    let own = table
+        .enter(consumer, |context| {
+            let value = context.alloc::<Number>(|writer| writer.value(9));
+            context.keep(value)
+        })
+        .unwrap();
+    let read = table
+        .enter(consumer, |context| {
+            let pulled = context.redeem(kept).expect("the absorbing cell answers");
+            let mine = context
+                .redeem(own)
+                .expect("the home redeems its own resident");
+            (*context.read(&pulled).value(), *context.read(&mine).value())
+        })
+        .unwrap();
+    assert_eq!(read, (41, 9));
+}
+
+#[test]
+fn a_resident_forwarded_through_two_merges_is_still_found() {
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
+    let end = table.create(None, None).unwrap();
+    let middle = table.create(None, None).unwrap();
+    let head = table.create(None, None).unwrap();
+
+    table
+        .enter(middle, |context| context.hold(head))
+        .unwrap()
+        .unwrap();
+    table
+        .enter(end, |context| context.hold(middle))
+        .unwrap()
+        .unwrap();
+    let kept = table
+        .enter(head, |context| {
+            let value = context.alloc::<Number>(|writer| writer.value(41));
+            context.keep(value)
+        })
+        .unwrap();
+
+    // Merge one: into the slab. Merge two: into the tier. The key is rewritten by each, so the
+    // chain of single-consumer producers costs the map one entry per merge and none per value.
+    table.release(head, Absorption::IntoHolder).unwrap();
+    table.release(middle, Absorption::Refused).unwrap();
+    let id = table.sealed.ids().next().unwrap();
+    assert_eq!(table.relocated.get(&head), Some(&Location::Record(id)));
+
+    let read = table
+        .enter(end, |context| {
+            let carrier = context.redeem(kept).expect("the end holds the record");
+            assert!(carrier.reach().names_sealed(id));
+            *context.read(&carrier).value()
+        })
+        .unwrap();
+    assert_eq!(read, 41);
+
+    table.release(end, Absorption::IntoHolder).unwrap();
+    assert_eq!(table.sealed.len(), 0);
+    assert!(table.relocated.is_empty());
+    assert_eq!(table.free.len(), 4);
+}
+
+#[test]
+fn redeem_refuses_a_cell_that_does_not_hold_the_home() {
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
+    let home = table.create(None, None).unwrap();
+    let bystander = table.create(None, None).unwrap();
+    let middle = table.create(None, None).unwrap();
+    let far = table.create(None, None).unwrap();
+
+    let kept = table
+        .enter(home, |context| {
+            let value = context.alloc::<Number>(|writer| writer.value(41));
+            context.keep(value)
+        })
+        .unwrap();
+
+    let refused = table
+        .enter(bystander, |context| context.redeem(kept).err())
+        .unwrap();
+    assert_eq!(refused, Some(RedeemError::Unheld));
+
+    // A hold is what entitles: with one, the same key answers.
+    let read = table
+        .enter(bystander, |context| {
+            context.hold(home).unwrap();
+            let carrier = context.redeem(kept).expect("the holder is entitled");
+            *context.read(&carrier).value()
+        })
+        .unwrap();
+    assert_eq!(read, 41);
+
+    // Entitlement is the direct relation, not its closure: reaching the home only through a cell
+    // in between is not a claim on the home's storage.
+    table
+        .enter(middle, |context| context.hold(home))
+        .unwrap()
+        .unwrap();
+    table
+        .enter(far, |context| context.hold(middle))
+        .unwrap()
+        .unwrap();
+    let transitive = table
+        .enter(far, |context| context.redeem(kept).err())
+        .unwrap();
+    assert_eq!(transitive, Some(RedeemError::Unheld));
+}
+
+#[test]
+fn redeem_refuses_once_the_storage_is_gone() {
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
+    let reclaimed = table.create(None, None).unwrap();
+    let onlooker = table.create(None, None).unwrap();
+
+    let orphan = table
+        .enter(reclaimed, |context| {
+            let value = context.alloc::<Number>(|writer| writer.value(41));
+            context.keep(value)
+        })
+        .unwrap();
+    // Nothing reached the home, so its death frees the chunks the resident named.
+    table.release(reclaimed, Absorption::IntoHolder).unwrap();
+    let gone = table
+        .enter(onlooker, |context| context.redeem(orphan).err())
+        .unwrap();
+    assert_eq!(gone, Some(RedeemError::Gone));
+
+    // The other way storage goes: sealed, then retired when its last holder leaves.
+    let sealed_home = table.create(None, None).unwrap();
+    let holder = table.create(None, None).unwrap();
+    table
+        .enter(holder, |context| context.hold(sealed_home))
+        .unwrap()
+        .unwrap();
+    let retired = table
+        .enter(sealed_home, |context| {
+            let value = context.alloc::<Number>(|writer| writer.value(41));
+            context.keep(value)
+        })
+        .unwrap();
+    table.release(sealed_home, Absorption::Refused).unwrap();
+    table.release(holder, Absorption::IntoHolder).unwrap();
+    assert_eq!(table.sealed.len(), 0);
+
+    let gone = table
+        .enter(onlooker, |context| context.redeem(retired).err())
+        .unwrap();
+    assert_eq!(gone, Some(RedeemError::Gone));
+}
+
+#[test]
+fn a_birth_hold_entitles_a_child_to_its_parents_resident() {
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
+    let parent = table.create(None, None).unwrap();
+    let child = table.create(Some(parent), None).unwrap();
+
+    let kept = table
+        .enter(parent, |context| {
+            let value = context.alloc::<Number>(|writer| writer.value(41));
+            context.keep(value)
+        })
+        .unwrap();
+
+    // The birth row is a claim on the parent's storage in its own right: the child took no pin
+    // hold, and the parent's row names nothing of the child's.
+    assert!(!table.holds(child, parent));
+    let read = table
+        .enter(child, |context| {
+            *context
+                .read(&context.redeem(kept).expect("a child is entitled"))
+                .value()
+        })
+        .unwrap();
+    assert_eq!(read, 41);
+
+    // A birth row has no sealed half, so a declared death leaves the parent resident in the slab
+    // with its storage intact — and the child's claim outlives the death.
+    table.release(parent, Absorption::IntoHolder).unwrap();
+    assert_eq!(state_of(&table, parent), SlotState::Dead);
+    let read = table
+        .enter(child, |context| {
+            *context
+                .read(&context.redeem(kept).expect("the storage is still there"))
+                .value()
+        })
+        .unwrap();
+    assert_eq!(read, 41);
+}
+
+#[test]
+fn a_redeemed_record_value_can_be_kept_again() {
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
+    let producer = table.create(None, None).unwrap();
+    let middle = table.create(None, None).unwrap();
+    let end = table.create(None, None).unwrap();
+
+    table
+        .enter(middle, |context| context.hold(producer))
+        .unwrap()
+        .unwrap();
+    table
+        .enter(end, |context| context.hold(middle))
+        .unwrap()
+        .unwrap();
+    let first = table
+        .enter(producer, |context| {
+            let value = context.alloc::<Number>(|writer| writer.value(41));
+            context.keep(value)
+        })
+        .unwrap();
+    table.release(producer, Absorption::Refused).unwrap();
+    let record = table.sealed.ids().next().unwrap();
+
+    // A carrier redeemed out of a record is a carrier like any other: keeping it registers its
+    // record-only reach in the redeeming cell's own table.
+    let again = table
+        .enter(middle, |context| {
+            let carrier = context.redeem(first).expect("the middle holds the record");
+            context.keep(carrier)
+        })
+        .unwrap();
+    assert!(resident_reach(&table, middle.slot(), 0).names_sealed(record));
+    let read = table
+        .enter(middle, |context| {
+            *context
+                .read(&context.redeem(again).expect("its own resident"))
+                .value()
+        })
+        .unwrap();
+    assert_eq!(read, 41);
+
+    // The re-keeping cell now seals in turn, and the key forwards to its record.
+    table.release(middle, Absorption::Refused).unwrap();
+    let outer = table.sealed_holds[end.slot() as usize]
+        .iter()
+        .next()
+        .expect("the end holds the record the middle sealed into");
+    let read = table
+        .enter(end, |context| {
+            let carrier = context
+                .redeem(again)
+                .expect("the end holds the outer record");
+            assert!(carrier.reach().names_sealed(outer));
+            *context.read(&carrier).value()
+        })
+        .unwrap();
+    assert_eq!(read, 41);
+}
+
+#[test]
+fn the_continuation_is_one_entry_of_the_resident_table() {
+    let mut table: CellTable<Borrowed> = CellTable::new(4, pin);
+    let cell = table.create(None, None).unwrap();
+    let over = table.create(None, None).unwrap();
+
+    table
+        .enter(cell, |context| {
+            let value = context
+                .alloc_into::<Number, Number>(over, &[], |writer, _| writer.value(41))
+                .unwrap();
+            context
+                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
+        })
+        .unwrap();
+    assert_eq!(
+        table.slots[cell.slot() as usize].continuation_reach,
+        Some(0)
+    );
+    assert_eq!(table.slots[cell.slot() as usize].residents.len(), 1);
+    let stored = continuation_reach(&table, cell);
+    assert!(stored.names(over.slot()));
+    assert!(stored.names(cell.slot()));
+
+    // A continuation that captures nothing reaches nothing: the entry is emptied where it stands,
+    // since an index is a name and retiring one would strand every key past it.
+    table
+        .enter(cell, |context| {
+            context.continuation();
+            context.store_successor(&ANCHOR);
+        })
+        .unwrap();
+    assert_eq!(
+        table.slots[cell.slot() as usize].continuation_reach,
+        Some(0)
+    );
+    assert_eq!(table.slots[cell.slot() as usize].residents.len(), 1);
+    let emptied = continuation_reach(&table, cell);
+    assert!(emptied.slab_slots().next().is_none());
+    assert!(emptied.sealed().is_empty());
+
+    // And the next capturing store writes that same entry rather than growing the table.
+    table
+        .enter(cell, |context| {
+            context.continuation();
+            let value = context
+                .alloc_into::<Number, Number>(over, &[], |writer, _| writer.value(7))
+                .unwrap();
+            context
+                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
+        })
+        .unwrap();
+    assert_eq!(
+        table.slots[cell.slot() as usize].continuation_reach,
+        Some(0)
+    );
+    assert_eq!(table.slots[cell.slot() as usize].residents.len(), 1);
+    assert!(continuation_reach(&table, cell).names(over.slot()));
+
+    let read = table
+        .enter(cell, |context| *context.continuation().unwrap().value())
+        .unwrap();
+    assert_eq!(read, 7);
 }

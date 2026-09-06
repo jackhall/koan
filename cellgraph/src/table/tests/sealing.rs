@@ -12,21 +12,36 @@ use super::{Borrowed, Number, Owned, continuation_reach, operand, pin, pinned};
 const SMALL: usize = 16;
 const LARGE: usize = if cfg!(miri) { 512 } else { 10_000 };
 
-/// Seal a held cell holding `resident` values, and report the maintenance the transition performed.
-fn seal_work_for(resident: usize) -> u64 {
+/// Seal a held cell and report the maintenance the transition performed.
+///
+/// The producer stores `stored` values in its region and puts `kept_by_producer` more of them to
+/// rest as residents; the holder puts `kept_by_holder` values of its own to rest. The three knobs
+/// are the three quantities the transition could plausibly be proportional to, and only one of
+/// them may be.
+fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) -> u64 {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let holder = table.create(None, None).unwrap();
     let producer = table.create(None, None).unwrap();
 
     table
         .enter(producer, |context| {
-            for value in 0..resident {
+            for value in 0..stored {
                 context.alloc::<Number>(|writer| writer.value(value as u32));
+            }
+            for value in 0..kept_by_producer {
+                let carrier = context.alloc::<Number>(|writer| writer.value(value as u32));
+                context.keep(carrier);
             }
         })
         .unwrap();
     table
-        .enter(holder, |context| context.hold(producer))
+        .enter(holder, |context| {
+            for value in 0..kept_by_holder {
+                let carrier = context.alloc::<Number>(|writer| writer.value(value as u32));
+                context.keep(carrier);
+            }
+            context.hold(producer)
+        })
         .unwrap()
         .unwrap();
 
@@ -37,10 +52,27 @@ fn seal_work_for(resident: usize) -> u64 {
 }
 
 #[test]
-fn the_seal_transition_is_bounded_by_the_row_and_the_index_not_the_storage() {
+fn the_seal_transition_is_bounded_by_the_holders_residents_not_the_storage() {
     // Atomicity is exactly this: the aggregate is a word copy out of the matrix, so a region with
     // ten thousand resident values costs what one with sixteen costs.
-    assert_eq!(seal_work_for(SMALL), seal_work_for(LARGE));
+    assert_eq!(seal_work_for(SMALL, 4, 0), seal_work_for(LARGE, 4, 0));
+
+    // What the transition *is* proportional to: each holder's resident table, one entry at a
+    // time, because the dying slot's bit has to become the record's id in every mask that names
+    // it. Four more entries in the one holder's table, four more units of work — exactly.
+    assert_eq!(
+        seal_work_for(SMALL, 8, 0) - seal_work_for(SMALL, 4, 0),
+        4,
+        "the rewrite is bounded by the holders' resident counts"
+    );
+
+    // And not to the dying cell's own residents: those masks are dead bytes the moment the
+    // storage they name is in the record, so the transition forwards one lineage entry for the
+    // whole table rather than touching an entry per value.
+    assert_eq!(
+        seal_work_for(SMALL, 4, SMALL),
+        seal_work_for(SMALL, 4, LARGE)
+    );
 }
 
 #[test]

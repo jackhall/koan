@@ -1,6 +1,6 @@
 //! The liveness-matrix invariants, over random interleavings of the verbs. The hand-written tests
-//! pin shapes; this one pins that no order of `create` / `hold` / `alloc_into` / `keep` / `read` /
-//! `release` can break the conditions the whole model rests on
+//! pin shapes; this one pins that no order of `create` / `hold` / `alloc_into` / `keep` / `redeem`
+//! / `read` / `release` can break the conditions the whole model rests on
 //! ([liveness-matrix.md § Invariants](../../../design/liveness-matrix.md#invariants)):
 //!
 //! - a recycled slot is named by nothing — no occupant's row in either relation, and no frozen
@@ -9,7 +9,11 @@
 //!   relation with no sealed half to convert into;
 //! - every sealed record's holder count equals the number of hold sets that name it, and the
 //!   reverse naming index is exactly the transpose of the aggregates;
-//! - every bit and id of a stored mask is covered by a live cell or a live record — mask validity;
+//! - every bit and id of a resident's mask is covered by storage its cell is answerable for —
+//!   mask validity, over the whole resident table rather than one stored continuation;
+//! - the relocation map and the lineages agree in both directions, and every relocated key names
+//!   an entry that exists — so a resident forwarded through any number of merges still redeems to
+//!   the value it was kept as, which the redeem verb reads back and checks;
 //! - no hold set names its own owner, and every present record has a holder — which together make
 //!   a record that survives a wound-down run a ring by arithmetic, with no ring walk in the loop;
 //! - the live tier never grows across a release, so storage that has sealed never re-enters it;
@@ -22,9 +26,24 @@
 use proptest::prelude::*;
 
 use super::super::*;
-use super::{Borrowed, Number, live_bytes, operand, pin, pinned};
+use super::{Borrowed, Number, live_bytes, operand_at, pin, take};
 
 const CAP: u32 = 6;
+
+/// A verdict that reaches both arms across a run: two pins, then a copy. Deterministic, so a
+/// shrunk failure replays exactly — and the invariants have to hold under either answer, since a
+/// copy mints no hold where a pin would have.
+fn alternating() -> impl FnMut(Crossing) -> Verdict + 'static {
+    let mut seen = 0u32;
+    move |_| {
+        seen += 1;
+        if seen.is_multiple_of(3) {
+            Verdict::Copy
+        } else {
+            Verdict::Pin
+        }
+    }
+}
 
 /// One verb, with its operands as indices into the handles minted so far — so a generated run
 /// names cells that may since have died, which is the point: a stale operand must be refused, not
@@ -34,22 +53,35 @@ enum Verb {
     Create { parent: Option<usize> },
     Hold { holder: usize, held: usize },
     Place { producer: usize, consumer: usize },
-    Keep { cell: usize, over: usize },
+    Continue { cell: usize, over: usize },
+    Keep { cell: usize },
+    Redeem { cell: usize, index: usize },
     Read { cell: usize },
     Release { cell: usize, refuse: bool },
     Price { index: usize },
 }
 
-/// The verbs that change the table. What the merge-coverage test draws from: a read-only verb
-/// reaches no merge, so mixing one in would only thin the corpus that has to reach all three.
-fn state_verb() -> impl Strategy<Value = Verb> {
+/// The verbs that can reach a merge — the ones that change a relation or take a release path.
+/// What the merge-coverage test draws from: a verb that reaches no merge would only spend a step
+/// the corpus needed for one, and the three shapes are already rare in a random interleaving.
+fn merge_verb() -> impl Strategy<Value = Verb> {
     prop_oneof![
         proptest::option::of(0..8usize).prop_map(|parent| Verb::Create { parent }),
         (0..8usize, 0..8usize).prop_map(|(holder, held)| Verb::Hold { holder, held }),
         (0..8usize, 0..8usize).prop_map(|(producer, consumer)| Verb::Place { producer, consumer }),
-        (0..8usize, 0..8usize).prop_map(|(cell, over)| Verb::Keep { cell, over }),
+        (0..8usize, 0..8usize).prop_map(|(cell, over)| Verb::Continue { cell, over }),
         (0..8usize).prop_map(|cell| Verb::Read { cell }),
         (0..8usize, any::<bool>()).prop_map(|(cell, refuse)| Verb::Release { cell, refuse }),
+    ]
+}
+
+/// Those plus the two resident doors, which mint no hold and take no release path of their own —
+/// what they do reach is the resident table, the relocation map, and the masks a merge forwards.
+fn state_verb() -> impl Strategy<Value = Verb> {
+    prop_oneof![
+        3 => merge_verb(),
+        1 => (0..8usize).prop_map(|cell| Verb::Keep { cell }),
+        1 => (0..8usize, 0..8usize).prop_map(|(cell, index)| Verb::Redeem { cell, index }),
     ]
 }
 
@@ -200,6 +232,65 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
         }
     }
 
+    // Relocation is consistent both ways: every key the map answers for names storage that is
+    // still there and answers for that key in turn, and every lineage entry a slot or a record
+    // carries is a key of the map pointing back at it. A one-way break would strand a resident or
+    // hand one storage that is not its own.
+    for (handle, location) in &table.relocated {
+        assert!(
+            !table.is_live(*handle),
+            "a live cell answers for its own residents, so it needs no relocation entry"
+        );
+        match location {
+            Location::Slab { slot, base } => {
+                let cell = &table.slots[*slot as usize];
+                assert!(
+                    cell.state != SlotState::Free,
+                    "{handle:?} is relocated to the recycled slot {slot}"
+                );
+                assert!(
+                    cell.lineage.contains(handle),
+                    "slot {slot} answers for {handle:?} without carrying it in its lineage"
+                );
+                assert!(
+                    *base < cell.residents.len(),
+                    "{handle:?} is relocated past the end of slot {slot}'s resident table"
+                );
+            }
+            Location::Record(id) => {
+                let record = table
+                    .sealed
+                    .get(*id)
+                    .expect("a relocation entry names a retired record");
+                assert!(
+                    record.lineage.contains(handle),
+                    "record {id:?} answers for {handle:?} without carrying it in its lineage"
+                );
+            }
+        }
+    }
+    for slot in 0..CAP {
+        for handle in &table.slots[slot as usize].lineage {
+            assert_eq!(
+                table.relocated.get(handle).map(|location| match location {
+                    Location::Slab { slot, .. } => Some(*slot),
+                    Location::Record(_) => None,
+                }),
+                Some(Some(slot)),
+                "slot {slot} carries {handle:?} in its lineage without the map pointing here"
+            );
+        }
+    }
+    for id in &records {
+        for handle in &table.sealed.get(*id).unwrap().lineage {
+            assert_eq!(
+                table.relocated.get(handle),
+                Some(&Location::Record(*id)),
+                "record {id:?} carries {handle:?} in its lineage without the map pointing here"
+            );
+        }
+    }
+
     // The occupancy signal is a maintained total, not a scan, so it has to agree with one.
     let scanned: usize = records
         .iter()
@@ -253,9 +344,13 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
 /// Drive one generated run to its end — every verb, then a wind-down that releases everything —
 /// checking the invariants after every step. Reports the merges the run performed, which is what
 /// tells a generated corpus that reaches all three shapes from one that only claims to.
-fn run(verbs: &[Verb]) -> Merges {
-    let mut table: CellTable<Borrowed> = CellTable::new(CAP, pin);
+fn run(verbs: &[Verb], verdict: impl FnMut(Crossing) -> Verdict + 'static) -> Merges {
+    let mut table: CellTable<Borrowed> = CellTable::new(CAP, verdict);
     let mut minted: Vec<Handle> = Vec::new();
+    // Every value put to rest, beside the cell it was kept in and the number it carries — so a
+    // redeem that answers can be checked against what it was supposed to hand back.
+    let mut kept: Vec<(Handle, Resident<Number>, u32)> = Vec::new();
+    let mut next_value: u32 = 0;
     // Nothing has been priced yet, so no record may carry a memo.
     let mut memoized: Vec<SealedId> = Vec::new();
 
@@ -285,8 +380,8 @@ fn run(verbs: &[Verb]) -> Merges {
                         context
                             .alloc_into::<Number, Number>(
                                 consumer,
-                                &[operand(&value)],
-                                |_w, views| pinned(&views[0]),
+                                &[operand_at(&value, 1)],
+                                |writer, views| take(&views[0], writer),
                             )
                             .map(|_| ())
                     });
@@ -294,7 +389,7 @@ fn run(verbs: &[Verb]) -> Merges {
             }
             // A continuation kept over a value homed elsewhere is the one stored mask a cell
             // owns, and the only thing the seal transition has to rewrite.
-            Verb::Keep { cell, over } => {
+            Verb::Continue { cell, over } => {
                 if let (Some(cell), Some(over)) =
                     (minted.get(cell).copied(), minted.get(over).copied())
                     && table.is_live(cell)
@@ -303,11 +398,78 @@ fn run(verbs: &[Verb]) -> Merges {
                         if let Ok(value) =
                             context.alloc_into::<Number, Number>(over, &[], |w, _| w.value(1))
                         {
-                            context.store_successor_capturing(&[operand(&value)], |_w, views| {
-                                pinned(&views[0])
-                            });
+                            context.store_successor_capturing(
+                                &[operand_at(&value, 1)],
+                                |writer, views| take(&views[0], writer),
+                            );
                         }
                     });
+                }
+            }
+            // A value put to rest in the cell that built it. Its mask lives in that cell's
+            // resident table from here on, where every merge and every seal has to maintain it.
+            Verb::Keep { cell } => {
+                if let Some(cell) = minted.get(cell).copied()
+                    && table.is_live(cell)
+                {
+                    let carried = next_value;
+                    next_value += 1;
+                    let resident = table
+                        .enter(cell, |context| {
+                            let value = context.alloc::<Number>(|writer| writer.value(carried));
+                            context.keep(value)
+                        })
+                        .unwrap();
+                    kept.push((cell, resident, carried));
+                }
+            }
+            // The door back. The outcome is predicted from the table's state before the call —
+            // where the home's residents live now, and whether this cell has a claim on them —
+            // and a successful redeem has to hand back the number that was kept, which is what
+            // says a mask forwarded through a merge still names the right storage.
+            Verb::Redeem { cell, index } => {
+                if let Some(cell) = minted.get(cell).copied()
+                    && table.is_live(cell)
+                    && !kept.is_empty()
+                {
+                    let (home, resident, carried) = kept[index % kept.len()];
+                    let expected = match table.locate(home) {
+                        None => Err(RedeemError::Gone),
+                        Some(Location::Slab { slot, .. }) => {
+                            if slot == cell.slot()
+                                || table.pins.test(cell.slot(), slot)
+                                || table.birth.test(cell.slot(), slot)
+                            {
+                                Ok(())
+                            } else {
+                                Err(RedeemError::Unheld)
+                            }
+                        }
+                        Some(Location::Record(id)) => {
+                            if table.sealed_holds[cell.slot() as usize].contains(id) {
+                                Ok(())
+                            } else {
+                                Err(RedeemError::Unheld)
+                            }
+                        }
+                    };
+                    let outcome = table
+                        .enter(cell, |context| match context.redeem(resident) {
+                            Ok(carrier) => {
+                                assert_eq!(
+                                    *context.read(&carrier).value(),
+                                    carried,
+                                    "a redeemed value read storage that was not its own"
+                                );
+                                Ok(())
+                            }
+                            Err(error) => Err(error),
+                        })
+                        .unwrap();
+                    assert_eq!(
+                        outcome, expected,
+                        "the redeem door disagreed with the relations that entitle it"
+                    );
                 }
             }
             // Reading the kept continuation back is the re-anchor: the value comes out at the
@@ -420,7 +582,7 @@ proptest! {
     fn no_interleaving_strands_a_slot_or_desynchronizes_the_two_tiers(
         verbs in proptest::collection::vec(verb(), 1..40)
     ) {
-        run(&verbs);
+        run(&verbs, alternating());
     }
 }
 
@@ -435,13 +597,16 @@ fn each_merge_fires_across_generated_interleavings() {
     use proptest::test_runner::TestRunner;
 
     let cases = if cfg!(miri) { 4 } else { 256 };
-    let strategy = proptest::collection::vec(state_verb(), 1..40);
+    let strategy = proptest::collection::vec(merge_verb(), 1..40);
     let mut runner = TestRunner::deterministic();
     let mut total = Merges::default();
 
     for _ in 0..cases {
         let verbs = strategy.new_tree(&mut runner).unwrap().current();
-        let merges = run(&verbs);
+        // Always-pin: a merge is a release-path shape, and it is pins that build the chains one
+        // needs. A verdict that severs a third of them only thins the corpus this sweep is
+        // measuring, without putting any merge out of reach in principle.
+        let merges = run(&verbs, pin);
         total.into_cell += merges.into_cell;
         total.at_seal += merges.at_seal;
         total.into_namer += merges.into_namer;

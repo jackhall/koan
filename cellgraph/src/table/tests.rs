@@ -1,4 +1,5 @@
 mod absorption;
+mod crossing;
 mod pricing;
 mod properties;
 mod sealing;
@@ -33,12 +34,20 @@ fn pin(_: Crossing) -> Verdict {
     Verdict::Pin
 }
 
-/// An operand at no stated copy cost — what a test that never expects a `Copy` verdict passes.
-fn operand<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Sealed<'b, V>) -> Operand<'a, 'b, V> {
+/// An operand at a stated copy cost — the half of the price the substrate cannot know.
+fn operand_at<'a, 'b, V: Reattachable + DropFree>(
+    carrier: &'a Sealed<'b, V>,
+    copy_bytes: usize,
+) -> Operand<'a, 'b, V> {
     Operand {
         carrier,
-        copy_bytes: 0,
+        copy_bytes,
     }
+}
+
+/// An operand at no stated copy cost — what a test that never expects a `Copy` verdict passes.
+fn operand<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Sealed<'b, V>) -> Operand<'a, 'b, V> {
+    operand_at(carrier, 0)
 }
 
 /// The pinned view of a crossed operand. Every test that uses it runs under [`pin`], so the copy
@@ -50,6 +59,25 @@ where
     match view {
         Crossed::Pinned(value) => *value,
         Crossed::Copied(_) => unreachable!("the test's verdict always pins"),
+    }
+}
+
+/// The deep copy a severed view allows and the embed a pinned one allows, in one build — what a
+/// test that runs under both verdicts passes.
+fn take<'r>(view: &Crossed<'r, '_, Number>, writer: Writer<'r>) -> &'r u32 {
+    match view {
+        // Pinned: the borrow itself, embedded in the destination's storage.
+        Crossed::Pinned(value) => value,
+        // Copied: severed, so the only thing that typechecks is a fresh allocation.
+        Crossed::Copied(value) => writer.value(**value),
+    }
+}
+
+/// What a view reads, whichever brand it arrived at — for a build that only needs the number.
+fn number(view: &Crossed<'_, '_, Number>) -> u32 {
+    match view {
+        Crossed::Pinned(value) => **value,
+        Crossed::Copied(value) => **value,
     }
 }
 
