@@ -10,7 +10,7 @@ mod tests;
 use crate::carrier::{Opened, Sealed};
 use crate::handle::{Handle, StaleHandle};
 use crate::mask::Mask;
-use crate::matrix::{BitRow, Matrix};
+use crate::matrix::{Bits, Matrix};
 use crate::reattach::{DropFree, Erased, Reattachable};
 use crate::region::{Region, Writer};
 use crate::sealed::{Memo, SealedId, SealedRecord, SealedSet, SealedTier};
@@ -176,7 +176,7 @@ pub struct CellTable<C: Reattachable> {
     /// without scanning the tier.
     naming: Box<[SealedSet]>,
     sealed: SealedTier,
-    executing: BitRow,
+    executing: Bits,
     cap: u32,
     /// Units of maintenance the seal transitions of this table have performed — the quantity the
     /// bounded-transition test asserts is independent of a region's resident value count.
@@ -223,7 +223,7 @@ impl<C: Reattachable> CellTable<C> {
             sealed_holds: (0..cap).map(|_| SealedSet::new()).collect(),
             naming: (0..cap).map(|_| SealedSet::new()).collect(),
             sealed: SealedTier::new(),
-            executing: BitRow::new(cap),
+            executing: Bits::new(cap),
             cap,
             #[cfg(test)]
             seal_work: 0,
@@ -416,8 +416,8 @@ impl<C: Reattachable> CellTable<C> {
     /// Reads of the absorbed values stay on the per-value-mask path: the chunks are now the
     /// target's own storage, which its stored mask already names, so no id enters the picture.
     fn absorb_into_cell(&mut self, dead: u32, into: u32) {
-        let holds = Mask::with_words(
-            self.pins.row_words(dead),
+        let holds = Mask::from_parts(
+            self.pins.row(dead).to_owned(),
             std::mem::take(&mut self.sealed_holds[dead as usize]),
         );
         // The target's hold on the dead cell is structural from here on: the storage is its own.
@@ -458,8 +458,8 @@ impl<C: Reattachable> CellTable<C> {
     /// No stored mask needs rewriting: a stored mask naming a slot implies a pin hold on it, and
     /// this cell's slab column is empty by the precondition.
     fn seal_into_namer(&mut self, dead: u32, namer: SealedId) {
-        let holds = Mask::with_words(
-            self.pins.row_words(dead),
+        let holds = Mask::from_parts(
+            self.pins.row(dead).to_owned(),
             std::mem::take(&mut self.sealed_holds[dead as usize]),
         );
         let storage = self.slots[dead as usize].region.take();
@@ -505,13 +505,12 @@ impl<C: Reattachable> CellTable<C> {
         holds: Mask,
         storage: Option<Region>,
     ) -> (Vec<SealedId>, SealedSet) {
-        let cap = self.cap;
         let record = self
             .sealed
             .get_mut(target)
             .expect("the merge target is in the tier");
         let newly_named: Vec<u32> = holds
-            .slab_slots(cap)
+            .slab_slots()
             .filter(|slot| !record.aggregate.names(*slot))
             .collect();
         record.aggregate.union_slab_with(&holds);
@@ -569,7 +568,7 @@ impl<C: Reattachable> CellTable<C> {
                 .sealed
                 .remove(source)
                 .expect("the record was just read");
-            let named: Vec<u32> = absorbed.aggregate.slab_slots(self.cap).collect();
+            let named: Vec<u32> = absorbed.aggregate.slab_slots().collect();
             for slot in &named {
                 self.naming[*slot as usize].remove(source);
             }
@@ -657,8 +656,8 @@ impl<C: Reattachable> CellTable<C> {
         let id = self.sealed.mint_id();
         // The cell's hold set, both halves, frozen rather than cleared. Its sealed half moves from
         // the cell to the record, so the ids it names change holder without changing count.
-        let aggregate = Mask::with_words(
-            self.pins.row_words(slot),
+        let aggregate = Mask::from_parts(
+            self.pins.row(slot).to_owned(),
             std::mem::take(&mut self.sealed_holds[slot as usize]),
         );
         let storage = self.slots[slot as usize].region.take();
@@ -681,7 +680,7 @@ impl<C: Reattachable> CellTable<C> {
         }
         // 3. The new record registers under every slab bit it names, so the next seal of one of
         //    those slots finds it.
-        let registered: Vec<u32> = aggregate.slab_slots(self.cap).collect();
+        let registered: Vec<u32> = aggregate.slab_slots().collect();
         for named in &registered {
             self.naming[*named as usize].insert(id);
         }
@@ -731,7 +730,7 @@ impl<C: Reattachable> CellTable<C> {
         let Some(record) = self.sealed.remove(id) else {
             return SealedSet::new();
         };
-        let named: Vec<u32> = record.aggregate.slab_slots(self.cap).collect();
+        let named: Vec<u32> = record.aggregate.slab_slots().collect();
         for slot in named {
             self.naming[slot as usize].remove(id);
         }
@@ -774,7 +773,7 @@ impl<C: Reattachable> CellTable<C> {
     /// nothing may read, so the aggregate is what stands in for them — and a resident value's true
     /// reach is a subset of its region's holds by mint-time coverage.
     fn derive_reach(&self, stored: &Mask) -> Mask {
-        let mut derived = Mask::with_words(stored.words(), SealedSet::new());
+        let mut derived = Mask::from_parts(stored.slab().clone(), SealedSet::new());
         for id in stored.sealed().iter() {
             derived.add_sealed(id);
             if let Some(record) = self.sealed.get(id) {
@@ -991,7 +990,7 @@ impl<C: Reattachable> CellTable<C> {
     /// the shared part twice. `use_memos` is false only where a test recomputes a memo from
     /// scratch to check it against what was recorded.
     fn reached_from(&self, start: Node, use_memos: bool) -> Reached {
-        let mut seen_cells = BitRow::new(self.cap);
+        let mut seen_cells = Bits::new(self.cap);
         let mut seen_records = SealedSet::new();
         let mut reached = Reached {
             cells: Vec::new(),
@@ -1073,14 +1072,14 @@ impl<C: Reattachable> CellTable<C> {
         match node {
             Node::Cell(slot) => self
                 .pins
-                .held_by(slot, self.cap)
+                .held_by(slot)
                 .map(Node::Cell)
                 .chain(self.sealed_holds[slot as usize].iter().map(Node::Sealed))
                 .collect(),
             Node::Sealed(id) => match self.sealed.get(id) {
                 Some(record) => record
                     .aggregate
-                    .slab_slots(self.cap)
+                    .slab_slots()
                     .map(Node::Cell)
                     .chain(record.aggregate.sealed().iter().map(Node::Sealed))
                     .collect(),

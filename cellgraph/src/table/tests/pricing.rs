@@ -544,11 +544,11 @@ fn pricing_mutates_no_hold() {
         .collect();
     let ids: Vec<SealedId> = table.sealed.ids().collect();
 
-    let pins: Vec<Vec<u64>> = (0..10)
-        .map(|slot| table.pins.row_words(slot).to_vec())
+    let pins: Vec<Bits> = (0..10)
+        .map(|slot| table.pins.row(slot).to_owned())
         .collect();
-    let births: Vec<Vec<u64>> = (0..10)
-        .map(|slot| table.birth.row_words(slot).to_vec())
+    let births: Vec<Bits> = (0..10)
+        .map(|slot| table.birth.row(slot).to_owned())
         .collect();
     let sealed_holds: Vec<SealedSet> = table.sealed_holds.to_vec();
     let naming: Vec<SealedSet> = table.naming.to_vec();
@@ -574,11 +574,8 @@ fn pricing_mutates_no_hold() {
 
     // The memo is the only mark a price query leaves, and a memo is not a hold.
     for slot in 0..10 {
-        assert_eq!(table.pins.row_words(slot), pins[slot as usize].as_slice());
-        assert_eq!(
-            table.birth.row_words(slot),
-            births[slot as usize].as_slice()
-        );
+        assert_eq!(table.pins.row(slot).to_owned(), pins[slot as usize]);
+        assert_eq!(table.birth.row(slot).to_owned(), births[slot as usize]);
     }
     assert_eq!(table.sealed_holds.to_vec(), sealed_holds);
     assert_eq!(table.naming.to_vec(), naming);

@@ -142,7 +142,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
             !record.aggregate.names_sealed(*id),
             "record {id:?} names itself"
         );
-        for named in record.aggregate.slab_slots(CAP) {
+        for named in record.aggregate.slab_slots() {
             assert!(
                 table.naming[named as usize].contains(*id),
                 "record {id:?} names slot {named} without registering in the naming index"
@@ -176,7 +176,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
         }
         // Mask validity: every bit and id of the cell's one stored mask is covered.
         if let Some(stored) = &table.slots[slot as usize].continuation {
-            for named in stored.reach.slab_slots(CAP) {
+            for named in stored.reach.slab_slots() {
                 assert!(
                     table.slots[named as usize].state != SlotState::Free,
                     "slot {slot} stores a mask naming the recycled slot {named}"
@@ -304,7 +304,7 @@ fn run(verbs: &[Verb]) -> Merges {
                         })
                         .unwrap();
                     if let Some(reach) = reach {
-                        for named in reach.slab_slots(CAP) {
+                        for named in reach.slab_slots() {
                             assert!(
                                 table.slots[named as usize].state != SlotState::Free,
                                 "a read handed back a mask naming the recycled slot {named}"
