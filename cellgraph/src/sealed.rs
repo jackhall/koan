@@ -15,6 +15,9 @@ use crate::handle::Handle;
 use crate::mask::Mask;
 use crate::region::Region;
 
+#[cfg(test)]
+mod tests;
+
 /// The name of one sealed region. Drawn in creation order from a space that never wraps and never
 /// reuses, so an id names the same region for the whole life of the table.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -59,6 +62,11 @@ impl SealedSet {
 
     /// Fold another set in. The sparse half of reach composition, and idempotent for the same
     /// reason the word `OR` is: naming a region twice is naming it once.
+    ///
+    /// Insertion, not a merge down the two sets. A merge is the cheaper shape when the sides are
+    /// comparable, but the fold reach composition performs is skewed — a handful of ids into a set
+    /// that mostly names them already — and at that shape a search per id beats a walk down
+    /// everything both sides name.
     pub(crate) fn union_with(&mut self, other: &SealedSet) {
         for id in other.iter() {
             self.insert(id);

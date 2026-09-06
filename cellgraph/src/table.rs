@@ -796,14 +796,20 @@ impl<C: Reattachable> CellTable<C> {
         holds: Mask,
         storage: Option<Region>,
     ) -> (Vec<SealedId>, SealedSet) {
+        let naming = &mut self.naming;
         let record = self
             .sealed
             .get_mut(target)
             .expect("the merge target is in the tier");
-        let newly_named: Vec<u32> = holds
+        // The slots the fold newly reaches register the target, so the next seal of one of them
+        // finds it. Registering before the union is what makes "newly" a reading off the
+        // aggregate: after it, every slot the fold names is one the aggregate names.
+        for slot in holds
             .slab_slots()
             .filter(|slot| !record.aggregate.names(*slot))
-            .collect();
+        {
+            naming[slot as usize].insert(target);
+        }
         record.aggregate.union_slab_with(&holds);
 
         let mut transferred = Vec::new();
@@ -830,12 +836,6 @@ impl<C: Reattachable> CellTable<C> {
             "a record's aggregate names itself"
         );
         self.sealed.splice_storage(target, storage);
-
-        // The slots the fold newly reached register the target, so the next seal of one of them
-        // finds it.
-        for slot in newly_named {
-            self.naming[slot as usize].insert(target);
-        }
         (transferred, duplicated)
     }
 
@@ -1061,13 +1061,12 @@ impl<C: Reattachable> CellTable<C> {
         let Some(record) = self.sealed.remove(id) else {
             return SealedSet::new();
         };
-        let named: Vec<u32> = record.aggregate.slab_slots().collect();
-        for slot in named {
+        for slot in record.aggregate.slab_slots() {
             self.naming[slot as usize].remove(id);
         }
         self.forget_lineage(&record.lineage);
         // The record's storage drops here: nothing reaches these chunks any more.
-        record.aggregate.sealed().clone()
+        record.aggregate.into_sealed()
     }
 
     /// Reclaim a record nothing holds any more — the zero-count exit, reached directly when a
@@ -1237,6 +1236,7 @@ impl<C: Reattachable> CellTable<C> {
 
     /// Walk from a record and memoize the result when it comes back frozen. `None` for an id no
     /// longer in the tier.
+    #[cfg(test)]
     fn reached_from_record(&self, id: SealedId) -> Option<Reached> {
         let record = self.sealed.get(id)?;
         if let Some(memo) = record.closure.get() {
@@ -1258,12 +1258,19 @@ impl<C: Reattachable> CellTable<C> {
     /// folds the memo in rather than descending. Written once and never cleared: a closure that has
     /// frozen is walked exactly once for the table's whole life.
     fn prime_memo(&self, id: SealedId) {
-        if self
-            .sealed
-            .get(id)
-            .is_some_and(|record| record.closure.get().is_none())
-        {
-            let _ = self.reached_from_record(id);
+        let Some(record) = self.sealed.get(id) else {
+            return;
+        };
+        if record.closure.get().is_some() {
+            return;
+        }
+        // Priming wants the walk and not its result, so the record set moves into the memo rather
+        // than being copied into it and the walk's own copy dropped.
+        let reached = self.reached_from(Node::Sealed(id), true);
+        if reached.cells.is_empty() {
+            let _ = record.closure.set(Memo {
+                records: reached.records,
+            });
         }
     }
 

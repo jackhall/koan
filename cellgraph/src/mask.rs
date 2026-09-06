@@ -123,6 +123,12 @@ impl Mask {
         &self.sealed
     }
 
+    /// The sealed half, taken out of a mask that has no further use — a retiring record's
+    /// aggregate, whose ids the caller releases.
+    pub(crate) fn into_sealed(self) -> SealedSet {
+        self.sealed
+    }
+
     /// The dense half, for the mint's OR.
     pub(crate) fn slab(&self) -> &Bits {
         &self.slab
