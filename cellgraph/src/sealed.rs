@@ -75,7 +75,6 @@ impl SealedSet {
         self.ids.iter().copied()
     }
 
-    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.ids.is_empty()
     }

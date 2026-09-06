@@ -50,7 +50,11 @@ fn ones_of(words: &[u64]) -> impl Iterator<Item = u32> + '_ {
 /// can set a bit in a matrix passes through here or through [`Matrix::set`], which is what lets
 /// [`Matrix::holders`] answer from a tally rather than a scan across rows.
 fn union_counting(dest: &mut [u64], source: &[u64], holders: &mut [u32]) {
-    debug_assert_eq!(dest.len(), source.len(), "rows of different widths do not union");
+    debug_assert_eq!(
+        dest.len(),
+        source.len(),
+        "rows of different widths do not union"
+    );
     for (index, (word, source)) in dest.iter_mut().zip(source).enumerate() {
         let base = (index * u64::BITS as usize) as u32;
         let mut newly = *source & !*word;

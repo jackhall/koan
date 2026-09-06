@@ -503,7 +503,15 @@ impl<C: Reattachable> CellTable<C> {
     /// — or a ring no merge dissolved survives in the tier; the crate's test-only ring walk names
     /// one.
     pub fn is_empty(&self) -> bool {
-        self.occupied().next().is_none() && self.sealed.is_empty()
+        // A slot is on the free list exactly when it is free, so a full list is an empty slab.
+        let vacant = self.free.len() == self.cap as usize;
+        #[cfg(test)]
+        debug_assert_eq!(
+            vacant,
+            self.occupied().next().is_none(),
+            "the free list disagrees with a scan across the slab"
+        );
+        vacant && self.sealed.is_empty()
     }
 
     /// Whether the handle names a cell that is still live — false for a slot that is free, holds a
@@ -621,14 +629,25 @@ impl<C: Reattachable> CellTable<C> {
     /// single-consumer producers — and each one is a record the tier never mints. A refused
     /// release falls through to the plain seal.
     fn dispose(&mut self, slot: u32) {
+        let namers = std::mem::take(&mut self.naming[slot as usize]);
+        // Nothing holds the storage, so no merge has anything to fold it into and the identity of
+        // a holder is not wanted: the pin tally settles that without reading down the column.
+        if self.pins.holders(slot) == 0 && namers.is_empty() {
+            self.reclaim(slot);
+            return;
+        }
         let holders: Vec<u32> = self
             .occupied()
             .filter(|other| self.pins.test(*other, slot))
             .collect();
-        let namers = std::mem::take(&mut self.naming[slot as usize]);
+        #[cfg(test)]
+        debug_assert_eq!(
+            holders.len() as u32,
+            self.pins.holders(slot),
+            "the pin tally disagrees with a scan across the occupied rows"
+        );
         let refused = self.slots[slot as usize].absorption == Absorption::Refused;
         match (holders.as_slice(), namers.len()) {
-            ([], 0) => self.reclaim(slot),
             ([into], 0) if !refused => self.absorb_into_cell(slot, *into),
             ([], 1) => {
                 let namer = namers.iter().next().expect("the set holds one id");
@@ -1321,6 +1340,21 @@ impl<C: Reattachable> CellTable<C> {
     /// only ever over-bills, which biases the verdict toward copying and never toward a pin whose
     /// cost the embedder was not shown.
     fn pin_price(&self, dest: u32, reach: &Mask) -> usize {
+        // Every seed already seen is a walk that reports nothing and a sum over nothing, so the
+        // price is zero without building the seed list or the seen sets. Priming a record's memo
+        // only fills a cache no reading depends on, so skipping it changes no answer either.
+        let row = self.pins.row(dest);
+        let covered = reach
+            .slab_slots()
+            .all(|slot| slot == dest || row.test(slot))
+            && reach
+                .sealed()
+                .iter()
+                .all(|id| self.sealed_holds[dest as usize].contains(id));
+        if covered {
+            return 0;
+        }
+
         let mut seen_cells = self.pins.row(dest).to_owned();
         seen_cells.set(dest);
         let seen_records = self.sealed_holds[dest as usize].clone();
