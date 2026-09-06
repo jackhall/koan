@@ -93,13 +93,15 @@ machinery and not the `alloc` within it.
   the newest recorded commit, which it rebuilds and runs beside HEAD so the
   time column is a comparison taken in one sitting rather than a figure written
   down in another. `--record` appends HEAD's readings, `--gate` exits non-zero
-  if allocations or bytes rose, and `--gate-time` exits non-zero if a row's
-  fastest trial sits more than 20 % above the rebuilt baseline's, counting only
-  rows whose baseline reads at least 20 µs. Both figures come from
-  `--calibrate`, which sweeps HEAD against a rebuild of HEAD — identical
-  source, so every row's movement is this machine's own floor — and prints the
-  spread the tolerance has to clear. That floor is wide enough to leave most
-  rows ungated, which is [wall-time-noise.md](roadmap/wall-time-noise.md).
+  if allocations or bytes rose, and `--gate-time` exits non-zero if any row's
+  fastest trial sits more than 10 % above the rebuilt baseline's, printing the
+  bar each row was held to. Every row is weighed: the harness runs each shape
+  in blocks sized so the smallest row's block clears 20 µs and reports the
+  fastest block per run, and the tool execs every trial from a fresh copy of
+  its binary so neither side reads from one fixed placement of its pages. The
+  tolerance comes from `--calibrate`, which sweeps HEAD against a rebuild of
+  HEAD — identical source, so every row's movement is this machine's own
+  spread — and prints what the tolerance has to clear.
 - [observe/perf.csv](observe/perf.csv) — the record: a tidy dataframe, one row
   per `(date, sha, dirty, benchmark, n, cap, verb)` carrying `calls`,
   `allocations`, `bytes` and `nanos`, capped to the three most recently

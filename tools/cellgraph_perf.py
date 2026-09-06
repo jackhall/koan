@@ -25,12 +25,14 @@ Two of the four figures gate and two do not. `calls`, `allocations` and `bytes`
 are deterministic, which is checked rather than assumed: the sweep runs the binary
 several times and refuses to report if any of the three moved between runs.
 `nanos` gates only under `--gate-time`, against a tolerance, and only beside a
-rebuilt baseline. Wall time on this machine is not a figure to hold to the digit —
-the sweep's own fastest-of-many is what makes it readable at all — so a row counts
-as slower only when it clears two bars at once: fastest trial more than
-`TIME_TOLERANCE` above the baseline's fastest, and a baseline of at least
-`TIME_FLOOR_NANOS` so a row too small to measure cannot trip it. Both are set from
-`--calibrate`, which is the only honest way to know what this machine's floor is.
+rebuilt baseline. Every row is held to the one bar: its fastest trial no more than
+`TIME_TOLERANCE` above the baseline's fastest. What makes a small row readable at
+all is the harness, which runs each shape in blocks sized so every row's block
+clears 20 µs and reports the fastest block per run; and what makes two binaries
+comparable is that every trial execs a fresh copy of its binary, so neither side
+is read from one fixed draw of where the kernel put its pages. The tolerance is
+set from `--calibrate`, which is the only honest way to know what this machine's
+spread is.
 
 A sweep compares against the SHA it reports on by **building that commit's harness
 and running it now**, alternating the two binaries so a machine that drifts through
@@ -74,6 +76,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -87,32 +90,25 @@ KEEP_SHAS = 3
 # invalidates the fingerprints of the build under test.
 BASELINES = REPO / "target" / "perf-baselines"
 
+# Where each trial's fresh copy of a binary is written, and removed after the run. Under
+# `target/` rather than the system temp directory, which may be mounted `noexec`.
+TRIAL_COPIES = REPO / "target" / "perf-trials"
+
 # Runs of each binary per sweep. A run is milliseconds, so the figure buys robustness
 # almost free: the fastest of fifteen is a reading the machine's other work has not
 # touched, and two runs of one binary would already settle the deterministic columns.
 TRIALS = 15
 
 # How far above the baseline's fastest trial a row may sit before it counts as slower.
-# Wide, because the bar it guards is "this item did not make a verb slower", not "this
-# machine is quiet". Set above what `--calibrate` reads at the floor below: two builds of
-# identical source differ by their code layout alone, which no protocol here can filter,
-# and a tolerance under that spread fires on the linker rather than on the change.
-TIME_TOLERANCE = 0.20
-
-# The baseline reading below which time is not gated at all. A `create` is a handful of
-# word writes, so a row of a few of them is timer granularity rather than work, and a
-# percentage of it means nothing — calibration reads those rows at spreads of 46% and 65%
-# on identical source, against 16% for the worst row above this floor.
-TIME_FLOOR_NANOS = 20_000
-
-# Rows at or above the floor whose spread the tolerance must cover. Set from `--calibrate`,
-# which sweeps HEAD against a rebuild of HEAD: same source, two binaries, so every row's
-# movement is the floor rather than a reading. The tolerance sits above that floor's own
-# spread, not at it — a gate that fires on the machine teaches nothing.
-CALIBRATION_COVERAGE = 0.95
+# Set from `--calibrate`, which sweeps HEAD against a rebuild of HEAD — same source, two
+# binaries, so every row's movement is this machine's spread rather than a reading — at
+# twice the worst row it reads: a gate that fires on the machine teaches nothing. Two
+# consecutive calibrations read every row within 5%.
+TIME_TOLERANCE = 0.10
 
 # The record's columns, in order. The first three stamp the sweep, the next four key
-# the row, and the last four are the reading.
+# the row, and the last four are the reading. `runs` is not recorded: it is how the
+# harness sized a row's block, not a figure about the code.
 COLUMNS = ["date", "sha", "dirty",
            "benchmark", "n", "cap", "verb",
            "calls", "allocations", "bytes", "nanos"]
@@ -120,13 +116,17 @@ COLUMNS = ["date", "sha", "dirty",
 
 @dataclass(frozen=True)
 class Reading:
-    """One verb's exclusive cost inside one benchmark at one size."""
+    """One verb's exclusive cost inside one benchmark at one size, per run of the shape.
+
+    `runs` is the block the harness read `nanos` from, carried so the report can show it;
+    a reading off the record has none to show."""
 
     cap: int
     calls: int
     allocations: int
     bytes: int
     nanos: int
+    runs: int | None = None
 
 
 # A row's identity in both the sweep and the record: which benchmark, at which size,
@@ -198,12 +198,22 @@ def measure(binaries: dict[str, Path], filter_: str | None, trials: int
     The binaries alternate which goes first, so a machine that gets busier or cooler
     over the sweep does it to both alike. Every row keeps its fastest time: noise on a
     shared machine only ever adds, so the minimum is the reading with the least of it.
+
+    Every trial execs a fresh copy of its binary. Two files with identical bytes read a
+    few rows a stable 4–12% apart for as long as their pages stay cached — the physical
+    placement of the file's own pages, drawn once when the file is written — so a copy
+    per trial has both sides sample that draw rather than each sit on one.
     """
     order = list(binaries)
     runs: dict[str, list[dict[Key, Reading]]] = {tag: [] for tag in order}
-    for trial in range(trials):
-        for tag in (order if trial % 2 == 0 else order[::-1]):
-            runs[tag].append(_run(binaries[tag], filter_))
+    TRIAL_COPIES.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=TRIAL_COPIES) as copies:
+        for trial in range(trials):
+            for tag in (order if trial % 2 == 0 else order[::-1]):
+                fresh = Path(copies) / f"{tag}-{trial}"
+                shutil.copy(binaries[tag], fresh)
+                runs[tag].append(_run(fresh, filter_))
+                fresh.unlink()
     return {tag: _fold(tag, results) for tag, results in runs.items()}
 
 
@@ -229,14 +239,17 @@ def _fold(tag: str, runs: list[dict[Key, Reading]]) -> dict[Key, Reading]:
                   file=sys.stderr)
         sys.exit(1)
 
-    times = {key: min(run[key].nanos for run in runs if key in run) for key in first}
+    fastest = {key: min((run[key] for run in runs if key in run),
+                        key=lambda reading: reading.nanos)
+               for key in first}
     return {key: Reading(reading.cap, reading.calls, reading.allocations,
-                         reading.bytes, times[key])
+                         reading.bytes, fastest[key].nanos, fastest[key].runs)
             for key, reading in first.items()}
 
 
 def _run(binary: Path, filter_: str | None) -> dict[Key, Reading]:
-    """One run of the harness, parsed out of the CSV it writes to stdout."""
+    """One run of the harness, parsed out of the CSV it writes to stdout. A baseline
+    built from a commit whose harness printed no `runs` column reads as having none."""
     command = [str(binary), filter_] if filter_ else [str(binary)]
     run = subprocess.run(command, cwd=REPO, capture_output=True, text=True)
     if run.returncode != 0:
@@ -248,7 +261,8 @@ def _run(binary: Path, filter_: str | None) -> dict[Key, Reading]:
         key = (row["benchmark"], int(row["n"]), row["verb"])
         readings[key] = Reading(int(row["cap"]), int(row["calls"]),
                                 int(row["allocations"]), int(row["bytes"]),
-                                int(row["nanos"]))
+                                int(row["nanos"]),
+                                int(row["runs"]) if "runs" in row else None)
     if not readings:
         sys.exit("the harness printed no rows")
     return readings
@@ -361,17 +375,23 @@ def _delta(now: float, then: float | None, places: int = 0) -> str:
     return f"{difference:+.{places}f}"
 
 
-def _slowed(now: Reading, then: Reading | None) -> bool:
-    """Whether this row is a time regression: both of the bars at once.
+def _bar(then: Reading | None) -> int | None:
+    """The most a row may read before it counts as slower: the baseline plus the
+    tolerance, rounded the way the report prints it so the verdict and the figure agree.
 
     Wall time is gated only beside a baseline rebuilt and run in the same sweep, so
-    `then` is a reading taken on this machine minutes ago. Either bar failing means the
-    sweep cannot tell a regression from the machine, and a reading it cannot tell apart
-    is not one to fail a run over.
+    `then` is a reading taken on this machine minutes ago, and every row has a bar: the
+    harness sizes each row's block so none is too small to hold to a percentage.
     """
-    if then is None or then.nanos < TIME_FLOOR_NANOS:
-        return False
-    return now.nanos - then.nanos > then.nanos * TIME_TOLERANCE
+    if then is None:
+        return None
+    return round(then.nanos * (1 + TIME_TOLERANCE))
+
+
+def _slowed(now: Reading, then: Reading | None) -> bool:
+    """Whether this row read above its bar."""
+    bar = _bar(then)
+    return bar is not None and now.nanos > bar
 
 
 def _percent(now: float, then: float | None) -> str:
@@ -423,14 +443,16 @@ def report(readings: dict[Key, Reading], recorded: dict[Key, Reading],
 
     `timed` is false where time cannot be gated — no rebuilt baseline, or the caller
     did not ask. Then the time column is the trend it has always been and no row is
-    marked."""
+    marked. Under `timed` every row also shows its `bar`, the most it could have read
+    and passed, so what the gate held each row to is on the run itself."""
     lines: list[str] = []
     moved = 0
     risen = 0
     slowed = 0
 
     header = (f"{'n':>5} {'verb':<11} {'calls':>7} {'allocations':>12} {'Δ':>7} "
-              f"{'bytes':>10} {'Δ':>8} {'nanos':>11} {'Δ%':>11}")
+              f"{'bytes':>10} {'Δ':>8} {'nanos':>11} {'runs':>5} {'Δ%':>11}"
+              + (f" {'bar':>11}" if timed else ""))
     for benchmark in sorted({key[0] for key in readings}):
         rows = []
         for key in sorted(key for key in readings if key[0] == benchmark):
@@ -449,11 +471,13 @@ def report(readings: dict[Key, Reading], recorded: dict[Key, Reading],
             risen += rose
             slowed += slower
             percent = _percent(now.nanos, then.nanos if then else None)
+            bar = _bar(then)
             rows.append((row_moved or slower,
                          f"{n:>5} {verb:<11} {now.calls:>7} {now.allocations:>12} "
                          f"{allocations:>7} {now.bytes:>10} {byte_delta:>8} "
-                         f"{now.nanos:>11} "
-                         f"{percent + ' slow' if slower else percent:>11}"))
+                         f"{now.nanos:>11} {now.runs if now.runs else '—':>5} "
+                         f"{percent + ' slow' if slower else percent:>11}"
+                         + (f" {bar if bar is not None else '—':>11}" if timed else "")))
         lines += _table(f"{benchmark}\n{header}", rows, quiet)
 
     unit_header = (f"{'benchmark':<16} {'verb':<11} {'alloc/unit':>11} {'Δ':>8} "
@@ -525,32 +549,30 @@ def _summary(rows: int, moved: int, risen: int, slowed: int, timed: bool,
 
 def calibrate(readings: dict[Key, Reading], floor: dict[Key, Reading]) -> list[str]:
     """What this machine's own spread is, one binary of a commit against another built from
-    the same source, and what tolerance covers it.
+    the same source, and whether the tolerance covers it.
 
-    The sweep's protocol — alternating the binaries, fastest of many trials — takes the
-    machine's *load* out of a reading, but not the two binaries' code layout, which is
-    fixed at the link and moves a row by a stable amount all sweep long. That is what this
-    measures, and what `TIME_TOLERANCE` has to clear: without it a tolerance is a guess,
-    and a gate set below the floor fires on the linker.
+    The sweep's protocol takes the machine's load out of a reading (alternating binaries,
+    fastest of many trials), the process's cold start out of the small rows (the harness's
+    blocks), and the placement of each file's pages out of the pair (a fresh copy per
+    trial). What is left is what `TIME_TOLERANCE` has to clear, on every row: a gate set
+    below it fires on the machine rather than on the change.
     """
     spreads = sorted(
         (abs(readings[key].nanos - floor[key].nanos) / floor[key].nanos, key)
-        for key in readings.keys() & floor.keys()
-        if floor[key].nanos >= TIME_FLOOR_NANOS)
+        for key in readings.keys() & floor.keys())
     if not spreads:
-        return ["", f"no row reached the {TIME_FLOOR_NANOS} ns floor; nothing to calibrate"]
+        return ["", "no row was read on both sides; nothing to calibrate"]
 
-    covered = spreads[min(int(len(spreads) * CALIBRATION_COVERAGE), len(spreads) - 1)][0]
     lines = ["", f"{'row':<28} {'spread':>8}"]
     for spread, key in spreads:
         lines.append(f"{_name(key):<28} {spread:>7.1%}")
+    worst = spreads[-1][0]
     lines += [
         "",
-        f"{_plural(len(spreads), 'row')} above the {TIME_FLOOR_NANOS} ns floor: "
-        f"spread runs to {spreads[-1][0]:.1%}, "
-        f"{CALIBRATION_COVERAGE:.0%} of rows within {covered:.1%}",
+        f"{_plural(len(spreads), 'row')}: median spread {spreads[len(spreads) // 2][0]:.1%}, "
+        f"worst {worst:.1%}",
         f"TIME_TOLERANCE is {TIME_TOLERANCE:.0%}"
-        f"{' — below the floor it has to clear' if TIME_TOLERANCE <= covered else ''}",
+        f"{' — below the spread it has to clear' if TIME_TOLERANCE <= worst else ''}",
     ]
     return lines
 
@@ -588,8 +610,8 @@ def main() -> int:
     parser.add_argument("--gate-time", action="store_true",
                         # `%` is argparse's own formatting character, so the tolerance
                         # is spelled out rather than interpolated.
-                        help="exit 1 if any row above the floor got slower than the "
-                             "rebuilt baseline by more than the tolerance")
+                        help="exit 1 if any row got slower than the rebuilt baseline "
+                             "by more than the tolerance")
     parser.add_argument("--calibrate", action="store_true",
                         help="sweep HEAD against a rebuild of HEAD and report the "
                              "spread the time tolerance has to clear")
