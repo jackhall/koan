@@ -11,7 +11,7 @@
 //! One type, [`Bits`], is every row of bits in the crate: a matrix row, the executing row, and the
 //! slab half of a reach mask. It is `W` words held inline, so it is `Copy` and building, copying,
 //! or comparing one touches no allocator, and [`Bits::place`] is the only word-and-bit arithmetic
-//! written anywhere.
+//! written outside the two loops that keep a matrix's tally in step with its rows.
 
 #[cfg(test)]
 mod tests;
@@ -130,21 +130,6 @@ impl<const W: usize> Bits<W> {
             *word |= *source;
         }
     }
-
-    /// OR `source` in, reporting every bit the union newly sets. Every write that can set a bit in
-    /// a matrix passes through here or through [`Matrix::set`], which is what lets
-    /// [`Matrix::holders`] answer from a tally rather than a scan across rows.
-    fn union_counting(&mut self, source: &Bits<W>, mut newly_set: impl FnMut(u32)) {
-        for (index, (word, source)) in self.words.iter_mut().zip(&source.words).enumerate() {
-            let base = (index * u64::BITS as usize) as u32;
-            let mut newly = *source & !*word;
-            *word |= *source;
-            while newly != 0 {
-                newly_set(base + newly.trailing_zeros());
-                newly &= newly - 1;
-            }
-        }
-    }
 }
 
 /// A `64·W` x `64·W` bit matrix over slab slots, held inline. A set bit at `(holder, held)` means
@@ -243,25 +228,46 @@ impl<const W: usize> Matrix<W> {
         self.union_into(dest, *self.row(source));
     }
 
-    /// OR a row in, keeping the tallies in step — the shared body of the mint and the birth
-    /// derivation. The source arrives by value, which is `W` words, so the two rows are never
-    /// borrowed from the matrix at once.
+    /// OR a row in, counting a hold for every bit the union newly sets — the shared body of the
+    /// mint and the birth derivation. Every write that can set a bit passes through here or
+    /// through [`Matrix::set`], which is what lets [`Matrix::holders`] answer from a tally rather
+    /// than a scan across rows.
+    ///
+    /// The source arrives by value, which is `W` words, so the two rows are never borrowed from
+    /// the matrix at once.
     fn union_into(&mut self, dest: u32, source: Bits<W>) {
         let Matrix { rows, holders } = self;
         let (chunk, row) = Self::at(dest);
-        rows[chunk][row].union_counting(&source, |bit| {
-            let (chunk, row) = Self::at(bit);
-            holders[chunk][row] += 1;
-        });
+        for (index, (word, source)) in rows[chunk][row]
+            .words
+            .iter_mut()
+            .zip(&source.words)
+            .enumerate()
+        {
+            let base = (index * u64::BITS as usize) as u32;
+            let mut newly = *source & !*word;
+            *word |= *source;
+            while newly != 0 {
+                let (chunk, row) = Self::at(base + newly.trailing_zeros());
+                holders[chunk][row] += 1;
+                newly &= newly - 1;
+            }
+        }
     }
 
     /// Drop every name in `holder`'s row. The whole-row release a cell's death performs.
     pub(crate) fn clear_row(&mut self, holder: u32) {
+        let Matrix { rows, holders } = self;
         let (chunk, row) = Self::at(holder);
-        let dead = self.rows[chunk][row];
-        self.rows[chunk][row] = Bits::new();
-        for bit in dead.ones() {
-            *self.tally(bit) -= 1;
+        for (index, word) in rows[chunk][row].words.iter_mut().enumerate() {
+            let base = (index * u64::BITS as usize) as u32;
+            let mut rest = *word;
+            while rest != 0 {
+                let (chunk, row) = Self::at(base + rest.trailing_zeros());
+                holders[chunk][row] -= 1;
+                rest &= rest - 1;
+            }
+            *word = 0;
         }
     }
 
