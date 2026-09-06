@@ -1531,8 +1531,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         let mut seen_cells = *row;
         seen_cells.set(dest);
         seen_cells.union_with(pinned.slab());
-        let mut seen_records = scratch.ids();
-        seen_records.union_with(held);
+        let mut seen_records = scratch.ids_from(held);
         seen_records.union_with(pinned.sealed());
         for id in reach.sealed().iter() {
             self.prime_memo(id, scratch);

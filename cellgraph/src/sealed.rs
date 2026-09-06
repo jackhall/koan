@@ -82,6 +82,18 @@ impl<'s> ScratchSet<'s> {
         debug_assert!(ids.is_empty(), "a set is built over an empty buffer");
         IdSet { ids }
     }
+
+    /// `other`'s ids copied into a scratch buffer.
+    ///
+    /// A copy of the whole run, not an insert per id: the source is ascending and distinct
+    /// already, so the sorted insert would re-derive at `k log k` what a copy settles at `k`.
+    /// This is how a pricing walk seeds its seen set from the destination's hold set, which is
+    /// the largest set it ever starts from.
+    pub(crate) fn copy_of(mut ids: ScratchVec<'s, SealedId>, other: &IdSet<impl IdBuffer>) -> Self {
+        debug_assert!(ids.is_empty(), "a set is built over an empty buffer");
+        ids.extend_from_slice_copy(other.as_slice());
+        IdSet { ids }
+    }
 }
 
 impl<V: IdBuffer> IdSet<V> {

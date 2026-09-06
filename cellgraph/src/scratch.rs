@@ -8,7 +8,7 @@
 
 use bumpalo::Bump;
 
-use crate::sealed::ScratchSet;
+use crate::sealed::{IdBuffer, IdSet, ScratchSet};
 
 /// A growable transient, homed in the scratch region rather than on the heap.
 pub(crate) type ScratchVec<'s, T> = bumpalo::collections::Vec<'s, T>;
@@ -35,7 +35,16 @@ impl Scratch {
 
     /// Drop every transient at once. Keeps the largest chunk, so a table is warm again from the
     /// next verb.
+    ///
+    /// A region that is already empty is left alone. The equality holds only for a single chunk
+    /// with nothing handed out of it — two chunks make the total exceed what the current one has
+    /// left — and that is the state most verbs start in, since a bump gives the bytes back when a
+    /// transient dropped last is freed. So the common entry costs two loads rather than the chunk
+    /// walk and finger rewind.
     pub(crate) fn reset(&mut self) {
+        if self.bump.allocated_bytes() == self.bump.chunk_capacity() {
+            return;
+        }
         self.bump.reset();
     }
 
@@ -49,9 +58,15 @@ impl Scratch {
         ScratchVec::with_capacity_in(capacity, &self.bump)
     }
 
-    /// An empty sorted id set in scratch — what a walk seeds its seen set from.
+    /// An empty sorted id set in scratch — what a walk with nothing already seen starts from.
     pub(crate) fn ids(&self) -> ScratchSet<'_> {
         ScratchSet::over(self.vec())
+    }
+
+    /// A sorted id set in scratch holding what `other` holds — a walk's seen set, seeded with the
+    /// ids the question already covers.
+    pub(crate) fn ids_from(&self, other: &IdSet<impl IdBuffer>) -> ScratchSet<'_> {
+        ScratchSet::copy_of(self.vec_with_capacity(other.len()), other)
     }
 
     /// Chunk bytes the region holds, handed out or not. The figure a warm-table test reads: a

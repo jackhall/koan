@@ -24,7 +24,13 @@ analyst's own.
 Two of the four figures gate and two do not. `calls`, `allocations` and `bytes`
 are deterministic, which is checked rather than assumed: the sweep runs the binary
 several times and refuses to report if any of the three moved between runs.
-`nanos` never gates.
+`nanos` gates only under `--gate-time`, with a tolerance and a per-row noise
+bound, and only beside a rebuilt baseline. Wall time on this machine is not a
+figure to hold to the digit — the sweep's own fastest-of-many is what makes it
+readable at all — so a row counts as slower only when it clears three bars at
+once: fastest trial more than `TIME_TOLERANCE` above the baseline's fastest, the
+excess in nanoseconds above that row's own trial noise, and a baseline at least
+`TIME_FLOOR_NANOS` so timer granularity on a sub-microsecond verb cannot trip it.
 
 A sweep compares against the SHA it reports on by **building that commit's harness
 and running it now**, alternating the two binaries so a machine that drifts through
@@ -52,6 +58,7 @@ Debug profile, matching every other measurement in the repo.
     python3 tools/cellgraph_perf.py            # sweep, compare against the newest recorded SHA
     python3 tools/cellgraph_perf.py --record   # sweep and append this HEAD's rows to the record
     python3 tools/cellgraph_perf.py --gate     # also exit 1 if allocations or bytes rose
+    python3 tools/cellgraph_perf.py --gate-time  # also exit 1 if a row got slower
     python3 tools/cellgraph_perf.py --quiet    # a summary line, plus only the rows that moved
     python3 tools/cellgraph_perf.py --trials 5 # fewer interleaved runs per binary
 """
@@ -64,6 +71,7 @@ import datetime
 import io
 import json
 import shutil
+import statistics
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -83,6 +91,17 @@ BASELINES = REPO / "target" / "perf-baselines"
 # almost free: the fastest of fifteen is a reading the machine's other work has not
 # touched, and two runs of one binary would already settle the deterministic columns.
 TRIALS = 15
+
+# How far above the baseline's fastest trial a row may sit before it counts as slower.
+# Wide, because the bar it guards is "this item did not make a verb slower", not "this
+# machine is quiet": the noise bound below is what catches a real regression a narrower
+# tolerance would only bury in false alarms.
+TIME_TOLERANCE = 0.10
+
+# The baseline reading below which time is not gated at all. A `create` is a handful of
+# word writes, so its row is timer granularity rather than work, and a percentage of it
+# means nothing.
+TIME_FLOOR_NANOS = 5_000
 
 # The record's columns, in order. The first three stamp the sweep, the next four key
 # the row, and the last four are the reading.
@@ -164,9 +183,9 @@ def prune_baselines(keep: set[str]) -> None:
             shutil.rmtree(tree, ignore_errors=True)
 
 
-def measure(binaries: dict[str, Path], filter_: str | None,
-            trials: int) -> dict[str, dict[Key, Reading]]:
-    """Run every binary `trials` times and return each one's readings.
+def measure(binaries: dict[str, Path], filter_: str | None, trials: int
+            ) -> tuple[dict[str, dict[Key, Reading]], dict[str, dict[Key, int]]]:
+    """Run every binary `trials` times and return each one's readings and its noise.
 
     The binaries alternate which goes first, so a machine that gets busier or cooler
     over the sweep does it to both alike. Every row keeps its fastest time: noise on a
@@ -177,11 +196,20 @@ def measure(binaries: dict[str, Path], filter_: str | None,
     for trial in range(trials):
         for tag in (order if trial % 2 == 0 else order[::-1]):
             runs[tag].append(_run(binaries[tag], filter_))
-    return {tag: _fold(tag, results) for tag, results in runs.items()}
+    folded = {tag: _fold(tag, results) for tag, results in runs.items()}
+    return ({tag: readings for tag, (readings, _) in folded.items()},
+            {tag: noise for tag, (_, noise) in folded.items()})
 
 
-def _fold(tag: str, runs: list[dict[Key, Reading]]) -> dict[Key, Reading]:
-    """One binary's runs collapsed to one reading per row, fastest time kept.
+def _fold(tag: str, runs: list[dict[Key, Reading]]
+          ) -> tuple[dict[Key, Reading], dict[Key, int]]:
+    """One binary's runs collapsed to one reading per row, fastest time kept, beside
+    how noisy that row was across the sweep.
+
+    Noise is the median trial minus the fastest — how far this row drifted upward while
+    the machine was doing whatever else it was doing, measured on the same runs the
+    reading came from. It is the second bar the time gate holds a row to, so a row this
+    machine cannot measure steadily cannot be called a regression.
 
     The runs are also what proves the gating figures are deterministic. The crate has
     two `HashMap`s under `RandomState`, whose allocation pattern depends only on how
@@ -202,9 +230,14 @@ def _fold(tag: str, runs: list[dict[Key, Reading]]) -> dict[Key, Reading]:
                   file=sys.stderr)
         sys.exit(1)
 
-    return {key: Reading(reading.cap, reading.calls, reading.allocations,
-                         reading.bytes, min(run[key].nanos for run in runs))
-            for key, reading in first.items()}
+    times = {key: sorted(run[key].nanos for run in runs if key in run)
+             for key in first}
+    readings = {key: Reading(reading.cap, reading.calls, reading.allocations,
+                             reading.bytes, times[key][0])
+                for key, reading in first.items()}
+    noise = {key: round(statistics.median(trials) - trials[0])
+             for key, trials in times.items()}
+    return readings, noise
 
 
 def _run(binary: Path, filter_: str | None) -> dict[Key, Reading]:
@@ -333,9 +366,25 @@ def _delta(now: float, then: float | None, places: int = 0) -> str:
     return f"{difference:+.{places}f}"
 
 
+def _slowed(now: Reading, then: Reading | None, noise: int | None) -> bool:
+    """Whether this row is a time regression: all three of the bars at once.
+
+    Wall time is gated only beside a baseline rebuilt and run in the same sweep, so
+    `then` and `noise` are both readings taken on this machine minutes ago. Any of the
+    three bars failing means the sweep cannot tell a regression from the machine, and a
+    reading it cannot tell apart is not one to fail a run over.
+    """
+    if then is None or noise is None:
+        return False
+    if then.nanos < TIME_FLOOR_NANOS:
+        return False
+    excess = now.nanos - then.nanos
+    return excess > then.nanos * TIME_TOLERANCE and excess > noise
+
+
 def _percent(now: float, then: float | None) -> str:
-    """Time's movement, as a percentage. Time never gates, so this is the one column
-    that reads as a trend rather than as a figure to hold."""
+    """Time's movement, as a percentage. Time gates only under `--gate-time`, so for
+    every other sweep this column reads as a trend rather than as a figure to hold."""
     if then is None:
         return "—"
     if then == 0:
@@ -375,16 +424,22 @@ def _table(header: str, rows: list[tuple[bool, str]], quiet: bool) -> list[str]:
 
 
 def report(readings: dict[Key, Reading], recorded: dict[Key, Reading],
-           quiet: bool) -> tuple[int, int, list[str]]:
+           noise: dict[Key, int] | None, quiet: bool
+           ) -> tuple[int, int, int, list[str]]:
     """Print one table per benchmark and a per-unit table under them, each figure
-    beside its movement against the recorded SHA. Returns how many rows moved and
-    how many rose in a gating figure."""
+    beside its movement against the recorded SHA. Returns how many rows moved, how
+    many rose in a gating figure, and how many got slower.
+
+    `noise` is the baseline's per-row trial spread, and `None` where time cannot be
+    gated — no rebuilt baseline, or the caller did not ask. Without it the time column
+    is the trend it has always been and no row is marked."""
     lines: list[str] = []
     moved = 0
     risen = 0
+    slowed = 0
 
     header = (f"{'n':>5} {'verb':<11} {'calls':>7} {'allocations':>12} {'Δ':>7} "
-              f"{'bytes':>10} {'Δ':>8} {'nanos':>11} {'Δ%':>6}")
+              f"{'bytes':>10} {'Δ':>8} {'nanos':>11} {'Δ%':>11}")
     for benchmark in sorted({key[0] for key in readings}):
         rows = []
         for key in sorted(key for key in readings if key[0] == benchmark):
@@ -395,16 +450,19 @@ def report(readings: dict[Key, Reading], recorded: dict[Key, Reading],
             byte_delta = _delta(now.bytes, then.bytes if then else None)
             rose = then is not None and (now.allocations > then.allocations
                                          or now.bytes > then.bytes)
+            slower = _slowed(now, then, noise.get(key) if noise else None)
             # A row with nothing on record has not moved — it has never been read
             # before. That keeps a quiet first sweep to its one summary line.
             row_moved = then is not None and (allocations != "=" or byte_delta != "=")
             moved += row_moved
             risen += rose
-            rows.append((row_moved,
+            slowed += slower
+            percent = _percent(now.nanos, then.nanos if then else None)
+            rows.append((row_moved or slower,
                          f"{n:>5} {verb:<11} {now.calls:>7} {now.allocations:>12} "
                          f"{allocations:>7} {now.bytes:>10} {byte_delta:>8} "
                          f"{now.nanos:>11} "
-                         f"{_percent(now.nanos, then.nanos if then else None):>6}"))
+                         f"{percent + ' slow' if slower else percent:>11}"))
         lines += _table(f"{benchmark}\n{header}", rows, quiet)
 
     unit_header = (f"{'benchmark':<16} {'verb':<11} {'alloc/unit':>11} {'Δ':>8} "
@@ -429,7 +487,7 @@ def report(readings: dict[Key, Reading], recorded: dict[Key, Reading],
                               f"{allocation_delta:>8} {unit[1]:>11.2f} "
                               f"{byte_delta:>9}"))
     lines += _table(unit_header, unit_rows, quiet)
-    return moved, risen, lines
+    return moved, risen, slowed, lines
 
 
 def _plural(count: int, noun: str) -> str:
@@ -460,7 +518,7 @@ def _report_drift(measured: dict[Key, Reading],
               f"measures {_gating(measured[key])}", file=sys.stderr)
 
 
-def _summary(rows: int, moved: int, risen: int,
+def _summary(rows: int, moved: int, risen: int, slowed: int, timed: bool,
              against: tuple[str, str] | None, rebuilt: bool) -> str:
     """The one line a quiet sweep leads with. Every figure it names is either zero —
     nothing below it to read — or the row count of a table printed underneath."""
@@ -469,7 +527,9 @@ def _summary(rows: int, moved: int, risen: int,
     basis = f"vs {against[1]} {_basis(against, rebuilt)}"
     movement = (f"{_plural(moved, 'row')} moved" if moved
                 else f"{_plural(rows, 'row')}, all at parity")
-    return f"cellgraph perf: {movement} {basis}; {_plural(risen, 'row')} rose"
+    time = f"; {_plural(slowed, 'row')} slowed" if timed else ""
+    return (f"cellgraph perf: {movement} {basis}; "
+            f"{_plural(risen, 'row')} rose{time}")
 
 
 def _display(path: Path) -> str:
@@ -486,6 +546,11 @@ def main() -> int:
                         help="append this sweep to the record (default: read-only)")
     parser.add_argument("--gate", action="store_true",
                         help="exit 1 if allocations or bytes rose on any row")
+    parser.add_argument("--gate-time", action="store_true",
+                        # `%` is argparse's own formatting character, so the tolerance
+                        # is spelled out rather than interpolated.
+                        help="exit 1 if any row got slower than the rebuilt baseline "
+                             "by more than the tolerance and its own trial noise")
     parser.add_argument("--quiet", action="store_true",
                         help="print one summary line, plus only the rows that moved")
     parser.add_argument("--file", type=Path, default=RECORD, dest="record_path",
@@ -511,7 +576,7 @@ def main() -> int:
     rebuilt = baseline(against[1]) if against else None
     if rebuilt is not None:
         binaries["baseline"] = rebuilt
-    measured = measure(binaries, args.filter, args.trials)
+    measured, noise = measure(binaries, args.filter, args.trials)
     readings = measured["head"]
 
     if rebuilt is not None:
@@ -524,9 +589,19 @@ def main() -> int:
                   f"recorded figures, whose time column was read in another session",
                   file=sys.stderr)
 
-    moved, risen, lines = report(readings, comparison, args.quiet)
+    # Time is gated only against a binary rebuilt and run beside this sweep: a recorded
+    # `nanos` was read in another session on a machine doing other things, and holding
+    # this run to it would be comparing two different afternoons.
+    timed = args.gate_time and rebuilt is not None
+    if args.gate_time and rebuilt is None:
+        print(f"time cannot be gated: no baseline was rebuilt beside this sweep, so "
+              f"there is nothing to compare {'against' if against is None else against[1]}"
+              f"'s time column against", file=sys.stderr)
+    moved, risen, slowed, lines = report(
+        readings, comparison, noise.get("baseline") if timed else None, args.quiet)
     if args.quiet:
-        print(_summary(len(readings), moved, risen, against, rebuilt is not None))
+        print(_summary(len(readings), moved, risen, slowed, timed,
+                       against, rebuilt is not None))
     elif against is None:
         print(f"no recorded sweep to compare against ({_display(args.record_path)})")
     else:
@@ -539,7 +614,7 @@ def main() -> int:
         record_sweep(readings, date, sha, dirty, args.record_path)
         print(f"\nrecorded {date} {sha}"
               f"{' (dirty)' if dirty else ''} to {_display(args.record_path)}")
-    return 1 if args.gate and risen else 0
+    return 1 if (args.gate and risen) or (args.gate_time and slowed) else 0
 
 
 if __name__ == "__main__":
