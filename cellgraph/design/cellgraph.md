@@ -148,5 +148,7 @@ Each absence is a design statement, not a gap:
 
 The remaining slices are indexed in [the roadmap](../roadmap/README.md):
 
+- [Resident carriers and the crossing price](../roadmap/resident-carriers.md)
+  — the at-rest carrier state, the redeem door, and the crossing verdict.
 - [Rebuilding workgraph over cellgraph](../../workgraph/roadmap/adopt-cellgraph.md)
   — the first embedder's adoption.

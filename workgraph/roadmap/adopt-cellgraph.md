@@ -59,11 +59,18 @@ exist, and koan sits on the one the design has moved off.
   — linear on occupancy, or a step at fixed watermarks — is chosen here, over
   the substrate's occupancy signal
   ([liveness-matrix.md § Bounding the two tiers](../../cellgraph/design/liveness-matrix.md#bounding-the-two-tiers)),
-  from this embedder's own measurements.
+  from this embedder's own measurements. The prices reach this layer only
+  through the crossing-verdict closure of
+  [resident-carriers.md](../../cellgraph/roadmap/resident-carriers.md); the
+  ramp is that closure's body.
 
 ## Dependencies
 
-**Requires:** none — the substrate it rebuilds over has shipped.
+**Requires:**
+
+- [Resident carriers and the crossing price](../../cellgraph/roadmap/resident-carriers.md)
+  — delivery by push or pull is that door, and the pressure model is its
+  closure.
 
 **Unblocks:**
 
