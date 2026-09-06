@@ -548,7 +548,16 @@ impl<C: Reattachable> CellTable<C> {
     /// cell in place — a descendant that can still walk to it has not finished with it, and the
     /// relation has no sealed half for the walk to follow.
     fn disposable(&self, slot: u32) -> bool {
-        !self.executing.test(slot) && !self.birth.held_by_any(self.occupied(), slot)
+        // A free slot's birth row is cleared before the slot is recycled, so no free row names
+        // anything and the count across every row is the count across the occupied ones.
+        let held = self.birth.holders(slot);
+        #[cfg(test)]
+        debug_assert_eq!(
+            held > 0,
+            self.birth.held_by_any(self.occupied(), slot),
+            "the birth tally disagrees with a scan across the occupied rows"
+        );
+        !self.executing.test(slot) && held == 0
     }
 
     /// The handle of whatever occupies `slot` right now, at its current generation.

@@ -4,13 +4,17 @@
 //! Both relations take the same square shape, indexed the same way: row `holder`, bit `held`, so a
 //! cell's whole hold set is one contiguous row. That is the axis each relation's *write* wants —
 //! the birth derivation ORs a parent's row into its child's, and the pin mint ORs a reach mask
-//! into a destination's — and it makes the reclaim query, "does anything still hold this cell",
-//! the scan across rows that [`Matrix::held_by_any`] performs.
+//! into a destination's. It is the wrong axis for the reclaim query, "does anything still hold
+//! this cell", which reads down a column instead; a matrix answers that from a tally it keeps as
+//! it writes, so the query costs one read rather than a scan across every row.
 //!
 //! One type, [`Bits`], is every row of bits in the crate: a matrix row viewed into the flat
 //! allocation, the executing row, and the slab half of a reach mask. It is generic over what holds
 //! its words so a view costs no copy, and [`Bits::place`] is the only word-and-bit arithmetic
 //! written anywhere.
+
+#[cfg(test)]
+mod tests;
 
 use crate::mask::Mask;
 
@@ -40,6 +44,22 @@ fn ones_of(words: &[u64]) -> impl Iterator<Item = u32> + '_ {
             })
         })
     })
+}
+
+/// OR `source` into `dest`, counting a hold for every bit the union newly sets. Every write that
+/// can set a bit in a matrix passes through here or through [`Matrix::set`], which is what lets
+/// [`Matrix::holders`] answer from a tally rather than a scan across rows.
+fn union_counting(dest: &mut [u64], source: &[u64], holders: &mut [u32]) {
+    debug_assert_eq!(dest.len(), source.len(), "rows of different widths do not union");
+    for (index, (word, source)) in dest.iter_mut().zip(source).enumerate() {
+        let base = (index * u64::BITS as usize) as u32;
+        let mut newly = *source & !*word;
+        *word |= *source;
+        while newly != 0 {
+            holders[(base + newly.trailing_zeros()) as usize] += 1;
+            newly &= newly - 1;
+        }
+    }
 }
 
 impl Bits<Box<[u64]>> {
@@ -107,9 +127,13 @@ impl<W: AsRef<[u64]>> Bits<W> {
 }
 
 impl<W: AsRef<[u64]> + AsMut<[u64]>> Bits<W> {
-    pub(crate) fn set(&mut self, bit: u32) {
+    /// Set one bit, reporting whether it was clear before.
+    pub(crate) fn set(&mut self, bit: u32) -> bool {
         let (index, mask) = self.place(bit);
-        self.words.as_mut()[index] |= mask;
+        let word = &mut self.words.as_mut()[index];
+        let was = *word & mask == 0;
+        *word |= mask;
+        was
     }
 
     /// Clear one bit, reporting whether it was set.
@@ -132,11 +156,6 @@ impl<W: AsRef<[u64]> + AsMut<[u64]>> Bits<W> {
             *word |= *source;
         }
     }
-
-    /// Drop every bit. The whole-row release a cell's death performs.
-    pub(crate) fn clear_all(&mut self) {
-        self.words.as_mut().fill(0);
-    }
 }
 
 /// A `cap` x `cap` bit matrix over slab slots, stored as a flat word slice, one contiguous row per
@@ -144,6 +163,10 @@ impl<W: AsRef<[u64]> + AsMut<[u64]>> Bits<W> {
 pub(crate) struct Matrix {
     words_per_row: usize,
     bits: Box<[u64]>,
+    /// How many rows name each slot, one entry per column. The reclaim query asks only whether a
+    /// cell is named at all, so carrying the count turns that question from a scan across every
+    /// row into a single read.
+    holders: Box<[u32]>,
 }
 
 impl Matrix {
@@ -152,6 +175,7 @@ impl Matrix {
         Matrix {
             words_per_row,
             bits: vec![0u64; words_per_row * cap as usize].into_boxed_slice(),
+            holders: vec![0u32; cap as usize].into_boxed_slice(),
         }
     }
 
@@ -177,11 +201,20 @@ impl Matrix {
     }
 
     pub(crate) fn set(&mut self, holder: u32, held: u32) {
-        self.row_mut(holder).set(held);
+        if self.row_mut(holder).set(held) {
+            self.holders[held as usize] += 1;
+        }
     }
 
     pub(crate) fn clear(&mut self, holder: u32, held: u32) {
-        self.row_mut(holder).clear(held);
+        if self.row_mut(holder).clear(held) {
+            self.holders[held as usize] -= 1;
+        }
+    }
+
+    /// How many rows name `held`.
+    pub(crate) fn holders(&self, held: u32) -> u32 {
+        self.holders[held as usize]
     }
 
     pub(crate) fn test(&self, holder: u32, held: u32) -> bool {
@@ -193,13 +226,18 @@ impl Matrix {
     /// mask](../design/liveness-matrix.md#reach-as-a-hybrid-mask)). The and-not is the self rule: a
     /// cell that held itself alive would never reach a zero hold count.
     pub(crate) fn mint(&mut self, holder: u32, reach: &Mask) {
-        let mut row = self.row_mut(holder);
-        row.union_with(reach.slab());
-        row.clear(holder);
+        let range = self.range(holder);
+        union_counting(
+            &mut self.bits[range],
+            reach.slab().words.as_ref(),
+            &mut self.holders,
+        );
+        self.clear(holder, holder);
     }
 
-    /// Whether any row in `rows` holds `held`. The reclaim query: a cell is reclaimable only when
-    /// no live cell names it in either relation.
+    /// Whether any row in `rows` holds `held` — the scan [`Matrix::holders`] stands in for, kept
+    /// as the check the reclaim query asserts itself against.
+    #[cfg(test)]
     pub(crate) fn held_by_any(&self, rows: impl Iterator<Item = u32>, held: u32) -> bool {
         rows.into_iter().any(|holder| self.test(holder, held))
     }
@@ -223,14 +261,22 @@ impl Matrix {
         } else {
             (&mut high[..self.words_per_row], &low[source_range])
         };
-        Bits { words: dest_words }.union_with(&Bits {
-            words: source_words,
-        });
+        union_counting(dest_words, source_words, &mut self.holders);
     }
 
     /// Drop every name in `holder`'s row. The whole-row release a cell's death performs.
     pub(crate) fn clear_row(&mut self, holder: u32) {
-        self.row_mut(holder).clear_all();
+        let range = self.range(holder);
+        let holders = &mut self.holders;
+        for (index, word) in self.bits[range].iter_mut().enumerate() {
+            let base = (index * u64::BITS as usize) as u32;
+            let mut rest = *word;
+            while rest != 0 {
+                holders[(base + rest.trailing_zeros()) as usize] -= 1;
+                rest &= rest - 1;
+            }
+            *word = 0;
+        }
     }
 
     /// Whether `outer`'s row names everything `inner`'s row names — the containment invariant a
