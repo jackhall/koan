@@ -19,7 +19,9 @@ required-features = ["perf"]
 # destructor, which is exactly the region contract: every family a region hosts is `DropFree`, and
 # death is chunk deallocation. Moving a `Bump` moves no chunk byte, which is what lets a sealed
 # region's storage detach from its slot unmoved.
-bumpalo = "3.20.3"
+# `collections` is the scratch region's half: a verb's transients are bump-backed vectors, so a
+# worklist or a view list costs no allocation on a table whose chunk already fits them.
+bumpalo = { version = "3.20.3", features = ["collections"] }
 
 [dev-dependencies]
 # Random create / place / hold / release interleavings for the liveness-matrix invariants; the

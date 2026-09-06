@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use crate::handle::Handle;
 use crate::mask::Mask;
 use crate::region::Region;
+use crate::scratch::ScratchVec;
 
 #[cfg(test)]
 mod tests;
@@ -23,21 +24,67 @@ mod tests;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub(crate) struct SealedId(u64);
 
+/// Where a sorted id set keeps its ids: the heap for the sets the table stores durably, the
+/// scratch region for the seen set a walk builds and throws away.
+///
+/// The two buffers differ in nothing the sorted-insert logic reads, so the set is generic over
+/// them rather than written twice.
+pub(crate) trait IdBuffer: std::ops::Deref<Target = [SealedId]> {
+    fn insert(&mut self, at: usize, id: SealedId);
+    fn remove(&mut self, at: usize) -> SealedId;
+}
+
+impl IdBuffer for Vec<SealedId> {
+    fn insert(&mut self, at: usize, id: SealedId) {
+        Vec::insert(self, at, id);
+    }
+
+    fn remove(&mut self, at: usize) -> SealedId {
+        Vec::remove(self, at)
+    }
+}
+
+impl IdBuffer for ScratchVec<'_, SealedId> {
+    fn insert(&mut self, at: usize, id: SealedId) {
+        ScratchVec::insert(self, at, id);
+    }
+
+    fn remove(&mut self, at: usize) -> SealedId {
+        ScratchVec::remove(self, at)
+    }
+}
+
 /// A sparse set of sealed ids, kept sorted so union is a merge and membership a binary search.
 ///
 /// Sealed sets are the sparse half of every hold set and every reach mask. They stay small because
 /// only a *retained* region takes an id, so a sorted vector beats a hash set on both the union
 /// that reach composition performs and the iteration the cascade performs.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub(crate) struct SealedSet {
-    ids: Vec<SealedId>,
+pub(crate) struct IdSet<V> {
+    ids: V,
 }
+
+/// A durable id set: a hold set, a reverse-naming entry, a mask's sparse half.
+pub(crate) type SealedSet = IdSet<Vec<SealedId>>;
+
+/// A transient id set, living in the table's scratch region for the length of one verb.
+pub(crate) type ScratchSet<'s> = IdSet<ScratchVec<'s, SealedId>>;
 
 impl SealedSet {
     pub(crate) const fn new() -> Self {
-        SealedSet { ids: Vec::new() }
+        IdSet { ids: Vec::new() }
     }
+}
 
+impl<'s> ScratchSet<'s> {
+    /// An empty set over a scratch buffer.
+    pub(crate) fn over(ids: ScratchVec<'s, SealedId>) -> Self {
+        debug_assert!(ids.is_empty(), "a set is built over an empty buffer");
+        IdSet { ids }
+    }
+}
+
+impl<V: IdBuffer> IdSet<V> {
     /// Add an id, reporting whether it was absent. The answer is what the holder count reads: a
     /// hold set names a region at most once, so a second mint of the same id is not a second hold.
     pub(crate) fn insert(&mut self, id: SealedId) -> bool {
@@ -67,7 +114,7 @@ impl SealedSet {
     /// comparable, but the fold reach composition performs is skewed — a handful of ids into a set
     /// that mostly names them already — and at that shape a search per id beats a walk down
     /// everything both sides name.
-    pub(crate) fn union_with(&mut self, other: &SealedSet) {
+    pub(crate) fn union_with(&mut self, other: &IdSet<impl IdBuffer>) {
         for id in other.iter() {
             self.insert(id);
         }
@@ -81,6 +128,12 @@ impl SealedSet {
     /// The ids, in id order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = SealedId> + '_ {
         self.ids.iter().copied()
+    }
+
+    /// The ids as a slice — what a caller that only walks them takes, so the two buffers reach
+    /// one signature.
+    pub(crate) fn as_slice(&self) -> &[SealedId] {
+        &self.ids
     }
 
     pub(crate) fn is_empty(&self) -> bool {

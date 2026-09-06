@@ -16,7 +16,8 @@ use crate::matrix::{Bits, Matrix};
 use crate::reattach::{DropFree, Erased, Reattachable};
 use crate::region::{Region, Writer};
 use crate::resident::{Resident, ResidentKey, Residents};
-use crate::sealed::{Memo, SealedId, SealedRecord, SealedSet, SealedTier};
+use crate::scratch::{Scratch, ScratchVec};
+use crate::sealed::{Memo, ScratchSet, SealedId, SealedRecord, SealedSet, SealedTier};
 
 /// Refusals from [`CellTable::create`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -200,6 +201,40 @@ pub struct Operand<'a, 'b, V: Reattachable + DropFree, const W: usize = 1> {
 ///     })
 ///     .unwrap();
 /// ```
+///
+/// The views themselves die with the build call. They are handed over out of the table's scratch
+/// region, which the next verb's entry resets, and the `for<'r, 'v>` quantifier is what keeps one
+/// from outliving the call that received it — a caller cannot name either brand, so it has nowhere
+/// to put the slice:
+///
+/// ```compile_fail
+/// use cellgraph::{CellTable, Crossed, DropFree, Operand, Verdict, reattachable};
+/// struct Work;
+/// reattachable!(Work => String);
+/// struct Number;
+/// reattachable!(Number => &'r u32);
+/// impl DropFree for Number {}
+///
+/// let mut table: CellTable<Work> = CellTable::new(2, |_| Verdict::Pin);
+/// let cell = table.create(None, None).unwrap();
+/// let other = table.create(None, None).unwrap();
+/// let mut escaped: Option<&[Crossed<'_, '_, Number>]> = None;
+/// table
+///     .enter(cell, |context| {
+///         let value = context.alloc::<Number>(|writer| writer.value(41));
+///         context
+///             .alloc_into::<Number, Number>(
+///                 other,
+///                 &[Operand { carrier: &value, copy_bytes: usize::MAX }],
+///                 |writer, views| {
+///                     escaped = Some(views);
+///                     writer.value(0)
+///                 },
+///             )
+///             .unwrap();
+///     })
+///     .unwrap();
+/// ```
 pub enum Crossed<'r, 'v, V: Reattachable> {
     Pinned(V::At<'r>),
     Copied(V::At<'v>),
@@ -351,6 +386,16 @@ pub struct CellTable<C: Reattachable, const W: usize = 1> {
     /// priced operand is nothing beside the walk that prices it, and keeping the closure here is
     /// what leaves every other signature free of the parameter.
     verdict: Box<dyn FnMut(Crossing) -> Verdict>,
+    /// The one place a verb's transients live, reset at the entry of `create`, `enter` and
+    /// `release` and never inside one.
+    ///
+    /// **Nothing but the three verbs reads this field.** The cascade takes `&mut self`, so a
+    /// transient borrowing the field would conflict with it; a verb therefore takes the region
+    /// off the table for its whole length and passes it down as a parameter, leaving an empty
+    /// default bump parked here. A stray use during a verb would mint a chunk of its own, which
+    /// the warm-table test reads as capacity growth. The test-only walkers use it directly, and
+    /// run outside any verb.
+    scratch: Scratch,
     executing: Bits<W>,
     cap: u32,
     /// Units of maintenance the seal transitions of this table have performed — the quantity the
@@ -423,6 +468,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             sealed: SealedTier::new(),
             relocated: std::collections::HashMap::new(),
             verdict: Box::new(verdict),
+            scratch: Scratch::new(),
             executing: Bits::new(),
             cap,
             #[cfg(test)]
@@ -446,6 +492,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             Some(parent) => Some(self.live_slot(parent).map_err(CreateError::StaleParent)?),
             None => None,
         };
+        self.scratch.reset();
         let slot = self.free.pop().ok_or(CreateError::SlabFull)?;
         let cell = &mut self.slots[slot as usize];
         cell.state = SlotState::Live;
@@ -491,9 +538,15 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         step: impl FnOnce(&mut StepContext<'_, C, W>) -> R,
     ) -> Result<R, EnterError> {
         self.begin(handle)?;
+        // The scratch comes off the table for the whole step: the doors take `&mut self`, so a
+        // transient borrowing the field could not coexist with them. The context's `Drop` hands it
+        // back, so a panicking step loses no chunk.
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.reset();
         let mut context = StepContext {
             table: self,
             handle,
+            scratch,
         };
         Ok(step(&mut context))
     }
@@ -517,7 +570,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         let cell = &mut self.slots[slot as usize];
         cell.state = SlotState::Dead;
         cell.absorption = absorption;
-        self.dispose_chain(slot);
+        // A release runs its cascade outside any step, so the region is taken and reset here for
+        // the same reason `enter` takes and resets it: a verb's transients start on empty ground.
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.reset();
+        self.dispose_chain(slot, &scratch);
+        self.scratch = scratch;
         Ok(())
     }
 
@@ -620,8 +678,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Every departed handle whose residents `slot` answers for, plus `slot`'s own occupant if it
     /// kept anything. Taken off the slot: the caller is moving them somewhere else.
-    fn take_lineage(&mut self, slot: u32) -> Vec<Handle> {
-        let mut lineage = std::mem::take(&mut self.slots[slot as usize].lineage);
+    fn take_lineage<'s>(&mut self, slot: u32, scratch: &'s Scratch) -> ScratchVec<'s, Handle> {
+        let mut lineage = scratch.vec();
+        // Drained rather than taken: the slot keeps the capacity for its next occupant.
+        lineage.extend(self.slots[slot as usize].lineage.drain(..));
         if !self.slots[slot as usize].residents.is_empty() {
             lineage.push(self.occupant(slot));
         }
@@ -630,15 +690,15 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Point every handle of `lineage` at `target`, and record them on the target so its own
     /// retirement can drop them again.
-    fn relocate_to_record(&mut self, lineage: Vec<Handle>, target: SealedId) {
-        for handle in &lineage {
+    fn relocate_to_record(&mut self, lineage: &[Handle], target: SealedId) {
+        for handle in lineage {
             self.relocated.insert(*handle, Location::Record(target));
         }
         self.sealed
             .get_mut(target)
             .expect("the relocation target is in the tier")
             .lineage
-            .extend(lineage);
+            .extend_from_slice(lineage);
     }
 
     /// Drop every entry of `lineage` from the map — the storage those keys named is gone, so a
@@ -657,18 +717,16 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// The two merges are the degenerate shapes the model is designed around — a chain of
     /// single-consumer producers — and each one is a record the tier never mints. A refused
     /// release falls through to the plain seal.
-    fn dispose(&mut self, slot: u32) {
+    fn dispose(&mut self, slot: u32, scratch: &Scratch) {
         let namers = std::mem::take(&mut self.naming[slot as usize]);
         // Nothing holds the storage, so no merge has anything to fold it into and the identity of
         // a holder is not wanted: the pin tally settles that without reading down the column.
         if self.pins.holders(slot) == 0 && namers.is_empty() {
-            self.reclaim(slot);
+            self.reclaim(slot, scratch);
             return;
         }
-        let holders: Vec<u32> = self
-            .occupied()
-            .filter(|other| self.pins.test(*other, slot))
-            .collect();
+        let mut holders = scratch.vec_with_capacity(self.pins.holders(slot) as usize);
+        holders.extend(self.occupied().filter(|other| self.pins.test(*other, slot)));
         #[cfg(test)]
         debug_assert_eq!(
             holders.len() as u32,
@@ -677,12 +735,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         );
         let refused = self.slots[slot as usize].absorption == Absorption::Refused;
         match (holders.as_slice(), namers.len()) {
-            ([into], 0) if !refused => self.absorb_into_cell(slot, *into),
+            ([into], 0) if !refused => self.absorb_into_cell(slot, *into, scratch),
             ([], 1) => {
                 let namer = namers.iter().next().expect("the set holds one id");
-                self.fold_into_namer(slot, namer);
+                self.fold_into_namer(slot, namer, scratch);
             }
-            _ => self.seal(slot, &holders, &namers),
+            _ => self.seal(slot, &holders, &namers, scratch),
         }
     }
 
@@ -697,25 +755,27 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     ///
     /// Reads of the absorbed values stay on the per-value-mask path: the chunks are now the
     /// target's own storage, which its stored mask already names, so no id enters the picture.
-    fn absorb_into_cell(&mut self, dead: u32, into: u32) {
+    fn absorb_into_cell(&mut self, dead: u32, into: u32, scratch: &Scratch) {
         let holds = self.take_holds(dead);
         // The target's hold on the dead cell is structural from here on: the storage is its own.
         self.pins.clear(into, dead);
-        self.migrate_residents(dead, into);
+        self.migrate_residents(dead, into, scratch);
         self.pins.mint(into, &holds);
 
         // The sparse half moves holder without changing count, except where the target already
         // held the same region: there the dead cell's hold simply vanishes.
-        let mut dups = SealedSet::new();
+        // A list, not a set: the source ids arrive distinct and ascending, so pushing them keeps
+        // both properties without a second sorted insert.
+        let mut dups = scratch.vec();
         for id in holds.sealed().iter() {
             if !self.sealed_holds[into as usize].insert(id) {
-                dups.insert(id);
+                dups.push(id);
             }
         }
         let storage = self.slots[dead as usize].region.take();
         Region::splice(&mut self.slots[into as usize].region, storage);
 
-        self.vacate(dead, &dups);
+        self.vacate(dead, &dups, scratch);
         debug_assert!(
             !self.pins.test(into, into),
             "a cell absorbed a hold on itself"
@@ -734,7 +794,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// table at its new base, so a resident survives any number of merges. A dead cell with an
     /// empty table forwards nothing and leaves no entry behind. The moved block is appended
     /// without interning: its position at `base` is what forwards the keys minted under it.
-    fn migrate_residents(&mut self, dead: u32, into: u32) {
+    fn migrate_residents(&mut self, dead: u32, into: u32, scratch: &Scratch) {
         // The target's own residents lose the dead cell's bit: those chunks are its storage now.
         for mask in self.slots[into as usize].residents.iter_mut() {
             mask.remove_slot(dead);
@@ -748,7 +808,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             self.slots[into as usize].residents.append(mask);
         }
 
-        let mut lineage = std::mem::take(&mut self.slots[dead as usize].lineage);
+        let mut lineage = scratch.vec();
+        // Drained rather than taken: the dead slot keeps the capacity for its next occupant.
+        lineage.extend(self.slots[dead as usize].lineage.drain(..));
         for handle in &lineage {
             let Location::Slab { base: old, .. } = self
                 .relocated
@@ -772,7 +834,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 .insert(departing, Location::Slab { slot: into, base });
             lineage.push(departing);
         }
-        self.slots[into as usize].lineage.extend(lineage);
+        self.slots[into as usize]
+            .lineage
+            .extend_from_slice(&lineage);
     }
 
     /// Merge 3: a cell nothing in the slab holds, named by exactly one sealed aggregate, folds
@@ -780,7 +844,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     ///
     /// No stored mask needs rewriting: a stored mask naming a slot implies a pin hold on it, and
     /// this cell's slab column is empty by the precondition.
-    fn fold_into_namer(&mut self, dead: u32, namer: SealedId) {
+    fn fold_into_namer(&mut self, dead: u32, namer: SealedId, scratch: &Scratch) {
         let holds = self.take_holds(dead);
         let storage = self.slots[dead as usize].region.take();
         // The namer's hold on the dead cell is structural; the slots its row named trade the dead
@@ -790,11 +854,11 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             .expect("the namer came out of the reverse index")
             .aggregate
             .remove_slot(dead);
-        let (_, dups) = self.fold_into_record(namer, holds, storage);
-        let lineage = self.take_lineage(dead);
-        self.relocate_to_record(lineage, namer);
+        let (_, dups) = self.fold_into_record(namer, holds, storage, scratch);
+        let lineage = self.take_lineage(dead, scratch);
+        self.relocate_to_record(&lineage, namer);
 
-        self.vacate(dead, &dups);
+        self.vacate(dead, &dups, scratch);
         #[cfg(test)]
         {
             self.seal_work += 1 + dups.len() as u64;
@@ -806,10 +870,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             .get(namer)
             .is_some_and(|record| record.holders == 0)
         {
-            self.reclaim_record(namer);
+            self.reclaim_record(namer, scratch);
             return;
         }
-        self.absorb_singletons(namer);
+        self.absorb_singletons(namer, scratch);
     }
 
     /// Fold a hold set and a region into an existing record: the shared body of merges 2 and 3.
@@ -819,12 +883,13 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// hold on each vanishes). The caller releases the duplicates, since the borrow of the record
     /// has to end first, and then checks whether the target still has a holder: a source that held
     /// its own target contributes a self-hold, which has no representation and drops the count.
-    fn fold_into_record(
+    fn fold_into_record<'s>(
         &mut self,
         target: SealedId,
         holds: Mask<W>,
         storage: Option<Region>,
-    ) -> (Vec<SealedId>, SealedSet) {
+        scratch: &'s Scratch,
+    ) -> (ScratchVec<'s, SealedId>, ScratchVec<'s, SealedId>) {
         let naming = &mut self.naming;
         let record = self
             .sealed
@@ -841,8 +906,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         }
         record.aggregate.union_slab_with(&holds);
 
-        let mut transferred = Vec::new();
-        let mut duplicated = SealedSet::new();
+        // Two lists, not sets: the source's sealed half is already distinct and ascending, and a
+        // fold puts each id in exactly one of them.
+        let mut transferred = scratch.vec();
+        let mut duplicated = scratch.vec();
         for id in holds.sealed().iter() {
             if id == target {
                 // The source held its own target. The hold becomes a self-hold, which no aggregate
@@ -857,7 +924,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             if record.aggregate.add_sealed(id) {
                 transferred.push(id);
             } else {
-                duplicated.insert(id);
+                duplicated.push(id);
             }
         }
         debug_assert!(
@@ -875,11 +942,14 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// producers the tier would otherwise keep as a chain of records. The candidate set is a
     /// worklist rather than one pass: a fold transfers ids the target did not hold before, and
     /// drops a duplicate's count, either of which can newly qualify.
-    fn absorb_singletons(&mut self, target: SealedId) {
-        let Some(record) = self.sealed.get(target) else {
-            return;
-        };
-        let mut pending: Vec<SealedId> = record.aggregate.sealed().iter().collect();
+    fn absorb_singletons(&mut self, target: SealedId, scratch: &Scratch) {
+        let mut pending = scratch.vec();
+        {
+            let Some(record) = self.sealed.get(target) else {
+                return;
+            };
+            pending.extend(record.aggregate.sealed().iter());
+        }
         while let Some(source) = pending.pop() {
             if source == target {
                 continue;
@@ -888,15 +958,17 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 Some(record) if record.holders == 1 => {}
                 _ => continue,
             }
-            let mut absorbed = self
+            let absorbed = self
                 .sealed
                 .remove(source)
                 .expect("the record was just read");
-            let lineage = std::mem::take(&mut absorbed.lineage);
-            self.relocate_to_record(lineage, target);
-            let named: Vec<u32> = absorbed.aggregate.slab_slots().collect();
-            for slot in &named {
-                self.naming[*slot as usize].remove(source);
+            self.relocate_to_record(&absorbed.lineage, target);
+            // The aggregate is an owned local, so its slots are walked straight into `naming`
+            // rather than collected first. The tally reads the count before the fold moves it.
+            #[cfg(test)]
+            let named = absorbed.aggregate.slab_slots().count() as u64;
+            for slot in absorbed.aggregate.slab_slots() {
+                self.naming[slot as usize].remove(source);
             }
             self.sealed
                 .get_mut(target)
@@ -906,13 +978,13 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             #[cfg(test)]
             let sealed_width = absorbed.aggregate.sealed().len() as u64;
             let (transferred, duplicated) =
-                self.fold_into_record(target, absorbed.aggregate, absorbed.storage);
+                self.fold_into_record(target, absorbed.aggregate, absorbed.storage, scratch);
             // Each duplicate had at least two holders — the target and the absorbed record — so
             // none of these counts reaches zero, and the target survives the call.
-            self.release_sealed_holds(&duplicated);
+            self.release_sealed_holds(&duplicated, scratch);
             #[cfg(test)]
             {
-                self.seal_work += 1 + named.len() as u64 + sealed_width;
+                self.seal_work += 1 + named + sealed_width;
                 self.merges.at_seal += 1;
             }
 
@@ -922,11 +994,11 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 .is_some_and(|record| record.holders == 0)
             {
                 // The absorbed record held its own holder, and was its last: the ring dissolves.
-                self.reclaim_record(target);
+                self.reclaim_record(target, scratch);
                 return;
             }
-            pending.extend(transferred);
-            pending.extend(duplicated.iter());
+            pending.extend(transferred.iter().copied());
+            pending.extend(duplicated.iter().copied());
         }
     }
 
@@ -941,7 +1013,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// so the dead ancestors this release zeroes are a prefix of the chain upward: a live
     /// ancestor, or one another branch's row still names, stops the walk, and everything above it
     /// is still held.
-    fn dispose_chain(&mut self, released: u32) {
+    fn dispose_chain(&mut self, released: u32, scratch: &Scratch) {
         let mut next = Some(released);
         while let Some(slot) = next {
             if self.slots[slot as usize].state != SlotState::Dead || !self.disposable(slot) {
@@ -949,7 +1021,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             }
             // Read the link first: disposal recycles the slot, which clears it.
             next = self.slots[slot as usize].parent;
-            self.dispose(slot);
+            self.dispose(slot, scratch);
         }
     }
 
@@ -973,13 +1045,13 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     ///
     /// Releasing is only ever wholesale — there is no mid-life, per-reason release — which is what
     /// makes the mint's bit-setting idempotence safe.
-    fn reclaim(&mut self, slot: u32) {
+    fn reclaim(&mut self, slot: u32, scratch: &Scratch) {
         // Nothing reaches this cell's storage, so every mask its residents named dies with it and
         // the handles it answered for stop resolving. Its own handle was never in the map.
         let lineage = std::mem::take(&mut self.slots[slot as usize].lineage);
         self.forget_lineage(&lineage);
         let released = std::mem::take(&mut self.sealed_holds[slot as usize]);
-        self.vacate(slot, &released);
+        self.vacate(slot, released.as_slice(), scratch);
     }
 
     /// Freeze a dying cell's hold set, both halves: the slab row copied, the sparse half taken off
@@ -993,10 +1065,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// The tail every exit from the slab shares: the row clears, the slot recycles under a fresh
     /// generation, and one hold on each of `released` drops.
-    fn vacate(&mut self, slot: u32, released: &SealedSet) {
+    fn vacate(&mut self, slot: u32, released: &[SealedId], scratch: &Scratch) {
         self.pins.clear_row(slot);
         self.recycle(slot);
-        self.release_sealed_holds(released);
+        self.release_sealed_holds(released, scratch);
     }
 
     /// The seal transition: convert every representation of the dying cell from slab bit to sealed
@@ -1006,7 +1078,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// The work is bounded by `holders`, `namers`, and the aggregate's width — never by what the
     /// region stores. Nothing here reads a region byte: monotone holds make the frozen row
     /// exactly the union of every reach ever minted in, so the aggregate is a word copy.
-    fn seal(&mut self, slot: u32, holders: &[u32], namers: &SealedSet) {
+    fn seal(&mut self, slot: u32, holders: &[u32], namers: &SealedSet, scratch: &Scratch) {
         let id = self.sealed.mint_id();
         // The cell's hold set, both halves, frozen rather than cleared. Its sealed half moves from
         // the cell to the record, so the ids it names change holder without changing count.
@@ -1061,19 +1133,20 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         );
         // The cell's own resident masks are dead bytes from here on: the storage they named is in
         // the record, and a redeem under one of these keys derives its reach from the record's id.
-        let lineage = self.take_lineage(slot);
-        self.relocate_to_record(lineage, id);
+        let lineage = self.take_lineage(slot, scratch);
+        self.relocate_to_record(&lineage, id);
         // The dying cell's sealed half moved into the record above, so the exit releases nothing.
-        self.vacate(slot, &SealedSet::new());
+        self.vacate(slot, &[], scratch);
         // 4. Every count-1 region the new record holds folds into it: a chain of single-consumer
         //    producers collapses to the one record at its head rather than one record per link.
-        self.absorb_singletons(id);
+        self.absorb_singletons(id, scratch);
     }
 
     /// Drop one hold on each of `released`, reclaiming every record whose count reaches zero and
     /// cascading through the holds that record's own aggregate named.
-    fn release_sealed_holds(&mut self, released: &SealedSet) {
-        let mut pending: Vec<SealedId> = released.iter().collect();
+    fn release_sealed_holds(&mut self, released: &[SealedId], scratch: &Scratch) {
+        let mut pending = scratch.vec_with_capacity(released.len());
+        pending.extend_from_slice_copy(released);
         while let Some(id) = pending.pop() {
             let Some(record) = self.sealed.get_mut(id) else {
                 continue;
@@ -1107,9 +1180,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Reclaim a record nothing holds any more — the zero-count exit, reached directly when a
     /// merge dissolves the last hold on its own target rather than through a holder's release.
-    fn reclaim_record(&mut self, id: SealedId) {
+    fn reclaim_record(&mut self, id: SealedId, scratch: &Scratch) {
         let released = self.retire_record(id);
-        self.release_sealed_holds(&released);
+        self.release_sealed_holds(released.as_slice(), scratch);
     }
 
     /// The mint: fold a value's reach into the hold set of the region that now stores it, minus
@@ -1294,7 +1367,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// Record `id`'s frozen closure if it has one and has not been asked before, so a later walk
     /// folds the memo in rather than descending. Written once and never cleared: a closure that has
     /// frozen is walked exactly once for the table's whole life.
-    fn prime_memo(&self, id: SealedId) {
+    fn prime_memo(&self, id: SealedId, scratch: &Scratch) {
         let Some(record) = self.sealed.get(id) else {
             return;
         };
@@ -1304,21 +1377,27 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         // Priming wants the record set and nothing else: a closure that names a live cell is not
         // frozen and is not recorded, so a cell only has to be noticed, and the set the walk
         // reports moves into the memo rather than being copied into it.
-        let mut records = Vec::new();
+        let mut records = scratch.vec();
         let mut frozen = true;
+        let mut worklist = scratch.vec_with_capacity(1);
+        worklist.push(id);
         self.walk(
             Bits::new(),
-            vec![id],
+            worklist,
             Bits::new(),
-            SealedSet::new(),
+            scratch.ids(),
             true,
             |node| match node {
                 Node::Cell(_) => frozen = false,
                 Node::Sealed(inner) => records.push(inner),
             },
         );
+        // The one heap vector on this path, and only for a closure that has actually frozen: the
+        // memo is durable, written once per record for the table's whole life.
         if frozen {
-            let _ = record.closure.set(Memo { records });
+            let _ = record.closure.set(Memo {
+                records: records.to_vec(),
+            });
         }
     }
 
@@ -1333,7 +1412,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     #[cfg(test)]
     fn reached_from(&self, start: Node, use_memos: bool) -> Reached {
         let mut frontier = Bits::new();
-        let mut worklist = Vec::new();
+        // The walkers run outside every verb, so they take the region off the field directly and
+        // leave it to the next verb's reset.
+        let mut worklist = self.scratch.vec();
         match start {
             Node::Cell(slot) => {
                 frontier.set(slot);
@@ -1348,7 +1429,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             frontier,
             worklist,
             Bits::new(),
-            SealedSet::new(),
+            self.scratch.ids(),
             use_memos,
             |node| match node {
                 Node::Cell(slot) => reached.cells.push(slot),
@@ -1369,12 +1450,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// its frontier and its seen set are rows and descending through a cell is one word-wise
     /// `frontier |= row & !seen` — no expansion of a row into per-node entries. Only the sealed
     /// half, which is sparse and unbounded, wants a worklist.
-    fn walk(
+    fn walk<'s>(
         &self,
         mut frontier: Bits<W>,
-        mut worklist: Vec<SealedId>,
+        mut worklist: ScratchVec<'s, SealedId>,
         mut seen_cells: Bits<W>,
-        mut seen_records: SealedSet,
+        mut seen_records: ScratchSet<'s>,
         use_memos: bool,
         mut visit: impl FnMut(Node),
     ) {
@@ -1430,7 +1511,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// destination reaches only through a directly held node is still billed. The figure therefore
     /// only ever over-bills, which biases the verdict toward copying and never toward a pin whose
     /// cost the embedder was not shown.
-    fn pin_price(&self, dest: u32, reach: &Mask<W>, pinned: &Mask<W>) -> usize {
+    fn pin_price(&self, dest: u32, reach: &Mask<W>, pinned: &Mask<W>, scratch: &Scratch) -> usize {
         // Every seed already seen is a walk that reports nothing and a sum over nothing, so the
         // price is zero without building the walk's state at all. Priming a record's memo only
         // fills a cache no reading depends on, so skipping it changes no answer either.
@@ -1450,27 +1531,23 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         let mut seen_cells = *row;
         seen_cells.set(dest);
         seen_cells.union_with(pinned.slab());
-        let mut seen_records = held.clone();
+        let mut seen_records = scratch.ids();
+        seen_records.union_with(held);
         seen_records.union_with(pinned.sealed());
         for id in reach.sealed().iter() {
-            self.prime_memo(id);
+            self.prime_memo(id, scratch);
         }
         let mut frontier = Bits::new();
         frontier.union_not_with(reach.slab(), &seen_cells);
+        let mut worklist = scratch.vec_with_capacity(reach.sealed().len());
+        worklist.extend(reach.sealed().iter());
         let mut bytes = 0;
-        self.walk(
-            frontier,
-            reach.sealed().iter().collect(),
-            seen_cells,
-            seen_records,
-            true,
-            |node| {
-                bytes += match node {
-                    Node::Cell(slot) => self.cell_bytes(slot),
-                    Node::Sealed(id) => self.record_bytes(id),
-                };
-            },
-        );
+        self.walk(frontier, worklist, seen_cells, seen_records, true, |node| {
+            bytes += match node {
+                Node::Cell(slot) => self.cell_bytes(slot),
+                Node::Sealed(id) => self.record_bytes(id),
+            };
+        });
         bytes
     }
 
@@ -1560,6 +1637,80 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         None
     }
 
+    /// Price every operand against `dest`, put each price to the embedder's verdict, and split the
+    /// operands by the answer: the pinned reaches unioned for the mint, and each operand's erased
+    /// form beside its verdict for the views.
+    ///
+    /// **The one path every placement over operands takes**, so the destination-homed placement and
+    /// the capturing successor store consult the same closure with the same numbers and hand the
+    /// build the same shapes. Every operand is consulted, including one whose pin price is zero.
+    ///
+    /// Lives on the table rather than on the step context because it reads nothing but the table:
+    /// keeping it here is what lets a door split its borrows and hand the scratch in beside them.
+    fn cross<'s, 'b, V>(
+        &mut self,
+        dest: u32,
+        operands: &[Operand<'_, 'b, V, W>],
+        scratch: &'s Scratch,
+    ) -> (Mask<W>, ScratchVec<'s, (Erased<V>, Verdict)>)
+    where
+        V: Reattachable + DropFree,
+        Erased<V>: Copy,
+    {
+        let mut reach = Mask::empty();
+        let mut crossed = scratch.vec_with_capacity(operands.len());
+        for operand in operands {
+            let crossing = Crossing {
+                // Priced against what this placement has already pinned as well as what the
+                // destination held before it, so a second operand homed in the same source as the
+                // first is shown the marginal cost and the sum over the operands is exact.
+                pin_bytes: self.pin_price(dest, operand.carrier.reach(), &reach, scratch),
+                copy_bytes: operand.copy_bytes,
+                occupied: self.cap - self.free.len() as u32,
+                cap: self.cap,
+                records: self.sealed.len(),
+                retained_bytes: self.sealed.retained_bytes(),
+                dest_bytes: self.cell_bytes(dest),
+            };
+            let verdict = (self.verdict)(crossing);
+            if verdict == Verdict::Pin {
+                reach.union_with(operand.carrier.reach());
+            }
+            crossed.push((operand.carrier.erased(), verdict));
+        }
+        (reach, crossed)
+    }
+
+    /// The one path from a built value into a region: fold `reach` into the destination's hold
+    /// set, write the value, and hand back the carrier that pairs it with its own reach — the
+    /// destination's bit plus everything the operands reached.
+    ///
+    /// The carrier's brand is free here and fixed by the door that calls it: every caller is a
+    /// [`StepContext`] method whose return type names the step's own brand.
+    fn mint_and_build<'b, T>(
+        &mut self,
+        dest_slot: u32,
+        reach: Mask<W>,
+        build: impl for<'r> FnOnce(Writer<'r>) -> T::At<'r>,
+    ) -> Sealed<'b, T, W>
+    where
+        T: Reattachable + DropFree,
+    {
+        // A bump releases its chunks whole and never walks a value, so a family with drop glue
+        // would leak whatever it owns. `DropFree` declares the absence; this is the check.
+        const { assert!(!std::mem::needs_drop::<T::At<'static>>()) };
+        self.mint(dest_slot, &reach);
+        let value = {
+            let region = self.slots[dest_slot as usize]
+                .region
+                .get_or_insert_with(Region::new);
+            Erased::<T>::erase(build(region.writer()))
+        };
+        let mut reach = reach;
+        reach.add(dest_slot);
+        Sealed::new(value, reach, dest_slot)
+    }
+
     /// Whether `holder` holds `held` in the pin relation.
     #[cfg(test)]
     fn holds(&self, holder: Handle, held: Handle) -> bool {
@@ -1575,6 +1726,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 pub struct StepContext<'b, C: Reattachable, const W: usize = 1> {
     table: &'b mut CellTable<C, W>,
     handle: Handle,
+    /// The table's scratch region, held here for the length of the step and handed back by `Drop`.
+    /// A door splits this off the table borrow so a transient and a `&mut CellTable` coexist.
+    scratch: Scratch,
 }
 
 impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
@@ -1659,21 +1813,29 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         V: Reattachable + DropFree,
         Erased<V>: Copy,
     {
-        let slot = self.handle.slot();
-        let (mut reach, crossed) = self.cross(slot, captures);
-        self.table.mint(slot, &reach);
+        // The scratch splits off the table borrow: the transients below live in it while the
+        // doors below hold the table exclusively.
+        let StepContext {
+            table,
+            handle,
+            scratch,
+        } = &mut *self;
+        let scratch = &*scratch;
+        let slot = handle.slot();
+        let (mut reach, crossed) = table.cross(slot, captures, scratch);
+        table.mint(slot, &reach);
         let value = {
-            let region = self.table.slots[slot as usize]
+            let region = table.slots[slot as usize]
                 .region
                 .get_or_insert_with(Region::new);
             // SAFETY: see `crossed_views`. The mint above has folded every pinned capture's reach
             // into this cell's hold set, so none of that storage can go away while the cell holds
             // it, and the views live only for the `build` call.
-            let views = unsafe { crossed_views(crossed) };
+            let views = unsafe { crossed_views(&crossed, scratch) };
             Erased::<C>::erase(build(region.writer(), &views))
         };
         reach.add(slot);
-        let cell = &mut self.table.slots[slot as usize];
+        let cell = &mut table.slots[slot as usize];
         cell.continuation_reach = Some(cell.residents.intern(reach));
         cell.continuation = Some(value);
     }
@@ -1729,8 +1891,7 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         T: Reattachable + DropFree,
     {
         let slot = self.handle.slot();
-        let reach = Mask::empty();
-        self.mint_and_build(slot, reach, build)
+        self.table.mint_and_build(slot, Mask::empty(), build)
     }
 
     /// Destination-homed placement: build a value **in `dest`'s region**, embedding the views of
@@ -1756,13 +1917,21 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         V: Reattachable + DropFree,
         Erased<V>: Copy,
     {
-        let dest_slot = self.table.live_slot(dest)?;
-        let (reach, crossed) = self.cross(dest_slot, operands);
-        Ok(self.mint_and_build(dest_slot, reach, move |writer| {
+        // The scratch splits off the table borrow: the crossed operands and the views live in it
+        // while the placement below holds the table exclusively.
+        let StepContext {
+            table,
+            handle: _,
+            scratch,
+        } = &mut *self;
+        let scratch = &*scratch;
+        let dest_slot = table.live_slot(dest)?;
+        let (reach, crossed) = table.cross(dest_slot, operands, scratch);
+        Ok(table.mint_and_build(dest_slot, reach, move |writer| {
             // SAFETY: see `crossed_views`. `mint_and_build` has already folded every pinned
             // operand's reach into the destination's hold set before it calls this closure, so
             // that storage outlives both `'r` and the destination.
-            let views = unsafe { crossed_views(crossed) };
+            let views = unsafe { crossed_views(&crossed, scratch) };
             build(writer, &views)
         }))
     }
@@ -1868,74 +2037,6 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         let value: T::At<'s> = unsafe { carrier.erased().reattach::<'s>() };
         Opened::new(value)
     }
-
-    /// Price every operand against `dest`, put each price to the embedder's verdict, and split the
-    /// operands by the answer: the pinned reaches unioned for the mint, and each operand's erased
-    /// form beside its verdict for the views.
-    ///
-    /// **The one path every placement over operands takes**, so the destination-homed placement and
-    /// the capturing successor store consult the same closure with the same numbers and hand the
-    /// build the same shapes. Every operand is consulted, including one whose pin price is zero.
-    fn cross<V>(
-        &mut self,
-        dest: u32,
-        operands: &[Operand<'_, 'b, V, W>],
-    ) -> (Mask<W>, Vec<(Erased<V>, Verdict)>)
-    where
-        V: Reattachable + DropFree,
-        Erased<V>: Copy,
-    {
-        let table = &mut *self.table;
-        let mut reach = Mask::empty();
-        let mut crossed = Vec::with_capacity(operands.len());
-        for operand in operands {
-            let crossing = Crossing {
-                // Priced against what this placement has already pinned as well as what the
-                // destination held before it, so a second operand homed in the same source as the
-                // first is shown the marginal cost and the sum over the operands is exact.
-                pin_bytes: table.pin_price(dest, operand.carrier.reach(), &reach),
-                copy_bytes: operand.copy_bytes,
-                occupied: table.cap - table.free.len() as u32,
-                cap: table.cap,
-                records: table.sealed.len(),
-                retained_bytes: table.sealed.retained_bytes(),
-                dest_bytes: table.cell_bytes(dest),
-            };
-            let verdict = (table.verdict)(crossing);
-            if verdict == Verdict::Pin {
-                reach.union_with(operand.carrier.reach());
-            }
-            crossed.push((operand.carrier.erased(), verdict));
-        }
-        (reach, crossed)
-    }
-
-    /// The one path from a built value into a region: fold `reach` into the destination's hold
-    /// set, write the value, and hand back the carrier that pairs it with its own reach — the
-    /// destination's bit plus everything the operands reached.
-    fn mint_and_build<T>(
-        &mut self,
-        dest_slot: u32,
-        reach: Mask<W>,
-        build: impl for<'r> FnOnce(Writer<'r>) -> T::At<'r>,
-    ) -> Sealed<'b, T, W>
-    where
-        T: Reattachable + DropFree,
-    {
-        // A bump releases its chunks whole and never walks a value, so a family with drop glue
-        // would leak whatever it owns. `DropFree` declares the absence; this is the check.
-        const { assert!(!std::mem::needs_drop::<T::At<'static>>()) };
-        self.table.mint(dest_slot, &reach);
-        let value = {
-            let region = self.table.slots[dest_slot as usize]
-                .region
-                .get_or_insert_with(Region::new);
-            Erased::<T>::erase(build(region.writer()))
-        };
-        let mut reach = reach;
-        reach.add(dest_slot);
-        Sealed::new(value, reach, dest_slot)
-    }
 }
 
 /// Re-anchor each crossed operand at the brand its verdict allows: the destination's region brand
@@ -1948,22 +2049,29 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
 /// `enter` holds it exclusively — and a pinned operand's reach has additionally been minted into
 /// the destination's hold set before this runs. The views live only for the build call, and the
 /// caller's `for<'r, 'v>` quantifier keeps one from escaping it.
-unsafe fn crossed_views<'r, 'v, V: Reattachable>(
-    crossed: Vec<(Erased<V>, Verdict)>,
-) -> Vec<Crossed<'r, 'v, V>> {
-    crossed
-        .into_iter()
-        .map(|(erased, verdict)| match verdict {
-            // SAFETY: see the function contract.
-            Verdict::Pin => Crossed::Pinned(unsafe { erased.reattach::<'r>() }),
-            // SAFETY: see the function contract.
-            Verdict::Copy => Crossed::Copied(unsafe { erased.reattach::<'v>() }),
-        })
-        .collect()
+unsafe fn crossed_views<'r, 'v, 's, V>(
+    crossed: &[(Erased<V>, Verdict)],
+    scratch: &'s Scratch,
+) -> ScratchVec<'s, Crossed<'r, 'v, V>>
+where
+    V: Reattachable,
+    Erased<V>: Copy,
+{
+    let mut views = scratch.vec_with_capacity(crossed.len());
+    views.extend(crossed.iter().map(|(erased, verdict)| match verdict {
+        // SAFETY: see the function contract.
+        Verdict::Pin => Crossed::Pinned(unsafe { erased.reattach::<'r>() }),
+        // SAFETY: see the function contract.
+        Verdict::Copy => Crossed::Copied(unsafe { erased.reattach::<'v>() }),
+    }));
+    views
 }
 
 impl<C: Reattachable, const W: usize> Drop for StepContext<'_, C, W> {
     fn drop(&mut self) {
         self.table.executing.clear(self.handle.slot());
+        // Back on the table, chunk and all, so the next verb starts warm — and so a panicking step
+        // hands it back exactly as an ordinary one does.
+        self.table.scratch = std::mem::take(&mut self.scratch);
     }
 }

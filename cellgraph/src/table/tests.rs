@@ -2,6 +2,7 @@ mod absorption;
 mod crossing;
 mod pricing;
 mod properties;
+mod scratch;
 mod sealing;
 mod values;
 

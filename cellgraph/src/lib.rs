@@ -20,6 +20,7 @@ mod matrix;
 mod reattach;
 mod region;
 mod resident;
+mod scratch;
 mod sealed;
 mod table;
 
