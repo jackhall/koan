@@ -59,6 +59,7 @@ Debug profile, matching every other measurement in the repo.
     python3 tools/cellgraph_perf.py --record   # sweep and append this HEAD's rows to the record
     python3 tools/cellgraph_perf.py --gate     # also exit 1 if allocations or bytes rose
     python3 tools/cellgraph_perf.py --gate-time  # also exit 1 if a row got slower
+    python3 tools/cellgraph_perf.py --calibrate  # measure the time gate's noise floor
     python3 tools/cellgraph_perf.py --quiet    # a summary line, plus only the rows that moved
     python3 tools/cellgraph_perf.py --trials 5 # fewer interleaved runs per binary
 """
@@ -102,6 +103,12 @@ TIME_TOLERANCE = 0.10
 # word writes, so its row is timer granularity rather than work, and a percentage of it
 # means nothing.
 TIME_FLOOR_NANOS = 5_000
+
+# Rows at or above the floor whose spread the tolerance must cover. Set from `--calibrate`,
+# which sweeps HEAD against a rebuild of HEAD: same source, two binaries, so every row's
+# movement is the floor rather than a reading. The tolerance sits above that floor's own
+# spread, not at it — a gate that fires on the machine teaches nothing.
+CALIBRATION_COVERAGE = 0.95
 
 # The record's columns, in order. The first three stamp the sweep, the next four key
 # the row, and the last four are the reading.
@@ -532,11 +539,61 @@ def _summary(rows: int, moved: int, risen: int, slowed: int, timed: bool,
             f"{_plural(risen, 'row')} rose{time}")
 
 
+def calibrate(readings: dict[Key, Reading], floor: dict[Key, Reading],
+              noise: dict[Key, int]) -> list[str]:
+    """What this machine's own spread is, one binary of a commit against another built from
+    the same source, and what tolerance covers it.
+
+    The sweep's protocol — alternating the binaries, fastest of many trials — takes the
+    machine's *load* out of a reading, but not the two binaries' code layout, which is
+    fixed at the link and moves a row by a stable amount all sweep long. That is what this
+    measures, and what `TIME_TOLERANCE` has to clear: without it a tolerance is a guess,
+    and a gate set below the floor fires on the linker.
+    """
+    spreads = sorted(
+        (abs(readings[key].nanos - floor[key].nanos) / floor[key].nanos, key)
+        for key in readings.keys() & floor.keys()
+        if floor[key].nanos >= TIME_FLOOR_NANOS)
+    if not spreads:
+        return ["", f"no row reached the {TIME_FLOOR_NANOS} ns floor; nothing to calibrate"]
+
+    covered = spreads[min(int(len(spreads) * CALIBRATION_COVERAGE), len(spreads) - 1)][0]
+    lines = ["", f"{'row':<28} {'spread':>8} {'noise':>8}", ]
+    for spread, key in spreads:
+        lines.append(f"{_name(key):<28} {spread:>7.1%} {noise.get(key, 0):>8}")
+    lines += [
+        "",
+        f"{_plural(len(spreads), 'row')} above the {TIME_FLOOR_NANOS} ns floor: "
+        f"spread runs to {spreads[-1][0]:.1%}, "
+        f"{CALIBRATION_COVERAGE:.0%} of rows within {covered:.1%}",
+        f"TIME_TOLERANCE is {TIME_TOLERANCE:.0%}"
+        f"{' — below the floor it has to clear' if TIME_TOLERANCE <= covered else ''}",
+    ]
+    return lines
+
+
 def _display(path: Path) -> str:
     try:
         return str(path.relative_to(REPO))
     except ValueError:
         return str(path)
+
+
+def _calibrate(args, sha: str, dirty: bool) -> int:
+    """Sweep HEAD against a worktree build of HEAD. Same source both sides, so every row's
+    movement is this machine's floor rather than a reading about the code."""
+    if dirty:
+        sys.exit("calibration compares HEAD against a worktree build of HEAD, so it needs "
+                 "a clean tree — commit or stash first")
+    rebuilt = baseline(sha)
+    if rebuilt is None:
+        sys.exit(f"could not build {sha} in a worktree")
+    measured, noise = measure({"head": build(REPO), "floor": rebuilt},
+                              args.filter, args.trials)
+    print(f"calibrating against {sha}, built twice from the same source")
+    for line in calibrate(measured["head"], measured["floor"], noise["floor"]):
+        print(line)
+    return 0
 
 
 def main() -> int:
@@ -551,6 +608,9 @@ def main() -> int:
                         # is spelled out rather than interpolated.
                         help="exit 1 if any row got slower than the rebuilt baseline "
                              "by more than the tolerance and its own trial noise")
+    parser.add_argument("--calibrate", action="store_true",
+                        help="sweep HEAD against a rebuild of HEAD and report the "
+                             "spread the time tolerance has to clear")
     parser.add_argument("--quiet", action="store_true",
                         help="print one summary line, plus only the rows that moved")
     parser.add_argument("--file", type=Path, default=RECORD, dest="record_path",
@@ -563,6 +623,8 @@ def main() -> int:
     args.record_path = args.record_path.resolve()
 
     date, sha, dirty = _stamp()
+    if args.calibrate:
+        return _calibrate(args, sha, dirty)
     rows = read_record(args.record_path)
     # A recording sweep reports against the newest SHA it is not about to replace; a
     # read-only one reports against the newest on record, its own commit included.
