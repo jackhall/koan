@@ -42,6 +42,15 @@ impl Mask {
         mask
     }
 
+    /// A mask naming exactly the sealed region `id` — the reach a value takes on when it is
+    /// redeemed out of a record: a hold on the record keeps its aggregate alive transitively, so
+    /// the id alone covers everything the value reads.
+    pub(crate) fn single_sealed(cap: u32, id: SealedId) -> Self {
+        let mut mask = Mask::empty(cap);
+        mask.add_sealed(id);
+        mask
+    }
+
     /// A mask over an already-built slab row and a sealed half — how a dying cell's hold set is
     /// frozen into its aggregate.
     pub(crate) fn from_parts(slab: Bits, sealed: SealedSet) -> Self {
@@ -50,6 +59,13 @@ impl Mask {
 
     pub(crate) fn add(&mut self, slot: u32) {
         self.slab.set(slot);
+    }
+
+    /// Empty the mask in place — how a resident entry the table no longer needs stops naming
+    /// anything without leaving its index.
+    pub(crate) fn clear(&mut self) {
+        self.slab.clear_all();
+        self.sealed = SealedSet::new();
     }
 
     /// Add a sealed id, reporting whether it was absent. A merge reads the answer: an id already

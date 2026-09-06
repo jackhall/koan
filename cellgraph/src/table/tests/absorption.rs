@@ -9,7 +9,9 @@
 use proptest::prelude::*;
 
 use super::super::*;
-use super::{Borrowed, Number, Owned, live_bytes, state_of};
+use super::{
+    Borrowed, Number, Owned, continuation_reach, live_bytes, operand, pin, pinned, state_of,
+};
 
 /// Bytes a cell's region bundle occupies, or zero for a cell that never allocated.
 fn region_bytes<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> usize {
@@ -27,7 +29,7 @@ fn only_record<C: Reattachable>(table: &CellTable<C>) -> SealedId {
 
 #[test]
 fn an_empty_table_is_quiescent_and_a_surviving_ring_is_not() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     assert!(table.is_empty());
 
     let cell = table.create(None, None).unwrap();
@@ -68,7 +70,7 @@ fn an_empty_table_is_quiescent_and_a_surviving_ring_is_not() {
 
 #[test]
 fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
-    let mut table: CellTable<Borrowed> = CellTable::new(4);
+    let mut table: CellTable<Borrowed> = CellTable::new(4, pin);
     let consumer = table.create(None, None).unwrap();
     let producer = table.create(None, None).unwrap();
 
@@ -79,7 +81,8 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
             let value = context
                 .alloc_into::<Number, Number>(producer, &[], |writer, _| writer.value(41))
                 .unwrap();
-            context.store_successor_capturing(&[&value], |_writer, views| views[0]);
+            context
+                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
         })
         .unwrap();
     assert!(table.holds(consumer, producer));
@@ -100,13 +103,10 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
 
     // The merge rewrote the consumer's stored mask: the dead cell's bit became the holder's, and
     // nothing sealed, so the mask stays a plain slab row over live cells.
-    let stored = table.slots[consumer.slot() as usize]
-        .continuation
-        .as_ref()
-        .unwrap();
-    assert!(stored.reach.names(consumer.slot()));
-    assert!(!stored.reach.names(producer.slot()));
-    assert_eq!(stored.reach.sealed().len(), 0);
+    let stored = continuation_reach(&table, consumer);
+    assert!(stored.names(consumer.slot()));
+    assert!(!stored.names(producer.slot()));
+    assert_eq!(stored.sealed().len(), 0);
 
     // The bump moved into the consumer's bundle without moving a chunk byte, so the borrow reads
     // the same address.
@@ -118,7 +118,7 @@ fn a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing() {
 
 #[test]
 fn absorption_carries_the_dead_cells_holds_onto_its_holder() {
-    let mut table: CellTable<Owned> = CellTable::new(6);
+    let mut table: CellTable<Owned> = CellTable::new(6, pin);
     let consumer = table.create(None, None).unwrap();
     let producer = table.create(None, None).unwrap();
     let reached = table.create(None, None).unwrap();
@@ -165,7 +165,7 @@ fn absorption_carries_the_dead_cells_holds_onto_its_holder() {
 
 #[test]
 fn a_refused_release_seals_as_before() {
-    let mut table: CellTable<Borrowed> = CellTable::new(4);
+    let mut table: CellTable<Borrowed> = CellTable::new(4, pin);
     let consumer = table.create(None, None).unwrap();
     let producer = table.create(None, None).unwrap();
 
@@ -174,7 +174,8 @@ fn a_refused_release_seals_as_before() {
             let value = context
                 .alloc_into::<Number, Number>(producer, &[], |writer, _| writer.value(41))
                 .unwrap();
-            context.store_successor_capturing(&[&value], |_writer, views| views[0]);
+            context
+                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
         })
         .unwrap();
 
@@ -185,14 +186,7 @@ fn a_refused_release_seals_as_before() {
     let id = only_record(&table);
     assert_eq!(table.sealed.get(id).unwrap().holders, 1);
 
-    assert!(
-        table.slots[consumer.slot() as usize]
-            .continuation
-            .as_ref()
-            .unwrap()
-            .reach
-            .names_sealed(id)
-    );
+    assert!(continuation_reach(&table, consumer).names_sealed(id));
     let value = table
         .enter(consumer, |context| *context.continuation().unwrap().value())
         .unwrap();
@@ -201,7 +195,7 @@ fn a_refused_release_seals_as_before() {
 
 #[test]
 fn a_dead_resident_holder_absorbs_too() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let holder = table.create(None, None).unwrap();
     let child = table.create(Some(holder), None).unwrap();
     let held = table.create(None, None).unwrap();
@@ -229,7 +223,7 @@ fn a_dead_resident_holder_absorbs_too() {
 
 #[test]
 fn a_two_cell_ring_dissolves_when_one_side_dies() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let first = table.create(None, None).unwrap();
     let second = table.create(None, None).unwrap();
 
@@ -256,7 +250,7 @@ fn a_two_cell_ring_dissolves_when_one_side_dies() {
 
 #[test]
 fn a_seal_absorbs_its_count_one_sealed_holds() {
-    let mut table: CellTable<Owned> = CellTable::new(6);
+    let mut table: CellTable<Owned> = CellTable::new(6, pin);
     let top = table.create(None, None).unwrap();
     let other = table.create(None, None).unwrap();
     let middle = table.create(None, None).unwrap();
@@ -315,7 +309,7 @@ fn a_seal_absorbs_its_count_one_sealed_holds() {
 
 #[test]
 fn seal_time_absorption_follows_a_chain_whose_counts_dropped() {
-    let mut table: CellTable<Owned> = CellTable::new(6);
+    let mut table: CellTable<Owned> = CellTable::new(6, pin);
     let first_keeper = table.create(None, None).unwrap();
     let second_keeper = table.create(None, None).unwrap();
     let top = table.create(None, None).unwrap();
@@ -367,7 +361,7 @@ fn seal_time_absorption_follows_a_chain_whose_counts_dropped() {
 
 #[test]
 fn a_count_one_record_held_by_a_live_cell_stays_sealed() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let holder = table.create(None, None).unwrap();
     let extra = table.create(None, None).unwrap();
     let held = table.create(None, None).unwrap();
@@ -416,7 +410,7 @@ fn a_count_one_record_held_by_a_live_cell_stays_sealed() {
 
 #[test]
 fn a_cell_with_a_single_sealed_namer_seals_into_it() {
-    let mut table: CellTable<Borrowed> = CellTable::new(4);
+    let mut table: CellTable<Borrowed> = CellTable::new(4, pin);
     let keeper = table.create(None, None).unwrap();
     let namer = table.create(None, None).unwrap();
     let dying = table.create(None, None).unwrap();
@@ -433,7 +427,8 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
             let value = context
                 .alloc_into::<Number, Number>(namer, &[], |writer, _| writer.value(41))
                 .unwrap();
-            context.store_successor_capturing(&[&value], |_writer, views| views[0]);
+            context
+                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
         })
         .unwrap();
     table
@@ -465,14 +460,7 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
     assert!(table.naming[reached.slot() as usize].contains(id));
 
     // The read still goes through the record, whose bundle grew a bump under the borrow.
-    assert!(
-        table.slots[keeper.slot() as usize]
-            .continuation
-            .as_ref()
-            .unwrap()
-            .reach
-            .names_sealed(id)
-    );
+    assert!(continuation_reach(&table, keeper).names_sealed(id));
     let value = table
         .enter(keeper, |context| *context.continuation().unwrap().value())
         .unwrap();
@@ -486,7 +474,7 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
 /// and `alone` sealed regions only it holds — so the hold set varies in both halves and in whether
 /// each sealed id transfers or duplicates, while `resident` varies what the region stores.
 fn absorb_work_for(resident: usize, reached: u32, shared: u32, alone: u32) -> u64 {
-    let mut table: CellTable<Owned> = CellTable::new(2 + reached + shared + alone);
+    let mut table: CellTable<Owned> = CellTable::new(2 + reached + shared + alone, pin);
     let consumer = table.create(None, None).unwrap();
     let producer = table.create(None, None).unwrap();
     let mut make = |count| {
@@ -566,7 +554,7 @@ proptest! {
 
 #[test]
 fn a_sealed_ring_dissolves_through_its_last_namer() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let first = table.create(None, None).unwrap();
     let second = table.create(None, None).unwrap();
     let bystander = table.create(None, None).unwrap();
@@ -603,7 +591,7 @@ fn a_sealed_ring_dissolves_through_its_last_namer() {
 
 #[test]
 fn a_seal_that_absorbs_every_holder_it_had_reclaims_itself() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let held = table.create(None, None).unwrap();
     let first = table.create(None, None).unwrap();
     let second = table.create(None, None).unwrap();

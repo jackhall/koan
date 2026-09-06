@@ -19,6 +19,7 @@ mod mask;
 mod matrix;
 mod reattach;
 mod region;
+mod resident;
 mod sealed;
 mod table;
 
@@ -26,4 +27,8 @@ pub use carrier::{Opened, Sealed};
 pub use handle::{Handle, StaleHandle};
 pub use reattach::{DropFree, Erased, Reattachable};
 pub use region::Writer;
-pub use table::{Absorption, CellTable, CreateError, EnterError, ReleaseError, StepContext};
+pub use resident::Resident;
+pub use table::{
+    Absorption, CellTable, CreateError, Crossed, Crossing, EnterError, Operand, RedeemError,
+    ReleaseError, StepContext, Verdict,
+};

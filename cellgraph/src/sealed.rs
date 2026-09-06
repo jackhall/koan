@@ -8,10 +8,10 @@
 //! enforced by what this module cannot express — a record has no write path into its aggregate
 //! beyond the seal transition's own rewrite, so a pin *out of* a sealed region is unrepresentable.
 
-#[cfg(test)]
 use std::cell::OnceCell;
 use std::collections::HashMap;
 
+use crate::handle::Handle;
 use crate::mask::Mask;
 use crate::region::Region;
 
@@ -85,15 +85,15 @@ impl SealedSet {
     }
 }
 
-/// A frozen closure: every record a hold on one record keeps alive, and the bytes they occupy
-/// between them. Recorded only for a closure that names no live cell, and exact from then on.
-#[cfg(test)]
+/// A frozen closure: every record a hold on one record keeps alive. Recorded only for a closure
+/// that names no live cell, and exact from then on.
+///
+/// The node *set* is what is memoized, not a byte total: two branches of one closure may share a
+/// sub-tier, so a price folds sets together and sums once at the end. Summing memoized totals
+/// instead would bill the shared part twice.
 pub(crate) struct Memo {
     /// The records the closure spans, root included, in walk order.
     pub(crate) records: Vec<SealedId>,
-    /// Their storage summed. Each record appears once, so a sub-tier two branches of the closure
-    /// share is billed once.
-    pub(crate) bytes: usize,
 }
 
 /// One retained region: everything its cell had, minus everything a cell needs to run.
@@ -132,8 +132,12 @@ pub(crate) struct SealedRecord {
     /// So the node set is fixed and the bytes are fixed, and the memo stays exact for the record's
     /// whole life ([liveness-matrix.md § Bounding the two
     /// tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
-    #[cfg(test)]
     pub(crate) closure: OnceCell<Memo>,
+    /// The departed cells whose residents this record now answers for: every handle the table's
+    /// relocation map points at this id. Bounded by merges, never by values — a cell contributes
+    /// at most one entry, however many residents it kept — and it is what lets the record's
+    /// retirement drop exactly its own entries from that map.
+    pub(crate) lineage: Vec<Handle>,
 }
 
 impl SealedRecord {
@@ -203,7 +207,6 @@ impl SealedTier {
     }
 
     /// Bytes retained across the whole tier.
-    #[cfg(test)]
     pub(crate) fn retained_bytes(&self) -> usize {
         self.bytes
     }
@@ -217,7 +220,6 @@ impl SealedTier {
         self.records.keys().copied()
     }
 
-    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.records.len()
     }

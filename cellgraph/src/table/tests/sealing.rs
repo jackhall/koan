@@ -4,7 +4,7 @@
 //! tier.
 
 use super::super::*;
-use super::{Borrowed, Number, Owned};
+use super::{Borrowed, Number, Owned, continuation_reach, operand, pin, pinned};
 
 /// Two resident-value counts far enough apart that a transition proportional to storage could not
 /// produce the same work for both. The Miri run takes the smaller pair — the shapes are what it
@@ -14,7 +14,7 @@ const LARGE: usize = if cfg!(miri) { 512 } else { 10_000 };
 
 /// Seal a held cell holding `resident` values, and report the maintenance the transition performed.
 fn seal_work_for(resident: usize) -> u64 {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let holder = table.create(None, None).unwrap();
     let producer = table.create(None, None).unwrap();
 
@@ -45,7 +45,7 @@ fn the_seal_transition_is_bounded_by_the_row_and_the_index_not_the_storage() {
 
 #[test]
 fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
-    let mut table: CellTable<Owned> = CellTable::new(2);
+    let mut table: CellTable<Owned> = CellTable::new(2, pin);
     let holder = table.create(None, None).unwrap();
     let held = table.create(None, None).unwrap();
 
@@ -71,7 +71,7 @@ fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
 
 #[test]
 fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
-    let mut table: CellTable<Borrowed> = CellTable::new(4);
+    let mut table: CellTable<Borrowed> = CellTable::new(4, pin);
     let consumer = table.create(None, None).unwrap();
     let producer = table.create(None, None).unwrap();
     let reached = table.create(None, None).unwrap();
@@ -89,7 +89,8 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
             let value = context
                 .alloc_into::<Number, Number>(producer, &[], |writer, _| writer.value(41))
                 .unwrap();
-            context.store_successor_capturing(&[&value], |_writer, views| views[0]);
+            context
+                .store_successor_capturing(&[operand(&value)], |_writer, views| pinned(&views[0]));
         })
         .unwrap();
     assert!(table.holds(consumer, producer));
@@ -100,12 +101,9 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
 
     // The transition rewrote the consumer's stored mask in place: the dying slot's bit traded for
     // the record's id, and what that region reached lives on in the record's frozen aggregate.
-    let stored = table.slots[consumer.slot() as usize]
-        .continuation
-        .as_ref()
-        .unwrap();
-    assert!(stored.reach.names_sealed(id));
-    assert!(!stored.reach.names(producer.slot()));
+    let stored = continuation_reach(&table, consumer);
+    assert!(stored.names_sealed(id));
+    assert!(!stored.names(producer.slot()));
     assert!(
         table
             .sealed
@@ -124,7 +122,7 @@ fn a_stored_mask_trades_the_sealed_slot_for_its_id() {
 
 #[test]
 fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
-    let mut table: CellTable<Borrowed> = CellTable::new(4);
+    let mut table: CellTable<Borrowed> = CellTable::new(4, pin);
     let consumer = table.create(None, None).unwrap();
     let first = table.create(None, None).unwrap();
     let second = table.create(None, None).unwrap();
@@ -137,7 +135,9 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
             let two = context
                 .alloc_into::<Number, Number>(second, &[], |writer, _| writer.value(2))
                 .unwrap();
-            context.store_successor_capturing(&[&one, &two], |_writer, views| views[1]);
+            context.store_successor_capturing(&[operand(&one), operand(&two)], |_writer, views| {
+                pinned(&views[1])
+            });
         })
         .unwrap();
 
@@ -147,11 +147,7 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
     minted.sort();
     assert_eq!(minted.len(), 2);
 
-    let named: Vec<SealedId> = table.slots[consumer.slot() as usize]
-        .continuation
-        .as_ref()
-        .unwrap()
-        .reach
+    let named: Vec<SealedId> = continuation_reach(&table, consumer)
         .sealed()
         .iter()
         .collect();
@@ -166,7 +162,7 @@ fn a_reach_that_names_two_sealed_regions_merges_their_ids_in_order() {
 
 #[test]
 fn reclaiming_a_records_last_holder_cascades_through_its_aggregate() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let top = table.create(None, None).unwrap();
     let middle = table.create(None, None).unwrap();
     let base = table.create(None, None).unwrap();
@@ -200,7 +196,7 @@ fn reclaiming_a_records_last_holder_cascades_through_its_aggregate() {
 
 #[test]
 fn a_record_survives_every_holder_but_the_last() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let first = table.create(None, None).unwrap();
     let second = table.create(None, None).unwrap();
     let held = table.create(None, None).unwrap();
@@ -224,7 +220,7 @@ fn a_record_survives_every_holder_but_the_last() {
 
 #[test]
 fn a_cell_that_only_a_birth_row_names_waits_in_the_slab_rather_than_sealing() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let parent = table.create(None, None).unwrap();
     let child = table.create(Some(parent), None).unwrap();
 

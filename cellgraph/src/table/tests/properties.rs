@@ -22,7 +22,7 @@
 use proptest::prelude::*;
 
 use super::super::*;
-use super::{Borrowed, Number, live_bytes};
+use super::{Borrowed, Number, live_bytes, operand, pin, pinned};
 
 const CAP: u32 = 6;
 
@@ -174,18 +174,27 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
         for id in table.sealed_holds[slot as usize].iter() {
             assert!(records.contains(&id), "slot {slot} holds a retired record");
         }
-        // Mask validity: every bit and id of the cell's one stored mask is covered.
-        if let Some(stored) = &table.slots[slot as usize].continuation {
-            for named in stored.reach.slab_slots() {
+        // Resident masks are covered: every bit and id of every entry of the cell's resident
+        // table names storage the cell is answerable for, so a read through one is sound.
+        for mask in table.slots[slot as usize].residents.iter() {
+            for named in mask.slab_slots() {
                 assert!(
                     table.slots[named as usize].state != SlotState::Free,
-                    "slot {slot} stores a mask naming the recycled slot {named}"
+                    "slot {slot} keeps a resident naming the recycled slot {named}"
+                );
+                assert!(
+                    named == slot || table.pins.test(slot, named),
+                    "slot {slot} keeps a resident naming slot {named}, which it does not hold"
                 );
             }
-            for named in stored.reach.sealed().iter() {
+            for named in mask.sealed().iter() {
                 assert!(
                     records.contains(&named),
-                    "slot {slot} stores a mask naming a retired record"
+                    "slot {slot} keeps a resident naming a retired record"
+                );
+                assert!(
+                    table.sealed_holds[slot as usize].contains(named),
+                    "slot {slot} keeps a resident naming record {named:?}, which it does not hold"
                 );
             }
         }
@@ -231,8 +240,11 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
         assert_eq!(walked, memoized, "the memoized closure of {id:?} drifted");
         assert_eq!(
             table.bytes_of(&fresh),
-            memo.bytes,
-            "the memoized bytes of {id:?} drifted"
+            memoized
+                .iter()
+                .map(|id| table.record_bytes(*id))
+                .sum::<usize>(),
+            "the memoized closure of {id:?} no longer prices to the walked total"
         );
     }
     *memoized = now_memoized;
@@ -242,7 +254,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
 /// checking the invariants after every step. Reports the merges the run performed, which is what
 /// tells a generated corpus that reaches all three shapes from one that only claims to.
 fn run(verbs: &[Verb]) -> Merges {
-    let mut table: CellTable<Borrowed> = CellTable::new(CAP);
+    let mut table: CellTable<Borrowed> = CellTable::new(CAP, pin);
     let mut minted: Vec<Handle> = Vec::new();
     // Nothing has been priced yet, so no record may carry a memo.
     let mut memoized: Vec<SealedId> = Vec::new();
@@ -271,7 +283,11 @@ fn run(verbs: &[Verb]) -> Merges {
                     let _ = table.enter(producer, |context| {
                         let value = context.alloc::<Number>(|writer| writer.value(1));
                         context
-                            .alloc_into::<Number, Number>(consumer, &[&value], |_w, views| views[0])
+                            .alloc_into::<Number, Number>(
+                                consumer,
+                                &[operand(&value)],
+                                |_w, views| pinned(&views[0]),
+                            )
                             .map(|_| ())
                     });
                 }
@@ -287,7 +303,9 @@ fn run(verbs: &[Verb]) -> Merges {
                         if let Ok(value) =
                             context.alloc_into::<Number, Number>(over, &[], |w, _| w.value(1))
                         {
-                            context.store_successor_capturing(&[&value], |_w, views| views[0]);
+                            context.store_successor_capturing(&[operand(&value)], |_w, views| {
+                                pinned(&views[0])
+                            });
                         }
                     });
                 }

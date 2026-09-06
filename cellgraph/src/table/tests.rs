@@ -26,6 +26,33 @@ impl DropFree for Number {}
 
 const ANCHOR: u32 = 7;
 
+/// The crossing verdict every test that is not about the crossing itself passes: pin, always. It
+/// is the answer an embedder with no price to weigh gives, and it makes a placement's reach the
+/// union of its operands' — what the hold-relation tests are written against.
+fn pin(_: Crossing) -> Verdict {
+    Verdict::Pin
+}
+
+/// An operand at no stated copy cost — what a test that never expects a `Copy` verdict passes.
+fn operand<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Sealed<'b, V>) -> Operand<'a, 'b, V> {
+    Operand {
+        carrier,
+        copy_bytes: 0,
+    }
+}
+
+/// The pinned view of a crossed operand. Every test that uses it runs under [`pin`], so the copy
+/// arm is unreachable rather than merely unexpected.
+fn pinned<'r, V: Reattachable>(view: &Crossed<'r, '_, V>) -> V::At<'r>
+where
+    V::At<'r>: Copy,
+{
+    match view {
+        Crossed::Pinned(value) => *value,
+        Crossed::Copied(_) => unreachable!("the test's verdict always pins"),
+    }
+}
+
 /// Bytes the slab tier holds, across every occupied cell's region bundle.
 ///
 /// A release may move these bytes between live cells (a merge into a holder), out to a record (a
@@ -39,6 +66,18 @@ fn live_bytes<C: Reattachable>(table: &CellTable<C>, cap: u32) -> usize {
         .sum()
 }
 
+/// The reach of a cell's stored continuation, read out of the resident table entry it occupies.
+/// The continuation is a resident like any other, so this is the same lookup a redeem performs.
+fn continuation_reach<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> &Mask {
+    let cell = &table.slots[handle.slot() as usize];
+    let index = cell
+        .continuation_reach
+        .expect("the cell stored a continuation over captures");
+    cell.residents
+        .get(index)
+        .expect("the entry the continuation names is in the table")
+}
+
 /// What a slot currently holds, by handle — the state assertions read the slab directly, since
 /// residence is not observable through the public verbs.
 fn state_of<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> SlotState {
@@ -47,7 +86,7 @@ fn state_of<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> SlotState 
 
 #[test]
 fn the_slab_refuses_past_its_cap_and_reuses_a_freed_slot() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let cells: Vec<Handle> = (0..4).map(|_| table.create(None, None).unwrap()).collect();
     assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
 
@@ -60,7 +99,7 @@ fn the_slab_refuses_past_its_cap_and_reuses_a_freed_slot() {
 
 #[test]
 fn every_verb_rejects_a_stale_handle() {
-    let mut table: CellTable<Owned> = CellTable::new(1);
+    let mut table: CellTable<Owned> = CellTable::new(1, pin);
     let first = table.create(None, None).unwrap();
     table.release(first, Absorption::IntoHolder).unwrap();
     let second = table.create(None, None).unwrap();
@@ -84,7 +123,7 @@ fn every_verb_rejects_a_stale_handle() {
 
 #[test]
 fn a_birth_row_contains_the_parent_chain_and_outlives_the_middle_cell() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let a = table.create(None, None).unwrap();
     let b = table.create(Some(a), None).unwrap();
     let c = table.create(Some(b), None).unwrap();
@@ -112,7 +151,7 @@ fn a_birth_row_contains_the_parent_chain_and_outlives_the_middle_cell() {
 
 #[test]
 fn a_cell_without_a_continuation_is_storage_only() {
-    let mut table: CellTable<Owned> = CellTable::new(2);
+    let mut table: CellTable<Owned> = CellTable::new(2, pin);
     let cell = table.create(None, None).unwrap();
     let seen = table
         .enter(cell, |context| {
@@ -125,7 +164,7 @@ fn a_cell_without_a_continuation_is_storage_only() {
 
 #[test]
 fn the_continuation_comes_back_re_anchored_at_the_step_brand() {
-    let mut table: CellTable<Borrowed> = CellTable::new(2);
+    let mut table: CellTable<Borrowed> = CellTable::new(2, pin);
     let cell = table.create(None, Some(&ANCHOR)).unwrap();
 
     let read = table
@@ -141,7 +180,7 @@ fn the_continuation_comes_back_re_anchored_at_the_step_brand() {
 
 #[test]
 fn a_step_stores_the_successor_the_next_step_receives() {
-    let mut table: CellTable<Owned> = CellTable::new(2);
+    let mut table: CellTable<Owned> = CellTable::new(2, pin);
     let cell = table.create(None, None).unwrap();
 
     table
@@ -159,7 +198,7 @@ fn a_step_stores_the_successor_the_next_step_receives() {
 
 #[test]
 fn a_cell_is_entered_by_one_step_at_a_time() {
-    let mut table: CellTable<Owned> = CellTable::new(2);
+    let mut table: CellTable<Owned> = CellTable::new(2, pin);
     let cell = table.create(None, None).unwrap();
 
     table.begin(cell).unwrap();
@@ -175,7 +214,7 @@ fn a_cell_is_entered_by_one_step_at_a_time() {
 
 #[test]
 fn the_executing_flag_falls_when_a_step_panics() {
-    let mut table: CellTable<Owned> = CellTable::new(1);
+    let mut table: CellTable<Owned> = CellTable::new(1, pin);
     let cell = table.create(None, None).unwrap();
 
     let hook = std::panic::take_hook();
@@ -193,7 +232,7 @@ fn the_executing_flag_falls_when_a_step_panics() {
 #[test]
 fn reclaiming_a_slot_drops_the_continuation_it_held() {
     let anchor = Rc::new(());
-    let mut table: CellTable<Counted> = CellTable::new(1);
+    let mut table: CellTable<Counted> = CellTable::new(1, pin);
     let cell = table.create(None, Some(Rc::clone(&anchor))).unwrap();
     assert_eq!(Rc::strong_count(&anchor), 2);
 

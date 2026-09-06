@@ -60,7 +60,6 @@ impl Bits<&[u64]> {
     }
 }
 
-#[cfg(test)]
 impl<'a> Bits<&'a [u64]> {
     /// [`Bits::ones`] at the view's own lifetime, so the iterator outlives the view.
     pub(crate) fn into_ones(self) -> impl Iterator<Item = u32> + 'a {
@@ -206,7 +205,6 @@ impl Matrix {
     }
 
     /// The cells `holder` names, in slot order — the hold graph's outgoing edges from one cell.
-    #[cfg(test)]
     pub(crate) fn held_by(&self, holder: u32) -> impl Iterator<Item = u32> + '_ {
         self.row(holder).into_ones()
     }

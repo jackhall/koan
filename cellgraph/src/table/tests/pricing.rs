@@ -7,7 +7,7 @@
 //! live holder, or a refused release — because a merge that fires leaves nothing to price.
 
 use super::super::*;
-use super::{Number, Owned};
+use super::{Number, Owned, pin};
 
 /// Give a cell a region of its own, so it prices at more than nothing.
 fn allocate(table: &mut CellTable<Owned>, cell: Handle) {
@@ -76,7 +76,7 @@ fn sealed_chain(table: &mut CellTable<Owned>) -> (SealedId, SealedId, SealedId) 
 
 #[test]
 fn a_closure_prices_everything_a_hold_on_the_record_reaches() {
-    let mut table: CellTable<Owned> = CellTable::new(8);
+    let mut table: CellTable<Owned> = CellTable::new(8, pin);
     let (s_id, a_id, b_id) = sealed_chain(&mut table);
 
     let whole = closure(&table, s_id).unwrap();
@@ -97,7 +97,7 @@ fn a_closure_prices_everything_a_hold_on_the_record_reaches() {
 
 #[test]
 fn a_shared_sub_tier_is_billed_once_within_one_closure() {
-    let mut table: CellTable<Owned> = CellTable::new(8);
+    let mut table: CellTable<Owned> = CellTable::new(8, pin);
     let c = table.create(None, None).unwrap();
     let a = table.create(None, None).unwrap();
     let b = table.create(None, None).unwrap();
@@ -145,7 +145,7 @@ fn a_shared_sub_tier_is_billed_once_within_one_closure() {
 
 #[test]
 fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let live = table.create(None, None).unwrap();
     let s = table.create(None, None).unwrap();
     let keep_s = table.create(None, None).unwrap();
@@ -176,12 +176,19 @@ fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
     assert_eq!(frozen.bytes, open.bytes);
     let memo = table.sealed.get(s_id).unwrap().closure.get().unwrap();
     assert_eq!(memo.records, vec![s_id]);
-    assert_eq!(memo.bytes, open.bytes);
+    // The memo records the node set, and the set still prices to the same total.
+    assert_eq!(
+        memo.records
+            .iter()
+            .map(|id| retained(&table, *id))
+            .sum::<usize>(),
+        open.bytes
+    );
 }
 
 #[test]
 fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
-    let mut table: CellTable<Owned> = CellTable::new(8);
+    let mut table: CellTable<Owned> = CellTable::new(8, pin);
     let a = table.create(None, None).unwrap();
     let s = table.create(None, None).unwrap();
     let keep_a = table.create(None, None).unwrap();
@@ -230,7 +237,7 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
 
 #[test]
 fn a_walk_that_reaches_a_memoized_record_merges_its_set() {
-    let mut table: CellTable<Owned> = CellTable::new(8);
+    let mut table: CellTable<Owned> = CellTable::new(8, pin);
     let b = table.create(None, None).unwrap();
     let a = table.create(None, None).unwrap();
     let s = table.create(None, None).unwrap();
@@ -286,7 +293,7 @@ fn a_walk_that_reaches_a_memoized_record_merges_its_set() {
 
 #[test]
 fn unique_slices_do_not_double_bill_a_shared_sub_tier() {
-    let mut table: CellTable<Owned> = CellTable::new(10);
+    let mut table: CellTable<Owned> = CellTable::new(10, pin);
     let c = table.create(None, None).unwrap();
     let a = table.create(None, None).unwrap();
     let b = table.create(None, None).unwrap();
@@ -349,7 +356,7 @@ fn unique_slices_do_not_double_bill_a_shared_sub_tier() {
 
 #[test]
 fn a_candidate_inside_another_candidates_closure_is_shared_throughout() {
-    let mut table: CellTable<Owned> = CellTable::new(8);
+    let mut table: CellTable<Owned> = CellTable::new(8, pin);
     let (s_id, a_id, _) = sealed_chain(&mut table);
 
     // Releasing the head buys back only the head: everything below it the other candidate reaches
@@ -371,7 +378,7 @@ fn a_candidate_inside_another_candidates_closure_is_shared_throughout() {
 
 #[test]
 fn an_absent_id_prices_as_none() {
-    let mut table: CellTable<Owned> = CellTable::new(8);
+    let mut table: CellTable<Owned> = CellTable::new(8, pin);
     let (s_id, ..) = sealed_chain(&mut table);
     let gone = table.create(None, None).unwrap();
     let keeper = table.create(None, None).unwrap();
@@ -392,78 +399,8 @@ fn an_absent_id_prices_as_none() {
 }
 
 #[test]
-fn a_cart_reports_what_it_absorbed_since_a_mark() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
-    let cart = table.create(None, None).unwrap();
-    allocate(&mut table, cart);
-    let own = table.region_bytes(cart).unwrap();
-    assert!(own > 0);
-
-    let first_mark = table.mark(cart).unwrap();
-    assert_eq!(table.absorbed_since(first_mark).unwrap(), 0);
-
-    let first = table.create(None, None).unwrap();
-    allocate(&mut table, first);
-    hold(&mut table, cart, first);
-    let first_bytes = table.region_bytes(first).unwrap();
-    table.release(first, Absorption::IntoHolder).unwrap();
-    assert_eq!(table.absorbed_since(first_mark).unwrap(), first_bytes);
-    assert_eq!(table.region_bytes(cart).unwrap(), own + first_bytes);
-
-    let second_mark = table.mark(cart).unwrap();
-    let second = table.create(None, None).unwrap();
-    allocate(&mut table, second);
-    hold(&mut table, cart, second);
-    let second_bytes = table.region_bytes(second).unwrap();
-    table.release(second, Absorption::IntoHolder).unwrap();
-    assert_eq!(table.absorbed_since(second_mark).unwrap(), second_bytes);
-    // The older mark still reads against the same counter, so it sees both hops.
-    assert_eq!(
-        table.absorbed_since(first_mark).unwrap(),
-        first_bytes + second_bytes
-    );
-
-    // A producer that refuses the merge seals instead, so the cart accretes nothing from it.
-    let refused = table.create(None, None).unwrap();
-    allocate(&mut table, refused);
-    hold(&mut table, cart, refused);
-    let held = table.region_bytes(cart).unwrap();
-    table.release(refused, Absorption::Refused).unwrap();
-    assert_eq!(table.sealed.len(), 1);
-    assert_eq!(
-        table.absorbed_since(first_mark).unwrap(),
-        first_bytes + second_bytes
-    );
-    assert_eq!(table.region_bytes(cart).unwrap(), held);
-
-    // A mark is stamped with the cell it was taken against, so it dies with it.
-    table.release(cart, Absorption::IntoHolder).unwrap();
-    assert_eq!(table.absorbed_since(first_mark), Err(StaleHandle(cart)));
-    assert_eq!(table.region_bytes(cart), Err(StaleHandle(cart)));
-    assert_eq!(table.mark(cart), Err(StaleHandle(cart)));
-}
-
-#[test]
-fn a_cell_that_takes_a_region_whole_counts_it_as_absorbed() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
-    let cart = table.create(None, None).unwrap();
-    let producer = table.create(None, None).unwrap();
-    allocate(&mut table, producer);
-    hold(&mut table, cart, producer);
-    let producer_bytes = table.region_bytes(producer).unwrap();
-
-    // The cart never allocated, so the merge hands it the producer's bundle whole — every byte of
-    // which it took in from elsewhere.
-    let mark = table.mark(cart).unwrap();
-    assert_eq!(table.region_bytes(cart).unwrap(), 0);
-    table.release(producer, Absorption::IntoHolder).unwrap();
-    assert_eq!(table.region_bytes(cart).unwrap(), producer_bytes);
-    assert_eq!(table.absorbed_since(mark).unwrap(), producer_bytes);
-}
-
-#[test]
 fn occupancy_tracks_both_tiers() {
-    let mut table: CellTable<Owned> = CellTable::new(4);
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let first = table.create(None, None).unwrap();
     let second = table.create(None, None).unwrap();
     let third = table.create(None, None).unwrap();
@@ -526,7 +463,7 @@ fn occupancy_tracks_both_tiers() {
 
 #[test]
 fn pricing_mutates_no_hold() {
-    let mut table: CellTable<Owned> = CellTable::new(10);
+    let mut table: CellTable<Owned> = CellTable::new(10, pin);
     let (s_id, ..) = sealed_chain(&mut table);
     // A record naming a live cell, so the sweep meets an unfrozen closure as well as a frozen one.
     let live = table.create(None, None).unwrap();
@@ -562,8 +499,17 @@ fn pricing_mutates_no_hold() {
 
     for handle in &handles {
         let _ = table.region_bytes(*handle).unwrap();
-        let mark = table.mark(*handle).unwrap();
-        let _ = table.absorbed_since(mark).unwrap();
+    }
+    // The pin price walks from every live cell's whole hold set into every other live cell, so the
+    // sweep covers both tiers, memoized and open closures alike.
+    for handle in &handles {
+        for other in &handles {
+            let reach = Mask::from_parts(
+                table.pins.row(other.slot()).to_owned(),
+                table.sealed_holds[other.slot() as usize].clone(),
+            );
+            let _ = table.pin_price(handle.slot(), &reach);
+        }
     }
     for id in &ids {
         let _ = closure(&table, *id).unwrap();

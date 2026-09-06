@@ -9,8 +9,9 @@
 //! `pub(crate)` is indistinguishable from `pub`; only a caller outside it sees the real surface.
 
 use cellgraph::{
-    Absorption, CellTable, CreateError, DropFree, EnterError, Erased, Handle, Opened, Reattachable,
-    ReleaseError, Sealed, StaleHandle, StepContext, Writer, reattachable,
+    Absorption, CellTable, CreateError, Crossed, Crossing, DropFree, EnterError, Erased, Handle,
+    Opened, Operand, Reattachable, RedeemError, ReleaseError, Resident, Sealed, StaleHandle,
+    StepContext, Verdict, Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -60,6 +61,42 @@ where
     context.read(carrier).into_value()
 }
 
+/// The embedder's crossing verdict, taken at the table's construction and consulted once per
+/// operand of every placement over operands.
+///
+/// Every field the substrate ships is named here — both prices, both tiers' occupancy, and the
+/// destination's own size — and the threshold over them is the embedder's alone. This one copies
+/// only where the embedder has said copying is cheap and the slab is under pressure.
+fn weigh(crossing: Crossing) -> Verdict {
+    let pressure = crossing.occupied * 2 >= crossing.cap
+        || crossing.records > 0
+        || crossing.retained_bytes > 0
+        || crossing.dest_bytes > 1 << 20;
+    if pressure && crossing.copy_bytes < crossing.pin_bytes {
+        Verdict::Copy
+    } else {
+        Verdict::Pin
+    }
+}
+
+/// An operand the embedder is unwilling to copy: at a cost above anything a pin can price, the
+/// verdict above always pins it.
+fn pinned_operand<'a, 'b, V: Reattachable + DropFree>(
+    carrier: &'a Sealed<'b, V>,
+) -> Operand<'a, 'b, V> {
+    Operand {
+        carrier,
+        copy_bytes: usize::MAX,
+    }
+}
+
+fn name_redeem_error(error: RedeemError) -> &'static str {
+    match error {
+        RedeemError::Gone => "gone",
+        RedeemError::Unheld => "unheld",
+    }
+}
+
 /// The two refusals this file cannot provoke: a cell is entered and released only from outside a
 /// step, so neither door ever finds one executing. The matches are exhaustive, so a variant that
 /// went missing from either enum is a compile error here.
@@ -79,7 +116,7 @@ fn name_release_error(error: ReleaseError) -> &'static str {
 
 #[test]
 fn every_public_door_answers_from_outside_the_crate() {
-    let mut table: CellTable<Work> = CellTable::new(4);
+    let mut table: CellTable<Work> = CellTable::new(4, weigh);
 
     // Creation, with and without a parent, and with or without a continuation at birth.
     let root: Handle = table.create(None, Some(String::from("root"))).unwrap();
@@ -92,6 +129,7 @@ fn every_public_door_answers_from_outside_the_crate() {
 
     table.release(doomed, Absorption::IntoHolder).unwrap();
 
+    let mut kept: Option<Resident<Number>> = None;
     let carried = table
         .enter(child, |context| {
             assert_eq!(context.handle(), child);
@@ -101,10 +139,29 @@ fn every_public_door_answers_from_outside_the_crate() {
             let numbers = context.alloc::<Numbers>(build_slice);
             let text = context.alloc::<Text>(build_text);
             let pushed = context
-                .alloc_into::<Number, Number>(root, &[&number], |writer, views| {
-                    writer.value(*views[0] + 1)
+                .alloc_into::<Number, Number>(root, &[pinned_operand(&number)], |writer, views| {
+                    match views[0] {
+                        Crossed::Pinned(value) => writer.value(*value + 1),
+                        Crossed::Copied(value) => writer.value(*value + 1),
+                    }
                 })
                 .unwrap();
+            // The same door under the other verdict: an operand the embedder prices cheap to copy
+            // crosses severed, so the only thing the build can do with it is copy it in deeply.
+            let copied = context
+                .alloc_into::<Numbers, Number>(
+                    root,
+                    &[Operand {
+                        carrier: &number,
+                        copy_bytes: 0,
+                    }],
+                    |writer, views| match views[0] {
+                        Crossed::Copied(value) => writer.slice(&[*value, *value]),
+                        Crossed::Pinned(value) => writer.slice(&[*value, *value]),
+                    },
+                )
+                .unwrap();
+            assert_eq!(read_first(context, &copied), &[7, 7]);
 
             // A bare hold, and the refusal a handle kept past a declared death earns.
             context.hold(root).unwrap();
@@ -120,12 +177,46 @@ fn every_public_door_answers_from_outside_the_crate() {
             // captures a value living in another cell's region.
             assert!(context.continuation().is_none());
             context.store_successor(String::from("plain"));
-            context.store_successor_capturing(&[&pushed], |_writer, views| views[0].to_string());
+            context.store_successor_capturing(&[pinned_operand(&pushed)], |_writer, views| {
+                match views[0] {
+                    Crossed::Pinned(value) => value.to_string(),
+                    Crossed::Copied(value) => value.to_string(),
+                }
+            });
+
+            // Put a value to rest, so it outlives the step that built it. What comes back is
+            // opaque: a resident has no read, and the redeem door is its only exit.
+            kept = Some(context.keep(pushed));
 
             String::from("done")
         })
         .unwrap();
     assert_eq!(carried, "done");
+
+    // The value kept in the last step redeems in this one: the child holds root, whose region the
+    // value lives in, so the door hands it back with reach derived from the table.
+    let kept = kept.unwrap();
+    let redeemed = table
+        .enter(child, |context| {
+            *context.read(&context.redeem(kept).unwrap()).value()
+        })
+        .unwrap();
+    assert_eq!(redeemed, 8);
+
+    // A cell with no claim on the home is refused, and the refusal says which of the two it is.
+    let refused = table
+        .enter(root, |context| context.redeem(kept).map(|_| ()))
+        .unwrap();
+    assert!(refused.is_ok(), "the home cell redeems its own resident");
+    let bystander = table.create(None, None).unwrap();
+    let error = table
+        .enter(bystander, |context| match context.redeem(kept) {
+            Err(error) => error,
+            Ok(_) => panic!("a cell with no claim on the home must be refused"),
+        })
+        .unwrap();
+    assert_eq!(name_redeem_error(error), "unheld");
+    table.release(bystander, Absorption::IntoHolder).unwrap();
 
     // The successor comes back re-anchored at the next step's brand.
     let echoed = table
@@ -151,7 +242,7 @@ fn every_public_door_answers_from_outside_the_crate() {
 
 #[test]
 fn the_refusals_hand_back_the_handle_that_went_stale() {
-    let mut full: CellTable<Work> = CellTable::new(1);
+    let mut full: CellTable<Work> = CellTable::new(1, weigh);
     let taken = full.create(None, None).unwrap();
     assert_eq!(full.create(None, None), Err(CreateError::SlabFull));
 

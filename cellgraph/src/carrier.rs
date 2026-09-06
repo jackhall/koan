@@ -1,5 +1,6 @@
-//! The two carrier states a value with reach passes through: [`Sealed`], the dormant form that
-//! rests in a region between reads, and [`Opened`], the in-use form a step reads it out at. See
+//! The two carrier states that carry a lifetime: [`Sealed`], the in-step form a door hands back,
+//! and [`Opened`], the in-use form a step reads it out at. The third state — at rest, lifetime-free
+//! — is [`Resident`](crate::Resident), which lives in [`resident`](crate::resident). See
 //! [design/cellgraph.md](../design/cellgraph.md) § The contract: two embedder types.
 //!
 //! [`Sealed`] bundles the value with the mask describing what it reaches; [`Opened`] is the value
@@ -27,16 +28,22 @@ use crate::reattach::{DropFree, Erased, Reattachable};
 pub struct Sealed<'home, T: Reattachable + DropFree> {
     value: Erased<T>,
     reach: Mask,
+    /// The slab slot whose hold set covers this reach, and whose resident table a
+    /// [`keep`](crate::StepContext::keep) registers the reach in. For a door-built carrier that
+    /// is the cell the value was placed into; for one redeemed out of a record it is the
+    /// executing cell, which holds the record.
+    home: u32,
     _home: PhantomData<&'home ()>,
 }
 
 impl<'home, T: Reattachable + DropFree> Sealed<'home, T> {
     /// Bundle a value the table itself just wrote into a region with the reach it composed for it.
     /// Crate-private, so the value-to-reach pairing is only ever the one a door established.
-    pub(crate) fn new(value: Erased<T>, reach: Mask) -> Self {
+    pub(crate) fn new(value: Erased<T>, reach: Mask, home: u32) -> Self {
         Sealed {
             value,
             reach,
+            home,
             _home: PhantomData,
         }
     }
@@ -59,6 +66,12 @@ impl<'home, T: Reattachable + DropFree> Sealed<'home, T> {
     {
         self.value
     }
+
+    /// Split the carrier into the three things a [`keep`](crate::StepContext::keep) needs: the
+    /// erased value, the reach the table takes over, and the slot whose table takes it.
+    pub(crate) fn into_parts(self) -> (Erased<T>, Mask, u32) {
+        (self.value, self.reach, self.home)
+    }
 }
 
 /// Duplicating a carrier duplicates no ownership: the value names region bytes it does not own,
@@ -72,6 +85,7 @@ where
         Sealed {
             value: self.value,
             reach: self.reach.clone(),
+            home: self.home,
             _home: PhantomData,
         }
     }
