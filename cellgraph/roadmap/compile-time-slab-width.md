@@ -25,26 +25,29 @@ deep.
   benchmarks run at it.
 - A reach mask is the inline row plus its sealed half, so a mask naming no
   sealed region is built, copied, and compared with no allocation, and
-  `Sealed`, `Resident`, and a resident-table entry carry it inline.
+  `Sealed` and a resident-table entry carry it inline. A `Resident` carries no
+  mask, only the key naming its entry, and is unchanged.
 - The harness's keep-and-redeem and fan-out benchmarks record zero
   allocations per `alloc`, `hold`, `keep`, and slab-path `redeem` on a warm
   table, and no benchmark records more time than the row before.
 - `CellTable::new` refuses, at compile time or construction, a cap above the
-  width, and the crossing signal's `cap` field still reports the width.
+  width, and the crossing signal's `cap` field still reports the construction
+  cap — pressure in a two-cell table is against 2, not the width.
 
 **Directions.**
 
-- *How the width is fixed — open.* (a) a crate-level constant, one word, with
-  the cap a construction-time value at or below it; (b) a const generic on
-  `CellTable`, `Bits`, and `Mask` for the word count, defaulting to one, so
-  an embedder that needs a deeper slab instantiates a wider table without a
-  crate edit and the 64-cell figure is a parameter rather than a ceiling.
-  Recommended: (b). A cell is a call frame's worth of execution in the
-  embedder's terms ([adopt-cellgraph.md](../../workgraph/roadmap/adopt-cellgraph.md)),
-  and the parent chain of a non-tail-recursive call stays live for its whole
-  depth, so 64 cells is the width for the crate's own tests and for loops
-  that recycle a slot per hop, not for a koan program that recurses past
-  that depth; the embedder should be able to widen it in its type.
+- *How the width is fixed — decided.* A const generic for the word count,
+  defaulting to one, on `CellTable` and on every type that carries a row:
+  `StepContext`, `Sealed`, `Operand`, and the crate-private `Bits`, `Mask`,
+  and matrix. An embedder that needs a deeper slab instantiates a wider
+  table without a crate edit, and the crate's own tests and benchmarks stay
+  at one word. A crate constant was rejected because it would move the
+  crate's tests and benchmarks to whatever width the embedder needs. On
+  stable `W * 64` cannot be an array length, so a matrix is stored as `W`
+  chunks of 64 rows — byte-identical to a flat array, with the chunking only
+  in the index arithmetic. The word count is expected to stay small; how a
+  deep slab segments its liveness matrices is separate work.
+  Plan: [scratch/compile-time-slab-width-plan.md](../../scratch/compile-time-slab-width-plan.md).
 - *Cap below the width — decided.* The cap stays a construction value at or
   below the width, so a test can build a two-cell table over a 64-bit row
   and admission is still refused at the cap, not at the word boundary.
