@@ -293,9 +293,10 @@ struct Slot<C: Reattachable> {
     /// The continuation at rest, erased. Its reach is one entry of `residents` — the continuation
     /// is a resident like any other, so the seal transition maintains one collection per cell.
     continuation: Option<Erased<C>>,
-    /// Which entry of `residents` holds the continuation's reach. A store repoints this at the
-    /// entry its reach interns to rather than writing the entry it named before, so a cell that
-    /// alternates between a few continuation shapes settles at one entry per shape.
+    /// Which entry of `residents` holds the continuation's reach, and `None` for a continuation
+    /// that reaches nothing. A store repoints this at the entry its reach interns to rather than
+    /// writing the entry it named before, so a cell that alternates between a few continuation
+    /// shapes settles at one entry per shape.
     continuation_reach: Option<u32>,
     /// The reach of every value kept in this cell's region, interned on content — the one durable
     /// habitat of a mask on the slab side, and what the seal transition's step 1 rewrites. One
@@ -1458,8 +1459,9 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
             .take()?;
         // SAFETY: the value's referents are region storage in the cells and sealed regions its
         // stored reach names — the resident entry `continuation_reach` names, which the seal
-        // transition maintains — and that reach was minted into this cell's hold set when it was
-        // stored, so every one of them is either a live cell or a held sealed record, whose
+        // transition maintains, and none at all when it names no entry — and that reach was minted
+        // into this cell's hold set when it was stored, so every one of them is either a live cell
+        // or a held sealed record, whose
         // chunks are pointer-stable and detached unmoved. The cell is live for all of `'b` (it is
         // the one executing), so its holds are too. `'b` is the enclosing `enter`'s table borrow,
         // unnameable by the step's return type, so nothing anchored at it escapes.
@@ -1469,13 +1471,13 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
 
     /// Store a continuation that captures nothing any region owns, so it reaches nothing.
     ///
-    /// The empty reach interns like any other, so the cell points at the entry naming nothing and
-    /// whatever entry an earlier store pointed at stays as it is: entries are content, and nothing
-    /// rewrites one because the value that minted it moved on.
+    /// Reaching nothing takes no entry: the cell stops naming one rather than naming an entry that
+    /// names nothing, so a cell whose continuations never capture keeps an empty table. Whatever
+    /// entry an earlier store pointed at stays as it is — entries are content, and nothing rewrites
+    /// one because the value that minted it moved on.
     pub fn store_successor(&mut self, continuation: C::At<'static>) {
-        let cap = self.table.cap;
         let cell = &mut self.table.slots[self.handle.slot() as usize];
-        cell.continuation_reach = Some(cell.residents.intern(Mask::empty(cap)));
+        cell.continuation_reach = None;
         cell.continuation = Some(Erased::store(continuation));
     }
 

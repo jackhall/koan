@@ -612,25 +612,19 @@ fn the_continuation_interns_its_reach_like_any_other_keep() {
     assert!(stored.names(over.slot()));
     assert!(stored.names(cell.slot()));
 
-    // A continuation that captures nothing reaches nothing, and the empty reach is a distinct
-    // shape: the cell repoints at an entry of its own rather than emptying the one it named, which
-    // is what makes an entry immutable content.
+    // A continuation that captures nothing reaches nothing, and reaching nothing takes no entry:
+    // the cell stops naming one rather than emptying the entry it named, which is what makes an
+    // entry immutable content.
     table
         .enter(cell, |context| {
             context.continuation();
             context.store_successor(&ANCHOR);
         })
         .unwrap();
-    assert_eq!(
-        table.slots[cell.slot() as usize].continuation_reach,
-        Some(1)
-    );
-    let emptied = continuation_reach(&table, cell);
-    assert!(emptied.slab_slots().next().is_none());
-    assert!(emptied.sealed().is_empty());
+    assert_eq!(table.slots[cell.slot() as usize].continuation_reach, None);
 
     // And the capturing store comes back to the entry it minted the first time, because its reach
-    // is the same reach. Alternating for a whole run costs the two shapes and nothing more.
+    // is the same reach. Alternating for a whole run costs that one entry and nothing more.
     for value in 0..8 {
         capturing(&mut table, value);
         assert_eq!(
@@ -646,7 +640,7 @@ fn the_continuation_interns_its_reach_like_any_other_keep() {
     }
     assert_eq!(
         table.slots[cell.slot() as usize].residents.len(),
-        2,
+        1,
         "a table holds one entry per distinct reach, not one per store"
     );
 
