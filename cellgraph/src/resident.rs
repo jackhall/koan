@@ -116,11 +116,11 @@ pub(crate) struct ResidentKey {
 /// which carry equal masks to equal masks. The continuation is no exception — it interns its reach
 /// like any other keep and repoints, rather than owning an entry it overwrites.
 #[derive(Default)]
-pub(crate) struct Residents {
-    masks: Vec<Mask>,
+pub(crate) struct Residents<const W: usize> {
+    masks: Vec<Mask<W>>,
 }
 
-impl Residents {
+impl<const W: usize> Residents<W> {
     /// Take a reach in, handing back the index that names it from here on — the entry that already
     /// holds an equal mask when there is one, so a cell kept into repeatedly with the same reach
     /// takes one entry rather than one per keep.
@@ -128,7 +128,7 @@ impl Residents {
     /// The scan is linear in the table, which interning is what keeps small: the cost is the
     /// number of distinct reaches the cell has ever been kept into, and every hit is an entry the
     /// table did not grow by.
-    pub(crate) fn intern(&mut self, reach: Mask) -> u32 {
+    pub(crate) fn intern(&mut self, reach: Mask<W>) -> u32 {
         match self.masks.iter().position(|mask| *mask == reach) {
             Some(index) => index as u32,
             None => self.append(reach),
@@ -138,13 +138,13 @@ impl Residents {
     /// Add an entry without consulting the existing ones — how a merge moves a departed cell's
     /// table in, where the block's position is what forwards its keys and an intern hit would put
     /// an entry at the wrong offset.
-    pub(crate) fn append(&mut self, reach: Mask) -> u32 {
+    pub(crate) fn append(&mut self, reach: Mask<W>) -> u32 {
         let index = self.masks.len() as u32;
         self.masks.push(reach);
         index
     }
 
-    pub(crate) fn get(&self, index: u32) -> Option<&Mask> {
+    pub(crate) fn get(&self, index: u32) -> Option<&Mask<W>> {
         self.masks.get(index as usize)
     }
 
@@ -156,18 +156,18 @@ impl Residents {
         self.masks.is_empty()
     }
 
-    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Mask> {
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Mask<W>> {
         self.masks.iter_mut()
     }
 
     #[cfg(test)]
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &Mask> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Mask<W>> {
         self.masks.iter()
     }
 
     /// Take the entries out whole, leaving the table empty — how a cell absorbed into another
     /// hands its residents over.
-    pub(crate) fn take(&mut self) -> Vec<Mask> {
+    pub(crate) fn take(&mut self) -> Vec<Mask<W>> {
         std::mem::take(&mut self.masks)
     }
 }

@@ -8,12 +8,12 @@ use super::*;
 
 /// The count a scan down `held`'s column reports, which is what [`Matrix::holders`] must equal
 /// after every write.
-fn scanned(matrix: &Matrix, cap: u32, held: u32) -> u32 {
+fn scanned(matrix: &Matrix<1>, cap: u32, held: u32) -> u32 {
     (0..cap).filter(|holder| matrix.test(*holder, held)).count() as u32
 }
 
 /// Compare the tally against the scan for every column at once.
-fn agrees(matrix: &Matrix, cap: u32) {
+fn agrees(matrix: &Matrix<1>, cap: u32) {
     for held in 0..cap {
         assert_eq!(
             matrix.holders(held),
@@ -26,7 +26,7 @@ fn agrees(matrix: &Matrix, cap: u32) {
 #[test]
 fn the_tally_follows_every_write() {
     let cap = 6;
-    let mut matrix = Matrix::new(cap);
+    let mut matrix = Matrix::<1>::new();
     agrees(&matrix, cap);
 
     // A set counts once, and a set that changes nothing counts nothing.
@@ -47,7 +47,7 @@ fn the_tally_follows_every_write() {
 
     // A mint folds a reach mask in the same way, and drops the destination's own bit rather than
     // counting it: a cell that held itself would never reach a zero count.
-    let mut reach = Mask::empty(cap);
+    let mut reach = Mask::empty();
     reach.add(4);
     reach.add(5);
     matrix.mint(5, &reach);

@@ -34,7 +34,7 @@ pub(crate) struct SealedSet {
 }
 
 impl SealedSet {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         SealedSet { ids: Vec::new() }
     }
 
@@ -104,11 +104,11 @@ pub(crate) struct Memo {
 }
 
 /// One retained region: everything its cell had, minus everything a cell needs to run.
-pub(crate) struct SealedRecord {
+pub(crate) struct SealedRecord<const W: usize> {
     /// The cell's hold set, frozen at its death instead of cleared. Monotone holds make this
     /// exactly the union of every reach ever minted into the region, so the freeze is a word copy
     /// and consults no storage.
-    pub(crate) aggregate: Mask,
+    pub(crate) aggregate: Mask<W>,
     /// The chunks, detached from the slot unmoved. `None` for a cell that never allocated.
     pub(crate) storage: Option<Region>,
     /// How many hold sets name this region — live cells' sealed halves plus other records'
@@ -147,7 +147,7 @@ pub(crate) struct SealedRecord {
     pub(crate) lineage: Vec<Handle>,
 }
 
-impl SealedRecord {
+impl<const W: usize> SealedRecord<W> {
     /// Bytes the detached chunks still occupy. Retention lives only in this tier, so this is the
     /// occupancy a hold on the region is answerable for — what the consolidation copy buys back,
     /// and the input a pressure model prices a release against.
@@ -159,15 +159,15 @@ impl SealedRecord {
 }
 
 /// Every sealed region in the table, and the monotone counter their ids come from.
-pub(crate) struct SealedTier {
-    records: HashMap<SealedId, SealedRecord>,
+pub(crate) struct SealedTier<const W: usize> {
+    records: HashMap<SealedId, SealedRecord<W>>,
     next: u64,
     /// Retained bytes summed over every record present — the tier's half of the occupancy signal,
     /// maintained at the three places storage enters or leaves the tier rather than scanned.
     bytes: usize,
 }
 
-impl SealedTier {
+impl<const W: usize> SealedTier<W> {
     pub(crate) fn new() -> Self {
         SealedTier {
             records: HashMap::new(),
@@ -183,20 +183,20 @@ impl SealedTier {
         id
     }
 
-    pub(crate) fn insert(&mut self, id: SealedId, record: SealedRecord) {
+    pub(crate) fn insert(&mut self, id: SealedId, record: SealedRecord<W>) {
         self.bytes += record.retained_bytes();
         self.records.insert(id, record);
     }
 
-    pub(crate) fn get(&self, id: SealedId) -> Option<&SealedRecord> {
+    pub(crate) fn get(&self, id: SealedId) -> Option<&SealedRecord<W>> {
         self.records.get(&id)
     }
 
-    pub(crate) fn get_mut(&mut self, id: SealedId) -> Option<&mut SealedRecord> {
+    pub(crate) fn get_mut(&mut self, id: SealedId) -> Option<&mut SealedRecord<W>> {
         self.records.get_mut(&id)
     }
 
-    pub(crate) fn remove(&mut self, id: SealedId) -> Option<SealedRecord> {
+    pub(crate) fn remove(&mut self, id: SealedId) -> Option<SealedRecord<W>> {
         let record = self.records.remove(&id)?;
         self.bytes -= record.retained_bytes();
         Some(record)

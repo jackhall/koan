@@ -481,15 +481,11 @@ fn pricing_mutates_no_hold() {
         .collect();
     let ids: Vec<SealedId> = table.sealed.ids().collect();
 
-    let pins: Vec<Bits> = (0..10)
-        .map(|slot| table.pins.row(slot).to_owned())
-        .collect();
-    let births: Vec<Bits> = (0..10)
-        .map(|slot| table.birth.row(slot).to_owned())
-        .collect();
+    let pins: Vec<Bits<1>> = (0..10).map(|slot| *table.pins.row(slot)).collect();
+    let births: Vec<Bits<1>> = (0..10).map(|slot| *table.birth.row(slot)).collect();
     let sealed_holds: Vec<SealedSet> = table.sealed_holds.to_vec();
     let naming: Vec<SealedSet> = table.naming.to_vec();
-    let records: Vec<(u32, Mask)> = ids
+    let records: Vec<(u32, Mask<1>)> = ids
         .iter()
         .map(|id| {
             let record = table.sealed.get(*id).unwrap();
@@ -505,10 +501,10 @@ fn pricing_mutates_no_hold() {
     for handle in &handles {
         for other in &handles {
             let reach = Mask::from_parts(
-                table.pins.row(other.slot()).to_owned(),
+                *table.pins.row(other.slot()),
                 table.sealed_holds[other.slot() as usize].clone(),
             );
-            let _ = table.pin_price(handle.slot(), &reach, &Mask::empty(table.cap));
+            let _ = table.pin_price(handle.slot(), &reach, &Mask::empty());
         }
     }
     for id in &ids {

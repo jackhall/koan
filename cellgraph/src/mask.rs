@@ -1,5 +1,5 @@
 //! [`Mask`] — a value's reach: the set of regions whose storage the value's borrows read. Slab
-//! slots as a fixed-width [`Bits`] row, sealed regions as a sparse id set, so union and dedup are a
+//! slots as an inline [`Bits`] row, sealed regions as a sparse id set, so union and dedup are a
 //! word `OR` plus a sorted merge and membership is a bit test or a binary search. See
 //! [design/liveness-matrix.md](../design/liveness-matrix.md) § Reach as a hybrid mask.
 //!
@@ -10,8 +10,11 @@
 use crate::matrix::Bits;
 use crate::sealed::{SealedId, SealedSet};
 
-/// The set of regions a value's borrows reach: slab slots as bits over the table's cap, sealed
+/// The set of regions a value's borrows reach: slab slots as bits over the table's width, sealed
 /// regions as ids.
+///
+/// The dense half is inline, so a mask naming no sealed region is built, copied, and compared
+/// without touching the allocator — which is what keeps a reach off the per-value allocation path.
 ///
 /// Masks compose by `OR` and merge, so a value built from several operands names the union of
 /// their reaches with no deduplication step and no subsumption fold.
@@ -21,23 +24,23 @@ use crate::sealed::{SealedId, SealedSet};
 /// door beside a value, so the only reach a value ever travels with is the one a door composed
 /// for it.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct Mask {
-    slab: Bits,
+pub(crate) struct Mask<const W: usize> {
+    slab: Bits<W>,
     sealed: SealedSet,
 }
 
-impl Mask {
+impl<const W: usize> Mask<W> {
     /// A mask naming nothing — the reach of a value whose borrows leave the table entirely.
-    pub(crate) fn empty(cap: u32) -> Self {
+    pub(crate) const fn empty() -> Self {
         Mask {
-            slab: Bits::new(cap),
+            slab: Bits::new(),
             sealed: SealedSet::new(),
         }
     }
 
     /// A mask naming exactly `slot` — the reach a value takes on the moment it is homed in a cell.
-    pub(crate) fn single(cap: u32, slot: u32) -> Self {
-        let mut mask = Mask::empty(cap);
+    pub(crate) fn single(slot: u32) -> Self {
+        let mut mask = Mask::empty();
         mask.add(slot);
         mask
     }
@@ -45,15 +48,15 @@ impl Mask {
     /// A mask naming exactly the sealed region `id` — the reach a value takes on when it is
     /// redeemed out of a record: a hold on the record keeps its aggregate alive transitively, so
     /// the id alone covers everything the value reads.
-    pub(crate) fn single_sealed(cap: u32, id: SealedId) -> Self {
-        let mut mask = Mask::empty(cap);
+    pub(crate) fn single_sealed(id: SealedId) -> Self {
+        let mut mask = Mask::empty();
         mask.add_sealed(id);
         mask
     }
 
     /// A mask over an already-built slab row and a sealed half — how a dying cell's hold set is
     /// frozen into its aggregate.
-    pub(crate) fn from_parts(slab: Bits, sealed: SealedSet) -> Self {
+    pub(crate) fn from_parts(slab: Bits<W>, sealed: SealedSet) -> Self {
         Mask { slab, sealed }
     }
 
@@ -92,14 +95,14 @@ impl Mask {
 
     /// Fold `other`'s reach into this one. The composition rule for a value built over operands:
     /// it reaches everything every operand reaches.
-    pub(crate) fn union_with(&mut self, other: &Mask) {
+    pub(crate) fn union_with(&mut self, other: &Mask<W>) {
         self.slab.union_with(&other.slab);
         self.sealed.union_with(&other.sealed);
     }
 
     /// Fold only `other`'s slab half in. A merge folds the sparse half id by id instead, since it
     /// needs each insert's answer to tell a transferred hold from a duplicated one.
-    pub(crate) fn union_slab_with(&mut self, other: &Mask) {
+    pub(crate) fn union_slab_with(&mut self, other: &Mask<W>) {
         self.slab.union_with(&other.slab);
     }
 
@@ -130,7 +133,7 @@ impl Mask {
     }
 
     /// The dense half, for the mint's OR.
-    pub(crate) fn slab(&self) -> &Bits {
+    pub(crate) fn slab(&self) -> &Bits<W> {
         &self.slab
     }
 }

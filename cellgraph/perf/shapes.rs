@@ -17,9 +17,9 @@ use cellgraph::{
 
 use crate::meter::{Verb, measure};
 
-/// The slab width every shape builds at. One cap for the whole set, so a row's `cap` column is a
-/// constant today and a dimension once the compile-time slab width lands.
-pub const CAP: u32 = 128;
+/// The cap every shape builds at: the full width of a one-word table, which is the width the crate
+/// ships at. One cap for the whole set, so a row's `cap` column is a constant across the record.
+pub const CAP: u32 = 64;
 
 /// The widest operand list any shape passes, and so the stack buffer a slice build writes into: a
 /// build closure that allocated would charge the placement for the harness's own work.

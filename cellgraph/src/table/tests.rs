@@ -96,7 +96,7 @@ fn live_bytes<C: Reattachable>(table: &CellTable<C>, cap: u32) -> usize {
 
 /// The reach of a cell's stored continuation, read out of the resident table entry it occupies.
 /// The continuation is a resident like any other, so this is the same lookup a redeem performs.
-fn continuation_reach<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> &Mask {
+fn continuation_reach<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> &Mask<1> {
     let cell = &table.slots[handle.slot() as usize];
     let index = cell
         .continuation_reach
@@ -123,6 +123,54 @@ fn the_slab_refuses_past_its_cap_and_reuses_a_freed_slot() {
     assert_eq!(reused.slot(), cells[1].slot());
     assert_eq!(reused.generation(), cells[1].generation() + 1);
     assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
+}
+
+#[test]
+fn a_cap_below_the_width_binds_admission_and_the_signal() {
+    // The width is fixed by the table's type and the cap by its construction. A table two cells
+    // deep over a 64-cell row is full at two, and the occupancy signal reports two.
+    let mut table: CellTable<Owned> = CellTable::new(2, pin);
+    let _ = table.create(None, None).unwrap();
+    let _ = table.create(None, None).unwrap();
+    assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
+    assert_eq!(table.occupancy().cap, 2);
+}
+
+#[test]
+#[should_panic(expected = "does not fit a 64-cell slab")]
+fn a_cap_above_the_width_is_refused_at_construction() {
+    let _: CellTable<Owned> = CellTable::new(65, pin);
+}
+
+#[test]
+fn a_two_word_table_names_slots_across_the_chunk_boundary() {
+    // The shape that exercises the matrices' chunk arithmetic: a birth chain and a pin whose ends
+    // sit in different chunks of the same row.
+    let mut table: CellTable<Owned, 2> = CellTable::new(128, pin);
+    let root = table.create(None, None).unwrap();
+    let cells: Vec<Handle> = (1..128)
+        .map(|_| table.create(Some(root), None).unwrap())
+        .collect();
+    assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
+
+    // A child born in the high chunk inherits the row of a parent in the low one.
+    let high = cells[99];
+    assert_eq!(high.slot(), 100);
+    assert!(table.birth.test(high.slot(), root.slot()));
+
+    // And a pin crosses the boundary the other way.
+    let low = cells[2];
+    table
+        .enter(low, |context| context.hold(high).unwrap())
+        .unwrap();
+    assert!(table.holds(low, high));
+
+    // Releasing the holder drops the whole row, both chunks of it, so the held cell reclaims.
+    table.release(low, Absorption::IntoHolder).unwrap();
+    assert!(!table.holds(low, high));
+    table.release(high, Absorption::IntoHolder).unwrap();
+    assert!(!table.is_live(high));
+    assert_eq!(table.occupancy().records, 0);
 }
 
 #[test]

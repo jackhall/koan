@@ -25,9 +25,9 @@ use crate::reattach::{DropFree, Erased, Reattachable};
 /// out, and it hands back an [`Opened`] anchored at the reading borrow.
 ///
 /// [`StepContext::read`]: crate::StepContext::read
-pub struct Sealed<'home, T: Reattachable + DropFree> {
+pub struct Sealed<'home, T: Reattachable + DropFree, const W: usize = 1> {
     value: Erased<T>,
-    reach: Mask,
+    reach: Mask<W>,
     /// The slab slot whose hold set covers this reach, and whose resident table a
     /// [`keep`](crate::StepContext::keep) registers the reach in. For a door-built carrier that
     /// is the cell the value was placed into; for one redeemed out of a record it is the
@@ -36,10 +36,10 @@ pub struct Sealed<'home, T: Reattachable + DropFree> {
     _home: PhantomData<&'home ()>,
 }
 
-impl<'home, T: Reattachable + DropFree> Sealed<'home, T> {
+impl<T: Reattachable + DropFree, const W: usize> Sealed<'_, T, W> {
     /// Bundle a value the table itself just wrote into a region with the reach it composed for it.
     /// Crate-private, so the value-to-reach pairing is only ever the one a door established.
-    pub(crate) fn new(value: Erased<T>, reach: Mask, home: u32) -> Self {
+    pub(crate) fn new(value: Erased<T>, reach: Mask<W>, home: u32) -> Self {
         Sealed {
             value,
             reach,
@@ -50,7 +50,7 @@ impl<'home, T: Reattachable + DropFree> Sealed<'home, T> {
 
     /// The value's reach — which cells' region storage its borrows read. Crate-private, like the
     /// mask itself: the only reach a value travels with is the one a door composed for it.
-    pub(crate) fn reach(&self) -> &Mask {
+    pub(crate) fn reach(&self) -> &Mask<W> {
         &self.reach
     }
 
@@ -69,7 +69,7 @@ impl<'home, T: Reattachable + DropFree> Sealed<'home, T> {
 
     /// Split the carrier into the three things a [`keep`](crate::StepContext::keep) needs: the
     /// erased value, the reach the table takes over, and the slot whose table takes it.
-    pub(crate) fn into_parts(self) -> (Erased<T>, Mask, u32) {
+    pub(crate) fn into_parts(self) -> (Erased<T>, Mask<W>, u32) {
         (self.value, self.reach, self.home)
     }
 }
@@ -77,7 +77,7 @@ impl<'home, T: Reattachable + DropFree> Sealed<'home, T> {
 /// Duplicating a carrier duplicates no ownership: the value names region bytes it does not own,
 /// and the reach is a word copy. Two holders of the same value name the same reach, which is what
 /// keeps the mint idempotent.
-impl<T: Reattachable + DropFree> Clone for Sealed<'_, T>
+impl<T: Reattachable + DropFree, const W: usize> Clone for Sealed<'_, T, W>
 where
     Erased<T>: Copy,
 {

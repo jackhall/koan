@@ -73,6 +73,8 @@ fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
     for crossing in seen.iter() {
         assert_eq!(crossing.occupied, occupancy.occupied);
         assert_eq!(crossing.cap, occupancy.cap);
+        // The cap the table was built at, not the width of the row its type fixes.
+        assert_eq!(crossing.cap, 4);
         assert_eq!(crossing.records, occupancy.records);
         assert_eq!(crossing.retained_bytes, occupancy.retained_bytes);
         assert_eq!(

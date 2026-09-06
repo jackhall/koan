@@ -212,7 +212,7 @@ fn an_acyclic_hold_graph_reports_no_ring() {
 // [design/cellgraph.md § Passing values between cells](../../../design/cellgraph.md).
 
 /// The one entry a cell's resident table holds, by the index a key names.
-fn resident_reach<C: Reattachable>(table: &CellTable<C>, slot: u32, index: u32) -> &Mask {
+fn resident_reach<C: Reattachable>(table: &CellTable<C>, slot: u32, index: u32) -> &Mask<1> {
     table.slots[slot as usize]
         .residents
         .get(index)
