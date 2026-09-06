@@ -186,20 +186,23 @@ if [ "$CELLGRAPH_ONLY" = 1 ]; then
     printf 'Change scope: cellgraph only — running the cell-substrate slate.\n\n'
 
     # Unit tests and doctests in one pass, as in the workgraph branch — the
-    # `compile_fail` guards on the carrier surface are doctests. The crate has no
-    # feature flags: everything it compiles, it compiles here.
+    # `compile_fail` guards on the carrier surface are doctests. The one feature the
+    # crate has, `perf`, gates a binary rather than any library code, so the tests
+    # see everything without it and only clippy below turns it on.
     run tests 'tests FAILED' cargo test -p cellgraph --quiet
     ok tests "ok ($(passed) passed, unit + doctests)" 'tests ok'
 
     cellgraph_surface
 
-    if OUT="$(cargo clippy -p cellgraph --all-targets -- -D warnings 2>&1)"; then
+    # `--features perf` is what brings the measurement harness under `cellgraph/perf/`
+    # into the lint, since its `[[bin]]` requires the feature to build at all.
+    if OUT="$(cargo clippy -p cellgraph --all-targets --features perf -- -D warnings 2>&1)"; then
         ok clippy clean 'clippy clean'
     else
         cargo clippy -p cellgraph --fix --allow-dirty --allow-staged \
-            --all-targets >/dev/null 2>&1 || true
+            --all-targets --features perf >/dev/null 2>&1 || true
         run clippy 'clippy: issues remain after --fix' \
-            cargo clippy -p cellgraph --all-targets -- -D warnings
+            cargo clippy -p cellgraph --all-targets --features perf -- -D warnings
         ok clippy 'clean after --fix (working tree modified)' 'clippy clean after --fix'
     fi
 

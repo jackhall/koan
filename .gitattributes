@@ -1,2 +1,3 @@
 /observe/precommit-coverage.lcov -diff linguist-generated=true
 Cargo.lock -diff linguist-generated=true
+/cellgraph/observe/perf.csv -diff linguist-generated=true
