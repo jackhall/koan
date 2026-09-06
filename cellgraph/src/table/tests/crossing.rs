@@ -246,6 +246,88 @@ fn pin_price_is_marginal_against_what_the_destination_already_holds() {
 }
 
 #[test]
+fn operands_from_one_source_are_priced_against_what_the_placement_has_already_pinned() {
+    let (verdict, seen) = recording(|_| Verdict::Pin);
+    let mut table: CellTable<Owned> = CellTable::new(4, verdict);
+    let destination = table.create(None, None).unwrap();
+    let source = table.create(None, None).unwrap();
+    let driver = table.create(None, None).unwrap();
+
+    table
+        .enter(driver, |context| {
+            // Two values homed in the same cell, so both operands reach exactly `source`.
+            let first = context
+                .alloc_into::<Number, Number>(source, &[], |writer, _| writer.value(1))
+                .unwrap();
+            let second = context
+                .alloc_into::<Number, Number>(source, &[], |writer, _| writer.value(2))
+                .unwrap();
+            context
+                .alloc_into::<Number, Number>(
+                    destination,
+                    &[
+                        operand_at(&first, usize::MAX),
+                        operand_at(&second, usize::MAX),
+                    ],
+                    |writer, views| take(&views[0], writer),
+                )
+                .unwrap();
+        })
+        .unwrap();
+
+    let seen = seen.borrow();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(
+        seen[0].pin_bytes,
+        table.region_bytes(source).unwrap(),
+        "the first operand from a shared source carries the shared cost"
+    );
+    assert_eq!(
+        seen[1].pin_bytes, 0,
+        "the second reaches nothing the placement has not already pinned"
+    );
+}
+
+#[test]
+fn a_copied_operand_leaves_the_next_one_the_whole_price() {
+    // Copy where the embedder's figure undercuts the pin: the first operand is passed at zero and
+    // is copied, the second at `usize::MAX` and is pinned.
+    let (verdict, seen) = recording(cheaper);
+    let mut table: CellTable<Owned> = CellTable::new(4, verdict);
+    let destination = table.create(None, None).unwrap();
+    let source = table.create(None, None).unwrap();
+    let driver = table.create(None, None).unwrap();
+
+    table
+        .enter(driver, |context| {
+            let first = context
+                .alloc_into::<Number, Number>(source, &[], |writer, _| writer.value(1))
+                .unwrap();
+            let second = context
+                .alloc_into::<Number, Number>(source, &[], |writer, _| writer.value(2))
+                .unwrap();
+            context
+                .alloc_into::<Number, Number>(
+                    destination,
+                    &[operand_at(&first, 0), operand_at(&second, usize::MAX)],
+                    |writer, views| take(&views[1], writer),
+                )
+                .unwrap();
+        })
+        .unwrap();
+
+    let seen = seen.borrow();
+    assert_eq!(seen.len(), 2);
+    let source_bytes = table.region_bytes(source).unwrap();
+    assert_eq!(seen[0].pin_bytes, source_bytes);
+    // A copy mints nothing, so the second operand is still the first to bring `source` in.
+    assert_eq!(
+        seen[1].pin_bytes, source_bytes,
+        "a refused pin leaves the source unheld"
+    );
+}
+
+#[test]
 fn a_frozen_closure_prices_through_its_memo() {
     let (verdict, seen) = recording(|_| Verdict::Pin);
     let mut table: CellTable<Owned> = CellTable::new(4, verdict);

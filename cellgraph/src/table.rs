@@ -258,6 +258,11 @@ enum Node {
 
 /// The nodes one walk of the hold graph visited, split by tier. A walk with no cells is a frozen
 /// closure: nothing in it will ever seal, merge, or retire again.
+///
+/// Test-only: a walk reports each node as it visits it, and the two readings the crate takes —
+/// a price and a memo — fold that stream rather than materialising it. The tests that check the
+/// stream against a recorded closure want the whole thing, and this is it.
+#[cfg(test)]
 struct Reached {
     cells: Vec<u32>,
     records: Vec<SealedId>,
@@ -1238,6 +1243,7 @@ impl<C: Reattachable> CellTable<C> {
         self.sealed.get(id).map_or(0, SealedRecord::retained_bytes)
     }
 
+    #[cfg(test)]
     fn bytes_of(&self, reached: &Reached) -> usize {
         reached
             .cells
@@ -1281,13 +1287,24 @@ impl<C: Reattachable> CellTable<C> {
         if record.closure.get().is_some() {
             return;
         }
-        // Priming wants the walk and not its result, so the record set moves into the memo rather
-        // than being copied into it and the walk's own copy dropped.
-        let reached = self.reached_from(Node::Sealed(id), true);
-        if reached.cells.is_empty() {
-            let _ = record.closure.set(Memo {
-                records: reached.records,
-            });
+        // Priming wants the record set and nothing else: a closure that names a live cell is not
+        // frozen and is not recorded, so a cell only has to be noticed, and the set the walk
+        // reports moves into the memo rather than being copied into it.
+        let mut records = Vec::new();
+        let mut frozen = true;
+        self.walk(
+            Bits::new(self.cap),
+            vec![id],
+            Bits::new(self.cap),
+            SealedSet::new(),
+            true,
+            |node| match node {
+                Node::Cell(_) => frozen = false,
+                Node::Sealed(inner) => records.push(inner),
+            },
+        );
+        if frozen {
+            let _ = record.closure.set(Memo { records });
         }
     }
 
@@ -1299,99 +1316,148 @@ impl<C: Reattachable> CellTable<C> {
     /// two branches of one closure may share a sub-tier, and adding two memoized totals would bill
     /// the shared part twice. `use_memos` is false only where a test recomputes a memo from
     /// scratch to check it against what was recorded.
+    #[cfg(test)]
     fn reached_from(&self, start: Node, use_memos: bool) -> Reached {
-        self.walk([start], Bits::new(self.cap), SealedSet::new(), use_memos)
-    }
-
-    /// The walk itself, from a set of seeds and over a pair of already-seen sets: a node either
-    /// set names is neither reported nor descended through, which is how a marginal price prunes
-    /// at what the destination already holds.
-    fn walk(
-        &self,
-        seeds: impl IntoIterator<Item = Node>,
-        mut seen_cells: Bits,
-        mut seen_records: SealedSet,
-        use_memos: bool,
-    ) -> Reached {
+        let mut frontier = Bits::new(self.cap);
+        let mut worklist = Vec::new();
+        match start {
+            Node::Cell(slot) => {
+                frontier.set(slot);
+            }
+            Node::Sealed(id) => worklist.push(id),
+        }
         let mut reached = Reached {
             cells: Vec::new(),
             records: Vec::new(),
         };
-        let mut stack: Vec<Node> = seeds.into_iter().collect();
-        while let Some(node) = stack.pop() {
-            match node {
-                Node::Cell(slot) => {
-                    if seen_cells.test(slot) {
-                        continue;
-                    }
-                    seen_cells.set(slot);
-                    reached.cells.push(slot);
-                    stack.extend(self.holds_of(node));
+        self.walk(
+            frontier,
+            worklist,
+            Bits::new(self.cap),
+            SealedSet::new(),
+            use_memos,
+            |node| match node {
+                Node::Cell(slot) => reached.cells.push(slot),
+                Node::Sealed(id) => reached.records.push(id),
+            },
+        );
+        reached
+    }
+
+    /// The walk itself, reporting every node it reaches to `visit` exactly once.
+    ///
+    /// The working state is handed in, so each caller seeds it the way its question wants and
+    /// nothing is built that the answer does not read. A node either seen set already names is
+    /// neither reported nor descended through, which is how a marginal price prunes at what the
+    /// destination already holds.
+    ///
+    /// The two tiers are walked in the shape each one is stored in. The slab half is a matrix, so
+    /// its frontier and its seen set are rows and descending through a cell is one word-wise
+    /// `frontier |= row & !seen` — no expansion of a row into per-node entries. Only the sealed
+    /// half, which is sparse and unbounded, wants a worklist.
+    fn walk(
+        &self,
+        mut frontier: Bits,
+        mut worklist: Vec<SealedId>,
+        mut seen_cells: Bits,
+        mut seen_records: SealedSet,
+        use_memos: bool,
+        mut visit: impl FnMut(Node),
+    ) {
+        loop {
+            if let Some(slot) = frontier.take_one() {
+                if !seen_cells.set(slot) {
+                    continue;
                 }
-                Node::Sealed(id) => {
-                    if !seen_records.insert(id) {
-                        continue;
-                    }
-                    reached.records.push(id);
-                    let memo = use_memos
-                        .then(|| self.sealed.get(id).and_then(|record| record.closure.get()))
-                        .flatten();
-                    match memo {
-                        Some(memo) => {
-                            for inner in &memo.records {
-                                if seen_records.insert(*inner) {
-                                    reached.records.push(*inner);
-                                }
-                            }
+                visit(Node::Cell(slot));
+                frontier.union_not_with(&self.pins.row(slot), &seen_cells);
+                worklist.extend(self.sealed_holds[slot as usize].iter());
+                continue;
+            }
+            let Some(id) = worklist.pop() else { return };
+            if !seen_records.insert(id) {
+                continue;
+            }
+            visit(Node::Sealed(id));
+            let memo = use_memos
+                .then(|| self.sealed.get(id).and_then(|record| record.closure.get()))
+                .flatten();
+            match memo {
+                Some(memo) => {
+                    for inner in &memo.records {
+                        if seen_records.insert(*inner) {
+                            visit(Node::Sealed(*inner));
                         }
-                        None => stack.extend(self.holds_of(node)),
+                    }
+                }
+                None => {
+                    if let Some(record) = self.sealed.get(id) {
+                        frontier.union_not_with(record.aggregate.slab(), &seen_cells);
+                        worklist.extend(record.aggregate.sealed().iter());
                     }
                 }
             }
         }
-        reached
     }
 
-    /// Bytes that pinning a value with reach `reach` into `dest` would **newly** keep alive.
+    /// Bytes that pinning a value with reach `reach` into `dest` would **newly** keep alive,
+    /// given `pinned` — the reach of everything already pinned into `dest` by this placement.
     ///
-    /// The walk starts from the reach with `dest` itself, everything `dest`'s pin row names, and
-    /// every record `dest` holds already marked as seen, so what the destination is answerable for
-    /// anyway is billed to nobody. An operand homed in the destination, or in a cell the
-    /// destination holds directly, prices at zero.
+    /// The walk starts from the reach with `dest` itself, everything `dest`'s pin row names, every
+    /// record `dest` holds, and both halves of `pinned` already marked as seen, so what the
+    /// destination is answerable for anyway, or has just become answerable for, is billed to
+    /// nobody. An operand homed in the destination, or in a cell the destination holds directly,
+    /// prices at zero — and so does one whose whole reach an earlier operand of the same placement
+    /// already brought in. The sum over a placement's operands is therefore what that placement
+    /// newly retains, once, and the first operand from a shared source is the one shown the shared
+    /// cost.
     ///
     /// The pruning is at *direct* holds, not at the destination's whole closure: a node the
     /// destination reaches only through a directly held node is still billed. The figure therefore
     /// only ever over-bills, which biases the verdict toward copying and never toward a pin whose
     /// cost the embedder was not shown.
-    fn pin_price(&self, dest: u32, reach: &Mask) -> usize {
+    fn pin_price(&self, dest: u32, reach: &Mask, pinned: &Mask) -> usize {
         // Every seed already seen is a walk that reports nothing and a sum over nothing, so the
-        // price is zero without building the seed list or the seen sets. Priming a record's memo
-        // only fills a cache no reading depends on, so skipping it changes no answer either.
+        // price is zero without building the walk's state at all. Priming a record's memo only
+        // fills a cache no reading depends on, so skipping it changes no answer either.
         let row = self.pins.row(dest);
+        let held = &self.sealed_holds[dest as usize];
         let covered = reach
             .slab_slots()
-            .all(|slot| slot == dest || row.test(slot))
+            .all(|slot| slot == dest || row.test(slot) || pinned.names(slot))
             && reach
                 .sealed()
                 .iter()
-                .all(|id| self.sealed_holds[dest as usize].contains(id));
+                .all(|id| held.contains(id) || pinned.names_sealed(id));
         if covered {
             return 0;
         }
 
-        let mut seen_cells = self.pins.row(dest).to_owned();
+        let mut seen_cells = row.to_owned();
         seen_cells.set(dest);
-        let seen_records = self.sealed_holds[dest as usize].clone();
+        seen_cells.union_with(pinned.slab());
+        let mut seen_records = held.clone();
+        seen_records.union_with(pinned.sealed());
         for id in reach.sealed().iter() {
             self.prime_memo(id);
         }
-        let seeds: Vec<Node> = reach
-            .slab_slots()
-            .map(Node::Cell)
-            .chain(reach.sealed().iter().map(Node::Sealed))
-            .collect();
-        let reached = self.walk(seeds, seen_cells, seen_records, true);
-        self.bytes_of(&reached)
+        let mut frontier = Bits::new(self.cap);
+        frontier.union_not_with(reach.slab(), &seen_cells);
+        let mut bytes = 0;
+        self.walk(
+            frontier,
+            reach.sealed().iter().collect(),
+            seen_cells,
+            seen_records,
+            true,
+            |node| {
+                bytes += match node {
+                    Node::Cell(slot) => self.cell_bytes(slot),
+                    Node::Sealed(id) => self.record_bytes(id),
+                };
+            },
+        );
+        bytes
     }
 
     /// Walk the hold graph from `start` and report a cycle if one is reachable — the fail-safe
@@ -1431,6 +1497,11 @@ impl<C: Reattachable> CellTable<C> {
 
     /// What one node of the hold graph holds: for a cell, its two hold-set halves; for a sealed
     /// region, the two halves of its frozen aggregate.
+    ///
+    /// The expansion the test-only ring walk wants, which descends one node at a time and reports
+    /// the path it took. The pricing walk descends the slab half a whole row at a time and never
+    /// builds this.
+    #[cfg(test)]
     fn holds_of(&self, node: Node) -> Vec<Node> {
         match node {
             Node::Cell(slot) => self
@@ -1562,6 +1633,10 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
     /// `build` also receives this cell's own write surface, since a continuation that captures
     /// anything usually needs somewhere to put the captures' spine; the self rule makes the
     /// resulting self-reach a hold on nothing.
+    ///
+    /// Captures are priced in the order they are given, each against what the ones before it have
+    /// already pinned: the first capture from a shared source carries the shared cost and the rest
+    /// price at the margin.
     pub fn store_successor_capturing<V>(
         &mut self,
         captures: &[Operand<'_, 'b, V>],
@@ -1648,6 +1723,11 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
     /// cells](../design/cellgraph.md#passing-values-between-cells): the producer builds straight
     /// into the consumer, the consumer's row takes the reach, and the producer can then die.
     /// Operands share one family `V` and arrive as carriers, never as values beside a mask.
+    ///
+    /// Operands are priced in the order they are given, each against what the ones before it have
+    /// already pinned: the first operand from a shared source carries the shared cost and the rest
+    /// price at the margin, so the prices sum to what the placement newly retains rather than
+    /// billing a shared source once per operand.
     pub fn alloc_into<T, V>(
         &mut self,
         dest: Handle,
@@ -1793,7 +1873,10 @@ impl<'b, C: Reattachable> StepContext<'b, C> {
         let mut crossed = Vec::with_capacity(operands.len());
         for operand in operands {
             let crossing = Crossing {
-                pin_bytes: table.pin_price(dest, operand.carrier.reach()),
+                // Priced against what this placement has already pinned as well as what the
+                // destination held before it, so a second operand homed in the same source as the
+                // first is shown the marginal cost and the sum over the operands is exact.
+                pin_bytes: table.pin_price(dest, operand.carrier.reach(), &reach),
                 copy_bytes: operand.copy_bytes,
                 occupied: table.cap - table.free.len() as u32,
                 cap: table.cap,

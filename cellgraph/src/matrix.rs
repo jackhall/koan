@@ -84,6 +84,9 @@ impl Bits<&[u64]> {
     }
 }
 
+/// Wanted only where a row is expanded bit by bit, which outside the tests is nowhere: the walks
+/// that read the relations descend a whole row at a time.
+#[cfg(test)]
 impl<'a> Bits<&'a [u64]> {
     /// [`Bits::ones`] at the view's own lifetime, so the iterator outlives the view.
     pub(crate) fn into_ones(self) -> impl Iterator<Item = u32> + 'a {
@@ -147,6 +150,45 @@ impl<W: AsRef<[u64]> + AsMut<[u64]>> Bits<W> {
         let was = *word & mask != 0;
         *word &= !mask;
         was
+    }
+
+    /// OR in every bit `source` sets that `exclude` does not — the frontier step of a walk over
+    /// the slab half of the hold graph, where `exclude` is what the walk has already seen. One
+    /// word-wise pass in place of a bit-at-a-time expansion of the row into a worklist.
+    pub(crate) fn union_not_with(
+        &mut self,
+        source: &Bits<impl AsRef<[u64]>>,
+        exclude: &Bits<impl AsRef<[u64]>>,
+    ) {
+        let (source, exclude) = (source.words.as_ref(), exclude.words.as_ref());
+        debug_assert_eq!(
+            self.words.as_ref().len(),
+            source.len(),
+            "rows of different widths do not union"
+        );
+        debug_assert_eq!(
+            source.len(),
+            exclude.len(),
+            "rows of different widths do not union"
+        );
+        for (word, (source, exclude)) in self
+            .words
+            .as_mut()
+            .iter_mut()
+            .zip(source.iter().zip(exclude))
+        {
+            *word |= *source & !*exclude;
+        }
+    }
+
+    /// Take the lowest bit this row sets, clearing it — a walk popping its frontier. `None` when
+    /// the row is clear.
+    pub(crate) fn take_one(&mut self) -> Option<u32> {
+        let words = self.words.as_mut();
+        let (index, word) = words.iter_mut().enumerate().find(|(_, word)| **word != 0)?;
+        let bit = word.trailing_zeros();
+        *word &= *word - 1;
+        Some((index * u64::BITS as usize) as u32 + bit)
     }
 
     /// OR another row of the same width in.
@@ -246,7 +288,9 @@ impl Matrix {
         rows.into_iter().any(|holder| self.test(holder, held))
     }
 
-    /// The cells `holder` names, in slot order — the hold graph's outgoing edges from one cell.
+    /// The cells `holder` names, in slot order — the hold graph's outgoing edges from one cell,
+    /// one at a time, which is what the test-only ring walk wants and the pricing walk does not.
+    #[cfg(test)]
     pub(crate) fn held_by(&self, holder: u32) -> impl Iterator<Item = u32> + '_ {
         self.row(holder).into_ones()
     }
