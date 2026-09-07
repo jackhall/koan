@@ -38,6 +38,25 @@ exist, and koan sits on the one the design has moved off.
   splicing remain and are the only scheduler state.
 - Koan compiles and its full slate passes on the rebuilt crate, and the
   Miri slate is clean.
+- The kind rule is an admission decision at creation: a cell whose source
+  edge is destined at its creator's region, or at a
+  [tree cell](../../cellgraph/design/tree-cells.md) under the same root, is a
+  tree cell; top-level statements, yielding producers, and any cell an outside
+  consumer can pin while it lives are slab cells. The substrate ships both
+  kinds and no rule for choosing between them.
+- The delivery walk adopts a tree terminal once, into its canonical
+  destination — the producer's own source edge's region, the shallowest on
+  the chain — by the placement door whose `Pin` pledges the producer, and the
+  deeper destination buckets redeem that resident by reference.
+- A non-tail recursion deeper than the slab cap runs to completion; the koan
+  program that refuses admission today is the regression test, and a test pins
+  the chain property — a closure returned out of a body and called from
+  outside while a binding it forwards to is still pending is unreachable
+  under body ordering — so a later change to that ordering trips it.
+- Slots, deps, wake and notify, the priority bands, the drain, and reinstall
+  behave identically over both kinds; the existing slot-count and TCO
+  assertions hold unchanged, and a reinstall inside a tree is on the Miri
+  slate in its scheduler shape.
 
 **Directions.**
 
@@ -73,8 +92,7 @@ exist, and koan sits on the one the design has moved off.
 
 ## Dependencies
 
-**Requires:**
-
+**Requires:** none — the substrate it is rebuilt over is shipped.
 
 **Unblocks:**
 

@@ -40,7 +40,8 @@ pub struct Sealed<'home, T: Reattachable + DropFree, const W: usize = 1> {
     reach: Mask<W>,
     /// The cell whose region stores this value: the one a [`keep`](crate::StepContext::keep)
     /// registers the reach under. For a door-built carrier that is the cell the value was placed
-    /// into; for one redeemed out of a record it is the executing cell, which holds the record.
+    /// into; for one redeemed out of a record it is the slab cell whose hold set names the record —
+    /// the executing cell, or its root when the step is running in a tree cell.
     home: Home,
     _home: PhantomData<&'home ()>,
 }

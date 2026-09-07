@@ -7,10 +7,14 @@ safely allocated memory, an optional erased continuation, and the holds that
 keep other cells alive on its behalf. Liveness is an attributed bit matrix
 over a bounded slab plus an atomic sealed tier, so a cell is reclaimed the
 instant no bit names it — no count gates a slab slot, and the sealed tier's
-holder count is released only wholesale, at a holder's own death. The
-substrate makes no acyclicity promise, has no notion of a cell finishing, and
-never decides when a cell runs — a scheduler is something an embedder builds
-on top.
+holder count is released only wholesale, at a holder's own death. A third
+habitat sits outside the matrix entirely: a **tree cell**
+([design/tree-cells.md](design/tree-cells.md)) takes no slab slot and no bit,
+because a call subtree's liveness is a stack discipline — a parent outlives
+its children — so a recursion deeper than the slab's cap costs the pool a slot
+and the matrix nothing. The substrate makes no acyclicity promise, has no
+notion of a cell finishing, and never decides when a cell runs — a scheduler
+is something an embedder builds on top.
 
 The crate names no type from its embedders: the dependency direction is
 `koan` → `workgraph` → `cellgraph`, and each arrow is compile-enforced.
@@ -23,8 +27,9 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
 ## Source layout
 
 - [src/lib.rs](src/lib.rs) — the module wiring and the public surface.
-- [src/handle.rs](src/handle.rs) — cell identity: slot plus generation, and
-  the stale-handle refusal.
+- [src/handle.rs](src/handle.rs) — cell identity over both habitats: a slab
+  slot or a tree-pool index paired with a generation, `CellRef` naming either
+  kind, and the stale refusals.
 - [src/table.rs](src/table.rs) — the slab, the `create` / `enter` / `release`
   verbs, the step context's doors, the seal transition, the three locality
   merges a dying cell can take instead, the cascade that retires cells and
@@ -34,6 +39,13 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
   it reaches the embedder through the crossing verdict
   ([cellgraph.md § The crossing
   verdict](design/cellgraph.md#the-crossing-verdict)).
+- [src/tree.rs](src/tree.rs) — the tree pool: the slab-free habitat for a
+  call subtree, whose liveness is a stack discipline rather than a matrix
+  reading. The chain links and depth the one crossing rule classifies by, the
+  child count that keeps a released parent resident, the pledge a placement
+  door leaves that says which ancestor a dying cell's bump splices into, and
+  the tombstone chain a resident redeems through once its home's bytes have
+  moved ([design/tree-cells.md](design/tree-cells.md)).
 - [src/matrix.rs](src/matrix.rs) — `Bits`, the crate's one row of bits: `W`
   words held inline, `Copy`, and the only place word-and-bit arithmetic is
   written outside the two loops that keep a matrix's tally in step with its
@@ -87,7 +99,8 @@ machinery and not the `alloc` within it.
   the library build, its tests, and the Miri slate never compile it.
   [perf/shapes.rs](perf/shapes.rs) holds the shapes — a keep-and-redeem loop, a
   push chain, a pull chain, a birth chain, a fan-out placement, a shared
-  sub-tier wound down, and a cell kept into at many distinct reaches — and [perf/meter.rs](perf/meter.rs) the meter, which
+  sub-tier wound down, a cell kept into at many distinct reaches, and a chain
+  of tree cells each pinning its result into its parent — and [perf/meter.rs](perf/meter.rs) the meter, which
   subtracts a nested door's spend from its parent's frame. It counts through
   [audit/counting_alloc.rs](../audit/counting_alloc.rs), the same delegating
   allocator koan's own readings go through.
@@ -126,6 +139,11 @@ machinery and not the `alloc` within it.
     bit matrices over the slab: pin holds and birth holds, reach as a hybrid
     mask, the sealed tier and its accessor, the seal transition, the
     invariants and the staleness argument, absorption, pricing.
+  - [tree-cells.md](design/tree-cells.md) — the third region habitat: a cell
+    of a call subtree, living under a slab root in an uncapped pool that no
+    mask names. Mints redirected to the root, the one crossing rule an
+    operand homed in a tree cell meets, the pledge and the splice that
+    replace a seal at its death, and the tombstone chain a redeem follows.
 - [roadmap/](roadmap/README.md) — the slices that build the crate, in
   dependency order.
 

@@ -336,6 +336,13 @@ policy, which lives in the layer above. The dependency direction survives:
 the substrate names no embedder type and holds no queue. Retention does not
 occupy slab slots, so admission alone genuinely bounds this tier.
 
+A call subtree does not occupy them either. Its cells live in the uncapped
+tree pool ([tree-cells.md](tree-cells.md)), whose liveness is a stack
+discipline rather than a matrix reading, so a non-tail recursion holds one
+cell per level without ever consulting the cap — the depth of the call tree
+the embedder is running is what bounds that pool, and nothing in the matrix
+names a cell in it.
+
 The sealed tier is program-dependent — a program building a deep cactus of
 closures retains regions no matter how slowly cells are admitted — and it is
 the *only* home of retention. Atomicity prices that home: a sealed region
@@ -551,13 +558,11 @@ copy remains the lever there.
   genuinely shared absorbs nothing and keeps the full graph. For absorbed
   chains the uniquely-held slice of the pricing model is read directly off
   the merged record; the shared residue still poses the cross-decision
-  double-billing question above. The merge is per region: one held only
-  *within a group* that seals together — a dying call subtree — carries a
-  count above 1 at each individual seal, so it stays its own record.
-  Generalizing to the group is unsettled, delimiting one being the design
-  work, and it would carry a second payoff: holds internal to a group sealed
-  as one record never manifest as sealed-naming-live edges at all; only the
-  group's boundary reach would survive the seal.
+  double-billing question above. The merge is per region, and it needs no
+  group case: a dying call subtree is not a group of slab cells at all but a
+  chain of [tree cells](tree-cells.md), whose internal holds never exist, so
+  there is no chain of records to collapse into one and only the subtree's
+  boundary reach ever reaches the sealed tier.
 
 - **Fold-into-namer covers the downward direction.** When N dies with a zero
   column and a singleton naming set {Q}, the sealed Q is provably N's only
@@ -654,8 +659,3 @@ One koan-side primitive the model leans on is tracked on koan's own roadmap:
 [Yielding iterators](../../roadmap/foundation/yielding-iterators.md) —
 producers that yield many values before dying, the surface family lazy
 admission belongs to.
-
-The slab is the only liveness habitat a cell has, so a non-tail recursion
-deeper than the cap deadlocks admission rather than degrading;
-[Tree cells](../roadmap/tree-cells.md) adds a slab-free cell kind for call
-subtrees, whose liveness is a stack discipline needing no bit and no count.

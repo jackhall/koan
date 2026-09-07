@@ -20,7 +20,20 @@ compile-enforced: the lower crate names no type from the higher one.
 - **Identity** is a handle: slab slot plus generation, `Copy`. A handle names
   one occupant; an operation on a handle whose occupant has died is an
   error, never a silent no-op, because a stale handle means a caller kept a
-  name past a death it declared.
+  name past a death it declared. A **tree cell** is named the same way over
+  its own pool — index plus generation — and `CellRef` is the two of them
+  under one name, which is what a door taking a destination or a parent asks
+  for.
+- **Habitat**, one of two. A cell either takes a slab slot, where the
+  liveness matrix decides its death, or it is a
+  [tree cell](tree-cells.md): a cell of a call subtree, living under a slab
+  **root** through a chain of tree parents, in an uncapped pool that no mask
+  and no relation ever names. A tree cell's liveness is structural — a parent
+  outlives its children — so it takes no row, no column, no holder count and
+  no resident table; a placement into it mints into its root's holds, and its
+  region either reclaims at death or splices into an ancestor's bundle. Which
+  kind a creation takes is the embedder's admission decision; the substrate
+  ships both and no rule.
 - **Region.** One bump region per cell, in pointer-stable chunks, is the only
   place a value with reach may rest. Storage can leave the slot without a
   byte moving, which is what the sealed tier and absorption rely on.
@@ -106,7 +119,9 @@ how an embedder gives one unit of work two regions with different lifetimes.
   rather than panics. The executing cell must be entitled to the storage the
   value names: it is the home cell itself, its pin row or its birth row names
   the home — both keep the home in the slab with its storage intact — or the
-  home has sealed into a record this cell holds. Anything else is `Unheld`,
+  home has sealed into a record this cell holds. For a value homed in a tree
+  cell the test is root identity, and a step inside a subtree is entitled by
+  its root's rows. Anything else is `Unheld`,
   and a home whose storage is gone entirely, reclaimed or retired with its
   record, is `Gone`. Nothing could have read such a value, so nothing is lost
   by refusing it. A value redeemed out of a record comes back reaching that
@@ -116,6 +131,15 @@ how an embedder gives one unit of work two regions with different lifetimes.
   A placement over operands consults the **crossing verdict** once per
   operand before it builds — the one closure the table was constructed with,
   described under Passing values below.
+- **`create_tree(parent)`** / **`enter_tree(handle, step)`** /
+  **`release_tree(handle)`** are the same three verbs over the tree pool.
+  `create_tree` takes a cell of either kind as the parent and never refuses
+  for want of room, since the pool has no cap; `enter_tree` supplies the same
+  step context, whose placements mint into the root; `release_tree` takes no
+  absorption argument, because where a tree cell's bytes go was settled at the
+  placement door that pinned a value homed there into an ancestor. A parent
+  released before its children waits dead-resident and disposes when the last
+  of them does. See [tree-cells.md](tree-cells.md).
 - **`release(handle, absorption)`** declares death: the embedder promises
   never to enter the cell again. The slot leaves the slab once no descendant's
   birth row names the cell: reclaimed if nothing reaches its storage, folded
@@ -125,7 +149,8 @@ how an embedder gives one unit of work two regions with different lifetimes.
   ([liveness-matrix.md § Locality tactics](liveness-matrix.md#locality-tactics));
   it is recorded on the slot and read when the slot actually leaves.
 - **`is_empty()`** asks whether the table holds nothing at all — every slot
-  free, no record left in the sealed tier. After a program's last release it
+  free, no record left in the sealed tier, and no tree cell or tombstone left
+  in the pool. After a program's last release it
   is the end-of-program alarm, and the only one the substrate ships: a
   non-empty table means either a release was forgotten or a ring no merge
   dissolved survives. Naming the nodes on such a ring is a walk of the hold
@@ -193,6 +218,13 @@ placement — the destination-homed placement and the capturing successor store
 alike, and for every operand, including one whose pin price is zero. There is
 no verdict-free constructor: a table that can place a value can price the
 placement.
+
+The verdict is skipped in exactly one case, and only because there is no
+choice to put: an operand homed in a tree cell, crossing to a destination
+neither on that cell's chain nor under it, is a **forced copy** — nothing off
+the chain may outlive the home while borrowing it, so no pin typechecks
+([tree-cells.md § The one crossing rule](tree-cells.md#the-one-crossing-rule)).
+Every other operand of every placement is priced and put.
 
 What the closure sees is both halves of the price and the occupancy the
 choice plays out against: the bytes a pin would *newly* keep alive, walked by

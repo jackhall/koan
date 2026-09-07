@@ -15,4 +15,5 @@ observe/.profraw-staging/
 .claude/scheduled_tasks.lock
 .claude/plans/
 observe/miri-last-run.log
+*/observe/miri-last-run.log
 dhat-heap.json

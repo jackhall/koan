@@ -53,7 +53,7 @@ more than once before dying.
   installed-but-unrun frame
   ([liveness-matrix.md](../../cellgraph/design/liveness-matrix.md)) — the
   gap predates this item and needs one answer covering both.
-  [Tree cells](../../cellgraph/roadmap/tree-cells.md) fixes a yielding
+  [Tree cells](../../cellgraph/design/tree-cells.md) fixes a yielding
   producer as a slab cell, since a yield is the one mid-life delivery to an
   outside consumer.
 - *Buffered channels — deferred.* A policy layer over dormant producers (a

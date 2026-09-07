@@ -59,8 +59,9 @@ shortcut, and a pin into an ancestor prices at the splice price, which is a
 byte total rather than a walk. So nothing needs to remember it. A `keep` of a
 tree-homed carrier interns no entry.
 
-The seal transition is untouched. Tree cells hold nothing, so they are never in
-a column; the root is, and its table is rewritten as before.
+The seal transition needs no tree case. Tree cells hold nothing, so they are
+never in a column; the root is, and its table is rewritten by the ordinary
+transition.
 
 ## The one crossing rule
 
@@ -167,7 +168,7 @@ executing cell, and read "root of `E`" as `E` itself when `E` is a slab cell.
 | where the key's home resolves | entitled when | reach handed back |
 |---|---|---|
 | a live or dead-resident tree cell `T` | `root(T)` is `E`'s root | `{root(T)}`, homed in `T` |
-| a live slab slot `S` | `S` is `E`'s root, or `E`'s root's pin row or birth row names it | the stored mask, as before |
+| a live slab slot `S` | `S` is `E`'s root, or `E`'s root's pin row or birth row names it | the mask stored in that cell's resident table |
 | a record `id` | `E`'s root holds `id` | `{id}` |
 | nowhere — a recycled slot, or a chain that ends in a reclaim | — | `Gone` |
 
@@ -197,7 +198,12 @@ records to collapse into one.
 
 The substrate ships both kinds and no rule for choosing between them. Which
 cell a creation takes is an admission decision, made from the source edge's
-destination, and it belongs to the embedder
-([adopt-cellgraph.md](../../workgraph/roadmap/adopt-cellgraph.md)). A producer
+destination, and it belongs to the layer that knows the destination. A producer
 that delivers mid-life to an outside consumer — a yielding iterator — is a slab
 cell, because an outside consumer can pin it while it lives.
+
+## Open work
+
+- [Rebuilding workgraph over cellgraph](../../workgraph/roadmap/adopt-cellgraph.md)
+  — the first embedder's kind rule, its delivery walk's adoption of a tree
+  terminal, and the scheduler-shaped tests over both kinds.
