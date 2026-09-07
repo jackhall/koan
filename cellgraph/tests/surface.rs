@@ -9,9 +9,10 @@
 //! `pub(crate)` is indistinguishable from `pub`; only a caller outside it sees the real surface.
 
 use cellgraph::{
-    Absorption, CellTable, CreateError, Crossed, Crossing, DropFree, EnterError, Erased, Handle,
-    Opened, Operand, Reattachable, RedeemError, ReleaseError, Resident, Sealed, StaleHandle,
-    StepContext, Verdict, Writer, reattachable,
+    Absorption, CellRef, CellTable, CreateError, CreateTreeError, Crossed, Crossing, DropFree,
+    EnterError, EnterTreeError, Erased, Handle, Opened, Operand, Reattachable, RedeemError,
+    ReleaseError, ReleaseTreeError, Resident, Sealed, StaleCell, StaleHandle, StaleTree,
+    StepContext, TreeHandle, Verdict, Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -114,6 +115,30 @@ fn name_release_error(error: ReleaseError) -> &'static str {
     }
 }
 
+/// The tree pool's three refusals, matched exhaustively for the same reason: a variant that went
+/// missing from any of them is a compile error here. `create_tree` has no full refusal — the pool
+/// takes no cap — and neither `enter_tree` nor `release_tree` can meet an executing cell from
+/// outside a step.
+fn name_create_tree_error(error: CreateTreeError) -> &'static str {
+    match error {
+        CreateTreeError::StaleParent(_) => "stale parent",
+    }
+}
+
+fn name_enter_tree_error(error: EnterTreeError) -> &'static str {
+    match error {
+        EnterTreeError::Stale(_) => "stale",
+        EnterTreeError::AlreadyExecuting => "already executing",
+    }
+}
+
+fn name_release_tree_error(error: ReleaseTreeError) -> &'static str {
+    match error {
+        ReleaseTreeError::Stale(_) => "stale",
+        ReleaseTreeError::Executing => "executing",
+    }
+}
+
 #[test]
 fn every_public_door_answers_from_outside_the_crate() {
     let mut table: CellTable<Work> = CellTable::new(4, weigh);
@@ -132,7 +157,7 @@ fn every_public_door_answers_from_outside_the_crate() {
     let mut kept: Option<Resident<Number>> = None;
     let carried = table
         .enter(child, |context| {
-            assert_eq!(context.handle(), child);
+            assert_eq!(context.cell(), CellRef::Slab(child));
 
             // Placement: into the running cell, and into a named one with an operand embedded.
             let number = context.alloc::<Number>(build_number);
@@ -266,4 +291,89 @@ fn the_refusals_hand_back_the_handle_that_went_stale() {
         panic!("a second release names a death already declared");
     };
     assert_eq!(name_release_error(error), "stale");
+}
+
+#[test]
+fn the_tree_pool_answers_from_outside_the_crate() {
+    let mut table: CellTable<Work> = CellTable::new(1, weigh);
+    let root: Handle = table.create(None, None).unwrap();
+    assert_eq!(table.create(None, None), Err(CreateError::SlabFull));
+
+    // The pool takes no cap: a chain deeper than the slab is ordinary, and none of it is a slot.
+    let outer: TreeHandle = table.create_tree(root, None).unwrap();
+    let inner = table
+        .create_tree(outer, Some(String::from("resume")))
+        .unwrap();
+    assert_eq!(outer.index(), 0);
+    assert_eq!(inner.generation(), 0);
+    assert!(table.is_live_tree(inner));
+
+    let mut kept: Option<Resident<Number>> = None;
+    let carried = table
+        .enter_tree(inner, |context| {
+            assert_eq!(context.cell(), CellRef::Tree(inner));
+            let value = context.alloc::<Number>(build_number);
+
+            // Into the cell's own tree parent: an upward pin, priced at the splice and pledging
+            // this cell's bump to the parent's bundle.
+            let up = context
+                .alloc_into::<Number, Number>(outer, &[pinned_operand(&value)], |writer, views| {
+                    match views[0] {
+                        Crossed::Pinned(value) => writer.value(*value + 1),
+                        Crossed::Copied(value) => writer.value(*value + 1),
+                    }
+                })
+                .unwrap();
+            kept = Some(context.keep(up));
+
+            // A carrier homed in a tree cell reaches its root, so the root is what a hold from
+            // inside the subtree lands on.
+            context.hold(root).unwrap();
+            let resumed = context.continuation().map(Opened::into_value);
+            context.store_successor(String::from("done"));
+            resumed
+        })
+        .unwrap();
+    assert_eq!(carried.as_deref(), Some("resume"));
+
+    // The value kept in the parent redeems from anywhere under the same root.
+    let redeemed = table
+        .enter(root, |context| {
+            *context
+                .read(&context.redeem(kept.unwrap()).unwrap())
+                .value()
+        })
+        .unwrap();
+    assert_eq!(redeemed, 8);
+
+    // Release takes no argument: where the bytes go was settled at the placement door.
+    table.release_tree(inner).unwrap();
+    assert!(!table.is_live_tree(inner));
+
+    let Err(error) = table.release_tree(inner) else {
+        panic!("a second release names a death already declared");
+    };
+    assert_eq!(name_release_tree_error(error), "stale");
+    let stale: StaleTree = match error {
+        ReleaseTreeError::Stale(stale) => stale,
+        ReleaseTreeError::Executing => unreachable!("the cell is not executing"),
+    };
+    assert_eq!(stale.handle(), inner);
+
+    let Err(error) = table.enter_tree(inner, |_| ()) else {
+        panic!("a dead tree cell must refuse the step");
+    };
+    assert_eq!(name_enter_tree_error(error), "stale");
+
+    let Err(error) = table.create_tree(inner, None) else {
+        panic!("a dead tree parent must refuse");
+    };
+    assert_eq!(name_create_tree_error(error), "stale parent");
+    let CreateTreeError::StaleParent(stale) = error;
+    let stale: StaleCell = stale;
+    assert_eq!(stale.cell(), CellRef::Tree(inner));
+
+    table.release_tree(outer).unwrap();
+    table.release(root, Absorption::IntoHolder).unwrap();
+    assert!(table.is_empty());
 }

@@ -1,4 +1,4 @@
-//! The benchmark shapes: seven traversals of the substrate, each sized to the smallest `n` that
+//! The benchmark shapes: eight traversals of the substrate, each sized to the smallest `n` that
 //! shows its trend.
 //!
 //! Every shape builds its own table, drives public doors only, and ends with an `is_empty` assert
@@ -11,8 +11,8 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    Absorption, CellTable, Crossed, Crossing, DropFree, Handle, Operand, Reattachable, Resident,
-    Sealed, Verdict, Writer, reattachable,
+    Absorption, CellRef, CellTable, Crossed, Crossing, DropFree, Handle, Operand, Reattachable,
+    Resident, Sealed, TreeHandle, Verdict, Writer, reattachable,
 };
 
 use crate::meter::{Verb, measure};
@@ -441,9 +441,86 @@ pub struct Shape {
     pub large: u32,
 }
 
+/// The tree habitat: a root plus `n` nested tree cells, each building a value, pinning it into its
+/// parent, and dying — the call-subtree shape the slab cannot hold, since none of it takes a slot.
+///
+/// The trend this reads is the one the habitat exists for: creation, entry and death are flat per
+/// level whatever the depth, because a tree cell takes no row, no column and no resident table, and
+/// its death is a bump splice into the ancestor it pledged.
+fn tree_chain(n: u32) {
+    let mut table = table();
+    let root = measure(Verb::Create, || table.create(None, None)).unwrap();
+
+    let mut chain: Vec<TreeHandle> = Vec::with_capacity(n as usize);
+    let mut parent = CellRef::Slab(root);
+    for _ in 0..n {
+        let cell = measure(Verb::CreateTree, || table.create_tree(parent, None)).unwrap();
+        chain.push(cell);
+        parent = CellRef::Tree(cell);
+    }
+
+    // Innermost outward: each level redeems what its child pinned into it, adds one, pins the
+    // result into its own parent, and dies — so every level's bump splices one step up the chain.
+    let mut carried: Option<Resident<Number>> = None;
+    for level in (0..n as usize).rev() {
+        let cell = chain[level];
+        let up = match level {
+            0 => CellRef::Slab(root),
+            _ => CellRef::Tree(chain[level - 1]),
+        };
+        let taken = carried.take();
+        carried = Some(
+            measure(Verb::EnterTree, || {
+                table.enter_tree(cell, |context| {
+                    let value = match taken {
+                        None => measure(Verb::Alloc, || {
+                            context.alloc::<Number>(|writer| writer.value(0))
+                        }),
+                        Some(resting) => {
+                            let carrier =
+                                measure(Verb::Redeem, || context.redeem(resting).unwrap());
+                            let seen = measure(Verb::Read, || *context.read(&carrier).value());
+                            measure(Verb::Alloc, || {
+                                context.alloc::<Number>(|writer| writer.value(seen + 1))
+                            })
+                        }
+                    };
+                    let placed = measure(Verb::AllocInto, || {
+                        context
+                            .alloc_into::<Number, Number>(up, &[pinned(&value)], build_number)
+                            .unwrap()
+                    });
+                    measure(Verb::Keep, || context.keep(placed))
+                })
+            })
+            .unwrap(),
+        );
+        measure(Verb::ReleaseTree, || table.release_tree(cell)).unwrap();
+    }
+
+    let read = measure(Verb::Enter, || {
+        table.enter(root, |context| {
+            let carrier = measure(Verb::Redeem, || {
+                context
+                    .redeem(carried.take().expect("the chain left a resident"))
+                    .unwrap()
+            });
+            measure(Verb::Read, || *context.read(&carrier).value())
+        })
+    })
+    .unwrap();
+    assert_eq!(read, n - 1);
+
+    measure(Verb::Release, || {
+        table.release(root, Absorption::IntoHolder)
+    })
+    .unwrap();
+    assert!(table.is_empty());
+}
+
 /// Every shape. Each is swept at both its sizes, so the per-unit trend is the difference over the
 /// difference in `n` — a term needs both readings.
-pub const SHAPES: [Shape; 7] = [
+pub const SHAPES: [Shape; 8] = [
     Shape {
         name: "keep_redeem",
         run: keep_redeem,
@@ -485,5 +562,11 @@ pub const SHAPES: [Shape; 7] = [
         run: keep_shapes,
         small: 8,
         large: 32,
+    },
+    Shape {
+        name: "tree_chain",
+        run: tree_chain,
+        small: 64,
+        large: 256,
     },
 ];

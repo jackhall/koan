@@ -5,8 +5,8 @@
 //!
 //! - a recycled slot is named by nothing — no occupant's row in either relation, and no frozen
 //!   aggregate;
-//! - a cell resident after its declared death is named by an occupant's birth row, the one
-//!   relation with no sealed half to convert into;
+//! - a cell resident after its declared death is named by an occupant's birth row — the one
+//!   relation with no sealed half to convert into — or counted by an undisposed tree child;
 //! - every sealed record's holder count equals the number of hold sets that name it, and the
 //!   reverse naming index is exactly the transpose of the aggregates;
 //! - every bit and id of a resident's mask is covered by storage its cell is answerable for —
@@ -21,12 +21,18 @@
 //!   universal the hand-written ring-dissolution tests are three instances of;
 //! - every memoized closure still equals the walk that would recompute it, and no memo exists
 //!   unless a price query put it there — the never-invalidated memo carried across every
-//!   interleaving, and the substrate's own paths pricing nothing.
+//!   interleaving, and the substrate's own paths pricing nothing;
+//! - and, over the tree pool ([tree-cells.md](../../../design/tree-cells.md)): no tombstone names
+//!   storage that is gone, every tombstone is on exactly one lineage list, every parent's child
+//!   count equals the children that still name it, every pledge is an ancestor and every
+//!   intermediate below a pledged cell is pledged at least as shallow, and a value kept in a tree
+//!   cell redeems from an entitled cell to the number it was kept as.
 
 use proptest::prelude::*;
 
 use super::super::*;
 use super::{Borrowed, Number, live_bytes, operand_at, pin, take};
+use crate::tree::TreeState;
 
 const CAP: u32 = 6;
 
@@ -50,15 +56,57 @@ fn alternating() -> impl FnMut(Crossing) -> Verdict + 'static {
 /// mis-applied.
 #[derive(Clone, Debug)]
 enum Verb {
-    Create { parent: Option<usize> },
-    Hold { holder: usize, held: usize },
-    Place { producer: usize, consumer: usize },
-    Continue { cell: usize, over: usize },
-    Keep { cell: usize },
-    Redeem { cell: usize, index: usize },
-    Read { cell: usize },
-    Release { cell: usize, refuse: bool },
-    Price { index: usize },
+    Create {
+        parent: Option<usize>,
+    },
+    CreateTree {
+        parent: usize,
+        under_tree: bool,
+    },
+    PlaceFromTree {
+        producer: usize,
+        consumer: usize,
+        into_tree: bool,
+    },
+    KeepTree {
+        cell: usize,
+    },
+    RedeemInTree {
+        cell: usize,
+        index: usize,
+    },
+    ReleaseTree {
+        cell: usize,
+    },
+    Hold {
+        holder: usize,
+        held: usize,
+    },
+    Place {
+        producer: usize,
+        consumer: usize,
+    },
+    Continue {
+        cell: usize,
+        over: usize,
+    },
+    Keep {
+        cell: usize,
+    },
+    Redeem {
+        cell: usize,
+        index: usize,
+    },
+    Read {
+        cell: usize,
+    },
+    Release {
+        cell: usize,
+        refuse: bool,
+    },
+    Price {
+        index: usize,
+    },
 }
 
 /// The verbs that can reach a merge — the ones that change a relation or take a release path.
@@ -75,6 +123,35 @@ fn merge_verb() -> impl Strategy<Value = Verb> {
     ]
 }
 
+/// One of `handles`, chosen by a generated index. Wrapping rather than indexing directly: a tree
+/// verb has nothing to say when it names past the end, and the staleness these runs are meant to
+/// exercise is a handle in the list whose cell has died, not an index off it.
+fn wrapped<H: Copy>(handles: &[H], index: usize) -> Option<H> {
+    match handles.is_empty() {
+        true => None,
+        false => Some(handles[index % handles.len()]),
+    }
+}
+
+/// The tree pool's own verbs: the three that move a cell through its life, the placement door a
+/// tree step drives, and the two resident doors keyed to a tree home.
+fn tree_verb() -> impl Strategy<Value = Verb> {
+    prop_oneof![
+        (0..8usize, any::<bool>())
+            .prop_map(|(parent, under_tree)| Verb::CreateTree { parent, under_tree }),
+        (0..8usize, 0..8usize, any::<bool>()).prop_map(|(producer, consumer, into_tree)| {
+            Verb::PlaceFromTree {
+                producer,
+                consumer,
+                into_tree,
+            }
+        }),
+        (0..8usize).prop_map(|cell| Verb::KeepTree { cell }),
+        (0..8usize, 0..8usize).prop_map(|(cell, index)| Verb::RedeemInTree { cell, index }),
+        (0..8usize).prop_map(|cell| Verb::ReleaseTree { cell }),
+    ]
+}
+
 /// Those plus the two resident doors, which mint no hold and take no release path of their own —
 /// what they do reach is the resident table, the relocation map, and the masks a merge forwards.
 fn state_verb() -> impl Strategy<Value = Verb> {
@@ -82,6 +159,7 @@ fn state_verb() -> impl Strategy<Value = Verb> {
         3 => merge_verb(),
         1 => (0..8usize).prop_map(|cell| Verb::Keep { cell }),
         1 => (0..8usize, 0..8usize).prop_map(|(cell, index)| Verb::Redeem { cell, index }),
+        4 => tree_verb(),
     ]
 }
 
@@ -124,9 +202,11 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
                     "slot {slot} is free but kept a sealed hold"
                 );
             }
+            // Two relations keep a dead cell in place: a descendant's birth row, and an
+            // undisposed tree child, which is the same relation counted rather than rowed.
             SlotState::Dead => assert!(
-                by_birth,
-                "slot {slot} is resident but no birth row names it, so it should have left the slab"
+                by_birth || table.tree_children_of(table.occupant(slot)) > 0,
+                "slot {slot} is resident but nothing names it, so it should have left the slab"
             ),
             SlotState::Live => {}
         }
@@ -339,6 +419,194 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
         );
     }
     *memoized = now_memoized;
+    check_tree_invariants(table);
+}
+
+/// What the redeem door has to answer, derived from the relations rather than from the door: the
+/// executing cell's **root** — its own slot when it is a slab cell — against where the key's home
+/// resolves to now.
+fn expected_redeem(
+    table: &CellTable<Borrowed>,
+    executing: u32,
+    home: CellRef,
+) -> Result<(), RedeemError> {
+    let slab_home = match home {
+        CellRef::Slab(handle) => handle,
+        CellRef::Tree(handle) => match table.trees().resolve(handle) {
+            None => return Err(RedeemError::Gone),
+            Some(crate::tree::Resolved::Tree(index)) => {
+                return match table.trees().root(index) == executing {
+                    true => Ok(()),
+                    false => Err(RedeemError::Unheld),
+                };
+            }
+            Some(crate::tree::Resolved::Slab(handle)) => handle,
+        },
+    };
+    match table.locate(slab_home) {
+        None => Err(RedeemError::Gone),
+        Some(Location::Slab { slot, .. }) => {
+            match slot == executing
+                || table.pins.test(executing, slot)
+                || table.birth.test(executing, slot)
+            {
+                true => Ok(()),
+                false => Err(RedeemError::Unheld),
+            }
+        }
+        Some(Location::Record(id)) => match table.sealed_holds[executing as usize].contains(id) {
+            true => Ok(()),
+            false => Err(RedeemError::Unheld),
+        },
+    }
+}
+
+/// Redeem inside a step and check what comes back: a value that answers must read the number it
+/// was kept as, which is what says a mask forwarded through a merge — or a tombstone chain — still
+/// names the right storage.
+fn check_redeem(
+    context: &StepContext<'_, Borrowed>,
+    resident: Resident<Number>,
+    carried: u32,
+) -> Result<(), RedeemError> {
+    match context.redeem(resident) {
+        Ok(carrier) => {
+            assert_eq!(
+                *context.read(&carrier).value(),
+                carried,
+                "a redeemed value read storage that was not its own"
+            );
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The tree pool's own invariants, checked after every step beside the matrix ones.
+fn check_tree_invariants(table: &CellTable<Borrowed>) {
+    let pool = table.trees();
+    let occupied: Vec<u32> = pool.occupied().collect();
+    let alive = |index: u32| matches!(pool.state(index), TreeState::Live | TreeState::Dead);
+
+    // Every tombstone points at storage that is still answerable — a tree cell that has it, or a
+    // slab handle the relocation map forwards — and never at a place that has gone.
+    for index in occupied.iter().copied() {
+        if pool.state(index) != TreeState::Absorbed {
+            continue;
+        }
+        match pool
+            .tombstone_target(index)
+            .expect("a tombstone records where its bytes went")
+        {
+            CellRef::Tree(target) => assert!(
+                pool.state(target.index()) != TreeState::Free,
+                "tombstone {index} points at a recycled pool slot"
+            ),
+            CellRef::Slab(handle) => assert!(
+                table.locate(handle).is_some(),
+                "tombstone {index} points at a slab cell nothing answers for"
+            ),
+        }
+    }
+
+    // Every tombstone is on exactly one lineage list, and every lineage list holds only tombstones.
+    let heads = table
+        .relocated_tree_lineages()
+        .into_iter()
+        .chain((0..table.cap).filter_map(|slot| table.tree_lineage_of(table.occupant(slot))))
+        .chain(
+            occupied
+                .iter()
+                .copied()
+                .filter_map(|index| pool.lineage(index)),
+        );
+    let mut listed: Vec<u32> = Vec::new();
+    let mut pending: Vec<u32> = heads.collect();
+    while let Some(index) = pending.pop() {
+        assert_eq!(
+            pool.state(index),
+            TreeState::Absorbed,
+            "a lineage list holds pool slot {index}, which is not a tombstone"
+        );
+        assert!(
+            !listed.contains(&index),
+            "tombstone {index} is on two lineage lists"
+        );
+        listed.push(index);
+        pending.extend(pool.next_tombstone(index));
+    }
+    for index in occupied.iter().copied() {
+        assert!(
+            pool.state(index) != TreeState::Absorbed || listed.contains(&index),
+            "tombstone {index} is on no lineage list"
+        );
+    }
+
+    for index in occupied.iter().copied().filter(|index| alive(*index)) {
+        // The child count is the birth tally's analogue: it has to agree with a scan.
+        let children = occupied
+            .iter()
+            .copied()
+            .filter(|other| alive(*other) && pool.parent(*other) == Some(index))
+            .count();
+        assert_eq!(
+            pool.children(index) as usize,
+            children,
+            "pool slot {index} counts children that do not name it, or misses ones that do"
+        );
+        // A pledge is always an ancestor, and everything between the cell and its pledge is
+        // pledged at least as shallow — which is what keeps a grandparent's bundle from borrowing
+        // bytes an intermediate reclaimed.
+        let Some(pledge) = pool.pledge(index) else {
+            continue;
+        };
+        let floor = pool.pledge_depth(pledge);
+        assert!(
+            floor < pool.depth(index),
+            "pool slot {index} pledged into itself or below"
+        );
+        if let crate::tree::Pledge::Tree(target) = pledge {
+            assert!(
+                alive(target),
+                "pool slot {index} pledged into a cell that is gone"
+            );
+            assert_eq!(
+                pool.relation(index, target),
+                crate::tree::Relation::Above,
+                "pool slot {index} pledged into a cell that is not an ancestor"
+            );
+        }
+        let mut at = pool.parent(index);
+        while let Some(intermediate) = at {
+            if pool.depth(intermediate) <= floor {
+                break;
+            }
+            let held = pool
+                .pledge(intermediate)
+                .expect("an intermediate below a pledge is pledged too");
+            assert!(
+                pool.pledge_depth(held) <= floor,
+                "pool slot {intermediate} lies below a pledge it does not carry"
+            );
+            at = pool.parent(intermediate);
+        }
+    }
+
+    // A root's tree-child count is the same tally, over the cells whose chain tops out at it.
+    for slot in 0..table.cap {
+        let children = occupied
+            .iter()
+            .copied()
+            .filter(|index| {
+                alive(*index) && pool.parent(*index).is_none() && pool.root(*index) == slot
+            })
+            .count();
+        assert_eq!(
+            table.tree_children_of(table.occupant(slot)) as usize,
+            children,
+            "slot {slot} counts tree children that do not name it, or misses ones that do"
+        );
+    }
 }
 
 /// Drive one generated run to its end — every verb, then a wind-down that releases everything —
@@ -347,9 +615,12 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
 fn run(verbs: &[Verb], verdict: impl FnMut(Crossing) -> Verdict + 'static) -> Merges {
     let mut table: CellTable<Borrowed> = CellTable::new(CAP, verdict);
     let mut minted: Vec<Handle> = Vec::new();
+    // Every tree cell the run created, in creation order. A generated index may name one that has
+    // since died, which is the point: the doors have to refuse it.
+    let mut grown: Vec<TreeHandle> = Vec::new();
     // Every value put to rest, beside the cell it was kept in and the number it carries — so a
     // redeem that answers can be checked against what it was supposed to hand back.
-    let mut kept: Vec<(Handle, Resident<Number>, u32)> = Vec::new();
+    let mut kept: Vec<(CellRef, Resident<Number>, u32)> = Vec::new();
     let mut next_value: u32 = 0;
     // Nothing has been priced yet, so no record may carry a memo.
     let mut memoized: Vec<SealedId> = Vec::new();
@@ -420,7 +691,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Crossing) -> Verdict + 'static) -> Me
                             context.keep(value)
                         })
                         .unwrap();
-                    kept.push((cell, resident, carried));
+                    kept.push((CellRef::Slab(cell), resident, carried));
                 }
             }
             // The door back. The outcome is predicted from the table's state before the call —
@@ -433,43 +704,106 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Crossing) -> Verdict + 'static) -> Me
                     && !kept.is_empty()
                 {
                     let (home, resident, carried) = kept[index % kept.len()];
-                    let expected = match table.locate(home) {
-                        None => Err(RedeemError::Gone),
-                        Some(Location::Slab { slot, .. }) => {
-                            if slot == cell.slot()
-                                || table.pins.test(cell.slot(), slot)
-                                || table.birth.test(cell.slot(), slot)
-                            {
-                                Ok(())
-                            } else {
-                                Err(RedeemError::Unheld)
-                            }
-                        }
-                        Some(Location::Record(id)) => {
-                            if table.sealed_holds[cell.slot() as usize].contains(id) {
-                                Ok(())
-                            } else {
-                                Err(RedeemError::Unheld)
-                            }
-                        }
-                    };
+                    let expected = expected_redeem(&table, cell.slot(), home);
                     let outcome = table
-                        .enter(cell, |context| match context.redeem(resident) {
-                            Ok(carrier) => {
-                                assert_eq!(
-                                    *context.read(&carrier).value(),
-                                    carried,
-                                    "a redeemed value read storage that was not its own"
-                                );
-                                Ok(())
-                            }
-                            Err(error) => Err(error),
-                        })
+                        .enter(cell, |context| check_redeem(context, resident, carried))
                         .unwrap();
                     assert_eq!(
                         outcome, expected,
                         "the redeem door disagreed with the relations that entitle it"
                     );
+                }
+            }
+            // A tree cell under a slab cell or under another tree cell. The pool takes no cap, so
+            // the only refusal is a parent whose death was already declared.
+            Verb::CreateTree { parent, under_tree } => {
+                // A tree parent when the run has one and the draw asks for it, and the slab
+                // otherwise. A run with no slab cell yet takes one now: a tree cell is meaningless
+                // without a root, so the alternative is a verb that can never fire.
+                if minted.is_empty()
+                    && let Ok(handle) = table.create(None, None)
+                {
+                    minted.push(handle);
+                }
+                let parent: Option<CellRef> = under_tree
+                    .then(|| wrapped(&grown, parent).map(CellRef::Tree))
+                    .flatten()
+                    .or_else(|| wrapped(&minted, parent).map(CellRef::Slab));
+                if let Some(parent) = parent
+                    && let Ok(handle) = table.create_tree(parent, None)
+                {
+                    grown.push(handle);
+                }
+            }
+            // A placement out of a tree step, into either kind. Where the destination sits decides
+            // whether the operand pins — pledging the producer's chain — or is copied outright.
+            Verb::PlaceFromTree {
+                producer,
+                consumer,
+                into_tree,
+            } => {
+                let consumer: Option<CellRef> = match into_tree {
+                    true => wrapped(&grown, consumer).map(CellRef::Tree),
+                    false => wrapped(&minted, consumer).map(CellRef::Slab),
+                };
+                if let (Some(producer), Some(consumer)) = (wrapped(&grown, producer), consumer)
+                    && table.is_live_tree(producer)
+                {
+                    let _ = table.enter_tree(producer, |context| {
+                        let value = context.alloc::<Number>(|writer| writer.value(1));
+                        context
+                            .alloc_into::<Number, Number>(
+                                consumer,
+                                &[operand_at(&value, 1)],
+                                |writer, views| take(&views[0], writer),
+                            )
+                            .map(|_| ())
+                    });
+                }
+            }
+            // A value put to rest in a tree cell. It interns nothing — the reach is the root —
+            // but it does make the cell nameable, which is what decides whether its death leaves
+            // a tombstone behind.
+            Verb::KeepTree { cell } => {
+                if let Some(cell) = wrapped(&grown, cell)
+                    && table.is_live_tree(cell)
+                {
+                    let carried = next_value;
+                    next_value += 1;
+                    let resident = table
+                        .enter_tree(cell, |context| {
+                            let value = context.alloc::<Number>(|writer| writer.value(carried));
+                            context.keep(value)
+                        })
+                        .unwrap();
+                    kept.push((CellRef::Tree(cell), resident, carried));
+                }
+            }
+            // The same door from inside the tree, where entitlement is root identity rather than a
+            // row reading, and a tree home resolves through however many splices its bytes have
+            // been through since the keep.
+            Verb::RedeemInTree { cell, index } => {
+                if let Some(cell) = wrapped(&grown, cell)
+                    && table.is_live_tree(cell)
+                    && !kept.is_empty()
+                {
+                    let (home, resident, carried) = kept[index % kept.len()];
+                    let root = table.trees().root(cell.index());
+                    let expected = expected_redeem(&table, root, home);
+                    let outcome = table
+                        .enter_tree(cell, |context| check_redeem(context, resident, carried))
+                        .unwrap();
+                    assert_eq!(
+                        outcome, expected,
+                        "the redeem door disagreed with the root that entitles it"
+                    );
+                }
+            }
+            // Death in any order: a cell released before its children waits dead-resident, and the
+            // last child's disposal cascades up through every ancestor it unblocks.
+            Verb::ReleaseTree { cell } => {
+                if let Some(cell) = wrapped(&grown, cell) {
+                    let _ = table.release_tree(cell);
                 }
             }
             // Reading the kept continuation back is the re-anchor: the value comes out at the
@@ -546,10 +880,19 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Crossing) -> Verdict + 'static) -> Me
 
     // Winding the run down: once every cell's death is declared, the cascade returns every slot,
     // and the tier retains only what a ring no merge met tied together.
+    // The pool first: a root with an undisposed tree child under it waits dead-resident exactly as
+    // one with a live descendant does, so the slab cannot finish until the trees have.
+    for handle in &grown {
+        let _ = table.release_tree(*handle);
+    }
     for handle in &minted {
         let _ = table.release(*handle, Absorption::IntoHolder);
     }
     check_invariants(&table, &mut memoized, false);
+    assert!(
+        table.trees().occupied().next().is_none(),
+        "a wound-down run left a tree cell or a tombstone in the pool"
+    );
     for slot in 0..CAP {
         assert_eq!(table.slots[slot as usize].state, SlotState::Free);
     }

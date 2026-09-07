@@ -17,7 +17,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-20 tests, grouped by the unsafe site each pins down. Names below are the exact
+24 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -112,6 +112,24 @@ build.
 - `table::tests::values::a_resident_forwarded_through_two_merges_is_still_found`
 - `table::tests::values::redeem_refuses_once_the_storage_is_gone`
 - `table::tests::crossing::a_copied_view_is_readable_and_a_pinned_one_embeddable`
+
+**The tree habitat's splice, copy and tombstone**
+([src/tree.rs](../src/tree.rs), [src/table.rs](../src/table.rs)) — the same `retype` primitive
+where the storage under a borrow moves by a **splice** rather than by a merge: a dying tree cell's
+whole bump is taken into an ancestor's bundle, and a resident keyed to it resolves through a
+tombstone chain to wherever those bytes ended up. The first is the load-bearing one for the pledge:
+a destination stores a continuation over a value living in its child's bump, the child dies, and the
+next step reads through the continuation — which is only sound because the pin pledged the child to
+splice here. The second reads a resident back after its home spliced and left a tombstone. The
+third is the forced copy's other half: a value crossing to a sibling is severed and deep-copied, so
+the old cell's bump reclaims outright while the copy stays readable. The fourth carries spliced
+bumps out of the slab entirely — the root seals, and a holder reads a tree-homed value out of the
+record.
+
+- `table::tests::tree::a_splice_keeps_a_borrow_the_destination_already_holds`
+- `table::tests::tree::a_resident_whose_home_was_absorbed_redeems_from_the_destination`
+- `table::tests::tree::a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one`
+- `table::tests::tree::a_tree_root_that_seals_carries_its_spliced_bumps`
 
 ## Adding tests to the slate
 

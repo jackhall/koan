@@ -22,6 +22,9 @@ pub enum Verb {
     Create,
     Enter,
     Release,
+    CreateTree,
+    EnterTree,
+    ReleaseTree,
     Alloc,
     AllocInto,
     Hold,
@@ -33,10 +36,13 @@ pub enum Verb {
 
 impl Verb {
     /// Every verb, in the order rows are printed.
-    pub const ALL: [Verb; 10] = [
+    pub const ALL: [Verb; 13] = [
         Verb::Create,
         Verb::Enter,
         Verb::Release,
+        Verb::CreateTree,
+        Verb::EnterTree,
+        Verb::ReleaseTree,
         Verb::Alloc,
         Verb::AllocInto,
         Verb::Hold,
@@ -52,6 +58,9 @@ impl Verb {
             Verb::Create => "create",
             Verb::Enter => "enter",
             Verb::Release => "release",
+            Verb::CreateTree => "create_tree",
+            Verb::EnterTree => "enter_tree",
+            Verb::ReleaseTree => "release_tree",
             Verb::Alloc => "alloc",
             Verb::AllocInto => "alloc_into",
             Verb::Hold => "hold",

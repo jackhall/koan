@@ -47,6 +47,10 @@ pub(crate) struct Region {
     /// allocated into an absorbed bump again — but their chunks stay at their addresses, which is
     /// what the borrows minted before the merge still name.
     absorbed: Vec<Bump>,
+    /// What those bumps' chunks occupy, maintained at every merge. A running total rather than a
+    /// walk: the byte figure is read once per priced operand, and a chain of splices would
+    /// otherwise make each reading linear in the bundle it has accumulated.
+    absorbed_bytes: usize,
     /// The frozen-closure memo of the record this region belongs to, written once by a price query
     /// and never cleared — see [`SealedRecord`](crate::sealed::SealedRecord) for why it can never
     /// go stale. Region state because its bytes are region bytes: the record's price counts them
@@ -59,6 +63,7 @@ impl Region {
         Region {
             bump: Bump::new(),
             absorbed: Vec::new(),
+            absorbed_bytes: 0,
             memo: OnceCell::new(),
         }
     }
@@ -96,17 +101,25 @@ impl Region {
         Writer(&self.bump)
     }
 
-    /// Take `other`'s chunks into this bundle. The bumps move; the chunks do not.
     /// Take `other`'s chunks into this bundle. The bumps move; the chunks do not, so a borrow
     /// minted before the merge still names its bytes — `other`'s own memo included, whose `Kept`
     /// goes with `other` and leaves its bytes behind as a bump's dead bytes.
-    fn absorb(&mut self, other: Region) {
-        self.absorbed.extend(other.absorbed);
-        // A bump that never allocated owns no chunk, so taking it in would only lengthen the walk
-        // every byte total makes.
+    ///
+    /// The shorter list moves into the longer one rather than the source into the target, which is
+    /// what makes a splice up a chain O(1) apiece: a cell absorbing a bundle far larger than its
+    /// own takes that bundle over instead of copying it in. Order carries no meaning here — the
+    /// list exists to keep the chunks alive and to total their bytes — so the swap costs nothing.
+    fn absorb(&mut self, mut other: Region) {
+        if self.absorbed.len() < other.absorbed.len() {
+            std::mem::swap(&mut self.absorbed, &mut other.absorbed);
+        }
+        self.absorbed.append(&mut other.absorbed);
+        // A bump that never allocated owns no chunk, so taking it in would only lengthen the list.
         if other.bump.allocated_bytes() > 0 {
+            self.absorbed_bytes += other.bump.allocated_bytes();
             self.absorbed.push(other.bump);
         }
+        self.absorbed_bytes += other.absorbed_bytes;
     }
 
     /// Splice an optional region into a region — the storage half of every merge into a record. A
@@ -131,14 +144,10 @@ impl Region {
 
     /// Bytes the chunks occupy, whether or not a value still uses them — a bump never reclaims
     /// within a chunk, so this is what the region costs while anything holds it. Absorbed bumps
-    /// count: the bundle is answerable for every chunk it took in.
+    /// count: the bundle is answerable for every chunk it took in. O(1), off the running total the
+    /// merges maintain, since a priced operand reads this figure and a bundle grows by splices.
     pub(crate) fn allocated_bytes(&self) -> usize {
-        self.bump.allocated_bytes()
-            + self
-                .absorbed
-                .iter()
-                .map(Bump::allocated_bytes)
-                .sum::<usize>()
+        self.bump.allocated_bytes() + self.absorbed_bytes
     }
 }
 

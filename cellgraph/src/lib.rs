@@ -23,13 +23,14 @@ mod resident;
 mod scratch;
 mod sealed;
 mod table;
+mod tree;
 
 pub use carrier::{Opened, Sealed};
-pub use handle::{Handle, StaleHandle};
+pub use handle::{CellRef, Handle, StaleCell, StaleHandle, StaleTree, TreeHandle};
 pub use reattach::{DropFree, Erased, Reattachable};
 pub use region::Writer;
 pub use resident::Resident;
 pub use table::{
-    Absorption, CellTable, CreateError, Crossed, Crossing, EnterError, Operand, RedeemError,
-    ReleaseError, StepContext, Verdict,
+    Absorption, CellTable, CreateError, CreateTreeError, Crossed, Crossing, EnterError,
+    EnterTreeError, Operand, RedeemError, ReleaseError, ReleaseTreeError, StepContext, Verdict,
 };

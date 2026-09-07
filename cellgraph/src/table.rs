@@ -11,8 +11,8 @@ mod tests;
 
 use smallvec::SmallVec;
 
-use crate::carrier::{Opened, Sealed};
-use crate::handle::{Handle, StaleHandle};
+use crate::carrier::{Home, Opened, Sealed};
+use crate::handle::{CellRef, Handle, StaleCell, StaleHandle, StaleTree, TreeHandle};
 use crate::mask::Mask;
 use crate::matrix::{Bits, Matrix};
 use crate::reattach::{DropFree, Erased, Reattachable};
@@ -20,6 +20,7 @@ use crate::region::{Region, Writer};
 use crate::resident::{Resident, ResidentKey, Residents};
 use crate::scratch::{Scratch, ScratchVec};
 use crate::sealed::{ScratchSet, SealedId, SealedRecord, SealedSet, SealedTier};
+use crate::tree::{Pledge, Relation, Resolved, TreePool, TreeState};
 
 /// Refusals from [`CellTable::create`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -44,6 +45,32 @@ pub enum EnterError {
 pub enum ReleaseError {
     /// The named cell is not a live cell — a second release names a death already declared.
     Stale(StaleHandle),
+    /// The cell is executing. Death is declared from outside a step, never from within one.
+    Executing,
+}
+
+/// Refusals from [`CellTable::create_tree`]. There is no full variant: the pool takes no cap.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CreateTreeError {
+    /// The named parent is not a live cell of either kind. A dead-resident parent refuses too — it
+    /// is waiting on the children it already has, not taking new ones.
+    StaleParent(StaleCell),
+}
+
+/// Refusals from [`CellTable::enter_tree`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EnterTreeError {
+    /// The named cell is not a live tree cell.
+    Stale(StaleTree),
+    /// The cell is already executing; a cell is entered by one step at a time.
+    AlreadyExecuting,
+}
+
+/// Refusals from [`CellTable::release_tree`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReleaseTreeError {
+    /// The named cell is not a live tree cell — a second release names a death already declared.
+    Stale(StaleTree),
     /// The cell is executing. Death is declared from outside a step, never from within one.
     Executing,
 }
@@ -370,6 +397,14 @@ struct Slot<C: Reattachable, const W: usize> {
     /// whole at reclamation, and detached unmoved at a seal — which is what makes a cell's death
     /// O(1) in its resident values either way.
     region: Option<Region>,
+    /// Tree children whose chain tops out at this cell and that have not disposed — the birth
+    /// tally's analogue for the pool. A released root waits dead-resident while any of them is
+    /// still there, and the last one's disposal is what sets its own cascade off.
+    tree_children: u32,
+    /// The head of the list of tree tombstones whose bytes spliced into this cell's bundle. Travels
+    /// onto the relocation entry when the cell leaves the slab, so a resident still keyed to one of
+    /// them keeps resolving.
+    tree_lineage: Option<u32>,
 }
 
 impl<C: Reattachable, const W: usize> Slot<C, W> {
@@ -385,8 +420,43 @@ impl<C: Reattachable, const W: usize> Slot<C, W> {
             residents: Residents::default(),
             lineage: None,
             region: None,
+            tree_children: 0,
+            tree_lineage: None,
         }
     }
+}
+
+/// One placement's destination, resolved: the cell whose region takes the bytes, and the slab slot
+/// whose relations the placement writes.
+///
+/// **The one place the two kinds converge.** No relation names a tree cell, so a placement into one
+/// mints into its root through the ordinary mint, and the reach the built value travels with is the
+/// root's bit — which is why the pair travels together rather than one number standing for both.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Dest {
+    /// The slab slot the placement mints into: the destination itself, or a tree destination's
+    /// root.
+    mint_slot: u32,
+    /// The cell whose region bundle the value is written into.
+    home: Home,
+}
+
+/// How one operand reaches its destination — the classification the crossing rule applies to an
+/// operand homed in a tree cell, before any price is asked for.
+///
+/// An operand homed in a slab cell or a record is always `Ordinary`: nothing about the tree
+/// habitat touches it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Reaching {
+    /// The destination dies before the operand's home, so a borrow embedded there stays valid with
+    /// no promise: the ordinary price, and the ordinary verdict.
+    Ordinary,
+    /// The destination is an ancestor of the operand's home on its chain. The price is the splice
+    /// price, and a `Pin` pledges the home and every intermediate to splice into it at death.
+    Upward(Pledge),
+    /// The destination is neither on the home's chain nor under it, so nothing there may outlive
+    /// the home while borrowing it. The verdict is **not consulted**: the crossing is a copy.
+    Forced,
 }
 
 /// A capped slab of cells over the relations that decide when a slot may be reused, plus the
@@ -409,6 +479,9 @@ pub struct CellTable<C: Reattachable, const W: usize = 1> {
     /// without scanning the tier.
     naming: Box<[SealedSet]>,
     sealed: SealedTier<W>,
+    /// The tree pool: the third region habitat, uncapped and outside every relation. See
+    /// [tree](crate::tree).
+    trees: TreePool<C>,
     /// Where the residents of a cell that has left the slab went, one list per slab slot. A
     /// departed handle maps to the live cell whose table absorbed its masks, or to the record its
     /// storage sealed into; a cell with an empty resident table leaves no entry. Rewritten at
@@ -418,6 +491,11 @@ pub struct CellTable<C: Reattachable, const W: usize = 1> {
     ///
     /// No hashing: the handle's slot is the index and its generation is what the search compares.
     relocated: Box<[SmallVec<[Relocation; 2]>]>,
+    /// The tree tombstone lists belonging to cells that have left the slab, keyed by the handle
+    /// they still name. Beside the relocation map rather than on its entries: a departed cell with
+    /// tombstones under it is rare, and a slot whose occupants relocate over and over — which is
+    /// every producer of a chain — would otherwise pay for the field in every entry it keeps.
+    departed_tombstones: Vec<(Handle, u32)>,
     /// The embedder's crossing verdict, taken at construction. There is no verdict-free
     /// constructor: a table that can place a value can price the placement. One indirect call per
     /// priced operand is nothing beside the walk that prices it, and keeping the closure here is
@@ -494,7 +572,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             sealed_holds: (0..cap).map(|_| SealedSet::new()).collect(),
             naming: (0..cap).map(|_| SealedSet::new()).collect(),
             sealed: SealedTier::new(cap),
+            trees: TreePool::new(),
             relocated: (0..cap).map(|_| SmallVec::new()).collect(),
+            departed_tombstones: Vec::new(),
             verdict: Box::new(verdict),
             scratch: Some(Scratch::new()),
             executing: Bits::new(),
@@ -573,7 +653,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         scratch.reset();
         let mut context = StepContext {
             table: self,
-            handle,
+            cell: CellRef::Slab(handle),
             scratch: Some(scratch),
         };
         Ok(step(&mut context))
@@ -605,7 +685,188 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         Ok(())
     }
 
-    /// Whether the table holds nothing at all: every slab slot free, and no sealed region left.
+    /// Create a tree cell under `parent` — a slab cell, which becomes its **root**, or another
+    /// tree cell, whose root it inherits.
+    ///
+    /// The cell owns its region outright and takes no slab slot, so this door has no full refusal:
+    /// what bounds the pool is the depth of the call tree, not the slab's cap. It takes no row and
+    /// no column either — a placement into it mints into its root, and a carrier homed in it
+    /// travels with the root's bit ([design/tree-cells.md](../design/tree-cells.md)).
+    pub fn create_tree(
+        &mut self,
+        parent: impl Into<CellRef>,
+        continuation: Option<C::At<'static>>,
+    ) -> Result<TreeHandle, CreateTreeError> {
+        let (root, tree_parent, depth) = match parent.into() {
+            CellRef::Slab(handle) => {
+                let slot = self
+                    .live_slot(handle)
+                    .map_err(|stale| CreateTreeError::StaleParent(stale.into()))?;
+                (slot, None, 1)
+            }
+            CellRef::Tree(handle) => {
+                let index = self
+                    .trees
+                    .live_index(handle)
+                    .map_err(|stale| CreateTreeError::StaleParent(stale.into()))?;
+                (
+                    self.trees.root(index),
+                    Some(index),
+                    self.trees.depth(index) + 1,
+                )
+            }
+        };
+        self.take_scratch().reset();
+        // A continuation handed in from outside is at `'static`: it captures nothing any region
+        // owns, so it reaches nothing — and a tree cell records no reach in any case.
+        let continuation = continuation.map(Erased::store);
+        let handle = self.trees.create(root, tree_parent, depth, continuation);
+        match tree_parent {
+            Some(index) => self.trees.add_child(index),
+            None => self.slots[root as usize].tree_children += 1,
+        }
+        Ok(handle)
+    }
+
+    /// Run `step` against a tree cell, with its executing flag set for the scope — [`enter`]'s twin
+    /// over the pool, and the same contract in every other respect.
+    ///
+    /// [`enter`]: CellTable::enter
+    pub fn enter_tree<R>(
+        &mut self,
+        handle: TreeHandle,
+        step: impl FnOnce(&mut StepContext<'_, C, W>) -> R,
+    ) -> Result<R, EnterTreeError> {
+        let index = self
+            .trees
+            .live_index(handle)
+            .map_err(EnterTreeError::Stale)?;
+        if self.trees.is_executing(index) {
+            return Err(EnterTreeError::AlreadyExecuting);
+        }
+        self.trees.set_executing(index, true);
+        let mut scratch = self.take_scratch_owned();
+        scratch.reset();
+        let mut context = StepContext {
+            table: self,
+            cell: CellRef::Tree(handle),
+            scratch: Some(scratch),
+        };
+        Ok(step(&mut context))
+    }
+
+    /// Declare a tree cell's death. **No absorption argument**: where its bytes go was settled at
+    /// the placement door that pinned a value homed here into an ancestor, and the pledge that door
+    /// left is what disposal reads.
+    ///
+    /// A cell whose children have all disposed disposes at once — splicing its bump into its pledge
+    /// or reclaiming it — and the disposal walks up through every dead-resident ancestor it
+    /// unblocks, into the slab's own cascade at the root. One released while a child still lives
+    /// goes **dead-resident**: stale to every door, region kept, disposed when its last child does.
+    pub fn release_tree(&mut self, handle: TreeHandle) -> Result<(), ReleaseTreeError> {
+        let index = self
+            .trees
+            .live_index(handle)
+            .map_err(ReleaseTreeError::Stale)?;
+        if self.trees.is_executing(index) {
+            return Err(ReleaseTreeError::Executing);
+        }
+        self.trees.mark_dead(index);
+        self.park()
+            .run(|table, scratch| table.dispose_tree_chain(index, scratch));
+        Ok(())
+    }
+
+    /// Whether the handle names a tree cell that is still live — false for a recycled index, a
+    /// later generation, a dead-resident cell, and a tombstone.
+    pub fn is_live_tree(&self, handle: TreeHandle) -> bool {
+        self.trees.live_index(handle).is_ok()
+    }
+
+    /// Dispose of the just-released tree cell and then of every dead-resident ancestor its
+    /// disposal leaves with no undisposed child, innermost first — and, at the top, of the root
+    /// through the slab's own cascade.
+    ///
+    /// The walk is complete for the same reason the slab's is: only creation and disposal move a
+    /// child count, so the only cells this release can bring to zero are the ones on its own chain
+    /// upward, and the first ancestor that is still live or still has another child stops it.
+    fn dispose_tree_chain(&mut self, released: u32, scratch: &Scratch) {
+        let mut next = Some(released);
+        while let Some(index) = next {
+            if self.trees.state(index) != TreeState::Dead || self.trees.children(index) > 0 {
+                return;
+            }
+            // Read the links first: disposal recycles the slot or turns it into a tombstone, and
+            // either way the chain fields stop answering for the cell that was there.
+            let parent = self.trees.parent(index);
+            let root = self.trees.root(index);
+            self.dispose_tree(index, scratch);
+            match parent {
+                Some(parent) => {
+                    self.trees.drop_child(parent);
+                    next = Some(parent);
+                }
+                None => {
+                    debug_assert!(
+                        self.slots[root as usize].tree_children > 0,
+                        "a tree cell disposed under a root that counted none"
+                    );
+                    self.slots[root as usize].tree_children -= 1;
+                    if self.slots[root as usize].state == SlotState::Dead {
+                        self.dispose_chain(root, scratch);
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Take one tree cell out: its bump splices into the ancestor it pledged, or is dropped where
+    /// it pledged none, and its identity either recycles or stays behind as a tombstone.
+    ///
+    /// O(1). No hold arithmetic and no seal transition runs — a tree cell holds nothing of its own
+    /// — and the splice moves a `Bump` without moving a chunk byte.
+    fn dispose_tree(&mut self, index: u32, scratch: &Scratch) {
+        let region = self.trees.take_region(index);
+        let into = match self.trees.pledge(index) {
+            None => None,
+            Some(Pledge::Root) => {
+                let root = self.trees.root(index);
+                Region::splice_optional(&mut self.slots[root as usize].region, region);
+                Some(CellRef::Slab(self.occupant(root)))
+            }
+            Some(Pledge::Tree(dest)) => {
+                self.trees.splice_into(dest, region);
+                Some(CellRef::Tree(self.trees.occupant(dest)))
+            }
+        };
+        match into {
+            // The bytes moved and something may still name this cell: it stays as a tombstone
+            // pointing at where they went, and the tombstones already hanging off it stay hanging
+            // off it, so the chain lengthens rather than being repointed.
+            Some(into) if self.trees.leaves_tombstone(index) => match into {
+                CellRef::Tree(dest) => {
+                    self.trees.entomb(index, CellRef::Tree(dest), None);
+                    self.trees.adopt_tombstone(dest.index(), index);
+                }
+                CellRef::Slab(root) => {
+                    let head = self.slots[root.slot() as usize].tree_lineage;
+                    self.trees.entomb(index, CellRef::Slab(root), head);
+                    self.slots[root.slot() as usize].tree_lineage = Some(index);
+                }
+            },
+            // Either nothing can name it, or its bytes are gone. A reclaim takes the tombstones
+            // that spliced into it with it: their bytes died in this bundle.
+            _ => {
+                let lineage = self.trees.lineage(index);
+                self.trees.free_tombstones(lineage, scratch);
+                self.trees.recycle(index);
+            }
+        }
+    }
+
+    /// Whether the table holds nothing at all: every slab slot free, no sealed region left, and no
+    /// tree cell or tombstone in the pool.
     ///
     /// The embedder's end-of-program alarm, and the only one the substrate ships. After the last
     /// release, a non-empty table means either a release was forgotten — a slot is still occupied
@@ -620,7 +881,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             self.occupied().next().is_none(),
             "the free list disagrees with a scan across the slab"
         );
-        vacant && self.sealed.is_empty()
+        vacant && self.sealed.is_empty() && self.trees.is_empty()
     }
 
     /// Whether the handle names a cell that is still live — false for a slot that is free, holds a
@@ -685,16 +946,20 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         (0..self.cap).filter(|slot| self.slots[*slot as usize].state != SlotState::Free)
     }
 
-    /// Whether a dead cell's slot may leave the slab now: no occupant's birth row still names it.
-    /// Birth holds are the one relation that keeps a dead cell in place — a descendant that can
-    /// still walk to it has not finished with it, and the relation has no sealed half for the walk
-    /// to follow.
+    /// Whether a dead cell's slot may leave the slab now: no occupant's birth row still names it,
+    /// and no tree cell under it is undisposed. Birth holds are the one relation that keeps a dead
+    /// cell in place — a descendant that can still walk to it has not finished with it, and the
+    /// relation has no sealed half for the walk to follow — and a tree child is the same relation
+    /// counted rather than rowed, since no matrix names a tree cell.
     ///
     /// Execution does not enter the question: `release` refuses an executing cell and `begin`
     /// refuses a dead one, so a dead cell is never executing.
     fn disposable(&self, slot: u32) -> bool {
         // A free slot's birth row is cleared before the slot is recycled, so no free row names
         // anything and the count across every row is the count across the occupied ones.
+        if self.slots[slot as usize].tree_children > 0 {
+            return false;
+        }
         let held = self.birth.holders(slot);
         #[cfg(test)]
         debug_assert_eq!(
@@ -760,7 +1025,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Drop every entry on a chain — the storage those keys named is gone, so a redeem under one
     /// of them refuses rather than finding a stale answer.
-    fn forget_chain(&mut self, head: Option<Handle>) {
+    fn forget_chain(&mut self, head: Option<Handle>, scratch: &Scratch) {
         let mut next = head;
         while let Some(handle) = next {
             let list = &mut self.relocated[handle.slot() as usize];
@@ -770,6 +1035,16 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 .expect("a chain entry is in its slot's list");
             next = list[at].next;
             list.swap_remove(at);
+            // The bytes this entry forwarded to are gone, so the tree tombstones that pointed
+            // through it go with them: a redeem under one of their keys must answer `Gone`.
+            if let Some(at) = self
+                .departed_tombstones
+                .iter()
+                .position(|(named, _)| *named == handle)
+            {
+                let (_, head) = self.departed_tombstones.swap_remove(at);
+                self.trees.free_tombstones(Some(head), scratch);
+            }
         }
     }
 
@@ -789,14 +1064,17 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         }
     }
 
-    /// Every departed handle whose residents `slot` answers for, plus `slot`'s own occupant if it
-    /// kept anything. Taken off the slot: the caller is moving them somewhere else.
+    /// Every departed handle whose residents `slot` answers for, plus `slot`'s own occupant if
+    /// anything still has to find its way to it — a resident kept in it, or a tree tombstone whose
+    /// bytes spliced into its bundle. Taken off the slot: the caller is moving them somewhere else.
     ///
-    /// The occupant comes last when it comes at all, which is what lets a caller that has to treat
-    /// it differently from the inherited entries split the run rather than re-derive it.
-    fn take_lineage<'s>(&mut self, slot: u32, scratch: &'s Scratch) -> &'s mut [Handle] {
-        let occupant =
-            (!self.slots[slot as usize].residents.is_empty()).then(|| self.occupant(slot));
+    /// The occupant comes last when it comes at all, and the flag says whether it came, which is
+    /// what lets a caller that has to treat it differently from the inherited entries split the run
+    /// rather than re-derive it.
+    fn take_lineage<'s>(&mut self, slot: u32, scratch: &'s Scratch) -> (&'s mut [Handle], bool) {
+        let cell = &self.slots[slot as usize];
+        let occupant = (!cell.residents.is_empty() || cell.tree_lineage.is_some())
+            .then(|| self.occupant(slot));
         let head = self.slots[slot as usize].lineage.take();
         let mut walk = head;
         let mut length = 0;
@@ -808,7 +1086,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 .next;
         }
         let mut next = head;
-        scratch.slice_with(length + usize::from(occupant.is_some()), |_| match next {
+        let run = scratch.slice_with(length + usize::from(occupant.is_some()), |_| match next {
             Some(handle) => {
                 next = self
                     .relocation(handle)
@@ -817,7 +1095,20 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 handle
             }
             None => occupant.expect("only the occupant sits past the slot's own entries"),
-        })
+        });
+        (run, occupant.is_some())
+    }
+
+    /// Move a departing cell's tree tombstones onto the relocation entry that now forwards its
+    /// handle, so they resolve through wherever its bundle went and are freed when that entry is.
+    fn carry_tree_lineage(&mut self, slot: u32, departing: Handle) {
+        if let Some(head) = self.slots[slot as usize].tree_lineage.take() {
+            debug_assert!(
+                self.relocation(departing).is_some(),
+                "a departing occupant with tombstones has just been relocated"
+            );
+            self.departed_tombstones.push((departing, head));
+        }
     }
 
     /// Point every handle of `lineage` at `target`, and record them on the target so its own
@@ -945,10 +1236,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         }
         let base = self.slots[into as usize].residents.len();
         // Taken before the resident table is, so the run carries the departing occupant exactly
-        // when that table had something to move.
-        let lineage = self.take_lineage(dead, scratch);
+        // when something — a kept resident or a tree tombstone — still has to find its way to it.
+        let (lineage, has_occupant) = self.take_lineage(dead, scratch);
         let moved = self.slots[dead as usize].residents.take();
-        let kept_any = !moved.is_empty();
         for mut mask in moved {
             mask.remove_slot(dead);
             mask.add(into);
@@ -958,11 +1248,11 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         // The departing occupant is the run's last entry and the only one landing at the moved
         // block's own base; every other entry was minted under an earlier merge and moves by the
         // block's offset.
-        let (departing, inherited) = match kept_any {
+        let (departing, inherited) = match has_occupant {
             true => {
                 let (occupant, rest) = lineage
                     .split_last()
-                    .expect("a kept resident table puts its occupant on the run");
+                    .expect("an included occupant is on the run");
                 (Some(*occupant), rest)
             }
             false => (None, &*lineage),
@@ -988,6 +1278,9 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         }
         if let Some(departing) = departing {
             self.relocate(departing, Location::Slab { slot: into, base }, head);
+            // The tombstones that spliced into the dead cell's bundle keep naming its handle; the
+            // entry just written is what forwards them into the target's bundle from here on.
+            self.carry_tree_lineage(dead, departing);
             head = Some(departing);
         }
         self.slots[into as usize].lineage = head;
@@ -1009,8 +1302,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             .aggregate
             .remove_slot(dead);
         let (_, dups) = self.fold_into_record(namer, holds, storage, scratch);
-        let lineage = self.take_lineage(dead, scratch);
+        let (lineage, has_occupant) = self.take_lineage(dead, scratch);
         self.relocate_to_record(lineage, namer);
+        if has_occupant {
+            let departing = *lineage.last().expect("an included occupant is on the run");
+            self.carry_tree_lineage(dead, departing);
+        }
 
         self.vacate(dead, &dups, scratch);
         #[cfg(test)]
@@ -1200,7 +1497,11 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         // Nothing reaches this cell's storage, so every mask its residents named dies with it and
         // the handles it answered for stop resolving. Its own handle was never in the map.
         let lineage = self.slots[slot as usize].lineage.take();
-        self.forget_chain(lineage);
+        self.forget_chain(lineage, scratch);
+        // The tree bumps spliced into this bundle go with it, so the tombstones that named them
+        // stop resolving too.
+        let tombstones = self.slots[slot as usize].tree_lineage.take();
+        self.trees.free_tombstones(tombstones, scratch);
         let released = std::mem::take(&mut self.sealed_holds[slot as usize]);
         self.vacate(slot, released.as_slice(), scratch);
     }
@@ -1286,8 +1587,12 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         );
         // The cell's own resident masks are dead bytes from here on: the storage they named is in
         // the record, and a redeem under one of these keys derives its reach from the record's id.
-        let lineage = self.take_lineage(slot, scratch);
+        let (lineage, has_occupant) = self.take_lineage(slot, scratch);
         self.relocate_to_record(lineage, id);
+        if has_occupant {
+            let departing = *lineage.last().expect("an included occupant is on the run");
+            self.carry_tree_lineage(slot, departing);
+        }
         // The dying cell's sealed half moved into the record above, so the exit releases nothing.
         self.vacate(slot, &[], scratch);
         // 4. Every count-1 region the new record holds folds into it: a chain of single-consumer
@@ -1312,21 +1617,21 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             if record.holders > 0 {
                 continue;
             }
-            pending.extend(self.retire_record(id).iter());
+            pending.extend(self.retire_record(id, scratch).iter());
         }
     }
 
     /// Retire a record whose count has reached zero: out of the tier, out of the reverse naming
     /// index, and its storage dropped. Hands back the holds its aggregate named, which the caller
     /// releases in turn.
-    fn retire_record(&mut self, id: SealedId) -> SealedSet {
+    fn retire_record(&mut self, id: SealedId, scratch: &Scratch) -> SealedSet {
         let Some(record) = self.sealed.remove(id) else {
             return SealedSet::new();
         };
         for slot in record.aggregate.slab_slots() {
             self.naming[slot as usize].remove(id);
         }
-        self.forget_chain(record.lineage);
+        self.forget_chain(record.lineage, scratch);
         // The record's storage drops here: nothing reaches these chunks any more.
         record.aggregate.into_sealed()
     }
@@ -1334,7 +1639,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// Reclaim a record nothing holds any more — the zero-count exit, reached directly when a
     /// merge dissolves the last hold on its own target rather than through a holder's release.
     fn reclaim_record(&mut self, id: SealedId, scratch: &Scratch) {
-        let released = self.retire_record(id);
+        let released = self.retire_record(id, scratch);
         self.release_sealed_holds(released.as_slice(), scratch);
     }
 
@@ -1473,6 +1778,35 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             .collect()
     }
 
+    /// The tree pool, for the assertions that read a cell's chain links, its pledge and the
+    /// tombstones hanging off it — none of which is observable through a public verb.
+    #[cfg(test)]
+    pub(crate) fn trees(&self) -> &TreePool<C> {
+        &self.trees
+    }
+
+    /// Tree children of a slab cell that have not disposed.
+    #[cfg(test)]
+    pub(crate) fn tree_children_of(&self, handle: Handle) -> u32 {
+        self.slots[handle.slot() as usize].tree_children
+    }
+
+    /// The head of the tree tombstones hanging off a slab cell's bundle.
+    #[cfg(test)]
+    pub(crate) fn tree_lineage_of(&self, handle: Handle) -> Option<u32> {
+        self.slots[handle.slot() as usize].tree_lineage
+    }
+
+    /// Every tree tombstone head that hangs off a departed cell's handle rather than off a live
+    /// slot.
+    #[cfg(test)]
+    pub(crate) fn relocated_tree_lineages(&self) -> Vec<u32> {
+        self.departed_tombstones
+            .iter()
+            .map(|(_, head)| *head)
+            .collect()
+    }
+
     /// How many relocation entries the table carries in all — the figure that has to come back to
     /// zero once every departed cell's storage is gone.
     #[cfg(test)]
@@ -1543,6 +1877,14 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             cap: self.cap,
             records: self.sealed.len(),
             retained_bytes: self.sealed.retained_bytes(),
+        }
+    }
+
+    /// Chunk bytes of a placement destination's own region bundle, whichever habitat it lives in.
+    fn dest_bytes(&self, dest: Dest) -> usize {
+        match dest.home {
+            Home::Slab(slot) => self.cell_bytes(slot),
+            Home::Tree(index) => self.trees.region_bytes(index),
         }
     }
 
@@ -1856,6 +2198,48 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         None
     }
 
+    /// Where one operand's home sits relative to its destination — **the one crossing rule for a
+    /// tree-homed operand**, applied at every placement door before the verdict.
+    ///
+    /// Into the home or a tree cell under it, the ordinary door: the destination dies first. Into
+    /// an ancestor on the home's chain, or into its root: the verdict is consulted with the splice
+    /// price, and a `Pin` pledges the home and every intermediate. Into anything else — a cousin
+    /// under the same root, a cell under another root, an unrelated slab cell — a forced copy,
+    /// because nothing outside the chain may outlive the home while borrowing it.
+    ///
+    /// The classification costs the level distance between home and destination, and two homes
+    /// under different roots settle in O(1).
+    fn classify(&self, home: Home, dest: Dest) -> Reaching {
+        let Home::Tree(home) = home else {
+            return Reaching::Ordinary;
+        };
+        match dest.home {
+            Home::Slab(slot) => match slot == self.trees.root(home) {
+                true => Reaching::Upward(Pledge::Root),
+                false => Reaching::Forced,
+            },
+            Home::Tree(dest) if self.trees.root(dest) != self.trees.root(home) => Reaching::Forced,
+            Home::Tree(dest) => match self.trees.relation(home, dest) {
+                Relation::Under => Reaching::Ordinary,
+                Relation::Above => Reaching::Upward(Pledge::Tree(dest)),
+                Relation::Apart => Reaching::Forced,
+            },
+        }
+    }
+
+    /// What an upward pin costs: the bundle bytes of the operand's home and of every intermediate
+    /// up to the destination that is not already pledged at least that shallow.
+    ///
+    /// Marginal across the operands of one placement for free — the pledge is applied the moment a
+    /// verdict comes back `Pin`, before the next operand is priced — so a second operand from the
+    /// same home, or from a cell the first one's walk already pledged, is shown nothing.
+    fn splice_price(&self, home: u32, dest: Pledge) -> usize {
+        self.trees
+            .unpledged_up(home, dest)
+            .map(|index| self.trees.region_bytes(index))
+            .sum()
+    }
+
     /// Price every operand against `dest`, put each price to the embedder's verdict, and split the
     /// operands by the answer: the pinned reaches unioned for the mint, and each operand's erased
     /// form beside its verdict for the views.
@@ -1868,7 +2252,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// keeping it here is what lets a door split its borrows and hand the scratch in beside them.
     fn cross<'s, 'b, V>(
         &mut self,
-        dest: u32,
+        dest: Dest,
         operands: &[Operand<'_, 'b, V, W>],
         scratch: &'s Scratch,
     ) -> (Mask<W>, &'s [Verdict])
@@ -1887,21 +2271,45 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         // their erased forms through here would be a second copy of a slice the caller already has.
         let verdicts = scratch.slice_with(operands.len(), |index| {
             let operand = &operands[index];
+            let home = operand.carrier.home();
+            let reaching = self.classify(home, dest);
+            if reaching == Reaching::Forced {
+                // The verdict is not consulted: no pin of this operand into this destination
+                // typechecks, so there is no choice to put to the embedder.
+                return Verdict::Copy;
+            }
+            let pin_bytes = match reaching {
+                Reaching::Upward(pledge) => {
+                    let Home::Tree(home) = home else {
+                        unreachable!("only a tree-homed operand reaches upward")
+                    };
+                    self.splice_price(home, pledge)
+                }
+                // Priced against what this placement has already pinned as well as what the
+                // destination held before it, so a second operand homed in the same source as the
+                // first is shown the marginal cost and the sum over the operands is exact.
+                _ => self.pin_price(dest.mint_slot, operand.carrier.reach(), &reach, scratch),
+            };
             let crossing = Crossing {
                 // Priced against what this placement has already pinned as well as what the
                 // destination held before it, so a second operand homed in the same source as the
                 // first is shown the marginal cost and the sum over the operands is exact.
-                pin_bytes: self.pin_price(dest, operand.carrier.reach(), &reach, scratch),
+                pin_bytes,
                 copy_bytes: operand.copy_bytes,
                 occupied,
                 cap,
                 records,
                 retained_bytes,
-                dest_bytes: self.cell_bytes(dest),
+                dest_bytes: self.dest_bytes(dest),
             };
             let verdict = (self.verdict)(crossing);
             if verdict == Verdict::Pin {
                 reach.union_with(operand.carrier.reach());
+                // The promise the price was quoted for, made before the next operand is priced, so
+                // the walk it shares with this one is billed once.
+                if let (Reaching::Upward(pledge), Home::Tree(home)) = (reaching, home) {
+                    self.trees.pledge_up(home, pledge);
+                }
             }
             verdict
         });
@@ -1916,7 +2324,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// [`StepContext`] method whose return type names the step's own brand.
     fn mint_and_build<'b, T>(
         &mut self,
-        dest_slot: u32,
+        dest: Dest,
         reach: Mask<W>,
         build: impl for<'r> FnOnce(Writer<'r>) -> T::At<'r>,
     ) -> Sealed<'b, T, W>
@@ -1926,8 +2334,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         // A bump releases its chunks whole and never walks a value, so a family with drop glue
         // would leak whatever it owns. `DropFree` declares the absence; this is the check.
         const { assert!(!std::mem::needs_drop::<T::At<'static>>()) };
-        let (value, reach) = self.place::<T>(dest_slot, reach, build);
-        Sealed::new(value, reach, dest_slot)
+        let (value, reach) = self.place::<T>(dest, reach, build);
+        Sealed::new(value, reach, dest.home)
     }
 
     /// Fold `reach` into the destination's hold set, build the value in the destination's region,
@@ -1941,21 +2349,26 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// the door that hands back a [`Sealed`].
     fn place<T>(
         &mut self,
-        dest_slot: u32,
+        dest: Dest,
         mut reach: Mask<W>,
         build: impl for<'r> FnOnce(Writer<'r>) -> T::At<'r>,
     ) -> (Erased<T>, Mask<W>)
     where
         T: Reattachable,
     {
-        self.mint(dest_slot, &reach);
+        self.mint(dest.mint_slot, &reach);
         let value = {
-            let region = self.slots[dest_slot as usize]
-                .region
-                .get_or_insert_with(Region::new);
+            let region = match dest.home {
+                Home::Slab(slot) => self.slots[slot as usize]
+                    .region
+                    .get_or_insert_with(Region::new),
+                Home::Tree(index) => self.trees.region_mut(index),
+            };
             Erased::<T>::erase(build(region.writer()))
         };
-        reach.add(dest_slot);
+        // The mint slot, not the home: a value homed in a tree cell reaches its root, which is what
+        // every hold on its behalf was minted into.
+        reach.add(dest.mint_slot);
         (value, reach)
     }
 
@@ -1983,7 +2396,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 /// [`enter`](CellTable::enter) holds. Nothing carrying it escapes the call.
 pub struct StepContext<'b, C: Reattachable, const W: usize = 1> {
     table: &'b mut CellTable<C, W>,
-    handle: Handle,
+    /// The cell this step is running in, of either kind.
+    cell: CellRef,
     /// The table's scratch region, held here for the length of the step and handed back by `Drop`.
     /// A door splits this off the table borrow so a transient and a `&mut CellTable` coexist.
     ///
@@ -1993,9 +2407,33 @@ pub struct StepContext<'b, C: Reattachable, const W: usize = 1> {
 }
 
 impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
-    /// The cell this step is running in.
-    pub fn handle(&self) -> Handle {
-        self.handle
+    /// The cell this step is running in, of either kind.
+    pub fn cell(&self) -> CellRef {
+        self.cell
+    }
+
+    /// The slab slot whose relations this step's placements write: the executing cell itself when
+    /// it is a slab cell, and its root when it is a tree cell.
+    fn executing_slot(&self) -> u32 {
+        match self.cell {
+            CellRef::Slab(handle) => handle.slot(),
+            CellRef::Tree(handle) => self.table.trees.root(handle.index()),
+        }
+    }
+
+    /// The executing cell as a placement destination — where [`alloc`](Self::alloc) builds and what
+    /// a successor store writes into.
+    fn executing_dest(&self) -> Dest {
+        match self.cell {
+            CellRef::Slab(handle) => Dest {
+                mint_slot: handle.slot(),
+                home: Home::Slab(handle.slot()),
+            },
+            CellRef::Tree(handle) => Dest {
+                mint_slot: self.table.trees.root(handle.index()),
+                home: Home::Tree(handle.index()),
+            },
+        }
     }
 
     /// Take the cell's continuation, re-anchored at the step brand.
@@ -2021,15 +2459,18 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// let _ = table.continuation(cell);
     /// ```
     pub fn continuation(&mut self) -> Option<Opened<'b, C>> {
-        let stored = self.table.slots[self.handle.slot() as usize]
-            .continuation
-            .take()?;
+        let stored = match self.cell {
+            CellRef::Slab(handle) => self.table.slots[handle.slot() as usize].continuation.take(),
+            CellRef::Tree(handle) => self.table.trees.take_continuation(handle.index()),
+        }?;
         // SAFETY: the value's referents are region storage in the cells and sealed regions its
         // stored reach names — the resident entry `continuation_reach` names, which the seal
         // transition maintains, and none at all when it names no entry — and that reach was minted
-        // into this cell's hold set when it was stored, so every one of them is either a live cell
-        // or a held sealed record, whose
-        // chunks are pointer-stable and detached unmoved. The cell is live for all of `'b` (it is
+        // into the executing cell's hold set when it was stored, so every one of them is either a
+        // live cell or a held sealed record, whose chunks are pointer-stable and detached unmoved.
+        // For a tree step the hold set is the root's, and the captures' own storage is either the
+        // root's, one of the cells it holds, or a tree cell on this one's chain — an ancestor,
+        // which outlives it, or the executing cell itself. The cell is live for all of `'b` (it is
         // the one executing), so its holds are too. `'b` is the enclosing `enter`'s table borrow,
         // unnameable by the step's return type, so nothing anchored at it escapes.
         let value = unsafe { stored.reattach::<'b>() };
@@ -2043,9 +2484,20 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// entry an earlier store pointed at stays as it is — entries are content, and nothing rewrites
     /// one because the value that minted it moved on.
     pub fn store_successor(&mut self, continuation: C::At<'static>) {
-        let cell = &mut self.table.slots[self.handle.slot() as usize];
-        cell.continuation_reach = None;
-        cell.continuation = Some(Erased::store(continuation));
+        let stored = Erased::store(continuation);
+        match self.cell {
+            CellRef::Slab(handle) => {
+                let cell = &mut self.table.slots[handle.slot() as usize];
+                cell.continuation_reach = None;
+                cell.continuation = Some(stored);
+            }
+            // A tree cell records no reach: it never seals, so there is nothing a stored mask would
+            // have to be rewritten for.
+            CellRef::Tree(handle) => self
+                .table
+                .trees
+                .set_continuation(handle.index(), Some(stored)),
+        }
     }
 
     /// Store a continuation built over carriers, so it may capture values living in regions.
@@ -2076,26 +2528,31 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     {
         // The scratch splits off the table borrow: the transients below live in it while the
         // doors below hold the table exclusively.
+        let dest = self.executing_dest();
         let StepContext {
             table,
-            handle,
+            cell: _,
             scratch,
         } = &mut *self;
         let scratch = scratch
             .as_ref()
             .expect("a step holds the region for its whole length");
-        let slot = handle.slot();
-        let (reach, verdicts) = table.cross(slot, captures, scratch);
-        let (value, reach) = table.place::<C>(slot, reach, move |writer| {
+        let (reach, verdicts) = table.cross(dest, captures, scratch);
+        let (value, reach) = table.place::<C>(dest, reach, move |writer| {
             // SAFETY: see `crossed_views`. `place` has already folded every pinned capture's reach
             // into this cell's hold set before it calls this closure, so none of that storage can
             // go away while the cell holds it, and the views live only for the `build` call.
             let views = unsafe { crossed_views(captures, verdicts, scratch) };
             build(writer, views)
         });
-        let cell = &mut table.slots[slot as usize];
-        cell.continuation_reach = Some(cell.residents.intern(reach));
-        cell.continuation = Some(value);
+        match dest.home {
+            Home::Slab(slot) => {
+                let cell = &mut table.slots[slot as usize];
+                cell.continuation_reach = Some(cell.residents.intern(reach));
+                cell.continuation = Some(value);
+            }
+            Home::Tree(index) => table.trees.set_continuation(index, Some(value)),
+        }
     }
 
     /// Build a value in the executing cell's own region.
@@ -2148,8 +2605,8 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     where
         T: Reattachable + DropFree,
     {
-        let slot = self.handle.slot();
-        self.table.mint_and_build(slot, Mask::empty(), build)
+        let dest = self.executing_dest();
+        self.table.mint_and_build(dest, Mask::empty(), build)
     }
 
     /// Destination-homed placement: build a value **in `dest`'s region**, embedding the views of
@@ -2166,10 +2623,10 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// billing a shared source once per operand.
     pub fn alloc_into<T, V>(
         &mut self,
-        dest: Handle,
+        dest: impl Into<CellRef>,
         operands: &[Operand<'_, 'b, V, W>],
         build: impl for<'r, 'v> FnOnce(Writer<'r>, &[Crossed<'r, 'v, V>]) -> T::At<'r>,
-    ) -> Result<Sealed<'b, T, W>, StaleHandle>
+    ) -> Result<Sealed<'b, T, W>, StaleCell>
     where
         T: Reattachable + DropFree,
         V: Reattachable + DropFree,
@@ -2179,15 +2636,30 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         // while the placement below holds the table exclusively.
         let StepContext {
             table,
-            handle: _,
+            cell: _,
             scratch,
         } = &mut *self;
         let scratch = scratch
             .as_ref()
             .expect("a step holds the region for its whole length");
-        let dest_slot = table.live_slot(dest)?;
-        let (reach, verdicts) = table.cross(dest_slot, operands, scratch);
-        Ok(table.mint_and_build(dest_slot, reach, move |writer| {
+        let dest = match dest.into() {
+            CellRef::Slab(handle) => {
+                let slot = table.live_slot(handle).map_err(StaleCell::from)?;
+                Dest {
+                    mint_slot: slot,
+                    home: Home::Slab(slot),
+                }
+            }
+            CellRef::Tree(handle) => {
+                let index = table.trees.live_index(handle).map_err(StaleCell::from)?;
+                Dest {
+                    mint_slot: table.trees.root(index),
+                    home: Home::Tree(index),
+                }
+            }
+        };
+        let (reach, verdicts) = table.cross(dest, operands, scratch);
+        Ok(table.mint_and_build(dest, reach, move |writer| {
             // SAFETY: see `crossed_views`. `mint_and_build` has already folded every pinned
             // operand's reach into the destination's hold set before it calls this closure, so
             // that storage outlives both `'r` and the destination.
@@ -2202,7 +2674,8 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     pub fn hold(&mut self, other: Handle) -> Result<(), StaleHandle> {
         let other_slot = self.table.live_slot(other)?;
         let reach = Mask::single(other_slot);
-        self.table.mint(self.handle.slot(), &reach);
+        let into = self.executing_slot();
+        self.table.mint(into, &reach);
         Ok(())
     }
 
@@ -2219,11 +2692,26 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         T: Reattachable + DropFree,
     {
         let (value, reach, home) = carrier.into_parts();
-        let cell = &mut self.table.slots[home as usize];
-        let index = cell.residents.intern(reach);
-        let key = ResidentKey {
-            home: Handle::new(home, cell.generation),
-            index,
+        let key = match home {
+            Home::Slab(slot) => {
+                let cell = &mut self.table.slots[slot as usize];
+                let index = cell.residents.intern(reach);
+                ResidentKey {
+                    home: CellRef::Slab(Handle::new(slot, cell.generation)),
+                    index,
+                }
+            }
+            // A tree cell has no resident table and interns nothing: the value reaches its root
+            // and nothing else, so the redeem derives that reach rather than reading one back. What
+            // the keep does record is that the cell is now nameable, which is what decides whether
+            // its death leaves a tombstone.
+            Home::Tree(index) => {
+                self.table.trees.mark_kept(index);
+                ResidentKey {
+                    home: CellRef::Tree(self.table.trees.occupant(index)),
+                    index: 0,
+                }
+            }
         };
         Resident::new(value, key)
     }
@@ -2244,11 +2732,33 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         T: Reattachable + DropFree,
     {
         let table = &*self.table;
-        let executing = self.handle.slot();
+        let executing = self.executing_slot();
         let key = resident.key();
         // Decided before the value is touched: a resident rests as bytes precisely so that a
         // refusal costs nothing, including when the storage those bytes name is gone.
-        let (reach, home) = match table.locate(key.home) {
+        // A tree home resolves through its tombstone chain first: one hop per splice its bytes have
+        // been through since the keep, ending at a tree cell that still holds them or at the slab
+        // handle the relocation map answers for from there.
+        let slab_home = match key.home {
+            CellRef::Slab(handle) => handle,
+            CellRef::Tree(handle) => match table.trees.resolve(handle) {
+                None => return Err(RedeemError::Gone),
+                Some(Resolved::Tree(index)) => {
+                    // Entitled by root identity, which is O(1): a slab cell is its own root, and
+                    // every hold a value homed in a tree cell can take points up its own chain.
+                    if table.trees.root(index) != executing {
+                        return Err(RedeemError::Unheld);
+                    }
+                    // SAFETY: the home is a tree cell under this step's own root, live or
+                    // dead-resident, so its region is still there and nothing dies inside a step.
+                    let value = unsafe { resident.take() };
+                    let reach = Mask::single(table.trees.root(index));
+                    return Ok(Sealed::new(value, reach, Home::Tree(index)));
+                }
+                Some(Resolved::Slab(handle)) => handle,
+            },
+        };
+        let (reach, home) = match table.locate(slab_home) {
             None => return Err(RedeemError::Gone),
             Some(Location::Slab { slot, base }) => {
                 let entitled = slot == executing
@@ -2257,12 +2767,17 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
                 if !entitled {
                     return Err(RedeemError::Unheld);
                 }
-                let reach = table.slots[slot as usize]
-                    .residents
-                    .get(base + key.index)
-                    .expect("a relocated key names an entry of the table it was forwarded to")
-                    .clone();
-                (reach, slot)
+                // A key that started in a tree cell indexes no table: its value reached the root
+                // alone, and the slot the chain ends at is where those bytes are now.
+                let reach = match key.home {
+                    CellRef::Tree(_) => Mask::single(slot),
+                    CellRef::Slab(_) => table.slots[slot as usize]
+                        .residents
+                        .get(base + key.index)
+                        .expect("a relocated key names an entry of the table it was forwarded to")
+                        .clone(),
+                };
+                (reach, Home::Slab(slot))
             }
             Some(Location::Record(id)) => {
                 if !table.sealed_holds[executing as usize].contains(id) {
@@ -2270,7 +2785,7 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
                 }
                 // The record's id alone: a hold on it keeps its aggregate alive transitively, and
                 // a mask naming no slab bit has nothing that can go stale under a later `keep`.
-                (Mask::single_sealed(id), executing)
+                (Mask::single_sealed(id), Home::Slab(executing))
             }
         };
         // SAFETY: the match above resolved the key's home to storage that is still there — a live
@@ -2359,7 +2874,12 @@ impl<C: Reattachable, const W: usize> Drop for Parked<'_, C, W> {
 
 impl<C: Reattachable, const W: usize> Drop for StepContext<'_, C, W> {
     fn drop(&mut self) {
-        self.table.executing.clear(self.handle.slot());
+        match self.cell {
+            CellRef::Slab(handle) => {
+                self.table.executing.clear(handle.slot());
+            }
+            CellRef::Tree(handle) => self.table.trees.set_executing(handle.index(), false),
+        }
         // Back on the table, chunk and all, so the next verb starts warm — and so a panicking step
         // hands it back exactly as an ordinary one does.
         self.table.scratch = self.scratch.take();

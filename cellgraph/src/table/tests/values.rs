@@ -27,7 +27,7 @@ fn a_value_allocated_in_the_executing_cell_reaches_only_that_cell() {
 fn a_cell_that_never_allocates_mints_no_region() {
     let mut table: CellTable<Owned> = CellTable::new(2, pin);
     let cell = table.create(None, None).unwrap();
-    table.enter(cell, |context| context.handle()).unwrap();
+    table.enter(cell, |context| context.cell()).unwrap();
     assert!(table.slots[cell.slot() as usize].region.is_none());
 }
 

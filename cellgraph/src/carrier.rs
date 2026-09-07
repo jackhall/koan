@@ -19,6 +19,16 @@ use std::marker::PhantomData;
 use crate::mask::Mask;
 use crate::reattach::{DropFree, Erased, Reattachable};
 
+/// Which region a carrier's value was written into: a slab slot, or a tree cell's pool index.
+///
+/// Crate-private and paired with the value, like the mask beside it. A tree home is not a mask bit
+/// — no relation names a tree cell — so the two kinds are a sum here rather than one number.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Home {
+    Slab(u32),
+    Tree(u32),
+}
+
 /// The dormant carrier: a value erased to its lifetime-free form, bundled with its reach.
 ///
 /// Opaque by construction — it exposes no read of its own. [`StepContext::read`] is the only door
@@ -28,18 +38,17 @@ use crate::reattach::{DropFree, Erased, Reattachable};
 pub struct Sealed<'home, T: Reattachable + DropFree, const W: usize = 1> {
     value: Erased<T>,
     reach: Mask<W>,
-    /// The slab slot whose hold set covers this reach, and whose resident table a
-    /// [`keep`](crate::StepContext::keep) registers the reach in. For a door-built carrier that
-    /// is the cell the value was placed into; for one redeemed out of a record it is the
-    /// executing cell, which holds the record.
-    home: u32,
+    /// The cell whose region stores this value: the one a [`keep`](crate::StepContext::keep)
+    /// registers the reach under. For a door-built carrier that is the cell the value was placed
+    /// into; for one redeemed out of a record it is the executing cell, which holds the record.
+    home: Home,
     _home: PhantomData<&'home ()>,
 }
 
 impl<T: Reattachable + DropFree, const W: usize> Sealed<'_, T, W> {
     /// Bundle a value the table itself just wrote into a region with the reach it composed for it.
     /// Crate-private, so the value-to-reach pairing is only ever the one a door established.
-    pub(crate) fn new(value: Erased<T>, reach: Mask<W>, home: u32) -> Self {
+    pub(crate) fn new(value: Erased<T>, reach: Mask<W>, home: Home) -> Self {
         Sealed {
             value,
             reach,
@@ -67,9 +76,15 @@ impl<T: Reattachable + DropFree, const W: usize> Sealed<'_, T, W> {
         self.value
     }
 
+    /// The cell whose region stores this value — what the crossing rule classifies by, and what a
+    /// [`keep`](crate::StepContext::keep) registers under.
+    pub(crate) fn home(&self) -> Home {
+        self.home
+    }
+
     /// Split the carrier into the three things a [`keep`](crate::StepContext::keep) needs: the
-    /// erased value, the reach the table takes over, and the slot whose table takes it.
-    pub(crate) fn into_parts(self) -> (Erased<T>, Mask<W>, u32) {
+    /// erased value, the reach the table takes over, and the cell whose table takes it.
+    pub(crate) fn into_parts(self) -> (Erased<T>, Mask<W>, Home) {
         (self.value, self.reach, self.home)
     }
 }

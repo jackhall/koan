@@ -4,6 +4,7 @@ mod pricing;
 mod properties;
 mod scratch;
 mod sealing;
+mod tree;
 mod values;
 
 use super::*;
@@ -233,10 +234,10 @@ fn a_cell_without_a_continuation_is_storage_only() {
     let seen = table
         .enter(cell, |context| {
             assert!(context.continuation().is_none());
-            context.handle()
+            context.cell()
         })
         .unwrap();
-    assert_eq!(seen, cell);
+    assert_eq!(seen, CellRef::Slab(cell));
 }
 
 #[test]

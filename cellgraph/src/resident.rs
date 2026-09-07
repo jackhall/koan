@@ -20,7 +20,7 @@
 
 use std::mem::MaybeUninit;
 
-use crate::handle::Handle;
+use crate::handle::CellRef;
 use crate::mask::Mask;
 use crate::reattach::{DropFree, Erased, Reattachable};
 
@@ -92,12 +92,17 @@ impl<T: Reattachable + DropFree> Copy for Resident<T> where Erased<T>: Copy {}
 /// Which entry of which cell's resident table holds one resident's reach.
 ///
 /// Crate-private, like the mask itself: an embedder cannot name an entry, so it cannot hand a
-/// value a reach that is not its own. The handle is the home cell as it stood at the
+/// value a reach that is not its own. The home is the cell as it stood at the
 /// [`keep`](crate::StepContext::keep) — a generation the redeem re-checks, and the key the
-/// relocation map is looked up under once that cell has left the slab.
+/// relocation map is looked up under once a slab cell has left the slab, or the tombstone chain is
+/// followed from once a tree cell has died.
+///
+/// A tree home names no table entry: a value homed in a tree cell reaches its root and nothing
+/// else, so the index is zero and the redeem derives the reach from the root rather than reading
+/// it back.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct ResidentKey {
-    pub(crate) home: Handle,
+    pub(crate) home: CellRef,
     pub(crate) index: u32,
 }
 
