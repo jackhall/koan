@@ -40,12 +40,15 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
   rows. The birth and pin matrices are inline arrays of those rows, so a table
   carries both relations in its own bytes.
 - [src/mask.rs](src/mask.rs) — reach as a hybrid mask: an inline `Bits` row
-  over slab slots plus a sparse sealed-id set, so a reach naming no sealed
-  region is built, copied, and compared without touching the allocator.
-- [src/sealed.rs](src/sealed.rs) — the sealed tier: ids, sparse sets, frozen
-  aggregates, holder counts, detached storage.
+  over slab slots plus a sparse sealed-id set that is itself inline up to two
+  ids, so a reach naming at most two sealed regions is built, copied, and
+  compared without touching the allocator.
+- [src/sealed.rs](src/sealed.rs) — the sealed tier: ids packed as a serial
+  beside a slab index, sparse sets, frozen aggregates, holder counts, and the
+  dense slab of records with its free list.
 - [src/region.rs](src/region.rs) — the per-cell bundle of bumps, the splice a
-  locality merge performs, and the write surface a build closure receives.
+  locality merge performs, the write surface a build closure receives, and the
+  record's frozen-closure memo, kept in the region's own bytes.
 - [src/scratch.rs](src/scratch.rs) — the table's one scratch region: a bump
   sized at construction, reset at the entry of every verb and never inside
   one, and the doors every transient a verb builds is taken through — the

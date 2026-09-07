@@ -68,8 +68,17 @@ death instead of cleared. Monotone holds make that row exactly the union
 of every mask ever minted into the region, so the seal consults no storage
 and scans no values: the aggregate is a word copy out of the matrix. The
 region's storage chunks detach from the slot unmoved, the slot recycles under
-a fresh generation, and the sealed region takes a **sealed id** from a
-monotone space — never reused, so the tier needs no generations.
+a fresh generation, and the sealed region takes a **sealed id** — never reused,
+so the tier needs no generations.
+
+The id is two halves of a word: a table-wide monotone **serial** above, and
+below it the **index** of the record's slot in the tier's own dense slab. The
+tier is that slab plus a free list of the indices retirement handed back, sized
+at construction to the table's cap, so a lookup is a bounds-checked load and a
+serial compare rather than a hash. An index is reused; an id is not — the
+serial beside a present record is what makes a retired id read as absent rather
+than as whatever record later took its place. The serial leads the word, so
+ordering ids is still ordering them by creation.
 
 Three consequences:
 
@@ -157,6 +166,12 @@ bitmask over slab slots plus a sparse set of sealed ids:
 - **Reach is never folded.** Antichain minimization pays for itself only
   when each member costs an owning pointer; bits and ids cost nothing, so
   there is no subsumption step and no per-member pin semantics hook.
+- **Both halves are inline at the width that matters.** The slab half always;
+  the sparse half up to two ids, spilling to the heap only past that. So a
+  reach naming at most two sealed regions is built, copied, rewritten by the
+  seal transition, and compared without touching the allocator — and the
+  merges keep a reach naming more than two records rare, since a chain of
+  single-consumer producers collapses to the record at its head.
 
 ## The seal transition
 
@@ -354,8 +369,10 @@ every node in it is named by a predecessor inside it, so none retires; a fold's
 target is either the record a seal just minted or a namer whose aggregate names
 a dying slab bit, and a frozen closure holds neither; and a record whose sole
 holder lies inside the closure is never an absorption source either. So a
-frozen closure's *record set* is memoized on its record, written once and
-exact for the record's whole life, with no invalidation path to get wrong. It
+frozen closure's *record set* is memoized on its record — written into the
+record's own region, so `retained_bytes` counts the memo's bytes like any other
+chunk, at chunk granularity — once, and exact for the record's whole life, with
+no invalidation path to get wrong. It
 is the set that is memoized and not a byte total: two branches of one closure
 may share a sub-tier, so a walk that meets a memoized record merges its set
 and the price sums once at the end. Summing memoized totals would bill the
@@ -591,30 +608,41 @@ run of its own — so each matrix carries a **holder tally**, one count per
 column, bumped by every write that can set or clear a bit. The query is then
 one read, and a write pays only for the bits it *newly* sets.
 
-Per sealed region: one hybrid aggregate mask, one holder count, one memoized
-closure at most — the record set of a closure that has frozen, written once
-and exact from then on — the lineage of departed cells whose residents it
-answers for, and its storage, which is a *bundle* of regions, not one. Every merge splices the absorbed chunks in whole rather
-than copying them, so a region is the bump it writes into plus the bumps of
-everything
-folded into it; the chunks keep their addresses, which is the same pointer
-stability a detached seal already relies on. Nothing is ever allocated into an
-absorbed bump again, so a long chain keeps each link's chunk headroom rather
-than compacting it. Per slab slot: one sparse reverse-naming set, one
-resident table — the reaches of the values kept in that cell, interned on
-content and named by index, and the only durable habitat a slab-side mask
-has — and one lineage of the departed cells whose residents it absorbed. The
-table is bounded by the *distinct* reaches the cell has been kept into, not by
-how many times, so it does not grow with the length of a run; a merge is the
-one writer that appends without interning, since the moved block's position is
-what forwards its keys. Per
-table: one relocation map from a departed cell's handle to where its
-residents went, a live slot at a base offset or a record. The lineages and
-the map are bounded by merges rather than by values — a departing cell
-contributes one entry however many values it kept, dropped when its target
-reclaims or retires. Per tier: one
-running retained-byte total, maintained where storage enters or leaves the
-sealed tier rather than summed on demand. The holder tallies above are derived
+Per sealed region: one hybrid aggregate mask, one holder count, one head word
+naming its lineage, and its storage, which is a *bundle* of regions, not one.
+Every merge splices the absorbed chunks in whole rather than copying them, so a
+region is the bump it writes into plus the bumps of everything folded into it;
+the chunks keep their addresses, which is the same pointer stability a detached
+seal already relies on. Nothing is ever allocated into an absorbed bump again,
+so a long chain keeps each link's chunk headroom rather than compacting it. The
+memoized closure lives in that storage too — a run of ids in the record's own
+bump, written once and read back only through the region that wrote it — so the
+record's bookkeeping is its own bytes and its price says so.
+
+Per slab slot: one sparse reverse-naming set, one resident table — the reaches
+of the values kept in that cell, interned on content and named by index, and
+the only durable habitat a slab-side mask has — and one head word naming the
+lineage of departed cells whose residents it absorbed. The table is bounded by
+the *distinct* reaches the cell has been kept into, not by how many times, so
+it does not grow with the length of a run; a merge is the one writer that
+appends without interning, since the moved block's position is what forwards
+its keys.
+
+Per table: one relocation entry per departed cell, saying where its residents
+went — a live slot at a base offset, or a record — held in one list per slab
+slot and searched by the handle's generation rather than hashed. A lineage is
+a chain threaded through those entries themselves, which is why a slot and a
+record each carry a head word and no collection: the links live where the
+entries already are. The lineages and the map are bounded by merges rather than
+by values — a departing cell contributes one entry however many values it kept,
+dropped when its target reclaims or retires — so a slot's list holds two
+entries inline and reaches the allocator only past that. Nothing here hashes,
+in either direction.
+
+Per tier: the dense record slab and its free list, both reserved at the table's
+cap so a seal grows neither, and one running retained-byte total, maintained
+where storage enters or leaves the sealed tier rather than summed on demand.
+The holder tallies above are derived
 data — derived *from* attributed transitions, never a free-standing count a
 caller could release against — and invisible to the interface: under test each
 tally is asserted against the column scan it stands in for, at every query that

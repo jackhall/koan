@@ -4,9 +4,8 @@ Open work on the `cellgraph` computation-cell substrate (working name —
 [design/cellgraph.md](../design/cellgraph.md)). The substrate stands, retains
 atomically, prices what that retention costs, and carries values across steps.
 The substrate's own build-out is complete, and so are the representation
-changes its measurement harness gates; what is open is the harness's own
-wall-time reading, plus the gaps recorded below, which nothing is scheduled
-against. `workgraph`'s
+changes its measurement harness gates; what is open is the gaps recorded below,
+which nothing is scheduled against. `workgraph`'s
 adoption of the crate is on the scheduler's own roadmap
 ([workgraph/roadmap/](../../workgraph/roadmap/README.md)), and koan's is
 [roadmap/](../../roadmap/README.md).
@@ -29,7 +28,10 @@ as surprises, not scheduled.
   wrong cell's hold set, leaving the regions the reach names reclaimable under
   a live continuation. Widening the counter, or retiring a slot that exhausts
   it, both cost slab state that nothing else needs; the cheaper answer is
-  probably a debug counter that a long-running embedder can assert against.
+  probably a debug counter that a long-running embedder can assert against. A
+  sealed id's serial is a `u32` with the same exhaustion point, one table-wide
+  rather than one per slot; the tier panics at that point rather than reusing
+  a serial, since a reused one would let a retired id name a live record.
 - **Group sealing.** Seal-time absorption is per region: it fires on a count of
   1, so a region held only *within* a dying subtree carries a count above 1 at
   each individual seal and stays its own record, leaving the subtree as a chain
@@ -48,27 +50,6 @@ as surprises, not scheduled.
   query prices as freeing a sub-tier may free nothing. The precise answer is
   which nodes the candidate dominates in the hold graph, a computation the
   substrate does not have and the first embedder has not yet needed.
-- **Reach clones allocate once a reach names a sealed region.** A
-  [`Mask`](../src/mask.rs) is an inline `Bits<W>` row plus a `SealedSet`, and
-  that sparse half is a heap `Vec<SealedId>` — so "built, copied, and compared
-  without touching the allocator" ([design/liveness-matrix.md § Reach as a
-  hybrid mask](../design/liveness-matrix.md#reach-as-a-hybrid-mask)) holds only
-  while the half is empty. A mask also grows that vector under `replace_slot`,
-  which the seal transition applies to every mask of every holder's resident
-  table. The reading: `redeem` costs no allocation in `fan_out` and
-  `keep_redeem`, and 32 bytes per call in `pull_chain` and `shared_subtier`,
-  all of it the clone of a redeemed entry's reach.
-- **A release's bytes grow with the depth of the tier it winds down.** Across
-  `pull_chain`, allocations per `release` fall from 1.78 at n=8 to 1.39 at
-  n=32 while bytes per call rise from 579 to 689 — 16 allocations over 5208
-  bytes against 46 over 22744. The count amortizes and the volume does not,
-  and nothing records which of the seal transition's writes carries the growth.
-- **A record's bookkeeping is three heap vectors beside its region.** A
-  [`SealedRecord`](../src/sealed.rs) carries its aggregate's sealed half, its
-  `lineage`, and its memo's `records`, each its own allocation and none of them
-  in the region the record detached with. So `retained_bytes` — the figure a
-  hold on the region is answerable for, and the input a release is priced
-  against — counts none of what the substrate spends per record.
 
 ### Performance
 
@@ -84,11 +65,6 @@ reading for one comes from, against the record in
   Interning is what keeps that number small, and the row is inline, so each
   comparison is a word compare at the shipped width; a hash over the row
   would make the scan O(1) if a cell ever settles at many shapes.
-- **Default hashing on the two maps.** The sealed tier and the relocation
-  map are `HashMap`s keyed by a `u64` id and a two-`u32` handle under
-  SipHash. The crate's dependency list is `bumpalo` and `allocator-api2` and
-  is meant to stay there, so the only cheaper route is a small identity hasher
-  of its own; worth a reading before it is written.
 - **Duplicated shapes.** The fresh-slot state is written twice, in
   `CellTable::new` and `recycle`; `store_successor_capturing` repeats
   `mint_and_build`'s region-get, view, erase, and reach steps, differing only
