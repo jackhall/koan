@@ -83,3 +83,16 @@ fn a_scratch_set_keeps_the_sorted_invariant() {
     assert!(seen.contains(SealedId(7)));
     assert_eq!(seen.as_slice().len(), 5);
 }
+
+/// The durable buffer keeps two ids inline and reaches the allocator only past that, at no cost
+/// in the size of the sets every mask and hold row carries.
+#[test]
+fn a_durable_set_holds_two_ids_inline() {
+    assert_eq!(
+        size_of::<SealedSet>(),
+        size_of::<Vec<SealedId>>(),
+        "the inline buffer costs a durable set nothing in width"
+    );
+    assert!(!set([1, 2]).ids.spilled(), "two ids fit inline");
+    assert!(set([1, 2, 3]).ids.spilled(), "a third id spills");
+}

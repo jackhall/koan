@@ -27,6 +27,11 @@ bumpalo = { version = "3.20.3", features = ["allocator-api2"] }
 # std's is not, on stable. Same crate and same version workgraph's `BumpVec` names; the two aliases
 # collapse into one when cellgraph is adopted there.
 allocator-api2 = "0.2.21"
+# The sparse half of an id set: the ids inline up to two and spill to the heap past that, so a
+# reach naming at most two sealed regions is built, copied and rewritten without the allocator.
+# Same crate and same version koan and workgraph name; `const_new` is what keeps an empty set a
+# `const fn`, which the mask constants are built out of.
+smallvec = { version = "1.15", features = ["union", "const_new"] }
 
 [dev-dependencies]
 # Random create / place / hold / release interleavings for the liveness-matrix invariants; the

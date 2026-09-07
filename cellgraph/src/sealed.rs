@@ -11,6 +11,8 @@
 use std::cell::OnceCell;
 use std::collections::HashMap;
 
+use smallvec::SmallVec;
+
 use crate::handle::Handle;
 use crate::mask::Mask;
 use crate::region::Region;
@@ -24,8 +26,8 @@ mod tests;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub(crate) struct SealedId(u64);
 
-/// Where a sorted id set keeps its ids: the heap for the sets the table stores durably, the
-/// scratch region for the seen set a walk builds and throws away.
+/// Where a sorted id set keeps its ids: inline, spilling to the heap, for the sets the table
+/// stores durably; the scratch region for the seen set a walk builds and throws away.
 ///
 /// The two buffers differ in nothing the sorted-insert logic reads, so the set is generic over
 /// them rather than written twice.
@@ -34,13 +36,13 @@ pub(crate) trait IdBuffer: std::ops::Deref<Target = [SealedId]> {
     fn remove(&mut self, at: usize) -> SealedId;
 }
 
-impl IdBuffer for Vec<SealedId> {
+impl IdBuffer for SmallVec<[SealedId; 2]> {
     fn insert(&mut self, at: usize, id: SealedId) {
-        Vec::insert(self, at, id);
+        SmallVec::insert(self, at, id);
     }
 
     fn remove(&mut self, at: usize) -> SealedId {
-        Vec::remove(self, at)
+        SmallVec::remove(self, at)
     }
 }
 
@@ -57,22 +59,27 @@ impl IdBuffer for ScratchVec<'_, SealedId> {
 /// A sparse set of sealed ids, kept sorted so union is a merge and membership a binary search.
 ///
 /// Sealed sets are the sparse half of every hold set and every reach mask. They stay small because
-/// only a *retained* region takes an id, so a sorted vector beats a hash set on both the union
-/// that reach composition performs and the iteration the cascade performs.
+/// only a *retained* region takes an id, so a sorted run beats a hash set on both the union that
+/// reach composition performs and the iteration the cascade performs — and small enough that the
+/// durable buffer keeps two ids inline and reaches the allocator only past that.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub(crate) struct IdSet<V> {
     ids: V,
 }
 
-/// A durable id set: a hold set, a reverse-naming entry, a mask's sparse half.
-pub(crate) type SealedSet = IdSet<Vec<SealedId>>;
+/// A durable id set: a hold set, a reverse-naming entry, a mask's sparse half. Two ids inline, so
+/// the sets that dominate — a reach naming one region, a hold set naming a couple — cost no
+/// allocation and no indirection to read.
+pub(crate) type SealedSet = IdSet<SmallVec<[SealedId; 2]>>;
 
 /// A transient id set, living in the table's scratch region for the length of one verb.
 pub(crate) type ScratchSet<'s> = IdSet<ScratchVec<'s, SealedId>>;
 
 impl SealedSet {
     pub(crate) const fn new() -> Self {
-        IdSet { ids: Vec::new() }
+        IdSet {
+            ids: SmallVec::new_const(),
+        }
     }
 }
 

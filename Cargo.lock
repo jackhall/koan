@@ -135,6 +135,7 @@ dependencies = [
  "allocator-api2",
  "bumpalo",
  "proptest",
+ "smallvec",
 ]
 
 [[package]]

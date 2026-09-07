@@ -3,7 +3,7 @@
 //! Built as a `[[bin]]` behind the `perf` feature rather than as a `benches/` target, for two
 //! reasons. The reading that gates is the allocation count, which is deterministic and needs no
 //! statistics; and every measurement in this repo is off a debug build, which `cargo bench` is
-//! not. The crate's dependency list stays at `bumpalo`.
+//! not. The harness itself adds no dependency to the crate.
 //!
 //! ```text
 //! cargo run -p cellgraph --features perf --bin perf [name-filter]

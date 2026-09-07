@@ -1,6 +1,7 @@
 //! [`Mask`] — a value's reach: the set of regions whose storage the value's borrows read. Slab
-//! slots as an inline [`Bits`] row, sealed regions as a sparse id set, so union and dedup are a
-//! word `OR` plus a sorted merge and membership is a bit test or a binary search. See
+//! slots as an inline [`Bits`] row, sealed regions as a sparse id set that is itself inline up to
+//! two ids, so union and dedup are a word `OR` plus a sorted merge and membership is a bit test or
+//! a binary search. See
 //! [design/liveness-matrix.md](../design/liveness-matrix.md) § Reach as a hybrid mask.
 //!
 //! A mask is never handed to a caller beside a bare value: it exists only inside a
@@ -13,8 +14,10 @@ use crate::sealed::{SealedId, SealedSet};
 /// The set of regions a value's borrows reach: slab slots as bits over the table's width, sealed
 /// regions as ids.
 ///
-/// The dense half is inline, so a mask naming no sealed region is built, copied, and compared
-/// without touching the allocator — which is what keeps a reach off the per-value allocation path.
+/// Both halves are inline at the width that matters: the dense one always, the sparse one up to
+/// two ids. So a mask naming at most two sealed regions is built, copied, rewritten, and compared
+/// without touching the allocator — which is what keeps a reach off the per-value allocation
+/// path, and a reach naming more than two records is a shape merges keep rare.
 ///
 /// Masks compose by `OR` and merge, so a value built from several operands names the union of
 /// their reaches with no deduplication step and no subsumption fold.
