@@ -9,6 +9,8 @@
 #[cfg(test)]
 mod tests;
 
+use smallvec::SmallVec;
+
 use crate::carrier::{Opened, Sealed};
 use crate::handle::{Handle, StaleHandle};
 use crate::mask::Mask;
@@ -319,9 +321,23 @@ enum SlotState {
 /// `Record` is a seal or a fold: the masks are gone, and a redeemed value's reach is derived from
 /// the record instead.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Location {
+pub(crate) enum Location {
     Slab { slot: u32, base: u32 },
     Record(SealedId),
+}
+
+/// Where one departed cell's residents went, plus the link to the next departed cell whose
+/// residents the same target answers for.
+///
+/// The entry carries the generation rather than the whole handle: the list it sits in is indexed
+/// by the handle's slot, so the generation is all that is left to tell two occupants of that slot
+/// apart.
+#[derive(Clone, Copy, Debug)]
+struct Relocation {
+    generation: u32,
+    location: Location,
+    /// The next handle on the target's lineage chain, `None` at the chain's end.
+    next: Option<Handle>,
 }
 
 struct Slot<C: Reattachable, const W: usize> {
@@ -347,9 +363,10 @@ struct Slot<C: Reattachable, const W: usize> {
     /// habitat of a mask on the slab side, and what the seal transition's step 1 rewrites. One
     /// entry per distinct reach is what bounds that rewrite.
     residents: Residents<W>,
-    /// The departed cells whose residents this one absorbed, each of them a key in the table's
-    /// relocation map pointing here. Bounded by merges, never by values.
-    lineage: Vec<Handle>,
+    /// The head of the chain of departed cells whose residents this one absorbed, threaded
+    /// through the relocation entries themselves. Bounded by merges, never by values, and one
+    /// word rather than a vector: the links live where the entries already are.
+    lineage: Option<Handle>,
     /// Minted at the cell's first allocation, so a cell that never allocates costs no chunk. Freed
     /// whole at reclamation, and detached unmoved at a seal — which is what makes a cell's death
     /// O(1) in its resident values either way.
@@ -376,11 +393,15 @@ pub struct CellTable<C: Reattachable, const W: usize = 1> {
     /// without scanning the tier.
     naming: Box<[SealedSet]>,
     sealed: SealedTier<W>,
-    /// Where the residents of a cell that has left the slab went. A departed handle maps to the
-    /// live cell whose table absorbed its masks, or to the record its storage sealed into; a cell
-    /// with an empty resident table leaves no entry. Rewritten at every merge and dropped at the
-    /// target's reclamation, so the map is bounded by merges rather than by values.
-    relocated: std::collections::HashMap<Handle, Location>,
+    /// Where the residents of a cell that has left the slab went, one list per slab slot. A
+    /// departed handle maps to the live cell whose table absorbed its masks, or to the record its
+    /// storage sealed into; a cell with an empty resident table leaves no entry. Rewritten at
+    /// every merge and dropped at the target's reclamation, so a slot's list is bounded by merges
+    /// rather than by values — which is what keeps a generation search short and two entries
+    /// inline.
+    ///
+    /// No hashing: the handle's slot is the index and its generation is what the search compares.
+    relocated: Box<[SmallVec<[Relocation; 2]>]>,
     /// The embedder's crossing verdict, taken at construction. There is no verdict-free
     /// constructor: a table that can place a value can price the placement. One indirect call per
     /// priced operand is nothing beside the walk that prices it, and keeping the closure here is
@@ -454,7 +475,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 continuation: None,
                 continuation_reach: None,
                 residents: Residents::default(),
-                lineage: Vec::new(),
+                lineage: None,
                 region: None,
             })
             .collect::<Vec<_>>()
@@ -467,7 +488,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             sealed_holds: (0..cap).map(|_| SealedSet::new()).collect(),
             naming: (0..cap).map(|_| SealedSet::new()).collect(),
             sealed: SealedTier::new(cap),
-            relocated: std::collections::HashMap::new(),
+            relocated: (0..cap).map(|_| SmallVec::new()).collect(),
             verdict: Box::new(verdict),
             scratch: Some(Scratch::new()),
             executing: Bits::new(),
@@ -697,7 +718,69 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 base: 0,
             });
         }
-        self.relocated.get(&home).copied()
+        self.relocation(home).map(|entry| entry.location)
+    }
+
+    /// The relocation entry for one departed handle, found by walking its slot's list for the
+    /// matching generation.
+    fn relocation(&self, handle: Handle) -> Option<&Relocation> {
+        self.relocated[handle.slot() as usize]
+            .iter()
+            .find(|entry| entry.generation == handle.generation())
+    }
+
+    fn relocation_mut(&mut self, handle: Handle) -> Option<&mut Relocation> {
+        self.relocated[handle.slot() as usize]
+            .iter_mut()
+            .find(|entry| entry.generation == handle.generation())
+    }
+
+    /// Point `handle` at `location` and push it onto a lineage chain whose current head is
+    /// `chain_head`. The caller stores `Some(handle)` as the new head, so the chain is threaded
+    /// through the entries rather than collected beside them.
+    fn relocate(&mut self, handle: Handle, location: Location, chain_head: Option<Handle>) {
+        match self.relocation_mut(handle) {
+            Some(entry) => {
+                entry.location = location;
+                entry.next = chain_head;
+            }
+            None => self.relocated[handle.slot() as usize].push(Relocation {
+                generation: handle.generation(),
+                location,
+                next: chain_head,
+            }),
+        }
+    }
+
+    /// Drop every entry on a chain — the storage those keys named is gone, so a redeem under one
+    /// of them refuses rather than finding a stale answer.
+    fn forget_chain(&mut self, head: Option<Handle>) {
+        let mut next = head;
+        while let Some(handle) = next {
+            let list = &mut self.relocated[handle.slot() as usize];
+            let at = list
+                .iter()
+                .position(|entry| entry.generation == handle.generation())
+                .expect("a chain entry is in its slot's list");
+            next = list[at].next;
+            list.swap_remove(at);
+        }
+    }
+
+    /// Move every handle on `head`'s chain onto `onto`'s chain, pointing each at `target`. What an
+    /// absorbed record's lineage takes, and what a run of freshly departed handles takes at a
+    /// seal.
+    fn relink_chain(&mut self, head: Option<Handle>, target: SealedId, onto: &mut Option<Handle>) {
+        let mut next = head;
+        while let Some(handle) = next {
+            let entry = self
+                .relocation_mut(handle)
+                .expect("a chain entry is in its slot's list");
+            next = entry.next;
+            entry.location = Location::Record(target);
+            entry.next = *onto;
+            *onto = Some(handle);
+        }
     }
 
     /// Every departed handle whose residents `slot` answers for, plus `slot`'s own occupant if it
@@ -708,39 +791,50 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     fn take_lineage<'s>(&mut self, slot: u32, scratch: &'s Scratch) -> &'s mut [Handle] {
         let occupant =
             (!self.slots[slot as usize].residents.is_empty()).then(|| self.occupant(slot));
-        let kept = &mut self.slots[slot as usize].lineage;
-        let taken =
-            scratch.slice_with(
-                kept.len() + usize::from(occupant.is_some()),
-                |index| match kept.get(index) {
-                    Some(handle) => *handle,
-                    None => occupant.expect("only the occupant sits past the slot's own entries"),
-                },
-            );
-        // Cleared rather than taken: the slot keeps the capacity for its next occupant.
-        kept.clear();
-        taken
+        let head = self.slots[slot as usize].lineage.take();
+        let mut walk = head;
+        let mut length = 0;
+        while let Some(handle) = walk {
+            length += 1;
+            walk = self
+                .relocation(handle)
+                .expect("a chain entry is in its slot's list")
+                .next;
+        }
+        let mut next = head;
+        scratch.slice_with(length + usize::from(occupant.is_some()), |_| match next {
+            Some(handle) => {
+                next = self
+                    .relocation(handle)
+                    .expect("a chain entry is in its slot's list")
+                    .next;
+                handle
+            }
+            None => occupant.expect("only the occupant sits past the slot's own entries"),
+        })
     }
 
     /// Point every handle of `lineage` at `target`, and record them on the target so its own
     /// retirement can drop them again.
     fn relocate_to_record(&mut self, lineage: &[Handle], target: SealedId) {
+        // The head comes out of the record for the walk and goes back after it: the walk writes
+        // the relocation lists, and holding a borrow of the record across that would name two
+        // fields of the table at once.
+        let mut head = std::mem::take(
+            &mut self
+                .sealed
+                .get_mut(target)
+                .expect("the relocation target is in the tier")
+                .lineage,
+        );
         for handle in lineage {
-            self.relocated.insert(*handle, Location::Record(target));
+            self.relocate(*handle, Location::Record(target), head);
+            head = Some(*handle);
         }
         self.sealed
             .get_mut(target)
             .expect("the relocation target is in the tier")
-            .lineage
-            .extend_from_slice(lineage);
-    }
-
-    /// Drop every entry of `lineage` from the map — the storage those keys named is gone, so a
-    /// redeem under one of them refuses rather than finding a stale answer.
-    fn forget_lineage(&mut self, lineage: &[Handle]) {
-        for handle in lineage {
-            self.relocated.remove(handle);
-        }
+            .lineage = head;
     }
 
     /// Take a disposable dead cell out of the slab, by the four exits it has: reclamation when
@@ -867,28 +961,30 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             }
             false => (None, &*lineage),
         };
+        let mut head = self.slots[into as usize].lineage;
         for handle in inherited {
             let Location::Slab { base: old, .. } = self
-                .relocated
-                .get(handle)
-                .copied()
+                .relocation(*handle)
                 .expect("a slot's lineage entry points at that slot")
+                .location
             else {
                 unreachable!("a slot's lineage entry points at a slab slot, not a record");
             };
-            self.relocated.insert(
+            self.relocate(
                 *handle,
                 Location::Slab {
                     slot: into,
                     base: base + old,
                 },
+                head,
             );
+            head = Some(*handle);
         }
         if let Some(departing) = departing {
-            self.relocated
-                .insert(departing, Location::Slab { slot: into, base });
+            self.relocate(departing, Location::Slab { slot: into, base }, head);
+            head = Some(departing);
         }
-        self.slots[into as usize].lineage.extend_from_slice(lineage);
+        self.slots[into as usize].lineage = head;
     }
 
     /// Merge 3: a cell nothing in the slab holds, named by exactly one sealed aggregate, folds
@@ -1014,7 +1110,22 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 .sealed
                 .remove(source)
                 .expect("the record was just read");
-            self.relocate_to_record(&absorbed.lineage, target);
+            {
+                // The absorbed record's chain moves onto the target's whole, each entry repointed
+                // as it goes. The target's head comes out for the walk and goes back after it.
+                let mut head = std::mem::take(
+                    &mut self
+                        .sealed
+                        .get_mut(target)
+                        .expect("the target is in the tier")
+                        .lineage,
+                );
+                self.relink_chain(absorbed.lineage, target, &mut head);
+                self.sealed
+                    .get_mut(target)
+                    .expect("the target is in the tier")
+                    .lineage = head;
+            }
             // The aggregate is an owned local, so its slots are walked straight into `naming`
             // rather than collected first. The tally reads the count before the fold moves it.
             #[cfg(test)]
@@ -1087,7 +1198,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         cell.continuation = None;
         cell.continuation_reach = None;
         cell.residents = Residents::default();
-        cell.lineage.clear();
+        cell.lineage = None;
         cell.region = None;
         cell.generation = cell.generation.wrapping_add(1);
         self.free.push(slot);
@@ -1100,8 +1211,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     fn reclaim(&mut self, slot: u32, scratch: &Scratch) {
         // Nothing reaches this cell's storage, so every mask its residents named dies with it and
         // the handles it answered for stop resolving. Its own handle was never in the map.
-        let lineage = std::mem::take(&mut self.slots[slot as usize].lineage);
-        self.forget_lineage(&lineage);
+        let lineage = self.slots[slot as usize].lineage.take();
+        self.forget_chain(lineage);
         let released = std::mem::take(&mut self.sealed_holds[slot as usize]);
         self.vacate(slot, released.as_slice(), scratch);
     }
@@ -1180,7 +1291,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 #[cfg(test)]
                 peak_holders: count,
                 closure: std::cell::OnceCell::new(),
-                lineage: Vec::new(),
+                lineage: None,
             },
         );
         // The cell's own resident masks are dead bytes from here on: the storage they named is in
@@ -1225,7 +1336,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         for slot in record.aggregate.slab_slots() {
             self.naming[slot as usize].remove(id);
         }
-        self.forget_lineage(&record.lineage);
+        self.forget_chain(record.lineage);
         // The record's storage drops here: nothing reaches these chunks any more.
         record.aggregate.into_sealed()
     }
@@ -1345,6 +1456,60 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                     .iter()
                     .find(|(priced, _)| priced == id)
                     .map(|(_, closure)| *closure)
+            })
+            .collect()
+    }
+
+    /// How many relocation entries the table carries in all — the figure that has to come back to
+    /// zero once every departed cell's storage is gone.
+    #[cfg(test)]
+    pub(crate) fn relocations(&self) -> usize {
+        self.relocated.iter().map(SmallVec::len).sum()
+    }
+
+    /// Where one departed handle's residents live now, straight off the map rather than through
+    /// [`locate`](Self::locate)'s live-cell shortcut.
+    #[cfg(test)]
+    pub(crate) fn relocation_of(&self, handle: Handle) -> Option<Location> {
+        self.relocation(handle).map(|entry| entry.location)
+    }
+
+    /// The handles on a record's lineage chain, collected. Chain order is reverse insertion, so a
+    /// caller comparing more than one handle compares sets.
+    #[cfg(test)]
+    pub(crate) fn lineage_of(&self, id: SealedId) -> Vec<Handle> {
+        self.chain(self.sealed.get(id).and_then(|record| record.lineage))
+    }
+
+    /// The handles on a slot's lineage chain, collected.
+    #[cfg(test)]
+    pub(crate) fn slot_lineage(&self, slot: u32) -> Vec<Handle> {
+        self.chain(self.slots[slot as usize].lineage)
+    }
+
+    #[cfg(test)]
+    fn chain(&self, head: Option<Handle>) -> Vec<Handle> {
+        let mut walk = head;
+        let mut handles = Vec::new();
+        while let Some(handle) = walk {
+            handles.push(handle);
+            walk = self
+                .relocation(handle)
+                .expect("a chain entry is in its slot's list")
+                .next;
+        }
+        handles
+    }
+
+    /// Every relocation entry, as the handle it answers for and where that handle now points.
+    #[cfg(test)]
+    pub(crate) fn relocation_entries(&self) -> Vec<(Handle, Location)> {
+        self.relocated
+            .iter()
+            .enumerate()
+            .flat_map(|(slot, list)| {
+                list.iter()
+                    .map(move |entry| (Handle::new(slot as u32, entry.generation), entry.location))
             })
             .collect()
     }

@@ -236,57 +236,57 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
     // still there and answers for that key in turn, and every lineage entry a slot or a record
     // carries is a key of the map pointing back at it. A one-way break would strand a resident or
     // hand one storage that is not its own.
-    for (handle, location) in &table.relocated {
+    for (handle, location) in table.relocation_entries() {
         assert!(
-            !table.is_live(*handle),
+            !table.is_live(handle),
             "a live cell answers for its own residents, so it needs no relocation entry"
         );
         match location {
             Location::Slab { slot, base } => {
-                let cell = &table.slots[*slot as usize];
+                let cell = &table.slots[slot as usize];
                 assert!(
                     cell.state != SlotState::Free,
                     "{handle:?} is relocated to the recycled slot {slot}"
                 );
                 assert!(
-                    cell.lineage.contains(handle),
-                    "slot {slot} answers for {handle:?} without carrying it in its lineage"
+                    table.slot_lineage(slot).contains(&handle),
+                    "slot {slot} answers for {handle:?} without carrying it on its chain"
                 );
                 assert!(
-                    *base < cell.residents.len(),
+                    base < cell.residents.len(),
                     "{handle:?} is relocated past the end of slot {slot}'s resident table"
                 );
             }
             Location::Record(id) => {
-                let record = table
-                    .sealed
-                    .get(*id)
-                    .expect("a relocation entry names a retired record");
                 assert!(
-                    record.lineage.contains(handle),
-                    "record {id:?} answers for {handle:?} without carrying it in its lineage"
+                    table.sealed.get(id).is_some(),
+                    "a relocation entry names a retired record"
+                );
+                assert!(
+                    table.lineage_of(id).contains(&handle),
+                    "record {id:?} answers for {handle:?} without carrying it on its chain"
                 );
             }
         }
     }
     for slot in 0..CAP {
-        for handle in &table.slots[slot as usize].lineage {
+        for handle in table.slot_lineage(slot) {
             assert_eq!(
-                table.relocated.get(handle).map(|location| match location {
-                    Location::Slab { slot, .. } => Some(*slot),
+                table.relocation_of(handle).map(|location| match location {
+                    Location::Slab { slot, .. } => Some(slot),
                     Location::Record(_) => None,
                 }),
                 Some(Some(slot)),
-                "slot {slot} carries {handle:?} in its lineage without the map pointing here"
+                "slot {slot} carries {handle:?} on its chain without the map pointing here"
             );
         }
     }
     for id in &records {
-        for handle in &table.sealed.get(*id).unwrap().lineage {
+        for handle in table.lineage_of(*id) {
             assert_eq!(
-                table.relocated.get(handle),
-                Some(&Location::Record(*id)),
-                "record {id:?} carries {handle:?} in its lineage without the map pointing here"
+                table.relocation_of(handle),
+                Some(Location::Record(*id)),
+                "record {id:?} carries {handle:?} on its chain without the map pointing here"
             );
         }
     }

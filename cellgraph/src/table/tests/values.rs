@@ -237,13 +237,13 @@ fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
         .unwrap();
     assert_eq!(table.slots[consumer.slot() as usize].residents.len(), 1);
     assert!(resident_reach(&table, consumer.slot(), 0).names(consumer.slot()));
-    assert!(table.relocated.is_empty());
+    assert_eq!(table.relocations(), 0);
 
     // Nothing reaches the producer, so its death is a reclamation: the slot comes straight back
     // and the map it never entered stays empty.
     table.release(producer, Absorption::IntoHolder).unwrap();
     assert_eq!(state_of(&table, producer), SlotState::Free);
-    assert!(table.relocated.is_empty());
+    assert_eq!(table.relocations(), 0);
 
     let read = table
         .enter(consumer, |context| {
@@ -277,8 +277,8 @@ fn pull_completes_after_the_producer_seals() {
     // forwards to the record rather than stopping resolving.
     table.release(producer, Absorption::Refused).unwrap();
     let id = table.sealed.ids().next().unwrap();
-    assert_eq!(table.relocated.get(&producer), Some(&Location::Record(id)));
-    assert_eq!(table.sealed.get(id).unwrap().lineage, vec![producer]);
+    assert_eq!(table.relocation_of(producer), Some(Location::Record(id)));
+    assert_eq!(table.lineage_of(id), vec![producer]);
 
     let read = table
         .enter(consumer, |context| {
@@ -296,7 +296,7 @@ fn pull_completes_after_the_producer_seals() {
     // The record's last holder goes, so the record retires and takes its lineage with it.
     table.release(consumer, Absorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
-    assert!(table.relocated.is_empty());
+    assert_eq!(table.relocations(), 0);
 }
 
 #[test]
@@ -321,8 +321,8 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
     table.release(producer, Absorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(
-        table.relocated.get(&producer),
-        Some(&Location::Slab {
+        table.relocation_of(producer),
+        Some(Location::Slab {
             slot: consumer.slot(),
             base: 0,
         })
@@ -378,7 +378,7 @@ fn a_resident_forwarded_through_two_merges_is_still_found() {
     table.release(head, Absorption::IntoHolder).unwrap();
     table.release(middle, Absorption::Refused).unwrap();
     let id = table.sealed.ids().next().unwrap();
-    assert_eq!(table.relocated.get(&head), Some(&Location::Record(id)));
+    assert_eq!(table.relocation_of(head), Some(Location::Record(id)));
 
     let read = table
         .enter(end, |context| {
@@ -391,7 +391,7 @@ fn a_resident_forwarded_through_two_merges_is_still_found() {
 
     table.release(end, Absorption::IntoHolder).unwrap();
     assert_eq!(table.sealed.len(), 0);
-    assert!(table.relocated.is_empty());
+    assert_eq!(table.relocations(), 0);
     assert_eq!(table.free.len(), 4);
 }
 

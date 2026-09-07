@@ -232,11 +232,11 @@ pub(crate) struct SealedRecord<const W: usize> {
     /// whole life ([liveness-matrix.md § Bounding the two
     /// tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
     pub(crate) closure: OnceCell<Memo>,
-    /// The departed cells whose residents this record now answers for: every handle the table's
-    /// relocation map points at this id. Bounded by merges, never by values — a cell contributes
-    /// at most one entry, however many residents it kept — and it is what lets the record's
-    /// retirement drop exactly its own entries from that map.
-    pub(crate) lineage: Vec<Handle>,
+    /// The head of the chain of departed cells whose residents this record now answers for,
+    /// threaded through the table's relocation entries themselves. Bounded by merges, never by
+    /// values — a cell contributes at most one entry, however many residents it kept — and it is
+    /// what lets the record's retirement drop exactly its own entries from that map.
+    pub(crate) lineage: Option<Handle>,
 }
 
 impl<const W: usize> SealedRecord<W> {
