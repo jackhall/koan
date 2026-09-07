@@ -9,9 +9,9 @@
 //! `pub(crate)` is indistinguishable from `pub`; only a caller outside it sees the real surface.
 
 use cellgraph::{
-    Absorption, CellRef, CellTable, CreateError, Crossed, Crossing, DropFree, EnterError, Erased,
-    Handle, Opened, Operand, Reattachable, RedeemError, ReleaseError, ReleaseTreeError, Resident,
-    Sealed, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
+    Absorption, Active, CellRef, CellTable, CreateError, Crossed, Dormant, DropFree, EnterError,
+    Erased, Handle, Operand, Prices, Reattachable, RedeemError, ReleaseError, ReleaseTreeError,
+    Resident, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -52,7 +52,7 @@ fn build_text<'r>(writer: Writer<'r>) -> &'r str {
 /// generic over the value family has to write that bound too.
 fn read_first<'s, 'b, V>(
     context: &'s StepContext<'b, Work>,
-    carrier: &'s Sealed<'b, V>,
+    carrier: &'s Dormant<'b, V>,
 ) -> V::At<'s>
 where
     V: Reattachable + DropFree,
@@ -67,12 +67,12 @@ where
 /// Every field the substrate ships is named here — both prices, both tiers' occupancy, and the
 /// destination's own size — and the threshold over them is the embedder's alone. This one copies
 /// only where the embedder has said copying is cheap and the slab is under pressure.
-fn weigh(crossing: Crossing) -> Verdict {
-    let pressure = crossing.occupied * 2 >= crossing.cap
-        || crossing.records > 0
-        || crossing.retained_bytes > 0
-        || crossing.dest_bytes > 1 << 20;
-    if pressure && crossing.copy_bytes < crossing.pin_bytes {
+fn weigh(prices: Prices) -> Verdict {
+    let pressure = prices.occupied * 2 >= prices.cap
+        || prices.records > 0
+        || prices.retained_bytes > 0
+        || prices.dest_bytes > 1 << 20;
+    if pressure && prices.copy_bytes < prices.pin_bytes {
         Verdict::Copy
     } else {
         Verdict::Pin
@@ -82,7 +82,7 @@ fn weigh(crossing: Crossing) -> Verdict {
 /// An operand the embedder is unwilling to copy: at a cost above anything a pin can price, the
 /// verdict above always pins it.
 fn pinned_operand<'a, 'b, V: Reattachable + DropFree>(
-    carrier: &'a Sealed<'b, V>,
+    carrier: &'a Dormant<'b, V>,
 ) -> Operand<'a, 'b, V> {
     Operand {
         carrier,
@@ -232,7 +232,7 @@ fn every_public_door_answers_from_outside_the_crate() {
     // The successor comes back re-anchored at the next step's brand.
     let echoed = table
         .enter(child, |context| {
-            context.continuation().map(Opened::into_value)
+            context.continuation().map(Active::into_value)
         })
         .unwrap();
     assert_eq!(echoed.as_deref(), Some("8"));
@@ -240,7 +240,7 @@ fn every_public_door_answers_from_outside_the_crate() {
     // The cell born with a continuation still has it.
     let born_with = table
         .enter(root, |context| {
-            context.continuation().map(Opened::into_value)
+            context.continuation().map(Active::into_value)
         })
         .unwrap();
     assert_eq!(born_with.as_deref(), Some("root"));
@@ -315,7 +315,7 @@ fn the_tree_pool_answers_from_outside_the_crate() {
             // A carrier homed in a tree cell reaches its root, so the root is what a hold from
             // inside the subtree lands on.
             context.hold(root).unwrap();
-            let resumed = context.continuation().map(Opened::into_value);
+            let resumed = context.continuation().map(Active::into_value);
             context.store_successor(String::from("done"));
             resumed
         })

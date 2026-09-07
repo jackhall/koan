@@ -15,7 +15,7 @@ use std::cell::Cell;
 use smallvec::SmallVec;
 
 use crate::handle::Handle;
-use crate::mask::Mask;
+use crate::mask::GraphReach;
 use crate::region::Region;
 use crate::scratch::ScratchVec;
 
@@ -196,7 +196,7 @@ pub(crate) struct SealedRecord<const W: usize> {
     /// The cell's hold set, frozen at its death instead of cleared. Monotone holds make this
     /// exactly the union of every reach ever minted into the region, so the freeze is a word copy
     /// and consults no storage.
-    pub(crate) aggregate: Mask<W>,
+    pub(crate) aggregate: GraphReach<W>,
     /// The chunks, detached from the slot unmoved — a bundle with no chunk at all for a cell that
     /// never allocated, and the record's own bytes from then on: its memo is written here too.
     pub(crate) storage: Region,

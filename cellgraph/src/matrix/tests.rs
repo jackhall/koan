@@ -47,7 +47,7 @@ fn the_tally_follows_every_write() {
 
     // A mint folds a reach mask in the same way, and drops the destination's own bit rather than
     // counting it: a cell that held itself would never reach a zero count.
-    let mut reach = Mask::empty();
+    let mut reach = GraphReach::empty();
     reach.add(4);
     reach.add(5);
     matrix.mint(5, &reach);

@@ -1,9 +1,9 @@
-//! The two carrier states that carry a lifetime: [`Sealed`], the in-step form a door hands back,
-//! and [`Opened`], the in-use form a step reads it out at. The third state — at rest, lifetime-free
+//! The two carrier states that carry a lifetime: [`Dormant`], the in-step form a door hands back,
+//! and [`Active`], the in-use form a step reads it out at. The third state — at rest, lifetime-free
 //! — is [`Resident`](crate::Resident), which lives in [`resident`](crate::resident). See
 //! [design/cellgraph.md](../design/cellgraph.md) § The contract: two embedder types.
 //!
-//! [`Sealed`] bundles the value with the mask describing what it reaches; [`Opened`] is the value
+//! [`Dormant`] bundles the value with the mask describing what it reaches; [`Active`] is the value
 //! alone at the reading borrow. **A value and its reach are never separable**: every constructor
 //! here is crate-private and the mask type is crate-private too, so a caller cannot assemble a
 //! loose value-plus-mask pair to hand a mint, and cannot re-pair a value with a mask that is not
@@ -16,7 +16,7 @@
 
 use std::marker::PhantomData;
 
-use crate::mask::Mask;
+use crate::mask::GraphReach;
 use crate::reattach::{DropFree, Erased, Reattachable};
 
 /// Which region a carrier's value was written into: a slab slot, or a tree cell's pool index.
@@ -24,7 +24,7 @@ use crate::reattach::{DropFree, Erased, Reattachable};
 /// Crate-private and paired with the value, like the mask beside it. A tree home is not a mask bit
 /// — no relation names a tree cell — so the two kinds are a sum here rather than one number.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Home {
+pub(crate) enum CellPool {
     Slab(u32),
     Tree(u32),
 }
@@ -32,25 +32,25 @@ pub(crate) enum Home {
 /// The dormant carrier: a value erased to its lifetime-free form, bundled with its reach.
 ///
 /// Opaque by construction — it exposes no read of its own. [`StepContext::read`] is the only door
-/// out, and it hands back an [`Opened`] anchored at the reading borrow.
+/// out, and it hands back an [`Active`] anchored at the reading borrow.
 ///
 /// [`StepContext::read`]: crate::StepContext::read
-pub struct Sealed<'home, T: Reattachable + DropFree, const W: usize = 1> {
+pub struct Dormant<'home, T: Reattachable + DropFree, const W: usize = 1> {
     value: Erased<T>,
-    reach: Mask<W>,
+    reach: GraphReach<W>,
     /// The cell whose region stores this value: the one a [`keep`](crate::StepContext::keep)
     /// registers the reach under. For a door-built carrier that is the cell the value was placed
     /// into; for one redeemed out of a record it is the slab cell whose hold set names the record —
     /// the executing cell, or its root when the step is running in a tree cell.
-    home: Home,
+    home: CellPool,
     _home: PhantomData<&'home ()>,
 }
 
-impl<T: Reattachable + DropFree, const W: usize> Sealed<'_, T, W> {
+impl<T: Reattachable + DropFree, const W: usize> Dormant<'_, T, W> {
     /// Bundle a value the table itself just wrote into a region with the reach it composed for it.
     /// Crate-private, so the value-to-reach pairing is only ever the one a door established.
-    pub(crate) fn new(value: Erased<T>, reach: Mask<W>, home: Home) -> Self {
-        Sealed {
+    pub(crate) fn new(value: Erased<T>, reach: GraphReach<W>, home: CellPool) -> Self {
+        Dormant {
             value,
             reach,
             home,
@@ -60,7 +60,7 @@ impl<T: Reattachable + DropFree, const W: usize> Sealed<'_, T, W> {
 
     /// The value's reach — which cells' region storage its borrows read. Crate-private, like the
     /// mask itself: the only reach a value travels with is the one a door composed for it.
-    pub(crate) fn reach(&self) -> &Mask<W> {
+    pub(crate) fn reach(&self) -> &GraphReach<W> {
         &self.reach
     }
 
@@ -79,13 +79,13 @@ impl<T: Reattachable + DropFree, const W: usize> Sealed<'_, T, W> {
 
     /// The cell whose region stores this value — what the crossing rule classifies by, and what a
     /// [`keep`](crate::StepContext::keep) registers under.
-    pub(crate) fn home(&self) -> Home {
+    pub(crate) fn home(&self) -> CellPool {
         self.home
     }
 
     /// Split the carrier into the three things a [`keep`](crate::StepContext::keep) needs: the
     /// erased value, the reach the table takes over, and the cell whose table takes it.
-    pub(crate) fn into_parts(self) -> (Erased<T>, Mask<W>, Home) {
+    pub(crate) fn into_parts(self) -> (Erased<T>, GraphReach<W>, CellPool) {
         (self.value, self.reach, self.home)
     }
 }
@@ -93,12 +93,12 @@ impl<T: Reattachable + DropFree, const W: usize> Sealed<'_, T, W> {
 /// Duplicating a carrier duplicates no ownership: the value names region bytes it does not own,
 /// and the reach is a word copy. Two holders of the same value name the same reach, which is what
 /// keeps the mint idempotent.
-impl<T: Reattachable + DropFree, const W: usize> Clone for Sealed<'_, T, W>
+impl<T: Reattachable + DropFree, const W: usize> Clone for Dormant<'_, T, W>
 where
     Erased<T>: Copy,
 {
     fn clone(&self) -> Self {
-        Sealed {
+        Dormant {
             value: self.value,
             reach: self.reach.clone(),
             home: self.home,
@@ -114,13 +114,13 @@ where
 /// reader gets is already bounded by the cell's life. Bounded only by [`Reattachable`], since a
 /// continuation comes back through this state too and rests in its cell's slot rather than a
 /// region, where drop glue is fine.
-pub struct Opened<'r, T: Reattachable> {
+pub struct Active<'r, T: Reattachable> {
     value: T::At<'r>,
 }
 
-impl<'r, T: Reattachable> Opened<'r, T> {
+impl<'r, T: Reattachable> Active<'r, T> {
     pub(crate) fn new(value: T::At<'r>) -> Self {
-        Opened { value }
+        Active { value }
     }
 
     /// The re-anchored value.
@@ -131,7 +131,7 @@ impl<'r, T: Reattachable> Opened<'r, T> {
         self.value
     }
 
-    /// The re-anchored value, consuming the open — the by-move twin of [`value`](Opened::value)
+    /// The re-anchored value, consuming the open — the by-move twin of [`value`](Active::value)
     /// for a family whose live form is not `Copy`.
     pub fn into_value(self) -> T::At<'r> {
         self.value

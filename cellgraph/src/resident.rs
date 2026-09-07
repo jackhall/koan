@@ -21,7 +21,7 @@
 use std::mem::MaybeUninit;
 
 use crate::handle::CellRef;
-use crate::mask::Mask;
+use crate::mask::GraphReach;
 use crate::reattach::{DropFree, Erased, Reattachable};
 
 /// The at-rest carrier: a value's bytes, parked, plus the key naming its reach.
@@ -29,11 +29,11 @@ use crate::reattach::{DropFree, Erased, Reattachable};
 /// Opaque: it has no method at all. [`StepContext::redeem`] is the only door out, and it refuses
 /// unless the executing cell is entitled to the storage the reach names.
 ///
-/// `Copy` when the family's erased form is, for the same reason [`Sealed`] is: the parked value
+/// `Copy` when the family's erased form is, for the same reason [`Dormant`] is: the parked value
 /// names region bytes it does not own, and the key is two words.
 ///
 /// [`StepContext::redeem`]: crate::StepContext::redeem
-/// [`Sealed`]: crate::Sealed
+/// [`Dormant`]: crate::Dormant
 pub struct Resident<T: Reattachable + DropFree> {
     /// The value parked. `MaybeUninit` is the whole point rather than an implementation detail: a
     /// carrier at rest must be movable after its home's storage is gone, and a `T::At<'static>`
@@ -122,7 +122,7 @@ pub(crate) struct ResidentKey {
 /// like any other keep and repoints, rather than owning an entry it overwrites.
 #[derive(Default)]
 pub(crate) struct Residents<const W: usize> {
-    masks: Vec<Mask<W>>,
+    masks: Vec<GraphReach<W>>,
 }
 
 impl<const W: usize> Residents<W> {
@@ -133,7 +133,7 @@ impl<const W: usize> Residents<W> {
     /// The scan is linear in the table, which interning is what keeps small: the cost is the
     /// number of distinct reaches the cell has ever been kept into, and every hit is an entry the
     /// table did not grow by.
-    pub(crate) fn intern(&mut self, reach: Mask<W>) -> u32 {
+    pub(crate) fn intern(&mut self, reach: GraphReach<W>) -> u32 {
         match self.masks.iter().position(|mask| *mask == reach) {
             Some(index) => index as u32,
             None => self.append(reach),
@@ -143,13 +143,13 @@ impl<const W: usize> Residents<W> {
     /// Add an entry without consulting the existing ones — how a merge moves a departed cell's
     /// table in, where the block's position is what forwards its keys and an intern hit would put
     /// an entry at the wrong offset.
-    pub(crate) fn append(&mut self, reach: Mask<W>) -> u32 {
+    pub(crate) fn append(&mut self, reach: GraphReach<W>) -> u32 {
         let index = self.masks.len() as u32;
         self.masks.push(reach);
         index
     }
 
-    pub(crate) fn get(&self, index: u32) -> Option<&Mask<W>> {
+    pub(crate) fn get(&self, index: u32) -> Option<&GraphReach<W>> {
         self.masks.get(index as usize)
     }
 
@@ -161,18 +161,18 @@ impl<const W: usize> Residents<W> {
         self.masks.is_empty()
     }
 
-    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Mask<W>> {
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut GraphReach<W>> {
         self.masks.iter_mut()
     }
 
     #[cfg(test)]
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &Mask<W>> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &GraphReach<W>> {
         self.masks.iter()
     }
 
     /// Take the entries out whole, leaving the table empty — how a cell absorbed into another
     /// hands its residents over.
-    pub(crate) fn take(&mut self) -> Vec<Mask<W>> {
+    pub(crate) fn take(&mut self) -> Vec<GraphReach<W>> {
         std::mem::take(&mut self.masks)
     }
 }

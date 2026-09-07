@@ -1,11 +1,11 @@
-//! [`Mask`] — a value's reach: the set of regions whose storage the value's borrows read. Slab
+//! [`GraphReach`] — a value's reach: the set of regions whose storage the value's borrows read. Slab
 //! slots as an inline [`Bits`] row, sealed regions as a sparse id set that is itself inline up to
 //! two ids, so union and dedup are a word `OR` plus a sorted merge and membership is a bit test or
 //! a binary search. See
 //! [design/liveness-matrix.md](../design/liveness-matrix.md) § Reach as a hybrid mask.
 //!
 //! A mask is never handed to a caller beside a bare value: it exists only inside a
-//! [`Sealed`](crate::Sealed) carrier or a stored continuation, and the type is crate-private, so
+//! [`Dormant`](crate::Dormant) carrier or a stored continuation, and the type is crate-private, so
 //! the pairing of a value with its reach cannot be fabricated from outside.
 
 use crate::matrix::Bits;
@@ -27,15 +27,15 @@ use crate::sealed::{SealedId, SealedSet};
 /// door beside a value, so the only reach a value ever travels with is the one a door composed
 /// for it.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct Mask<const W: usize> {
+pub(crate) struct GraphReach<const W: usize> {
     slab: Bits<W>,
     sealed: SealedSet,
 }
 
-impl<const W: usize> Mask<W> {
+impl<const W: usize> GraphReach<W> {
     /// A mask naming nothing — the reach of a value whose borrows leave the table entirely.
     pub(crate) const fn empty() -> Self {
-        Mask {
+        GraphReach {
             slab: Bits::new(),
             sealed: SealedSet::new(),
         }
@@ -43,7 +43,7 @@ impl<const W: usize> Mask<W> {
 
     /// A mask naming exactly `slot` — the reach a value takes on the moment it is homed in a cell.
     pub(crate) fn single(slot: u32) -> Self {
-        let mut mask = Mask::empty();
+        let mut mask = GraphReach::empty();
         mask.add(slot);
         mask
     }
@@ -52,7 +52,7 @@ impl<const W: usize> Mask<W> {
     /// redeemed out of a record: a hold on the record keeps its aggregate alive transitively, so
     /// the id alone covers everything the value reads.
     pub(crate) fn single_sealed(id: SealedId) -> Self {
-        let mut mask = Mask::empty();
+        let mut mask = GraphReach::empty();
         mask.add_sealed(id);
         mask
     }
@@ -60,7 +60,7 @@ impl<const W: usize> Mask<W> {
     /// A mask over an already-built slab row and a sealed half — how a dying cell's hold set is
     /// frozen into its aggregate.
     pub(crate) fn from_parts(slab: Bits<W>, sealed: SealedSet) -> Self {
-        Mask { slab, sealed }
+        GraphReach { slab, sealed }
     }
 
     pub(crate) fn add(&mut self, slot: u32) {
@@ -98,14 +98,14 @@ impl<const W: usize> Mask<W> {
 
     /// Fold `other`'s reach into this one. The composition rule for a value built over operands:
     /// it reaches everything every operand reaches.
-    pub(crate) fn union_with(&mut self, other: &Mask<W>) {
+    pub(crate) fn union_with(&mut self, other: &GraphReach<W>) {
         self.slab.union_with(&other.slab);
         self.sealed.union_with(&other.sealed);
     }
 
     /// Fold only `other`'s slab half in. A merge folds the sparse half id by id instead, since it
     /// needs each insert's answer to tell a transferred hold from a duplicated one.
-    pub(crate) fn union_slab_with(&mut self, other: &Mask<W>) {
+    pub(crate) fn union_slab_with(&mut self, other: &GraphReach<W>) {
         self.slab.union_with(&other.slab);
     }
 

@@ -11,8 +11,8 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    Absorption, CellRef, CellTable, Crossed, Crossing, DropFree, Handle, Operand, Reattachable,
-    Resident, Sealed, TreeHandle, Verdict, Writer, reattachable,
+    Absorption, CellRef, CellTable, Crossed, Dormant, DropFree, Handle, Operand, Prices,
+    Reattachable, Resident, TreeHandle, Verdict, Writer, reattachable,
 };
 
 use crate::meter::{Verb, measure};
@@ -43,7 +43,7 @@ impl DropFree for Numbers {}
 
 /// The always-pin embedder the roadmap names: every operand crosses pinned, so every placement
 /// over operands pays the pricing walk. This is the shape that makes `pin_price` a per-verb cost.
-fn always_pin(_: Crossing) -> Verdict {
+fn always_pin(_: Prices) -> Verdict {
     Verdict::Pin
 }
 
@@ -53,7 +53,7 @@ fn table() -> CellTable<Work> {
 
 /// An operand priced above anything a pin can cost, so [`always_pin`] pins it whatever the slab is
 /// doing.
-fn pinned<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Sealed<'b, V>) -> Operand<'a, 'b, V> {
+fn pinned<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Dormant<'b, V>) -> Operand<'a, 'b, V> {
     Operand {
         carrier,
         copy_bytes: usize::MAX,

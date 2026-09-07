@@ -1,5 +1,5 @@
 mod absorption;
-mod crossing;
+mod prices;
 mod pricing;
 mod properties;
 mod scratch;
@@ -32,13 +32,13 @@ const ANCHOR: u32 = 7;
 /// The crossing verdict every test that is not about the crossing itself passes: pin, always. It
 /// is the answer an embedder with no price to weigh gives, and it makes a placement's reach the
 /// union of its operands' — what the hold-relation tests are written against.
-fn pin(_: Crossing) -> Verdict {
+fn pin(_: Prices) -> Verdict {
     Verdict::Pin
 }
 
 /// An operand at a stated copy cost — the half of the price the substrate cannot know.
 fn operand_at<'a, 'b, V: Reattachable + DropFree>(
-    carrier: &'a Sealed<'b, V>,
+    carrier: &'a Dormant<'b, V>,
     copy_bytes: usize,
 ) -> Operand<'a, 'b, V> {
     Operand {
@@ -48,7 +48,7 @@ fn operand_at<'a, 'b, V: Reattachable + DropFree>(
 }
 
 /// An operand at no stated copy cost — what a test that never expects a `Copy` verdict passes.
-fn operand<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Sealed<'b, V>) -> Operand<'a, 'b, V> {
+fn operand<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Dormant<'b, V>) -> Operand<'a, 'b, V> {
     operand_at(carrier, 0)
 }
 
@@ -98,7 +98,7 @@ fn live_bytes<C: Reattachable>(table: &CellTable<C>, cap: u32) -> usize {
 
 /// The reach of a cell's stored continuation, read out of the resident table entry it occupies.
 /// The continuation is a resident like any other, so this is the same lookup a redeem performs.
-fn continuation_reach<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> &Mask<1> {
+fn continuation_reach<C: Reattachable>(table: &CellTable<C>, handle: Handle) -> &GraphReach<1> {
     let cell = &table.slots[handle.slot() as usize];
     let index = cell
         .continuation_reach

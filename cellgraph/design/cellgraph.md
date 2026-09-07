@@ -84,7 +84,7 @@ compile-enforced: the lower crate names no type from the higher one.
   - **In step** — branded to the step that built or redeemed it, and paired
     with the reach the substrate composed for it. Handed back by the
     placement doors and by `redeem`; it dies with the step.
-  - **Opened** — the value itself, at a reading borrow strictly inside the
+  - **Active** — the value itself, at a reading borrow strictly inside the
     step.
 
   The pairing of a value with a reach is only ever one the substrate made:

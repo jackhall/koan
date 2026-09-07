@@ -18,24 +18,24 @@ use super::{Borrowed, Number, Owned, number, operand_at, take};
 /// The log is the whole point: the substrate promises one consultation per operand with the prices
 /// of *that* operand, and only a recorded sequence can say so.
 fn recording(
-    answer: impl Fn(Crossing) -> Verdict + 'static,
+    answer: impl Fn(Prices) -> Verdict + 'static,
 ) -> (
-    impl FnMut(Crossing) -> Verdict + 'static,
-    Rc<RefCell<Vec<Crossing>>>,
+    impl FnMut(Prices) -> Verdict + 'static,
+    Rc<RefCell<Vec<Prices>>>,
 ) {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&seen);
-    let verdict = move |crossing: Crossing| {
-        log.borrow_mut().push(crossing);
-        answer(crossing)
+    let verdict = move |prices: Prices| {
+        log.borrow_mut().push(prices);
+        answer(prices)
     };
     (verdict, seen)
 }
 
 /// The embedder threshold these tests steer with: copy where the embedder's own figure undercuts
 /// what the pin would newly retain. An operand passed at `usize::MAX` is one it will never copy.
-fn cheaper(crossing: Crossing) -> Verdict {
-    if crossing.copy_bytes < crossing.pin_bytes {
+fn cheaper(prices: Prices) -> Verdict {
+    if prices.copy_bytes < prices.pin_bytes {
         Verdict::Copy
     } else {
         Verdict::Pin
@@ -70,17 +70,14 @@ fn the_verdict_is_consulted_once_per_operand_with_both_prices() {
     let seen = seen.borrow();
     assert_eq!(seen.len(), 2, "one consultation per operand, in order");
     let occupancy = table.occupancy();
-    for crossing in seen.iter() {
-        assert_eq!(crossing.occupied, occupancy.occupied);
-        assert_eq!(crossing.cap, occupancy.cap);
+    for prices in seen.iter() {
+        assert_eq!(prices.occupied, occupancy.occupied);
+        assert_eq!(prices.cap, occupancy.cap);
         // The cap the table was built at, not the width of the row its type fixes.
-        assert_eq!(crossing.cap, 4);
-        assert_eq!(crossing.records, occupancy.records);
-        assert_eq!(crossing.retained_bytes, occupancy.retained_bytes);
-        assert_eq!(
-            crossing.dest_bytes,
-            table.region_bytes(destination).unwrap()
-        );
+        assert_eq!(prices.cap, 4);
+        assert_eq!(prices.records, occupancy.records);
+        assert_eq!(prices.retained_bytes, occupancy.retained_bytes);
+        assert_eq!(prices.dest_bytes, table.region_bytes(destination).unwrap());
     }
     // The embedder's own figures come through untouched, in the order the operands were passed.
     assert_eq!(seen[0].copy_bytes, 3);
@@ -489,8 +486,8 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
     let cart_sizes: Vec<usize> = seen
         .borrow()
         .iter()
-        .filter(|crossing| crossing.copy_bytes == usize::MAX)
-        .map(|crossing| crossing.dest_bytes)
+        .filter(|prices| prices.copy_bytes == usize::MAX)
+        .map(|prices| prices.dest_bytes)
         .collect();
     assert_eq!(cart_sizes.len(), HOPS);
     assert!(cart_sizes.windows(2).all(|pair| pair[0] <= pair[1]));

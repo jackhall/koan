@@ -25,12 +25,12 @@ mod sealed;
 mod table;
 mod tree;
 
-pub use carrier::{Opened, Sealed};
+pub use carrier::{Active, Dormant};
 pub use handle::{CellRef, Handle, Stale, TreeHandle};
 pub use reattach::{DropFree, Erased, Reattachable};
 pub use region::Writer;
 pub use resident::Resident;
 pub use table::{
-    Absorption, CellTable, CreateError, Crossed, Crossing, EnterError, Operand, RedeemError,
+    Absorption, CellTable, CreateError, Crossed, EnterError, Operand, Prices, RedeemError,
     ReleaseError, ReleaseTreeError, StepContext, Verdict,
 };

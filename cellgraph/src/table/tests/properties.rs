@@ -39,7 +39,7 @@ const CAP: u32 = 6;
 /// A verdict that reaches both arms across a run: two pins, then a copy. Deterministic, so a
 /// shrunk failure replays exactly — and the invariants have to hold under either answer, since a
 /// copy mints no hold where a pin would have.
-fn alternating() -> impl FnMut(Crossing) -> Verdict + 'static {
+fn alternating() -> impl FnMut(Prices) -> Verdict + 'static {
     let mut seen = 0u32;
     move |_| {
         seen += 1;
@@ -399,7 +399,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
         // Recomputed from scratch, consulting no memo at all: a closure memoized as frozen still
         // names no live cell, spans the same records, and prices at the same bytes. Nothing inside
         // a frozen closure changes, and this is the check that says so for every interleaving.
-        let fresh = table.reached_from(Node::Sealed(*id), false);
+        let fresh = table.reached_from(SlotNode::Sealed(*id), false);
         assert!(
             fresh.cells.is_empty(),
             "the memoized closure of {id:?} has since named a live cell"
@@ -612,7 +612,7 @@ fn check_tree_invariants(table: &CellTable<Borrowed>) {
 /// Drive one generated run to its end — every verb, then a wind-down that releases everything —
 /// checking the invariants after every step. Reports the merges the run performed, which is what
 /// tells a generated corpus that reaches all three shapes from one that only claims to.
-fn run(verbs: &[Verb], verdict: impl FnMut(Crossing) -> Verdict + 'static) -> Merges {
+fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merges {
     let mut table: CellTable<Borrowed> = CellTable::new(CAP, verdict);
     let mut minted: Vec<Handle> = Vec::new();
     // Every tree cell the run created, in creation order. A generated index may name one that has

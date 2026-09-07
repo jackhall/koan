@@ -257,7 +257,7 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
     assert_eq!(closure(&table, s_id).unwrap(), priced);
 
     // And a walk that consults no memo at all agrees with what was recorded.
-    let fresh = table.reached_from(Node::Sealed(s_id), false);
+    let fresh = table.reached_from(SlotNode::Sealed(s_id), false);
     assert!(fresh.cells.is_empty());
     assert_eq!(table.bytes_of(&fresh), priced.bytes);
 }
@@ -505,7 +505,7 @@ fn pricing_mutates_no_hold() {
     let births: Vec<Bits<1>> = (0..10).map(|slot| *table.birth.row(slot)).collect();
     let sealed_holds: Vec<SealedSet> = table.sealed_holds.to_vec();
     let naming: Vec<SealedSet> = table.naming.to_vec();
-    let records: Vec<(u32, Mask<1>)> = ids
+    let records: Vec<(u32, GraphReach<1>)> = ids
         .iter()
         .map(|id| {
             let record = table.sealed.get(*id).unwrap();
@@ -520,14 +520,14 @@ fn pricing_mutates_no_hold() {
     // sweep covers both tiers, memoized and open closures alike.
     for handle in &handles {
         for other in &handles {
-            let reach = Mask::from_parts(
+            let reach = GraphReach::from_parts(
                 *table.pins.row(other.slot()),
                 table.sealed_holds[other.slot() as usize].clone(),
             );
             let _ = table.pin_price(
                 handle.slot(),
                 &reach,
-                &Mask::empty(),
+                &GraphReach::empty(),
                 table.scratch_at_rest(),
             );
         }

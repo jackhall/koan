@@ -17,7 +17,7 @@ use crate::tree::TreeState;
 /// An operand the embedder will never copy: at a cost above anything a pin can price, a verdict
 /// that weighs the two always pins it.
 fn kept_operand<'a, 'b, V: Reattachable + DropFree>(
-    carrier: &'a Sealed<'b, V>,
+    carrier: &'a Dormant<'b, V>,
 ) -> Operand<'a, 'b, V> {
     operand_at(carrier, usize::MAX)
 }
@@ -25,16 +25,16 @@ fn kept_operand<'a, 'b, V: Reattachable + DropFree>(
 /// A verdict that records every crossing it is shown. The log is what says a forced copy consulted
 /// nobody: an operand the rule copies leaves no entry at all.
 fn recording(
-    answer: impl Fn(Crossing) -> Verdict + 'static,
+    answer: impl Fn(Prices) -> Verdict + 'static,
 ) -> (
-    impl FnMut(Crossing) -> Verdict + 'static,
-    Rc<RefCell<Vec<Crossing>>>,
+    impl FnMut(Prices) -> Verdict + 'static,
+    Rc<RefCell<Vec<Prices>>>,
 ) {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&seen);
-    let verdict = move |crossing: Crossing| {
-        log.borrow_mut().push(crossing);
-        answer(crossing)
+    let verdict = move |prices: Prices| {
+        log.borrow_mut().push(prices);
+        answer(prices)
     };
     (verdict, seen)
 }
@@ -43,7 +43,7 @@ fn recording(
 fn number_in<'b, C: Reattachable>(
     context: &mut StepContext<'b, C>,
     value: u32,
-) -> Sealed<'b, Number> {
+) -> Dormant<'b, Number> {
     context.alloc::<Number>(move |writer| writer.value(value))
 }
 
@@ -62,7 +62,7 @@ fn a_tree_cell_runs_its_three_verbs_without_taking_a_slab_slot() {
         .enter(tree, |context| {
             (
                 context.cell(),
-                context.continuation().map(Opened::into_value),
+                context.continuation().map(Active::into_value),
             )
         })
         .unwrap();

@@ -246,11 +246,11 @@ The model is sound on a chain of invariants that must hold together:
    which is what makes bit-setting idempotence safe: overlapping reasons for
    the same entry can never desynchronize, because nothing clears a single
    entry.
-2. **Mask validity.** Every bit and id of a *readable* mask is covered by
-   some live row or frozen aggregate; a value's mask is always covered by
+2. **Reach validity.** Every bit and id of a *readable* reach is covered by
+   some live row or frozen aggregate; a value's reach is always covered by
    its host region's hold set (the mint OR establishes this); and a value
    only moves between regions while its current host is live — sealed hosts
-   release values only through the accessor, which hands out no mask at all
+   release values only through the accessor, which hands out no reach at all
    and leaves the aggregate covering what comes out.
 3. **Retirement cascade.** A live cell reclaiming at column-zero clears its
    row and releases its sealed-hold set; the cleared entries name exactly the

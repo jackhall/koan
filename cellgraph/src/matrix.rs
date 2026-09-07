@@ -16,7 +16,7 @@
 #[cfg(test)]
 mod tests;
 
-use crate::mask::Mask;
+use crate::mask::GraphReach;
 
 /// A row of bits indexed by slab slot: `W` words held inline, naming `64 · W` slots.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -202,7 +202,7 @@ impl<const W: usize> Matrix<W> {
     /// only write into the pin relation ([liveness-matrix.md § Reach as a hybrid
     /// mask](../design/liveness-matrix.md#reach-as-a-hybrid-mask)). The and-not is the self rule: a
     /// cell that held itself alive would never reach a zero hold count.
-    pub(crate) fn mint(&mut self, holder: u32, reach: &Mask<W>) {
+    pub(crate) fn mint(&mut self, holder: u32, reach: &GraphReach<W>) {
         self.union_into(holder, reach.slab());
         self.clear(holder, holder);
     }
