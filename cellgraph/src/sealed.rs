@@ -4,12 +4,13 @@
 //! [design/liveness-matrix.md](../design/liveness-matrix.md) § The sealed tier.
 //!
 //! Ids come from a monotone space and are never reused, which is what lets the tier skip
-//! generations entirely: a sealed name cannot be re-bound, so it cannot go stale. Sealedness is
+//! generations entirely: a sealed name cannot be re-bound, so it cannot go stale. The *slot* an id
+//! names in the tier's slab is reused; the serial packed beside it is what tells a live id from a
+//! retired one whose index came back. Sealedness is
 //! enforced by what this module cannot express — a record has no write path into its aggregate
 //! beyond the seal transition's own rewrite, so a pin *out of* a sealed region is unrepresentable.
 
 use std::cell::OnceCell;
-use std::collections::HashMap;
 
 use smallvec::SmallVec;
 
@@ -21,10 +22,29 @@ use crate::scratch::ScratchVec;
 #[cfg(test)]
 mod tests;
 
-/// The name of one sealed region. Drawn in creation order from a space that never wraps and never
-/// reuses, so an id names the same region for the whole life of the table.
+/// The name of one sealed region: a table-wide monotone `serial` in the high half, the tier's own
+/// slab `index` in the low half. Drawn in creation order and never reused, so an id names the same
+/// region for the whole life of the table — and because the serial leads, the derived ordering is
+/// creation order.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub(crate) struct SealedId(u64);
+
+impl SealedId {
+    fn pack(serial: u32, index: u32) -> Self {
+        SealedId(u64::from(serial) << 32 | u64::from(index))
+    }
+
+    /// Where in the tier's slab this id's record sits, live or retired.
+    fn index(self) -> u32 {
+        self.0 as u32
+    }
+
+    /// Which mint handed this id out. What separates a live record from a retired one that gave
+    /// its index back.
+    fn serial(self) -> u32 {
+        (self.0 >> 32) as u32
+    }
+}
 
 /// Where a sorted id set keeps its ids: inline, spilling to the heap, for the sets the table
 /// stores durably; the scratch region for the seen set a walk builds and throws away.
@@ -230,46 +250,93 @@ impl<const W: usize> SealedRecord<W> {
     }
 }
 
-/// Every sealed region in the table, and the monotone counter their ids come from.
+/// Every sealed region in the table: a dense slab of record slots, the indices retirement handed
+/// back, and the monotone serial their ids come from.
+///
+/// No hashing anywhere. An id carries its own index, so every lookup is a bounds-checked load and
+/// a serial compare, and the serial is what makes a retired id read as absent rather than as
+/// whatever record later took its index.
 pub(crate) struct SealedTier<const W: usize> {
-    records: HashMap<SealedId, SealedRecord<W>>,
-    next: u64,
+    /// One entry per index the tier has ever handed out. `None` while the index is on the free
+    /// list; the serial beside a present record is what tells a live id from a retired one that
+    /// reused its index.
+    records: Vec<Option<(u32, SealedRecord<W>)>>,
+    free: Vec<u32>,
+    next_serial: u32,
+    live: usize,
     /// Retained bytes summed over every record present — the tier's half of the occupancy signal,
-    /// maintained at the three places storage enters or leaves the tier rather than scanned.
+    /// maintained at the places storage enters or leaves the tier rather than scanned.
     bytes: usize,
 }
 
 impl<const W: usize> SealedTier<W> {
-    pub(crate) fn new() -> Self {
+    /// A tier pre-sized to the slab's `cap`: a table cannot have more records than it has had
+    /// cells, up to what retention keeps beyond that. Construction is unmetered, like the slab
+    /// itself, so the reserve costs no verb an allocation.
+    pub(crate) fn new(cap: u32) -> Self {
         SealedTier {
-            records: HashMap::new(),
-            next: 0,
+            records: Vec::with_capacity(cap as usize),
+            free: Vec::with_capacity(cap as usize),
+            next_serial: 0,
+            live: 0,
             bytes: 0,
         }
     }
 
-    /// Take the next id. Never reused, so nothing needs a generation to tell two occupants apart.
+    /// Take the next id: a retired index if one is free, else a fresh one, under a serial no
+    /// earlier mint has used. The serial is what makes an id unreusable even though its index is
+    /// not.
+    ///
+    /// # Panics
+    ///
+    /// If the serial space is exhausted. A `u32` of them outlives any run that seals at a sane
+    /// rate, and reusing one would let a retired id name a live record.
     pub(crate) fn mint_id(&mut self) -> SealedId {
-        let id = SealedId(self.next);
-        self.next += 1;
-        id
+        let index = match self.free.pop() {
+            Some(index) => index,
+            None => {
+                self.records.push(None);
+                (self.records.len() - 1) as u32
+            }
+        };
+        let serial = self.next_serial;
+        self.next_serial = serial
+            .checked_add(1)
+            .expect("the sealed tier's serial space is exhausted");
+        SealedId::pack(serial, index)
     }
 
     pub(crate) fn insert(&mut self, id: SealedId, record: SealedRecord<W>) {
+        let slot = &mut self.records[id.index() as usize];
+        debug_assert!(slot.is_none(), "a minted index is filled once");
         self.bytes += record.retained_bytes();
-        self.records.insert(id, record);
+        *slot = Some((id.serial(), record));
+        self.live += 1;
     }
 
     pub(crate) fn get(&self, id: SealedId) -> Option<&SealedRecord<W>> {
-        self.records.get(&id)
+        match self.records.get(id.index() as usize)? {
+            Some((serial, record)) if *serial == id.serial() => Some(record),
+            _ => None,
+        }
     }
 
     pub(crate) fn get_mut(&mut self, id: SealedId) -> Option<&mut SealedRecord<W>> {
-        self.records.get_mut(&id)
+        match self.records.get_mut(id.index() as usize)? {
+            Some((serial, record)) if *serial == id.serial() => Some(record),
+            _ => None,
+        }
     }
 
     pub(crate) fn remove(&mut self, id: SealedId) -> Option<SealedRecord<W>> {
-        let record = self.records.remove(&id)?;
+        let slot = self.records.get_mut(id.index() as usize)?;
+        match slot {
+            Some((serial, _)) if *serial == id.serial() => {}
+            _ => return None,
+        }
+        let (_, record) = slot.take().expect("the serial matched a present record");
+        self.free.push(id.index());
+        self.live -= 1;
         self.bytes -= record.retained_bytes();
         Some(record)
     }
@@ -278,10 +345,7 @@ impl<const W: usize> SealedTier<W> {
     /// record's storage after its construction, so the total needs no other maintenance point.
     pub(crate) fn splice_storage(&mut self, id: SealedId, from: Option<Region>) {
         self.bytes += from.as_ref().map_or(0, Region::allocated_bytes);
-        let record = self
-            .records
-            .get_mut(&id)
-            .expect("the fold target is present");
+        let record = self.get_mut(id).expect("the fold target is present");
         Region::splice(&mut record.storage, from);
     }
 
@@ -291,15 +355,18 @@ impl<const W: usize> SealedTier<W> {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.records.is_empty()
+        self.live == 0
     }
 
     #[cfg(test)]
     pub(crate) fn ids(&self) -> impl Iterator<Item = SealedId> + '_ {
-        self.records.keys().copied()
+        self.records.iter().enumerate().filter_map(|(index, slot)| {
+            slot.as_ref()
+                .map(|(serial, _)| SealedId::pack(*serial, index as u32))
+        })
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.records.len()
+        self.live
     }
 }

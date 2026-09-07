@@ -466,7 +466,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             pins: Matrix::new(),
             sealed_holds: (0..cap).map(|_| SealedSet::new()).collect(),
             naming: (0..cap).map(|_| SealedSet::new()).collect(),
-            sealed: SealedTier::new(),
+            sealed: SealedTier::new(cap),
             relocated: std::collections::HashMap::new(),
             verdict: Box::new(verdict),
             scratch: Some(Scratch::new()),
