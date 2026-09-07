@@ -654,3 +654,8 @@ One koan-side primitive the model leans on is tracked on koan's own roadmap:
 [Yielding iterators](../../roadmap/foundation/yielding-iterators.md) —
 producers that yield many values before dying, the surface family lazy
 admission belongs to.
+
+The slab is the only liveness habitat a cell has, so a non-tail recursion
+deeper than the cap deadlocks admission rather than degrading;
+[Tree cells](../roadmap/tree-cells.md) adds a slab-free cell kind for call
+subtrees, whose liveness is a stack discipline needing no bit and no count.
