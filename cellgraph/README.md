@@ -86,8 +86,8 @@ machinery and not the `alloc` within it.
 - [perf/](perf/) — the harness, a `[[bin]]` behind the `perf` cargo feature so
   the library build, its tests, and the Miri slate never compile it.
   [perf/shapes.rs](perf/shapes.rs) holds the shapes — a keep-and-redeem loop, a
-  push chain, a pull chain, a birth chain, a fan-out placement, and a shared
-  sub-tier wound down — and [perf/meter.rs](perf/meter.rs) the meter, which
+  push chain, a pull chain, a birth chain, a fan-out placement, a shared
+  sub-tier wound down, and a cell kept into at many distinct reaches — and [perf/meter.rs](perf/meter.rs) the meter, which
   subtracts a nested door's spend from its parent's frame. It counts through
   [audit/counting_alloc.rs](../audit/counting_alloc.rs), the same delegating
   allocator koan's own readings go through.

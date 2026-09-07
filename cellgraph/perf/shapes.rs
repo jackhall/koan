@@ -1,4 +1,4 @@
-//! The benchmark shapes: six traversals of the substrate, each sized to the smallest `n` that
+//! The benchmark shapes: seven traversals of the substrate, each sized to the smallest `n` that
 //! shows its trend.
 //!
 //! Every shape builds its own table, drives public doors only, and ends with an `is_empty` assert
@@ -112,6 +112,59 @@ fn keep_redeem(n: u32) {
 
     measure(Verb::Release, || {
         table.release(cell, Absorption::IntoHolder)
+    })
+    .unwrap();
+    assert!(table.is_empty());
+}
+
+/// Resident interning against many shapes: `n` sources each build one value into `dest`, so every
+/// keep in `dest` carries a reach no earlier keep did and the table holds `n` entries. Each keep
+/// scans the entries before it, which is the linear term interning is priced at.
+fn keep_shapes(n: u32) {
+    let mut table = table();
+    let dest = measure(Verb::Create, || table.create(None, None)).unwrap();
+    let mut sources: Vec<Handle> = Vec::with_capacity(n as usize);
+    let mut residents: Vec<Resident<Number>> = Vec::with_capacity(n as usize);
+
+    for i in 0..n {
+        let source = measure(Verb::Create, || table.create(None, None)).unwrap();
+        sources.push(source);
+        let resting = measure(Verb::Enter, || {
+            table.enter(source, |context| {
+                let value = measure(Verb::Alloc, || {
+                    context.alloc::<Number>(|writer| writer.value(i))
+                });
+                let placed = measure(Verb::AllocInto, || {
+                    context
+                        .alloc_into::<Number, Number>(dest, &[pinned(&value)], build_number)
+                        .unwrap()
+                });
+                measure(Verb::Keep, || context.keep(placed))
+            })
+        })
+        .unwrap();
+        residents.push(resting);
+    }
+
+    measure(Verb::Enter, || {
+        table.enter(dest, |context| {
+            for (i, resting) in residents.drain(..).enumerate() {
+                let carrier = measure(Verb::Redeem, || context.redeem(resting).unwrap());
+                let value = measure(Verb::Read, || *context.read(&carrier).value());
+                assert_eq!(value, i as u32);
+            }
+        })
+    })
+    .unwrap();
+
+    for source in &sources {
+        measure(Verb::Release, || {
+            table.release(*source, Absorption::IntoHolder)
+        })
+        .unwrap();
+    }
+    measure(Verb::Release, || {
+        table.release(dest, Absorption::IntoHolder)
     })
     .unwrap();
     assert!(table.is_empty());
@@ -390,7 +443,7 @@ pub struct Shape {
 
 /// Every shape. Each is swept at both its sizes, so the per-unit trend is the difference over the
 /// difference in `n` — a term needs both readings.
-pub const SHAPES: [Shape; 6] = [
+pub const SHAPES: [Shape; 7] = [
     Shape {
         name: "keep_redeem",
         run: keep_redeem,
@@ -424,6 +477,12 @@ pub const SHAPES: [Shape; 6] = [
     Shape {
         name: "shared_subtier",
         run: shared_subtier,
+        small: 8,
+        large: 32,
+    },
+    Shape {
+        name: "keep_shapes",
+        run: keep_shapes,
         small: 8,
         large: 32,
     },
