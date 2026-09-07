@@ -63,7 +63,7 @@ fn an_empty_table_is_quiescent_and_a_surviving_ring_is_not() {
 
     assert!(!table.is_empty());
     let ring = table
-        .debug_ring_from_sealed(table.sealed.ids().next().unwrap())
+        .debug_ring_from(HoldNode::Sealed(table.sealed.ids().next().unwrap()))
         .expect("the survivors are a ring");
     assert_eq!(ring.len(), 2);
 }

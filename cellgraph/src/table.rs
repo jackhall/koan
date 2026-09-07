@@ -262,7 +262,6 @@ pub(crate) struct Closure {
 /// threshold over. The substrate ships the numbers and no threshold: whether the ramp is linear or
 /// a watermark step is the embedder's call
 /// ([liveness-matrix.md § Bounding the two tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
-#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Occupancy {
     /// Slab slots occupied — live cells and dead-but-resident ones alike.
@@ -373,6 +372,23 @@ struct Slot<C: Reattachable, const W: usize> {
     region: Option<Region>,
 }
 
+impl<C: Reattachable, const W: usize> Slot<C, W> {
+    /// A slot with no occupant, under the given generation.
+    fn free(generation: u32) -> Self {
+        Slot {
+            generation,
+            state: SlotState::Free,
+            parent: None,
+            absorption: Absorption::IntoHolder,
+            continuation: None,
+            continuation_reach: None,
+            residents: Residents::default(),
+            lineage: None,
+            region: None,
+        }
+    }
+}
+
 /// A capped slab of cells over the relations that decide when a slot may be reused, plus the
 /// sealed tier that holds the regions whose slot came back while something still reached them.
 ///
@@ -467,17 +483,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             Bits::<W>::CELLS
         );
         let slots = (0..cap)
-            .map(|_| Slot {
-                generation: 0,
-                state: SlotState::Free,
-                parent: None,
-                absorption: Absorption::IntoHolder,
-                continuation: None,
-                continuation_reach: None,
-                residents: Residents::default(),
-                lineage: None,
-                region: None,
-            })
+            .map(|_| Slot::free(0))
             .collect::<Vec<_>>()
             .into_boxed_slice();
         CellTable {
@@ -1013,12 +1019,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             self.merges.into_namer += 1;
         }
         // The dead cell may have been the namer's last holder — a ring whose final cell just died.
-        if self
-            .sealed
-            .get(namer)
-            .is_some_and(|record| record.holders == 0)
-        {
-            self.reclaim_record(namer, scratch);
+        if self.reclaim_if_unheld(namer, scratch) {
             return;
         }
         self.absorb_singletons(namer, scratch);
@@ -1151,13 +1152,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 self.merges.at_seal += 1;
             }
 
-            if self
-                .sealed
-                .get(target)
-                .is_some_and(|record| record.holders == 0)
-            {
-                // The absorbed record held its own holder, and was its last: the ring dissolves.
-                self.reclaim_record(target, scratch);
+            // The absorbed record held its own holder, and was its last: the ring dissolves.
+            if self.reclaim_if_unheld(target, scratch) {
                 return;
             }
             pending.extend(transferred.iter().copied());
@@ -1192,15 +1188,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// departing occupant is stale from here on.
     fn recycle(&mut self, slot: u32) {
         let cell = &mut self.slots[slot as usize];
-        cell.state = SlotState::Free;
-        cell.parent = None;
-        cell.absorption = Absorption::IntoHolder;
-        cell.continuation = None;
-        cell.continuation_reach = None;
-        cell.residents = Residents::default();
-        cell.lineage = None;
-        cell.region = None;
-        cell.generation = cell.generation.wrapping_add(1);
+        *cell = Slot::free(cell.generation.wrapping_add(1));
         self.free.push(slot);
     }
 
@@ -1348,6 +1336,19 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     fn reclaim_record(&mut self, id: SealedId, scratch: &Scratch) {
         let released = self.retire_record(id);
         self.release_sealed_holds(released.as_slice(), scratch);
+    }
+
+    /// Reclaim `id` if a fold has just taken its last holder. `true` when it did, so the caller
+    /// stops working on a record that is no longer in the tier.
+    fn reclaim_if_unheld(&mut self, id: SealedId, scratch: &Scratch) -> bool {
+        let unheld = self
+            .sealed
+            .get(id)
+            .is_some_and(|record| record.holders == 0);
+        if unheld {
+            self.reclaim_record(id, scratch);
+        }
+        unheld
     }
 
     /// The mint: fold a value's reach into the hold set of the region that now stores it, minus
@@ -1536,7 +1537,6 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// How full both tiers are right now. The slab is bounded by its cap and the sealed tier by
     /// nothing, so an embedder ramps its copy-versus-hold threshold on these two numbers together.
-    #[cfg(test)]
     pub(crate) fn occupancy(&self) -> Occupancy {
         Occupancy {
             occupied: self.cap - self.free.len() as u32,
@@ -1781,22 +1781,17 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// Test-only, and **not consulted on any mint or release path**: preventing rings is the
     /// embedder's crossing discipline, not a mint-time reachability check. The walk spans both
     /// tiers, since a ring among live cells becomes a ring among sealed records the moment they
-    /// die.
+    /// die, which is also why a seed may be a sealed region: every hold on one is an id, and a
+    /// stale handle can no longer reach it.
     #[cfg(test)]
-    pub(crate) fn debug_ring_from(&self, start: Handle) -> Option<Vec<HoldNode>> {
+    pub(crate) fn debug_ring_from(&self, start: HoldNode) -> Option<Vec<HoldNode>> {
+        let start = match start {
+            HoldNode::Cell(handle) => Node::Cell(handle.slot()),
+            HoldNode::Sealed(id) => Node::Sealed(id),
+        };
         let mut path = Vec::new();
         let mut settled = std::collections::HashSet::new();
-        self.walk_for_ring(Node::Cell(start.slot()), &mut path, &mut settled)
-            .map(|cycle| cycle.into_iter().map(|node| self.name(node)).collect())
-    }
-
-    /// The same walk from a sealed region, for a ring that outlived the cells it started among:
-    /// every hold on a sealed region is an id, and a stale handle can no longer reach it.
-    #[cfg(test)]
-    pub(crate) fn debug_ring_from_sealed(&self, start: SealedId) -> Option<Vec<HoldNode>> {
-        let mut path = Vec::new();
-        let mut settled = std::collections::HashSet::new();
-        self.walk_for_ring(Node::Sealed(start), &mut path, &mut settled)
+        self.walk_for_ring(start, &mut path, &mut settled)
             .map(|cycle| cycle.into_iter().map(|node| self.name(node)).collect())
     }
 
@@ -1881,6 +1876,13 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         V: Reattachable + DropFree,
     {
         let mut reach = Mask::empty();
+        // The tiers read once: they do not change between operands.
+        let Occupancy {
+            occupied,
+            cap,
+            records,
+            retained_bytes,
+        } = self.occupancy();
         // The answers alone. The operands are still to hand where the views are built, so carrying
         // their erased forms through here would be a second copy of a slice the caller already has.
         let verdicts = scratch.slice_with(operands.len(), |index| {
@@ -1891,10 +1893,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 // first is shown the marginal cost and the sum over the operands is exact.
                 pin_bytes: self.pin_price(dest, operand.carrier.reach(), &reach, scratch),
                 copy_bytes: operand.copy_bytes,
-                occupied: self.cap - self.free.len() as u32,
-                cap: self.cap,
-                records: self.sealed.len(),
-                retained_bytes: self.sealed.retained_bytes(),
+                occupied,
+                cap,
+                records,
+                retained_bytes,
                 dest_bytes: self.cell_bytes(dest),
             };
             let verdict = (self.verdict)(crossing);
@@ -1924,6 +1926,28 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         // A bump releases its chunks whole and never walks a value, so a family with drop glue
         // would leak whatever it owns. `DropFree` declares the absence; this is the check.
         const { assert!(!std::mem::needs_drop::<T::At<'static>>()) };
+        let (value, reach) = self.place::<T>(dest_slot, reach, build);
+        Sealed::new(value, reach, dest_slot)
+    }
+
+    /// Fold `reach` into the destination's hold set, build the value in the destination's region,
+    /// and hand back its erased form beside its own reach: the destination's bit plus everything
+    /// the operands reached. Private: both callers bundle the pair at once, into a carrier or into
+    /// the slot's continuation fields, so no loose value-plus-reach exists outside this function's
+    /// return.
+    ///
+    /// Bounded on `Reattachable` alone, since a continuation family may carry drop glue: it is
+    /// dropped when its slot recycles rather than bump-freed, so the `DropFree` check belongs at
+    /// the door that hands back a [`Sealed`].
+    fn place<T>(
+        &mut self,
+        dest_slot: u32,
+        mut reach: Mask<W>,
+        build: impl for<'r> FnOnce(Writer<'r>) -> T::At<'r>,
+    ) -> (Erased<T>, Mask<W>)
+    where
+        T: Reattachable,
+    {
         self.mint(dest_slot, &reach);
         let value = {
             let region = self.slots[dest_slot as usize]
@@ -1931,9 +1955,8 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 .get_or_insert_with(Region::new);
             Erased::<T>::erase(build(region.writer()))
         };
-        let mut reach = reach;
         reach.add(dest_slot);
-        Sealed::new(value, reach, dest_slot)
+        (value, reach)
     }
 
     /// The scratch region as the test-only walkers reach it: they run outside every verb, so the
@@ -2062,19 +2085,14 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
             .as_ref()
             .expect("a step holds the region for its whole length");
         let slot = handle.slot();
-        let (mut reach, verdicts) = table.cross(slot, captures, scratch);
-        table.mint(slot, &reach);
-        let value = {
-            let region = table.slots[slot as usize]
-                .region
-                .get_or_insert_with(Region::new);
-            // SAFETY: see `crossed_views`. The mint above has folded every pinned capture's reach
-            // into this cell's hold set, so none of that storage can go away while the cell holds
-            // it, and the views live only for the `build` call.
+        let (reach, verdicts) = table.cross(slot, captures, scratch);
+        let (value, reach) = table.place::<C>(slot, reach, move |writer| {
+            // SAFETY: see `crossed_views`. `place` has already folded every pinned capture's reach
+            // into this cell's hold set before it calls this closure, so none of that storage can
+            // go away while the cell holds it, and the views live only for the `build` call.
             let views = unsafe { crossed_views(captures, verdicts, scratch) };
-            Erased::<C>::erase(build(region.writer(), views))
-        };
-        reach.add(slot);
+            build(writer, views)
+        });
         let cell = &mut table.slots[slot as usize];
         cell.continuation_reach = Some(cell.residents.intern(reach));
         cell.continuation = Some(value);

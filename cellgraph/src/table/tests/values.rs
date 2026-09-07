@@ -164,7 +164,7 @@ fn a_ring_an_outside_holder_keeps_from_every_merge_is_reported_and_leaks() {
         .unwrap();
 
     let ring = table
-        .debug_ring_from(first)
+        .debug_ring_from(HoldNode::Cell(first))
         .expect("the hold graph has a cycle");
     assert_eq!(ring.len(), 2);
     assert!(ring.contains(&HoldNode::Cell(first)) && ring.contains(&HoldNode::Cell(second)));
@@ -178,7 +178,7 @@ fn a_ring_an_outside_holder_keeps_from_every_merge_is_reported_and_leaks() {
     assert_eq!(table.sealed.len(), 2);
 
     let sealed_ring = table
-        .debug_ring_from_sealed(table.sealed.ids().next().unwrap())
+        .debug_ring_from(HoldNode::Sealed(table.sealed.ids().next().unwrap()))
         .expect("the ring survives the seal");
     assert_eq!(sealed_ring.len(), 2);
     assert!(
@@ -204,7 +204,7 @@ fn an_acyclic_hold_graph_reports_no_ring() {
         .unwrap()
         .unwrap();
 
-    assert!(table.debug_ring_from(first).is_none());
+    assert!(table.debug_ring_from(HoldNode::Cell(first)).is_none());
 }
 
 // The doors a value crosses steps through: `keep` puts a carrier down in its home cell's resident
