@@ -133,7 +133,7 @@ fn a_bare_hold_on_a_dead_cell_refuses() {
     table.release(other, Absorption::IntoHolder).unwrap();
 
     let refusal = table.enter(holder, |context| context.hold(other)).unwrap();
-    assert_eq!(refusal, Err(StaleHandle(other)));
+    assert_eq!(refusal, Err(Stale(other)));
     assert!(!table.holds(holder, other));
 }
 

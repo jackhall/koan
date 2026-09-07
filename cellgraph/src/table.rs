@@ -12,7 +12,7 @@ mod tests;
 use smallvec::SmallVec;
 
 use crate::carrier::{Home, Opened, Sealed};
-use crate::handle::{CellRef, Handle, StaleCell, StaleHandle, StaleTree, TreeHandle};
+use crate::handle::{CellRef, Handle, Stale, TreeHandle};
 use crate::mask::Mask;
 use crate::matrix::{Bits, Matrix};
 use crate::reattach::{DropFree, Erased, Reattachable};
@@ -28,14 +28,14 @@ pub enum CreateError {
     /// The slab is at its cap. What to do next is admission policy, and the embedder's.
     SlabFull,
     /// The named parent is not a live cell.
-    StaleParent(StaleHandle),
+    StaleParent(Stale<Handle>),
 }
 
 /// Refusals from [`CellTable::enter`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EnterError {
-    /// The named cell is not a live cell.
-    Stale(StaleHandle),
+    /// The named cell is not a live cell of either kind.
+    Stale(Stale<CellRef>),
     /// The cell is already executing; a cell is entered by one step at a time.
     AlreadyExecuting,
 }
@@ -44,33 +44,16 @@ pub enum EnterError {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ReleaseError {
     /// The named cell is not a live cell — a second release names a death already declared.
-    Stale(StaleHandle),
+    Stale(Stale<Handle>),
     /// The cell is executing. Death is declared from outside a step, never from within one.
     Executing,
-}
-
-/// Refusals from [`CellTable::create_tree`]. There is no full variant: the pool takes no cap.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum CreateTreeError {
-    /// The named parent is not a live cell of either kind. A dead-resident parent refuses too — it
-    /// is waiting on the children it already has, not taking new ones.
-    StaleParent(StaleCell),
-}
-
-/// Refusals from [`CellTable::enter_tree`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum EnterTreeError {
-    /// The named cell is not a live tree cell.
-    Stale(StaleTree),
-    /// The cell is already executing; a cell is entered by one step at a time.
-    AlreadyExecuting,
 }
 
 /// Refusals from [`CellTable::release_tree`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ReleaseTreeError {
     /// The named cell is not a live tree cell — a second release names a death already declared.
-    Stale(StaleTree),
+    Stale(Stale<TreeHandle>),
     /// The cell is executing. Death is declared from outside a step, never from within one.
     Executing,
 }
@@ -642,10 +625,11 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// ```
     pub fn enter<R>(
         &mut self,
-        handle: Handle,
+        cell: impl Into<CellRef>,
         step: impl FnOnce(&mut StepContext<'_, C, W>) -> R,
     ) -> Result<R, EnterError> {
-        self.begin(handle)?;
+        let cell = cell.into();
+        self.begin(cell)?;
         // The scratch comes off the table for the whole step: the doors take `&mut self`, so a
         // transient borrowing the field could not coexist with them. The context's `Drop` hands it
         // back, so a panicking step loses no chunk.
@@ -653,7 +637,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         scratch.reset();
         let mut context = StepContext {
             table: self,
-            cell: CellRef::Slab(handle),
+            cell,
             scratch: Some(scratch),
         };
         Ok(step(&mut context))
@@ -696,19 +680,11 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         &mut self,
         parent: impl Into<CellRef>,
         continuation: Option<C::At<'static>>,
-    ) -> Result<TreeHandle, CreateTreeError> {
+    ) -> Result<TreeHandle, Stale<CellRef>> {
         let (root, tree_parent, depth) = match parent.into() {
-            CellRef::Slab(handle) => {
-                let slot = self
-                    .live_slot(handle)
-                    .map_err(|stale| CreateTreeError::StaleParent(stale.into()))?;
-                (slot, None, 1)
-            }
+            CellRef::Slab(handle) => (self.live_slot(handle)?, None, 1),
             CellRef::Tree(handle) => {
-                let index = self
-                    .trees
-                    .live_index(handle)
-                    .map_err(|stale| CreateTreeError::StaleParent(stale.into()))?;
+                let index = self.trees.live_index(handle)?;
                 (
                     self.trees.root(index),
                     Some(index),
@@ -726,33 +702,6 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             None => self.slots[root as usize].tree_children += 1,
         }
         Ok(handle)
-    }
-
-    /// Run `step` against a tree cell, with its executing flag set for the scope — [`enter`]'s twin
-    /// over the pool, and the same contract in every other respect.
-    ///
-    /// [`enter`]: CellTable::enter
-    pub fn enter_tree<R>(
-        &mut self,
-        handle: TreeHandle,
-        step: impl FnOnce(&mut StepContext<'_, C, W>) -> R,
-    ) -> Result<R, EnterTreeError> {
-        let index = self
-            .trees
-            .live_index(handle)
-            .map_err(EnterTreeError::Stale)?;
-        if self.trees.is_executing(index) {
-            return Err(EnterTreeError::AlreadyExecuting);
-        }
-        self.trees.set_executing(index, true);
-        let mut scratch = self.take_scratch_owned();
-        scratch.reset();
-        let mut context = StepContext {
-            table: self,
-            cell: CellRef::Tree(handle),
-            scratch: Some(scratch),
-        };
-        Ok(step(&mut context))
     }
 
     /// Declare a tree cell's death. **No absorption argument**: where its bytes go was settled at
@@ -775,12 +724,6 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         self.park()
             .run(|table, scratch| table.dispose_tree_chain(index, scratch));
         Ok(())
-    }
-
-    /// Whether the handle names a tree cell that is still live — false for a recycled index, a
-    /// later generation, a dead-resident cell, and a tombstone.
-    pub fn is_live_tree(&self, handle: TreeHandle) -> bool {
-        self.trees.live_index(handle).is_ok()
     }
 
     /// Dispose of the just-released tree cell and then of every dead-resident ancestor its
@@ -884,21 +827,25 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         vacant && self.sealed.is_empty() && self.trees.is_empty()
     }
 
-    /// Whether the handle names a cell that is still live — false for a slot that is free, holds a
-    /// later generation, or holds a cell whose death was already declared.
-    pub fn is_live(&self, handle: Handle) -> bool {
-        self.live_slot(handle).is_ok()
+    /// Whether the name is a cell of either kind that is still live — false for a slot or pool
+    /// index that is free, holds a later generation, or holds a cell whose death was already
+    /// declared, and false for a tree tombstone.
+    pub fn is_live(&self, cell: impl Into<CellRef>) -> bool {
+        match cell.into() {
+            CellRef::Slab(handle) => self.live_slot(handle).is_ok(),
+            CellRef::Tree(handle) => self.trees.live_index(handle).is_ok(),
+        }
     }
 
     /// The slot a handle names, if that slot still holds the live cell the handle was minted for.
-    fn live_slot(&self, handle: Handle) -> Result<u32, StaleHandle> {
+    fn live_slot(&self, handle: Handle) -> Result<u32, Stale<Handle>> {
         match self.slots.get(handle.slot() as usize) {
             Some(cell)
                 if cell.state == SlotState::Live && cell.generation == handle.generation() =>
             {
                 Ok(handle.slot())
             }
-            _ => Err(StaleHandle(handle)),
+            _ => Err(Stale(handle)),
         }
     }
 
@@ -929,12 +876,28 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
 
     /// Set the executing flag, or refuse. Paired with the clear in [`StepContext`]'s `Drop`, so
     /// the flag falls even if the step panics.
-    fn begin(&mut self, handle: Handle) -> Result<(), EnterError> {
-        let slot = self.live_slot(handle).map_err(EnterError::Stale)?;
-        if self.executing.test(slot) {
-            return Err(EnterError::AlreadyExecuting);
+    fn begin(&mut self, cell: CellRef) -> Result<(), EnterError> {
+        match cell {
+            CellRef::Slab(handle) => {
+                let slot = self
+                    .live_slot(handle)
+                    .map_err(|stale| EnterError::Stale(stale.into()))?;
+                if self.executing.test(slot) {
+                    return Err(EnterError::AlreadyExecuting);
+                }
+                self.executing.set(slot);
+            }
+            CellRef::Tree(handle) => {
+                let index = self
+                    .trees
+                    .live_index(handle)
+                    .map_err(|stale| EnterError::Stale(stale.into()))?;
+                if self.trees.is_executing(index) {
+                    return Err(EnterError::AlreadyExecuting);
+                }
+                self.trees.set_executing(index, true);
+            }
         }
-        self.executing.set(slot);
         Ok(())
     }
 
@@ -1864,7 +1827,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     /// Chunk bytes a live cell's region bundle occupies, absorbed bumps included. `0` for a cell
     /// that never allocated.
     #[cfg(test)]
-    pub(crate) fn region_bytes(&self, handle: Handle) -> Result<usize, StaleHandle> {
+    pub(crate) fn region_bytes(&self, handle: Handle) -> Result<usize, Stale<Handle>> {
         let slot = self.live_slot(handle)?;
         Ok(self.cell_bytes(slot))
     }
@@ -2626,7 +2589,7 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
         dest: impl Into<CellRef>,
         operands: &[Operand<'_, 'b, V, W>],
         build: impl for<'r, 'v> FnOnce(Writer<'r>, &[Crossed<'r, 'v, V>]) -> T::At<'r>,
-    ) -> Result<Sealed<'b, T, W>, StaleCell>
+    ) -> Result<Sealed<'b, T, W>, Stale<CellRef>>
     where
         T: Reattachable + DropFree,
         V: Reattachable + DropFree,
@@ -2644,14 +2607,17 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
             .expect("a step holds the region for its whole length");
         let dest = match dest.into() {
             CellRef::Slab(handle) => {
-                let slot = table.live_slot(handle).map_err(StaleCell::from)?;
+                let slot = table.live_slot(handle).map_err(Stale::<CellRef>::from)?;
                 Dest {
                     mint_slot: slot,
                     home: Home::Slab(slot),
                 }
             }
             CellRef::Tree(handle) => {
-                let index = table.trees.live_index(handle).map_err(StaleCell::from)?;
+                let index = table
+                    .trees
+                    .live_index(handle)
+                    .map_err(Stale::<CellRef>::from)?;
                 Dest {
                     mint_slot: table.trees.root(index),
                     home: Home::Tree(index),
@@ -2671,7 +2637,7 @@ impl<'b, C: Reattachable, const W: usize> StepContext<'b, C, W> {
     /// Mint a bare hold on another live cell — the pull shape's first half: the executing cell
     /// takes a hold with no value crossing, so the held cell seals rather than reclaims when it
     /// dies, and this cell can read out of it later.
-    pub fn hold(&mut self, other: Handle) -> Result<(), StaleHandle> {
+    pub fn hold(&mut self, other: Handle) -> Result<(), Stale<Handle>> {
         let other_slot = self.table.live_slot(other)?;
         let reach = Mask::single(other_slot);
         let into = self.executing_slot();

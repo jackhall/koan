@@ -55,11 +55,11 @@ fn a_tree_cell_runs_its_three_verbs_without_taking_a_slab_slot() {
 
     // The pool takes no cap, so the door has no full refusal to give.
     let tree = table.create_tree(root, Some(String::from("next"))).unwrap();
-    assert!(table.is_live_tree(tree));
+    assert!(table.is_live(tree));
     assert_eq!(table.tree_children_of(root), 1);
 
     let (cell, continuation) = table
-        .enter_tree(tree, |context| {
+        .enter(tree, |context| {
             (
                 context.cell(),
                 context.continuation().map(Opened::into_value),
@@ -70,7 +70,7 @@ fn a_tree_cell_runs_its_three_verbs_without_taking_a_slab_slot() {
     assert_eq!(continuation.as_deref(), Some("next"));
 
     table.release_tree(tree).unwrap();
-    assert!(!table.is_live_tree(tree));
+    assert!(!table.is_live(tree));
     assert_eq!(table.tree_children_of(root), 0);
     table.release(root, Absorption::IntoHolder).unwrap();
     assert!(table.is_empty());
@@ -83,27 +83,27 @@ fn the_tree_doors_refuse_a_name_kept_past_a_declared_death() {
     let tree = table.create_tree(root, None).unwrap();
     table.release_tree(tree).unwrap();
 
-    let Err(CreateTreeError::StaleParent(stale)) = table.create_tree(tree, None) else {
+    let Err(stale) = table.create_tree(tree, None) else {
         panic!("a dead tree parent must refuse");
     };
-    assert_eq!(stale.cell(), CellRef::Tree(tree));
+    assert_eq!(stale.name(), CellRef::Tree(tree));
 
-    let Err(EnterTreeError::Stale(stale)) = table.enter_tree(tree, |_| ()) else {
+    let Err(EnterError::Stale(stale)) = table.enter(tree, |_| ()) else {
         panic!("a dead tree cell must refuse the step");
     };
-    assert_eq!(stale.handle(), tree);
+    assert_eq!(stale.name(), CellRef::Tree(tree));
 
     let Err(ReleaseTreeError::Stale(stale)) = table.release_tree(tree) else {
         panic!("a second release names a death already declared");
     };
-    assert_eq!(stale.handle(), tree);
+    assert_eq!(stale.name(), tree);
 
     // And a slab parent whose own death was declared refuses to take a new tree child.
     table.release(root, Absorption::IntoHolder).unwrap();
-    let Err(CreateTreeError::StaleParent(stale)) = table.create_tree(root, None) else {
+    let Err(stale) = table.create_tree(root, None) else {
         panic!("a dead root must refuse");
     };
-    assert_eq!(stale.cell(), CellRef::Slab(root));
+    assert_eq!(stale.name(), CellRef::Slab(root));
     assert!(table.is_empty());
 }
 
@@ -154,7 +154,7 @@ fn a_tree_cell_nothing_was_kept_in_leaves_no_tombstone() {
     let root = table.create(None, None).unwrap();
     let tree = table.create_tree(root, None).unwrap();
     table
-        .enter_tree(tree, |context| {
+        .enter(tree, |context| {
             let value = number_in(context, 1);
             context
                 .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, views| {
@@ -188,7 +188,7 @@ fn a_tree_homed_operand_crosses_by_where_the_destination_sits() {
     let cousin = table.create_tree(parent, None).unwrap();
 
     let copied = table
-        .enter_tree(home, |context| {
+        .enter(home, |context| {
             let value = number_in(context, 5);
             let mut copied = Vec::new();
             for dest in [
@@ -249,7 +249,7 @@ fn an_upward_pin_pledges_the_home_and_every_intermediate() {
     // A grandchild pinned straight into its grandparent: the parent is carried too, or the
     // grandparent's bundle would be left borrowing bytes the parent's reclaim took away.
     let bytes = table
-        .enter_tree(home, |context| {
+        .enter(home, |context| {
             let value = number_in(context, 9);
             context
                 .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, views| {
@@ -282,7 +282,7 @@ fn the_shallowest_pledge_wins_and_the_splice_price_is_marginal() {
     let home = table.create_tree(parent, None).unwrap();
 
     table
-        .enter_tree(home, |context| {
+        .enter(home, |context| {
             let first = number_in(context, 1);
             let second = number_in(context, 2);
             // Two operands from one home in one placement: the first carries the whole splice
@@ -365,7 +365,7 @@ fn a_resident_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_root() {
     let sibling = table.create_tree(root, None).unwrap();
 
     let kept = table
-        .enter_tree(home, |context| {
+        .enter(home, |context| {
             let value = number_in(context, 12);
             context.keep(value)
         })
@@ -377,7 +377,7 @@ fn a_resident_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_root() {
             unreachable!("the loop names tree cells")
         };
         let read = table
-            .enter_tree(handle, |context| {
+            .enter(handle, |context| {
                 *context.read(&context.redeem(kept).unwrap()).value()
             })
             .unwrap();
@@ -414,7 +414,7 @@ fn a_resident_whose_home_reclaimed_answers_gone() {
 
     // Kept but never pinned upward, so the cell pledges nothing and its bytes go with it.
     let kept = table
-        .enter_tree(home, |context| {
+        .enter(home, |context| {
             let value = number_in(context, 3);
             context.keep(value)
         })
@@ -446,7 +446,7 @@ fn spliced_into_root(
     let parent = table.create_tree(root, None).unwrap();
     let home = table.create_tree(parent, None).unwrap();
     let kept = table
-        .enter_tree(home, |context| {
+        .enter(home, |context| {
             let value = number_in(context, 21);
             let kept = context.keep(value.clone());
             context
@@ -606,7 +606,7 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
         let taken = carried.take();
         carried = Some(
             table
-                .enter_tree(cell, |context| {
+                .enter(cell, |context| {
                     let value = match taken {
                         None => number_in(context, 0),
                         Some(resident) => {
@@ -657,7 +657,7 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
     let home = table.create_tree(destination, None).unwrap();
 
     let kept = table
-        .enter_tree(home, |context| {
+        .enter(home, |context| {
             let value = number_in(context, 33);
             context.keep(value)
         })
@@ -667,7 +667,7 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
     // pin pledges the child, so the bytes the continuation reads move into this very bundle when
     // the child dies rather than going away with it.
     table
-        .enter_tree(destination, |context| {
+        .enter(destination, |context| {
             let carrier = context.redeem(kept).unwrap();
             context.store_successor_capturing(&[kept_operand(&carrier)], |writer, views| {
                 take(&views[0], writer)
@@ -677,7 +677,7 @@ fn a_splice_keeps_a_borrow_the_destination_already_holds() {
 
     table.release_tree(home).unwrap();
     let read = table
-        .enter_tree(destination, |context| {
+        .enter(destination, |context| {
             *context
                 .continuation()
                 .expect("the successor is still in the slot")
@@ -701,7 +701,7 @@ fn a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one() {
     // The next hop's arguments are built into a sibling, which is off this cell's chain — so the
     // crossing rule forces the copy, and the old hop's storage is free to go.
     let kept = table
-        .enter_tree(hop, |context| {
+        .enter(hop, |context| {
             let value = number_in(context, 6);
             let placed = context
                 .alloc_into::<Number, Number>(next, &[kept_operand(&value)], |writer, views| {
@@ -724,7 +724,7 @@ fn a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one() {
     );
 
     let read = table
-        .enter_tree(next, |context| {
+        .enter(next, |context| {
             *context.read(&context.redeem(kept).unwrap()).value()
         })
         .unwrap();

@@ -112,7 +112,7 @@ fn a_handle_is_stale_once_its_cell_seals_and_the_slot_takes_a_new_occupant() {
     assert!(!table.is_live(held));
     assert_eq!(
         table.enter(held, |_| ()),
-        Err(EnterError::Stale(StaleHandle(held)))
+        Err(EnterError::Stale(Stale(CellRef::Slab(held))))
     );
 
     let reused = table.create(None, None).unwrap();

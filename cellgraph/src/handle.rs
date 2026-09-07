@@ -29,19 +29,6 @@ impl Handle {
     }
 }
 
-/// A handle whose occupant has died: the slot is free, holds a later generation, or holds a cell
-/// whose death the embedder already declared. A stale handle is always an error and never a silent
-/// no-op, because it means a caller kept a name past a death it declared itself.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct StaleHandle(pub(crate) Handle);
-
-impl StaleHandle {
-    /// The handle that went stale — the name the caller kept past a death it declared itself.
-    pub fn handle(self) -> Handle {
-        self.0
-    }
-}
-
 /// A name for one tree cell: the pool index it occupies, plus the generation that distinguishes it
 /// from every other occupant of that index. `Copy`, like [`Handle`], and re-checked by every verb
 /// for the same reason.
@@ -95,43 +82,32 @@ impl From<TreeHandle> for CellRef {
     }
 }
 
-/// A tree handle whose occupant has died — [`StaleHandle`]'s twin for the pool, and an error for
-/// the same reason: the caller kept a name past a death it declared itself.
+/// A name whose occupant has died: the slot or pool index is free, holds a later generation, or
+/// holds a cell whose death the embedder already declared. A stale name is always an error and
+/// never a silent no-op, because it means a caller kept a name past a death it declared itself.
+///
+/// `N` is the name that went stale, and a door's error is exactly as wide as the name it takes:
+/// [`Handle`] from a door that names only a slab cell, [`TreeHandle`] from one that names only a
+/// tree cell, and [`CellRef`] from one that takes either — so no door reports a kind it cannot
+/// have met.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct StaleTree(pub(crate) TreeHandle);
+pub struct Stale<N>(pub(crate) N);
 
-impl StaleTree {
-    /// The tree handle that went stale.
-    pub fn handle(self) -> TreeHandle {
+impl<N> Stale<N> {
+    /// The name that went stale — the one the caller kept past a death it declared itself.
+    pub fn name(self) -> N {
         self.0
     }
 }
 
-/// Either kind of stale name, for a door that takes a [`CellRef`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum StaleCell {
-    Slab(StaleHandle),
-    Tree(StaleTree),
-}
-
-impl StaleCell {
-    /// The name that went stale.
-    pub fn cell(self) -> CellRef {
-        match self {
-            StaleCell::Slab(stale) => CellRef::Slab(stale.handle()),
-            StaleCell::Tree(stale) => CellRef::Tree(stale.handle()),
-        }
+impl From<Stale<Handle>> for Stale<CellRef> {
+    fn from(stale: Stale<Handle>) -> Self {
+        Stale(CellRef::Slab(stale.0))
     }
 }
 
-impl From<StaleHandle> for StaleCell {
-    fn from(stale: StaleHandle) -> Self {
-        StaleCell::Slab(stale)
-    }
-}
-
-impl From<StaleTree> for StaleCell {
-    fn from(stale: StaleTree) -> Self {
-        StaleCell::Tree(stale)
+impl From<Stale<TreeHandle>> for Stale<CellRef> {
+    fn from(stale: Stale<TreeHandle>) -> Self {
+        Stale(CellRef::Tree(stale.0))
     }
 }

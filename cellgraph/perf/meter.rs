@@ -23,6 +23,7 @@ pub enum Verb {
     Enter,
     Release,
     CreateTree,
+    /// The `enter` door taken on a tree cell, rowed apart from the slab case.
     EnterTree,
     ReleaseTree,
     Alloc,
@@ -59,7 +60,7 @@ impl Verb {
             Verb::Enter => "enter",
             Verb::Release => "release",
             Verb::CreateTree => "create_tree",
-            Verb::EnterTree => "enter_tree",
+            Verb::EnterTree => "enter/tree",
             Verb::ReleaseTree => "release_tree",
             Verb::Alloc => "alloc",
             Verb::AllocInto => "alloc_into",

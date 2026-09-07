@@ -186,15 +186,15 @@ fn every_verb_rejects_a_stale_handle() {
     assert!(!table.is_live(first));
     assert_eq!(
         table.enter(first, |_| ()),
-        Err(EnterError::Stale(StaleHandle(first)))
+        Err(EnterError::Stale(Stale(CellRef::Slab(first))))
     );
     assert_eq!(
         table.release(first, Absorption::IntoHolder),
-        Err(ReleaseError::Stale(StaleHandle(first)))
+        Err(ReleaseError::Stale(Stale(first)))
     );
     assert_eq!(
         table.create(Some(first), None),
-        Err(CreateError::StaleParent(StaleHandle(first)))
+        Err(CreateError::StaleParent(Stale(first)))
     );
     assert!(table.is_live(second));
 }
@@ -279,8 +279,11 @@ fn a_cell_is_entered_by_one_step_at_a_time() {
     let mut table: CellTable<Owned> = CellTable::new(2, pin);
     let cell = table.create(None, None).unwrap();
 
-    table.begin(cell).unwrap();
-    assert_eq!(table.begin(cell), Err(EnterError::AlreadyExecuting));
+    table.begin(CellRef::Slab(cell)).unwrap();
+    assert_eq!(
+        table.begin(CellRef::Slab(cell)),
+        Err(EnterError::AlreadyExecuting)
+    );
     assert_eq!(
         table.release(cell, Absorption::IntoHolder),
         Err(ReleaseError::Executing)

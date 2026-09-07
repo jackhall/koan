@@ -9,10 +9,9 @@
 //! `pub(crate)` is indistinguishable from `pub`; only a caller outside it sees the real surface.
 
 use cellgraph::{
-    Absorption, CellRef, CellTable, CreateError, CreateTreeError, Crossed, Crossing, DropFree,
-    EnterError, EnterTreeError, Erased, Handle, Opened, Operand, Reattachable, RedeemError,
-    ReleaseError, ReleaseTreeError, Resident, Sealed, StaleCell, StaleHandle, StaleTree,
-    StepContext, TreeHandle, Verdict, Writer, reattachable,
+    Absorption, CellRef, CellTable, CreateError, Crossed, Crossing, DropFree, EnterError, Erased,
+    Handle, Opened, Operand, Reattachable, RedeemError, ReleaseError, ReleaseTreeError, Resident,
+    Sealed, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -115,23 +114,10 @@ fn name_release_error(error: ReleaseError) -> &'static str {
     }
 }
 
-/// The tree pool's three refusals, matched exhaustively for the same reason: a variant that went
-/// missing from any of them is a compile error here. `create_tree` has no full refusal — the pool
-/// takes no cap — and neither `enter_tree` nor `release_tree` can meet an executing cell from
+/// The tree pool's one enum of refusals, matched exhaustively for the same reason. `create_tree`
+/// refuses only a stale parent — the pool takes no cap, so its error is the bare stale name — and
+/// `enter` is the same door over both kinds. `release_tree` cannot meet an executing cell from
 /// outside a step.
-fn name_create_tree_error(error: CreateTreeError) -> &'static str {
-    match error {
-        CreateTreeError::StaleParent(_) => "stale parent",
-    }
-}
-
-fn name_enter_tree_error(error: EnterTreeError) -> &'static str {
-    match error {
-        EnterTreeError::Stale(_) => "stale",
-        EnterTreeError::AlreadyExecuting => "already executing",
-    }
-}
-
 fn name_release_tree_error(error: ReleaseTreeError) -> &'static str {
     match error {
         ReleaseTreeError::Stale(_) => "stale",
@@ -190,7 +176,7 @@ fn every_public_door_answers_from_outside_the_crate() {
 
             // A bare hold, and the refusal a handle kept past a declared death earns.
             context.hold(root).unwrap();
-            assert_eq!(context.hold(doomed).unwrap_err().handle(), doomed);
+            assert_eq!(context.hold(doomed).unwrap_err().name(), doomed);
 
             // Reading, by copy and by move, directly and through the embedder's own helper.
             assert_eq!(*context.read(&number).value(), 7);
@@ -279,8 +265,8 @@ fn the_refusals_hand_back_the_handle_that_went_stale() {
     let Err(CreateError::StaleParent(stale)) = full.create(Some(taken), None) else {
         panic!("a dead parent must refuse");
     };
-    let stale: StaleHandle = stale;
-    assert_eq!(stale.handle(), taken);
+    let stale: Stale<Handle> = stale;
+    assert_eq!(stale.name(), taken);
 
     let Err(error) = full.enter(taken, |_| ()) else {
         panic!("a dead cell must refuse the step");
@@ -306,11 +292,11 @@ fn the_tree_pool_answers_from_outside_the_crate() {
         .unwrap();
     assert_eq!(outer.index(), 0);
     assert_eq!(inner.generation(), 0);
-    assert!(table.is_live_tree(inner));
+    assert!(table.is_live(inner));
 
     let mut kept: Option<Resident<Number>> = None;
     let carried = table
-        .enter_tree(inner, |context| {
+        .enter(inner, |context| {
             assert_eq!(context.cell(), CellRef::Tree(inner));
             let value = context.alloc::<Number>(build_number);
 
@@ -348,30 +334,33 @@ fn the_tree_pool_answers_from_outside_the_crate() {
 
     // Release takes no argument: where the bytes go was settled at the placement door.
     table.release_tree(inner).unwrap();
-    assert!(!table.is_live_tree(inner));
+    assert!(!table.is_live(inner));
 
     let Err(error) = table.release_tree(inner) else {
         panic!("a second release names a death already declared");
     };
     assert_eq!(name_release_tree_error(error), "stale");
-    let stale: StaleTree = match error {
+    let stale: Stale<TreeHandle> = match error {
         ReleaseTreeError::Stale(stale) => stale,
         ReleaseTreeError::Executing => unreachable!("the cell is not executing"),
     };
-    assert_eq!(stale.handle(), inner);
+    assert_eq!(stale.name(), inner);
 
-    let Err(error) = table.enter_tree(inner, |_| ()) else {
+    let Err(error) = table.enter(inner, |_| ()) else {
         panic!("a dead tree cell must refuse the step");
     };
-    assert_eq!(name_enter_tree_error(error), "stale");
+    assert_eq!(name_enter_error(error), "stale");
+    let EnterError::Stale(stale) = error else {
+        unreachable!("the cell is not executing")
+    };
+    let stale: Stale<CellRef> = stale;
+    assert_eq!(stale.name(), CellRef::Tree(inner));
 
-    let Err(error) = table.create_tree(inner, None) else {
+    let Err(stale) = table.create_tree(inner, None) else {
         panic!("a dead tree parent must refuse");
     };
-    assert_eq!(name_create_tree_error(error), "stale parent");
-    let CreateTreeError::StaleParent(stale) = error;
-    let stale: StaleCell = stale;
-    assert_eq!(stale.cell(), CellRef::Tree(inner));
+    let stale: Stale<CellRef> = stale;
+    assert_eq!(stale.name(), CellRef::Tree(inner));
 
     table.release_tree(outer).unwrap();
     table.release(root, Absorption::IntoHolder).unwrap();

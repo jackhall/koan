@@ -131,15 +131,15 @@ how an embedder gives one unit of work two regions with different lifetimes.
   A placement over operands consults the **crossing verdict** once per
   operand before it builds — the one closure the table was constructed with,
   described under Passing values below.
-- **`create_tree(parent)`** / **`enter_tree(handle, step)`** /
-  **`release_tree(handle)`** are the same three verbs over the tree pool.
-  `create_tree` takes a cell of either kind as the parent and never refuses
-  for want of room, since the pool has no cap; `enter_tree` supplies the same
-  step context, whose placements mint into the root; `release_tree` takes no
-  absorption argument, because where a tree cell's bytes go was settled at the
-  placement door that pinned a value homed there into an ancestor. A parent
-  released before its children waits dead-resident and disposes when the last
-  of them does. See [tree-cells.md](tree-cells.md).
+- **`create_tree(parent)`** / **`release_tree(handle)`** are birth and death
+  over the tree pool; `enter` is one door over both kinds. `create_tree` takes
+  a cell of either kind as the parent and refuses only a stale one, since the
+  pool has no cap; a step entered in a tree cell gets the same context, whose
+  placements mint into the root; `release_tree` takes no absorption argument,
+  because where a tree cell's bytes go was settled at the placement door that
+  pinned a value homed there into an ancestor. A parent released before its
+  children waits dead-resident and disposes when the last of them does. See
+  [tree-cells.md](tree-cells.md).
 - **`release(handle, absorption)`** declares death: the embedder promises
   never to enter the cell again. The slot leaves the slab once no descendant's
   birth row names the cell: reclaimed if nothing reaches its storage, folded

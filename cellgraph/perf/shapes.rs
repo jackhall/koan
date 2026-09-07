@@ -471,7 +471,7 @@ fn tree_chain(n: u32) {
         let taken = carried.take();
         carried = Some(
             measure(Verb::EnterTree, || {
-                table.enter_tree(cell, |context| {
+                table.enter(cell, |context| {
                     let value = match taken {
                         None => measure(Verb::Alloc, || {
                             context.alloc::<Number>(|writer| writer.value(0))

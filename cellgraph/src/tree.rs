@@ -13,7 +13,7 @@
 //! resident, the **pledge** naming the ancestor its bump will splice into, and the tombstone links
 //! that say where its bytes went once it did.
 
-use crate::handle::{CellRef, Handle, StaleTree, TreeHandle};
+use crate::handle::{CellRef, Handle, Stale, TreeHandle};
 use crate::reattach::{Erased, Reattachable};
 use crate::region::Region;
 use crate::scratch::Scratch;
@@ -170,14 +170,14 @@ impl<C: Reattachable> TreePool<C> {
     }
 
     /// The pool index a handle names, if that index still holds the live cell it was minted for.
-    pub(crate) fn live_index(&self, handle: TreeHandle) -> Result<u32, StaleTree> {
+    pub(crate) fn live_index(&self, handle: TreeHandle) -> Result<u32, Stale<TreeHandle>> {
         match self.slots.get(handle.index() as usize) {
             Some(slot)
                 if slot.state == TreeState::Live && slot.generation == handle.generation() =>
             {
                 Ok(handle.index())
             }
-            _ => Err(StaleTree(handle)),
+            _ => Err(Stale(handle)),
         }
     }
 

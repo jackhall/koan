@@ -747,9 +747,9 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Crossing) -> Verdict + 'static) -> Me
                     false => wrapped(&minted, consumer).map(CellRef::Slab),
                 };
                 if let (Some(producer), Some(consumer)) = (wrapped(&grown, producer), consumer)
-                    && table.is_live_tree(producer)
+                    && table.is_live(producer)
                 {
-                    let _ = table.enter_tree(producer, |context| {
+                    let _ = table.enter(producer, |context| {
                         let value = context.alloc::<Number>(|writer| writer.value(1));
                         context
                             .alloc_into::<Number, Number>(
@@ -766,12 +766,12 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Crossing) -> Verdict + 'static) -> Me
             // a tombstone behind.
             Verb::KeepTree { cell } => {
                 if let Some(cell) = wrapped(&grown, cell)
-                    && table.is_live_tree(cell)
+                    && table.is_live(cell)
                 {
                     let carried = next_value;
                     next_value += 1;
                     let resident = table
-                        .enter_tree(cell, |context| {
+                        .enter(cell, |context| {
                             let value = context.alloc::<Number>(|writer| writer.value(carried));
                             context.keep(value)
                         })
@@ -784,14 +784,14 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Crossing) -> Verdict + 'static) -> Me
             // been through since the keep.
             Verb::RedeemInTree { cell, index } => {
                 if let Some(cell) = wrapped(&grown, cell)
-                    && table.is_live_tree(cell)
+                    && table.is_live(cell)
                     && !kept.is_empty()
                 {
                     let (home, resident, carried) = kept[index % kept.len()];
                     let root = table.trees().root(cell.index());
                     let expected = expected_redeem(&table, root, home);
                     let outcome = table
-                        .enter_tree(cell, |context| check_redeem(context, resident, carried))
+                        .enter(cell, |context| check_redeem(context, resident, carried))
                         .unwrap();
                     assert_eq!(
                         outcome, expected,
