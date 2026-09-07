@@ -10,7 +10,7 @@
 //! enforced by what this module cannot express — a record has no write path into its aggregate
 //! beyond the seal transition's own rewrite, so a pin *out of* a sealed region is unrepresentable.
 
-use std::cell::OnceCell;
+use std::cell::Cell;
 
 use smallvec::SmallVec;
 
@@ -37,6 +37,13 @@ impl SealedId {
     /// Where in the tier's slab this id's record sits, live or retired.
     fn index(self) -> u32 {
         self.0 as u32
+    }
+
+    /// An id with a chosen serial and index, for the tests outside this module that need concrete
+    /// ones. Minting is the tier's job everywhere else.
+    #[cfg(test)]
+    pub(crate) fn packed(serial: u32, index: u32) -> Self {
+        SealedId::pack(serial, index)
     }
 
     /// Which mint handed this id out. What separates a live record from a retired one that gave
@@ -184,25 +191,15 @@ impl<V: IdBuffer> IdSet<V> {
     }
 }
 
-/// A frozen closure: every record a hold on one record keeps alive. Recorded only for a closure
-/// that names no live cell, and exact from then on.
-///
-/// The node *set* is what is memoized, not a byte total: two branches of one closure may share a
-/// sub-tier, so a price folds sets together and sums once at the end. Summing memoized totals
-/// instead would bill the shared part twice.
-pub(crate) struct Memo {
-    /// The records the closure spans, root included, in walk order.
-    pub(crate) records: Vec<SealedId>,
-}
-
 /// One retained region: everything its cell had, minus everything a cell needs to run.
 pub(crate) struct SealedRecord<const W: usize> {
     /// The cell's hold set, frozen at its death instead of cleared. Monotone holds make this
     /// exactly the union of every reach ever minted into the region, so the freeze is a word copy
     /// and consults no storage.
     pub(crate) aggregate: Mask<W>,
-    /// The chunks, detached from the slot unmoved. `None` for a cell that never allocated.
-    pub(crate) storage: Option<Region>,
+    /// The chunks, detached from the slot unmoved — a bundle with no chunk at all for a cell that
+    /// never allocated, and the record's own bytes from then on: its memo is written here too.
+    pub(crate) storage: Region,
     /// How many hold sets name this region — live cells' sealed halves plus other records'
     /// aggregates. Decremented only in batch, when a holder dies or reclaims.
     pub(crate) holders: u32,
@@ -211,9 +208,29 @@ pub(crate) struct SealedRecord<const W: usize> {
     /// full wind-down must have been shared at some point.
     #[cfg(test)]
     pub(crate) peak_holders: u32,
-    /// What a hold on this record keeps alive, once that answer can no longer change. Written by a
-    /// price query and by nothing else, and never cleared — there is no path that clears a
-    /// `OnceCell`, which is the point.
+    /// The head of the chain of departed cells whose residents this record now answers for,
+    /// threaded through the table's relocation entries themselves. Bounded by merges, never by
+    /// values — a cell contributes at most one entry, however many residents it kept — and it is
+    /// what lets the record's retirement drop exactly its own entries from that map.
+    pub(crate) lineage: Option<Handle>,
+}
+
+impl<const W: usize> SealedRecord<W> {
+    /// Bytes the detached chunks still occupy, the memo's own among them. Retention lives only in
+    /// this tier, so this is the occupancy a hold on the region is answerable for — what the
+    /// consolidation copy buys back, and the input a pressure model prices a release against.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.storage.allocated_bytes()
+    }
+
+    /// What a hold on this record keeps alive, once that answer can no longer change — the record
+    /// set, written into the record's own [`storage`](Self::storage). Written by a price query and
+    /// by nothing else, and never cleared: there is no path that clears a `OnceCell`, which is the
+    /// point.
+    ///
+    /// The node *set* is what is memoized, not a byte total: two branches of one closure may share
+    /// a sub-tier, so a price folds sets together and sums once at the end. Summing memoized
+    /// totals instead would bill the shared part twice.
     ///
     /// A closure is memoized only when it names no live cell, and **nothing inside such a closure
     /// ever changes**:
@@ -231,22 +248,8 @@ pub(crate) struct SealedRecord<const W: usize> {
     /// So the node set is fixed and the bytes are fixed, and the memo stays exact for the record's
     /// whole life ([liveness-matrix.md § Bounding the two
     /// tiers](../design/liveness-matrix.md#bounding-the-two-tiers)).
-    pub(crate) closure: OnceCell<Memo>,
-    /// The head of the chain of departed cells whose residents this record now answers for,
-    /// threaded through the table's relocation entries themselves. Bounded by merges, never by
-    /// values — a cell contributes at most one entry, however many residents it kept — and it is
-    /// what lets the record's retirement drop exactly its own entries from that map.
-    pub(crate) lineage: Option<Handle>,
-}
-
-impl<const W: usize> SealedRecord<W> {
-    /// Bytes the detached chunks still occupy. Retention lives only in this tier, so this is the
-    /// occupancy a hold on the region is answerable for — what the consolidation copy buys back,
-    /// and the input a pressure model prices a release against.
-    pub(crate) fn retained_bytes(&self) -> usize {
-        self.storage
-            .as_ref()
-            .map_or(0, |storage| storage.allocated_bytes())
+    pub(crate) fn memo(&self) -> Option<&[SealedId]> {
+        self.storage.memo()
     }
 }
 
@@ -265,8 +268,9 @@ pub(crate) struct SealedTier<const W: usize> {
     next_serial: u32,
     live: usize,
     /// Retained bytes summed over every record present — the tier's half of the occupancy signal,
-    /// maintained at the places storage enters or leaves the tier rather than scanned.
-    bytes: usize,
+    /// maintained at the places storage enters or leaves the tier rather than scanned. A `Cell`
+    /// because priming a memo grows a record's bytes and runs under `&self`.
+    bytes: Cell<usize>,
 }
 
 impl<const W: usize> SealedTier<W> {
@@ -279,7 +283,7 @@ impl<const W: usize> SealedTier<W> {
             free: Vec::with_capacity(cap as usize),
             next_serial: 0,
             live: 0,
-            bytes: 0,
+            bytes: Cell::new(0),
         }
     }
 
@@ -309,7 +313,7 @@ impl<const W: usize> SealedTier<W> {
     pub(crate) fn insert(&mut self, id: SealedId, record: SealedRecord<W>) {
         let slot = &mut self.records[id.index() as usize];
         debug_assert!(slot.is_none(), "a minted index is filled once");
-        self.bytes += record.retained_bytes();
+        self.bytes.set(self.bytes.get() + record.retained_bytes());
         *slot = Some((id.serial(), record));
         self.live += 1;
     }
@@ -337,21 +341,32 @@ impl<const W: usize> SealedTier<W> {
         let (_, record) = slot.take().expect("the serial matched a present record");
         self.free.push(id.index());
         self.live -= 1;
-        self.bytes -= record.retained_bytes();
+        self.bytes.set(self.bytes.get() - record.retained_bytes());
         Some(record)
     }
 
     /// Splice storage into a record, keeping the running total in step. The one write into a
     /// record's storage after its construction, so the total needs no other maintenance point.
     pub(crate) fn splice_storage(&mut self, id: SealedId, from: Option<Region>) {
-        self.bytes += from.as_ref().map_or(0, Region::allocated_bytes);
+        self.bytes
+            .set(self.bytes.get() + from.as_ref().map_or(0, Region::allocated_bytes));
         let record = self.get_mut(id).expect("the fold target is present");
         Region::splice(&mut record.storage, from);
     }
 
+    /// Write `ids` into `id`'s own region as its frozen closure, once, and count the bytes that
+    /// cost. Under `&self` because a price query is a read of the table everywhere else.
+    pub(crate) fn prime(&self, id: SealedId, ids: &[SealedId]) {
+        let Some(record) = self.get(id) else {
+            return;
+        };
+        let written = record.storage.set_memo(ids);
+        self.bytes.set(self.bytes.get() + written);
+    }
+
     /// Bytes retained across the whole tier.
     pub(crate) fn retained_bytes(&self) -> usize {
-        self.bytes
+        self.bytes.get()
     }
 
     pub(crate) fn is_empty(&self) -> bool {

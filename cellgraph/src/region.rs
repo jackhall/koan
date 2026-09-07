@@ -17,7 +17,27 @@
 //! a `Bump` moves without moving a chunk byte, so the pointer stability a detached seal already
 //! relies on carries a borrow across the merge unchanged.
 
+use std::cell::OnceCell;
+use std::ptr::NonNull;
+
 use bumpalo::Bump;
+
+use crate::sealed::SealedId;
+
+#[cfg(test)]
+mod tests;
+
+/// A run of `Copy` values written into this region's own bump and read back only through the
+/// region that wrote it.
+///
+/// Private to this module: it has no `Deref`, no public constructor, and no `Drop`, so the only
+/// way to reach the values is [`Region::memo`], whose `&self` bounds the slice it hands back.
+/// Holding a raw pointer is what makes a `Region` `!Send`, which costs nothing — a table is not
+/// `Send` either, since it carries the embedder's boxed verdict.
+struct Kept<T: Copy> {
+    ptr: NonNull<T>,
+    len: usize,
+}
 
 /// One cell's storage: the bump it writes into, plus the bumps it has absorbed. Minted lazily at
 /// the cell's first allocation, so a cell that never allocates costs no chunk.
@@ -27,6 +47,11 @@ pub(crate) struct Region {
     /// allocated into an absorbed bump again — but their chunks stay at their addresses, which is
     /// what the borrows minted before the merge still name.
     absorbed: Vec<Bump>,
+    /// The frozen-closure memo of the record this region belongs to, written once by a price query
+    /// and never cleared — see [`SealedRecord`](crate::sealed::SealedRecord) for why it can never
+    /// go stale. Region state because its bytes are region bytes: the record's price counts them
+    /// like any other chunk.
+    memo: OnceCell<Kept<SealedId>>,
 }
 
 impl Region {
@@ -34,7 +59,37 @@ impl Region {
         Region {
             bump: Bump::new(),
             absorbed: Vec::new(),
+            memo: OnceCell::new(),
         }
+    }
+
+    /// The memoized record set, or `None` while nothing has primed it.
+    pub(crate) fn memo(&self) -> Option<&[SealedId]> {
+        let kept = self.memo.get()?;
+        // SAFETY: the `Kept` is a private field of this region, minted by `set_memo` out of this
+        // region's own bump and reachable through no other path. The bump is never reset and frees
+        // its chunks only when this `Region` drops, and moving the `Bump` moves no chunk byte, so
+        // the run stays where it was written for as long as the region lives. `SealedId: Copy`, so
+        // nothing there was ever dropped in place. The returned borrow is bounded by `&self`.
+        Some(unsafe { std::slice::from_raw_parts(kept.ptr.as_ptr(), kept.len) })
+    }
+
+    /// Write the memo into this region's own bytes, once. Reports the chunk bytes the write cost,
+    /// which is what keeps the record's retained total in step — `0` when a memo is already there.
+    pub(crate) fn set_memo(&self, ids: &[SealedId]) -> usize {
+        if self.memo.get().is_some() {
+            return 0;
+        }
+        let before = self.allocated_bytes();
+        let written = self.bump.alloc_slice_copy(ids);
+        let kept = Kept {
+            // An empty run gets bumpalo's dangling, aligned pointer, which `from_raw_parts` takes
+            // at length zero.
+            ptr: NonNull::from(&mut *written).cast::<SealedId>(),
+            len: written.len(),
+        };
+        let _ = self.memo.set(kept);
+        self.allocated_bytes() - before
     }
 
     pub(crate) fn writer(&self) -> Writer<'_> {
@@ -42,14 +97,29 @@ impl Region {
     }
 
     /// Take `other`'s chunks into this bundle. The bumps move; the chunks do not.
+    /// Take `other`'s chunks into this bundle. The bumps move; the chunks do not, so a borrow
+    /// minted before the merge still names its bytes — `other`'s own memo included, whose `Kept`
+    /// goes with `other` and leaves its bytes behind as a bump's dead bytes.
     fn absorb(&mut self, other: Region) {
         self.absorbed.extend(other.absorbed);
-        self.absorbed.push(other.bump);
+        // A bump that never allocated owns no chunk, so taking it in would only lengthen the walk
+        // every byte total makes.
+        if other.bump.allocated_bytes() > 0 {
+            self.absorbed.push(other.bump);
+        }
     }
 
-    /// Splice one optional region into another — the storage half of every merge. A source with no
-    /// region contributes nothing; a target with none takes the source whole.
-    pub(crate) fn splice(into: &mut Option<Region>, from: Option<Region>) {
+    /// Splice an optional region into a region — the storage half of every merge into a record. A
+    /// source with no region contributes nothing.
+    pub(crate) fn splice(into: &mut Region, from: Option<Region>) {
+        if let Some(from) = from {
+            into.absorb(from);
+        }
+    }
+
+    /// Splice one optional region into another — the storage half of a merge into a slab cell,
+    /// whose region is minted lazily. A target with none takes the source whole.
+    pub(crate) fn splice_optional(into: &mut Option<Region>, from: Option<Region>) {
         let Some(from) = from else {
             return;
         };

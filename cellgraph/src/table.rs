@@ -19,7 +19,7 @@ use crate::reattach::{DropFree, Erased, Reattachable};
 use crate::region::{Region, Writer};
 use crate::resident::{Resident, ResidentKey, Residents};
 use crate::scratch::{Scratch, ScratchVec};
-use crate::sealed::{Memo, ScratchSet, SealedId, SealedRecord, SealedSet, SealedTier};
+use crate::sealed::{ScratchSet, SealedId, SealedRecord, SealedSet, SealedTier};
 
 /// Refusals from [`CellTable::create`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -911,7 +911,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             }
         }
         let storage = self.slots[dead as usize].region.take();
-        Region::splice(&mut self.slots[into as usize].region, storage);
+        Region::splice_optional(&mut self.slots[into as usize].region, storage);
 
         self.vacate(dead, &dups, scratch);
         debug_assert!(
@@ -1141,7 +1141,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             #[cfg(test)]
             let sealed_width = absorbed.aggregate.sealed().len() as u64;
             let (transferred, duplicated) =
-                self.fold_into_record(target, absorbed.aggregate, absorbed.storage, scratch);
+                self.fold_into_record(target, absorbed.aggregate, Some(absorbed.storage), scratch);
             // Each duplicate had at least two holders — the target and the absorbed record — so
             // none of these counts reaches zero, and the target survives the call.
             self.release_sealed_holds(&duplicated, scratch);
@@ -1246,7 +1246,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         // The cell's hold set, both halves, frozen rather than cleared. Its sealed half moves from
         // the cell to the record, so the ids it names change holder without changing count.
         let aggregate = self.take_holds(slot);
-        let storage = self.slots[slot as usize].region.take();
+        let storage = self.slots[slot as usize]
+            .region
+            .take()
+            .unwrap_or_else(Region::new);
         let count = (holders.len() + namers.len()) as u32;
 
         // 1. Holders convert: the slab bit becomes the id, in the hold set and in every mask of
@@ -1290,7 +1293,6 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 holders: count,
                 #[cfg(test)]
                 peak_holders: count,
-                closure: std::cell::OnceCell::new(),
                 lineage: None,
             },
         );
@@ -1410,17 +1412,27 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         }
 
         // How many candidates' closures each node lies in. A count of one is what makes it unique.
+        // The slab half indexes by slot; the sparse half is an association list, scanned rather
+        // than hashed — a candidate set is a handful of ids, and the crate keeps no hash map.
         let mut cell_count = vec![0u32; self.cap as usize];
-        let mut record_count: std::collections::HashMap<SealedId, u32> =
-            std::collections::HashMap::new();
+        let mut record_count: Vec<(SealedId, u32)> = Vec::new();
         for (_, reached) in &walks {
             for slot in &reached.cells {
                 cell_count[*slot as usize] += 1;
             }
             for id in &reached.records {
-                *record_count.entry(*id).or_insert(0) += 1;
+                match record_count.iter_mut().find(|(named, _)| named == id) {
+                    Some((_, count)) => *count += 1,
+                    None => record_count.push((*id, 1)),
+                }
             }
         }
+        let counted = |id: &SealedId| {
+            record_count
+                .iter()
+                .find(|(named, _)| named == id)
+                .map_or(0, |(_, count)| *count)
+        };
 
         let priced: Vec<(SealedId, Closure)> = walks
             .iter()
@@ -1434,7 +1446,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 let records: usize = reached
                     .records
                     .iter()
-                    .filter(|inner| record_count[*inner] == 1)
+                    .filter(|inner| counted(inner) == 1)
                     .map(|inner| self.record_bytes(*inner))
                     .sum();
                 (
@@ -1566,17 +1578,15 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
     #[cfg(test)]
     fn reached_from_record(&self, id: SealedId) -> Option<Reached> {
         let record = self.sealed.get(id)?;
-        if let Some(memo) = record.closure.get() {
+        if let Some(memo) = record.memo() {
             return Some(Reached {
                 cells: Vec::new(),
-                records: memo.records.clone(),
+                records: memo.to_vec(),
             });
         }
         let reached = self.reached_from(Node::Sealed(id), true);
         if reached.cells.is_empty() {
-            let _ = record.closure.set(Memo {
-                records: reached.records.clone(),
-            });
+            self.sealed.prime(id, &reached.records);
         }
         Some(reached)
     }
@@ -1588,7 +1598,7 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
         let Some(record) = self.sealed.get(id) else {
             return;
         };
-        if record.closure.get().is_some() {
+        if record.memo().is_some() {
             return;
         }
         // Priming wants the record set and nothing else: a closure that names a live cell is not
@@ -1609,12 +1619,10 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
                 Node::Sealed(inner) => records.push(inner),
             },
         );
-        // The one heap vector on this path, and only for a closure that has actually frozen: the
-        // memo is durable, written once per record for the table's whole life.
+        // The memo is durable and lands in the record's own region, so the bytes it costs are
+        // bytes the record's price already counts.
         if frozen {
-            let _ = record.closure.set(Memo {
-                records: records.to_vec(),
-            });
+            self.sealed.prime(id, &records);
         }
     }
 
@@ -1692,11 +1700,11 @@ impl<C: Reattachable, const W: usize> CellTable<C, W> {
             }
             visit(Node::Sealed(id));
             let memo = use_memos
-                .then(|| self.sealed.get(id).and_then(|record| record.closure.get()))
+                .then(|| self.sealed.get(id).and_then(SealedRecord::memo))
                 .flatten();
             match memo {
                 Some(memo) => {
-                    for inner in &memo.records {
+                    for inner in memo {
                         if seen_records.insert(*inner) {
                             visit(Node::Sealed(*inner));
                         }

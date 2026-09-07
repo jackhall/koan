@@ -164,7 +164,7 @@ fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
     let open = closure(&table, s_id).unwrap();
     assert!(!open.frozen);
     assert_eq!(open.bytes, retained(&table, s_id) + live_bytes);
-    assert!(table.sealed.get(s_id).unwrap().closure.get().is_none());
+    assert!(table.sealed.get(s_id).unwrap().memo().is_none());
 
     // The cell's slab column is empty and its only namer is the record, so it seals into it.
     table.release(live, Absorption::IntoHolder).unwrap();
@@ -174,16 +174,50 @@ fn a_closure_naming_a_live_cell_is_not_frozen_and_freezes_when_it_seals() {
     assert!(frozen.frozen);
     // The bytes moved within the closure, so the total did not move at all.
     assert_eq!(frozen.bytes, open.bytes);
-    let memo = table.sealed.get(s_id).unwrap().closure.get().unwrap();
-    assert_eq!(memo.records, vec![s_id]);
+    let memo = table.sealed.get(s_id).unwrap().memo().unwrap().to_vec();
+    assert_eq!(memo, vec![s_id]);
     // The memo records the node set, and the set still prices to the same total.
     assert_eq!(
-        memo.records
-            .iter()
-            .map(|id| retained(&table, *id))
-            .sum::<usize>(),
+        memo.iter().map(|id| retained(&table, *id)).sum::<usize>(),
         open.bytes
     );
+}
+
+/// The memo is region state, so the record's price counts it like any other chunk. A record whose
+/// cell never allocated is where that shows plainly: nothing retains anything until the price
+/// query writes the memo, and then the record retains exactly what its region does.
+#[test]
+fn priming_a_memo_costs_the_record_the_bytes_it_writes() {
+    let mut table: CellTable<Owned> = CellTable::new(4, pin);
+    let bare = table.create(None, None).unwrap();
+    let keep = table.create(None, None).unwrap();
+    let keep_too = table.create(None, None).unwrap();
+    // No `allocate`: the cell writes nothing, so the record it seals into starts with no chunk.
+    hold(&mut table, keep, bare);
+    hold(&mut table, keep_too, bare);
+
+    table.release(bare, Absorption::Refused).unwrap();
+    let id = newest(&table);
+    assert_eq!(retained(&table, id), 0);
+    assert_eq!(table.occupancy().retained_bytes, 0);
+
+    let priced = closure(&table, id).unwrap();
+    assert!(priced.frozen, "nothing live is left in the closure");
+
+    // The memo landed in the record's own region, so both the record's price and the tier's total
+    // grew by exactly the chunk it minted.
+    let after = retained(&table, id);
+    assert!(after > 0, "the record's price counts the memo it now holds");
+    assert_eq!(
+        after,
+        table.sealed.get(id).unwrap().storage.allocated_bytes()
+    );
+    assert_eq!(table.occupancy().retained_bytes, after);
+    assert_eq!(table.sealed.get(id).unwrap().memo(), Some(&[id][..]));
+
+    // A second query writes nothing, so the price does not move again.
+    assert_eq!(closure(&table, id).unwrap(), priced);
+    assert_eq!(retained(&table, id), after);
 }
 
 #[test]
@@ -211,15 +245,8 @@ fn a_frozen_closure_memoizes_and_the_memo_survives_holder_churn() {
     let priced = closure(&table, s_id).unwrap();
     assert!(priced.frozen);
     assert_eq!(
-        table
-            .sealed
-            .get(s_id)
-            .unwrap()
-            .closure
-            .get()
-            .unwrap()
-            .records,
-        vec![s_id, a_id]
+        table.sealed.get(s_id).unwrap().memo().unwrap(),
+        [s_id, a_id]
     );
 
     // Holders come and go above the closure; nothing inside it moves, so the memo stays exact.
@@ -279,15 +306,8 @@ fn a_walk_that_reaches_a_memoized_record_merges_its_set() {
     assert!(frozen.frozen);
     assert_eq!(frozen.bytes, open.bytes);
     assert_eq!(
-        table
-            .sealed
-            .get(s_id)
-            .unwrap()
-            .closure
-            .get()
-            .unwrap()
-            .records,
-        vec![s_id, a_id, b_id]
+        table.sealed.get(s_id).unwrap().memo().unwrap(),
+        [s_id, a_id, b_id]
     );
 }
 

@@ -48,6 +48,27 @@ as surprises, not scheduled.
   query prices as freeing a sub-tier may free nothing. The precise answer is
   which nodes the candidate dominates in the hold graph, a computation the
   substrate does not have and the first embedder has not yet needed.
+- **Reach clones allocate once a reach names a sealed region.** A
+  [`Mask`](../src/mask.rs) is an inline `Bits<W>` row plus a `SealedSet`, and
+  that sparse half is a heap `Vec<SealedId>` — so "built, copied, and compared
+  without touching the allocator" ([design/liveness-matrix.md § Reach as a
+  hybrid mask](../design/liveness-matrix.md#reach-as-a-hybrid-mask)) holds only
+  while the half is empty. A mask also grows that vector under `replace_slot`,
+  which the seal transition applies to every mask of every holder's resident
+  table. The reading: `redeem` costs no allocation in `fan_out` and
+  `keep_redeem`, and 32 bytes per call in `pull_chain` and `shared_subtier`,
+  all of it the clone of a redeemed entry's reach.
+- **A release's bytes grow with the depth of the tier it winds down.** Across
+  `pull_chain`, allocations per `release` fall from 1.78 at n=8 to 1.39 at
+  n=32 while bytes per call rise from 579 to 689 — 16 allocations over 5208
+  bytes against 46 over 22744. The count amortizes and the volume does not,
+  and nothing records which of the seal transition's writes carries the growth.
+- **A record's bookkeeping is three heap vectors beside its region.** A
+  [`SealedRecord`](../src/sealed.rs) carries its aggregate's sealed half, its
+  `lineage`, and its memo's `records`, each its own allocation and none of them
+  in the region the record detached with. So `retained_bytes` — the figure a
+  hold on the region is answerable for, and the input a release is priced
+  against — counts none of what the substrate spends per record.
 
 ### Performance
 

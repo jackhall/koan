@@ -17,7 +17,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-18 tests, grouped by the unsafe site each pins down. Names below are the exact
+20 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -80,6 +80,18 @@ into a sealed record a live continuation already borrows into.
 - `table::tests::absorption::a_uniquely_held_cell_is_absorbed_into_its_holder_instead_of_sealing`
 - `table::tests::absorption::a_cell_with_a_single_sealed_namer_seals_into_it`
 
+**Region bookkeeping — `Kept`** ([src/region.rs](../src/region.rs)) — a record's frozen-closure
+memo is a run of ids written into the record's own bump and held as a raw pointer, read back only
+through the `&self` door on the region that wrote it. It stands on the same argument the seal
+transition does — a `Bump` moves without moving a chunk byte, and a region never resets — but in a
+shape nothing else covers: the pointer is stored *inside* the same struct as the bump it names, so
+what Miri checks is that moving the region and absorbing another one into it leave the run
+readable, and that the chunk carrying it goes at the region's drop rather than outliving it. The
+second test pins the empty run, whose pointer is dangling-but-aligned by construction.
+
+- `region::tests::a_memo_survives_its_region_moving_and_absorbing`
+- `region::tests::an_empty_memo_reads_back_empty`
+
 **The at-rest carrier and the crossing's two brands** ([src/resident.rs](../src/resident.rs),
 [src/table.rs](../src/table.rs)) — the same `retype` primitive at the doors a value crosses steps
 through. A value put to rest keeps its borrows while its home cell's storage moves under it — into
@@ -120,9 +132,9 @@ full-slate run and trim to five so this list stays bounded. Use the most-recent
 entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-09-06: 172.83s — 87 tests, 0 leaks, 0 UB
 - 2026-09-06: 166.57s — 82 tests, 0 leaks, 0 UB
 - 2026-09-06: 150.44s — 77 tests, 0 leaks, 0 UB
 - 2026-09-06: 138.22s — 74 tests, 0 leaks, 0 UB
 - 2026-09-06: 140.36s — 67 tests, 0 leaks, 0 UB
-- 2026-09-06: 99.00s — 66 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

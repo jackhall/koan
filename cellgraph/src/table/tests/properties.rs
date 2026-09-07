@@ -308,7 +308,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
     let mut now_memoized = Vec::new();
     for id in &records {
         let record = table.sealed.get(*id).unwrap();
-        let Some(memo) = record.closure.get() else {
+        let Some(memo) = record.memo() else {
             continue;
         };
         now_memoized.push(*id);
@@ -326,7 +326,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
         );
         let mut walked = fresh.records.clone();
         walked.sort();
-        let mut memoized = memo.records.clone();
+        let mut memoized = memo.to_vec();
         memoized.sort();
         assert_eq!(walked, memoized, "the memoized closure of {id:?} drifted");
         assert_eq!(
