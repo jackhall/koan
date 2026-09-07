@@ -60,16 +60,17 @@ reading for one comes from, against the record in
 
 - **Resident interning is a linear scan.** `Residents::intern`
   ([resident.rs](../src/resident.rs)) compares the new reach against every
-  entry, each comparison a full-row equality, so a `keep` costs the number
-  of distinct reaches the cell has ever been kept into times the row width.
-  Interning is what keeps that number small, and the row is inline, so each
-  comparison is a word compare at the shipped width; a hash over the row
-  would make the scan O(1) if a cell ever settles at many shapes.
-- **Duplicated shapes.** The fresh-slot state is written twice, in
-  `CellTable::new` and `recycle`; `store_successor_capturing` repeats
-  `mint_and_build`'s region-get, view, erase, and reach steps, differing only
-  in the `DropFree` assert; the test-only `Occupancy` repeats four fields of
-  `Crossing` and `cross` recomputes them inline; the "target lost its last
-  holder" block appears in `fold_into_namer` and `absorb_singletons`; the two
-  `debug_ring_from` doors differ only in their seed node. None costs at
-  runtime; each is a second place that must agree with the first.
+  entry, each comparison a full-row equality, so a `keep` costs the number of
+  distinct reaches the cell has ever been kept into times the row width.
+  `keep_shapes` in [tools/cellgraph_perf.py](../../tools/cellgraph_perf.py) is
+  that cost on record: a keep into a cell holding 8 distinct entries reads at
+  about 162 ns and one into a cell holding 32 at about 228 ns, so the scan
+  charges roughly 3 ns an entry at the shipped width. `keep_redeem`, whose
+  cell settles at one entry, reads 190 ns a keep, but over a different
+  traversal — it is a scale, not a floor to subtract. A hash over the row is
+  not the drop-in it looks like: entries are rewritten in place at the seal
+  transition and at merges, a rewrite changes the content an index keys on and
+  can make two distinct entries equal, so an index would be rebuilt on every
+  rewrite of a holder's table and would need the duplicate handling the scan
+  gets for free. Left as is until an embedder shows a cell settling at many
+  shapes.
