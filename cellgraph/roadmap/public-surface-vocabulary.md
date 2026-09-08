@@ -41,19 +41,18 @@ a name a reader has to translate before it means anything:
   reaches start at, and `base` says none of that.
 - `src/mask.rs` is `src/reach.rs`. The module is named for a word its only
   type stopped using when `GraphReach` took its name.
+- The hold graph's internal node type is `GraphNode`, and both node enums name
+  the tier rather than the kind: `GraphNode::Slab` / `GraphNode::Sealed` and
+  `HoldNode::Slab` / `HoldNode::Sealed`, matching `CellHandle::Slab` and
+  `SlabForward::Slab`. A `Cell` variant would read as a contrast with `Sealed`
+  on the wrong axis — a sealed cell sits in the other tier, it is not un-live —
+  and `Live` would be plainly false, since `disposable` gates on birth holds
+  alone, so a released cell a pin row still names stays `Dead` in the slab and
+  the walk descends into it. `HoldNode` keeps its type name: the level it names
+  against `GraphNode` is "by handle" versus "by slot", and that pairing stays
+  open.
 - `tools/verify.sh` is green and `tools/doclinks.py check` reports no broken
   link, design-tree anchors included.
-
-**Directions.**
-
-- *`HoldNode` vs `SlotNode` — open, and not ready.* One hold-graph node type at
-  two levels: `SlotNode::Cell(u32)` is the internal one the walkers run on
-  (`walk`, `walk_for_ring`, `holds_of`, `transitive_pins`, `prime_memo` — 33
-  sites), and `HoldNode::Cell(Handle)` is the same node with its generation
-  attached, minted by `CellGraph::name` for the single `#[cfg(test)]` caller
-  `debug_ring_from`. `Hold` vs `Slot` names neither level, so the pair reads as
-  two *kinds* of node. Candidates considered and not settled: `HoldNode` /
-  `HoldSlot`, `NamedNode` / `HoldNode`, `HoldNode` / `HoldNodeBySlot`.
 
 ## Dependencies
 

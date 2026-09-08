@@ -215,12 +215,12 @@ fn an_acyclic_hold_graph_reports_no_ring() {
     assert!(table.debug_ring_from(HoldNode::Cell(first)).is_none());
 }
 
-// The doors a value crosses steps through: `keep` puts a carrier down in its home cell's resident
+// The doors a value crosses steps through: `keep` puts a carrier down in its home cell's reach
 // table, and `redeem` takes it back up in a later step of a cell entitled to that storage. See
 // [design/cellgraph.md § Passing values between cells](../../../design/cellgraph.md).
 
 /// The one entry a cell's reach table holds, by the index a key names.
-fn resident_reach<C: Reattachable>(table: &CellTable<C>, slot: u32, index: u32) -> &GraphReach<1> {
+fn dormant_reach<C: Reattachable>(table: &CellTable<C>, slot: u32, index: u32) -> &GraphReach<1> {
     table.slots[slot as usize]
         .reaches
         .get(index)
@@ -244,7 +244,7 @@ fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
         })
         .unwrap();
     assert_eq!(table.slots[consumer.slot() as usize].reaches.len(), 1);
-    assert!(resident_reach(&table, consumer.slot(), 0).names(consumer.slot()));
+    assert!(dormant_reach(&table, consumer.slot(), 0).names(consumer.slot()));
     assert_eq!(table.relocations(), 0);
 
     // Nothing reaches the producer, so its death is a reclamation: the slot comes straight back
@@ -259,7 +259,7 @@ fn push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step() {
         .enter(consumer, |context| {
             let carrier = context
                 .redeem(kept)
-                .expect("the home redeems its own resident");
+                .expect("the home redeems its own dormant carrier");
             *context.read(&carrier).value()
         })
         .unwrap();
@@ -331,7 +331,7 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
         .unwrap();
 
     // The uniquely held producer folds into its holder rather than minting a sealed cell, and its
-    // resident masks move with the storage, re-homed at the consumer's bit.
+    // dormant carriers' masks move with the storage, re-homed at the consumer's bit.
     table
         .release(producer, ReleaseAbsorption::IntoHolder)
         .unwrap();
@@ -343,12 +343,12 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
             base: 0,
         })
     );
-    let migrated = resident_reach(&table, consumer.slot(), 0);
+    let migrated = dormant_reach(&table, consumer.slot(), 0);
     assert!(migrated.names(consumer.slot()));
     assert!(!migrated.names(producer.slot()));
 
-    // A second resident kept by the consumer itself lands past the migrated one, so the two keys
-    // name different entries and both redeem.
+    // A second dormant carrier kept by the consumer itself lands past the migrated one, so the two
+    // keys name different entries and both redeem.
     let own = table
         .enter(consumer, |context| {
             let value = context.alloc::<Number>(|writer| writer.value(9));
@@ -360,7 +360,7 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
             let pulled = context.redeem(kept).expect("the absorbing cell answers");
             let mine = context
                 .redeem(own)
-                .expect("the home redeems its own resident");
+                .expect("the home redeems its own dormant carrier");
             (*context.read(&pulled).value(), *context.read(&mine).value())
         })
         .unwrap();
@@ -368,7 +368,7 @@ fn pull_completes_after_the_producer_is_absorbed_into_the_consumer() {
 }
 
 #[test]
-fn a_resident_forwarded_through_two_merges_is_still_found() {
+fn a_dormant_carrier_forwarded_through_two_merges_is_still_found() {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let end = table.create(None, None).unwrap();
     let middle = table.create(None, None).unwrap();
@@ -469,7 +469,7 @@ fn redeem_refuses_once_the_storage_is_gone() {
             context.keep(value)
         })
         .unwrap();
-    // Nothing reached the home, so its death frees the chunks the resident named.
+    // Nothing reached the home, so its death frees the chunks the dormant carrier named.
     table
         .release(reclaimed, ReleaseAbsorption::IntoHolder)
         .unwrap();
@@ -506,7 +506,7 @@ fn redeem_refuses_once_the_storage_is_gone() {
 }
 
 #[test]
-fn a_birth_hold_entitles_a_child_to_its_parents_resident() {
+fn a_birth_hold_entitles_a_child_to_its_parents_dormant_carrier() {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let parent = table.create(None, None).unwrap();
     let child = table.create(Some(parent), None).unwrap();
@@ -530,7 +530,7 @@ fn a_birth_hold_entitles_a_child_to_its_parents_resident() {
         .unwrap();
     assert_eq!(read, 41);
 
-    // A birth row has no sealed half, so a declared death leaves the parent resident in the slab
+    // A birth row has no sealed half, so a declared death leaves the parent undisposed in the slab
     // with its storage intact — and the child's claim outlives the death.
     table
         .release(parent, ReleaseAbsorption::IntoHolder)
@@ -580,11 +580,11 @@ fn a_value_redeemed_from_a_sealed_cell_can_be_kept_again() {
             context.keep(carrier)
         })
         .unwrap();
-    assert!(resident_reach(&table, middle.slot(), 0).names_sealed(sealed_id));
+    assert!(dormant_reach(&table, middle.slot(), 0).names_sealed(sealed_id));
     let read = table
         .enter(middle, |context| {
             *context
-                .read(&context.redeem(again).expect("its own resident"))
+                .read(&context.redeem(again).expect("its own dormant carrier"))
                 .value()
         })
         .unwrap();
@@ -708,8 +708,8 @@ fn keeping_the_same_reach_twice_takes_one_entry_and_both_keys_redeem() {
     let read = table
         .enter(cell, |context| {
             kept.into_iter()
-                .map(|resident| {
-                    let carrier = context.redeem(resident).expect("the home is executing");
+                .map(|dormant| {
+                    let carrier = context.redeem(dormant).expect("the home is executing");
                     *context.read(&carrier).value()
                 })
                 .collect::<Vec<u32>>()

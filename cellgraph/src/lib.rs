@@ -14,22 +14,22 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod carrier;
+mod dormant;
 mod handle;
 mod mask;
 mod matrix;
 mod reattach;
 mod region;
-mod resident;
 mod scratch;
 mod sealed;
 mod table;
 mod tree;
 
-pub use carrier::{Active, Dormant};
+pub use carrier::{Active, Ready};
+pub use dormant::Dormant;
 pub use handle::{CellHandle, Handle, Stale, TreeHandle};
 pub use reattach::{DropFree, Erased, Reattachable};
 pub use region::Writer;
-pub use resident::Resident;
 pub use table::{
     CellTable, CreateError, CrossedOperand, EnterError, Operand, Prices, RedeemError,
     ReleaseAbsorption, ReleaseError, ReleaseTreeError, StepContext, Verdict,

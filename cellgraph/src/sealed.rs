@@ -208,10 +208,10 @@ pub(crate) struct SealedCell<const W: usize> {
     /// of a full wind-down must have been shared at some point.
     #[cfg(test)]
     pub(crate) peak_holders: u32,
-    /// The head of the chain of departed cells whose residents this sealed cell now answers for,
-    /// threaded through the table's relocation entries themselves. Bounded by merges, never by
-    /// values — a cell contributes at most one entry, however many residents it kept — and it is
-    /// what lets the sealed cell's retirement drop exactly its own entries from that map.
+    /// The head of the chain of departed cells whose dormant carriers this sealed cell now answers
+    /// for, threaded through the table's relocation entries themselves. Bounded by merges, never by
+    /// values — a cell contributes at most one entry, however many dormant carriers it kept — and
+    /// it is what lets the sealed cell's retirement drop exactly its own entries from that map.
     pub(crate) lineage: Option<Handle>,
 }
 

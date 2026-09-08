@@ -70,7 +70,7 @@ by [adopt-cellgraph.md](../workgraph/roadmap/adopt-cellgraph.md).
   asserts that at compile time.
 - [src/carrier.rs](src/carrier.rs) — the two carrier states that carry a
   lifetime: sealed with its reach, in step, and opened at a reading borrow.
-- [src/resident.rs](src/resident.rs) — the third carrier state, at rest: a
+- [src/dormant.rs](src/dormant.rs) — the third carrier state, at rest: a
   value parked between steps with no lifetime of its own, the private key
   naming its reach, and the per-cell resident table that reach lives in —
   interned on content, so the table is bounded by the distinct reaches a cell

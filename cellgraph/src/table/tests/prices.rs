@@ -400,8 +400,8 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
     let mut running = table.create(None, None).unwrap();
     let mut waiting = table.create(None, None).unwrap();
 
-    // The cart seeds both residents: the first hop's argument, built into the hop's own region,
-    // and the accumulator, which lives in the cart from here on.
+    // The cart seeds both dormant carriers: the first hop's argument, built into the hop's own
+    // region, and the accumulator, which lives in the cart from here on.
     let (mut argument, mut accumulated) = table
         .enter(cart, |context| {
             let first = context
@@ -465,7 +465,7 @@ fn a_loop_is_two_hop_cells_and_a_cart() {
 
     // The cart is kept into once per hop and its table did not grow: every accumulator reaches
     // the cart and nothing else, so all of them intern to the entry the seed minted. This is what
-    // keeps the seal transition's bound — work per holder's resident entry — a bound on a run of
+    // keeps the seal transition's bound — work per holder's reach-table entry — a bound on a run of
     // any length rather than one that grows with it.
     assert_eq!(
         table.slots[cart.slot() as usize].reaches.len(),

@@ -1,22 +1,22 @@
-//! [`Resident`] — the carrier at rest: a value put down in its home cell's region between steps,
-//! with no lifetime of its own. The third of the three states a value with reach passes through
-//! ([design/cellgraph.md](../design/cellgraph.md) § The contract: two embedder types), and the
-//! only one an embedder may hold across an `enter` scope.
+//! [`Dormant`] — the carrier at rest: a value put down in its home cell's region between steps,
+//! with no lifetime of its own. The least live of the three states a value with reach passes
+//! through ([design/cellgraph.md](../design/cellgraph.md) § The contract: two embedder types), and
+//! the only one an embedder may hold across an `enter` scope.
 //!
-//! A resident carries **no reach**. Its mask lives in its home cell's reach table, where the
-//! seal transition can rewrite it as the slab bit it names becomes a sealed id; the resident names
-//! that entry by a private key and nothing else. So an embedder cannot pair a value with a reach
-//! from outside — there is nothing pairable — and a mask a resident depends on cannot go stale,
-//! because it never left the table. Two residents that reach the same thing name one entry: the
-//! table interns on content, so a cell kept into every step of a run holds one mask per distinct
-//! reach rather than one per keep.
+//! A dormant carrier carries **no reach**. Its mask lives in its home cell's reach table, where the
+//! seal transition can rewrite it as the slab bit it names becomes a sealed id; the dormant carrier
+//! names that entry by a private key and nothing else. So an embedder cannot pair a value with a
+//! reach from outside — there is nothing pairable — and a mask a dormant carrier depends on cannot
+//! go stale, because it never left the table. Two dormant carriers that reach the same thing name
+//! one entry: the table interns on content, so a cell kept into every step of a run holds one mask
+//! per distinct reach rather than one per keep.
 //!
 //! It carries no *live value* either, and that is what separates this state from the in-step one. A
-//! resident outlives the step that built it, so by the time one is redeemed its home's storage may
-//! be gone — reclaimed, or retired with the sealed cell it sealed into. A reference into freed
-//! chunks is an invalid value the moment it is moved, whether or not anything reads through it, so
-//! the value rests here as **bytes**: parked at the `keep`, reconstituted only once the redeem door
-//! has established a claim on the storage it names.
+//! dormant carrier outlives the step that built it, so by the time one is redeemed its home's
+//! storage may be gone — reclaimed, or retired with the sealed cell it sealed into. A reference
+//! into freed chunks is an invalid value the moment it is moved, whether or not anything reads
+//! through it, so the value rests here as **bytes**: parked at the `keep`, reconstituted only once
+//! the redeem door has established a claim on the storage it names.
 
 use std::mem::MaybeUninit;
 
@@ -29,29 +29,30 @@ use crate::reattach::{DropFree, Erased, Reattachable};
 /// Opaque: it has no method at all. [`StepContext::redeem`] is the only door out, and it refuses
 /// unless the executing cell is entitled to the storage the reach names.
 ///
-/// `Copy` when the family's erased form is, for the same reason [`Dormant`] is: the parked value
+/// `Copy` when the family's erased form is, for the same reason [`Ready`] is: the parked value
 /// names region bytes it does not own, and the key is two words.
 ///
 /// [`StepContext::redeem`]: crate::StepContext::redeem
-/// [`Dormant`]: crate::Dormant
-pub struct Resident<T: Reattachable + DropFree> {
+/// [`Ready`]: crate::Ready
+pub struct Dormant<T: Reattachable + DropFree> {
     /// The value parked. `MaybeUninit` is the whole point rather than an implementation detail: a
     /// carrier at rest must be movable after its home's storage is gone, and a `T::At<'static>`
     /// holding a reference into freed chunks is not. Parking asserts nothing about the referents,
-    /// so a resident whose home has been reclaimed is an ordinary value the door refuses.
+    /// so a dormant carrier whose home has been reclaimed is an ordinary value the door refuses.
     ///
     /// Nothing is lost by never reconstituting one: [`DropFree`] is what the value doors bound on,
     /// and the assertion below is the check that the family really runs no destructor.
     value: MaybeUninit<Erased<T>>,
-    key: ResidentKey,
+    key: DormantKey,
 }
 
-impl<T: Reattachable + DropFree> Resident<T> {
-    pub(crate) fn new(value: Erased<T>, key: ResidentKey) -> Self {
+impl<T: Reattachable + DropFree> Dormant<T> {
+    pub(crate) fn new(value: Erased<T>, key: DormantKey) -> Self {
         // A parked value is never dropped, so a family with drop glue would leak whatever it owns
-        // whenever a resident goes unredeemed. `DropFree` declares the absence; this is the check.
+        // whenever a dormant carrier goes unredeemed. `DropFree` declares the absence; this is the
+        // check.
         const { assert!(!std::mem::needs_drop::<T::At<'static>>()) };
-        Resident {
+        Dormant {
             value: MaybeUninit::new(value),
             key,
         }
@@ -59,7 +60,7 @@ impl<T: Reattachable + DropFree> Resident<T> {
 
     /// Which entry of which cell's table holds this value's reach. Readable without disturbing the
     /// parked value, which is what lets the redeem door decide before it reconstitutes anything.
-    pub(crate) fn key(&self) -> ResidentKey {
+    pub(crate) fn key(&self) -> DormantKey {
         self.key
     }
 
@@ -69,9 +70,9 @@ impl<T: Reattachable + DropFree> Resident<T> {
     ///
     /// The storage the value's referents name must still be there. The redeem door establishes
     /// exactly that before it calls: the key's home resolves to a live slab slot or a present
-    /// sealed cell, and the executing cell holds it. A resident whose home resolves to neither must
-    /// be refused rather than opened — the bytes are still bytes, but the references in them are
-    /// not.
+    /// sealed cell, and the executing cell holds it. A dormant carrier whose home resolves to
+    /// neither must be refused rather than opened — the bytes are still bytes, but the references
+    /// in them are not.
     pub(crate) unsafe fn take(self) -> Erased<T> {
         // SAFETY: `new` is the only constructor and it always initializes; the caller's contract
         // is what makes the referents in those bytes valid again.
@@ -79,7 +80,7 @@ impl<T: Reattachable + DropFree> Resident<T> {
     }
 }
 
-impl<T: Reattachable + DropFree> Clone for Resident<T>
+impl<T: Reattachable + DropFree> Clone for Dormant<T>
 where
     Erased<T>: Copy,
 {
@@ -88,9 +89,9 @@ where
     }
 }
 
-impl<T: Reattachable + DropFree> Copy for Resident<T> where Erased<T>: Copy {}
+impl<T: Reattachable + DropFree> Copy for Dormant<T> where Erased<T>: Copy {}
 
-/// Which entry of which cell's reach table holds one resident's reach.
+/// Which entry of which cell's reach table holds one dormant carrier's reach.
 ///
 /// Crate-private, like the mask itself: an embedder cannot name an entry, so it cannot hand a
 /// value a reach that is not its own. The home is the cell as it stood at the
@@ -102,7 +103,7 @@ impl<T: Reattachable + DropFree> Copy for Resident<T> where Erased<T>: Copy {}
 /// else, so the index is zero and the redeem derives the reach from the root rather than reading
 /// it back.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct ResidentKey {
+pub(crate) struct DormantKey {
     pub(crate) home: CellHandle,
     pub(crate) index: u32,
 }
@@ -112,8 +113,8 @@ pub(crate) struct ResidentKey {
 ///
 /// This is the **only** durable habitat of a mask on the slab side, so the seal transition's step 1
 /// rewrites exactly this collection per holder and the work is bounded by the holders' entry
-/// counts. It holds *reaches*, not [`Resident`]s — a resident carries no reach of its own and names
-/// an entry here by a private key, which is what keeps a value and its reach unpairable from
+/// counts. It holds *reaches*, not [`Dormant`]s — a dormant carrier carries no reach of its own and
+/// names an entry here by a private key, which is what keeps a value and its reach unpairable from
 /// outside. Entries are **interned on content**, which is what bounds that count: a table holds one
 /// entry per *distinct* reach ever kept into the cell, not one per keep, so a cell kept into every
 /// step for a whole run settles at the handful of shapes its keeps take. Nothing is ever removed —

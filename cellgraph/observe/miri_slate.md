@@ -92,40 +92,41 @@ pins the empty run, whose pointer is dangling-but-aligned by construction.
 - `region::tests::a_memo_survives_its_region_moving_and_absorbing`
 - `region::tests::an_empty_memo_reads_back_empty`
 
-**The at-rest carrier and the crossing's two brands** ([src/resident.rs](../src/resident.rs),
+**The at-rest carrier and the crossing's two brands** ([src/dormant.rs](../src/dormant.rs),
 [src/table.rs](../src/table.rs)) — the same `retype` primitive at the doors a value crosses steps
 through. A value put to rest keeps its borrows while its home cell's storage moves under it — into a
 holder's region bundle, out to a sealed cell, or both in turn — and the redeem door re-anchors it at
 a later step's brand, with the reach it hands back derived from wherever that storage ended up. The
 first three are the three exits a home takes, and the fourth chains two of them; what Miri checks
 across all four is that a borrow minted before any number of merges still names live chunks after
-them. The fifth is the load-bearing one for the park: a resident whose home has been reclaimed, and
-one whose sealed cell has retired, are moved into the door and refused, which is only a valid move
-because the value rests as bytes rather than as a reference. The sixth is the crossing's severing: a
-copied view is re-anchored at a brand unrelated to the destination's region and deep-copied through
-the writer, while a pinned one is embedded, so both re-anchors run in one build.
+them. The fifth is the load-bearing one for the park: a dormant carrier whose home has been
+reclaimed, and one whose sealed cell has retired, are moved into the door and refused, which is only
+a valid move because the value rests as bytes rather than as a reference. The sixth is the
+crossing's severing: a copied view is re-anchored at a brand unrelated to the destination's region
+and deep-copied through the writer, while a pinned one is embedded, so both re-anchors run in one
+build.
 
 - `table::tests::values::push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step`
 - `table::tests::values::pull_completes_after_the_producer_seals`
 - `table::tests::values::pull_completes_after_the_producer_is_absorbed_into_the_consumer`
-- `table::tests::values::a_resident_forwarded_through_two_merges_is_still_found`
+- `table::tests::values::a_dormant_carrier_forwarded_through_two_merges_is_still_found`
 - `table::tests::values::redeem_refuses_once_the_storage_is_gone`
 - `table::tests::crossing::a_copied_view_is_readable_and_a_pinned_one_embeddable`
 
 **The tree habitat's splice, copy and tombstone** ([src/tree.rs](../src/tree.rs),
 [src/table.rs](../src/table.rs)) — the same `retype` primitive where the storage under a borrow
 moves by a **splice** rather than by a merge: a dying tree cell's whole bump is taken into an
-ancestor's bundle, and a resident keyed to it resolves through a tombstone chain to wherever those
-bytes ended up. The first is the load-bearing one for the pledge: a destination stores a
+ancestor's bundle, and a dormant carrier keyed to it resolves through a tombstone chain to wherever
+those bytes ended up. The first is the load-bearing one for the pledge: a destination stores a
 continuation over a value living in its child's bump, the child dies, and the next step reads
 through the continuation — which is only sound because the pin pledged the child to splice here. The
-second reads a resident back after its home spliced and left a tombstone. The third is the forced
-copy's other half: a value crossing to a sibling is severed and deep-copied, so the old cell's bump
-reclaims outright while the copy stays readable. The fourth carries spliced bumps out of the slab
-entirely — the root seals, and a holder reads a tree-homed value out of the sealed cell.
+second reads a dormant carrier back after its home spliced and left a tombstone. The third is the
+forced copy's other half: a value crossing to a sibling is severed and deep-copied, so the old
+cell's bump reclaims outright while the copy stays readable. The fourth carries spliced bumps out of
+the slab entirely — the root seals, and a holder reads a tree-homed value out of the sealed cell.
 
 - `table::tests::tree::a_splice_keeps_a_borrow_the_destination_already_holds`
-- `table::tests::tree::a_resident_whose_home_was_absorbed_redeems_from_the_destination`
+- `table::tests::tree::a_dormant_carrier_whose_home_was_absorbed_redeems_from_the_destination`
 - `table::tests::tree::a_reinstall_inside_a_tree_copies_the_hop_and_reclaims_the_old_one`
 - `table::tests::tree::a_tree_root_that_seals_carries_its_spliced_bumps`
 

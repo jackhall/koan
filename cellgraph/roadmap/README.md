@@ -51,7 +51,7 @@ reading for one comes from, against the record in
 [observe/perf.csv](../observe/perf.csv).
 
 - **Resident interning is a linear scan.** `ReachTable::intern`
-  ([resident.rs](../src/resident.rs)) compares the new reach against every
+  ([dormant.rs](../src/dormant.rs)) compares the new reach against every
   entry, each comparison a full-row equality, so a `keep` costs the number of
   distinct reaches the cell has ever been kept into times the row width.
   `keep_shapes` in [tools/cellgraph_perf.py](../../tools/cellgraph_perf.py) is

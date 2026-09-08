@@ -1,9 +1,10 @@
-//! The two carrier states that carry a lifetime: [`Dormant`], the in-step form a door hands back,
-//! and [`Active`], the in-use form a step reads it out at. The third state — at rest, lifetime-free
-//! — is [`Resident`](crate::Resident), which lives in [`resident`](crate::resident). See
-//! [design/cellgraph.md](../design/cellgraph.md) § The contract: two embedder types.
+//! The two carrier states that carry a lifetime. A value with reach passes through three, in order
+//! of liveness: [`Dormant`](crate::Dormant), at rest and lifetime-free, which lives in
+//! [`dormant`](crate::dormant); [`Ready`], the in-step form a door hands back; and [`Active`], the
+//! in-use form a step reads it out at. See [design/cellgraph.md](../design/cellgraph.md) § The
+//! contract: two embedder types.
 //!
-//! [`Dormant`] bundles the value with the mask describing what it reaches; [`Active`] is the value
+//! [`Ready`] bundles the value with the mask describing what it reaches; [`Active`] is the value
 //! alone at the reading borrow. **A value and its reach are never separable**: every constructor
 //! here is crate-private and the mask type is crate-private too, so a caller cannot assemble a
 //! loose value-plus-mask pair to hand a mint, and cannot re-pair a value with a mask that is not
@@ -29,13 +30,13 @@ pub(crate) enum CellHome {
     Tree(u32),
 }
 
-/// The dormant carrier: a value erased to its lifetime-free form, bundled with its reach.
+/// The ready carrier: a value erased to its lifetime-free form, bundled with its reach.
 ///
 /// Opaque by construction — it exposes no read of its own. [`StepContext::read`] is the only door
 /// out, and it hands back an [`Active`] anchored at the reading borrow.
 ///
 /// [`StepContext::read`]: crate::StepContext::read
-pub struct Dormant<'home, T: Reattachable + DropFree, const W: usize = 1> {
+pub struct Ready<'home, T: Reattachable + DropFree, const W: usize = 1> {
     value: Erased<T>,
     reach: GraphReach<W>,
     /// The cell whose region stores this value: the one a [`keep`](crate::StepContext::keep)
@@ -46,11 +47,11 @@ pub struct Dormant<'home, T: Reattachable + DropFree, const W: usize = 1> {
     _home: PhantomData<&'home ()>,
 }
 
-impl<T: Reattachable + DropFree, const W: usize> Dormant<'_, T, W> {
+impl<T: Reattachable + DropFree, const W: usize> Ready<'_, T, W> {
     /// Bundle a value the table itself just wrote into a region with the reach it composed for it.
     /// Crate-private, so the value-to-reach pairing is only ever the one a door established.
     pub(crate) fn new(value: Erased<T>, reach: GraphReach<W>, home: CellHome) -> Self {
-        Dormant {
+        Ready {
             value,
             reach,
             home,
@@ -93,12 +94,12 @@ impl<T: Reattachable + DropFree, const W: usize> Dormant<'_, T, W> {
 /// Duplicating a carrier duplicates no ownership: the value names region bytes it does not own,
 /// and the reach is a word copy. Two holders of the same value name the same reach, which is what
 /// keeps the mint idempotent.
-impl<T: Reattachable + DropFree, const W: usize> Clone for Dormant<'_, T, W>
+impl<T: Reattachable + DropFree, const W: usize> Clone for Ready<'_, T, W>
 where
     Erased<T>: Copy,
 {
     fn clone(&self) -> Self {
-        Dormant {
+        Ready {
             value: self.value,
             reach: self.reach.clone(),
             home: self.home,

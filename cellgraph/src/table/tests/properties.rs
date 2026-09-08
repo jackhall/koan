@@ -5,15 +5,15 @@
 //!
 //! - a recycled slot is named by nothing — no occupant's row in either relation, and no frozen
 //!   aggregate;
-//! - a cell resident after its declared death is named by an occupant's birth row — the one
+//! - a cell undisposed after its declared death is named by an occupant's birth row — the one
 //!   relation with no sealed half to convert into — or counted by an undisposed tree child;
 //! - every sealed cell's holder count equals the number of hold sets that name it, and the reverse
 //!   naming index is exactly the transpose of the aggregates;
-//! - every bit and id of a resident's mask is covered by storage its cell is answerable for —
-//!   mask validity, over the whole reach table rather than one stored continuation;
+//! - every bit and id of a dormant carrier's mask is covered by storage its cell is answerable
+//!   for — mask validity, over the whole reach table rather than one stored continuation;
 //! - the relocation map and the lineages agree in both directions, and every relocated key names
-//!   an entry that exists — so a resident forwarded through any number of merges still redeems to
-//!   the value it was kept as, which the redeem verb reads back and checks;
+//!   an entry that exists — so a dormant carrier forwarded through any number of merges still
+//!   redeems to the value it was kept as, which the redeem verb reads back and checks;
 //! - no hold set names its own owner, and every present sealed cell has a holder — which together
 //!   make a sealed cell that survives a wound-down run a ring by arithmetic, with no ring walk in
 //!   the loop;
@@ -135,7 +135,7 @@ fn wrapped<H: Copy>(handles: &[H], index: usize) -> Option<H> {
 }
 
 /// The tree pool's own verbs: the three that move a cell through its life, the placement door a
-/// tree step drives, and the two resident doors keyed to a tree home.
+/// tree step drives, and the two dormant-carrier doors keyed to a tree home.
 fn tree_verb() -> impl Strategy<Value = Verb> {
     prop_oneof![
         (0..8usize, any::<bool>())
@@ -153,8 +153,8 @@ fn tree_verb() -> impl Strategy<Value = Verb> {
     ]
 }
 
-/// Those plus the two resident doors, which mint no hold and take no release path of their own —
-/// what they do reach is the reach table, the relocation map, and the masks a merge forwards.
+/// Those plus the two dormant-carrier doors, which mint no hold and take no release path of their
+/// own — what they do reach is the reach table, the relocation map, and the masks a merge forwards.
 fn state_verb() -> impl Strategy<Value = Verb> {
     prop_oneof![
         3 => merge_verb(),
@@ -207,7 +207,7 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
             // undisposed tree child, which is the same relation counted rather than rowed.
             SlotState::Dead => assert!(
                 by_birth || table.tree_children_of(table.occupant(slot)) > 0,
-                "slot {slot} is resident but nothing names it, so it should have left the slab"
+                "slot {slot} is undisposed but nothing names it, so it should have left the slab"
             ),
             SlotState::Live => {}
         }
@@ -291,27 +291,27 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
                 "slot {slot} holds a retired sealed cell"
             );
         }
-        // Resident masks are covered: every bit and id of every entry of the cell's resident
-        // table names storage the cell is answerable for, so a read through one is sound.
+        // Dormant carriers' masks are covered: every bit and id of every entry of the cell's
+        // reach table names storage the cell is answerable for, so a read through one is sound.
         for mask in table.slots[slot as usize].reaches.iter() {
             for named in mask.slab_slots() {
                 assert!(
                     table.slots[named as usize].state != SlotState::Free,
-                    "slot {slot} keeps a resident naming the recycled slot {named}"
+                    "slot {slot} keeps a carrier naming the recycled slot {named}"
                 );
                 assert!(
                     named == slot || table.pins.test(slot, named),
-                    "slot {slot} keeps a resident naming slot {named}, which it does not hold"
+                    "slot {slot} keeps a carrier naming slot {named}, which it does not hold"
                 );
             }
             for named in mask.sealed().iter() {
                 assert!(
                     sealed_ids.contains(&named),
-                    "slot {slot} keeps a resident naming a retired sealed cell"
+                    "slot {slot} keeps a carrier naming a retired sealed cell"
                 );
                 assert!(
                     table.sealed_holds[slot as usize].contains(named),
-                    "slot {slot} keeps a resident naming {named:?}, a sealed cell it does not hold"
+                    "slot {slot} keeps a carrier naming {named:?}, a sealed cell it does not hold"
                 );
             }
         }
@@ -319,12 +319,12 @@ fn check_invariants(table: &CellTable<Borrowed>, memoized: &mut Vec<SealedId>, p
 
     // Relocation is consistent both ways: every key the map answers for names storage that is still
     // there and answers for that key in turn, and every lineage entry a slot or a sealed cell
-    // carries is a key of the map pointing back at it. A one-way break would strand a resident or
-    // hand one storage that is not its own.
+    // carries is a key of the map pointing back at it. A one-way break would strand a dormant
+    // carrier or hand one storage that is not its own.
     for (handle, location) in table.relocation_entries() {
         assert!(
             !table.is_live(handle),
-            "a live cell answers for its own residents, so it needs no relocation entry"
+            "a live cell answers for its own dormant carriers, so it needs no relocation entry"
         );
         match location {
             SlabForward::Slab { slot, base } => {
@@ -474,10 +474,10 @@ fn expected_redeem(
 /// names the right storage.
 fn check_redeem(
     context: &StepContext<'_, Borrowed>,
-    resident: Resident<Number>,
+    dormant: Dormant<Number>,
     carried: u32,
 ) -> Result<(), RedeemError> {
-    match context.redeem(resident) {
+    match context.redeem(dormant) {
         Ok(carrier) => {
             assert_eq!(
                 *context.read(&carrier).value(),
@@ -628,7 +628,7 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
     let mut grown: Vec<TreeHandle> = Vec::new();
     // Every value put to rest, beside the cell it was kept in and the number it carries — so a
     // redeem that answers can be checked against what it was supposed to hand back.
-    let mut kept: Vec<(CellHandle, Resident<Number>, u32)> = Vec::new();
+    let mut kept: Vec<(CellHandle, Dormant<Number>, u32)> = Vec::new();
     let mut next_value: u32 = 0;
     // Nothing has been priced yet, so no sealed cell may carry a memo.
     let mut memoized: Vec<SealedId> = Vec::new();
@@ -693,28 +693,28 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                 {
                     let carried = next_value;
                     next_value += 1;
-                    let resident = table
+                    let dormant = table
                         .enter(cell, |context| {
                             let value = context.alloc::<Number>(|writer| writer.value(carried));
                             context.keep(value)
                         })
                         .unwrap();
-                    kept.push((CellHandle::Slab(cell), resident, carried));
+                    kept.push((CellHandle::Slab(cell), dormant, carried));
                 }
             }
             // The door back. The outcome is predicted from the table's state before the call —
-            // where the home's residents live now, and whether this cell has a claim on them —
-            // and a successful redeem has to hand back the number that was kept, which is what
+            // where the home's dormant carriers live now, and whether this cell has a claim on them
+            // — and a successful redeem has to hand back the number that was kept, which is what
             // says a mask forwarded through a merge still names the right storage.
             Verb::Redeem { cell, index } => {
                 if let Some(cell) = minted.get(cell).copied()
                     && table.is_live(cell)
                     && !kept.is_empty()
                 {
-                    let (home, resident, carried) = kept[index % kept.len()];
+                    let (home, dormant, carried) = kept[index % kept.len()];
                     let expected = expected_redeem(&table, cell.slot(), home);
                     let outcome = table
-                        .enter(cell, |context| check_redeem(context, resident, carried))
+                        .enter(cell, |context| check_redeem(context, dormant, carried))
                         .unwrap();
                     assert_eq!(
                         outcome, expected,
@@ -778,13 +778,13 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                 {
                     let carried = next_value;
                     next_value += 1;
-                    let resident = table
+                    let dormant = table
                         .enter(cell, |context| {
                             let value = context.alloc::<Number>(|writer| writer.value(carried));
                             context.keep(value)
                         })
                         .unwrap();
-                    kept.push((CellHandle::Tree(cell), resident, carried));
+                    kept.push((CellHandle::Tree(cell), dormant, carried));
                 }
             }
             // The same door from inside the tree, where entitlement is root identity rather than a
@@ -795,11 +795,11 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                     && table.is_live(cell)
                     && !kept.is_empty()
                 {
-                    let (home, resident, carried) = kept[index % kept.len()];
+                    let (home, dormant, carried) = kept[index % kept.len()];
                     let root = table.trees().root(cell.index());
                     let expected = expected_redeem(&table, root, home);
                     let outcome = table
-                        .enter(cell, |context| check_redeem(context, resident, carried))
+                        .enter(cell, |context| check_redeem(context, dormant, carried))
                         .unwrap();
                     assert_eq!(
                         outcome, expected,
@@ -807,8 +807,8 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
                     );
                 }
             }
-            // Death in any order: a cell released before its children waits dead-resident, and the
-            // last child's disposal cascades up through every ancestor it unblocks.
+            // Death in any order: a cell released before its children waits dead-but-undisposed,
+            // and the last child's disposal cascades up through every ancestor it unblocks.
             Verb::ReleaseTree { cell } => {
                 if let Some(cell) = wrapped(&grown, cell) {
                     let _ = table.release_tree(cell);
@@ -887,9 +887,9 @@ fn run(verbs: &[Verb], verdict: impl FnMut(Prices) -> Verdict + 'static) -> Merg
     }
 
     // Winding the run down: once every cell's death is declared, the cascade returns every slot,
-    // and the tier retains only what a ring no merge met tied together.
-    // The pool first: a root with an undisposed tree child under it waits dead-resident exactly as
-    // one with a live descendant does, so the slab cannot finish until the trees have.
+    // and the tier retains only what a ring no merge met tied together. The pool first: a root with
+    // an undisposed tree child under it waits dead-but-undisposed exactly as one with a live
+    // descendant does, so the slab cannot finish until the trees have.
     for handle in &grown {
         let _ = table.release_tree(*handle);
     }

@@ -10,8 +10,8 @@
 //!
 //! What a slot does carry is the little that death needs: the chain links and the depth the
 //! ancestry rule classifies by, the count of undisposed children that keeps a released parent
-//! resident, the **pledge** naming the ancestor its bump will splice into, and the tombstone links
-//! that say where its bytes went once it did.
+//! undisposed itself, the **pledge** naming the ancestor its bump will splice into, and the
+//! tombstone links that say where its bytes went once it did.
 
 use crate::handle::{CellHandle, Handle, Stale, TreeHandle};
 use crate::reattach::{Erased, Reattachable};
@@ -20,10 +20,10 @@ use crate::scratch::Scratch;
 
 /// What one pool index currently holds.
 ///
-/// `Dead` is the resident state, exactly as it is on the slab: the embedder declared the cell's
+/// `Dead` is the undisposed state, exactly as it is on the slab: the embedder declared the cell's
 /// death while a child was still live, so the cell is stale to every door but its region stays put.
 /// `Absorbed` is a tombstone — the cell is gone and its bytes moved, and the slot survives only to
-/// answer "where to" for a resident still keyed to it.
+/// answer "where to" for a dormant carrier still keyed to it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum TreeState {
     Free,
@@ -82,8 +82,9 @@ struct TreeSlot<C: Reattachable> {
     /// `1` for a child of the root, and the parent's depth plus one otherwise. What makes the
     /// ancestry rule's test cost the level distance rather than the depth of the tree.
     depth: u32,
-    /// Tree children that have not disposed — live and dead-resident alike. A parent disposes only
-    /// once this reaches zero, which is what lets an embedder tear a subtree down in any order.
+    /// Tree children that have not disposed — live and dead-but-undisposed alike. A parent disposes
+    /// only once this reaches zero, which is what lets an embedder tear a subtree down in any
+    /// order.
     children: u32,
     executing: bool,
     /// The shallowest ancestor a value homed here has been pinned into, and so the destination this
@@ -125,8 +126,8 @@ impl<C: Reattachable> TreeSlot<C> {
     }
 }
 
-/// The growable pool of tree cells: live ones, dead-resident ones, and the tombstones of the ones
-/// whose bytes have moved.
+/// The growable pool of tree cells: live ones, dead-but-undisposed ones, and the tombstones of the
+/// ones whose bytes have moved.
 ///
 /// No cap. The slab's is what bounds the matrix, and a tree cell is in no matrix; what bounds the
 /// pool is the depth of the call tree the embedder is running, which is the program's business.
@@ -143,7 +144,7 @@ impl<C: Reattachable> TreePool<C> {
         }
     }
 
-    /// Whether the pool holds nothing at all — no live cell, no dead-resident one, and no
+    /// Whether the pool holds nothing at all — no live cell, no dead-but-undisposed one, and no
     /// tombstone. Part of the table's end-of-program alarm.
     pub(crate) fn is_empty(&self) -> bool {
         self.free.len() == self.slots.len()
@@ -435,8 +436,9 @@ impl<C: Reattachable> TreePool<C> {
     }
 
     /// Follow the tombstone chain from a key's home to whatever answers for its bytes now: a live
-    /// or dead-resident tree cell, or a slab handle the relocation map takes over from. `None` once
-    /// the chain reaches a slot that has recycled, which means the bytes were reclaimed.
+    /// or dead-but-undisposed tree cell, or a slab handle the relocation map takes over from.
+    /// `None` once the chain reaches a slot that has recycled, which means the bytes were
+    /// reclaimed.
     ///
     /// One array load per hop, and one hop per splice the bytes have been through since the keep.
     pub(crate) fn resolve(&self, handle: TreeHandle) -> Option<TreeForward> {

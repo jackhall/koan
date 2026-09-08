@@ -203,7 +203,7 @@ fn a_refused_release_seals_as_before() {
 }
 
 #[test]
-fn a_dead_resident_holder_absorbs_too() {
+fn an_undisposed_dead_holder_absorbs_too() {
     let mut table: CellTable<Owned> = CellTable::new(4, pin);
     let holder = table.create(None, None).unwrap();
     let child = table.create(Some(holder), None).unwrap();
@@ -226,8 +226,8 @@ fn a_dead_resident_holder_absorbs_too() {
     assert_eq!(table.sealed.len(), 0);
     assert_eq!(state_of(&table, held), SlotState::Free);
 
-    // Absorbing into a dead-resident cell only brings forward the fold its own disposal would have
-    // performed: when the child goes, the whole bundle goes with the holder.
+    // Absorbing into a dead-but-undisposed cell only brings forward the fold its own disposal would
+    // have performed: when the child goes, the whole bundle goes with the holder.
     table.release(child, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(table.is_empty());
 }
@@ -495,8 +495,8 @@ fn a_cell_with_a_single_sealed_namer_seals_into_it() {
 ///
 /// The producer holds `reached` live cells, `shared` sealed regions the consumer already holds,
 /// and `alone` sealed regions only it holds — so the hold set varies in both halves and in whether
-/// each sealed id transfers or duplicates, while `resident` varies what the region stores.
-fn absorb_work_for(resident: usize, reached: u32, shared: u32, alone: u32) -> u64 {
+/// each sealed id transfers or duplicates, while `dormant` varies what the region stores.
+fn absorb_work_for(dormant: usize, reached: u32, shared: u32, alone: u32) -> u64 {
     let mut table: CellTable<Owned> = CellTable::new(2 + reached + shared + alone, pin);
     let consumer = table.create(None, None).unwrap();
     let producer = table.create(None, None).unwrap();
@@ -511,7 +511,7 @@ fn absorb_work_for(resident: usize, reached: u32, shared: u32, alone: u32) -> u6
 
     table
         .enter(producer, |context| {
-            for value in 0..resident {
+            for value in 0..dormant {
                 context.alloc::<Number>(|writer| writer.value(value as u32));
             }
             for cell in reached_cells
@@ -544,7 +544,8 @@ fn absorb_work_for(resident: usize, reached: u32, shared: u32, alone: u32) -> u6
     table.seal_work - before
 }
 
-/// A resident count large enough that work proportional to storage could not match the lean run's.
+/// A dormant-value count large enough that work proportional to storage could not match the lean
+/// run's.
 fn heavy() -> std::ops::Range<usize> {
     if cfg!(miri) { 64..128 } else { 1_600..2_000 }
 }

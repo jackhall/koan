@@ -6,7 +6,7 @@
 use super::super::*;
 use super::{Borrowed, Number, Owned, continuation_reach_index, operand, pin, pinned};
 
-/// Two resident-value counts far enough apart that a transition proportional to storage could not
+/// Two dormant-value counts far enough apart that a transition proportional to storage could not
 /// produce the same work for both. The Miri run takes the smaller pair — the shapes are what it
 /// checks, and the native run already covers the breadth.
 const SMALL: usize = 16;
@@ -15,12 +15,12 @@ const LARGE: usize = if cfg!(miri) { 512 } else { 10_000 };
 /// Seal a held cell and report the maintenance the transition performed.
 ///
 /// The producer stores `stored` values in its region and puts `kept_by_producer` more of them to
-/// rest as residents; the holder takes `kept_by_holder` **distinct** resident entries. The three
-/// knobs are the three quantities the transition could plausibly be proportional to, and only one
-/// of them may be.
+/// rest as dormant carriers; the holder takes `kept_by_holder` **distinct** reach-table entries.
+/// The three knobs are the three quantities the transition could plausibly be proportional to, and
+/// only one of them may be.
 ///
-/// The holder's entries have to be distinct because the table interns on content: a resident is
-/// one entry per reach, so counting keeps would count nothing. Each is built into the holder's
+/// The holder's entries have to be distinct because the table interns on content: a dormant carrier
+/// is one entry per reach, so counting keeps would count nothing. Each is built into the holder's
 /// region from a cell of its own, capturing a value that cell homes, so its reach names the holder
 /// and that one cell and matches no other.
 fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) -> u64 {
@@ -72,9 +72,9 @@ fn seal_work_for(stored: usize, kept_by_holder: usize, kept_by_producer: usize) 
 }
 
 #[test]
-fn the_seal_transition_is_bounded_by_the_holders_residents_not_the_storage() {
+fn the_seal_transition_is_bounded_by_the_holders_dormant_carriers_not_the_storage() {
     // Atomicity is exactly this: the aggregate is a word copy out of the matrix, so a region with
-    // ten thousand resident values costs what one with sixteen costs.
+    // ten thousand dormant values costs what one with sixteen costs.
     assert_eq!(seal_work_for(SMALL, 4, 0), seal_work_for(LARGE, 4, 0));
 
     // What the transition *is* proportional to: each holder's reach table, one entry at a time,
@@ -87,10 +87,10 @@ fn the_seal_transition_is_bounded_by_the_holders_residents_not_the_storage() {
         "the rewrite is bounded by the holders' entry counts"
     );
 
-    // And not to the dying cell's own residents: those masks are dead bytes the moment the storage
-    // they name is in the sealed cell, so the transition forwards one lineage entry for the whole
-    // table rather than touching an entry per value. The producer's keeps all share one reach and
-    // so one entry, which is the point twice over — the table did not grow either.
+    // And not to the dying cell's own dormant carriers: those masks are dead bytes the moment the
+    // storage they name is in the sealed cell, so the transition forwards one lineage entry for the
+    // whole table rather than touching an entry per value. The producer's keeps all share one reach
+    // and so one entry, which is the point twice over — the table did not grow either.
     assert_eq!(
         seal_work_for(SMALL, 4, SMALL),
         seal_work_for(SMALL, 4, LARGE)

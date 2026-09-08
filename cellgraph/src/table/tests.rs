@@ -38,7 +38,7 @@ fn pin(_: Prices) -> Verdict {
 
 /// An operand at a stated copy cost — the half of the price the substrate cannot know.
 fn operand_at<'a, 'b, V: Reattachable + DropFree>(
-    carrier: &'a Dormant<'b, V>,
+    carrier: &'a Ready<'b, V>,
     copy_bytes: usize,
 ) -> Operand<'a, 'b, V> {
     Operand {
@@ -48,7 +48,7 @@ fn operand_at<'a, 'b, V: Reattachable + DropFree>(
 }
 
 /// An operand at no stated copy cost — what a test that never expects a `Copy` verdict passes.
-fn operand<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Dormant<'b, V>) -> Operand<'a, 'b, V> {
+fn operand<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Ready<'b, V>) -> Operand<'a, 'b, V> {
     operand_at(carrier, 0)
 }
 
@@ -96,8 +96,8 @@ fn live_bytes<C: Reattachable>(table: &CellTable<C>, cap: u32) -> usize {
         .sum()
 }
 
-/// The reach of a cell's stored continuation, read out of the reach table entry it occupies.
-/// The continuation is a resident like any other, so this is the same lookup a redeem performs.
+/// The reach of a cell's stored continuation, read out of the reach table entry it occupies. The
+/// continuation is a dormant carrier like any other, so this is the same lookup a redeem performs.
 fn continuation_reach_index<C: Reattachable>(
     table: &CellTable<C>,
     handle: Handle,

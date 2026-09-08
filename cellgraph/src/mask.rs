@@ -5,7 +5,7 @@
 //! [design/liveness-matrix.md](../design/liveness-matrix.md) § Reach as a hybrid mask.
 //!
 //! A mask is never handed to a caller beside a bare value: it exists only inside a
-//! [`Dormant`](crate::Dormant) carrier or a stored continuation, and the type is crate-private, so
+//! [`Ready`](crate::Ready) carrier or a stored continuation, and the type is crate-private, so
 //! the pairing of a value with its reach cannot be fabricated from outside.
 
 use crate::matrix::Bits;

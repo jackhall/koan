@@ -10,8 +10,8 @@
 
 use cellgraph::{
     Active, CellHandle, CellTable, CreateError, CrossedOperand, Dormant, DropFree, EnterError,
-    Erased, Handle, Operand, Prices, Reattachable, RedeemError, ReleaseAbsorption, ReleaseError,
-    ReleaseTreeError, Resident, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
+    Erased, Handle, Operand, Prices, Ready, Reattachable, RedeemError, ReleaseAbsorption,
+    ReleaseError, ReleaseTreeError, Stale, StepContext, TreeHandle, Verdict, Writer, reattachable,
 };
 
 /// The continuation family: a step's successor is a plain owned string, so nothing it holds lives
@@ -50,10 +50,7 @@ fn build_text<'r>(writer: Writer<'r>) -> &'r str {
 /// An embedder's own helper over carriers, which is the one reason [`Erased`] is nameable from
 /// outside: the read door's `Copy` bound is on the erased form, so a caller that wants to be
 /// generic over the value family has to write that bound too.
-fn read_first<'s, 'b, V>(
-    context: &'s StepContext<'b, Work>,
-    carrier: &'s Dormant<'b, V>,
-) -> V::At<'s>
+fn read_first<'s, 'b, V>(context: &'s StepContext<'b, Work>, carrier: &'s Ready<'b, V>) -> V::At<'s>
 where
     V: Reattachable + DropFree,
     Erased<V>: Copy,
@@ -82,7 +79,7 @@ fn weigh(prices: Prices) -> Verdict {
 /// An operand the embedder is unwilling to copy: at a cost above anything a pin can price, the
 /// verdict above always pins it.
 fn pinned_operand<'a, 'b, V: Reattachable + DropFree>(
-    carrier: &'a Dormant<'b, V>,
+    carrier: &'a Ready<'b, V>,
 ) -> Operand<'a, 'b, V> {
     Operand {
         carrier,
@@ -142,7 +139,7 @@ fn every_public_door_answers_from_outside_the_crate() {
         .release(doomed, ReleaseAbsorption::IntoHolder)
         .unwrap();
 
-    let mut kept: Option<Resident<Number>> = None;
+    let mut kept: Option<Dormant<Number>> = None;
     let carried = table
         .enter(child, |context| {
             assert_eq!(context.cell(), CellHandle::Slab(child));
@@ -198,7 +195,7 @@ fn every_public_door_answers_from_outside_the_crate() {
             });
 
             // Put a value to rest, so it outlives the step that built it. What comes back is
-            // opaque: a resident has no read, and the redeem door is its only exit.
+            // opaque: a dormant carrier has no read, and the redeem door is its only exit.
             kept = Some(context.keep(pushed));
 
             String::from("done")
@@ -220,7 +217,10 @@ fn every_public_door_answers_from_outside_the_crate() {
     let refused = table
         .enter(root, |context| context.redeem(kept).map(|_| ()))
         .unwrap();
-    assert!(refused.is_ok(), "the home cell redeems its own resident");
+    assert!(
+        refused.is_ok(),
+        "the home cell redeems its own dormant carrier"
+    );
     let bystander = table.create(None, None).unwrap();
     let error = table
         .enter(bystander, |context| match context.redeem(kept) {
@@ -298,7 +298,7 @@ fn the_tree_pool_answers_from_outside_the_crate() {
     assert_eq!(inner.generation(), 0);
     assert!(table.is_live(inner));
 
-    let mut kept: Option<Resident<Number>> = None;
+    let mut kept: Option<Dormant<Number>> = None;
     let carried = table
         .enter(inner, |context| {
             assert_eq!(context.cell(), CellHandle::Tree(inner));

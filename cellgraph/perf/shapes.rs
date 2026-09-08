@@ -11,8 +11,8 @@
 //! row, so it neither hides nor inflates a real verb.
 
 use cellgraph::{
-    CellHandle, CellTable, CrossedOperand, Dormant, DropFree, Handle, Operand, Prices,
-    Reattachable, ReleaseAbsorption, Resident, TreeHandle, Verdict, Writer, reattachable,
+    CellHandle, CellTable, CrossedOperand, Dormant, DropFree, Handle, Operand, Prices, Ready,
+    Reattachable, ReleaseAbsorption, TreeHandle, Verdict, Writer, reattachable,
 };
 
 use crate::meter::{Verb, measure};
@@ -53,7 +53,7 @@ fn table() -> CellTable<Work> {
 
 /// An operand priced above anything a pin can cost, so [`always_pin`] pins it whatever the slab is
 /// doing.
-fn pinned<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Dormant<'b, V>) -> Operand<'a, 'b, V> {
+fn pinned<'a, 'b, V: Reattachable + DropFree>(carrier: &'a Ready<'b, V>) -> Operand<'a, 'b, V> {
     Operand {
         carrier,
         copy_bytes: usize::MAX,
@@ -117,14 +117,14 @@ fn keep_redeem(n: u32) {
     assert!(table.is_empty());
 }
 
-/// Resident interning against many shapes: `n` sources each build one value into `dest`, so every
+/// Dormant interning against many shapes: `n` sources each build one value into `dest`, so every
 /// keep in `dest` carries a reach no earlier keep did and the table holds `n` entries. Each keep
 /// scans the entries before it, which is the linear term interning is priced at.
 fn keep_shapes(n: u32) {
     let mut table = table();
     let dest = measure(Verb::Create, || table.create(None, None)).unwrap();
     let mut sources: Vec<Handle> = Vec::with_capacity(n as usize);
-    let mut residents: Vec<Resident<Number>> = Vec::with_capacity(n as usize);
+    let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
         let source = measure(Verb::Create, || table.create(None, None)).unwrap();
@@ -143,12 +143,12 @@ fn keep_shapes(n: u32) {
             })
         })
         .unwrap();
-        residents.push(resting);
+        dormant.push(resting);
     }
 
     measure(Verb::Enter, || {
         table.enter(dest, |context| {
-            for (i, resting) in residents.drain(..).enumerate() {
+            for (i, resting) in dormant.drain(..).enumerate() {
                 let carrier = measure(Verb::Redeem, || context.redeem(resting).unwrap());
                 let value = measure(Verb::Read, || *context.read(&carrier).value());
                 assert_eq!(value, i as u32);
@@ -175,7 +175,7 @@ fn keep_shapes(n: u32) {
 fn push_chain(n: u32) {
     let mut table = table();
     let consumer = measure(Verb::Create, || table.create(None, None)).unwrap();
-    let mut residents: Vec<Resident<Number>> = Vec::with_capacity(n as usize);
+    let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
         let producer = measure(Verb::Create, || table.create(None, None)).unwrap();
@@ -193,7 +193,7 @@ fn push_chain(n: u32) {
             })
         })
         .unwrap();
-        residents.push(resting);
+        dormant.push(resting);
         measure(Verb::Release, || {
             table.release(producer, ReleaseAbsorption::IntoHolder)
         })
@@ -202,7 +202,7 @@ fn push_chain(n: u32) {
 
     measure(Verb::Enter, || {
         table.enter(consumer, |context| {
-            for (i, resting) in residents.drain(..).enumerate() {
+            for (i, resting) in dormant.drain(..).enumerate() {
                 let carrier = measure(Verb::Redeem, || context.redeem(resting).unwrap());
                 let value = measure(Verb::Read, || *context.read(&carrier).value());
                 assert_eq!(value, i as u32);
@@ -224,7 +224,7 @@ fn push_chain(n: u32) {
 fn pull_chain(n: u32) {
     let mut table = table();
     let consumer = measure(Verb::Create, || table.create(None, None)).unwrap();
-    let mut residents: Vec<Resident<Number>> = Vec::with_capacity(n as usize);
+    let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
 
     for i in 0..n {
         let producer = measure(Verb::Create, || table.create(None, None)).unwrap();
@@ -237,7 +237,7 @@ fn pull_chain(n: u32) {
             })
         })
         .unwrap();
-        residents.push(resting);
+        dormant.push(resting);
 
         measure(Verb::Enter, || {
             table.enter(consumer, |context| {
@@ -253,7 +253,7 @@ fn pull_chain(n: u32) {
 
     measure(Verb::Enter, || {
         table.enter(consumer, |context| {
-            for (i, resting) in residents.drain(..).enumerate() {
+            for (i, resting) in dormant.drain(..).enumerate() {
                 let carrier = measure(Verb::Redeem, || context.redeem(resting).unwrap());
                 let value = measure(Verb::Read, || *context.read(&carrier).value());
                 assert_eq!(value, i as u32);
@@ -269,9 +269,9 @@ fn pull_chain(n: u32) {
     assert!(table.is_empty());
 }
 
-/// Dead ancestors waiting on a descendant: a chain of `n` cells each born under the last,
-/// released outermost-first so every one of them stays dead-resident under the leaf's birth row,
-/// and then the leaf — the single release that frees the whole chain in one walk up it.
+/// Dead ancestors waiting on a descendant: a chain of `n` cells each born under the last, released
+/// outermost-first so every one of them stays dead-but-undisposed under the leaf's birth row, and
+/// then the leaf — the single release that frees the whole chain in one walk up it.
 fn birth_chain(n: u32) {
     let mut table = table();
     let mut handles: Vec<Handle> = Vec::with_capacity(n as usize);
@@ -284,8 +284,8 @@ fn birth_chain(n: u32) {
         handles.push(child);
     }
 
-    // Every release but the last leaves its cell dead-resident: the leaf is still live, and its
-    // birth row names the whole chain above it.
+    // Every release but the last leaves its cell dead-but-undisposed: the leaf is still live, and
+    // its birth row names the whole chain above it.
     for handle in &handles {
         measure(Verb::Release, || {
             table.release(*handle, ReleaseAbsorption::IntoHolder)
@@ -301,7 +301,7 @@ fn fan_out_round(
     source: Handle,
     dest: Handle,
     m: u32,
-) -> Resident<Numbers> {
+) -> Dormant<Numbers> {
     measure(Verb::Enter, || {
         table.enter(source, |context| {
             let mut values = measure(Verb::Harness, || Vec::with_capacity(m as usize));
@@ -373,7 +373,7 @@ fn shared_subtier(n: u32) {
         bases.push(measure(Verb::Create, || table.create(None, None)).unwrap());
     }
 
-    let mut residents: Vec<Resident<Number>> = Vec::with_capacity(n as usize);
+    let mut dormant: Vec<Dormant<Number>> = Vec::with_capacity(n as usize);
     for (i, base) in bases.iter().enumerate() {
         let resting = measure(Verb::Enter, || {
             table.enter(*base, |context| {
@@ -384,7 +384,7 @@ fn shared_subtier(n: u32) {
             })
         })
         .unwrap();
-        residents.push(resting);
+        dormant.push(resting);
     }
 
     for branch in [left, right] {
@@ -408,7 +408,7 @@ fn shared_subtier(n: u32) {
     measure(Verb::Enter, || {
         table.enter(right, |context| {
             let mut carriers = measure(Verb::Harness, || Vec::with_capacity(n as usize));
-            for (i, resting) in residents.drain(..).enumerate() {
+            for (i, resting) in dormant.drain(..).enumerate() {
                 let carrier = measure(Verb::Redeem, || context.redeem(resting).unwrap());
                 let value = measure(Verb::Read, || *context.read(&carrier).value());
                 assert_eq!(value, i as u32);
@@ -465,7 +465,7 @@ fn tree_chain(n: u32) {
 
     // Innermost outward: each level redeems what its child pinned into it, adds one, pins the
     // result into its own parent, and dies — so every level's bump splices one step up the chain.
-    let mut carried: Option<Resident<Number>> = None;
+    let mut carried: Option<Dormant<Number>> = None;
     for level in (0..n as usize).rev() {
         let cell = chain[level];
         let up = match level {
@@ -506,7 +506,7 @@ fn tree_chain(n: u32) {
         table.enter(root, |context| {
             let carrier = measure(Verb::Redeem, || {
                 context
-                    .redeem(carried.take().expect("the chain left a resident"))
+                    .redeem(carried.take().expect("the chain left a dormant carrier"))
                     .unwrap()
             });
             measure(Verb::Read, || *context.read(&carrier).value())

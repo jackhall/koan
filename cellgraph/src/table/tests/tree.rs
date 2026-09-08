@@ -2,10 +2,11 @@
 //! discipline ([design/tree-cells.md](../../../design/tree-cells.md)).
 //!
 //! What these pin: the three verbs and their refusals; a chain deeper than the slab cap running to
-//! completion on a two-slot slab; the ancestry rule's three answers and the pledge an upward
-//! pin leaves; disposal by pledge, in any release order, cascading through dead-resident ancestors
-//! into the slab's own walk; and a resident redeeming through the tombstone chain after its home's
-//! bytes have moved — into a live cell, into a root that later absorbs, seals, or reclaims.
+//! completion on a two-slot slab; the ancestry rule's three answers and the pledge an upward pin
+//! leaves; disposal by pledge, in any release order, cascading through dead-but-undisposed
+//! ancestors into the slab's own walk; and a dormant carrier redeeming through the tombstone chain
+//! after its home's bytes have moved — into a live cell, into a root that later absorbs, seals, or
+//! reclaims.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,7 +18,7 @@ use crate::tree::TreeState;
 /// An operand the embedder will never copy: at a cost above anything a pin can price, a verdict
 /// that weighs the two always pins it.
 fn kept_operand<'a, 'b, V: Reattachable + DropFree>(
-    carrier: &'a Dormant<'b, V>,
+    carrier: &'a Ready<'b, V>,
 ) -> Operand<'a, 'b, V> {
     operand_at(carrier, usize::MAX)
 }
@@ -43,7 +44,7 @@ fn recording(
 fn number_in<'b, C: Reattachable>(
     context: &mut StepContext<'b, C>,
     value: u32,
-) -> Dormant<'b, Number> {
+) -> Ready<'b, Number> {
     context.alloc::<Number>(move |writer| writer.value(value))
 }
 
@@ -108,7 +109,7 @@ fn the_tree_doors_refuse_a_name_kept_past_a_declared_death() {
 }
 
 #[test]
-fn a_root_released_before_its_tree_child_waits_dead_resident() {
+fn a_root_released_before_its_tree_child_waits_undisposed() {
     let mut table: CellTable<Owned> = CellTable::new(2, pin);
     let root = table.create(None, None).unwrap();
     let tree = table.create_tree(root, None).unwrap();
@@ -137,10 +138,10 @@ fn a_tree_parent_released_first_disposes_when_its_last_child_does() {
     assert_eq!(
         table.trees().occupied().count(),
         3,
-        "a dead-resident ancestor keeps its region until its children are gone"
+        "a dead-but-undisposed ancestor keeps its region until its children are gone"
     );
 
-    // One release cascades through both dead-resident ancestors and into the root's own walk.
+    // One release cascades through both dead-but-undisposed ancestors and into the root's own walk.
     table.release_tree(child).unwrap();
     assert_eq!(table.trees().occupied().count(), 0);
     assert_eq!(table.tree_children_of(root), 0);
@@ -359,7 +360,7 @@ fn a_slab_step_placing_into_a_tree_cell_mints_its_root_the_hold() {
 }
 
 #[test]
-fn a_resident_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_root() {
+fn a_dormant_carrier_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_root() {
     let mut table: CellTable<Owned> = CellTable::new(3, pin);
     let root = table.create(None, None).unwrap();
     let outsider = table.create(None, None).unwrap();
@@ -411,7 +412,7 @@ fn a_resident_kept_in_a_tree_cell_redeems_from_anywhere_under_the_same_root() {
 }
 
 #[test]
-fn a_resident_whose_home_reclaimed_answers_gone() {
+fn a_dormant_carrier_whose_home_reclaimed_answers_gone() {
     let mut table: CellTable<Owned> = CellTable::new(2, pin);
     let root = table.create(None, None).unwrap();
     let home = table.create_tree(root, None).unwrap();
@@ -446,7 +447,7 @@ fn a_resident_whose_home_reclaimed_answers_gone() {
 fn spliced_into_root(
     table: &mut CellTable<Owned>,
     root: Handle,
-) -> (Resident<Number>, TreeHandle, TreeHandle) {
+) -> (Dormant<Number>, TreeHandle, TreeHandle) {
     let parent = table.create_tree(root, None).unwrap();
     let home = table.create_tree(parent, None).unwrap();
     let kept = table
@@ -465,7 +466,7 @@ fn spliced_into_root(
 }
 
 #[test]
-fn a_resident_whose_home_was_absorbed_redeems_from_the_destination() {
+fn a_dormant_carrier_whose_home_was_absorbed_redeems_from_the_destination() {
     let mut table: CellTable<Owned> = CellTable::new(2, pin);
     let root = table.create(None, None).unwrap();
     let (kept, parent, home) = spliced_into_root(&mut table, root);
@@ -605,7 +606,7 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
 
     // Innermost first: build a number, pin it into the parent, keep it, and die. Each level up
     // redeems what its child left, adds one, and does the same.
-    let mut carried: Option<Resident<Number>> = None;
+    let mut carried: Option<Dormant<Number>> = None;
     let mut spliced = 0;
     for level in (0..DEPTH).rev() {
         let cell = chain[level];
@@ -619,8 +620,8 @@ fn a_chain_deeper_than_the_slab_cap_runs_to_completion() {
                 .enter(cell, |context| {
                     let value = match taken {
                         None => number_in(context, 0),
-                        Some(resident) => {
-                            let redeemed = context.redeem(resident).unwrap();
+                        Some(dormant) => {
+                            let redeemed = context.redeem(dormant).unwrap();
                             let seen = *context.read(&redeemed).value();
                             number_in(context, seen + 1)
                         }
