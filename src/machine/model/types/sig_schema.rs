@@ -24,8 +24,9 @@ use super::node::{NodeSchema, TypeNode};
 use super::registry::{IdentityBuildHasher, TypeRegistry};
 use super::signature::{KeyElement, Specificity, UntypedKey, fn_type_specificity};
 use crate::machine::model::RunRegistries;
-use crate::machine::model::labels::{BinderSymbol, TypeSymbol, ValueSymbol};
+use crate::machine::model::labels::{BinderSymbol, KeywordSymbol, TypeSymbol, ValueSymbol};
 use crate::machine::model::values::ModuleDraft;
+use crate::machine::model::{FoldDirection, ReductionMode};
 use crate::machine::model::{display_label, render_label};
 
 /// A schema's type-member table: Type-class name → the member's type, identity-hashed on the
@@ -63,6 +64,129 @@ pub struct SigSchema {
     /// One key holds a *set* of overloads, kept in [`canonical_overloads`] order so equality,
     /// digesting and iteration are deterministic; an exact duplicate is illegal at declaration.
     pub keyworded: KeywordedMembers,
+    /// Operator members: the chaining records the interface declares, in [`canonical_groups`]
+    /// order. A record says which operators chain together and how a run of them reduces —
+    /// the half of an operator declaration that lives in the scope's operator registry rather than
+    /// in a dispatch bucket, and the half a `USING <view> SCOPE` window needs to reduce a run at
+    /// all. The buckets themselves are ordinary [`keyworded`](Self::keyworded) members.
+    pub operators: OperatorMembers,
+}
+
+/// One declared chaining record: which operators chain together, and how a run of them reduces.
+/// `members` is sorted by symbol bits and deduped, exactly as
+/// [`OperatorGroup::alloc`](crate::machine::model::OperatorGroup) stores them, so two records over
+/// the same set compare and digest alike whatever order they were written in.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DeclaredGroup {
+    pub members: Vec<KeywordSymbol>,
+    pub mode: ReductionMode,
+}
+
+/// A schema's operator channel, in [`canonical_groups`] order. Two records in one channel never
+/// share a member: a scope declares one chaining mode per operator, which both the SIG collector
+/// and the module registry enforce at their own write doors.
+pub type OperatorMembers = Vec<DeclaredGroup>;
+
+/// A schema's operator channel in canonical order — sorted by member run, then by mode, exact
+/// duplicates collapsed. Every channel is stored through this, so the digest, the rendering and
+/// equality all read one order rather than the order of declaration.
+pub fn canonical_groups(mut groups: OperatorMembers) -> OperatorMembers {
+    groups.sort_by(|a, b| {
+        a.members
+            .cmp(&b.members)
+            .then_with(|| mode_order(a.mode).cmp(&mode_order(b.mode)))
+    });
+    groups.dedup();
+    groups
+}
+
+/// A mode's total order, for [`canonical_groups`] — the same discriminant the digest feeds, with a
+/// pairwise mode's combiner and direction breaking its own ties.
+fn mode_order(mode: ReductionMode) -> (u8, Option<KeywordSymbol>, u8) {
+    match mode {
+        ReductionMode::Unary => (0, None, 0),
+        ReductionMode::FoldLeft => (1, None, 0),
+        ReductionMode::FoldRight => (2, None, 0),
+        ReductionMode::Pairwise {
+            combiner,
+            direction,
+        } => (3, Some(combiner), direction_byte(direction)),
+    }
+}
+
+/// A fold direction as the byte the digest and the mode order both read.
+fn direction_byte(direction: FoldDirection) -> u8 {
+    match direction {
+        FoldDirection::Left => 0,
+        FoldDirection::Right => 1,
+    }
+}
+
+/// Render one declared record as the `GROUP` head declaring it — `GROUP FOLD RIGHT {+ -}`,
+/// `GROUP PAIRWISE FOLD #(BOTH) LEFT {< <=}`. The members render in their stored (sorted) order,
+/// so a signature's name and a satisfaction diagnostic spell one record alike. A `Unary` record is
+/// never rendered this way: its head is the `UNARY OP` member itself.
+pub fn render_declared_group(group: &DeclaredGroup, registries: &RunRegistries) -> String {
+    use std::fmt::Write;
+    let mut out = match group.mode {
+        ReductionMode::Unary => "GROUP UNARY".to_string(),
+        ReductionMode::FoldLeft => "GROUP FOLD LEFT".to_string(),
+        ReductionMode::FoldRight => "GROUP FOLD RIGHT".to_string(),
+        ReductionMode::Pairwise {
+            combiner,
+            direction,
+        } => format!(
+            "GROUP PAIRWISE FOLD #({}) {}",
+            display_label(combiner.symbol(), registries),
+            match direction {
+                FoldDirection::Left => "LEFT",
+                FoldDirection::Right => "RIGHT",
+            }
+        ),
+    };
+    out.push_str(" {");
+    for (index, member) in group.members.iter().enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        let _ = write!(out, "{}", display_label(member.symbol(), registries));
+    }
+    out.push('}');
+    out
+}
+
+/// The member run of every declared record, joined for a diagnostic that names a record by its
+/// members alone.
+fn render_members(members: &[KeywordSymbol], registries: &RunRegistries) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    for (index, member) in members.iter().enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        let _ = write!(out, "{}", display_label(member.symbol(), registries));
+    }
+    out
+}
+
+/// A chaining mode's surface spelling, for the two operator satisfaction diagnostics.
+fn render_mode(mode: ReductionMode, registries: &RunRegistries) -> String {
+    match mode {
+        ReductionMode::Unary => "unary".to_string(),
+        ReductionMode::FoldLeft => "fold-left".to_string(),
+        ReductionMode::FoldRight => "fold-right".to_string(),
+        ReductionMode::Pairwise {
+            combiner,
+            direction,
+        } => format!(
+            "pairwise through `{}`, folding {}",
+            display_label(combiner.symbol(), registries),
+            match direction {
+                FoldDirection::Left => "left",
+                FoldDirection::Right => "right",
+            }
+        ),
+    }
 }
 
 /// A schema's keyworded-member table: untyped bucket key → the declared overload set.
@@ -97,9 +221,13 @@ pub fn sorted_keyworded(schema: &SigSchema) -> Vec<(&UntypedKey, &Vec<KType>)> {
 pub fn render_keyworded_head(
     key: &[KeyElement],
     fn_type: KType,
+    operators: &OperatorMembers,
     registries: &RunRegistries,
 ) -> String {
     use std::fmt::Write;
+    if let Some(head) = render_operator_head(key, fn_type, operators, registries) {
+        return head;
+    }
     let types = &registries.types;
     // Owns: the parameter pairs feed the write below, past the node read that yields them.
     let params: Vec<(BinderSymbol, KType)> = types.with_node(fn_type, |node| match node {
@@ -139,6 +267,69 @@ pub fn render_keyworded_head(
     out
 }
 
+/// The operator-surface reading of a keyworded member, or `None` when the member is not one.
+///
+/// A member is an operator member iff its key is one of the two an operator declaration writes —
+/// `[Slot, Keyword(s), Slot]` or `[Keyword(s), Slot]` — **and** `s` is a member of one of the
+/// schema's declared chaining records. That second half is what keeps the FN-head spelling of an
+/// operator key reading as an FN head: it declares the bucket and claims no chaining, so it is not
+/// an operator member and does not render as one.
+///
+/// Both keys of a unary triple render as the one `UNARY OP` head — the head declares the triple,
+/// so naming either half separately would spell a surface no one can write.
+fn render_operator_head(
+    key: &[KeyElement],
+    fn_type: KType,
+    operators: &OperatorMembers,
+    registries: &RunRegistries,
+) -> Option<String> {
+    let types = &registries.types;
+    let (symbol, is_list_form) = match key {
+        [
+            KeyElement::Slot,
+            KeyElement::Keyword(symbol),
+            KeyElement::Slot,
+        ] => (*symbol, false),
+        [KeyElement::Keyword(symbol), KeyElement::Slot] => (*symbol, true),
+        _ => return None,
+    };
+    let mode = operators
+        .iter()
+        .find(|record| record.members.contains(&symbol))?
+        .mode;
+    // Owns: the first parameter's type feeds the write below, past the node read that yields it.
+    let (first_param, ret) = types.with_node(fn_type, |node| match node {
+        TypeNode::KFunction { params, ret } => (params.values().next().copied(), Some(*ret)),
+        _ => (None, None),
+    });
+    let (first_param, ret) = (first_param?, ret?);
+    // The list form's sole parameter is the whole run, so the declared operand is its element.
+    let operand = if is_list_form {
+        types.with_node(first_param, |node| match node {
+            TypeNode::List { element } => Some(*element),
+            _ => None,
+        })?
+    } else {
+        first_param
+    };
+    let symbol = display_label(symbol.symbol(), registries);
+    let operand = operand.display_name(registries);
+    Some(if mode == ReductionMode::Unary {
+        format!(
+            "UNARY OP #({symbol}) OVER {operand} -> {}",
+            ret.display_name(registries)
+        )
+    } else if ret == first_param {
+        // A fold member's result is its operand type, which the bare head already says.
+        format!("OP #({symbol}) OVER {operand}")
+    } else {
+        format!(
+            "OP #({symbol}) OVER {operand} -> {}",
+            ret.display_name(registries)
+        )
+    })
+}
+
 impl SigSchema {
     /// The member-free schema — the module-lattice top the `:Module` name lowers to, and the
     /// content any zero-member `SIG E = ()` declaration projects to. `sig_id` is `None`: an empty
@@ -150,6 +341,7 @@ impl SigSchema {
             manifest_members: TypeMemberMap::default(),
             value_slots: HashMap::default(),
             keyworded: KeywordedMembers::default(),
+            operators: OperatorMembers::default(),
         }
     }
 
@@ -196,6 +388,10 @@ impl SigSchema {
             manifest_members,
             value_slots,
             keyworded,
+            // The operator channel needs no canonicalization pass of its own — the collector keys
+            // records by their member run and stores members sorted — but it is stored through the
+            // canonical door anyway, so one function is the whole answer to "what order is this in".
+            operators: canonical_groups(decl_scope.sig_operator_groups()),
         }
     }
 
@@ -278,12 +474,30 @@ impl SigSchema {
                 .collect();
             keyworded.insert(key, canonical_overloads(declared));
         }
+        // The operator channel: every distinct group record the body registered. The registry
+        // holds one entry per nonempty member subset, all sealing the one record, so the read
+        // dedupes by record address before describing each — the same per-record fold the
+        // environment copy's rebirth makes.
+        let operators = canonical_groups(
+            child
+                .bindings()
+                .iter_operator_groups()
+                .iter()
+                .map(|sealed| {
+                    child.read_operator_group(sealed, |group| DeclaredGroup {
+                        members: group.member_symbols().collect(),
+                        mode: group.mode(),
+                    })
+                })
+                .collect(),
+        );
         SigSchema {
             sig_id: None,
             abstract_members: TypeMemberMap::default(),
             manifest_members,
             value_slots,
             keyworded,
+            operators,
         }
     }
 }
@@ -612,8 +826,9 @@ fn member_table_handle(members: &TypeMemberMap, types: &TypeRegistry) -> KType {
         abstract_members: TypeMemberMap::default(),
         manifest_members: members.clone(),
         value_slots: HashMap::default(),
-        // A substitution table names no keyworded member.
+        // A substitution table names no keyworded member and no chaining record.
         keyworded: KeywordedMembers::default(),
+        operators: OperatorMembers::default(),
     })
 }
 
@@ -737,6 +952,31 @@ pub fn join_schemas(a: &SigSchema, b: &SigSchema, types: &TypeRegistry) -> SigSc
         }
     }
 
+    // Operator members intersect pairwise under an **equal** mode: a record either side declares
+    // is a claim about how a run of its members reduces, and two modes make incompatible claims,
+    // so only same-mode pairs have a common weakening. The weakening is the member intersection —
+    // the operators both operands agree chain that way — and an empty one keeps nothing.
+    let mut operators = OperatorMembers::new();
+    for left in &a.operators {
+        for right in &b.operators {
+            if left.mode != right.mode {
+                continue;
+            }
+            let members: Vec<KeywordSymbol> = left
+                .members
+                .iter()
+                .filter(|member| right.members.contains(member))
+                .copied()
+                .collect();
+            if !members.is_empty() {
+                operators.push(DeclaredGroup {
+                    members,
+                    mode: left.mode,
+                });
+            }
+        }
+    }
+
     SigSchema {
         // A schema with no abstract member names nothing for a slot to substitute against, which
         // is what `None` records — the same `sig_id` a module self-sig and the empty schema carry.
@@ -745,6 +985,7 @@ pub fn join_schemas(a: &SigSchema, b: &SigSchema, types: &TypeRegistry) -> SigSc
         manifest_members,
         value_slots,
         keyworded,
+        operators: canonical_groups(operators),
     }
 }
 
@@ -999,6 +1240,19 @@ pub enum SigSubtypeFailure {
         head: String,
         candidates: Vec<String>,
     },
+    /// No record in the module's operator registry covers the declared record's members. The
+    /// module may well define every bucket — a bare `FN` head over an operator symbol does — but
+    /// declaring no group over them, it claims nothing about how a run of them reduces.
+    MissingOperatorGroup {
+        members: String,
+    },
+    /// A record covering the declared members exists, but chains them a different way. The two
+    /// modes are rendered at the failure site like every other field here.
+    OperatorModeMismatch {
+        members: String,
+        expected: String,
+        got: String,
+    },
 }
 
 impl SigSubtypeFailure {
@@ -1060,6 +1314,17 @@ impl SigSubtypeFailure {
                     .map(|one| format!("`{one}`"))
                     .collect::<Vec<_>>()
                     .join(" and ")
+            ),
+            SigSubtypeFailure::MissingOperatorGroup { members } => format!(
+                "no chaining mode covers `{members}` (the module defines the buckets but declares \
+                 no group over them)"
+            ),
+            SigSubtypeFailure::OperatorModeMismatch {
+                members,
+                expected,
+                got,
+            } => format!(
+                "operators `{members}` chain {expected} in the signature but {got} in the module"
             ),
         }
     }
@@ -1181,11 +1446,11 @@ pub fn sig_subtype(
     for (key, declared_overloads) in &sup.keyworded {
         let candidates = sub.keyworded.get(key).map(Vec::as_slice).unwrap_or(&[]);
         for declared in declared_overloads {
-            let head = || render_keyworded_head(key, *declared, registries);
+            let head = || render_keyworded_head(key, *declared, &sup.operators, registries);
             let render_all = |indices: &[usize]| -> Vec<String> {
                 indices
                     .iter()
-                    .map(|i| render_keyworded_head(key, candidates[*i], registries))
+                    .map(|i| render_keyworded_head(key, candidates[*i], &sub.operators, registries))
                     .collect()
             };
             match select_keyworded_satisfier(
@@ -1213,6 +1478,32 @@ pub fn sig_subtype(
                     }));
                 }
             }
+        }
+    }
+
+    // 5. Operator members: each declared record needs a `sub` record whose member set **includes**
+    // it — width, as for every other channel — under an **equal** mode. At most one `sub` record
+    // can cover a declared one: two records in a channel never share a member, so a set covering
+    // the declared members is unique if it exists. Mode is matched exactly rather than covariantly
+    // because a mode is not an approximation of another: a run folded right and the same run
+    // folded left compute different things.
+    for declared in &sup.operators {
+        let covering = sub
+            .operators
+            .iter()
+            .find(|record| declared.members.iter().all(|m| record.members.contains(m)));
+        let members = || render_members(&declared.members, registries);
+        let Some(covering) = covering else {
+            return Err(Box::new(SigSubtypeFailure::MissingOperatorGroup {
+                members: members(),
+            }));
+        };
+        if covering.mode != declared.mode {
+            return Err(Box::new(SigSubtypeFailure::OperatorModeMismatch {
+                members: members(),
+                expected: render_mode(declared.mode, registries),
+                got: render_mode(covering.mode, registries),
+            }));
         }
     }
     Ok(())

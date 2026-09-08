@@ -62,6 +62,11 @@ pub(crate) struct ViewMembers {
     /// plan. A key absent here is absent from the view; a key present publishes one entry per
     /// declared overload, at the overload the source's bucket satisfies it with.
     pub(crate) keyworded: crate::machine::model::KeywordedMembers,
+    /// The signature's declared chaining records — the replay's **registry** plan. The view births
+    /// one fresh record per entry over exactly the declared members, so a run of them inside a
+    /// `USING <view> SCOPE` window reduces by the declared mode, and a run naming an operator the
+    /// signature did not declare misses (the narrowing, stated in the registry channel).
+    pub(crate) operators: crate::machine::model::OperatorMembers,
     /// The two member bindings every coerced slot is rewritten between — the source module's, and
     /// the view's own mints.
     pub(crate) coercion: crate::machine::model::MemberCoercion,
@@ -89,6 +94,7 @@ impl ViewMembers {
                 .map(|(name, declared)| (*name, *declared))
                 .collect(),
             keyworded: schema.keyworded.clone(),
+            operators: schema.operators.clone(),
             coercion,
         }
     }
@@ -408,7 +414,10 @@ impl<'a> Scope<'a> {
             && overloads.contains(&fn_type)
         {
             return Err(KError::new(KErrorKind::Rebind {
-                name: render_keyworded_head(key, fn_type, registries),
+                // The SIG's own operator channel is still being collected here, so this reads the
+                // FN-head spelling even for a member an `OP` head declared. The rebind diagnostic
+                // names a duplicate declaration, which the head's own text identifies well enough.
+                name: render_keyworded_head(key, fn_type, &Vec::new(), registries),
             }));
         }
         let mut table = keyworded.borrow_mut();
@@ -422,6 +431,68 @@ impl<'a> Scope<'a> {
         let mut overloads = ManuallyDrop::new(AllocVec::new_in(target.brand().allocator()));
         overloads.push(fn_type);
         table.insert(stored, overloads);
+        Ok(())
+    }
+
+    /// Record a SIG operator member: insert the declared chaining record into the nearest enclosing
+    /// SIG decl scope's operator collector — the third of [`Self::write_sig_slot`]'s siblings, and
+    /// the half of an operator declaration that lives outside the dispatch buckets.
+    ///
+    /// Keyed by the members' own run digest, so the upsert answers the same two questions the
+    /// module registry's does. A second write of the *same* record — two bare heads over one symbol
+    /// at different operand types are two overloads but one declaration — is an idempotent no-op.
+    /// A record whose members overlap a standing one, or one whose key matches at a different mode,
+    /// is a conflict: one signature declares one chaining mode per operator, exactly as one scope
+    /// does.
+    ///
+    /// The member run is bumped into the SIG scope's own region, so the collector's storage stays
+    /// region-hosted and carries no `Drop`.
+    pub(crate) fn write_sig_operator_group(
+        &self,
+        members: &[KeywordSymbol],
+        mode: ReductionMode,
+        registries: &RunRegistries,
+    ) -> Result<(), KError> {
+        let outside_sig = || {
+            KError::new(KErrorKind::ShapeError(
+                "operator member outside a SIG body reached the member door".to_string(),
+            ))
+        };
+        let target = self.nearest_opaque().ok_or_else(outside_sig)?;
+        let ScopeKind::Sig { operators, .. } = &target.kind else {
+            return Err(outside_sig());
+        };
+        target.assert_open(members);
+        let mut sorted: Vec<KeywordSymbol> = members.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let probe = KeywordSymbol::of_run(&sorted);
+        let conflict = |symbol: KeywordSymbol| {
+            KError::new(KErrorKind::ShapeError(format!(
+                "operator `{}` is already declared in this signature with a different chaining \
+                 mode or member set; one signature declares one chaining mode per operator",
+                render_label(symbol.symbol(), registries),
+            )))
+        };
+        {
+            let table = operators.borrow();
+            if let Some((_, standing)) = table.get(&probe) {
+                return if *standing == mode {
+                    Ok(())
+                } else {
+                    Err(conflict(sorted[0]))
+                };
+            }
+            // A different record is a conflict as soon as the two share one member: a run naming
+            // that operator would have two modes to reduce by.
+            for (_, (standing, _)) in table.iter() {
+                if let Some(shared) = sorted.iter().find(|m| standing.contains(m)) {
+                    return Err(conflict(*shared));
+                }
+            }
+        }
+        let stored = target.brand().allocator().slice(&sorted);
+        operators.borrow_mut().insert(probe, (stored, mode));
         Ok(())
     }
 
@@ -548,6 +619,7 @@ impl<'a> Scope<'a> {
             },
         )?;
         view.install_keyworded_surface(source, &members, &tables, registries)?;
+        view.install_operator_registry(&members, registries)?;
         // A view's type member is installed by the ascription, not by a declaration statement
         // running in the view scope, so it takes the born-with-the-scope site.
         for (name, ktype) in members.types {
@@ -626,13 +698,52 @@ impl<'a> Scope<'a> {
                     }
                     None => source.lift_resident(sealed.duplicate()),
                 };
-                self.register_function_direct(
-                    &cell,
-                    *index,
+                // Without the builtin-shadow guard: the guard exists so a user `FN` cannot join a
+                // builtin's bucket, and the source's own overload already passed that door where
+                // it was declared. Replaying it into a view is not a second declaration, and a
+                // signature with a `+` member would otherwise fail to ascribe at all.
+                WriteOp::Overload {
+                    index: *index,
+                    seal: OverloadSeal::of_delivered(self, &cell),
+                    builtin_shadow_guard: false,
+                }
+                .apply(
+                    self,
                     registries,
                     &mut WriteGate::for_unpublished_scope(),
                 )?;
             }
+        }
+        Ok(())
+    }
+
+    /// Publish the view's **registry** surface: one fresh record per chaining record the signature
+    /// declares, over exactly the declared members, registered under every nonempty subset of them
+    /// at index-0 visibility — the same parameters a `GROUP` body's own seeding takes.
+    ///
+    /// The record is born here rather than adopted from the source, the move the environment copy
+    /// makes for the same reason: a record's whole content is its member symbols and its mode, both
+    /// lifetime-free, so re-birthing costs nothing and leaves the view holding no borrow into the
+    /// source. Birthing over the *declared* members rather than the source record's is what makes
+    /// the registry half a narrowing like the other two — a source group chaining more operators
+    /// than the signature named does not chain them inside the window.
+    ///
+    /// Satisfaction decided before the view was allocated that a source record covers each declared
+    /// one at an equal mode, so nothing here can fail on the program's account.
+    fn install_operator_registry(
+        &'a self,
+        members: &ViewMembers,
+        registries: &RunRegistries,
+    ) -> Result<(), KError> {
+        for group in &members.operators {
+            let born = self.birth_operator_group(&group.members, group.mode);
+            self.register_group_under_all_subsets_direct(
+                &group.members,
+                GroupSeal::of_delivered(self, &born),
+                BindingIndex::value(0),
+                registries,
+                &mut WriteGate::for_unpublished_scope(),
+            )?;
         }
         Ok(())
     }

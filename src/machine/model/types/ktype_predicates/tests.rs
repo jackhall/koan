@@ -661,6 +661,7 @@ fn is_more_specific_for_pinned_signature_bound() {
             .into_iter()
             .collect(),
         keyworded: KeywordedMembers::default(),
+        operators: Vec::new(),
     };
     let hashed_schema = SigSchema {
         sig_id: Some(crate::machine::core::ScopeId::SENTINEL),
@@ -670,6 +671,7 @@ fn is_more_specific_for_pinned_signature_bound() {
             .into_iter()
             .collect(),
         keyworded: KeywordedMembers::default(),
+        operators: Vec::new(),
     };
 
     let type_sym = type_name("Type", &registries);

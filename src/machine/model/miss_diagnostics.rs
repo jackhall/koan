@@ -122,6 +122,20 @@ fn unary_missing_result(
     ))
 }
 
+/// The bodyless twin of [`unary_missing_result`]: a SIG operator member's head, whose result is no
+/// more optional than a definition's — the run reaches a unary body as one list, so nothing feeds
+/// a result back for the declaration to default to.
+fn unary_head_missing_result(
+    expr: &WorkingExpression<'_>,
+    registries: &RunRegistries,
+) -> Option<String> {
+    let sym = quoted_symbol(expr, registries)?;
+    Some(format!(
+        "`UNARY OP #({sym})` must declare its result type: \
+         `UNARY OP #({sym}) OVER <Operand> -> <Result>`",
+    ))
+}
+
 /// The combined twin of [`unary_missing_result`], naming the flat spelling in its suggestion.
 fn unary_missing_result_combined(
     expr: &WorkingExpression<'_>,
@@ -200,6 +214,20 @@ pub static MISS_DIAGNOSTICS: &[MissDiagnostic] = &[
             Slot,
         ],
         render: unary_missing_result,
+        reserved: true,
+    },
+    // UNARY OP <symbol> OVER <operand> — the head form, missing its result. Reserved for the same
+    // reason the definition form is: the shape has no other reading, and a user form claiming the
+    // key would turn the pointed message into a typed miss under its own bucket.
+    MissDiagnostic {
+        key: &[
+            Kw(&KEYWORDS.unary),
+            Kw(&KEYWORDS.op),
+            Slot,
+            Kw(&KEYWORDS.over),
+            Slot,
+        ],
+        render: unary_head_missing_result,
         reserved: true,
     },
     // LET <name> = UNARY OP <symbol> OVER <operand> = <body>.

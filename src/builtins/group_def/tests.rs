@@ -2,8 +2,10 @@
 //! and through a `USING` window), the pairwise combiner fold, and the errors the surface rejects.
 //!
 //! - [`functor`] — a `GROUP` in the body of a module-returning `FN`, instantiated explicitly.
+//! - [`sig_declaration`] — the bodyless form, which declares a SIG operator group.
 
 mod functor;
+mod sig_declaration;
 
 use crate::builtins::test_support::{TestRun, binds_module};
 use crate::machine::KErrorKind;

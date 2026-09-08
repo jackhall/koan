@@ -33,6 +33,8 @@ Before writing a single doc edit, verify the main agent's account against the di
 - **Scope creep.** Changes in the diff that the roadmap item didn't ask for and the summary doesn't justify. 
 - **Acceptance-criteria satisfaction.** Read the roadmap item's `**Acceptance criteria.**` section — each bullet is a verifiable done-condition. Take each one to the diff and the verify slate's test results and mark it **met / partial / unmet**, citing the hunk or test that satisfies it. Every criterion met ⇒ the item shipped and may be deleted; any partial or unmet ⇒ the item is only partially done, stays in `roadmap/`, and the status is at best yellow. This is the spine of the roadmap-delta call — the "should be deleted" decision in step 3 follows directly from it. (An item with no `**Acceptance criteria.**` section, or work not driven by a roadmap item, has nothing to check here — say so.)
 - **Caveat suppression.** Open follow-ups visible in the code (a `TODO`, a hard-coded special case, a punted branch) that the "Caveats" section claims are "none".
+- **Code quality issues.** Excessive duplication of code or logic, avoidable inefficiency with computational resources.
+- **Fragile design.** Choices likely to cause future mistakes.
 
 Record every finding. Findings are the point of this pass — a clean audit is a real result, but a silent one is a failure.
 

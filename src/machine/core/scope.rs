@@ -3,11 +3,12 @@ use std::mem::ManuallyDrop;
 use std::rc::{Rc, Weak};
 
 use crate::machine::DeliveredOperatorGroup;
-use crate::machine::model::OperatorGroup;
+use crate::machine::model::labels::KeywordSymbol;
 use crate::machine::model::{AnnouncedData, AnnouncedWindow};
 use crate::machine::model::{
     IdentityBuildHasher, KType, KeyElement, TypeSymbol, UntypedKey, ValueSymbol,
 };
+use crate::machine::model::{OperatorGroup, ReductionMode};
 use crate::witnessed::{And, BumpAllocator, RegionHandle, SealedExtern};
 
 use super::arena::{FrameStorage, KoanRegion, RegionBrand};
@@ -129,6 +130,13 @@ pub(crate) type SigKeywordedTable<'a> = BumpBackedMap<'a, &'a [KeyElement], SigO
 /// in a bump-backed table.
 pub(crate) type SigOverloads<'a> = ManuallyDrop<allocator_api2::vec::Vec<KType, BumpAllocator<'a>>>;
 
+/// A SIG decl scope's operator-member collector: the declared record's member run keyed by its own
+/// run digest ([`KeywordSymbol::of_run`]) → the members and the mode they chain by. The key is
+/// what makes a re-declaration of one record idempotent and a second mode over a shared member a
+/// conflict, exactly as the module registry's probe key does.
+pub(crate) type SigOperatorTable<'a> =
+    BumpBackedMap<'a, KeywordSymbol, (&'a [KeywordSymbol], ReductionMode), IdentityBuildHasher>;
+
 pub enum ScopeKind<'a> {
     Root,
     Anonymous,
@@ -160,6 +168,24 @@ pub enum ScopeKind<'a> {
         /// key run nor the overload run owns anything the region does not release whole, so the
         /// suppressed destructors had nothing to do and this variant still contributes no drop glue.
         keyworded: RefCell<ManuallyDrop<SigKeywordedTable<'a>>>,
+        /// The operator-member collector, the third of the three: a bodyless `OP` head or a
+        /// bodyless `GROUP` records the chaining record it declares here. Bump-backed and
+        /// `ManuallyDrop`-wrapped like its two siblings, and for the same reason — a member run is
+        /// bumped into this scope's region and a [`ReductionMode`] is `Copy` and lifetime-free, so
+        /// neither half owns anything the region does not release whole.
+        operators: RefCell<ManuallyDrop<SigOperatorTable<'a>>>,
+    },
+    /// A SIG group's body scope — the block a bodyless `GROUP` runs its member heads in. It is
+    /// **transparent** to the SIG-body gate: [`Scope::nearest_opaque`] walks straight past it, so a
+    /// head inside still records into the enclosing SIG's collectors. What it carries is the mode
+    /// the enclosing `GROUP` declares, read by a head through [`Scope::nearest_sig_group`] to know
+    /// that the group is the sole registrar for its members (so the head writes no singleton
+    /// record of its own) and whether a heterogeneous `-> Result` is admissible.
+    ///
+    /// A group body binds nothing, so the kind carries no table: the mode is the whole payload,
+    /// `Copy` and lifetime-free, and the scope contributes no drop glue of its own.
+    SigGroup {
+        mode: ReductionMode,
     },
     /// A MODULE body (also the per-ascription view minted by `:|`). `group` is `Some` for a `GROUP`
     /// body — a group *is* a module — naming the one [`OperatorGroup`] record its member `OP`
@@ -325,7 +351,19 @@ impl<'a> Scope<'a> {
                 name,
                 slots: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),
                 keyworded: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),
+                operators: RefCell::new(ManuallyDrop::new(bump_table(outer.brand))),
             },
+        )
+    }
+
+    /// `child_under`, stamped as a SIG group's body scope. It owns bindings like any other child —
+    /// nothing writes into them, but the storage keeps the scope shape uniform — and carries the
+    /// mode its `GROUP` head declares.
+    fn child_under_sig_group(outer: &'a Scope<'a>, mode: ReductionMode) -> Scope<'a> {
+        Self::child_inheriting(
+            outer,
+            ScopeBindings::Owned(Bindings::new(outer.brand)),
+            ScopeKind::SigGroup { mode },
         )
     }
 
@@ -381,6 +419,7 @@ impl<'a> Scope<'a> {
             ScopeKind::Root
             | ScopeKind::Anonymous
             | ScopeKind::Sig { .. }
+            | ScopeKind::SigGroup { .. }
             | ScopeKind::Module { window: None, .. } => None,
         })
     }
@@ -443,6 +482,12 @@ impl<'a> Scope<'a> {
     /// `name` is the declaration's own token, so the kind owns no heap of its own.
     pub fn alloc_child_under_sig(&'a self, name: TypeSymbol) -> &'a Scope<'a> {
         Self::bump_child(self, Scope::child_under_sig(self, name))
+    }
+
+    /// Allocate a same-region child stamped as a SIG group's body scope, carrying the chaining
+    /// mode its `GROUP` head declares.
+    pub fn alloc_child_under_sig_group(&'a self, mode: ReductionMode) -> &'a Scope<'a> {
+        Self::bump_child(self, Scope::child_under_sig_group(self, mode))
     }
 
     /// Allocate a same-region child stamped as a MODULE body (also the per-ascription view `:|`
@@ -621,7 +666,10 @@ impl<'a> Scope<'a> {
     pub(crate) fn nearest_opaque(&self) -> Option<&Scope<'a>> {
         self.ancestors().find(|s| match &s.kind {
             ScopeKind::Sig { .. } | ScopeKind::Module { .. } => true,
-            ScopeKind::Root | ScopeKind::Anonymous => false,
+            // A SIG group's body is transparent: a head inside it declares a member of the
+            // *enclosing* signature, so the gate, the group-context read and the two SIG write
+            // doors must all find the SIG scope through it.
+            ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::SigGroup { .. } => false,
         })
     }
 
@@ -747,7 +795,10 @@ impl<'a> Scope<'a> {
                 .iter()
                 .map(|(name, kt)| (*name, *kt))
                 .collect(),
-            ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::Module { .. } => Vec::new(),
+            ScopeKind::Root
+            | ScopeKind::Anonymous
+            | ScopeKind::SigGroup { .. }
+            | ScopeKind::Module { .. } => Vec::new(),
         }
     }
 
@@ -762,7 +813,45 @@ impl<'a> Scope<'a> {
                 .iter()
                 .map(|(key, overloads)| (key.to_vec(), overloads.to_vec()))
                 .collect(),
-            ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::Module { .. } => Vec::new(),
+            ScopeKind::Root
+            | ScopeKind::Anonymous
+            | ScopeKind::SigGroup { .. }
+            | ScopeKind::Module { .. } => Vec::new(),
         }
+    }
+
+    /// Snapshot of every declared chaining record — the operator half of the schema projection's
+    /// read, and the third of [`Self::sig_value_slots`]' siblings. The bumped member run is copied
+    /// into an owned vector here, at the one boundary where the collector's content leaves the
+    /// region. Empty for any scope that is not a SIG decl_scope.
+    pub(crate) fn sig_operator_groups(&self) -> Vec<crate::machine::model::DeclaredGroup> {
+        match &self.kind {
+            ScopeKind::Sig { operators, .. } => operators
+                .borrow()
+                .iter()
+                .map(
+                    |(_, (members, mode))| crate::machine::model::DeclaredGroup {
+                        members: members.to_vec(),
+                        mode: *mode,
+                    },
+                )
+                .collect(),
+            ScopeKind::Root
+            | ScopeKind::Anonymous
+            | ScopeKind::SigGroup { .. }
+            | ScopeKind::Module { .. } => Vec::new(),
+        }
+    }
+
+    /// The chaining mode of the SIG group whose body this scope sits in, if any — the context a
+    /// bodyless `OP` head reads to know it is a group member. The walk stops at the first opaque
+    /// scope, so a head in a SIG body proper, or one nested inside something opaque within a group
+    /// body, answers `None`.
+    pub fn nearest_sig_group(&self) -> Option<ReductionMode> {
+        self.ancestors().find_map(|s| match &s.kind {
+            ScopeKind::SigGroup { mode } => Some(Some(*mode)),
+            ScopeKind::Sig { .. } | ScopeKind::Module { .. } => Some(None),
+            ScopeKind::Root | ScopeKind::Anonymous => None,
+        })?
     }
 }

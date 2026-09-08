@@ -190,6 +190,7 @@ fn mixed_schema(types: &TypeRegistry, wrap_params: Vec<&str>) -> SigSchema {
         manifest_members: TypeMemberMap::default(),
         value_slots: HashMap::default(),
         keyworded: KeywordedMembers::default(),
+        operators: Vec::new(),
     }
 }
 
@@ -312,12 +313,12 @@ fn empty_signature_digests_are_pinned() {
     assert_pinned(
         "empty schema content",
         empty_schema_digest(),
-        0x52566807_c53f61b3_e9635215_bd621432,
+        0xa1e65d65_43bf2885_5017f26c_f3b94e05,
     );
     assert_handle_pinned(
         "empty signature",
         types.signature(SigSchema::empty()),
-        0x55ecc11f_39d3a140_69bc313b_aa2d1ed2,
+        0xb80aaa8d_7e3507bd_e06a1496_5250ca90,
     );
 }
 
@@ -461,16 +462,16 @@ fn schema_abstract_member_digests_are_pinned() {
     assert_pinned(
         "schema with higher-kinded Wrap",
         schema_content_digest(&mixed_schema(types, vec!["Inner", "Outer"]), types),
-        0xabcf11f0_f5b340f9_c855712d_f61abd44,
+        0x4e23745c_0601dcef_e398e091_6f5bf5d5,
     );
     assert_pinned(
         "schema with Wrap's parameters reordered",
         schema_content_digest(&mixed_schema(types, vec!["Outer", "Inner"]), types),
-        0xabcf11f0_f5b340f9_c855712d_f61abd44,
+        0x4e23745c_0601dcef_e398e091_6f5bf5d5,
     );
     assert_pinned(
         "schema with first-order Wrap",
         schema_content_digest(&mixed_schema(types, Vec::new()), types),
-        0x97f9fa18_ecac105c_fc74e68c_cac3fea3,
+        0x5befaef4_c4b619ba_56df0322_477e7955,
     );
 }

@@ -275,6 +275,88 @@ pub static LAZY_SLOT_SPECS: &[LazySlotSpec] = &[
         ],
         slots: &[(4, CODE), (6, TYPE_EXPR.with(RECORD_TYPE)), (8, CODE)],
     },
+    // The SIG-body operator heads. Only the quoted symbol captures raw: the operand and result are
+    // ordinary kind expectations, so a `:(…)` there sub-dispatches to a type eagerly, exactly as
+    // the bodyless `FN` head's return slot does.
+    //
+    // OP <symbol> OVER <operand>
+    LazySlotSpec {
+        key: &[Kw(&KEYWORDS.op), Slot, Kw(&KEYWORDS.over), Slot],
+        slots: &[(1, CODE)],
+    },
+    // OP <symbol> OVER <operand> -> <result>
+    LazySlotSpec {
+        key: &[
+            Kw(&KEYWORDS.op),
+            Slot,
+            Kw(&KEYWORDS.over),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+        ],
+        slots: &[(1, CODE)],
+    },
+    // UNARY OP <symbol> OVER <operand> -> <result>
+    LazySlotSpec {
+        key: &[
+            Kw(&KEYWORDS.unary),
+            Kw(&KEYWORDS.op),
+            Slot,
+            Kw(&KEYWORDS.over),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+        ],
+        slots: &[(2, CODE)],
+    },
+    // The SIG-body group forms — the definition spellings minus the name slot.
+    //
+    // GROUP FOLD LEFT|RIGHT = <heads>
+    LazySlotSpec {
+        key: &[
+            Kw(&KEYWORDS.group),
+            Kw(&KEYWORDS.fold),
+            Kw(&KEYWORDS.left),
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        slots: &[(4, CODE)],
+    },
+    LazySlotSpec {
+        key: &[
+            Kw(&KEYWORDS.group),
+            Kw(&KEYWORDS.fold),
+            Kw(&KEYWORDS.right),
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        slots: &[(4, CODE)],
+    },
+    // GROUP PAIRWISE FOLD <combiner> LEFT|RIGHT = <heads>
+    LazySlotSpec {
+        key: &[
+            Kw(&KEYWORDS.group),
+            Kw(&KEYWORDS.pairwise),
+            Kw(&KEYWORDS.fold),
+            Slot,
+            Kw(&KEYWORDS.left),
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        slots: &[(3, CODE), (6, CODE)],
+    },
+    LazySlotSpec {
+        key: &[
+            Kw(&KEYWORDS.group),
+            Kw(&KEYWORDS.pairwise),
+            Kw(&KEYWORDS.fold),
+            Slot,
+            Kw(&KEYWORDS.right),
+            Kw(&KEYWORDS.equals),
+            Slot,
+        ],
+        slots: &[(3, CODE), (6, CODE)],
+    },
     // OP <symbol> OVER <operand> = <body>
     LazySlotSpec {
         key: &[

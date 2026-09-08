@@ -202,6 +202,7 @@ fn schema_digest_binds_abstract_member_param_names() {
         manifest_members: crate::machine::model::TypeMemberMap::default(),
         value_slots: HashMap::default(),
         keyworded: KeywordedMembers::default(),
+        operators: Vec::new(),
     };
     assert_ne!(
         schema_content_digest(&schema(vec!["Elem"]), types),

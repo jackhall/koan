@@ -82,24 +82,26 @@ fn spec_table_matches_live_registration() {
 /// Every spec entry that installs anything declares at least one channel, and a `names` entry
 /// carries the bind kind the placeholder is tagged with. Pins that the table's two channels are
 /// the only routes into an install.
+///
+/// The silent entries are exactly the SIG **declaration** forms — `VAL` and the three bodyless
+/// operator heads. Each records into the decl scope's own collectors rather than into a binding
+/// map, so neither channel applies; anything else appearing here means a binder builtin lost its
+/// extractor.
 #[test]
 fn spec_channels_cover_every_installing_entry() {
-    let silent: Vec<&[super::KeyElementSpec]> = BINDER_SPECS
+    let silent: Vec<Vec<String>> = BINDER_SPECS
         .iter()
         .filter(|spec| spec.installs_nothing())
-        .map(|spec| spec.key)
+        .map(|spec| render_key(spec.key))
         .collect();
     assert_eq!(
-        silent.len(),
-        1,
-        "`VAL` is the one declaration form with no install channel; a second silent entry means a \
-         binder builtin lost its extractor",
-    );
-    assert!(
-        silent[0]
-            .first()
-            .is_some_and(|element| matches!(element, super::KeyElementSpec::Keyword(name) if name.text() == "VAL")),
-        "the silent entry must be `VAL`",
+        silent,
+        vec![
+            vec!["OP", "_", "OVER", "_"],
+            vec!["OP", "_", "OVER", "_", "->", "_"],
+            vec!["UNARY", "OP", "_", "OVER", "_", "->", "_"],
+            vec!["VAL", "_", "_"],
+        ],
     );
 }
 
@@ -146,7 +148,8 @@ fn every_masked_index_names_a_slot_position() {
 }
 
 /// A masked index is a slot the bucket's live registrations really read as a raw type expression:
-/// some overload types it with a carrier admitting `:(…)`, and **no** overload types it
+/// some overload takes `:(…)` there — either as a member of a raw-carrier union, or as a kind
+/// expectation, which a sigiled type expression sub-dispatches into — and **no** overload types it
 /// `:KExpression`. The second half is what matters — flipping a code slot's `(…)` to
 /// `SigiledTypeExpr` would silently retype a body.
 ///
@@ -183,9 +186,12 @@ fn every_masked_index_is_a_raw_type_expression_slot() {
                 "spec key {:?} masks slot {index}, which no live registration types",
                 render_key(spec.key)
             );
+            let admits_sigiled = |kt: &KType| {
+                kt.union_has_member(KType::SIGILED_TYPE_EXPR, &types)
+                    || matches!(types.node(*kt), crate::machine::model::TypeNode::OfKind(_))
+            };
             assert!(
-                live.iter()
-                    .any(|kt| kt.union_has_member(KType::SIGILED_TYPE_EXPR, &types)),
+                live.iter().any(admits_sigiled),
                 "spec key {:?} masks slot {index}, which no registration admits a `:(…)` at",
                 render_key(spec.key)
             );

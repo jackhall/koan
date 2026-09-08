@@ -37,6 +37,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
     let site = ctx.declaration_site();
     let name_for_finish = name;
     await_body_in_scope(decl_scope, body_expr, move |fctx| {
+        crate::try_action!(check_pairwise_combiners(decl_scope, fctx.registries));
         let schema = SigSchema::project_decl(decl_scope, fctx.registries);
         let identity = fctx.types().signature(schema);
         Action::done(Ok(fctx.ctx.type_carried(identity))).with_effect(
@@ -50,6 +51,44 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'_, 'a, '_>) -> crate::machine::Ac
             },
         )
     })
+}
+
+/// Every declared `PAIRWISE` group names a combiner the signature itself declares.
+///
+/// The reducer synthesizes the combiner infix at a run's use site, where the ordinary scope walk
+/// resolves it — so inside a `USING <view> SCOPE` window the combiner has to be one of the members
+/// the view installs, and only a signature that declares it can promise that. A definition needs
+/// no such check: its combiner is resolved against the group body's own scope, which holds
+/// whatever the module declared.
+///
+/// Checked at the finish rather than at the `GROUP` statement, so a combiner declared *after* the
+/// group — a SIG body has no declaration order — still counts.
+fn check_pairwise_combiners(
+    decl_scope: &Scope<'_>,
+    registries: &RunRegistries,
+) -> Result<(), crate::machine::KError> {
+    use crate::machine::model::{ReductionMode, binary_key, display_label};
+    let declared = decl_scope.sig_keyworded_members();
+    for group in decl_scope.sig_operator_groups() {
+        let ReductionMode::Pairwise { combiner, .. } = group.mode else {
+            continue;
+        };
+        let key = binary_key(combiner);
+        if declared
+            .iter()
+            .any(|(declared_key, _)| *declared_key == key)
+        {
+            continue;
+        }
+        let sym = display_label(combiner.symbol(), registries);
+        return Err(crate::machine::KError::new(
+            crate::machine::KErrorKind::ShapeError(format!(
+                "`GROUP PAIRWISE FOLD #({sym})` names a combiner the signature does not declare \
+                 — add `(OP #({sym}) OVER <Result>)`",
+            )),
+        ));
+    }
+    Ok(())
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {

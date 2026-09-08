@@ -84,6 +84,7 @@ fn schema(
             .map(|(n, k)| (value_name(n, registries), k))
             .collect(),
         keyworded: KeywordedMembers::default(),
+        operators: Vec::new(),
     }
 }
 
@@ -1554,4 +1555,235 @@ fn the_join_keeps_a_shared_key_and_drops_a_one_sided_one() {
         "the shared key's overload joins covariantly and meets its parameter",
     );
     assert_upper_bound(&a, &b, &joined, &registries);
+}
+
+// --- the operator channel -------------------------------------------------------------
+
+/// A keyword symbol for a fixture operator glyph, with its spelling recorded — the parse records
+/// it in production, and these tests read the diagnostics that render it back.
+fn op(text: &str, registries: &RunRegistries) -> KeywordSymbol {
+    KeywordSymbol::declared(text, &registries.labels).expect("a fixture glyph is keyword-class")
+}
+
+/// A declared chaining record over `members` — stored sorted, as every production write door
+/// stores one.
+fn group(members: &[&str], mode: ReductionMode, registries: &RunRegistries) -> DeclaredGroup {
+    let mut members: Vec<KeywordSymbol> = members.iter().map(|text| op(text, registries)).collect();
+    members.sort_unstable();
+    DeclaredGroup { members, mode }
+}
+
+/// [`schema`] carrying an operator channel and nothing else.
+fn operator_schema(groups: Vec<DeclaredGroup>, registries: &RunRegistries) -> SigSchema {
+    let mut built = schema(None, vec![], vec![], vec![], registries);
+    built.operators = canonical_groups(groups);
+    built
+}
+
+/// Width applies to a record's member set exactly as it does to every other channel: a module
+/// group chaining more operators than the signature names still supplies the declared record.
+#[test]
+fn a_wider_module_group_supplies_a_declared_record() {
+    let registries = RunRegistries::new();
+    let sub = operator_schema(
+        vec![group(
+            &["+", "-", "*"],
+            ReductionMode::FoldLeft,
+            &registries,
+        )],
+        &registries,
+    );
+    let sup = operator_schema(
+        vec![group(&["+", "-"], ReductionMode::FoldLeft, &registries)],
+        &registries,
+    );
+    assert!(relation(&sub, &sup, &registries).is_ok());
+}
+
+/// Two size-1 records do not add up to one record over both members: each says its operator
+/// chains with itself alone, which is not the claim a two-member group makes.
+#[test]
+fn two_singleton_records_do_not_cover_a_two_member_declaration() {
+    let registries = RunRegistries::new();
+    let sub = operator_schema(
+        vec![
+            group(&["+"], ReductionMode::FoldLeft, &registries),
+            group(&["-"], ReductionMode::FoldLeft, &registries),
+        ],
+        &registries,
+    );
+    let sup = operator_schema(
+        vec![group(&["+", "-"], ReductionMode::FoldLeft, &registries)],
+        &registries,
+    );
+    let failure = relation(&sub, &sup, &registries).expect_err("neither record covers both");
+    let SigSubtypeFailure::MissingOperatorGroup { members } = &*failure else {
+        panic!(
+            "expected a missing-group failure, got `{}`",
+            failure.render_fragment()
+        );
+    };
+    // Members render in their stored order, which is by symbol bits rather than by text.
+    assert!(
+        members.split(' ').collect::<std::collections::HashSet<_>>()
+            == ["+", "-"].into_iter().collect(),
+        "the failure names both declared members, got `{members}`",
+    );
+}
+
+/// A module that declares the buckets but no group at all — what a bare `FN` head over an
+/// operator symbol produces — supplies no chaining record.
+#[test]
+fn a_module_with_no_record_misses_a_declared_one() {
+    let registries = RunRegistries::new();
+    let sub = operator_schema(vec![], &registries);
+    let sup = operator_schema(
+        vec![group(&["+"], ReductionMode::FoldLeft, &registries)],
+        &registries,
+    );
+    let failure = relation(&sub, &sup, &registries).expect_err("an empty channel supplies nothing");
+    assert!(matches!(
+        &*failure,
+        SigSubtypeFailure::MissingOperatorGroup { .. }
+    ));
+}
+
+/// Mode is matched exactly: a run folded right and the same run folded left compute different
+/// things, so neither mode approximates the other.
+#[test]
+fn a_record_at_another_mode_is_a_mode_mismatch() {
+    let registries = RunRegistries::new();
+    let sub = operator_schema(
+        vec![group(&["+"], ReductionMode::FoldRight, &registries)],
+        &registries,
+    );
+    let sup = operator_schema(
+        vec![group(&["+"], ReductionMode::FoldLeft, &registries)],
+        &registries,
+    );
+    let failure = relation(&sub, &sup, &registries).expect_err("fold-right is not fold-left");
+    let SigSubtypeFailure::OperatorModeMismatch {
+        members,
+        expected,
+        got,
+    } = &*failure
+    else {
+        panic!(
+            "expected a mode mismatch, got `{}`",
+            failure.render_fragment()
+        );
+    };
+    assert_eq!(members, "+");
+    assert_eq!(expected, "fold-left");
+    assert_eq!(got, "fold-right");
+}
+
+/// A pairwise record's combiner is part of its mode: two modules pairing the same members
+/// through different combiners are distinct interfaces.
+#[test]
+fn a_pairwise_record_distinguishes_its_combiner() {
+    let registries = RunRegistries::new();
+    let pairwise = |combiner: &str| ReductionMode::Pairwise {
+        combiner: op(combiner, &registries),
+        direction: FoldDirection::Left,
+    };
+    let sub = operator_schema(
+        vec![group(&["<"], pairwise("AND"), &registries)],
+        &registries,
+    );
+    let sup = operator_schema(
+        vec![group(&["<"], pairwise("BOTH"), &registries)],
+        &registries,
+    );
+    assert!(matches!(
+        &*relation(&sub, &sup, &registries).expect_err("a different combiner is a different mode"),
+        SigSubtypeFailure::OperatorModeMismatch { .. }
+    ));
+}
+
+/// The channel is signature content: two interfaces alike but for a record's mode, or for one
+/// member of it, are two types; two spellings of one channel are one type.
+#[test]
+fn the_operator_channel_is_part_of_signature_identity() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let bare = operator_schema(vec![], &registries);
+    let left = operator_schema(
+        vec![group(&["+", "-"], ReductionMode::FoldLeft, &registries)],
+        &registries,
+    );
+    let right = operator_schema(
+        vec![group(&["+", "-"], ReductionMode::FoldRight, &registries)],
+        &registries,
+    );
+    let narrower = operator_schema(
+        vec![group(&["+"], ReductionMode::FoldLeft, &registries)],
+        &registries,
+    );
+    assert_ne!(types.signature(bare), types.signature(left.clone()));
+    assert_ne!(types.signature(left.clone()), types.signature(right));
+    assert_ne!(types.signature(left.clone()), types.signature(narrower));
+    // Content addressing: the members are stored sorted, so a channel written in either member
+    // order interns once.
+    let rebuilt = operator_schema(
+        vec![group(&["-", "+"], ReductionMode::FoldLeft, &registries)],
+        &registries,
+    );
+    assert_eq!(types.signature(left), types.signature(rebuilt));
+}
+
+/// A join keeps what both operands promise: same-mode records intersect on their members, and a
+/// mode disagreement has no common weakening at all.
+#[test]
+fn joining_operator_channels_intersects_same_mode_records() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let wide = operator_schema(
+        vec![group(
+            &["+", "-", "*"],
+            ReductionMode::FoldLeft,
+            &registries,
+        )],
+        &registries,
+    );
+    let narrow = operator_schema(
+        vec![group(&["+", "-"], ReductionMode::FoldLeft, &registries)],
+        &registries,
+    );
+    let joined = join_schemas(&wide, &narrow, types);
+    assert_eq!(
+        joined.operators,
+        vec![group(&["+", "-"], ReductionMode::FoldLeft, &registries)]
+    );
+
+    let other_mode = operator_schema(
+        vec![group(&["+", "-"], ReductionMode::FoldRight, &registries)],
+        &registries,
+    );
+    assert!(
+        join_schemas(&wide, &other_mode, types).operators.is_empty(),
+        "two modes make incompatible claims, so the pair contributes nothing",
+    );
+}
+
+/// `WITH` pins fix type members; a chaining record names only operator symbols, so it rides the
+/// fold untouched.
+#[test]
+fn folding_pins_leaves_the_operator_channel_intact() {
+    let registries = RunRegistries::new();
+    let types = &registries.types;
+    let mut declared = schema(
+        Some(SUP_ID),
+        vec![("Carrier", sig_abstract(SUP_ID, "Carrier", &registries))],
+        vec![],
+        vec![],
+        &registries,
+    );
+    declared.operators = canonical_groups(vec![group(
+        &["+", "-"],
+        ReductionMode::FoldLeft,
+        &registries,
+    )]);
+    let pinned = declared.fold_pins(&[(type_name("Carrier", &registries), KType::NUMBER)], types);
+    assert_eq!(pinned.operators, declared.operators);
 }

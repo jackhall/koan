@@ -25,8 +25,8 @@ use super::{BindingIndex, DeclarationSite, SealedValue, WriteGate};
 use crate::machine::core::carrier_witness::{GroupSeal, OverloadSeal};
 use crate::machine::core::{KError, KErrorKind, Scope};
 use crate::machine::model::{
-    KType, KeywordSymbol, LabelInterner, RunRegistries, TypeSymbol, UntypedKey, ValueSymbol,
-    render_label, render_untyped_key,
+    KType, KeywordSymbol, LabelInterner, ReductionMode, RunRegistries, TypeSymbol, UntypedKey,
+    ValueSymbol, render_label, render_untyped_key,
 };
 
 /// How a [`WriteOp::Type`] meets an existing `types[name]`: `Insert` is strict insert-if-absent (a
@@ -91,6 +91,14 @@ pub(crate) enum WriteOp<'a> {
     /// overload's `(params) -> ret` type; a same-key declaration at a different type joins the
     /// key's overload set rather than replacing it.
     SigKeyworded { key: UntypedKey, fn_type: KType },
+    /// An operator member into the nearest enclosing SIG decl scope's operator collector — the
+    /// bodyless `OP` head's and bodyless `GROUP`'s write, and the third of [`WriteOp::SigSlot`]'s
+    /// siblings. `members` is the record's declared member set and `mode` how a run of them
+    /// reduces; both are lifetime-free plain data, so the op still names no region borrow.
+    SigOperatorGroup {
+        members: Vec<KeywordSymbol>,
+        mode: ReductionMode,
+    },
 }
 
 impl<'a> WriteOp<'a> {
@@ -169,6 +177,9 @@ impl<'a> WriteOp<'a> {
             WriteOp::SigSlot { name, kt } => scope.write_sig_slot(name, kt, registries),
             WriteOp::SigKeyworded { key, fn_type } => {
                 scope.write_sig_keyworded(&key, fn_type, registries)
+            }
+            WriteOp::SigOperatorGroup { members, mode } => {
+                scope.write_sig_operator_group(&members, mode, registries)
             }
         }
     }

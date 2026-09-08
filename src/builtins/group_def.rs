@@ -74,6 +74,13 @@ enum GroupMode {
 /// member powerset, and finally run the body and bind the module value through the tail `MODULE`
 /// uses ([`super::module_def::await_module_body`]).
 fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
+    if ctx.scope.is_in_sig_body() {
+        return crate::machine::Action::done(Err(KError::new(KErrorKind::ShapeError(
+            "inside a SIG body, a group is declared rather than defined — drop the name and the \
+             member bodies and write `(GROUP FOLD LEFT = ((OP #(<sym>) OVER <Operand>) …))`"
+                .to_string(),
+        ))));
+    }
     let name = crate::try_action!(require_identifier_name(
         ctx.args,
         &SLOTS.name,
@@ -85,7 +92,12 @@ fn build<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
     // Both scans quote the group by name, but only on the arms that fail, so the binder's symbol
     // carries through to them unrendered and the spelling is written straight into a diagnostic's
     // buffer there. The success path — every `GROUP` that declares — renders nothing.
-    let members = crate::try_action!(scan_members(&body_expr, name, ctx.scratch, ctx.registries));
+    let members = crate::try_action!(scan_members(
+        &body_expr,
+        Some(name),
+        ctx.scratch,
+        ctx.registries
+    ));
     // A group *is* a module, so its body announces its top-level type declarations the same way.
     let announced = crate::try_action!(crate::machine::model::announce_type_members(
         &body_expr,
@@ -135,10 +147,16 @@ fn reduction_mode(
 /// whole run as one list, so it chains with nothing and can be no group's member.
 fn scan_members<'s>(
     body: &KExpression<'_>,
-    name: ValueSymbol,
+    name: Option<ValueSymbol>,
     scratch: BumpAllocator<'s>,
     registries: &RunRegistries,
 ) -> Result<BumpVec<'s, KeywordSymbol>, KError> {
+    // How the two spellings name themselves in a diagnostic: a definition by its binder, a SIG
+    // declaration by the surface (it binds nothing to name).
+    let subject = match name {
+        Some(name) => format!("GROUP {}", display_label(name.symbol(), registries)),
+        None => "GROUP".to_string(),
+    };
     // The list is read by `alloc_group_child` and dropped inside this step, so it rides the step
     // scratch. One statement declares at most one member, which is the reservation.
     let statements = body_statement_refs(body);
@@ -149,9 +167,8 @@ fn scan_members<'s>(
             None => continue,
             Some(OpArity::Unary) => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "`GROUP {}` declares a `UNARY OP`: a unary operator takes the whole run \
+                    "`{subject}` declares a `UNARY OP`: a unary operator takes the whole run \
                      as one list, so it chains with nothing and cannot be a group member",
-                    display_label(name.symbol(), registries),
                 ))));
             }
             Some(OpArity::Binary) => {
@@ -165,11 +182,68 @@ fn scan_members<'s>(
     }
     if members.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(format!(
-            "`GROUP {}` declares no operator: a GROUP body holds at least one top-level `OP`",
-            display_label(name.symbol(), registries),
+            "`{subject}` declares no operator: a GROUP body holds at least one top-level `OP`",
         ))));
     }
     Ok(members)
+}
+
+/// The bodyless `GROUP <mode> = (<heads>)` form — a SIG body's **group member**: the definition
+/// minus its name, since a SIG binds no value. It declares one chaining record over exactly the
+/// operators its body's heads name, read by the same structural [`scan_members`] scan the
+/// definition reads its own members with.
+///
+/// The heads run in a [`ScopeKind::SigGroup`](crate::machine::core::ScopeKind) child, which is
+/// transparent to the SIG-body gate: each head still records its keyworded member into the
+/// enclosing signature's collector, and finding the group mode through
+/// [`Scope::nearest_sig_group`] is what tells it to write no singleton record of its own. The
+/// group's own record lands at the finish, so it is written whether or not the heads ran in
+/// declaration order.
+///
+/// A group body holds heads and nothing else: a statement that declares no operator would be a
+/// member the record silently omits, so it is refused rather than ignored.
+fn sig_group<'a>(ctx: &BodyCtx<'_, 'a, '_>, group_mode: GroupMode) -> Action<'a> {
+    if !ctx.scope.is_in_sig_body() {
+        return Action::done(Err(KError::new(KErrorKind::ShapeError(
+            "a bodyless `GROUP` declares a SIG operator group and is only valid inside a SIG \
+             body — write `GROUP <name> FOLD LEFT = (<body>)` to define one"
+                .to_string(),
+        ))));
+    }
+    let body_expr = crate::try_action!(require_kexpression(ctx.args, "GROUP", &SLOTS.body));
+    let mode = crate::try_action!(reduction_mode(ctx, group_mode));
+    // Heads-only first: a body of non-heads would otherwise report "declares no operator", which
+    // names the symptom rather than the mistake.
+    crate::try_action!(check_heads_only(&body_expr));
+    let members = crate::try_action!(scan_members(&body_expr, None, ctx.scratch, ctx.registries));
+    let members: Vec<KeywordSymbol> = members.to_vec();
+
+    let child = ctx.scope.alloc_child_under_sig_group(mode);
+    super::await_body::await_body_in_scope(child, body_expr, move |fctx| {
+        // The record is the group's own write, and it rides the *step* scope: like its two
+        // siblings the door walks out to the nearest opaque scope, which is the enclosing SIG
+        // whether the statement ran in the SIG body or (for a head) in this child.
+        Action::done(Ok(fctx.ctx.type_carried(KType::EMPTY_SIGNATURE))).with_effect(
+            fctx.scratch,
+            crate::machine::core::bindings::WriteOp::SigOperatorGroup { members, mode },
+        )
+    })
+}
+
+/// A SIG group body holds operator heads only. Anything else — a `VAL` slot, an `FN` head, a
+/// nested group — would be a statement the member scan skips, so the record it produced would
+/// quietly not describe the body that was written.
+fn check_heads_only(body: &KExpression<'_>) -> Result<(), KError> {
+    for statement in body_statement_refs(body) {
+        if op_declaration_arity(statement).is_none() {
+            return Err(KError::new(KErrorKind::ShapeError(
+                "a SIG group body holds operator heads only — declare any other member in the \
+                 SIG body itself"
+                    .to_string(),
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn body_fold_left<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
@@ -186,6 +260,22 @@ fn body_pairwise_left<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
 
 fn body_pairwise_right<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     build(ctx, GroupMode::Pairwise(FoldDirection::Right))
+}
+
+fn sig_fold_left<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
+    sig_group(ctx, GroupMode::Fold(FoldDirection::Left))
+}
+
+fn sig_fold_right<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
+    sig_group(ctx, GroupMode::Fold(FoldDirection::Right))
+}
+
+fn sig_pairwise_left<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
+    sig_group(ctx, GroupMode::Pairwise(FoldDirection::Left))
+}
+
+fn sig_pairwise_right<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
+    sig_group(ctx, GroupMode::Pairwise(FoldDirection::Right))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut WriteGate) {
@@ -224,16 +314,62 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         )
     };
 
-    for (direction, fold_body, pairwise_body) in [
+    // The SIG-body forms: the same two shapes minus the name slot a SIG has nothing to bind. Full
+    // bucket-key matching keeps each disjoint from its definition spelling, so the two never
+    // compete and each body guards the other's context.
+    let sig_fold = |direction: &'static str| {
+        sig(
+            KType::EMPTY_SIGNATURE,
+            vec![
+                kw(registries, "GROUP"),
+                kw(registries, "FOLD"),
+                kw(registries, direction),
+                kw(registries, "="),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
+            ],
+        )
+    };
+    let sig_pairwise = |direction: &'static str| {
+        sig(
+            KType::EMPTY_SIGNATURE,
+            vec![
+                kw(registries, "GROUP"),
+                kw(registries, "PAIRWISE"),
+                kw(registries, "FOLD"),
+                arg(registries, &SLOTS.combiner, KType::KEXPRESSION),
+                kw(registries, direction),
+                kw(registries, "="),
+                arg(registries, &SLOTS.body, KType::KEXPRESSION),
+            ],
+        )
+    };
+
+    for (direction, fold_body, pairwise_body, sig_fold_body, sig_pairwise_body) in [
         (
             "LEFT",
             body_fold_left as crate::machine::ActionFn,
             body_pairwise_left as crate::machine::ActionFn,
+            sig_fold_left as crate::machine::ActionFn,
+            sig_pairwise_left as crate::machine::ActionFn,
         ),
-        ("RIGHT", body_fold_right, body_pairwise_right),
+        (
+            "RIGHT",
+            body_fold_right,
+            body_pairwise_right,
+            sig_fold_right,
+            sig_pairwise_right,
+        ),
     ] {
         register_builtin(scope, fold(direction), fold_body, registries, gate);
         register_builtin(scope, pairwise(direction), pairwise_body, registries, gate);
+        register_builtin(scope, sig_fold(direction), sig_fold_body, registries, gate);
+        register_builtin(
+            scope,
+            sig_pairwise(direction),
+            sig_pairwise_body,
+            registries,
+            gate,
+        );
     }
 }
 

@@ -20,5 +20,6 @@ mod cross_sig;
 mod functor;
 mod keyworded;
 mod nested;
+mod operators;
 mod self_sig;
 mod views;

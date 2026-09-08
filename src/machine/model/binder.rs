@@ -739,6 +739,54 @@ pub static BINDER_SPECS: &[BinderSpec] = &[
         name_slot: Some(1),
         type_slots: &[7, 9],
     },
+    // The SIG-body operator heads — the three definition surfaces minus their `= <body>`. Like
+    // `VAL` below they install nothing: a head records into the decl scope's collectors, not into
+    // a binding map any name lookup can see. They appear here for the `type_slots` mask (so a bare
+    // `(LIST OF Elt)` operand reads as a type expression, exactly as it does in the definition)
+    // and for the `OperatorDef` marker, which is what a SIG group's member scan keys on.
+    //
+    // OP <symbol> OVER <operand>.
+    BinderSpec {
+        key: &[Kw(&KEYWORDS.op), Slot, Kw(&KEYWORDS.over), Slot],
+        names: &[],
+        bucket: None,
+        surface: BinderSurface::OperatorDef,
+        name_slot: None,
+        type_slots: &[3],
+    },
+    // OP <symbol> OVER <operand> -> <result>.
+    BinderSpec {
+        key: &[
+            Kw(&KEYWORDS.op),
+            Slot,
+            Kw(&KEYWORDS.over),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+        ],
+        names: &[],
+        bucket: None,
+        surface: BinderSurface::OperatorDef,
+        name_slot: None,
+        type_slots: &[3, 5],
+    },
+    // UNARY OP <symbol> OVER <operand> -> <result>.
+    BinderSpec {
+        key: &[
+            Kw(&KEYWORDS.unary),
+            Kw(&KEYWORDS.op),
+            Slot,
+            Kw(&KEYWORDS.over),
+            Slot,
+            Kw(&KEYWORDS.arrow),
+            Slot,
+        ],
+        names: &[],
+        bucket: None,
+        surface: BinderSurface::OperatorDef,
+        name_slot: None,
+        type_slots: &[4, 6],
+    },
     // VAL <name> <ty> — a declaration form with no install channel. It records
     // into the decl scope's slot collector, not a binding map any name lookup can see, so it
     // installs nothing; it appears here so the one-place specification of the declaration forms is

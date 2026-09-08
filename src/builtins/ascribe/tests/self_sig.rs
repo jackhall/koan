@@ -10,6 +10,7 @@ use crate::machine::model::Module;
 use crate::machine::model::RunRegistries;
 use crate::machine::model::Symbol;
 use crate::machine::model::TypeNode;
+use crate::machine::model::{ReductionMode, render_label};
 use crate::machine::{KErrorKind, Scope};
 use crate::machine::{program_storage, run_root_storage};
 
@@ -348,4 +349,105 @@ fn differing_module_interface_misses_the_shared_verdict() {
         registry.hit_count(),
         registry.miss_count(),
     );
+}
+
+// --- the operator channel -------------------------------------------------------------
+
+/// The self-sig's operator channel, each record as `(sorted member spellings, mode)` — read
+/// structurally rather than through the rendering, which the signature-name tests pin.
+fn operator_records(
+    module: &Module<'_>,
+    test_run: &TestRun<'_>,
+) -> Vec<(Vec<String>, ReductionMode)> {
+    module.with_self_sig(test_run.types(), |sig| {
+        sig.operators
+            .iter()
+            .map(|group| {
+                let mut members: Vec<String> = group
+                    .members
+                    .iter()
+                    .map(|m| render_label(m.symbol(), test_run.registries()))
+                    .collect();
+                members.sort();
+                (members, group.mode)
+            })
+            .collect()
+    })
+}
+
+/// A bare `OP` declaration writes a size-1 fold-left record, which is what the module's registry
+/// holds and so what its self-sig reports.
+#[test]
+fn a_bare_op_declaration_reaches_the_self_sig_as_a_singleton_record() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run("MODULE strs = ((OP #(\u{2295}) OVER Str = ((left CONCAT right))))");
+    let m = module_named(scope, "strs", test_run.registries());
+    assert_eq!(
+        operator_records(m, &test_run),
+        vec![(vec!["\u{2295}".to_string()], ReductionMode::FoldLeft)],
+    );
+}
+
+/// A `GROUP`'s registry entries all seal one record, so the channel names it **once** however
+/// many powerset keys the declaration installed.
+#[test]
+fn a_group_reaches_the_self_sig_as_one_record_not_one_per_subset() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "GROUP strs FOLD RIGHT = ((OP #(\u{2295}) OVER Str = ((left CONCAT right))) \
+         (OP #(\u{2296}) OVER Str = ((left CONCAT right))))",
+    );
+    let m = module_named(scope, "strs", test_run.registries());
+    assert_eq!(
+        operator_records(m, &test_run),
+        vec![(
+            vec!["\u{2295}".to_string(), "\u{2296}".to_string()],
+            ReductionMode::FoldRight,
+        )],
+        "one declaration is one record, whatever its powerset install wrote",
+    );
+}
+
+/// A pairwise group carries its combiner and direction into the channel.
+#[test]
+fn a_pairwise_group_reaches_the_self_sig_with_its_combiner() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run.run(
+        "GROUP cmp PAIRWISE FOLD #(BOTH) LEFT = ((OP #(BOTH) OVER Bool = ((left AND right))) \
+         (OP #(\u{227A}) OVER Number -> Bool = ((left < right))))",
+    );
+    let m = module_named(scope, "cmp", test_run.registries());
+    let records = operator_records(m, &test_run);
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].1,
+        ReductionMode::Pairwise {
+            combiner: crate::machine::model::KeywordSymbol::of("BOTH")
+                .expect("`BOTH` is keyword-class"),
+            direction: crate::machine::model::FoldDirection::Left,
+        },
+    );
+}
+
+/// A keyworded `FN` over an operator symbol supplies the bucket and nothing else: the module
+/// declares no group, so its channel is empty.
+#[test]
+fn an_fn_head_over_an_operator_symbol_declares_no_record() {
+    let program = program_storage();
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&program, &region);
+    let scope = test_run.scope;
+    test_run
+        .run("MODULE strs = ((FN (left :Str \u{2295} right :Str) -> Str = ((left CONCAT right))))");
+    let m = module_named(scope, "strs", test_run.registries());
+    assert!(operator_records(m, &test_run).is_empty());
 }

@@ -37,9 +37,9 @@ use crate::machine::core::ProgramBrand;
 use crate::machine::core::bindings::SealedValue;
 use crate::machine::core::bindings::{WriteOp, powerset_probes};
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::KType;
 use crate::machine::model::labels::{KeywordSymbol, LabelInterner, TypeSymbol};
 use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{KKind, KType};
 use crate::machine::model::{OperatorGroup, ReductionMode, binary_key, unary_key};
 use crate::machine::model::{SignatureDraft, SignatureElement};
 use crate::machine::{
@@ -54,7 +54,7 @@ use super::fn_def::return_type::{
     ReturnTypeState, TypeSlotThunk, classify_return_type, type_carrier_union,
 };
 use super::resolve_or_await::{expect_type_terminal, resolve_at_wake};
-use super::{arg, kw, sig};
+use super::{arg, arg_labeled, kw, sig};
 use crate::machine::model::RunRegistries;
 
 /// Slot labels for the type-resolution diagnostics.
@@ -217,6 +217,16 @@ fn build<'a>(
         &SLOTS.symbol,
         &ctx.registries.labels
     ));
+    // A SIG declares members rather than defining them, so a definition inside one is refused and
+    // pointed at its declarator. Guarded here, ahead of any deferral, so the synchronous and
+    // dep-finish paths are covered once — the same position `build_fn_like` guards from.
+    if ctx.scope.is_in_sig_body() {
+        let spelling = head_spelling(kind, ctx.registries.labels.display(sym.symbol()));
+        return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+            "inside a SIG body, an operator is declared rather than defined — drop the \
+             `= (<body>)` and write `({spelling})`",
+        )))));
+    }
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "OP", &SLOTS.body));
     let has_result = ctx.args.held(&SLOTS.return_type).is_some();
     let group = ctx.scope.nearest_group_context();
@@ -704,8 +714,155 @@ fn op_action<'a>(
     }
 }
 
+/// The bodyless head spelling a diagnostic points at — the declarator for `kind`, with `sym`
+/// filled in and the operand and result left as placeholders.
+fn head_spelling(kind: OpKind, sym: impl std::fmt::Display) -> String {
+    match kind {
+        OpKind::Binary => format!("OP #({sym}) OVER <Operand>"),
+        OpKind::Unary => format!("UNARY OP #({sym}) OVER <Operand> -> <Result>"),
+    }
+}
+
+/// The bodyless `OP` / `UNARY OP` head: a SIG body's **operator member**. It declares both halves
+/// of what the definition writes — the dispatch bucket(s) under the keys a use site computes, and,
+/// outside a SIG group, the size-1 chaining record — derived through the same
+/// [`operator_shape`] the definition derives them through, so a head and the `OP` satisfying it
+/// cannot spell different shapes.
+///
+/// The two type slots are ordinary kind expectations rather than the definition's raw-carrier
+/// union, so a name resolves once where it is written and a still-finalizing sibling `TYPE Carrier`
+/// parks the statement exactly as a `VAL zero :Carrier` slot parks. No deferral of its own is
+/// needed, and the step's carrier is the declared primary function type — uniform with what a
+/// bodyless `FN` head hands back.
+fn declare<'a>(ctx: &BodyCtx<'_, 'a, '_>, kind: OpKind, has_result: bool) -> Action<'a> {
+    let sym = crate::try_action!(symbol_from_slot(
+        ctx.args,
+        "OP",
+        &SLOTS.symbol,
+        &ctx.registries.labels
+    ));
+    let spelling = ctx.registries.labels.display(sym.symbol());
+    if !ctx.scope.is_in_sig_body() {
+        let head = head_spelling(kind, spelling);
+        return Action::done(Err(KError::new(KErrorKind::ShapeError(format!(
+            "a bodyless `{head}` head declares a SIG operator member and is only valid inside a \
+             SIG body — write `{head} = (<body>)` to define an operator",
+        )))));
+    }
+    // The SIG group context, the declaration-side twin of `nearest_group_context`: inside one the
+    // group is the sole registrar for its members, and a pairwise mode is what admits a
+    // heterogeneous `-> Result`.
+    let group_mode = ctx.scope.nearest_sig_group();
+    crate::try_action!(check_sig_group_context(
+        kind, has_result, group_mode, spelling
+    ));
+
+    let operand = crate::try_action!(head_slot_type(ctx, &SLOTS.operand, OPERAND_SLOT));
+    let result = if has_result {
+        Some(crate::try_action!(head_slot_type(
+            ctx,
+            &SLOTS.return_type,
+            RESULT_SLOT
+        )))
+    } else {
+        None
+    };
+    let shape = crate::try_action!(operator_shape(kind, sym, operand, result, ctx.registries));
+
+    // The keyworded writes: the binary form always, plus a unary head's list form. The step's own
+    // carrier is the *primary* function type — the list body for a unary operator, the binary body
+    // otherwise — the same choice the definition makes about which function it evaluates to.
+    let binary_type =
+        super::fn_def::finalize::fn_type_of(&shape.binary_elements, shape.result, ctx.registries);
+    let mut writes: Vec<WriteOp<'a>> = vec![WriteOp::SigKeyworded {
+        key: untyped_key_of(&shape.binary_elements),
+        fn_type: binary_type,
+    }];
+    let primary = match &shape.list_elements {
+        None => binary_type,
+        Some(list_elements) => {
+            let list_type =
+                super::fn_def::finalize::fn_type_of(list_elements, shape.result, ctx.registries);
+            writes.push(WriteOp::SigKeyworded {
+                key: untyped_key_of(list_elements),
+                fn_type: list_type,
+            });
+            list_type
+        }
+    };
+    // Inside a SIG group the group writes the one record over all its members; a head standing on
+    // its own declares the singleton its own surface implies.
+    if group_mode.is_none() {
+        writes.push(WriteOp::SigOperatorGroup {
+            members: vec![sym],
+            mode: shape.singleton_mode,
+        });
+    }
+    Action::done(Ok(StepCarried::born(
+        ctx.scope
+            .resident(crate::machine::model::Carried::Type(primary)),
+    )))
+    .with_effects(ctx.scratch, writes)
+}
+
+/// One head type slot, read off the resolved kind-expectation slot and checked to be a proper
+/// type — a bare constructor standing unapplied types no value, so it can be neither operand nor
+/// result.
+fn head_slot_type(
+    ctx: &BodyCtx<'_, '_, '_>,
+    slot: &StaticName<ValueSymbol>,
+    label: &str,
+) -> Result<KType, KError> {
+    let kt = ctx
+        .args
+        .ktype(slot)
+        .ok_or_else(|| KError::new(KErrorKind::ShapeError(format!("{label} must be a type"))))?;
+    checked_value_type(kt, label, ctx.registries)
+}
+
+/// [`check_group_context`]'s declaration-side twin, over a SIG group's mode rather than a live
+/// [`OperatorGroup`] record. The two rules are the same ones, stated against the same surface: a
+/// unary operator chains with nothing, and a heterogeneous `-> Result` only reads under a pairwise
+/// fold.
+fn check_sig_group_context(
+    kind: OpKind,
+    has_result: bool,
+    group_mode: Option<ReductionMode>,
+    sym: impl std::fmt::Display,
+) -> Result<(), KError> {
+    if kind == OpKind::Unary && group_mode.is_some() {
+        return Err(KError::new(KErrorKind::ShapeError(format!(
+            "`UNARY OP #({sym})` cannot be declared inside a GROUP: a unary operator takes the \
+             whole run as one list, so it chains with nothing",
+        ))));
+    }
+    if kind == OpKind::Binary
+        && has_result
+        && !matches!(group_mode, Some(ReductionMode::Pairwise { .. }))
+    {
+        return Err(KError::new(KErrorKind::ShapeError(format!(
+            "`OP #({sym})` declares an explicit `-> Result`, which only a PAIRWISE group's \
+             members may do — a fold member's result is its operand type. Drop the `->`, or \
+             declare the member inside `(GROUP PAIRWISE FOLD #(<combiner>) LEFT = (…))`",
+        ))));
+    }
+    Ok(())
+}
+
 fn body_binary<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
     build(ctx, OpKind::Binary, None)
+}
+
+fn head_binary<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
+    declare(ctx, OpKind::Binary, false)
+}
+
+fn head_binary_with_result<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
+    declare(ctx, OpKind::Binary, true)
+}
+
+fn head_unary<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
+    declare(ctx, OpKind::Unary, true)
 }
 
 fn body_unary<'a>(ctx: &BodyCtx<'_, 'a, '_>) -> Action<'a> {
@@ -784,6 +941,34 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
             arg(registries, &SLOTS.body, KType::KEXPRESSION),
         ]
     };
+    // The SIG-body head forms: the definition spellings minus their `= (<body>)`. Full bucket-key
+    // matching keeps each head's key disjoint from every definition spelling, so the two never
+    // compete — the shorter key simply is not the longer one, and the bodies guard the rest.
+    //
+    // The type slots are ordinary kind expectations rather than the definition's raw-carrier
+    // union: a declared member's operand and result resolve once, where they are written.
+    let head_slot = |name: &StaticName<ValueSymbol>, role: &'static str| {
+        arg_labeled(registries, name, KType::of_kind(KKind::AnyType), role)
+    };
+    let head_binary_sig = || {
+        vec![
+            kw(registries, "OP"),
+            arg(registries, &SLOTS.symbol, KType::KEXPRESSION),
+            kw(registries, "OVER"),
+            head_slot(&SLOTS.operand, OPERAND_SLOT),
+        ]
+    };
+    let head_binary_result_sig = || {
+        let mut elements = head_binary_sig();
+        elements.push(kw(registries, "->"));
+        elements.push(head_slot(&SLOTS.return_type, RESULT_SLOT));
+        elements
+    };
+    let head_unary_sig = || {
+        let mut elements = vec![kw(registries, "UNARY")];
+        elements.append(&mut head_binary_result_sig());
+        elements
+    };
     let carrier = type_carrier_union(registries);
     register_builtin(
         scope,
@@ -824,6 +1009,30 @@ pub fn register<'a>(scope: &'a Scope<'a>, registries: &RunRegistries, gate: &mut
         scope,
         combined(registries, unary(carrier, carrier)),
         body_unary_combined,
+        registries,
+        gate,
+    );
+    // A head declares a member rather than a value, so its declared return is the member's own
+    // function type — `KType::ANY`, like every other declarator whose result only exists once its
+    // signature is known.
+    register_builtin(
+        scope,
+        sig(KType::ANY, head_binary_sig()),
+        head_binary,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        sig(KType::ANY, head_binary_result_sig()),
+        head_binary_with_result,
+        registries,
+        gate,
+    );
+    register_builtin(
+        scope,
+        sig(KType::ANY, head_unary_sig()),
+        head_unary,
         registries,
         gate,
     );

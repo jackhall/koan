@@ -27,6 +27,7 @@
 
 use crate::machine::core::ScopeId;
 use crate::machine::model::labels::{Symbol, TypeSymbol};
+use crate::machine::model::{FoldDirection, ReductionMode};
 
 use super::kkind::KKind;
 use super::ktype::KType;
@@ -400,6 +401,30 @@ pub(crate) fn schema_content_digest(schema: &SigSchema, types: &TypeRegistry) ->
             h.digest(canonical_type_digest(*overload, schema, types));
         }
     }
+
+    // Operator members: each declared chaining record as its member run then its mode. The channel
+    // is stored canonically, so the declaration order never reaches the digest. A mode feeds its
+    // own discriminant byte, and a pairwise mode additionally its combiner symbol and direction —
+    // two records differing only in how they chain are two interfaces.
+    h.count(schema.operators.len());
+    for group in &schema.operators {
+        h.count(group.members.len());
+        for member in &group.members {
+            h.symbol(member.symbol());
+        }
+        match group.mode {
+            ReductionMode::Unary => h.byte(0),
+            ReductionMode::FoldLeft => h.byte(1),
+            ReductionMode::FoldRight => h.byte(2),
+            ReductionMode::Pairwise {
+                combiner,
+                direction,
+            } => h.byte(3).symbol(combiner.symbol()).byte(match direction {
+                FoldDirection::Left => 0,
+                FoldDirection::Right => 1,
+            }),
+        };
+    }
     h.finish()
 }
 
@@ -415,6 +440,7 @@ pub(crate) fn empty_schema_digest() -> TypeDigest {
     h.count(0); // manifest_members (feed_named_types header)
     h.count(0); // value_slots (feed_named_types header)
     h.count(0); // keyworded members
+    h.count(0); // operator members
     h.finish()
 }
 

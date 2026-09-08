@@ -1,5 +1,9 @@
 //! `OP` surface tests: the declaration forms, what each registers, the shadowing/type-gating
 //! semantics against the builtin operators, and the errors the surface rejects.
+//!
+//! - [`sig_declaration`] — the bodyless heads, which declare a SIG operator member.
+
+mod sig_declaration;
 
 use crate::builtins::test_support::{TestRun, binds_module};
 use crate::machine::KErrorKind;

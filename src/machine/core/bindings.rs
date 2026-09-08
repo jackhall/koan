@@ -814,6 +814,29 @@ impl<'a> Bindings<'a> {
             .collect()
     }
 
+    /// Snapshot of the **distinct records** in `operators`, ignoring visibility. The table holds
+    /// one entry per nonempty member subset of each declaration, all sealing the one record, so
+    /// the walk dedupes on the sealed carrier's address and hands back one seal per declaration —
+    /// the shape a schema's operator channel is derived from. Each seal is a bit-copy; the caller
+    /// re-anchors what it needs under its own pin.
+    pub fn iter_operator_groups(&self) -> Vec<SealedOperatorGroup<'a>> {
+        let mut seen: Vec<usize> = Vec::new();
+        self.tables
+            .borrow()
+            .operators
+            .iter()
+            .filter_map(|(_, entry)| {
+                seen.contains(&entry.address).then_some(()).map_or_else(
+                    || {
+                        seen.push(entry.address);
+                        Some(entry.sealed.duplicate())
+                    },
+                    |()| None,
+                )
+            })
+            .collect()
+    }
+
     /// Everything one scope publishes into a `CLOSE OVER` block's **implicit close**, gated by the
     /// reading statement's own visibility `cutoff` — the same predicate every resolution ladder
     /// applies, so the block closes over exactly what a statement at that position could have

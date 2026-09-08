@@ -22,7 +22,9 @@ use super::kkind::KKind;
 use super::node::TypeNode;
 use super::record::Record;
 use super::registry::TypeRegistry;
-use super::sig_schema::{SigSchema, render_keyworded_head, sorted_keyworded};
+use super::sig_schema::{
+    SigSchema, render_declared_group, render_keyworded_head, sorted_keyworded,
+};
 use super::type_digest::{TypeDigest, empty_schema_digest};
 use smallvec::SmallVec;
 
@@ -93,7 +95,7 @@ impl KType {
     pub const DICT_ANY_ANY: KType = KType(TypeDigest(0xf9b9d64d_aa69edda_e7a59f82_4e0f5015));
     /// The empty signature — top of the module lattice, the type `:Module` lowers to. It
     /// constrains nothing, so every module value satisfies it.
-    pub const EMPTY_SIGNATURE: KType = KType(TypeDigest(0x55ecc11f_39d3a140_69bc313b_aa2d1ed2));
+    pub const EMPTY_SIGNATURE: KType = KType(TypeDigest(0xb80aaa8d_7e3507bd_e06a1496_5250ca90));
 
     /// The type-accepting slot admitting `kind` — one of the pre-seeded `OfKind` handles.
     pub const fn of_kind(kind: KKind) -> KType {
@@ -407,14 +409,37 @@ fn write_sig_schema(
     // by a call shape rather than a name, so they sort by the schema's canonical key order rather
     // than by member text.
     let mut written = members.len();
+    // A unary triple's bridge entry names the same head as its list entry, so one of the two is
+    // dropped here: the head declares the triple, and printing it twice would spell an interface
+    // no signature can be written to declare.
+    let mut heads: Vec<String> = Vec::new();
     for (key, overloads) in sorted_keyworded(schema) {
         for overload in overloads {
-            if written > 0 {
-                f.write_str(", ")?;
+            let head = render_keyworded_head(key, *overload, &schema.operators, registries);
+            if !heads.contains(&head) {
+                heads.push(head);
             }
-            f.write_str(&render_keyworded_head(key, *overload, registries))?;
-            written += 1;
         }
+    }
+    for head in heads {
+        if written > 0 {
+            f.write_str(", ")?;
+        }
+        f.write_str(&head)?;
+        written += 1;
+    }
+    // The chaining records follow the members, each as the `GROUP` head declaring it. A singleton
+    // record is skipped: the bare `OP` / `UNARY OP` head above already says how its one operator
+    // chains, so naming it again would be a second spelling of one declaration.
+    for group in &schema.operators {
+        if group.members.len() < 2 {
+            continue;
+        }
+        if written > 0 {
+            f.write_str(", ")?;
+        }
+        f.write_str(&render_declared_group(group, registries))?;
+        written += 1;
     }
     f.write_str(")")
 }

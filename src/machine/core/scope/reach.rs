@@ -23,7 +23,8 @@ use crate::machine::model::{
     ReductionMode, RegionEscape, coerce_object_into, copy_or_pin, relocate_object_into,
 };
 use crate::machine::{
-    CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, KError, SplicedCell,
+    CarrierWitness, DeliveredCarried, DeliveredOperatorGroup, KError, SealedOperatorGroup,
+    SplicedCell,
 };
 use crate::witnessed::{
     Delivered, DropFree, Reattachable, RegionHandleFamily, Sealed, SealedExtern, Witnessed,
@@ -183,6 +184,18 @@ impl<'a> Scope<'a> {
         read: impl for<'b> FnOnce(&'b KFunction<'b>) -> R,
     ) -> R {
         sealed.open(read)
+    }
+
+    /// Read a dormant operator-group carrier under this scope's own region owner —
+    /// [`Self::read_function`]'s twin for the `operators` table. Nothing is minted and nothing
+    /// escapes: the `for<'b>` brand confines the re-anchored record to the call, so only
+    /// lifetime-free content (member symbols, the mode) can leave it.
+    pub(crate) fn read_operator_group<R>(
+        &self,
+        sealed: &SealedOperatorGroup,
+        read: impl for<'b> FnOnce(&'b OperatorGroup<'b>) -> R,
+    ) -> R {
+        sealed.open(|group| read(group))
     }
 
     /// Adopt a delivered value **as a callable** into this scope — the head-resolution twin of

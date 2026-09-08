@@ -538,6 +538,7 @@ digraph {
     "koan::machine::core::scope" -> "koan::machine::core::ref_carriers" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::scope_id" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::scope" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::core::scope::copy" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::scope::copy" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::scope::copy" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -910,6 +911,7 @@ digraph {
     "koan::machine::model::types::signature" -> "koan::machine::model::types::node" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::types::type_digest" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::labels" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
