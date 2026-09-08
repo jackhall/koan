@@ -393,14 +393,7 @@ fn finalize_declaration<'a>(
             return_type.name(registries),
         ))));
     };
-    let params =
-        crate::machine::model::Record::from_pairs(elements.iter().filter_map(
-            |element| match element {
-                SignatureElement::Argument(argument) => Some((argument.name, argument.ktype)),
-                SignatureElement::Keyword(_) => None,
-            },
-        ));
-    let fn_type = registries.types.function_type(params, ret);
+    let fn_type = fn_type_of(elements, ret, registries);
     Ok((
         scope.resident(Carried::Type(fn_type)),
         [
@@ -411,6 +404,25 @@ fn finalize_declaration<'a>(
             None,
         ],
     ))
+}
+
+/// The `(params) -> ret` type a head names: the argument elements folded into a parameter record,
+/// in their own order, paired with the resolved return. The one derivation a SIG member's declared
+/// type comes from, so the bodyless `FN` head and the bodyless `OP` head
+/// ([`crate::builtins::op_def`]) record the same shape for the same surface.
+pub(crate) fn fn_type_of(
+    elements: &[SignatureElement],
+    ret: KType,
+    registries: &RunRegistries,
+) -> KType {
+    let params =
+        crate::machine::model::Record::from_pairs(elements.iter().filter_map(
+            |element| match element {
+                SignatureElement::Argument(argument) => Some((argument.name, argument.ktype)),
+                SignatureElement::Keyword(_) => None,
+            },
+        ));
+    registries.types.function_type(params, ret)
 }
 
 /// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed

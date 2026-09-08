@@ -403,7 +403,6 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
         result: Option<KType>,
         registries: &RunRegistries,
     ) -> Result<FinalizedOp<'a>, KError> {
-        let types = &registries.types;
         let OpPlan {
             sym,
             kind,
@@ -416,24 +415,19 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
         // The cell of the operator's *primary* function — the binary body for a binary operator,
         // the list body for a unary one. It is the value the declaration evaluates to, and, for the
         // combined form, the value the bound name reads.
-        let (cell, registrations) = match kind {
-            OpKind::Binary => {
-                let elements = [
-                    arg(registries, &MACHINE_BINDERS.operand_left, operand),
-                    SignatureElement::Keyword(sym),
-                    arg(registries, &MACHINE_BINDERS.operand_right, operand),
-                ];
-                let result_type = result.unwrap_or(operand);
+        let shape = operator_shape(kind, sym, operand, result, registries)?;
+        let (cell, registrations) = match shape.list_elements {
+            None => {
                 let (cell, overload) = register_body(
                     scope,
-                    ReturnType::Resolved(result_type),
-                    &elements,
+                    ReturnType::Resolved(shape.result),
+                    &shape.binary_elements,
                     Body::UserDefined(body_expr),
                     bind_index,
                     registries,
                 )?;
                 let group = (!in_group).then(|| {
-                    let record = scope.birth_operator_group(&[sym], ReductionMode::FoldLeft);
+                    let record = scope.birth_operator_group(&[sym], shape.singleton_mode);
                     WriteOp::Group {
                         probes: powerset_probes(&[sym], &registries.labels),
                         seal: GroupSeal::of_delivered(scope, &record),
@@ -442,25 +436,7 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                 });
                 (cell, [Some(overload), group, None])
             }
-            OpKind::Unary => {
-                let result_type = result.ok_or_else(|| {
-                    KError::new(KErrorKind::ShapeError(
-                        "UNARY OP requires an explicit `-> Result`".to_string(),
-                    ))
-                })?;
-                let list_elements = [
-                    SignatureElement::Keyword(sym),
-                    arg(registries, &MACHINE_BINDERS.operands, types.list(operand)),
-                ];
-                // The binary bridge: `a ~ b` names one keyword, so it dispatches as a plain
-                // keyworded call, not an operator chain — without a two-operand body it would
-                // simply miss. Its body is the AST `sym [left right]`, the shape a reduced run
-                // takes, so both surfaces land on the one list body the user wrote.
-                let bridge_elements = [
-                    arg(registries, &MACHINE_BINDERS.operand_left, operand),
-                    SignatureElement::Keyword(sym),
-                    arg(registries, &MACHINE_BINDERS.operand_right, operand),
-                ];
+            Some(list_elements) => {
                 // `check_group_context` rejects `UNARY OP` inside a `GROUP` before the plan is
                 // built, so `in_group` cannot hold here; the door asserts that rather than take
                 // it on trust, since it writes the single-member group unconditionally.
@@ -468,13 +444,13 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
                     scope,
                     sym,
                     OperatorForm {
-                        return_type: ReturnType::Resolved(result_type),
+                        return_type: ReturnType::Resolved(shape.result),
                         elements: &list_elements,
                         body: Body::UserDefined(body_expr),
                     },
                     OperatorForm {
-                        return_type: ReturnType::Resolved(result_type),
-                        elements: &bridge_elements,
+                        return_type: ReturnType::Resolved(shape.result),
+                        elements: &shape.binary_elements,
                         body: Body::UserDefined(bridge_body(program, &registries.labels, sym)),
                     },
                     in_group,
@@ -497,6 +473,68 @@ impl<'program: 'a, 'a> OpPlan<'program, 'a> {
         let [first, second, third] = registrations;
         Ok((cell.unseal(), [first, second, third, value_write]))
     }
+}
+
+/// Every dispatchable form an operator declaration writes — the one place a definition and a SIG
+/// declaration derive their bucket keys and slot types from, so a head declares exactly the shape
+/// the definition satisfying it registers.
+///
+/// `binary_elements` always keys [`binary_key`]: it is a binary operator's own form, and a unary
+/// operator's **bridge** — `a ~ b` names one keyword, so it dispatches as a plain keyworded call
+/// rather than an operator chain, and without a two-operand entry it would simply miss.
+/// `list_elements` is `Some` for a unary operator only, keying [`unary_key`] with the whole run as
+/// one list operand; its presence is what tells the two arms apart past this point.
+struct OperatorShape {
+    binary_elements: [SignatureElement; 3],
+    list_elements: Option<[SignatureElement; 2]>,
+    /// The result a body of either form returns. A binary operator with no explicit `-> Result`
+    /// folds, so its result is its operand type.
+    result: KType,
+    /// The mode of the size-1 registry record the declaration writes when it is not a group
+    /// member: a binary operator folds left, a unary one takes the whole run.
+    singleton_mode: ReductionMode,
+}
+
+/// Derive [`OperatorShape`] from the surface's own four facts. The only failure is the unary
+/// arm's missing result: a unary body is handed the run as a list, so nothing feeds its result
+/// back and there is no operand type to default to.
+fn operator_shape(
+    kind: OpKind,
+    sym: KeywordSymbol,
+    operand: KType,
+    result: Option<KType>,
+    registries: &RunRegistries,
+) -> Result<OperatorShape, KError> {
+    let binary_elements = [
+        arg(registries, &MACHINE_BINDERS.operand_left, operand),
+        SignatureElement::Keyword(sym),
+        arg(registries, &MACHINE_BINDERS.operand_right, operand),
+    ];
+    Ok(match kind {
+        OpKind::Binary => OperatorShape {
+            binary_elements,
+            list_elements: None,
+            result: result.unwrap_or(operand),
+            singleton_mode: ReductionMode::FoldLeft,
+        },
+        OpKind::Unary => OperatorShape {
+            binary_elements,
+            list_elements: Some([
+                SignatureElement::Keyword(sym),
+                arg(
+                    registries,
+                    &MACHINE_BINDERS.operands,
+                    registries.types.list(operand),
+                ),
+            ]),
+            result: result.ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(
+                    "UNARY OP requires an explicit `-> Result`".to_string(),
+                ))
+            })?,
+            singleton_mode: ReductionMode::Unary,
+        },
+    })
 }
 
 /// One dispatchable form of an operator: the signature naming a surface, and the body that surface
